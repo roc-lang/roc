@@ -11564,7 +11564,7 @@ fn customBoxyModuleObjectCache(
 }
 
 /// Append `text` to the file at `path`.
-fn appendLine(io: std.Io, path: []const u8, text: []const u8) !void {
+fn appendLine(io: std.Io, path: []const u8, text: []const u8) (std.Io.Dir.ReadFileAllocError || std.Io.Dir.WriteFileError)!void {
     const existing = try std.Io.Dir.cwd().readFileAlloc(io, path, std.heap.page_allocator, .limited(1024 * 1024));
     defer std.heap.page_allocator.free(existing);
     const joined = try std.mem.concat(std.heap.page_allocator, u8, &.{ existing, text });

@@ -37317,9 +37317,11 @@ fn retireParamsOfRejectedDispatches(self: *Self) Allocator.Error!void {
         const site = self.dispatchSiteOfFn(@fromBackingInt(dispatch.constraint_fn_var)) orelse continue;
         if (site.kind == .loop_derived) continue;
         operands.clearRetainingCapacity();
-        switch (self.cir.store.getExpr(site.expr)) {
-            .e_runtime_error => |runtime_error| try operands.appendSlice(self.gpa, self.cir.store.sliceExpr(runtime_error.evaluated)),
-            else => try self.appendEvaluationOperands(site.expr, &operands),
+        const site_expr = self.cir.store.getExpr(site.expr);
+        if (site_expr == .e_runtime_error) {
+            try operands.appendSlice(self.gpa, self.cir.store.sliceExpr(site_expr.e_runtime_error.evaluated));
+        } else {
+            try self.appendEvaluationOperands(site.expr, &operands);
         }
         for (operands.items) |operand| {
             const lambda = self.evaluatedLambda(operand) orelse continue;
@@ -37333,12 +37335,17 @@ fn retireParamsOfRejectedDispatches(self: *Self) Allocator.Error!void {
 /// The lambda `expr` evaluates to: a lambda, closure, or block ending in one.
 fn evaluatedLambda(self: *const Self, expr: CIR.Expr.Idx) ?@FieldType(CIR.Expr, "e_lambda") {
     var current = expr;
-    while (true) switch (self.cir.store.getExpr(current)) {
-        .e_block => |block| current = block.final_expr,
-        .e_closure => |closure| current = closure.lambda_idx,
-        .e_lambda => |lambda| return lambda,
-        else => return null,
-    };
+    while (true) {
+        const value = self.cir.store.getExpr(current);
+        if (value == .e_lambda) return value.e_lambda;
+        if (value == .e_closure) {
+            current = value.e_closure.lambda_idx;
+        } else if (value == .e_block) {
+            current = value.e_block.final_expr;
+        } else {
+            return null;
+        }
+    }
 }
 
 fn poisonErroneousValueUses(self: *Self) Allocator.Error!void {

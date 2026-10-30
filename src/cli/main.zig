@@ -11527,17 +11527,6 @@ fn boxyPlatformView(
     return platform;
 }
 
-/// One module's object for the link, and the hosted symbols it references.
-const BoxyUnitObject = struct {
-    /// Whether the object came from the cache rather than this build.
-    restored: bool,
-    object: []const u8,
-    hosted_symbols: []const []const u8,
-    /// For the root program's object (`buildBoxyRootObject`).
-    link_root_symbols: []const []const u8 = &.{},
-    app_export_symbols: []const []const u8 = &.{},
-};
-
 /// The key of `artifact`'s object under this build's target and policy.
 /// A module declaring hosted functions is lowered against the platform
 /// header's hosted section, which binds them to their host symbols, so its

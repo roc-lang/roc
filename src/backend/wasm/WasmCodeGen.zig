@@ -17337,7 +17337,7 @@ test "a hosted call's args slot is aligned to its most-aligned argument" {
     const lowered = try layout.abi.lower(arena, &layouts, .wasm32, &arg_layouts, .zst, false);
     try std.testing.expect(lowered.args[1] == .indirect);
 
-    var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
+    var codegen = Self.init(allocator, &store, &layouts, .default);
     defer codegen.deinit();
     const type_idx = try codegen.module.addFuncType(&.{}, &.{});
     const defined = try codegen.module.addDefinedFunction(type_idx);

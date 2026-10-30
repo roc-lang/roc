@@ -14871,10 +14871,10 @@ Descriptors come from two sources and nowhere else:
 
 A recursive type composes through placeholders. The lowerer finds the
 type's recursive component in the graph of descriptor components (record
-fields, tuple items, tag payloads, nominal backings, list elements, box
+fields, tuple items, tag payloads, nominal backings, list items, box
 payloads) and breaks the cycle at exactly its pointer slots: the slots the
 shared layout store boxes for that component, a struct slot leading back into
-it and a non-struct tag payload leading back into it, and the list elements
+it and a non-struct tag payload leading back into it, and the list items
 and box payloads leading back into it, which are pointers already. Each member
 a pointer slot points at is opened first (`desc_recursive_open`, keyed by a
 static word naming the member and the descriptors of its variables), which
