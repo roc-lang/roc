@@ -19086,7 +19086,7 @@ fn frontEndBreakdown(timing: anytype) [4]progress.SubTiming {
     };
 }
 
-fn compileTimeEvaluationBreakdown(timing: eval.CompileTimeFinalization.TimingSnapshot) [12]progress.SubTiming {
+fn compileTimeEvaluationBreakdown(timing: eval.CompileTimeFinalization.TimingSnapshot) [15]progress.SubTiming {
     return .{
         .{ .name = "Shared Monotype Lowering", .ns = timing.lowering.monotype_ns },
         .{ .name = "Shared Closure Lifting", .ns = timing.lowering.lift_ns },
@@ -19100,6 +19100,9 @@ fn compileTimeEvaluationBreakdown(timing: eval.CompileTimeFinalization.TimingSna
         .{ .name = devInstructionGenerationPhaseName(backend.dev.LirCodeGenMod.host_lir_codegen_target.toCpuArch()), .ns = timing.code_generation_ns },
         .{ .name = "Execution", .ns = timing.execution_ns },
         .{ .name = "Store Results", .ns = timing.store_results_ns },
+        .{ .name = "Shared Boxy Lowering", .ns = timing.lowering.boxy_lowering_ns },
+        .{ .name = "Shared Boxy Unit Codegen", .ns = timing.lowering.boxy_unit_codegen_ns },
+        .{ .name = "Shared Boxy Object Cache", .ns = timing.lowering.boxy_unit_cache_ns },
     };
 }
 
@@ -19854,7 +19857,7 @@ fn finishFrontEndPhaseExcluding(gpa: Allocator, config: reporting.ReportingConfi
     reporter.recordRankedTimings("Slowest Module Type Inference", slowest_rows[0..slowest.len]);
     const compile_time = timing.compile_time_evaluation;
     if (timing.program_finalization_ns != 0) {
-        var subs_buf: [12]progress.SubTiming = undefined;
+        var subs_buf: [15]progress.SubTiming = undefined;
         reporter.recordCompletedWithBreakdown(
             "Shared Lowering + Compile-Time Eval",
             timing.program_finalization_ns,
@@ -19913,6 +19916,9 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
             .lir_gen_ns = 6,
             .lir_passes_ns = 7,
             .arc_ns = 8,
+            .boxy_lowering_ns = 13,
+            .boxy_unit_codegen_ns = 14,
+            .boxy_unit_cache_ns = 15,
             .solved_lir_parallel = .{ .tasks_submitted = 61, .tasks_committed = 61 },
             .spec_constr_parallel = .{ .tasks_submitted = 63, .tasks_committed = 63 },
             .lir_pass_parallel = .{ .tasks_submitted = 67, .tasks_committed = 67 },

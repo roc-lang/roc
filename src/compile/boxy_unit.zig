@@ -217,6 +217,8 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     const static_data = try static_data_exports.buildStaticData(gpa, .{ .root = modules.root, .imports = views.items }, &lowered, unit.target, .{});
     defer static_data_exports.deinitStaticData(gpa, static_data);
 
+    var codegen_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_codegen);
+    defer codegen_scope.end();
     var object_compiler = backend.ObjectFileCompiler.init(gpa);
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
     object_compiler.link_unit = true;
@@ -233,7 +235,10 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
         return error.NativeCompilationFailed;
     };
     defer written.deinit();
+    codegen_scope.end();
 
+    var cache_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_cache);
+    defer cache_scope.end();
     const records = try exportRecords(gpa, &lowered, unit.interfaces);
     defer gpa.free(records);
     var hosted_arena = std.heap.ArenaAllocator.init(gpa);
