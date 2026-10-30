@@ -5159,7 +5159,13 @@ pub const Builder = struct {
         } else return try self.lowerValueCall(expr_id, call);
         const subst = self.siteSubstitution(call.func);
         const call_fn = try self.exprType(call.func);
-        const instance = try self.callInstanceAt(callee, subst, self.view.view.static_dispatch_plans.siteEvidence(call.func) orelse &.{}, call_fn, .{ .use = call.func });
+        // A platform requirement's call of the app's binding is checked
+        // before the two are paired, so checking records no edge at it: its
+        // literal arguments derive from the call's instantiation, as its
+        // dictionaries do.
+        const required_call = if (resolved) |id| self.resolvedRef(id).ref == .platform_required_proc else false;
+        const edge: checked.LiteralEdge = if (required_call) .literal else .{ .use = call.func };
+        const instance = try self.callInstanceAt(callee, subst, self.view.view.static_dispatch_plans.siteEvidence(call.func) orelse &.{}, call_fn, edge);
         var adapt: ?CallAdapt = null;
         if (try self.program.signatureHasSlots(callee)) {
             const arg_types = try self.program.arena.allocator().alloc(TypeId, call.args.len);
