@@ -8207,8 +8207,8 @@ const ReuseRun = struct {
     /// The checked occurrence of every named type in each root's stored
     /// value and type, by name, in walk order.
     occurrences: [][]NamedOccurrence,
-    /// The app module's checked key, which every stored closed occurrence
-    /// names.
+    /// The app module's checked key, whose version-specific checked types
+    /// no stored closed occurrence of an imported type names.
     module_key: [32]u8,
     hoisted: []HoistedIdentity,
 
@@ -8628,9 +8628,9 @@ test "a transplanted value carries no checked type occurrence of the version tha
         \\
     ;
     // `built`'s type is the app's own annotation and `made`'s is inferred
-    // from `Counter.make`'s return type: both stored constants carry the
-    // app's own occurrence of `Counter`, never one lowered from `Counter`'s
-    // checked types or from any other module of the program.
+    // from `Counter.make`'s return type: both stored constants carry
+    // `Counter`'s own occurrence, which its declaring module holds inside the
+    // app's import closure, never the app's version-specific one.
     const occurrence_app =
         \\app [answer] { pf: platform "./platform.roc" }
         \\
@@ -8654,10 +8654,9 @@ test "a transplanted value carries no checked type occurrence of the version tha
     for ([_][]const u8{ "built", "made" }) |name| {
         const stored = first.namedOccurrences(name);
         try std.testing.expect(stored.len != 0);
-        for (stored) |occurrence| try std.testing.expectEqualSlices(u8, &first.module_key, &occurrence.ty_module);
+        for (stored) |occurrence| try std.testing.expect(!std.mem.eql(u8, &first.module_key, &occurrence.ty_module));
     }
-    // All values are unchanged, including the nominal whose checked type
-    // occurrence belongs to the app rather than the imported declaration.
+    // All values are unchanged, including the nominals the app annotates.
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = occurrence_app ++ "# unchanged values\n" });
     var unchanged = try compileForReuseVerifying(allocator, cache, app, true);
     defer unchanged.deinit(allocator);

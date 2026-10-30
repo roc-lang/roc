@@ -21,25 +21,34 @@ const longjmp = sljmp.longjmp;
 
 const CompileTimeHost = @This();
 
-/// Every compile-time allocation carries its byte length in a header this
-/// many bytes before the bytes handed to Roc. The header keeps the Roc bytes
-/// at the strictest alignment a request may ask for, so one arena allocation
-/// serves every request, reallocation reads the old length from the header,
-/// and deallocation does nothing: the root's arena frees everything at once.
-const allocation_header_bytes = 16;
-const max_allocation_alignment = allocation_header_bytes;
+/// Every compile-time allocation starts with a header recording its byte
+/// length and alignment; reallocation reads the old length from it, and
+/// deallocation does nothing: the root's arena frees everything at once.
+///
+/// In safety-checked builds the Roc bytes sit `alignment` bytes past the
+/// header region, so their address is a multiple of the requested alignment
+/// and never of twice it. Code that leans on more alignment than it asked for
+/// then misbehaves here instead of only on a host whose allocator differs,
+/// and a free or reallocation at a different alignment than the allocation
+/// fails loudly: production hosts locate a block from the alignment they are
+/// given. Release builds place the bytes right after the header region and
+/// check nothing.
+const allocation_header_bytes = 32;
+const max_allocation_alignment = 16;
 /// Debug-only stamp a live header carries, so a pointer Roc hands back that
 /// no compile-time allocation produced is caught.
 const allocation_header_stamp: u64 = 0x5f6d_6f63_7074_696d;
 
 const AllocationHeader = extern struct {
     size: usize,
+    alignment: usize,
     stamp: u64,
 };
 
 comptime {
     std.debug.assert(@sizeOf(AllocationHeader) <= allocation_header_bytes);
     std.debug.assert(std.math.isPowerOfTwo(allocation_header_bytes));
+    std.debug.assert(max_allocation_alignment < allocation_header_bytes);
 }
 
 /// How a native compile-time root finished.
@@ -285,10 +294,10 @@ fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) *any
     return @ptrCast(self.allocateRocBytes(length, alignment));
 }
 
-fn rocDealloc(_: *RocOps, ptr: *anyopaque, _: usize) callconv(.c) void {
+fn rocDealloc(_: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
     // The root's arena frees every allocation at once; the bytes only have
     // to be ones this host handed out and not handed back already.
-    releaseAllocation(ptr);
+    releaseAllocation(ptr, alignment, "dealloc");
 }
 
 fn rocRealloc(roc_ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
@@ -298,37 +307,49 @@ fn rocRealloc(roc_ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: u
     const old_bytes: [*]u8 = @ptrCast(ptr);
     const copied = @min(old_size, @max(new_length, 1));
     @memcpy(new_bytes[0..copied], old_bytes[0..copied]);
-    releaseAllocation(ptr);
+    releaseAllocation(ptr, alignment, "realloc");
     return @ptrCast(new_bytes);
 }
 
-fn releaseAllocation(ptr: *anyopaque) void {
+fn releaseAllocation(ptr: *anyopaque, alignment: usize, comptime operation: []const u8) void {
     if (!std.debug.runtime_safety) return;
     const header = allocationHeader(ptr);
+    if (header.alignment != alignment) {
+        std.debug.panic("CompileTimeHost: " ++ operation ++ " at alignment {d} of a block allocated at alignment {d} (ptr=0x{x})", .{ alignment, header.alignment, @intFromPtr(ptr) });
+    }
     std.debug.assert(header.stamp == allocation_header_stamp);
     header.stamp = 0;
 }
 
+/// Bytes between the header region and Roc bytes at `alignment`.
+fn payloadSkew(alignment: usize) usize {
+    return if (std.debug.runtime_safety) alignment else 0;
+}
+
 /// Hand out `length` bytes (at least one) at `alignment` from the root's
-/// arena, behind their header.
+/// arena, after their header; exactly `alignment` in safety-checked builds.
 fn allocateRocBytes(self: *CompileTimeHost, length: usize, alignment: usize) [*]u8 {
     if (alignment > max_allocation_alignment or !std.math.isPowerOfTwo(alignment)) {
         base.invariant("{s}", .{"unsupported compile-time RocOps allocation alignment"});
     }
     const alloc_len = @max(length, 1);
-    const total = std.math.add(usize, allocation_header_bytes, alloc_len) catch self.jump(.host_oom);
+    const skew = payloadSkew(alignment);
+    const total = std.math.add(usize, allocation_header_bytes + skew, alloc_len) catch self.jump(.host_oom);
     const block = self.arena.allocator().alignedAlloc(u8, .fromByteUnits(allocation_header_bytes), total) catch {
         self.jump(.host_oom);
     };
     const header: *AllocationHeader = @ptrCast(@alignCast(block.ptr));
     header.size = alloc_len;
+    header.alignment = alignment;
     if (std.debug.runtime_safety) header.stamp = allocation_header_stamp;
-    return block.ptr + allocation_header_bytes;
+    return block.ptr + allocation_header_bytes + skew;
 }
 
 fn allocationHeader(ptr: *anyopaque) *AllocationHeader {
-    const bytes: [*]u8 = @ptrCast(ptr);
-    return @ptrCast(@alignCast(bytes - allocation_header_bytes));
+    // ptr = block start + allocation_header_bytes + skew, and the skew is less
+    // than allocation_header_bytes, so rounding down recovers the start.
+    const start = (@intFromPtr(ptr) - allocation_header_bytes) & ~@as(usize, allocation_header_bytes - 1);
+    return @ptrFromInt(start);
 }
 
 fn rocDbg(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
@@ -410,21 +431,24 @@ test "compile-time allocations honor alignment, keep their bytes across realloca
     inline for (.{ 1, 2, 4, 8, 16 }) |alignment| {
         const ptr = roc_ops.roc_alloc(roc_ops, 3, alignment);
         try std.testing.expect(@intFromPtr(ptr) % alignment == 0);
+        if (std.debug.runtime_safety) try std.testing.expect(@intFromPtr(ptr) % (2 * alignment) != 0);
         roc_ops.roc_dealloc(roc_ops, ptr, alignment);
     }
 
-    // Growing keeps every old byte; shrinking keeps the bytes that fit.
-    const first = roc_ops.roc_alloc(roc_ops, 5, 1);
+    // Growing keeps every old byte; shrinking keeps the bytes that fit. A
+    // realloc keeps the block's alignment: production's host_alloc finds a
+    // block's start from the alignment it is handed.
+    const first = roc_ops.roc_alloc(roc_ops, 5, 8);
     const first_bytes: [*]u8 = @ptrCast(first);
     @memcpy(first_bytes[0..5], "hello");
     const grown = roc_ops.roc_realloc(roc_ops, first, 40, 8);
     const grown_bytes: [*]u8 = @ptrCast(grown);
     try std.testing.expectEqualStrings("hello", grown_bytes[0..5]);
     try std.testing.expect(@intFromPtr(grown) % 8 == 0);
-    const shrunk = roc_ops.roc_realloc(roc_ops, grown, 2, 1);
+    const shrunk = roc_ops.roc_realloc(roc_ops, grown, 2, 8);
     const shrunk_bytes: [*]u8 = @ptrCast(shrunk);
     try std.testing.expectEqualStrings("he", shrunk_bytes[0..2]);
-    roc_ops.roc_dealloc(roc_ops, shrunk, 1);
+    roc_ops.roc_dealloc(roc_ops, shrunk, 8);
 
     // A root that once held many blocks and then frees and allocates in a
     // loop must not pay for the blocks it once held on every operation.

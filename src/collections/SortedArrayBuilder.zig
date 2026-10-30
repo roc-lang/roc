@@ -16,6 +16,7 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const CompactWriter = @import("CompactWriter.zig");
+const validateRelocatedSpan = @import("safe_list.zig").validateRelocatedSpan;
 
 /// A builder for creating sorted arrays directly without using hash maps
 /// This is more efficient when we know we won't have duplicates
@@ -273,6 +274,24 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             sorted: bool,
             deduplicated: bool,
 
+            /// One relocatable base pointer (`entries_offset`) is fixed up per
+            /// `deserializeInto`, regardless of `entries_len`. Marks this as a
+            /// relocatable marker, so the cache validator calls `validateRelocations`
+            /// and `relocatablePointerCount` counts it.
+            pub const serialized_relocatable_pointers: usize = 1;
+
+            /// The element type whose bytes are serialized, so a layout fingerprint can
+            /// reflect a change to the entry's field order/size.
+            pub const SerializedElement = Entry;
+
+            /// Reject an `(entries_offset, entries_len)` that is misaligned for `Entry` or
+            /// reaches outside the `backing_len`-byte buffer, before `deserializeInto`
+            /// dereferences it.
+            pub fn validateRelocations(self: *const Serialized, backing_len: u64) error{CorruptArtifact}!void {
+                const span_bytes = std.math.mul(u64, self.entries_len, @sizeOf(Entry)) catch return error.CorruptArtifact;
+                try validateRelocatedSpan(@alignOf(Entry), self.entries_offset, span_bytes, backing_len);
+            }
+
             /// Serialize a SortedArrayBuilder into this Serialized struct, appending data to the writer
             pub fn serialize(
                 self: *Serialized,
@@ -282,11 +301,11 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             ) Allocator.Error!void {
                 const entries_slice = builder.entries.items;
 
-                // Append the entries data to the writer
-                const slice_ptr = try writer.appendSlice(allocator, entries_slice);
+                // Padding inside `Entry` is zeroed so the serialized bytes are
+                // deterministic; the offset is an integer so zero is representable.
+                const data_offset = try writer.appendSlicePodZeroedOffset(allocator, @as([]const Entry, entries_slice));
 
-                // Store the offset, len, and capacity
-                self.entries_offset = @intCast(@intFromPtr(slice_ptr.ptr));
+                self.entries_offset = @intCast(data_offset);
                 self.entries_len = entries_slice.len;
                 self.entries_capacity = entries_slice.len;
                 self.sorted = builder.sorted;
@@ -443,4 +462,49 @@ test "SortedArrayBuilder no duplicates case" {
 inline fn collectionsInvariant(comptime fmt: []const u8, args: anytype) noreturn {
     if (std.debug.runtime_safety) std.debug.panic(fmt, args);
     unreachable; // design.md: optimized builds carry no runtime check for a violated compiler invariant
+}
+
+test "SortedArrayBuilder.Serialized: the cache validator rejects a misaligned or out-of-range offset" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+    const validateSerializedRelocations = @import("serde_validation.zig").validateSerializedRelocations;
+
+    const Builder = SortedArrayBuilder(u32, u32);
+    // A composing header, as `ExposedItems.Serialized` and `ModuleEnv.Serialized`
+    // embed the builder: the validator reaches it only by walking the fields.
+    const Header = extern struct {
+        items: Builder.Serialized,
+    };
+
+    var builder = Builder.init();
+    defer builder.deinit(gpa);
+    try builder.put(gpa, 3, 30);
+    try builder.put(gpa, 1, 10);
+    try builder.put(gpa, 2, 20);
+    builder.ensureSorted(gpa);
+
+    var writer = CompactWriter.init();
+    defer writer.deinit(gpa);
+    const header = try writer.appendAlloc(gpa, Header);
+    try header.items.serialize(&builder, gpa, &writer);
+
+    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+    defer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+    const written: *Header = @ptrCast(@alignCast(buffer.ptr));
+
+    try validateSerializedRelocations(Header, written, buffer.len);
+
+    // An offset one byte past the entries is no longer aligned to `Entry`.
+    var misaligned = written.*;
+    misaligned.items.entries_offset += 1;
+    try testing.expectError(error.CorruptArtifact, validateSerializedRelocations(Header, &misaligned, buffer.len));
+
+    // A truncated buffer leaves the entries reaching past its end.
+    try testing.expectError(error.CorruptArtifact, validateSerializedRelocations(Header, written, buffer.len - 1));
+
+    // A corrupt length whose byte extent overflows.
+    var huge = written.*;
+    huge.items.entries_len = std.math.maxInt(u64);
+    try testing.expectError(error.CorruptArtifact, validateSerializedRelocations(Header, &huge, buffer.len));
 }

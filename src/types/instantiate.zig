@@ -371,6 +371,12 @@ pub const Instantiator = struct {
     /// Faithful definition copies retain annotation closure authority; fresh
     /// scheme uses start with ordinary inferred openness.
     preserve_annotation_tag_ext: bool = false,
+    /// Copy each bounded row extension (`DescriptorFlags.bounded_row_ext`,
+    /// an annotated definition's implicitly opened row) as the closed row the
+    /// annotation wrote, rather than as a fresh extension a use may widen:
+    /// the copy stands for the annotation itself, which the definition's
+    /// body must fit (design.md "Polarity").
+    close_bounded_row_exts: bool = false,
 
     /// A rank-1 scheme can contain quantified leaves below monomorphic
     /// structural nodes. While instantiating such a scheme, copy exactly the
@@ -1261,6 +1267,11 @@ pub const Instantiator = struct {
                 const fresh_var = try self.store.fresh();
                 try self.var_map.put(resolved_var, fresh_var);
 
+                if (self.close_bounded_row_exts and resolved.desc.flags.bounded_row_ext) {
+                    try self.fillPlaceholder(fresh_var, .{ .structure = .empty_tag_union }, flags);
+                    try machine.value_stack.append(self.store.gpa, fresh_var);
+                    return true;
+                }
                 if (self.purpose == .expected_shape or flex.constraints.len() == 0) {
                     const fresh_content = Content{ .flex = Flex{ .name = flex.name, .constraints = StaticDispatchConstraint.SafeList.Range.empty() } };
                     try self.fillPlaceholder(fresh_var, fresh_content, flags);
