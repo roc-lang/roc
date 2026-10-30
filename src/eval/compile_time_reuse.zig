@@ -286,7 +286,6 @@ fn copyRoot(module: *checked.CheckedModuleArtifact, previous: *const Previous, m
                     &previous.const_store.type_store,
                     &previous.names,
                     &module.canonical_names,
-                    null,
                     storedRootType(previous, match.previous),
                 ),
                 .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .repl_expr => null,
