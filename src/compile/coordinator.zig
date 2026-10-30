@@ -3518,7 +3518,11 @@ pub const Coordinator = struct {
         var boxy_objects: ?BoxyObjects = null;
         defer if (boxy_objects) |*objects| objects.deinit();
         if (self.specialization_strategy == .boxy) if (self.boxy_object_lowering) |lowering| if (self.cache_manager) |manager| if (manager.config.enabled) {
-            boxy_objects = .{ .coordinator = self, .lowering = lowering, .manager = manager, .interfaces = .init(self.gpa, self.roc_ctx.std_io) };
+            // The module objects are built within this evaluation, so their
+            // lowering, code generation, and cache writes count toward it.
+            var unit_lowering = lowering;
+            unit_lowering.config.timing = &self.ctfe_timing.lowering;
+            boxy_objects = .{ .coordinator = self, .lowering = unit_lowering, .manager = manager, .interfaces = .init(self.gpa, self.roc_ctx.std_io) };
         };
         if (boxy_objects) |*objects| options.boxy_objects = objects.source();
         options.cancel_request = self.cancel_request;
