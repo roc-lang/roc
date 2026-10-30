@@ -1,6 +1,9 @@
 //! Shared-memory control block for machine-code hot loading.
 
 const std = @import("std");
+const base_mod = @import("base");
+const ConcurrentU64 = base_mod.ConcurrentU64;
+const invariant = base_mod.invariant;
 const SharedMemoryAllocator = @import("SharedMemoryAllocator.zig");
 
 /// Magic number identifying a hot-load control block ("ROCH" little-endian).
@@ -231,10 +234,9 @@ pub fn publishedGeneration(control: *const Control) u64 {
 /// Return the latest coherent published generation and raise `last_coherent`
 /// to it. When no snapshot is coherent, return `last_coherent` unchanged, so the
 /// result never decreases.
-pub fn latestCoherentGeneration(control: *const Control, last_coherent: *std.atomic.Value(u64)) u64 {
-    const image = publishedImage(control) orelse return last_coherent.load(.monotonic);
-    const previous = last_coherent.fetchMax(image.generation, .monotonic);
-    return @max(previous, image.generation);
+pub fn latestCoherentGeneration(control: *const Control, last_coherent: *ConcurrentU64) u64 {
+    if (publishedImage(control)) |image| last_coherent.max(image.generation);
+    return last_coherent.load();
 }
 
 /// Return the shared-memory byte offset of the currently published image.
@@ -465,11 +467,14 @@ test "hot reload publication snapshots reject in-progress writes" {
     try std.testing.expectEqual(@as(usize, 16384), image.image_size);
 }
 
-test "hot reload coherent generation keeps the last value while a publication is in progress" {
+test "hot reload coherent generation starts at zero and ignores incomplete publications" {
     var control = std.mem.zeroes(Control);
+    var last_coherent = ConcurrentU64.init(0);
+    try std.testing.expectEqual(@as(u64, 0), latestCoherentGeneration(&control, &last_coherent));
+
     control.magic = MAGIC;
     control.format_version = FORMAT_VERSION;
-    var last_coherent: std.atomic.Value(u64) = .init(0);
+    try std.testing.expectEqual(@as(u64, 0), latestCoherentGeneration(&control, &last_coherent));
 
     storeU64(&control.publish_sequence, 2, .release);
     storeU64(&control.published_descriptor_offset, 512, .release);
@@ -482,6 +487,62 @@ test "hot reload coherent generation keeps the last value while a publication is
 
     storeU64(&control.publish_sequence, 4, .release);
     try std.testing.expectEqual(@as(u64, 5), latestCoherentGeneration(&control, &last_coherent));
+    try std.testing.expectEqual(@as(u64, 5), latestCoherentGeneration(&control, &last_coherent));
+}
+
+test "hot reload coherent generation keeps full-width maxima across stale and skipped publications" {
+    var control = std.mem.zeroes(Control);
+    control.magic = MAGIC;
+    control.format_version = FORMAT_VERSION;
+    var last_coherent = ConcurrentU64.init(0);
+    storeU64(&control.published_descriptor_offset, 512, .release);
+
+    const before_rollover: u64 = std.math.maxInt(u32);
+    storeU64(&control.published_generation, before_rollover, .release);
+    try std.testing.expectEqual(before_rollover, latestCoherentGeneration(&control, &last_coherent));
+
+    const high: u64 = (@as(u64, 1) << 32) + 7;
+    storeU64(&control.published_generation, high, .release);
+    try std.testing.expectEqual(high, latestCoherentGeneration(&control, &last_coherent));
+
+    // A snapshot taken before the newer publication must not lower the cache.
+    last_coherent.max(high + 100);
+    try std.testing.expectEqual(high + 100, latestCoherentGeneration(&control, &last_coherent));
+    try std.testing.expectEqual(high + 100, latestCoherentGeneration(&control, &last_coherent));
+
+    storeU64(&control.published_generation, high + 1000, .release);
+    try std.testing.expectEqual(high + 1000, latestCoherentGeneration(&control, &last_coherent));
+    try std.testing.expectEqual(high + 1000, last_coherent.load());
+}
+
+test "hot reload coherent generation supports concurrent pollers" {
+    if (@import("builtin").single_threaded) return error.SkipZigTest;
+
+    var control = std.mem.zeroes(Control);
+    control.magic = MAGIC;
+    control.format_version = FORMAT_VERSION;
+    storeU64(&control.published_descriptor_offset, 512, .release);
+    const generation: u64 = (@as(u64, 1) << 32) + 91;
+    storeU64(&control.published_generation, generation, .release);
+    var last_coherent = ConcurrentU64.init(0);
+
+    const Poller = struct {
+        fn run(snapshot: *const Control, cache: *ConcurrentU64) void {
+            for (0..1000) |_| {
+                std.testing.expectEqual(generation, latestCoherentGeneration(snapshot, cache)) catch
+                    @panic("concurrent hot reload generation poll returned the wrong value");
+            }
+        }
+    };
+    var threads: [4]std.Thread = undefined;
+    var spawned: usize = 0;
+    errdefer for (threads[0..spawned]) |thread| thread.join();
+    for (&threads) |*thread| {
+        thread.* = try std.Thread.spawn(.{}, Poller.run, .{ &control, &last_coherent });
+        spawned += 1;
+    }
+    for (threads) |thread| thread.join();
+    try std.testing.expectEqual(generation, last_coherent.load());
 }
 
 test "hot reload acknowledgement snapshots reject in-progress writes" {
@@ -545,12 +606,4 @@ test "hot reload image retain rejects descriptors that stopped being current" {
     try std.testing.expectEqual(@as(u32, 0), descriptorSnapshot(desc0).refs);
     try std.testing.expectEqual(@as(u32, 1), descriptorSnapshot(desc1).refs);
     releaseDescriptor(retained.descriptor);
-}
-
-/// A violated compiler invariant (design.md): builds with runtime safety
-/// panic with this message, and optimized builds treat it as unreachable.
-/// The `ipc` module does not depend on `base`.
-inline fn invariant(comptime fmt: []const u8, args: anytype) noreturn {
-    if (std.debug.runtime_safety) std.debug.panic(fmt, args);
-    unreachable; // callers pass only compiler invariants, which a correct compiler never violates
 }

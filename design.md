@@ -24814,9 +24814,9 @@ or uninspectable archives fail the build. This check is unconditional across
 optimization modes and runs only in Roc's build graph: neither the released
 compiler nor user executables contain or execute the verifier. The focused
 archive test cross-builds all shipped native architectures and object formats.
-Compiler-private cache synchronization and stack probing are local to the
-shim; exported builtins payloads and the interpreter's assembly trampoline
-are not machine-code run-shim inputs.
+Compiler-private cache synchronization, stack probing, wide integer shifts, and
+ARM EABI integer/float conversion helpers are local to the shim; exported builtins payloads and the
+interpreter's assembly trampoline are not machine-code run-shim inputs.
 Compiler profiling is not a machine-code run-shim dependency either: the shim
 root disables Tracy instrumentation and its build never attaches the Tracy
 client, including when the compiler itself is built with profiling enabled.

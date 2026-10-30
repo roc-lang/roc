@@ -1,6 +1,7 @@
 extern void *roc_shim_get_ops(void);
 extern void roc_entrypoint(void);
 extern void roc_shim_default_main(void);
+extern unsigned long long roc_hot_reload_generation(void);
 
 // Deliberate collisions. Platform definitions must coexist with the shim's
 // local definitions, and neither may satisfy or interpose the other's uses.
@@ -10,5 +11,5 @@ int mainCRTStartup(void) {
     int (*shim_helper)(void) = (int (*)(void))roc_shim_get_ops();
     roc_entrypoint();
     roc_shim_default_main();
-    return shim_helper() == 42 && compiler_private_helper() == 99 ? 0 : 1;
+    return shim_helper() == 42 && compiler_private_helper() == 99 && roc_hot_reload_generation() == 0 ? 0 : 1;
 }

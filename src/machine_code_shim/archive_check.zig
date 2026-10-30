@@ -385,7 +385,7 @@ fn prepareCoffArchive(gpa: std.mem.Allocator, bytes: []const u8) PrepareError![]
     defer gpa.free(object);
     try localizeCoff(object);
 
-    // Rebuild the archive index so it advertises only the three public roots.
+    // Rebuild the archive index so it advertises only the public roots.
     // COFF linkers accept the standard first (big-endian) linker member; no
     // long-name table or second linker member is needed for a single short name.
     var index_size: usize = 4 + 4 * exports.len;
@@ -623,7 +623,7 @@ test "COFF preparation preserves relocations and indexes only public roots" {
     putInt(u16, &bytes, 20 + 32, 1);
     putInt(u32, &bytes, 20 + 36, 0x40001040); // read-only initialized COMDAT
     putInt(u64, &bytes, 60, 0x12345678);
-    putInt(u32, &bytes, 68 + 4, 3); // Relocation still addresses symbol index 3.
+    putInt(u32, &bytes, 68 + 4, exports.len); // Relocation addresses the private constant after the public roots.
     putInt(u16, &bytes, 68 + 8, 1); // IMAGE_REL_AMD64_ADDR64
     var strsize: usize = 4;
     for (names, 0..) |name, i| {
@@ -638,7 +638,7 @@ test "COFF preparation preserves relocations and indexes only public roots" {
     const object = bytes[0 .. strings_start + strsize];
     const original = bytes;
     try localizeCoff(object);
-    try std.testing.expectEqual(@as(u8, 3), bytes[table_start + 3 * 18 + 16]);
+    try std.testing.expectEqual(@as(u8, 3), bytes[table_start + exports.len * 18 + 16]);
     for (0..exports.len) |i| try std.testing.expectEqual(@as(u8, 2), bytes[table_start + i * 18 + 16]);
     try std.testing.expectEqualSlices(u8, original[60..78], bytes[60..78]);
     try std.testing.expectEqual(@as(u32, 0), (try int(u32, object, 56)) & 0x1000);
