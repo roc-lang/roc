@@ -54,7 +54,10 @@ pub fn constPlanOf(program: *Program, ty: TypeId) Allocator.Error!LirProgram.Con
             .str => .str,
             .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => .scalar,
         },
-        .empty_record => .zst,
+        // The empty record is stored as a record of no fields, as the
+        // Solved evaluator stores it; `.zst` is the Solved program's own
+        // zero-sized type, which no checked type is.
+        .empty_record => .{ .record = try allocator.alloc(LirProgram.ConstPlanId, 0) },
         .list => |elem| .{ .list = try constPlanOf(program, elem) },
         .box => |payload| .{ .box = try constPlanOf(program, payload) },
         .tuple => |items_span| blk: {
@@ -134,7 +137,7 @@ pub fn constTypeOf(program: *Program, ty: TypeId) Allocator.Error!const_store.Co
     try program.const_schema.types.put(allocator, ty, id);
     const stored: const_store.ConstType = switch (store.get(ty)) {
         .primitive => |primitive| .{ .primitive = primitive },
-        .empty_record => .zst,
+        .empty_record => .{ .record = try const_types.appendFieldSpan(&.{}) },
         .list => |elem| .{ .list = try constTypeOf(program, elem) },
         .box => |payload| .{ .box = try constTypeOf(program, payload) },
         .tuple => |items_span| blk: {

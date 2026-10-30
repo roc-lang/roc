@@ -2,6 +2,7 @@
 //! design.md's "`.boxy` Runtime Lowering" section.
 
 pub const Lower = @import("lower.zig");
+pub const LiteralValues = @import("literal_values.zig").LiteralValues;
 pub const Types = @import("types.zig");
 pub const Layouts = @import("layouts.zig");
 pub const StaticDescs = @import("static_descs.zig");

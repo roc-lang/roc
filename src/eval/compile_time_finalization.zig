@@ -20,6 +20,7 @@ const canonical = check.CanonicalNames;
 const CompilerHost = @import("compiler_host.zig");
 const ConstStoreWriter = @import("const_store_writer.zig");
 const NativeRootExport = @import("native_root_export.zig");
+const BoxyInProcessState = @import("boxy_runtime").compiled.InProcessState;
 const FrozenRootTranscode = @import("frozen_root_transcode.zig");
 const CompileTimeHost = @import("compile_time_host.zig");
 const checked_root_graph = @import("checked_root_graph.zig");
@@ -138,6 +139,9 @@ pub const Options = struct {
     /// dependency-ordered stages; `.boxy` lowers each dependency level as a
     /// Boxy program (design.md "Caching Under `.boxy`").
     strategy: base.SpecializationStrategy = .lss,
+    /// Where evaluation records every literal root's converted value or
+    /// failure, for a `.boxy` runtime program. Set by `finalizeProgram`.
+    boxy_literals: ?*lir.CheckedPipeline.BoxyLiteralValues = null,
     /// Where a compile-time failure is reported when the source it names
     /// belongs to a checked module this finalization does not complete: a
     /// literal in a module whose checking finished in an earlier compilation,
@@ -606,6 +610,9 @@ pub const ProgramSession = struct {
     /// The position of each runtime request in the specialized program's root
     /// plan.
     runtime_positions: []u32,
+    /// For a `.boxy` runtime consumer: the values evaluation converted the
+    /// program's instance-dependent literals to.
+    boxy_literals: ?*lir.CheckedPipeline.BoxyLiteralValues = null,
     /// All compile-time observations, including replayed observations, were
     /// empty. Together with the caller's error check this certifies discovery.
     discovery_silent: bool = false,
@@ -630,11 +637,22 @@ pub const ProgramSession = struct {
             .respecialized => |*stages| if (stages.*) |*owned| owned.deinit(),
         }
         if (self.runtime_prepared) |*prepared| prepared.deinit();
+        if (self.boxy_literals) |values| {
+            values.deinit();
+            self.allocator.destroy(values);
+        }
         self.allocator.free(self.runtime_positions);
         self.allocator.free(self.modules.root.relation_modules);
         self.allocator.free(self.modules.imports);
         deinitRootRequests(self.allocator, self.runtime_roots);
         self.* = undefined;
+    }
+
+    /// For a `.boxy` runtime consumer: the values evaluation converted the
+    /// program's instance-dependent literals to, which each module's unit
+    /// lowering reads (design.md "Literal Tables").
+    pub fn boxyLiteralValues(self: *const ProgramSession) ?*const lir.CheckedPipeline.BoxyLiteralValues {
+        return self.boxy_literals;
     }
 
     /// The compile-time reads of the specializations compile-time
@@ -682,7 +700,7 @@ pub const ProgramSession = struct {
             } else if (expected != actual) finalizationInvariant("runtime request policy differs from the declared consumer");
         }
         self.runtime_target = null;
-        if (target.specialization_strategy == .boxy) return lowerBoxyRuntime(allocator, self.modules, roots, target);
+        if (target.specialization_strategy == .boxy) return lowerBoxyRuntime(allocator, self.modules, roots, target, self.boxy_literals);
         if (self.runtime_prepared) |prepared| {
             self.runtime_prepared = null;
             var owned = prepared;
@@ -1289,7 +1307,16 @@ pub fn finalizeProgram(
 
     var stored_demand = StoredRootSet{};
     defer stored_demand.deinit(allocator);
-    var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, runtime_target, options, &debug_events, &stored_demand, true, lss_runtime, demand_driven, null);
+    // A `.boxy` runtime program reads the values evaluation converts its
+    // instance-dependent literals to.
+    const boxy_literals = try newBoxyLiterals(allocator, runtime_target);
+    errdefer if (boxy_literals) |values| {
+        values.deinit();
+        allocator.destroy(values);
+    };
+    var evaluation_options = options;
+    evaluation_options.boxy_literals = boxy_literals;
+    var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, runtime_target, evaluation_options, &debug_events, &stored_demand, true, lss_runtime, demand_driven, null);
     errdefer specialized.deinit();
     var runtime_stages: ProgramSession.RuntimeStages = .evaluation;
     errdefer switch (runtime_stages) {
@@ -1392,8 +1419,19 @@ pub fn finalizeProgram(
         .runtime_stages = runtime_stages,
         .runtime_prepared = runtime_prepared,
         .runtime_positions = runtime_positions,
+        .boxy_literals = boxy_literals,
         .discovery_silent = debug_events.events.items.len == 0 and !debug_events.emitted,
     };
+}
+
+/// The literal values a `.boxy` runtime consumer reads, or null for any
+/// other consumer.
+fn newBoxyLiterals(allocator: Allocator, runtime_target: ?lir.CheckedPipeline.TargetConfig) Allocator.Error!?*lir.CheckedPipeline.BoxyLiteralValues {
+    const target = runtime_target orelse return null;
+    if (target.specialization_strategy != .boxy) return null;
+    const values = try allocator.create(lir.CheckedPipeline.BoxyLiteralValues);
+    values.* = lir.CheckedPipeline.BoxyLiteralValues.init(allocator);
+    return values;
 }
 
 /// Report destinations for a specialization whose literal roots an earlier
@@ -1808,6 +1846,22 @@ fn finalizeProgramBoxy(
             for (cycles.items) |group| try evaluateBoxyCycle(allocator, modules, lowering_modules, states, roots.items, groups.membersOf(group), evaluation_options);
         }
     }
+    // Every compile-time root is complete. The program's instance-dependent
+    // literals are converted by the Solved evaluator's discovery: it
+    // specializes a runtime body only where it can register a literal
+    // root, evaluates each literal root, and records the values a `.boxy`
+    // runtime program reads as its literal tables (design.md "Literal
+    // Tables").
+    const boxy_literals = try newBoxyLiterals(allocator, runtime_target);
+    errdefer if (boxy_literals) |values| {
+        values.deinit();
+        allocator.destroy(values);
+    };
+    var discovery_options = options;
+    discovery_options.debug_events = &debug_events;
+    discovery_options.boxy_literals = boxy_literals;
+    var discovered = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, runtime_target, discovery_options, &debug_events, null, true, false, false, null);
+    discovered.deinit();
     for (modules) |entry| {
         if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
         try entry.module.const_store.verifyComplete();
@@ -1832,6 +1886,7 @@ fn finalizeProgramBoxy(
         .runtime_stages = .evaluation,
         .runtime_prepared = null,
         .runtime_positions = runtime_positions,
+        .boxy_literals = boxy_literals,
         .discovery_silent = debug_events.events.items.len == 0 and !debug_events.emitted,
     };
 }
@@ -2129,10 +2184,11 @@ pub fn lowerBoxyRuntime(
     modules: lir.CheckedPipeline.CheckedModuleSet,
     roots: lir.CheckedPipeline.RootRequestSet,
     target: lir.CheckedPipeline.TargetConfig,
+    literal_values: ?*const lir.CheckedPipeline.BoxyLiteralValues,
 ) RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
     std.debug.assert(target.specialization_strategy == .boxy);
     try lir.CheckedPipeline.requireHostedProceduresBound(modules, target);
-    var prepared = try lir.CheckedPipeline.prepareBoxyCheckedModules(allocator, modules, roots, target);
+    var prepared = try lir.CheckedPipeline.prepareBoxyCheckedModules(allocator, modules, roots, target, literal_values);
     defer prepared.deinit();
     return prepared.lower(target);
 }
@@ -4065,6 +4121,7 @@ fn evalInterpreterLiteralRoot(
             error.OutOfMemory => return error.OutOfMemory,
             error.RuntimeError => finalizationInvariant("a literal root's value held an unresolvable callable"),
         };
+        try recordBoxyLiteralValue(options, lowered, plan, result.value);
         break :evaluated null;
     };
     // A failure that read a member of its group not yet evaluated
@@ -4079,6 +4136,7 @@ fn evalInterpreterLiteralRoot(
     }
     const failed = failure orelse return true;
     try recordLiteralRootFailure(allocator, owners, lowered, plan, failed);
+    try recordBoxyLiteralFailure(options, lowered, plan, failed.message);
     if (options.publish_shared_slots) {
         try program.slotEnvironment().publishFailureOrigin(plan.site.owner, producer, .{ .loc = failed.loc, .region = failed.region }, &lowered.lir_result);
         try program.slotEnvironment().publishFailure(lowered, plan.site.owner, producer, .{ .message = failed.message, .kind = .crash }, .{ .resolve = InterpreterProgram.resolveFunction });
@@ -4112,9 +4170,11 @@ fn evalDevLiteralRoot(
     host.entry_frame = @frameAddress();
     var crash_boundary = host.enterCrashBoundary();
     const entered = builtins.in_process_host.enter(host.ops(), null);
+    const composition = native.enterComposition();
     if (crash_boundary.set() == 0) {
         native.executable.callRocABIAt(entry_offset, @ptrCast(ret_buf.ptr), null);
     }
+    DevProgram.leaveComposition(composition);
     builtins.in_process_host.leave(entered);
     crash_boundary.deinit();
 
@@ -4145,16 +4205,49 @@ fn evalDevLiteralRoot(
         .crashed => {},
     };
     const failed = failure orelse {
+        try recordBoxyLiteralValue(options, lowered, plan, .{ .ptr = ret_buf.ptr });
         if (options.publish_shared_slots) try native.publishRoot(lowered, plan.site.owner, producer, plan.shape(), .{ .ptr = ret_buf.ptr });
         if (options.publish_shared_slots) try native.publishFailure(lowered, plan.site.owner, producer, null);
         return true;
     };
     try recordLiteralRootFailure(allocator, owners, lowered, plan, failed);
+    try recordBoxyLiteralFailure(options, lowered, plan, failed.message);
     if (options.publish_shared_slots) {
         try native.slots.publishFailureOrigin(plan.site.owner, producer, .{ .loc = failed.loc, .region = failed.region }, &lowered.lir_result);
         try native.publishFailure(lowered, plan.site.owner, producer, .{ .message = failed.message, .kind = .crash });
     }
     return true;
+}
+
+/// Record a literal root's converted value, and the type it converted the
+/// literal at, for a `.boxy` runtime program.
+fn recordBoxyLiteralValue(options: Options, lowered: *const lir.CheckedPipeline.LoweredProgram, plan: LirProgram.LiteralRootPlan, value: Value) Allocator.Error!void {
+    const values = options.boxy_literals orelse return;
+    var writer = ConstStoreWriter.Writer.initStore(values.allocator, &values.store, &values.names, &lowered.lir_result);
+    defer writer.deinit();
+    const node = writer.storeLiteral(plan.plan, plan.ret_layout, value) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.RuntimeError => finalizationInvariant("a literal root's value held an unresolvable callable"),
+    };
+    const ty = writer.storeLiteralType(plan) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.RuntimeError => finalizationInvariant("a literal root's type could not be stored"),
+    };
+    try values.entries.append(values.allocator, .{ .module = plan.module, .expr = @fromBackingInt(plan.site.checked_expr), .ty = ty, .outcome = .{ .value = node } });
+}
+
+/// Record a literal root's failed conversion, for a `.boxy` runtime program.
+fn recordBoxyLiteralFailure(options: Options, lowered: *const lir.CheckedPipeline.LoweredProgram, plan: LirProgram.LiteralRootPlan, message: []const u8) Allocator.Error!void {
+    const values = options.boxy_literals orelse return;
+    var writer = ConstStoreWriter.Writer.initStore(values.allocator, &values.store, &values.names, &lowered.lir_result);
+    defer writer.deinit();
+    const ty = writer.storeLiteralType(plan) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.RuntimeError => finalizationInvariant("a literal root's type could not be stored"),
+    };
+    const owned = try values.allocator.dupe(u8, message);
+    errdefer values.allocator.free(owned);
+    try values.entries.append(values.allocator, .{ .module = plan.module, .expr = @fromBackingInt(plan.site.checked_expr), .ty = ty, .outcome = .{ .failed = owned } });
 }
 
 fn recordLiteralRootFailure(
@@ -4340,7 +4433,7 @@ const DevRootJob = struct {
 };
 
 const DevRunContext = struct {
-    executable: *const backend.ExecutableMemory,
+    program: *const DevProgram,
     jobs: []DevRootJob,
     std_io: ?std.Io,
     progress_reporter: ?*DevProgressReporter,
@@ -5169,6 +5262,9 @@ const DevProgram = struct {
     /// The bytes the program's erased callables reserve before their
     /// captures (`LirProgram.Result.erased_capture_prefix`).
     capture_prefix: u32,
+    /// What a `.boxy` program's code composes while it runs, current on
+    /// each thread that runs it.
+    composition: ?*BoxyInProcessState,
 
     fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, options: Options) FinalizeError!DevProgram {
         const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
@@ -5302,7 +5398,19 @@ const DevProgram = struct {
             .entry_offsets = entry_offsets,
             .excerpts = artifacts,
             .capture_prefix = lowered.lir_result.erased_capture_prefix,
+            .composition = if (lowered.lir_result.store.runtime_contract == .boxy) try BoxyInProcessState.create(allocator) else null,
         };
+    }
+
+    /// Make the program's composition state current on this thread while
+    /// its code runs here.
+    fn enterComposition(self: *const DevProgram) ?BoxyInProcessState.Entered {
+        const composition = self.composition orelse return null;
+        return composition.enter();
+    }
+
+    fn leaveComposition(entered: ?BoxyInProcessState.Entered) void {
+        if (entered) |composition| BoxyInProcessState.leave(composition);
     }
 
     fn compileProcedures(allocator: Allocator, codegen: *backend.HostLirCodeGen, demand: []const lir.LIR.LirProcSpecId, static_helpers: []const @import("layout").RcHelperKey, options: Options) Allocator.Error!NativeProcCompiler.Retained {
@@ -5402,6 +5510,7 @@ const DevProgram = struct {
     }
 
     fn deinit(self: *DevProgram) void {
+        if (self.composition) |composition| composition.destroy();
         self.entry_offsets.deinit();
         self.executable.deinit();
         self.splice.deinit();
@@ -5501,7 +5610,7 @@ fn evalDevProgramRoots(
     defer progress.deinit();
     try progress.start();
     var run_context = DevRunContext{
-        .executable = &native.executable,
+        .program = native,
         .jobs = jobs[0..jobs_len],
         .std_io = options.std_io,
         .progress_reporter = if (progress.thread == null) null else &progress,
@@ -5672,13 +5781,15 @@ fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
     job.host.entry_frame = @frameAddress();
     var crash_boundary = job.host.enterCrashBoundary();
     const entered = builtins.in_process_host.enter(job.host.ops(), null);
+    const composition = context.program.enterComposition();
     if (crash_boundary.set() == 0) {
-        context.executable.callRocABIAt(
+        context.program.executable.callRocABIAt(
             job.entry_offset,
             @ptrCast(job.ret_buf.ptr),
             null,
         );
     }
+    DevProgram.leaveComposition(composition);
     builtins.in_process_host.leave(entered);
     crash_boundary.deinit();
 

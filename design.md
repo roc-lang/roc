@@ -14763,9 +14763,12 @@ Descriptors come from two sources and nowhere else:
   parameters: `desc_list(item)`, `desc_box(payload)`, `desc_record(fields)`,
   `desc_tag_union(variants)`, `desc_nominal(declaration, args)`,
   `desc_erased_callable`. The runtime composes the layout with the shared
-  layout code and interns the result in a process-global immortal cache keyed
-  by constructor and operand identities, so a composition executed again
-  returns the same pointer and allocates nothing.
+  layout code and interns the result in an immortal cache keyed by
+  constructor and operand identities, so a composition executed again
+  returns the same pointer and allocates nothing. A platform build's cache
+  is process-global; in the compiler's own process each program has its own
+  (below), since the operand identities are addresses in the program's code
+  and static data.
 
 A recursive type composes through placeholders. The lowerer finds the
 type's recursive component in the graph of inline components (record fields,
@@ -15037,8 +15040,15 @@ registry, no sidecar, no descriptor numbering, no deferred or pending calls,
 and no table a backend must renumber. Static descriptors, static dictionaries,
 static callables, and the name table are static data of the program.
 Composed descriptors and dictionaries, and the cache interning them, are
-immortal: in a platform build they come from process-lifetime pages, not from
-the host's allocator, which owns only the values a program releases.
+immortal to the program composing them: in a platform build they come from
+process-lifetime pages, not from the host's allocator, which owns only the
+values a program releases. In the compiler's own process, where programs come
+and go (compile-time evaluation levels, test and run images, glue plugins),
+each program's runner owns an `InProcessState` holding what that program
+composes and makes it current on every thread running the program's code;
+the interning keys are addresses in the program's code and static data, which
+the process reuses once the program is gone, so the state is destroyed with
+the program and never shared between programs.
 
 #### Lowering Implementation Constraints
 
@@ -15166,18 +15176,20 @@ nothing to store such a value by. The `.boxy` evaluator specializes exactly
 those roots, one Solved program per level (`RootFilter`), and the group they
 belong to with them.
 
-A `.boxy` program converts an instance-dependent literal where it is
-evaluated: the checked `from_numeral`, `from_quote`, or interpolation
-dispatch plan runs at the instance the body has there, and its `Try` result
-is unwrapped in place (`Builder.finishLiteralConversion`), the `Ok` payload
-being the value and an `Err` rejecting the literal with the conversion's
-message, under the one-tag error row the checker fixes for every conversion.
-No literal root is registered and no converted value is stored for such a
-literal; a literal whose conversion is independent of its instance has a
-conversion root, evaluated like any other root, whose stored value every use
-restores. A rejected literal in a generic body is therefore reported where
-the Solved evaluator's discovery would report it only when a compile-time
-root reaches the literal; a runtime body reports it when it runs.
+An instance-dependent literal (one in a generic body, converted at each
+instance the program reaches it at) is converted by the Solved evaluator's
+discovery under either strategy: once every root is complete, the `.boxy`
+evaluator runs the same demand-driven discovery the Solved evaluator runs
+(`specializeAndEvaluate` with the program roots as discovery roots), which
+specializes a runtime body only where it can register a literal root,
+evaluates each literal root, and records the values a `.boxy` runtime
+program reads as its literal tables. A numeral requirement is no runtime
+dictionary (descriptor selection converts a numeral at a builtin instance),
+so a custom instance's conversion exists at runtime only through its table;
+the tables are what keep a `.boxy` program's literal rejections, conversion
+effects, and dormant-code diagnostics identical to a specialized program's.
+A module whose object embeds a literal table is keyed by the program the
+table was converted for (`boxy_object_cache.KeyInput.literal_program`).
 
 ### Strategy Equivalence Tests
 

@@ -11506,15 +11506,15 @@ fn customBoxyModuleObjectCache(
 
     const Build = struct { name: []const u8, no_cache: bool, objects: []const u8 };
     // The program's units are Builtin, Combinator, Tree, Main, and the
-    // default platform's two modules; the root unit's object makes seven.
-    // An edit of the app rebuilds Main's unit and the root unit; an edit
-    // of Tree rebuilds Tree's unit and, since Main imports it, both again.
+    // default platform's module; the root unit's object makes six. An edit
+    // of the app rebuilds Main's unit and the root unit; an edit of Tree
+    // rebuilds Tree's unit and, since Main imports it, both again.
     const builds = [_]Build{
-        .{ .name = "cold", .no_cache = false, .objects = "Boxy objects: 0 cached, 7 built" },
-        .{ .name = "warm", .no_cache = false, .objects = "Boxy objects: 7 cached, 0 built" },
+        .{ .name = "cold", .no_cache = false, .objects = "Boxy objects: 0 cached, 6 built" },
+        .{ .name = "warm", .no_cache = false, .objects = "Boxy objects: 6 cached, 0 built" },
         .{ .name = "nocache", .no_cache = true, .objects = "" },
-        .{ .name = "app_edit", .no_cache = false, .objects = "Boxy objects: 5 cached, 2 built" },
-        .{ .name = "lib_edit", .no_cache = false, .objects = "Boxy objects: 4 cached, 3 built" },
+        .{ .name = "app_edit", .no_cache = false, .objects = "Boxy objects: 4 cached, 2 built" },
+        .{ .name = "lib_edit", .no_cache = false, .objects = "Boxy objects: 3 cached, 3 built" },
     };
     var first_bytes: ?[]const u8 = null;
     for (builds) |build| {

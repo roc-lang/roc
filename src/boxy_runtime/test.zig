@@ -7,6 +7,7 @@ const desc_mod = @import("desc.zig");
 const compose = @import("compose.zig");
 const walk = @import("walk.zig");
 const exports = @import("exports.zig");
+const compiled = @import("compiled.zig");
 
 const testing = std.testing;
 const RocOps = builtins.host_abi.RocOps;
@@ -507,6 +508,10 @@ test "list element callbacks and C entry points reach the entered host" {
     const ops = env.ops();
     const saved = builtins.in_process_host.enter(ops, null);
     defer builtins.in_process_host.leave(saved);
+    const state = try compiled.InProcessState.create(testing.allocator);
+    defer state.destroy();
+    const entered = state.enter();
+    defer compiled.InProcessState.leave(entered);
 
     const str_desc = compose.strDesc();
     var element = bigStr("an element string long enough for the heap", ops);

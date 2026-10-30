@@ -10,7 +10,9 @@
 //! identities of its operands (descriptor addresses and name ids): composing
 //! again with the same operands returns the same pointer and allocates
 //! nothing. Descriptors and the cache live in immortal memory
-//! (`immortalBytes`) and are never freed.
+//! (`immortalBytes`): a platform's for the life of the process, the
+//! compiler's own for the life of the program composing them
+//! (`compiled.InProcessState`).
 
 const std = @import("std");
 const builtins = @import("builtins");
@@ -148,8 +150,9 @@ pub const VariantInput = extern struct {
     }
 };
 
-/// The process-global composition cache, through which the C entry points
-/// compose.
+/// A platform's composition cache, through which its C entry points
+/// compose. The compiler's process composes into the running program's
+/// `compiled.InProcessState` instead.
 pub var process_cache: Cache = .{};
 
 /// An immortal interning table from constructor keys to descriptors.

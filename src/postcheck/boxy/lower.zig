@@ -52,6 +52,9 @@ pub const Input = struct {
     list_in_place_map: bool = false,
     /// Record each platform entrypoint's host boundary digest.
     host_boundary_digests: bool = false,
+    /// The values compile-time evaluation converted the program's
+    /// instance-dependent literals to, when the program was evaluated.
+    literal_values: ?*const @import("literal_values.zig").LiteralValues = null,
     /// The lowering is a compile-time evaluator's: its roots are
     /// compile-time roots, each lowered with the plan and stored type the
     /// store writer keeps its value by (`LirProgram.ConstRootPlan`), and a
@@ -227,8 +230,9 @@ pub const WorkerKey = union(enum) {
 /// Why a dictionary slot's method crashes.
 pub const CrashDictionary = enum { checked_error, unreachable_value };
 
-/// Where a stored constant lives: a checked module's constant store.
-pub const ConstSource = union(enum) { module: ModuleIndex };
+/// Where a stored constant lives: a checked module's constant store, or the
+/// program's converted literal values (`Input.literal_values`).
+pub const ConstSource = union(enum) { module: ModuleIndex, literals };
 
 /// Whether `primitive` is a 128-bit SIMD vector.
 fn descFormatIsVector(primitive: types.Primitive) bool {
@@ -414,6 +418,9 @@ pub const Program = struct {
     lowering_module_ids: []LIR.LoweringModuleId = &.{},
     /// Modules by the checker's `module_idx`.
     by_module_idx: std.AutoHashMapUnmanaged(u32, ModuleIndex) = .empty,
+    /// The converted values of each instance-dependent literal, by the
+    /// literal: indices into `Input.literal_values.entries`.
+    literal_entries: std.AutoHashMapUnmanaged(ExprKey, std.ArrayList(u32)) = .empty,
     /// The constant store plans and stored types of the compile-time roots
     /// this lowering evaluates (`ConstSchema`).
     const_schema: ConstSchema = .{},
@@ -600,6 +607,7 @@ pub const Program = struct {
     pub fn constStore(self: *const Program, source: ConstSource) *const check.ConstStore.ConstStore {
         return switch (source) {
             .module => |index| self.module(index).view.const_store,
+            .literals => &(self.input.literal_values orelse invariant("a literal table names values no evaluation converted")).store,
         };
     }
 
@@ -607,6 +615,7 @@ pub const Program = struct {
     pub fn constNames(self: *const Program, source: ConstSource) *const checked_names.CanonicalNameStore {
         return switch (source) {
             .module => |index| self.module(index).nameStore(),
+            .literals => &(self.input.literal_values orelse invariant("a literal table names values no evaluation converted")).names,
         };
     }
 
@@ -1853,6 +1862,11 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         program.exported_bindings.deinit(allocator);
         program.callable_eval_by_pattern.deinit(allocator);
         program.platform_identities.deinit(allocator);
+        {
+            var entries = program.literal_entries.valueIterator();
+            while (entries.next()) |list| list.deinit(allocator);
+            program.literal_entries.deinit(allocator);
+        }
         program.const_schema.deinit(allocator);
         program.wrapper_by_root.deinit(allocator);
         program.hosted.deinit(allocator);
@@ -1890,6 +1904,16 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         }
         for (view.view.entry_wrappers.wrappers.items) |wrapper| {
             try program.wrapper_by_root.put(allocator, .{ .module = view.index, .root = wrapper.root }, wrapper.template);
+        }
+    }
+    if (input.literal_values) |values| {
+        for (values.entries.items, 0..) |entry, index| {
+            // The values are the program's; a module unit lowers the
+            // literals of its own modules.
+            const module = program.modules.find(entry.module) orelse continue;
+            const slot = try program.literal_entries.getOrPut(allocator, .{ .module = module.index, .expr = entry.expr });
+            if (!slot.found_existing) slot.value_ptr.* = .empty;
+            try slot.value_ptr.append(allocator, @intCast(index));
         }
     }
     try solvePlatformIdentities(&program);

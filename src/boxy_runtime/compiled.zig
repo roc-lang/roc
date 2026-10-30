@@ -385,8 +385,8 @@ fn targetVariant(to: *const TypeDesc, source: *const Variant, ops: *RocOps) *con
 
 // Dictionaries.
 
-/// Dictionary callables and dictionary records, interned by constructor and
-/// operand words. Both are immortal.
+/// A platform's dictionary callables and dictionary records, interned by
+/// constructor and operand words. Both are immortal.
 var dictionary_cache: compose.Cache = .{};
 
 const dict_compose_tag: u64 = 1;
@@ -414,7 +414,7 @@ pub fn dictCompose(callable_fn: erased_callable.CallableFnPtr, capture_prefix: u
     key[1] = @intFromPtr(callable_fn);
     key[2] = capture_prefix;
     for (captures, key[3..]) |capture, *word| word.* = capture;
-    if (dictionary_cache.lookup(key)) |existing| return @ptrCast(@constCast(existing));
+    if (dictionaryCache().lookup(key)) |existing| return @ptrCast(@constCast(existing));
 
     const capture_size = capture_prefix + captures.len * @sizeOf(usize);
     const payload_size = erased_callable.payloadSize(capture_size);
@@ -426,7 +426,7 @@ pub fn dictCompose(callable_fn: erased_callable.CallableFnPtr, capture_prefix: u
     @memset(capture_bytes[0..capture_prefix], 0);
     const words: [*]align(1) usize = @ptrCast(capture_bytes + capture_prefix);
     for (captures, 0..) |capture, index| words[index] = capture;
-    return @ptrCast(@constCast(dictionary_cache.intern(key, @ptrCast(@alignCast(data)), immortal_ops)));
+    return @ptrCast(@constCast(dictionaryCache().intern(key, @ptrCast(@alignCast(data)), immortal_ops)));
 }
 
 /// An immortal record of method callables, interned by its callables.
@@ -442,11 +442,11 @@ pub fn dictRecord(methods: []const usize, immortal_ops: *RocOps) [*]const usize 
     defer if (scratch) |words| immortal_ops.dealloc(@ptrCast(words), @alignOf(u64));
     key[0] = dict_record_tag;
     for (methods, key[1..]) |method, *word| word.* = method;
-    if (dictionary_cache.lookup(key)) |existing| return @ptrCast(@alignCast(existing));
+    if (dictionaryCache().lookup(key)) |existing| return @ptrCast(@alignCast(existing));
 
     const record: [*]usize = @ptrCast(@alignCast(compose.immortalBytes(immortal_ops, @max(methods.len, 1) * @sizeOf(usize), @alignOf(usize))));
     @memcpy(record[0..methods.len], methods);
-    return @ptrCast(@alignCast(dictionary_cache.intern(key, @ptrCast(@alignCast(record)), immortal_ops)));
+    return @ptrCast(@alignCast(dictionaryCache().intern(key, @ptrCast(@alignCast(record)), immortal_ops)));
 }
 
 // List operations through an element descriptor.
@@ -715,41 +715,125 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
     }
 }
 
-// Immortal memory for the compiler's own process.
+// Composition state.
 
 /// Where composed descriptors and dictionaries are allocated. They are
-/// immortal. A platform's runtime allocates them through its host, whose
-/// allocations live as long as the process. In the compiler's process,
-/// evaluations come and go with their own allocators while the composition
-/// caches are process-global, so composition allocates from process-lifetime
-/// memory and delivers a crash to the evaluation running on its thread.
+/// immortal to the code composing them. A platform's runtime allocates them
+/// through its host, whose allocations live as long as the process. In the
+/// compiler's process they live as long as the program composing them: its
+/// `InProcessState`, current on the thread while the program's code runs.
 pub fn immortalOps() *RocOps {
     if (comptime builtins.host_abi.host_role == .platform) return builtins.in_process_host.ops();
-    return &InProcessImmortals.ops;
+    return &InProcessState.current().ops;
 }
 
-const InProcessImmortals = struct {
-    var lock: std.atomic.Mutex = .unlocked;
-    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
-    var ops: RocOps = .{
-        .env = undefined,
-        .roc_alloc = &alloc,
-        .roc_dealloc = &dealloc,
-        .roc_realloc = &realloc,
-        .roc_dbg = &dbg,
-        .roc_expect_failed = &expectFailed,
-        .roc_crashed = &crashed,
-        .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
+/// The interning table descriptor composition fills: the process's in a
+/// platform build, the current program's in the compiler's process.
+pub fn descriptorCache() *compose.Cache {
+    if (comptime builtins.host_abi.host_role == .platform) return &compose.process_cache;
+    return &InProcessState.current().descriptors;
+}
+
+/// The interning table dictionary composition fills, chosen as
+/// `descriptorCache` is.
+fn dictionaryCache() *compose.Cache {
+    if (comptime builtins.host_abi.host_role == .platform) return &dictionary_cache;
+    return &InProcessState.current().dictionaries;
+}
+
+/// What one program's code composes while it runs in the compiler's own
+/// process: its descriptors, dictionary callables, and dictionary records,
+/// with their interning tables and the memory holding them. The tables key
+/// on addresses in the program's code and static data, which the process
+/// reuses once the program is gone, so the state lives exactly as long as
+/// the program: whoever runs the program creates one, makes it current on
+/// every thread that runs the program's code (`enter`), and destroys it
+/// after the program. Threads running the program's code at once share it.
+pub const InProcessState = struct {
+    allocator: std.mem.Allocator,
+    lock: std.atomic.Mutex = .unlocked,
+    arena: std.heap.ArenaAllocator,
+    /// Composition allocates through these ops: arena memory, with a crash
+    /// delivered to the evaluation entered on the composing thread.
+    ops: RocOps,
+    descriptors: compose.Cache = .{},
+    dictionaries: compose.Cache = .{},
+
+    threadlocal var current_state: ?*InProcessState = null;
+
+    /// What `enter` displaced; `leave` restores it.
+    pub const Entered = struct {
+        saved: ?*InProcessState,
     };
 
-    fn alloc(_: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
-        while (!lock.tryLock()) std.atomic.spinLoopHint();
-        defer lock.unlock();
-        return arena.allocator().rawAlloc(length, .fromByteUnits(alignment), @returnAddress()) orelse
+    pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!*InProcessState {
+        comptime assertInProcess("create");
+        const self = try allocator.create(InProcessState);
+        self.* = .{
+            .allocator = allocator,
+            .arena = .init(allocator),
+            .ops = .{
+                .env = @ptrCast(self),
+                .roc_alloc = &alloc,
+                .roc_dealloc = &dealloc,
+                .roc_realloc = &realloc,
+                .roc_dbg = &dbg,
+                .roc_expect_failed = &expectFailed,
+                .roc_crashed = &crashed,
+                .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
+            },
+        };
+        return self;
+    }
+
+    /// Release everything the program composed. Nothing of the program may
+    /// run afterwards.
+    pub fn destroy(self: *InProcessState) void {
+        const allocator = self.allocator;
+        self.arena.deinit();
+        allocator.destroy(self);
+    }
+
+    /// Make this the state of every composition on this thread until
+    /// `leave`. A program that runs another program nests: the inner one
+    /// enters, runs, and leaves, restoring the outer one.
+    pub fn enter(self: *InProcessState) Entered {
+        comptime assertInProcess("enter");
+        const entered = Entered{ .saved = current_state };
+        current_state = self;
+        return entered;
+    }
+
+    /// Restore what `enter` displaced.
+    pub fn leave(entered: Entered) void {
+        comptime assertInProcess("leave");
+        current_state = entered.saved;
+    }
+
+    fn current() *InProcessState {
+        comptime assertInProcess("current");
+        return current_state orelse invariant(builtins.in_process_host.ops(), "a program composed on a thread that entered no program's composition state");
+    }
+
+    fn assertInProcess(comptime operation: []const u8) void {
+        if (builtins.host_abi.host_role == .platform) {
+            @compileError("InProcessState." ++ operation ++ " touches thread-local storage, which a platform build must never do");
+        }
+    }
+
+    fn fromOps(ops: *RocOps) *InProcessState {
+        return @ptrCast(@alignCast(ops.env));
+    }
+
+    fn alloc(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
+        const self = fromOps(ops);
+        while (!self.lock.tryLock()) std.atomic.spinLoopHint();
+        defer self.lock.unlock();
+        return self.arena.allocator().rawAlloc(length, .fromByteUnits(alignment), @returnAddress()) orelse
             builtins.in_process_host.ops().crash("out of memory composing a Boxy descriptor");
     }
 
-    /// Process-lifetime memory is never released.
+    /// Arena memory is released with the state.
     fn dealloc(_: *RocOps, _: *anyopaque, _: usize) callconv(.c) void {}
 
     fn realloc(_: *RocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) *anyopaque {

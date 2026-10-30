@@ -11414,6 +11414,8 @@ fn buildBoxyLibraryObjects(
         }
     }
 
+    const session = build_env.runtimeProgramSession() orelse
+        base.invariant("roc build invariant violated: a .boxy build has no program session", .{});
     const tasks = try ctx.gpa.alloc(BoxyUnitTask, units.items.len);
     defer {
         for (tasks) |*task| task.deinit(ctx.gpa);
@@ -11429,6 +11431,8 @@ fn buildBoxyLibraryObjects(
             .views = try build_env.collectImportedArtifactViews(ctx.gpa, artifact),
             .target = target,
             .interfaces = interfaces,
+            .literal_values = session.boxyLiteralValues(),
+            .root_key = root_artifact.codeGenerationKey().bytes,
             .cache_manager = if (args.no_cache) null else build_env.cache_manager,
         };
     }
@@ -11535,7 +11539,19 @@ const BoxyUnitObject = struct {
 /// pairing: the root unit lowers the platform modules at the app's types.
 /// A library module's object is a function of the module and its imports
 /// alone, so its key is its checked key whatever program pairs it.
-fn boxyObjectKey(gpa: Allocator, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, platform: ?check.CheckedArtifact.ImportedModuleView, args: cli_args.BuildArgs, target: RocTarget, root: bool) Allocator.Error!compile.boxy_object_cache.Key {
+/// The program key a module's object is keyed by when its code embeds a
+/// literal table: the root program's, since the table holds the values of
+/// every instance that program reaches the module's literals at. Null for a
+/// module whose literals the program converted none of.
+fn boxyLiteralProgram(literal_values: ?*const lir.CheckedPipeline.BoxyLiteralValues, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, root_key: [32]u8) ?[32]u8 {
+    const values = literal_values orelse return null;
+    for (values.entries.items) |entry| {
+        if (std.mem.eql(u8, &entry.module.bytes, &artifact.key.bytes)) return root_key;
+    }
+    return null;
+}
+
+fn boxyObjectKey(gpa: Allocator, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, platform: ?check.CheckedArtifact.ImportedModuleView, args: cli_args.BuildArgs, target: RocTarget, root: bool, literal_program: ?[32]u8) Allocator.Error!compile.boxy_object_cache.Key {
     const hosted_bindings: ?[32]u8 = if (platform) |platform_view| blk: {
         const inputs = try gpa.alloc(compile.boxy_object_cache.HostedBindingInput, platform_view.hosted_bindings.bindings.len);
         defer gpa.free(inputs);
@@ -11552,6 +11568,7 @@ fn boxyObjectKey(gpa: Allocator, artifact: *const check.CheckedArtifact.CheckedM
         .target = @tagName(target),
         .opt = @tagName(args.opt),
         .inline_expects = inlineExpectModeForOpt(args.opt) == .run,
+        .literal_program = literal_program,
     });
 }
 
@@ -11651,6 +11668,9 @@ const BoxyUnitTask = struct {
     views: []check.CheckedArtifact.ImportedModuleView,
     target: RocTarget,
     interfaces: *postcheck.Boxy.Lower.ExportInterfaces,
+    literal_values: ?*const lir.CheckedPipeline.BoxyLiteralValues,
+    /// The root program's key (`boxyLiteralProgram`).
+    root_key: [32]u8,
     cache_manager: ?*CacheManager,
     outcome: union(enum) { pending, failed: CliMainError, done: Result } = .pending,
 
@@ -11681,7 +11701,7 @@ const BoxyUnitTask = struct {
 
     fn build(self: *BoxyUnitTask) CliMainError!Result {
         const gpa = self.gpa;
-        const object_key = try boxyObjectKey(gpa, self.artifact, self.platform, self.args, self.target, false);
+        const object_key = try boxyObjectKey(gpa, self.artifact, self.platform, self.args, self.target, false, boxyLiteralProgram(self.literal_values, self.artifact, self.root_key));
         const module_name = self.artifact.canonical_names.moduleNameText(self.artifact.module_identity.module_name);
         if (try restoreBoxyObject(gpa, self.cache_manager, object_key, self.interfaces)) |entry| {
             defer compile.boxy_object_cache.deinitEntry(gpa, entry);
@@ -11714,7 +11734,7 @@ const BoxyUnitTask = struct {
         };
         var config = checkedRuntimeLoweringConfig(.linked_output, self.args.opt, .boxy, self.target, self.args.synthetic_default_platform);
         config.target.boxy_unit = .{ .imports = self.interfaces, .root = false };
-        var lowered = try eval.CompileTimeFinalization.lowerBoxyRuntime(gpa, modules, .{}, config.target);
+        var lowered = try eval.CompileTimeFinalization.lowerBoxyRuntime(gpa, modules, .{}, config.target, self.literal_values);
         defer lowered.deinit();
         if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: lowered {s} ({d} procs)\n", .{ module_name, lowered.lir_result.store.procSpecCount() });
 
@@ -12330,7 +12350,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     else
         null;
     const boxy_cache_manager: ?*CacheManager = if (args.no_cache) null else build_env.cache_manager;
-    const boxy_root_key: ?compile.boxy_object_cache.Key = if (boxy_library) |library| try boxyObjectKey(ctx.gpa, root_artifact, boxyUnitPlatform(root_artifact, library.platform), args, target, true) else null;
+    const boxy_root_key: ?compile.boxy_object_cache.Key = if (boxy_library) |library| try boxyObjectKey(ctx.gpa, root_artifact, boxyUnitPlatform(root_artifact, library.platform), args, target, true, null) else null;
     if (dev_diagnostics.isSet(.trace_boxy_work)) if (boxy_library) |library| std.debug.print("boxy-work: library objects {d}, root key {s}\n", .{ library.objects.len, &std.fmt.bytesToHex(boxy_root_key.?.bytes[0..8], .lower) });
     // The root program's object is cached under its own key too: a build
     // whose every module is cached lowers nothing.

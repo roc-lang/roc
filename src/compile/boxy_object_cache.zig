@@ -43,6 +43,12 @@ pub const KeyInput = struct {
     opt: []const u8,
     /// Whether inline expects are compiled in (`roc test`) or dropped.
     inline_expects: bool,
+    /// For a module whose code embeds a literal table (an instance-dependent
+    /// literal's values, which the program's discovery converts): the key
+    /// of the program the table was converted for, which covers every
+    /// instance the program reaches the literal at. Null for a module whose
+    /// object is the same in every program.
+    literal_program: ?[32]u8 = null,
 };
 
 /// The key of a module's object for `input` under this compiler.
@@ -61,6 +67,12 @@ pub fn key(input: KeyInput) Key {
     hashLengthPrefixed(&hasher, input.target);
     hashLengthPrefixed(&hasher, input.opt);
     hasher.update(&[_]u8{@intFromBool(input.inline_expects)});
+    if (input.literal_program) |program| {
+        hasher.update(&[_]u8{1});
+        hasher.update(&program);
+    } else {
+        hasher.update(&[_]u8{0});
+    }
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -316,6 +328,13 @@ test "a Boxy object key is a function of exactly its declared inputs" {
     var changed_expects = testInput();
     changed_expects.inline_expects = true;
     try std.testing.expect(!std.mem.eql(u8, &baseline.bytes, &key(changed_expects).bytes));
+
+    var with_literal_program = testInput();
+    with_literal_program.literal_program = @splat(11);
+    try std.testing.expect(!std.mem.eql(u8, &baseline.bytes, &key(with_literal_program).bytes));
+    var other_literal_program = testInput();
+    other_literal_program.literal_program = @splat(12);
+    try std.testing.expect(!std.mem.eql(u8, &key(with_literal_program).bytes, &key(other_literal_program).bytes));
 
     // A length prefix keeps one field's tail from reading as the next's head.
     var moved_boundary = testInput();
