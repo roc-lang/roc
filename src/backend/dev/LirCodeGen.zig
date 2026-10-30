@@ -12061,6 +12061,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn emitPendingProcAddress(self: *Self, target_proc: lir.LIR.LirProcSpecId, dst_reg: GeneralReg) Allocator.Error!void {
+            const spec = self.store.getProcSpec(target_proc);
+            if (spec.linked) return try self.emitLinkedProcAddress(spec.identity, dst_reg);
             if (comptime target.toCpuArch() == .aarch64) {
                 // Reserve the 4-instruction PC-relative address sequence so the
                 // patcher can rewrite it once the target proc's code offset is
@@ -13641,6 +13643,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (proc_spec.c_abi_entry) {
                 return try self.generateCAbiCall(.{ .entry = proc_spec.identity }, arg_locs, arg_layouts, call.ret_layout);
             }
+            if (proc_spec.linked) {
+                return try self.generateRocCall(.{ .linked = proc_spec.identity }, arg_locs, arg_layouts, call.ret_layout);
+            }
 
             const proc = try self.compiledProcForId(call.proc);
             return try self.generateCallToCompiledProc(proc, arg_locs, arg_layouts, call.ret_layout);
@@ -13723,8 +13728,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 arg_locs[count - 1] = .{ .immediate_i64 = 0 };
             }
 
-            const proc = try self.compiledProcForId(proc_id);
-            const value_loc = try self.generateCallToCompiledProc(proc, arg_locs, arg_layouts, callee.ret_layout);
+            const value_loc = if (callee.linked)
+                try self.generateRocCall(.{ .linked = callee.identity }, arg_locs, arg_layouts, callee.ret_layout)
+            else
+                try self.generateCallToCompiledProc(try self.compiledProcForId(proc_id), arg_locs, arg_layouts, callee.ret_layout);
             if (result_target) |dst| {
                 try self.emitDriveInto(drive, dst);
                 return self.finishCallTarget(target_local, dst, drive);
@@ -13757,6 +13764,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const proc_spec = self.store.getProcSpec(call.proc);
             const arg_refs = self.store.getLocalSpan(call.args);
             const param_refs = self.store.getLocalSpan(proc_spec.args);
+            if (proc_spec.linked) base.invariant("LIR/codegen invariant violated: a frame-replacing call targets a procedure another object defines", .{});
             if (param_refs.len != arg_refs.len or
                 proc_spec.hosted != null or
                 proc_spec.abi != .roc or
@@ -14802,9 +14810,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .start = pbp_start, .slice = pass_by_ptr };
         }
 
+        /// The callee of a call in the backend's own Roc convention: a
+        /// procedure compiled in this image, or one another object of the
+        /// link defines (`LIR.LirProcSpec.linked`), reached by its symbol.
+        const RocCallTarget = union(enum) {
+            compiled: CompiledProc,
+            linked: lir.ProcIdentity,
+        };
+
         fn generateCallToCompiledProc(
             self: *Self,
             proc: CompiledProc,
+            args: []const ValueLocation,
+            arg_layouts: []const layout.Idx,
+            ret_layout: layout.Idx,
+        ) Allocator.Error!ValueLocation {
+            return try self.generateRocCall(.{ .compiled = proc }, args, arg_layouts, ret_layout);
+        }
+
+        fn generateRocCall(
+            self: *Self,
+            callee: RocCallTarget,
             args: []const ValueLocation,
             arg_layouts: []const layout.Idx,
             ret_layout: layout.Idx,
@@ -14838,10 +14864,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .pass_by_ptr = pbp_plan.slice,
                 .callee_owns_block = true,
             });
-            if (proc.code_start == unresolved_proc_code_start) {
-                try self.emitPendingCallToProc(proc.id);
-            } else {
-                try self.emitCallToOffset(.{ .proc = proc.id }, proc.code_start);
+            switch (callee) {
+                .compiled => |proc| if (proc.code_start == unresolved_proc_code_start) {
+                    try self.emitPendingCallToProc(proc.id);
+                } else {
+                    try self.emitCallToOffset(.{ .proc = proc.id }, proc.code_start);
+                },
+                .linked => |identity| try self.emitCallToLinkedProc(identity),
             }
 
             if (placed_call.stack_spill_size > 0) {
@@ -14851,7 +14880,39 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return try self.saveCallReturnValue(ret_layout, needs_ret_ptr, ret_buffer_offset);
         }
 
+        /// The symbol of a procedure another object of the link defines.
+        fn linkedProcSymbol(self: *Self, identity: lir.ProcIdentity) Allocator.Error!SymbolTable.Id {
+            var name: [lir.ProcIdentity.symbol_name_len]u8 = undefined;
+            return try self.internSymbolName(identity.writeSymbolName(&name), .shared);
+        }
+
+        /// Call a procedure another object of the link defines: a call
+        /// instruction whose target the linker fills in by the procedure's
+        /// symbol (`LIR.LirProcSpec.linked`).
+        fn emitCallToLinkedProc(self: *Self, identity: lir.ProcIdentity) Allocator.Error!void {
+            const symbol = try self.linkedProcSymbol(identity);
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emitExternCall(symbol);
+            } else {
+                const code_offset = self.codegen.currentOffset();
+                try self.codegen.emit.call(@bitCast(@as(i32, 0)));
+                try self.codegen.relocations.append(self.allocator, .{ .linked_function = .{
+                    .offset = @intCast(code_offset + 1),
+                    .symbol = symbol,
+                    .kind = .x86_call_rel32,
+                } });
+            }
+        }
+
+        /// Load the address of a procedure another object of the link
+        /// defines, through its symbol.
+        fn emitLinkedProcAddress(self: *Self, identity: lir.ProcIdentity, dst_reg: GeneralReg) Allocator.Error!void {
+            try self.codegen.emitLoadDataAddress(dst_reg, try self.linkedProcSymbol(identity));
+        }
+
         fn emitPendingCallToProc(self: *Self, target_proc: lir.LIR.LirProcSpecId) Allocator.Error!void {
+            const spec = self.store.getProcSpec(target_proc);
+            if (spec.linked) return try self.emitCallToLinkedProc(spec.identity);
             const call_site = self.codegen.currentOffset();
             try self.pending_calls.append(self.allocator, .{
                 .call_site = call_site,
@@ -17111,12 +17172,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Store the address of a procedure's code in `slot`.
         fn emitProcAddressToSlot(self: *Self, proc_id: lir.LIR.LirProcSpecId, slot: i32) Allocator.Error!void {
-            const proc = try self.compiledProcForId(proc_id);
             const reg = try self.allocTempGeneral();
-            if (proc.code_start == unresolved_proc_code_start)
-                try self.emitPendingProcAddress(proc_id, reg)
-            else
-                try self.emitInternalCodeAddress(.{ .proc = proc.id }, proc.code_start, reg);
+            const spec = self.store.getProcSpec(proc_id);
+            if (spec.linked) {
+                try self.emitLinkedProcAddress(spec.identity, reg);
+            } else {
+                const proc = try self.compiledProcForId(proc_id);
+                if (proc.code_start == unresolved_proc_code_start)
+                    try self.emitPendingProcAddress(proc_id, reg)
+                else
+                    try self.emitInternalCodeAddress(.{ .proc = proc.id }, proc.code_start, reg);
+            }
             try self.emitStore(.w64, frame_ptr, slot, reg);
             self.codegen.freeGeneral(reg);
         }
@@ -18019,6 +18085,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (proc.is_static_initializer) continue;
                 if (self.proc_registry.get(@intCast(i))) |registered| {
                     if (registered.code_start != unresolved_proc_code_start) continue;
+                }
+                if (proc.linked) {
+                    base.invariant("Dev/codegen invariant violated: an image compiles procedure {d}, which another object of a link defines", .{i});
                 }
                 if (proc.external and !proc.c_abi_entry) {
                     base.invariant("Dev/codegen invariant violated: external proc {d} had no object-cache entry spliced before compilation", .{i});
@@ -20063,8 +20132,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     break :blk try self.generateStaticDataLiteral(id, self.localLayout(assign.target));
                                 },
                                 .proc_ref => |proc_id| blk: {
-                                    const proc = try self.compiledProcForId(proc_id);
                                     const reg = try self.allocTempGeneral();
+                                    const spec = self.store.getProcSpec(proc_id);
+                                    if (spec.linked) {
+                                        try self.emitLinkedProcAddress(spec.identity, reg);
+                                        break :blk .{ .general_reg = reg };
+                                    }
+                                    const proc = try self.compiledProcForId(proc_id);
                                     if (proc.code_start == unresolved_proc_code_start)
                                         try self.emitPendingProcAddress(proc_id, reg)
                                     else
@@ -22508,9 +22582,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             for (self.assembled_symbolic_refs.items) |reference| {
                 const offset = switch (reference.target) {
-                    .proc => |identity| self.spliced_proc_starts.get(identity),
-                    .rc_helper => |name| self.spliced_helper_offsets.get(name),
-                } orelse base.invariant("unresolved independent machine-code fragment target", .{});
+                    .proc => |identity| self.spliced_proc_starts.get(identity) orelse
+                        base.invariant("unresolved independent machine-code fragment target: procedure {s} ({s} reference)", .{ &identity.symbolHex(), @tagName(reference.form) }),
+                    .rc_helper => |name| self.spliced_helper_offsets.get(name) orelse
+                        base.invariant("unresolved independent machine-code fragment target: helper {s}", .{name}),
+                };
                 try self.patchAssembledRef(reference.site, switch (reference.form) {
                     .call => .call,
                     .inline_call => .inline_call,

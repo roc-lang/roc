@@ -160,28 +160,16 @@ pub fn generateIndexedObjectFileWithDebug(
             macho.setZeroFill(zero_fill_size);
             if (debug) |d| macho.debug = d;
 
-            const referenced = try allocator.alloc(bool, symbols.len);
-            defer allocator.free(referenced);
-            @memset(referenced, false);
-            for (relocations) |rel| switch (rel) {
-                .linked_function => |f| {
-                    referenced[@backingInt(f.symbol)] = true;
-                },
-                .linked_data => |d| {
-                    referenced[@backingInt(d.symbol)] = true;
-                },
-                .local_data, .retired => {},
-            };
-            for (rodata_relocations) |rel| referenced[@backingInt(rel.symbol)] = true;
-
             // Add symbols (underscore prefix for C ABI is added in MachOWriter.write())
+            // A relocation names its target by symbol table index, so a
+            // symbol only relocations reference stays local: another
+            // object of the link may define the same name.
             for (symbols, 0..) |sym, ordinal| {
-                const is_macho_external = sym.is_global or sym.is_external or referenced[ordinal];
                 const sym_idx = try macho.addSymbol(.{
                     .name = sym.name,
                     .section = if (sym.is_external) 0 else machoSectionNumber(sym.section),
                     .offset = sym.offset,
-                    .is_external = is_macho_external,
+                    .is_external = sym.is_global or sym.is_external,
                 });
 
                 target_indices[ordinal] = sym_idx;
@@ -1001,6 +989,8 @@ test "indexed object relocations preserve targets through format symbol ordering
             try std.testing.expectEqual(expected_types[i], decoded.relocationType(record));
         }
         try std.testing.expectEqualStrings("local_data", decoded.targetName(decoded.data[0..decoded.relocation_size]));
+        // A symbol only relocations reference keeps its local binding.
+        if (decoded.format == .macho) try std.testing.expectEqual(@as(u8, 0), decoded.machoSymbolType(decoded.data[0..decoded.relocation_size]) & 0x01);
         try std.testing.expectEqualStrings("external_function", decoded.targetName(decoded.data[decoded.relocation_size..]));
         if (decoded.format == .elf) {
             try std.testing.expectEqual(@as(i64, 3), std.mem.readInt(i64, decoded.data[16..24], .little));
@@ -1081,6 +1071,12 @@ const TestObjectTables = struct {
         };
         const name = std.mem.sliceTo(self.strings[name_offset..], 0);
         return if (self.format == .macho) name[1..] else name;
+    }
+
+    /// The `n_type` of the symbol a Mach-O relocation record names.
+    fn machoSymbolType(self: TestObjectTables, relocation: []const u8) u8 {
+        const index = read32(relocation, 4) & 0x00ff_ffff;
+        return self.symbols[index * 16 + 4];
     }
 
     fn relocationType(self: TestObjectTables, record: []const u8) usize {

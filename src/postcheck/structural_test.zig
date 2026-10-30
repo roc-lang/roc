@@ -1512,7 +1512,6 @@ const boxy_sources = [_]LintSource{
     .{ .path = "boxy/layouts.zig", .text = @embedFile("boxy/layouts.zig") },
     .{ .path = "boxy/lower.zig", .text = @embedFile("boxy/lower.zig") },
     .{ .path = "boxy/match.zig", .text = @embedFile("boxy/match.zig") },
-    .{ .path = "boxy/row_joins.zig", .text = @embedFile("boxy/row_joins.zig") },
     .{ .path = "boxy/static_descs.zig", .text = @embedFile("boxy/static_descs.zig") },
     .{ .path = "boxy/types.zig", .text = @embedFile("boxy/types.zig") },
 };

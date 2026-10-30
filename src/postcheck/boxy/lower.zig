@@ -19,11 +19,12 @@ const lir_core = @import("lir_core");
 
 const Common = @import("../common.zig");
 const types = @import("types.zig");
-const RowJoins = @import("row_joins.zig");
 const Layouts = @import("layouts.zig").Layouts;
 const StaticDescs = @import("static_descs.zig").StaticDescs;
 const Body = @import("body.zig");
 const Codec = @import("codec.zig");
+const const_schema = @import("const_schema.zig");
+const ConstSchema = const_schema.ConstSchema;
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
@@ -54,6 +55,121 @@ pub const Input = struct {
     /// The values compile-time evaluation converted the program's
     /// instance-dependent literals to, when the program was evaluated.
     literal_values: ?*const @import("literal_values.zig").LiteralValues = null,
+    /// The lowering is a compile-time evaluator's: its roots are
+    /// compile-time roots, each lowered with the plan and stored type the
+    /// store writer keeps its value by (`LirProgram.ConstRootPlan`), and a
+    /// read of a compile-time value no evaluation has completed crashes as
+    /// a read of a failed value, which the evaluator retries once the value
+    /// completes (design.md "Dependency-Ordered Compile-Time Evaluation").
+    /// Its program runs before any literal table exists, so every evidence
+    /// parameter is a dictionary (`Program.runtimeDictionary`) and each
+    /// instance-dependent literal is converted where it is.
+    compile_time: bool = false,
+    /// What this lowering emits: one program, or one module's object.
+    unit: Unit = .program,
+};
+
+/// What one lowering emits (design.md "Per-Module Output").
+pub const Unit = union(enum) {
+    /// Every worker the roots reach, as one program: the interpreter paths,
+    /// tests, and compile-time evaluation.
+    program,
+    /// One module's object: every worker of the module's templates, lowered
+    /// as roots, with every other module's worker an imported symbol
+    /// (`LIR.LirProcSpec.linked`) its own object defines.
+    module: ModuleUnit,
+};
+
+/// The module one unit emits: the lowering's root module (`Input.modules`).
+pub const ModuleUnit = struct {
+    /// The export interface of every imported module's object (what its
+    /// unit's ARC solved for each exported worker), by worker identity.
+    imports: *ExportInterfaces,
+    /// Whether this is the program's root unit: it lowers `Input.roots` as
+    /// well, and the workers of every module with platform requirements,
+    /// which are lowered at the app's types and belong to no module's own
+    /// object (design.md "Host ABI").
+    root: bool,
+};
+
+/// The ownership signature and tail-drive summary a unit's ARC solved for
+/// one exported worker: what a call to it from another object compiles
+/// against (`LIR.LirProcSpec` `rc_*` fields and `may_leave_pending`).
+pub const ExportInterface = struct {
+    rc_borrowed_params: u64 = 0,
+    rc_ret_borrowed: bool = false,
+    rc_ret_lenders: u64 = 0,
+    rc_read_only_params: u64 = 0,
+    rc_ret_unique: bool = false,
+    rc_ret_unique_fields: u64 = 0,
+    rc_ret_conditions: []const u32 = &.{},
+    may_leave_pending: bool = false,
+};
+
+/// The export interfaces of every object a unit imports, by worker identity.
+/// Units lowered in parallel read and record interfaces concurrently, so
+/// every access takes the mutex; an interface, once recorded, never changes.
+pub const ExportInterfaces = struct {
+    allocator: Allocator,
+    io: std.Io,
+    map: std.AutoHashMapUnmanaged(LIR.ProcIdentity, ExportInterface) = .empty,
+    arena: std.heap.ArenaAllocator,
+    mutex: Mutex = .init,
+
+    /// A mutex on hosts with threads; a freestanding compiler runs every
+    /// unit on its one thread.
+    const Mutex = if (@import("builtin").os.tag == .freestanding) struct {
+        pub const init: @This() = .{};
+        pub fn lockUncancelable(_: *@This(), _: std.Io) void {}
+        pub fn unlock(_: *@This(), _: std.Io) void {}
+    } else std.Io.Mutex;
+
+    pub fn init(allocator: Allocator, io: std.Io) ExportInterfaces {
+        return .{ .allocator = allocator, .io = io, .arena = std.heap.ArenaAllocator.init(allocator) };
+    }
+
+    pub fn deinit(self: *ExportInterfaces) void {
+        self.map.deinit(self.allocator);
+        self.arena.deinit();
+    }
+
+    /// Record `interface` for `identity`, copying its condition rows.
+    pub fn put(self: *ExportInterfaces, identity: LIR.ProcIdentity, interface: ExportInterface) Allocator.Error!void {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        var owned = interface;
+        owned.rc_ret_conditions = try self.arena.allocator().dupe(u32, interface.rc_ret_conditions);
+        try self.map.put(self.allocator, identity, owned);
+    }
+
+    /// Record the interface ARC solved for `proc` of `store`, under the
+    /// procedure's identity, and return it.
+    pub fn putProc(self: *ExportInterfaces, store: *const lir_core.LirStore, proc: LIR.LirProcSpecId) Allocator.Error!ExportInterface {
+        const spec = store.getProcSpec(proc);
+        const words = store.getU32Span(spec.rc_ret_conditions);
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        const conditions = try self.arena.allocator().alloc(u32, collections.GuardedList.borrowLen(words));
+        for (conditions, 0..) |*word, index| word.* = collections.GuardedList.at(words, index);
+        const interface: ExportInterface = .{
+            .rc_borrowed_params = spec.rc_borrowed_params,
+            .rc_ret_borrowed = spec.rc_ret_borrowed,
+            .rc_ret_lenders = spec.rc_ret_lenders,
+            .rc_read_only_params = spec.rc_read_only_params,
+            .rc_ret_unique = spec.rc_ret_unique,
+            .rc_ret_unique_fields = spec.rc_ret_unique_fields,
+            .rc_ret_conditions = conditions,
+            .may_leave_pending = spec.may_leave_pending,
+        };
+        try self.map.put(self.allocator, spec.identity, interface);
+        return interface;
+    }
+
+    pub fn get(self: *ExportInterfaces, identity: LIR.ProcIdentity) ?ExportInterface {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        return self.map.get(identity);
+    }
 };
 
 /// The lowered program and the static data it carries.
@@ -107,6 +223,11 @@ pub const WorkerKey = union(enum) {
     /// to a crash: a dispatch checking rejected, or one no value can reach
     /// (design.md "Static Dispatch In Monotype"). Calling it crashes.
     crash_dictionary: CrashDictionary,
+    /// The static row conversion of `module` from the closed type `from` to
+    /// the closed type `to`, whose rows widen `from`'s along the coercion's
+    /// reach (design.md "Sealed Result Rows"). Each module converting a pair
+    /// has its own worker for it.
+    convert: struct { module: ModuleIndex, from: TypeId, to: TypeId },
 };
 
 /// Why a dictionary slot's method crashes.
@@ -144,8 +265,14 @@ pub const Worker = struct {
     proc: LIR.LirProcSpecId,
     module: ModuleIndex,
     /// The checked scheme variables of the worker's scope, in hidden
-    /// descriptor parameter order.
+    /// descriptor parameter order. A template's sealed variables (design.md
+    /// "Sealed Result Rows") are omitted: they seal to the empty row.
     scheme_vars: []const checked.CheckedTypeId,
+    /// For a template worker: the position of each of `scheme_vars` in the
+    /// template's checked `scheme_vars`, which a use's substitution is
+    /// indexed by, and that checked list's length.
+    checked_slots: []const u32 = &.{},
+    checked_scheme_count: u32 = 0,
     /// Evidence parameters that are runtime dictionaries, in hidden
     /// dictionary parameter order (indices into the template's params).
     dictionary_params: []const u32,
@@ -154,6 +281,9 @@ pub const Worker = struct {
     lowered: bool = false,
     /// Whether the worker's body is queued for lowering.
     queued: bool = false,
+    /// Another module's object defines the worker: its procedure is a
+    /// body-less `linked` symbol here (design.md "Per-Module Output").
+    imported: bool = false,
     /// For a root wrapper: the root request it wraps.
     root_request: ?checked.RootRequest = null,
     /// For a static data initializer: the request it serves.
@@ -181,6 +311,11 @@ pub const Worker = struct {
     /// by position) rather than a checked scheme variable.
     structural_descs: u32 = 0,
     own_dicts: u32 = 0,
+
+    /// The bytes of the worker's procedure identity.
+    pub fn identityBytes(self: Worker, program: *const Program) [32]u8 {
+        return program.result.store.getProcSpec(self.proc).identity.bytes;
+    }
 
     /// The dictionaries a lambda worker captures: every scope's but its own.
     pub fn capturedDictionaryCount(self: Worker) u32 {
@@ -273,7 +408,6 @@ pub const Program = struct {
     input: Input,
     modules: types.Modules,
     store: types.Store,
-    joins: RowJoins.Joins,
     layouts: Layouts,
     result: LirProgram.Result,
     static_descs: StaticDescs,
@@ -290,6 +424,9 @@ pub const Program = struct {
     /// The converted values of each instance-dependent literal, by the
     /// literal: indices into `Input.literal_values.entries`.
     literal_entries: std.AutoHashMapUnmanaged(ExprKey, std.ArrayList(u32)) = .empty,
+    /// The constant store plans and stored types of the compile-time roots
+    /// this lowering evaluates (`ConstSchema`).
+    const_schema: ConstSchema = .{},
     /// The app type each platform requirement identity variable takes
     /// (`types.Converter.platform_identities`).
     platform_identities: std.AutoHashMapUnmanaged(types.Converter.IdentityKey, TypeId) = .empty,
@@ -328,6 +465,150 @@ pub const Program = struct {
 
     pub fn converter(self: *Program) types.Converter {
         return .{ .store = &self.store, .modules = &self.modules, .platform_identities = &self.platform_identities };
+    }
+
+    /// Whether this lowering emits the workers of module `index`: every
+    /// module of a program, and for a module unit, the unit's module and,
+    /// for the root unit, each module with platform requirements, whose
+    /// workers are lowered at the app's types (design.md "Per-Module
+    /// Output").
+    /// Whether a worker receives `param` as a dictionary. A runtime
+    /// program's numeral evidence selects descriptors and is no dictionary:
+    /// its literals come converted from the literal tables. The compile-time
+    /// evaluator's program converts its literals where they are, through
+    /// every evidence parameter, so there each one is a dictionary.
+    pub fn runtimeDictionary(self: *const Program, param: static_dispatch.EvidenceParamRecord) bool {
+        return param.runtime_dictionary or self.input.compile_time;
+    }
+
+    pub fn ownsModule(self: *const Program, index: ModuleIndex) bool {
+        const unit = switch (self.input.unit) {
+            .program => return true,
+            .module => |unit| unit,
+        };
+        if (index == self.modules.views.items[0].index) return true;
+        return unit.root and self.module(index).view.platform_type_inputs.requirements.len != 0;
+    }
+
+    /// The content identity of a module's worker (design.md "Per-Module
+    /// Output"): a digest of the declaring module's content identity and
+    /// the worker's checked key, the same in every lowering, so one object's
+    /// reference to another's worker names it by symbol.
+    pub fn workerIdentity(self: *Program, key: WorkerKey) LIR.ProcIdentity {
+        var hasher = base.TypeDigestHasher.init();
+        hasher.update("roc.boxy.worker.v1");
+        switch (key) {
+            .template => |template| {
+                hasher.update("template");
+                hasher.update(&self.module(template.module).view.module_identity.stable_hash);
+                hasher.update(std.mem.asBytes(&@as(u32, @backingInt(template.template))));
+            },
+            .lambda => |lambda| {
+                hasher.update("lambda");
+                hasher.update(&self.module(lambda.module).view.module_identity.stable_hash);
+                hasher.update(std.mem.asBytes(&@as(u32, @backingInt(lambda.expr))));
+                hasher.update(&self.worker(lambda.outer).identityBytes(self));
+                hasher.update(&[_]u8{@intFromBool(lambda.captured_scheme)});
+            },
+            .method_entry => |target| {
+                hasher.update("method_entry");
+                hasher.update(&self.worker(target).identityBytes(self));
+            },
+            .default => |default| {
+                hasher.update("default");
+                hasher.update(&self.module(default.module).view.module_identity.stable_hash);
+                hasher.update(std.mem.asBytes(&@as(u32, @backingInt(default.expr))));
+            },
+            .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert => invariant("a worker no module's object exports has no content identity"),
+        }
+        return .{ .bytes = hasher.finalResult() };
+    }
+
+    /// Whether workers of `key`'s kind are the workers a module's object
+    /// defines for other objects, named by content identity.
+    pub fn exportableKind(key: WorkerKey) bool {
+        return switch (key) {
+            .template, .lambda, .method_entry, .default => true,
+            .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert => false,
+        };
+    }
+
+    /// The module unit this lowering emits, or null for a program.
+    fn moduleUnit(self: *const Program) ?ModuleUnit {
+        return switch (self.input.unit) {
+            .program => null,
+            .module => |unit| unit,
+        };
+    }
+
+    /// Give the proc of imported worker `id` the ownership signature its
+    /// defining object solved (design.md "Per-Module Output"), once a direct
+    /// call to it compiles against that signature.
+    fn bindImportedInterface(self: *Program, id: WorkerId) void {
+        const imported = self.worker(id);
+        const unit = self.moduleUnit() orelse invariant("an imported worker outside a module unit");
+        const proc = self.result.store.getProcSpecPtr(imported.proc);
+        const interface = unit.imports.get(proc.identity) orelse
+            invariant("a call reached a worker of an imported module whose object exports no such worker");
+        proc.rc_borrowed_params = interface.rc_borrowed_params;
+        proc.rc_ret_borrowed = interface.rc_ret_borrowed;
+        proc.rc_ret_lenders = interface.rc_ret_lenders;
+        proc.rc_read_only_params = interface.rc_read_only_params;
+        proc.rc_ret_unique = interface.rc_ret_unique;
+        proc.rc_ret_unique_fields = interface.rc_ret_unique_fields;
+        proc.may_leave_pending = interface.may_leave_pending;
+        proc.rc_ret_conditions = self.result.store.addU32Span(interface.rc_ret_conditions) catch |err| switch (err) {
+            error.OutOfMemory => invariant("out of memory binding an imported worker's interface"),
+        };
+    }
+
+    /// The procedure of an imported worker: body-less, defined by its
+    /// module's own object under its content identity, and reached with the
+    /// backend's Roc convention (`LIR.LirProcSpec.linked`).
+    fn addImportedProc(self: *Program, identity: LIR.ProcIdentity, module_index: ModuleIndex, abi: LIR.ProcAbi) Allocator.Error!LIR.LirProcSpecId {
+        return try self.result.store.addProcSpec(.{
+            .name = self.result.store.freshSyntheticSymbol(),
+            .identity = identity,
+            .emission_unit = LIR.EmissionUnit.module(@backingInt(module_index)),
+            .args = .empty(),
+            .ret_layout = .zst,
+            .abi = abi,
+            .external = true,
+            .linked = true,
+        }, base.SourceLoc.none);
+    }
+
+    /// Declare the signature of imported template worker `id`, exactly as
+    /// its defining unit's body lowering declares it: explicit parameters,
+    /// then hidden descriptors and dictionaries, and a dynamic result slot
+    /// when the result is dynamic. A dynamic parameter's descriptor local
+    /// is never read: the worker has no body here.
+    fn declareImportedTemplateSignature(self: *Program, id: WorkerId) Allocator.Error!void {
+        const imported = self.worker(id).*;
+        const store = &self.result.store;
+        var args: std.ArrayList(LIR.LocalId) = .empty;
+        defer args.deinit(self.allocator);
+        const dynamic_layout = try self.result.layouts.dynamicLayout();
+        for (imported.params) |param_ty| {
+            if (try self.converter().representationClosed(param_ty)) {
+                try args.append(self.allocator, try store.addLocal(.{ .layout_idx = try self.layouts.layoutOf(param_ty) }));
+            } else {
+                const desc = try store.addLocal(.{ .layout_idx = .opaque_ptr });
+                try args.append(self.allocator, try store.addLocal(.{ .layout_idx = dynamic_layout, .dyn = .{ .desc = desc, .storage = .param } }));
+            }
+        }
+        for (imported.scheme_vars) |_| try args.append(self.allocator, try store.addLocal(.{ .layout_idx = .opaque_ptr }));
+        const erased = try self.result.layouts.insertErasedCallable();
+        for (imported.dictionary_params) |_| try args.append(self.allocator, try store.addLocal(.{ .layout_idx = erased }));
+        const proc = store.getProcSpecPtr(imported.proc);
+        proc.args = try store.addLocalSpan(args.items);
+        if (try self.converter().representationClosed(imported.ret)) {
+            proc.ret_layout = try self.layouts.layoutOf(imported.ret);
+        } else {
+            proc.ret_layout = dynamic_layout;
+            const desc = try store.addLocal(.{ .layout_idx = .opaque_ptr });
+            proc.dyn_result = try store.addLocal(.{ .layout_idx = dynamic_layout, .dyn = .{ .desc = desc, .storage = .result } });
+        }
     }
 
     pub fn module(self: *const Program, index: ModuleIndex) *const types.ModuleView {
@@ -375,6 +656,15 @@ pub const Program = struct {
     /// The worker of a procedure template, queued for lowering.
     pub fn templateWorker(self: *Program, module_index: ModuleIndex, template_id: checked_names.CheckedProcedureTemplateId) Allocator.Error!WorkerId {
         const id = try self.templateScope(module_index, template_id);
+        if (self.worker(id).imported) {
+            // A call compiles against the signature the worker's own object
+            // solved.
+            if (!self.worker(id).queued) {
+                self.worker(id).queued = true;
+                self.bindImportedInterface(id);
+            }
+            return id;
+        }
         if (!self.worker(id).queued) {
             self.worker(id).queued = true;
             try self.worklist.append(self.allocator, id);
@@ -391,15 +681,33 @@ pub const Program = struct {
         if (self.worker_ids.get(key)) |existing| return existing;
         const view = self.module(module_index);
         const template = view.view.checked_procedure_templates.templates.items[@backingInt(template_id)];
-        const scheme_vars = poolSlice(checked.CheckedTypeId, view.view.checked_procedure_templates.scheme_vars_pool, template.scheme_vars);
-        var dictionary_params: std.ArrayList(u32) = .empty;
+        const checked_scheme_vars = poolSlice(checked.CheckedTypeId, view.view.checked_procedure_templates.scheme_vars_pool, template.scheme_vars);
+        // A sealed variable (design.md "Sealed Result Rows") is no hidden
+        // parameter: it seals to the empty row wherever the body mentions it,
+        // and an evidence parameter dispatching on it is no dictionary.
+        var scheme_vars: std.ArrayList(checked.CheckedTypeId) = .empty;
+        var checked_slots: std.ArrayList(u32) = .empty;
+        var sealed_slots: std.ArrayList(u32) = .empty;
+        defer sealed_slots.deinit(self.allocator);
         const evidence_params = poolSlice(static_dispatch.EvidenceParamRecord, view.view.checked_procedure_templates.evidence_params_pool, template.evidence_params);
-        for (evidence_params, 0..) |param, index| {
-            if (param.runtime_dictionary) try dictionary_params.append(self.arena.allocator(), @intCast(index));
+        for (checked_scheme_vars, 0..) |variable, slot| {
+            if (try self.converter().sealedSchemeVar(module_index, variable, template.checked_fn_root, evidence_params)) {
+                try sealed_slots.append(self.allocator, @intCast(slot));
+                continue;
+            }
+            try scheme_vars.append(self.arena.allocator(), variable);
+            try checked_slots.append(self.arena.allocator(), @intCast(slot));
         }
-        const bound = try self.arena.allocator().alloc(TypeId, scheme_vars.len);
+        var dictionary_params: std.ArrayList(u32) = .empty;
+        for (evidence_params, 0..) |param, index| {
+            if (!self.runtimeDictionary(param)) continue;
+            const sealed_dispatcher = if (param.slot) |slot| std.mem.findScalar(u32, sealed_slots.items, slot) != null else false;
+            if (sealed_dispatcher) continue;
+            try dictionary_params.append(self.arena.allocator(), @intCast(index));
+        }
+        const bound = try self.arena.allocator().alloc(TypeId, scheme_vars.items.len);
         for (bound, 0..) |*slot, index| slot.* = try self.store.variable(@intCast(index));
-        const env: types.Env = .{ .module = module_index, .vars = scheme_vars, .bound = bound };
+        const env: types.Env = .{ .module = module_index, .vars = scheme_vars.items, .bound = bound };
         const fn_ty = try self.converter().convert(module_index, template.checked_fn_root, env);
         const signature = switch (self.store.get(fn_ty)) {
             .function => |function| function,
@@ -408,9 +716,12 @@ pub const Program = struct {
         const params = try self.arena.allocator().dupe(TypeId, self.store.span(signature.args));
 
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
-        const proc = try self.result.store.addProcSpec(.{
+        const identity = self.workerIdentity(key);
+        const imported = !self.ownsModule(module_index);
+        const proc = if (imported) try self.addImportedProc(identity, module_index, .roc) else try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
-            .identity = LIR.ProcIdentity.programLocal("boxy.worker", @backingInt(id)),
+            .identity = identity,
+            .emission_unit = LIR.EmissionUnit.module(@backingInt(module_index)),
             .args = .empty(),
             .ret_layout = .zst,
         }, base.SourceLoc.none);
@@ -418,15 +729,35 @@ pub const Program = struct {
             .key = key,
             .proc = proc,
             .module = module_index,
-            .scheme_vars = scheme_vars,
+            .scheme_vars = scheme_vars.items,
+            .checked_slots = checked_slots.items,
+            .checked_scheme_count = @intCast(checked_scheme_vars.len),
             .dictionary_params = dictionary_params.items,
             .params = params,
             .ret = signature.ret,
             .dict_scopes = try self.arena.allocator().dupe([]const u32, &.{dictionary_params.items}),
             .dict_scope_params = try self.arena.allocator().dupe([]const static_dispatch.EvidenceParamRecord, &.{evidence_params}),
+            .imported = imported,
+            .lowered = imported,
         });
         try self.worker_ids.put(self.allocator, key, id);
+        if (imported) try self.declareImportedTemplateSignature(id);
         return id;
+    }
+
+    /// The entries of a use's checked substitution `subst` (indexed by the
+    /// template's checked scheme variables) for the scheme variables of
+    /// template worker `id`: the sealed variables' entries are dropped, since
+    /// the worker takes no descriptor for them. An empty substitution (a use
+    /// checking recorded none for) stays empty.
+    pub fn keptSubstitution(self: *Program, id: WorkerId, subst: []const checked.CheckedTypeId) Allocator.Error![]const checked.CheckedTypeId {
+        const target = self.worker(id).*;
+        if (subst.len == 0 or target.key != .template) return subst;
+        if (subst.len != target.checked_scheme_count) invariant("a use's checked substitution differs from its target's scheme");
+        if (target.checked_slots.len == subst.len) return subst;
+        const kept = try self.arena.allocator().alloc(checked.CheckedTypeId, target.checked_slots.len);
+        for (kept, target.checked_slots) |*entry, slot| entry.* = subst[slot];
+        return kept;
     }
 
     pub fn templateRefScope(self: *Program, ref: checked_names.ProcedureTemplateRef) Allocator.Error!WorkerId {
@@ -453,9 +784,13 @@ pub const Program = struct {
             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a lambda's type is not a function type"),
         };
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
-        const proc = try self.result.store.addProcSpec(.{
+        const identity = self.workerIdentity(key);
+        // A lambda of an imported worker is that worker's object's.
+        const imported = outer_worker.imported;
+        const proc = if (imported) try self.addImportedProc(identity, outer_worker.module, .erased_record) else try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
-            .identity = LIR.ProcIdentity.programLocal("boxy.lambda", @backingInt(id)),
+            .identity = identity,
+            .emission_unit = LIR.EmissionUnit.module(@backingInt(outer_worker.module)),
             .args = .empty(),
             .ret_layout = .zst,
             .abi = .erased_record,
@@ -474,9 +809,12 @@ pub const Program = struct {
             .dict_scope_params = if (own) |scheme| try std.mem.concat(self.arena.allocator(), []const static_dispatch.EvidenceParamRecord, &.{ &.{scheme.params}, outer_worker.dict_scope_params }) else outer_worker.dict_scope_params,
             .own_descs = if (own) |scheme| (if (scheme.per_call) @intCast(scheme.scheme_vars.len) else 0) else 0,
             .own_dicts = if (own) |scheme| (if (scheme.per_call) @intCast(scheme.dictionaries.len) else 0) else 0,
+            .imported = imported,
+            .lowered = imported,
+            .queued = imported,
         });
         try self.worker_ids.put(self.allocator, key, id);
-        try self.worklist.append(self.allocator, id);
+        if (!imported) try self.worklist.append(self.allocator, id);
         return id;
     }
 
@@ -495,10 +833,8 @@ pub const Program = struct {
     }
 
     /// `relateVariablesPartial`, also marking in `row_vars` each variable
-    /// related as an open tag row's remainder. A closed actual row relates
-    /// through its join representative, whose layout it has: an open row's
-    /// remainder is the representative's tags the row does not name
-    /// (design.md "Row Joins").
+    /// related as an open tag row's remainder: the actual row's tags the open
+    /// row does not name (design.md "Row Joins", `.boxy`).
     pub fn relateVariablesRows(self: *Program, allocator: Allocator, roots: []const [2]TypeId, count: usize, row_vars: ?[]bool) Allocator.Error![]?TypeId {
         const store = &self.store;
         const bound = try allocator.alloc(?TypeId, count);
@@ -560,10 +896,7 @@ pub const Program = struct {
                 .tag_union => |tag_union| {
                     var residual: std.ArrayList(types.TagInput) = .empty;
                     defer residual.deinit(allocator);
-                    const actual = if (tag_union.ext != null and other.tag_union.ext == null) switch (store.get(self.joins.representative(pair[1]))) {
-                        .tag_union => |rep| rep,
-                        .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => other.tag_union,
-                    } else other.tag_union;
+                    const actual = other.tag_union;
                     for (store.tagSpan(actual.tags)) |candidate| {
                         var named = false;
                         for (store.tagSpan(tag_union.tags)) |tag| {
@@ -634,7 +967,7 @@ pub const Program = struct {
     }
 
     /// `ty` with each variable `i` replaced by `bound[i]`. A row whose
-    /// remainder becomes a row joins it.
+    /// remainder becomes a row takes that row's tags.
     pub fn substitute(self: *Program, allocator: Allocator, root: TypeId, bound: []const TypeId) Allocator.Error!TypeId {
         var done: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty;
         defer done.deinit(allocator);
@@ -933,7 +1266,7 @@ pub const Program = struct {
         if (requirements.len == 0) return .{ .bound = bound, .requirements = requirements };
         const key = switch (target_worker.key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary => invariant("a worker with dictionary parameters is not a template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.module(key.module).view.checked_procedure_templates;
         const params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
@@ -980,7 +1313,7 @@ pub const Program = struct {
         if (target_worker.dictionary_params.len != 0) {
             const key = switch (target_worker.key) {
                 .template => |key| key,
-                .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary => invariant("a worker with dictionary parameters is not a template's"),
+                .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert => invariant("a worker with dictionary parameters is not a template's"),
             };
             const templates = self.module(key.module).view.checked_procedure_templates;
             const all_params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
@@ -1198,6 +1531,7 @@ pub const Program = struct {
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.programLocal("boxy.adapter", @backingInt(id)),
+            .emission_unit = .isolated,
             .args = .empty(),
             .ret_layout = .zst,
             .abi = .erased_record,
@@ -1236,9 +1570,12 @@ pub const Program = struct {
         const view = self.module(module_index);
         const ret = try self.converter().convert(module_index, view.bodies().expr(expr).ty, .{ .module = module_index, .vars = &.{}, .bound = &.{} });
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
-        const proc = try self.result.store.addProcSpec(.{
+        const identity = self.workerIdentity(key);
+        const imported = !self.ownsModule(module_index);
+        const proc = if (imported) try self.addImportedProc(identity, module_index, .roc) else try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
-            .identity = LIR.ProcIdentity.programLocal("boxy.default", @backingInt(id)),
+            .identity = identity,
+            .emission_unit = .isolated,
             .args = .empty(),
             .ret_layout = .zst,
         }, base.SourceLoc.none);
@@ -1250,9 +1587,18 @@ pub const Program = struct {
             .dictionary_params = &.{},
             .params = &.{},
             .ret = ret,
+            .imported = imported,
+            .lowered = imported,
+            .queued = true,
         });
         try self.worker_ids.put(self.allocator, key, id);
-        try self.worklist.append(self.allocator, id);
+        if (imported) {
+            // A default is called directly, at its closed result's layout.
+            self.result.store.getProcSpecPtr(proc).ret_layout = try self.layouts.layoutOf(ret);
+            self.bindImportedInterface(id);
+        } else {
+            try self.worklist.append(self.allocator, id);
+        }
         return id;
     }
 
@@ -1266,6 +1612,7 @@ pub const Program = struct {
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.programLocal("boxy.static_data", @backingInt(id)),
+            .emission_unit = .isolated,
             .args = .empty(),
             .ret_layout = .zst,
         }, base.SourceLoc.none);
@@ -1297,6 +1644,7 @@ pub const Program = struct {
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.programLocal("boxy.root", @backingInt(id)),
+            .emission_unit = .isolated,
             .args = .empty(),
             .ret_layout = .zst,
         }, base.SourceLoc.none);
@@ -1315,12 +1663,59 @@ pub const Program = struct {
         return id;
     }
 
+    /// The row conversion worker of `module_index` from `from` to `to` (see
+    /// `WorkerKey.convert`).
+    pub fn convertWorker(self: *Program, module_index: ModuleIndex, from: TypeId, to: TypeId) Allocator.Error!WorkerId {
+        const key: WorkerKey = .{ .convert = .{ .module = module_index, .from = from, .to = to } };
+        if (self.worker_ids.get(key)) |existing| return existing;
+        const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
+        const proc = try self.result.store.addProcSpec(.{
+            .name = self.result.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.programLocal("boxy.convert", @backingInt(id)),
+            .emission_unit = LIR.EmissionUnit.module(@backingInt(module_index)),
+            .args = .empty(),
+            .ret_layout = .zst,
+        }, base.SourceLoc.none);
+        try self.workers.append(self.allocator, .{
+            .key = key,
+            .proc = proc,
+            .module = module_index,
+            .scheme_vars = &.{},
+            .dictionary_params = &.{},
+            .params = try self.arena.allocator().dupe(TypeId, &.{from}),
+            .ret = to,
+        });
+        try self.worker_ids.put(self.allocator, key, id);
+        try self.worklist.append(self.allocator, id);
+        return id;
+    }
+
     /// The dictionary entry of template worker `target`.
     pub fn methodEntryWorker(self: *Program, target: WorkerId) Allocator.Error!WorkerId {
         const key: WorkerKey = .{ .method_entry = target };
         if (self.worker_ids.get(key)) |existing| return existing;
         const target_worker = self.worker(target).*;
-        return try self.addErasedWorker(key, target_worker.module, target_worker.scheme_vars, target_worker.params, target_worker.ret, "boxy.method_entry");
+        const identity = self.workerIdentity(key);
+        if (target_worker.imported) {
+            // The entry of an imported template is its object's.
+            const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
+            const proc = try self.addImportedProc(identity, target_worker.module, .erased_record);
+            try self.workers.append(self.allocator, .{
+                .key = key,
+                .proc = proc,
+                .module = target_worker.module,
+                .scheme_vars = target_worker.scheme_vars,
+                .dictionary_params = &.{},
+                .params = target_worker.params,
+                .ret = target_worker.ret,
+                .imported = true,
+                .lowered = true,
+                .queued = true,
+            });
+            try self.worker_ids.put(self.allocator, key, id);
+            return id;
+        }
+        return try self.addErasedWorkerWithIdentity(key, target_worker.module, target_worker.scheme_vars, target_worker.params, target_worker.ret, identity);
     }
 
     /// The structural method worker of `method`, generic over one type `a`
@@ -1368,9 +1763,15 @@ pub const Program = struct {
 
     fn addErasedWorker(self: *Program, key: WorkerKey, module_index: ModuleIndex, scheme_vars: []const checked.CheckedTypeId, params: []const TypeId, ret: TypeId, role: []const u8) Allocator.Error!WorkerId {
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
+        return try self.addErasedWorkerWithIdentity(key, module_index, scheme_vars, params, ret, LIR.ProcIdentity.programLocal(role, @backingInt(id)));
+    }
+
+    fn addErasedWorkerWithIdentity(self: *Program, key: WorkerKey, module_index: ModuleIndex, scheme_vars: []const checked.CheckedTypeId, params: []const TypeId, ret: TypeId, identity: LIR.ProcIdentity) Allocator.Error!WorkerId {
+        const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
-            .identity = LIR.ProcIdentity.programLocal(role, @backingInt(id)),
+            .identity = identity,
+            .emission_unit = .isolated,
             .args = .empty(),
             .ret_layout = .zst,
             .abi = .erased_record,
@@ -1454,7 +1855,6 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         .input = input,
         .modules = .{ .allocator = allocator },
         .store = types.Store.init(allocator),
-        .joins = RowJoins.Joins.init(allocator),
         .layouts = undefined,
         .result = try LirProgram.Result.init(allocator, input.target_usize),
         .static_descs = undefined,
@@ -1465,7 +1865,6 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     defer {
         program.static_descs.deinit();
         program.layouts.deinit();
-        program.joins.deinit();
         program.store.deinit();
         program.modules.deinit();
         program.workers.deinit(allocator);
@@ -1480,6 +1879,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             while (entries.next()) |list| list.deinit(allocator);
             program.literal_entries.deinit(allocator);
         }
+        program.const_schema.deinit(allocator);
         program.wrapper_by_root.deinit(allocator);
         program.hosted.deinit(allocator);
         program.local_scopes.deinit(allocator);
@@ -1499,7 +1899,6 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         .allocator = allocator,
         .store = &program.store,
         .converter = program.converter(),
-        .joins = &program.joins,
         .layouts = &program.result.layouts,
     };
     program.static_descs = StaticDescs.init(allocator, &program.store, &program.layouts, &program.result, input.target_usize);
@@ -1521,7 +1920,10 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     }
     if (input.literal_values) |values| {
         for (values.entries.items, 0..) |entry, index| {
-            const slot = try program.literal_entries.getOrPut(allocator, .{ .module = program.moduleByKey(entry.module).index, .expr = entry.expr });
+            // The values are the program's; a module unit lowers the
+            // literals of its own modules.
+            const module = program.modules.find(entry.module) orelse continue;
+            const slot = try program.literal_entries.getOrPut(allocator, .{ .module = module.index, .expr = entry.expr });
             if (!slot.found_existing) slot.value_ptr.* = .empty;
             try slot.value_ptr.append(allocator, @intCast(index));
         }
@@ -1578,10 +1980,9 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         }
     }
 
-    // Row joins are seeded from every checked body and sealed before any
-    // layout is committed.
-    try seedRowJoins(&program);
-    try program.joins.seal(&program.store);
+    // A module unit lowers every worker of its modules as a root: the
+    // workers other objects reach by symbol (design.md "Per-Module Output").
+    if (program.moduleUnit() != null) try seedUnitWorkers(&program);
 
     const requests = input.roots.requests;
     for (requests, 0..) |request, index| {
@@ -1589,8 +1990,24 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             program.modules.views.items[0].index
         else
             program.moduleByKey(input.roots.source_modules[index]).index;
-        const proc = try lowerRoot(&program, request, @intCast(index), source_module);
+        const worker_id = try lowerRoot(&program, request, @intCast(index), source_module);
+        const proc = program.worker(worker_id).proc;
         try program.result.root_procs.append(allocator, proc);
+        // A compile-time evaluator stores each root's value by the plan
+        // and stored type of the root's own result type.
+        if (request.abi == .compile_time) {
+            if (!input.compile_time) invariant("a compile-time root reached a lowering that evaluates none");
+            const ret = program.worker(worker_id).ret;
+            try program.result.const_roots.append(allocator, .{
+                .root_order = @intCast(index),
+                .owner = program.lowering_module_ids[@backingInt(source_module)],
+                .request = request,
+                .proc = proc,
+                .ret_layout = try program.layouts.layoutOf(ret),
+                .ret_type = try const_schema.constTypeOf(&program, ret),
+                .plan = try const_schema.constPlanOf(&program, ret),
+            });
+        }
         var metadata = RootMetadata.fromCheckedRoot(request);
         metadata.test_plan = Common.testPlanMetadataForRoot(input.roots, request, index);
         if (input.host_boundary_digests and request.abi == .platform) {
@@ -1629,6 +2046,14 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         }
     }
 
+    if (program.moduleUnit() != null) {
+        for (program.workers.items) |worker| {
+            if (worker.imported or !Program.exportableKind(worker.key)) continue;
+            program.result.store.getProcSpecPtr(worker.proc).exported = true;
+            try program.result.exported_procs.append(allocator, worker.proc);
+        }
+    }
+
     if (input.proc_debug_names) {
         for (program.workers.items) |worker| {
             // A template's worker carries its procedure's source name.
@@ -1643,7 +2068,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                     const export_name = names.procBase(template.proc_base).export_name orelse break :blk "boxy.template";
                     break :blk names.exportNameText(export_name);
                 },
-                inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .crash_dictionary => |_, kind| "boxy." ++ @tagName(kind),
+                inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .crash_dictionary, .convert => |_, kind| "boxy." ++ @tagName(kind),
             };
             try program.result.store.setProcDebugName(worker.proc, name);
         }
@@ -1653,6 +2078,35 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         .lir_result = program.result,
         .static_data = try program.static_descs.takeExports(),
     };
+}
+
+/// Queue every worker a module unit's modules define for other objects:
+/// each template and its dictionary entry (a template is a function value
+/// wherever another module names it, and a method wherever one dispatches
+/// to it), and each `??` default expression (design.md "Per-Module
+/// Output").
+fn seedUnitWorkers(program: *Program) Allocator.Error!void {
+    for (program.modules.views.items) |*view| {
+        if (!program.ownsModule(view.index)) continue;
+        for (0..view.view.checked_procedure_templates.templates.items.len) |index| {
+            const worker = try program.templateWorker(view.index, @fromBackingInt(@intCast(index)));
+            _ = try program.methodEntryWorker(worker);
+        }
+        for (view.view.method_registry.entries) |entry| {
+            const target = entry.target orelse continue;
+            const template = switch (target.kind) {
+                .procedure => |procedure| procedure.template,
+                .local_proc, .structural => continue,
+            };
+            const worker = try program.templateRefWorker(template);
+            if (program.worker(worker).imported) continue;
+            _ = try program.methodEntryWorker(worker);
+        }
+        for (view.bodies().default_exprs) |default| {
+            _ = try program.defaultWorker(view.index, default.checked_expr);
+        }
+    }
+    try program.drain();
 }
 
 fn seedSourceFiles(program: *Program) Allocator.Error!void {
@@ -1683,59 +2137,6 @@ fn seedSourceFiles(program: *Program) Allocator.Error!void {
     try program.result.store.setSourceFiles(files);
 }
 
-/// A root's procedure: its template's worker, which a host-shaped wrapper
-/// would call with static hidden arguments when the worker has any.
-/// Seed the row joins (design.md "Row Joins"): each `row_coerce` with its
-/// value, each lambda's body with its function's result, and each `return`
-/// with its function's result, in every module's checked bodies.
-fn seedRowJoins(program: *Program) Allocator.Error!void {
-    const allocator = program.allocator;
-    for (program.modules.views.items) |*view| {
-        var scheme_vars: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
-        defer scheme_vars.deinit(allocator);
-        for (view.view.checked_procedure_templates.scheme_vars_pool) |variable| try scheme_vars.put(allocator, variable, {});
-        var converter = program.converter();
-        converter.seed_scheme_vars = &scheme_vars;
-        const bodies = view.bodies();
-        for (0..bodies.exprCount()) |index| {
-            const id: checked.CheckedExprId = @fromBackingInt(@intCast(index));
-            const expr = bodies.expr(id);
-            const pair: [2]checked.CheckedTypeId = switch (expr.data) {
-                .row_coerce => |coerce| .{ expr.ty, bodies.expr(coerce.value).ty },
-                .lambda => |lambda| .{ checkedResult(view, expr.ty) orelse continue, bodies.expr(lambda.body).ty },
-                .return_ => |ret| .{ checkedResult(view, bodies.expr(ret.lambda).ty) orelse continue, bodies.expr(ret.expr).ty },
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .for_, .hosted_lambda, .run_low_level => continue,
-            };
-            try seedJoin(program, converter, view.index, pair);
-        }
-        for (0..bodies.statementCount()) |index| {
-            const id: checked.CheckedStatementId = @fromBackingInt(@intCast(index));
-            switch (bodies.statement(id).data) {
-                .return_ => |ret| try seedJoin(program, converter, view.index, .{ checkedResult(view, bodies.expr(ret.lambda).ty) orelse continue, bodies.expr(ret.expr).ty }),
-                .pending, .decl, .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
-            }
-        }
-    }
-}
-
-/// Join the types of a flow edge; one type flowing to itself joins nothing.
-fn seedJoin(program: *Program, converter: types.Converter, module_index: ModuleIndex, pair: [2]checked.CheckedTypeId) Allocator.Error!void {
-    if (pair[0] == pair[1]) return;
-    const env: types.Env = .{ .module = module_index, .vars = &.{}, .bound = &.{} };
-    try program.joins.join(&program.store, try converter.convert(module_index, pair[0], env), try converter.convert(module_index, pair[1], env));
-}
-
-/// The checked result type of a lambda's function type, through aliases; a
-/// rejected lambda's type has none.
-fn checkedResult(view: *const types.ModuleView, fn_ty: checked.CheckedTypeId) ?checked.CheckedTypeId {
-    var current = fn_ty;
-    while (true) switch (view.types().payload(current)) {
-        .alias => |alias| current = alias.backing,
-        .function => |function| return function.ret,
-        .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
-    };
-}
-
 /// Bind every hosted procedure in scope to its external symbol and dispatch
 /// slot: the platform header's hosted section, in order, when a platform is
 /// in scope; otherwise every declaration in a stable order.
@@ -1763,7 +2164,13 @@ fn initHosted(program: *Program) Allocator.Error!void {
     }
     if (platform) |view| {
         for (view.view.hosted_bindings.bindings, 0..) |binding, index| {
-            const target = program.moduleByKey(binding.target_checked_module);
+            const target = switch (program.input.unit) {
+                .program => program.moduleByKey(binding.target_checked_module),
+                // A unit binds the hosted functions of the modules it lowers;
+                // a binding of another module's function is that module's
+                // unit's.
+                .module => program.modules.find(binding.target_checked_module) orelse continue,
+            };
             const key = by_def.get(.{ .module = target.index, .def = @backingInt(binding.target_def) }) orelse
                 invariant("a hosted section names a function with no hosted declaration in scope");
             program.hosted.getPtr(key).?.* = .{
@@ -1808,7 +2215,9 @@ fn solvePlatformIdentities(program: *Program) Allocator.Error!void {
     }
 }
 
-fn lowerRoot(program: *Program, request: checked.RootRequest, index: u32, source_module: ModuleIndex) Allocator.Error!LIR.LirProcSpecId {
+/// A root's worker: its template's, which a host-shaped wrapper would call
+/// with static hidden arguments when the worker has any.
+fn lowerRoot(program: *Program, request: checked.RootRequest, index: u32, source_module: ModuleIndex) Allocator.Error!WorkerId {
     // A root whose target takes no hidden arguments is the target itself.
     const direct: ?checked_names.ProcedureTemplateRef = if (request.procedure_template) |template|
         template
@@ -1820,9 +2229,9 @@ fn lowerRoot(program: *Program, request: checked.RootRequest, index: u32, source
     if (direct) |template| {
         const id = try program.templateRefWorker(template);
         const worker = program.worker(id);
-        if (worker.scheme_vars.len == 0 and worker.dictionary_params.len == 0) return worker.proc;
+        if (worker.scheme_vars.len == 0 and worker.dictionary_params.len == 0) return id;
     }
-    return program.worker(try program.rootWorker(index, request, source_module)).proc;
+    return try program.rootWorker(index, request, source_module);
 }
 
 /// The host boundary digest of a platform entrypoint: the types and layouts
@@ -1850,10 +2259,9 @@ const HostBoundaryGraph = struct {
 
     const Edge = host_boundary.Edge(TypeId);
 
-    pub fn shape(self: HostBoundaryGraph, raw: TypeId, edges: *std.ArrayList(Edge)) Allocator.Error!host_boundary.Shape(TypeId) {
+    pub fn shape(self: HostBoundaryGraph, ty: TypeId, edges: *std.ArrayList(Edge)) Allocator.Error!host_boundary.Shape(TypeId) {
         const program = self.program;
         const allocator = program.allocator;
-        const ty = program.joins.representative(raw);
         switch (program.store.get(ty)) {
             .primitive, .empty_record => return .leaf,
             .variable => invariant("a type variable reached a host boundary"),

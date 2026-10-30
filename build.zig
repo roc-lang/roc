@@ -1055,6 +1055,7 @@ fn createAndRunBuiltinCompiler(
             .{ .name = "static_data", .module = roc_modules.static_data },
             .{ .name = "sljmp", .module = roc_modules.sljmp },
             .{ .name = "value_rules", .module = roc_modules.value_rules },
+            .{ .name = "boxy_runtime", .module = roc_modules.boxy_runtime },
         },
     });
     // The interpreter's hosted-call trampoline is hand-written assembly; attach

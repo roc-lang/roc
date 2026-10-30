@@ -20,9 +20,11 @@ const std = @import("std");
 const collections = @import("collections");
 const base = @import("base");
 const check = @import("check");
+const boxy_runtime = @import("boxy_runtime");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
+const static_dispatch = check.StaticDispatchRegistry;
 const names = check.CheckedNames;
 
 /// Dense index of a checked module in one lowering.
@@ -72,15 +74,51 @@ pub const Modules = struct {
         return &self.views.items[@backingInt(index)];
     }
 
+    /// The module of this lowering with key `key`, or null when the
+    /// lowering does not contain it.
+    pub fn find(self: *const Modules, key: checked.ModuleId) ?*const ModuleView {
+        const index = self.by_key.get(key.bytes) orelse return null;
+        return self.get(index);
+    }
+
     pub fn byKey(self: *const Modules, key: checked.ModuleId) *const ModuleView {
         const index = self.by_key.get(key.bytes) orelse
-            invariant("checked data named a module outside this lowering");
+            invariantFmt("checked data named a module outside this lowering ({s})", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
         return self.get(index);
     }
 };
 
 /// A label (record field or tag name), interned program-wide by text.
 pub const NameId = enum(u32) { _ };
+
+/// The content id of the label or tag `text`: the runtime's definition
+/// (`boxy_runtime.labelId`) computed with the compiler's SHA-256.
+pub fn labelContentId(text: []const u8) boxy_runtime.NameId {
+    var hasher = base.Sha256.init(.{});
+    hasher.update(boxy_runtime.desc.label_name_domain);
+    hasher.update(text);
+    return boxy_runtime.desc.nameIdFromDigest(hasher.finalResult());
+}
+
+/// The content id of nominal declaration `source_decl` of the module whose
+/// content identity is `module_identity`, named `text`
+/// (`boxy_runtime.nominalId`).
+pub fn nominalContentId(module_identity: [32]u8, source_decl: u32, text: []const u8) boxy_runtime.NameId {
+    var hasher = base.Sha256.init(.{});
+    hasher.update(boxy_runtime.desc.nominal_name_domain);
+    hasher.update(&module_identity);
+    var index_bytes: [4]u8 = undefined;
+    std.mem.writeInt(u32, &index_bytes, source_decl, .little);
+    hasher.update(&index_bytes);
+    hasher.update(text);
+    return boxy_runtime.desc.nameIdFromDigest(hasher.finalResult());
+}
+
+test "name content ids agree with the runtime's definition" {
+    try std.testing.expectEqual(boxy_runtime.labelId("field"), labelContentId("field"));
+    try std.testing.expectEqual(boxy_runtime.labelId(""), labelContentId(""));
+    try std.testing.expectEqual(boxy_runtime.nominalId(@splat(7), 3, "Point"), nominalContentId(@splat(7), 3, "Point"));
+}
 
 /// An interned type node.
 pub const TypeId = enum(u32) { _ };
@@ -198,6 +236,8 @@ pub const Store = struct {
     scratch_key: std.ArrayList(u8) = .empty,
 
     name_texts: std.ArrayList([]const u8) = .empty,
+    /// Each name's content id (design.md "Name Identity"), by `NameId`.
+    name_content_ids: std.ArrayList(boxy_runtime.NameId) = .empty,
     name_ids: std.StringHashMapUnmanaged(NameId) = .empty,
     /// Each nominal declaration's name, its own whatever its text: a
     /// descriptor compares nominals by name, and two declarations can share
@@ -221,6 +261,10 @@ pub const Store = struct {
     /// module on first use.
     decl_by_key: std.AutoHashMapUnmanaged(DeclKey, checked.CheckedNominalDeclarationId) = .empty,
     decl_keys_indexed: std.AutoHashMapUnmanaged(ModuleIndex, void) = .empty,
+    /// Each module's nominal declarations by source statement
+    /// (`declarationBySourceDecl`), indexed on first use.
+    decl_by_source: std.AutoHashMapUnmanaged(struct { module: ModuleIndex, source_decl: u32 }, checked.CheckedNominalDeclarationId) = .empty,
+    decl_sources_indexed: std.AutoHashMapUnmanaged(ModuleIndex, void) = .empty,
 
     const DeclKey = struct { module: ModuleIndex, key: names.NominalTypeKey };
 
@@ -266,6 +310,7 @@ pub const Store = struct {
         self.key_bytes.deinit(self.allocator);
         self.scratch_key.deinit(self.allocator);
         self.name_texts.deinit(self.allocator);
+        self.name_content_ids.deinit(self.allocator);
         self.name_ids.deinit(self.allocator);
         self.decl_name_ids.deinit(self.allocator);
         self.name_arena.deinit();
@@ -280,9 +325,23 @@ pub const Store = struct {
         self.field_defaults.deinit(self.allocator);
         self.decl_by_key.deinit(self.allocator);
         self.decl_keys_indexed.deinit(self.allocator);
+        self.decl_by_source.deinit(self.allocator);
+        self.decl_sources_indexed.deinit(self.allocator);
     }
 
     /// The declaration with nominal key `key` in `view`'s type store.
+    /// The nominal declaration of `view` declared at source statement
+    /// `source_decl`, or null when `view` declares none there.
+    pub fn declarationBySourceDecl(self: *Store, view: *const ModuleView, source_decl: u32) Allocator.Error!?checked.CheckedNominalDeclarationId {
+        if (!self.decl_sources_indexed.contains(view.index)) {
+            try self.decl_sources_indexed.put(self.allocator, view.index, {});
+            for (view.types().nominal_declarations) |declaration| {
+                try self.decl_by_source.put(self.allocator, .{ .module = view.index, .source_decl = declaration.nominal.source_decl }, declaration.id);
+            }
+        }
+        return self.decl_by_source.get(.{ .module = view.index, .source_decl = source_decl });
+    }
+
     pub fn declarationByKey(self: *Store, view: *const ModuleView, key: names.NominalTypeKey) Allocator.Error!?checked.CheckedNominalDeclarationId {
         if (!self.decl_keys_indexed.contains(view.index)) {
             try self.decl_keys_indexed.put(self.allocator, view.index, {});
@@ -300,22 +359,35 @@ pub const Store = struct {
         const owned = try self.name_arena.allocator().dupe(u8, text);
         const id: NameId = @fromBackingInt(@intCast(self.name_texts.items.len));
         try self.name_texts.append(self.allocator, owned);
+        errdefer _ = self.name_texts.pop();
+        try self.name_content_ids.append(self.allocator, labelContentId(text));
+        errdefer _ = self.name_content_ids.pop();
         try self.name_ids.put(self.allocator, owned, id);
         return id;
     }
 
-    /// The name of nominal declaration `decl`, whose text is `text`.
-    pub fn internDeclName(self: *Store, decl: NominalDeclKey, text: []const u8) Allocator.Error!NameId {
+    /// The name of nominal declaration `decl`, whose text is `text`:
+    /// `module_identity` is the declaring module's content identity and
+    /// `source_decl` the declaration's index in that module.
+    pub fn internDeclName(self: *Store, decl: NominalDeclKey, module_identity: [32]u8, source_decl: u32, text: []const u8) Allocator.Error!NameId {
         if (self.decl_name_ids.get(decl)) |existing| return existing;
         const owned = try self.name_arena.allocator().dupe(u8, text);
         const id: NameId = @fromBackingInt(@intCast(self.name_texts.items.len));
         try self.name_texts.append(self.allocator, owned);
+        errdefer _ = self.name_texts.pop();
+        try self.name_content_ids.append(self.allocator, nominalContentId(module_identity, source_decl, text));
+        errdefer _ = self.name_content_ids.pop();
         try self.decl_name_ids.put(self.allocator, decl, id);
         return id;
     }
 
     pub fn nameText(self: *const Store, id: NameId) []const u8 {
         return self.name_texts.items[@backingInt(id)];
+    }
+
+    /// The content id the runtime `Name` node of `id` carries.
+    pub fn nameContentId(self: *const Store, id: NameId) boxy_runtime.NameId {
+        return self.name_content_ids.items[@backingInt(id)];
     }
 
     pub fn nameCount(self: *const Store) usize {
@@ -554,11 +626,6 @@ pub fn invariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
 pub const Converter = struct {
     store: *Store,
     modules: *const Modules,
-    /// For row-join seeding: the scheme variables of every scope of the
-    /// module being seeded. A variable among them is a scheme variable in the
-    /// body lowering converts it in, so it seeds as a variable, keeping the
-    /// types it occurs in out of every ground join set.
-    seed_scheme_vars: ?*const collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = null,
     /// Whether an undetermined field kind outside every scheme commits to
     /// `required` (a generated codec contract's snapshot, whose kinds no
     /// caller can pin), rather than keeping its presence-slot representation.
@@ -569,9 +636,6 @@ pub const Converter = struct {
 
     /// A checked type of a module.
     pub const IdentityKey = struct { module: ModuleIndex, ty: checked.CheckedTypeId };
-
-    /// The variable a seeding conversion gives a scheme variable.
-    pub const seed_variable_index: u32 = std.math.maxInt(u32);
 
     const Frame = struct {
         module: ModuleIndex,
@@ -625,9 +689,8 @@ pub const Converter = struct {
             scoped.shrinkRetainingCapacity(frame.results_start);
             pending.shrinkRetainingCapacity(frame.pending_start);
             // A type with no identity variables converts the same under
-            // every environment; a seeding conversion, which keeps scheme
-            // variables apart, is not a lowering conversion.
-            if (!frame_scoped and !self.seal_undetermined_kinds and self.seed_scheme_vars == null and !rootHasIdentityVariables(self.modules.get(frame.module), frame.ty)) {
+            // every environment.
+            if (!frame_scoped and !self.seal_undetermined_kinds and !rootHasIdentityVariables(self.modules.get(frame.module), frame.ty)) {
                 try self.store.closed_memo.put(allocator, .{ .module = frame.module, .ty = frame.ty }, built);
             }
             if (frames.items.len == 0) return built;
@@ -658,12 +721,8 @@ pub const Converter = struct {
         }
         return switch (view.types().payload(ty)) {
             .pending => invariant("a pending checked type reached Boxy lowering"),
-            .err => if (self.seed_scheme_vars != null)
-                // A rejected type is never lowered; it joins nothing.
-                try self.store.variable(seed_variable_index)
-            else
-                invariant("an erroneous checked type reached Boxy lowering"),
-            .flex, .rigid => |variable| if (self.seed_scheme_vars) |vars| (if (vars.contains(ty)) try self.store.variable(seed_variable_index) else try self.sealVariable(variable)) else try self.sealVariable(variable),
+            .err => invariant("an erroneous checked type reached Boxy lowering"),
+            .flex, .rigid => |variable| try self.sealVariable(variable),
             .empty_record => try self.store.emptyRecord(),
             .empty_tag_union => try self.store.emptyTagUnion(),
             .nominal => |nominal| switch (nominal.representation) {
@@ -675,6 +734,175 @@ pub const Converter = struct {
             },
             .alias, .record, .tuple, .function, .tag_union => null,
         };
+    }
+
+    /// Whether scheme variable `variable` of `module` is SEALED (design.md
+    /// "Sealed Result Rows"): a flex tag-row tail that an annotation bounds,
+    /// whose row default is the empty row, and whose constraints closing
+    /// the row discharges. A worker binds such a variable to the empty row
+    /// and takes no descriptor for it; omitting it from the worker's scheme
+    /// variables is exactly that, since a flex no scope binds seals to its
+    /// row default (`sealVariable`).
+    pub fn sealedSchemeVar(self: Converter, module: ModuleIndex, variable: checked.CheckedTypeId, fn_root: checked.CheckedTypeId, evidence_params: []const static_dispatch.EvidenceParamRecord) Allocator.Error!bool {
+        const types = self.modules.get(module).types();
+        const payload = types.payload(variable);
+        const bounded = switch (payload) {
+            .flex => |flex| flex.bounded_row_ext and flex.row_default == .empty_tag_union and payload.variableSealsToRowDefault(),
+            .rigid, .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
+        };
+        if (!bounded) return false;
+        // Polarity also opens a row in a callback's parameter, which the
+        // definition produces but which no instantiation of its result
+        // converts: a variable at such a position, or anywhere else outside
+        // the result's reach, keeps its descriptor.
+        if (try self.occursOutsideResultReach(module, fn_root, variable)) return false;
+        // A callable the worker receives from its caller carries the caller's
+        // instantiation of every variable its interface mentions. A function
+        // parameter shows that interface and is excluded above; a `where`
+        // dictionary's interface is its evidence parameter's callable, and a
+        // nominal over a callable payload hides its callable's interface in
+        // its methods, so a parameter holding one may involve any variable.
+        for (evidence_params) |param| {
+            if (try self.mentionsVariable(module, param.callable_ty, variable)) return false;
+        }
+        return !try self.argumentsHoldCallablePayload(module, fn_root);
+    }
+
+    /// Whether any argument of the function type `fn_root` holds a nominal
+    /// over a callable payload (`local_box_payload_capability`,
+    /// `imported_box_payload_capability`): a function value whose
+    /// interface the signature does not show.
+    fn argumentsHoldCallablePayload(self: Converter, module: ModuleIndex, fn_root: checked.CheckedTypeId) Allocator.Error!bool {
+        const types = self.modules.get(module).types();
+        const allocator = self.store.allocator;
+        var root = fn_root;
+        const function = while (true) switch (types.payload(root)) {
+            .alias => |alias| root = alias.backing,
+            .function => |function| break function,
+            .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return true,
+        };
+        var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer pending.deinit(allocator);
+        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        defer seen.deinit(allocator);
+        try pending.appendSlice(allocator, function.args);
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
+            switch (types.payload(ty)) {
+                .alias => |alias| {
+                    try pending.appendSlice(allocator, alias.args);
+                    try pending.append(allocator, alias.backing);
+                },
+                .record => |record| {
+                    for (record.fields) |field| try pending.append(allocator, field.ty);
+                    try pending.append(allocator, record.ext);
+                },
+                .tuple => |items| try pending.appendSlice(allocator, items),
+                .tag_union => |tag_union| {
+                    for (tag_union.tags) |tag| try pending.appendSlice(allocator, tag.argsSlice(types));
+                    try pending.append(allocator, tag_union.ext);
+                },
+                .function => |inner| {
+                    try pending.appendSlice(allocator, inner.args);
+                    try pending.append(allocator, inner.ret);
+                },
+                .nominal => |nominal| switch (nominal.representation) {
+                    .local_box_payload_capability, .imported_box_payload_capability => return true,
+                    .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => try pending.appendSlice(allocator, nominal.args),
+                },
+                .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+            }
+        }
+        return false;
+    }
+
+    /// Whether `variable` occurs in the function type `fn_root` anywhere but
+    /// along its result's coercion reach: an argument, or a position under
+    /// the result that a row coercion does not reach (design.md "Row
+    /// Coercion Primitive": the root row, tag payload rows, the error
+    /// argument of a `Try`, and alias backings are reached; records, tuples,
+    /// lists, boxes, functions, and other named types' arguments are not).
+    fn occursOutsideResultReach(self: Converter, module: ModuleIndex, fn_root: checked.CheckedTypeId, variable: checked.CheckedTypeId) Allocator.Error!bool {
+        const types = self.modules.get(module).types();
+        const allocator = self.store.allocator;
+        var root = fn_root;
+        const function = while (true) switch (types.payload(root)) {
+            .alias => |alias| root = alias.backing,
+            .function => |function| break function,
+            .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return true,
+        };
+        for (function.args) |arg| {
+            if (try self.mentionsVariable(module, arg, variable)) return true;
+        }
+        // Reached positions under the result, in which only the variable's
+        // own occurrence as a row extension is on the reach.
+        var reached: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer reached.deinit(allocator);
+        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        defer seen.deinit(allocator);
+        try reached.append(allocator, function.ret);
+        while (reached.pop()) |ty| {
+            if (ty == variable) continue;
+            if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
+            switch (types.payload(ty)) {
+                .alias => |alias| try reached.append(allocator, alias.backing),
+                .tag_union => |tag_union| {
+                    for (tag_union.tags) |tag| try reached.appendSlice(allocator, tag.argsSlice(types));
+                    try reached.append(allocator, tag_union.ext);
+                },
+                .nominal => |nominal| switch (nominal.representation) {
+                    .builtin => |builtin_nominal| if (checked.builtinRuntimeEncoding(builtin_nominal) == .try_nominal and nominal.args.len == 2) {
+                        if (try self.mentionsVariable(module, nominal.args[0], variable)) return true;
+                        try reached.append(allocator, nominal.args[1]);
+                    } else {
+                        for (nominal.args) |arg| if (try self.mentionsVariable(module, arg, variable)) return true;
+                    },
+                    .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {
+                        for (nominal.args) |arg| if (try self.mentionsVariable(module, arg, variable)) return true;
+                    },
+                },
+                .flex, .rigid, .pending, .err, .empty_record, .empty_tag_union => {},
+                .record, .tuple, .function => if (try self.mentionsVariable(module, ty, variable)) return true,
+            }
+        }
+        return false;
+    }
+
+    /// Whether `variable` occurs anywhere in `root`.
+    fn mentionsVariable(self: Converter, module: ModuleIndex, root: checked.CheckedTypeId, variable: checked.CheckedTypeId) Allocator.Error!bool {
+        const types = self.modules.get(module).types();
+        const allocator = self.store.allocator;
+        var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer pending.deinit(allocator);
+        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        defer seen.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |ty| {
+            if (ty == variable) return true;
+            if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
+            switch (types.payload(ty)) {
+                .alias => |alias| {
+                    try pending.appendSlice(allocator, alias.args);
+                    try pending.append(allocator, alias.backing);
+                },
+                .record => |record| {
+                    for (record.fields) |field| try pending.append(allocator, field.ty);
+                    try pending.append(allocator, record.ext);
+                },
+                .tuple => |items| try pending.appendSlice(allocator, items),
+                .tag_union => |tag_union| {
+                    for (tag_union.tags) |tag| try pending.appendSlice(allocator, tag.argsSlice(types));
+                    try pending.append(allocator, tag_union.ext);
+                },
+                .function => |function| {
+                    try pending.appendSlice(allocator, function.args);
+                    try pending.append(allocator, function.ret);
+                },
+                .nominal => |nominal| try pending.appendSlice(allocator, nominal.args),
+                .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+            }
+        }
+        return false;
     }
 
     /// The type a scheme variable takes where nothing relates it to a use:
@@ -985,7 +1213,7 @@ pub const Converter = struct {
                 return try self.store.intern(.{ .nominal = .{
                     .decl = decl_key,
                     .args = args,
-                    .name = if (decl != null) try self.store.internDeclName(decl_key, name_store.typeNameText(nominal.name)) else try self.store.internName(name_store.typeNameText(nominal.name)),
+                    .name = if (decl != null) try self.declName(decl_key, name_store.typeNameText(nominal.name)) else try self.store.internName(name_store.typeNameText(nominal.name)),
                     .is_opaque = nominal.is_opaque,
                     .builtin = nominal.builtin,
                     .has_backing = decl != null,
@@ -1112,6 +1340,15 @@ pub const Converter = struct {
         };
     }
 
+    /// The name of nominal declaration `decl`, which is its own name
+    /// whatever its text (design.md "Name Identity"): the runtime node's id
+    /// digests the declaring module's content identity and the declaration.
+    fn declName(self: Converter, decl: NominalDeclKey, text: []const u8) Allocator.Error!NameId {
+        const view = self.modules.get(decl.module);
+        const declaration = view.types().nominalDeclarationById(decl.decl);
+        return try self.store.internDeclName(decl, view.view.module_identity.stable_hash, declaration.nominal.source_decl, text);
+    }
+
     /// The variables of an enclosing scope that the backing of `decl` (a
     /// declaration in a function body) mentions, directly or through the
     /// backings of the declarations it names: the variables its backing
@@ -1221,4 +1458,69 @@ test "interning shares structurally equal nodes" {
     const v = try store.variable(0);
     const list_v = try store.intern(.{ .list = v });
     try std.testing.expect(!store.isClosed(list_v));
+}
+
+/// Whether two types could unify without a structural conflict: the same
+/// kind of type, the same primitive, records with the same fields, tuples
+/// and functions of the same arity, the same nominal; a variable is
+/// compatible with anything. A value constructed at a type compatible with
+/// its destination is built at the destination (`Builder.exprType`).
+pub fn compatible(allocator: Allocator, store: *const Store, a: TypeId, b: TypeId) Allocator.Error!bool {
+    var pending: std.ArrayList([2]TypeId) = .empty;
+    defer pending.deinit(allocator);
+    var seen: std.AutoHashMapUnmanaged(struct { TypeId, TypeId }, void) = .empty;
+    defer seen.deinit(allocator);
+    try pending.append(allocator, .{ a, b });
+    while (pending.pop()) |pair| {
+        if (pair[0] == pair[1]) continue;
+        if ((try seen.getOrPut(allocator, .{ pair[0], pair[1] })).found_existing) continue;
+        const left = store.get(pair[0]);
+        const right = store.get(pair[1]);
+        if (left == .variable or right == .variable) continue;
+        if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+        switch (left) {
+            .primitive => |primitive| if (primitive != right.primitive) return false,
+            .empty_record => {},
+            .list => |elem| try pending.append(allocator, .{ elem, right.list }),
+            .box => |payload| try pending.append(allocator, .{ payload, right.box }),
+            .tuple => |items| {
+                const mine = store.span(items);
+                const theirs = store.span(right.tuple);
+                if (mine.len != theirs.len) return false;
+                for (mine, theirs) |x, y| try pending.append(allocator, .{ x, y });
+            },
+            .record => |record| {
+                const mine = store.fieldSpan(record.fields);
+                const theirs = store.fieldSpan(right.record.fields);
+                if (mine.len != theirs.len) return false;
+                for (mine, theirs) |x, y| {
+                    if (x.name != y.name) return false;
+                    try pending.append(allocator, .{ x.ty, y.ty });
+                }
+            },
+            .tag_union => |tag_union| {
+                // Rows merge their tags; only shared labels at one arity
+                // must agree.
+                for (store.tagSpan(tag_union.tags)) |tag| {
+                    for (store.tagSpan(right.tag_union.tags)) |other| {
+                        if (tag.name != other.name or tag.payloads.len != other.payloads.len) continue;
+                        for (store.span(tag.payloads), store.span(other.payloads)) |x, y| try pending.append(allocator, .{ x, y });
+                    }
+                }
+            },
+            .nominal => |nominal| {
+                if (nominal.decl.module != right.nominal.decl.module or nominal.decl.decl != right.nominal.decl.decl) return false;
+                for (store.nominalArgs(nominal), store.nominalArgs(right.nominal)) |x, y| try pending.append(allocator, .{ x, y });
+            },
+            .function => |function| {
+                const mine = store.span(function.args);
+                const theirs = store.span(right.function.args);
+                if (mine.len != theirs.len) return false;
+                for (mine, theirs) |x, y| try pending.append(allocator, .{ x, y });
+                try pending.append(allocator, .{ function.ret, right.function.ret });
+            },
+            .variable => unreachable, // answered above
+        }
+    }
+    return true;
 }

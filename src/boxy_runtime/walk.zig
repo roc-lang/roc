@@ -103,19 +103,19 @@ pub fn sameShape(a: *const TypeDesc, b: *const TypeDesc, ops: *RocOps) bool {
                 const px = x.child.?;
                 const py = y.child.?;
                 if (px.kind != py.kind) return false;
-                if (px.kind == .nominal and px.name.?.id != py.name.?.id) return false;
+                if (px.kind == .nominal and !px.name.?.eql(py.name.?)) return false;
             },
             .nominal => {
-                if (x.name.?.id != y.name.?.id) return false;
+                if (!x.name.?.eql(y.name.?)) return false;
                 stack.push(.{ .a = x.child.?, .b = y.child.? }, ops);
             },
             .record, .tuple => for (x.fields(), y.fields()) |*fx, *fy| {
                 if ((fx.name == null) != (fy.name == null)) return false;
-                if (fx.name != null and fx.name.?.id != fy.name.?.id) return false;
+                if (fx.name != null and !fx.name.?.eql(fy.name.?)) return false;
                 stack.push(.{ .a = fx.desc, .b = fy.desc }, ops);
             },
             .tag_union => for (x.variants(), y.variants()) |*vx, *vy| {
-                if (vx.name.id != vy.name.id or vx.payload_count != vy.payload_count) return false;
+                if (!vx.name.eql(vy.name) or vx.payload_count != vy.payload_count) return false;
                 if (vx.payload_count != 0) stack.push(.{ .a = vx.payload, .b = vy.payload }, ops);
             },
         }

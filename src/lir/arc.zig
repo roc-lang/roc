@@ -728,6 +728,9 @@ fn recordObjectCacheFacts(
         spec.rc_ret_unique_fields = sig.ret_unique_fields;
         spec.rc_ret_conditions = conditions;
         spec.rc_variant_demandable = false;
+        // Nothing shares an isolated procedure's unit, so no call demands a
+        // variant of it.
+        if (spec.emission_unit == .isolated) continue;
         if (solution.isPinnedProc(proc)) {
             // A proc pinned only for stability still has its outcome
             // variant, for callers compiled with its current body.
@@ -1230,6 +1233,7 @@ const VariantTable = struct {
             .erased_capture_arg = source_spec.erased_capture_arg,
             .dyn_result = source_spec.dyn_result,
             .abi = source_spec.abi,
+            .emission_unit = source_spec.emission_unit,
             .is_static_initializer = source_spec.is_static_initializer,
             .hosted = source_spec.hosted,
             .tail_transform = source_spec.tail_transform,
@@ -6028,6 +6032,9 @@ const Inserter = struct {
         self.retain_arg_scratch.clearRetainingCapacity();
         var demanded = callee_sig;
         const locals = self.store.getLocalSpan(span);
+        // A call across emission units adapts to the callee's base signature
+        // (design.md "Mode Specialization", emission units).
+        const same_unit = if (callee) |direct| arc_solve.sharesEmissionUnit(self.store, self.current_source_proc, direct) else false;
         if (tail_call != null and self.current_sig.ret_mode == .owned and demanded.ret_mode == .borrowed) {
             // A recursive tail edge must use the caller's return ABI. Asking
             // an owned-return caller to forward a borrowed result would put a
@@ -6165,13 +6172,14 @@ const Inserter = struct {
                 else
                     false;
                 const enables_field_take = if (callee) |direct|
-                    (self.dismantles.ownedOnlyParamBenefits(direct) & bit) != 0
+                    same_unit and (self.dismantles.ownedOnlyParamBenefits(direct) & bit) != 0
                 else
                     false;
                 // Recursive tail transfer and field takes are exact ownership
                 // schedules, so their variants are mandatory. General return
-                // and born-unique specialization remains opt-in.
-                if (!self.options.specialize and !enables_field_take and !requires_tail_transfer) continue;
+                // and born-unique specialization remains opt-in, and only
+                // within the callee's emission unit.
+                if (!(self.options.specialize and same_unit) and !enables_field_take and !requires_tail_transfer) continue;
                 const owner = self.unitOf(local);
                 const used_after_call = local != target and (if (enables_field_take)
                     try self.ownershipPlaceUsedInPath(next, owner)
@@ -6183,9 +6191,9 @@ const Inserter = struct {
                 // it, so a shared operand keeps its unit.
                 const shares_other_operand = self.groupSharesOtherOperand(locals, position, local);
                 const can_transfer = owned.contains(owner) and !used_after_call and !shares_other_operand;
-                const return_borrows_param = callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0;
+                const return_borrows_param = same_unit and callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0;
                 const seed_can_reach_check = if (callee) |direct| self.procParamCanUseUniqueSeed(direct, position) else false;
-                const seeds_unique_param = can_transfer and unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local);
+                const seeds_unique_param = can_transfer and unique_demand and same_unit and seed_can_reach_check and self.isLocalUniqueHere(local);
                 if (!can_transfer and !requires_tail_transfer) continue;
                 if (!return_borrows_param and !seeds_unique_param and !enables_field_take and !requires_tail_transfer) continue;
                 demanded.borrowed_params &= ~bit;
@@ -10462,6 +10470,89 @@ test "RC specialization: fields taken from one dying record select the owned var
     try testing.expectEqual(@as(usize, 1), f.countRc(left_field, .incref));
     try testing.expectEqual(@as(usize, 1), f.countRc(right_field, .incref));
     try f.expectRc(record, 0, 0, 0);
+}
+
+test "RC emission units: a call demands an owned variant only within its callee's unit" {
+    // The program of the test above, with the caller and the callee placed
+    // in emission units (design.md "Mode Specialization", emission units): a
+    // caller in the callee's module unit demands the owned variant as before;
+    // a caller in another module's unit, or any caller of an isolated callee,
+    // adapts to the callee's base signature and no variant is emitted.
+    const Case = struct { caller: LIR.EmissionUnit, callee: LIR.EmissionUnit, variants: usize };
+    const cases = [_]Case{
+        .{ .caller = LIR.EmissionUnit.module(0), .callee = LIR.EmissionUnit.module(0), .variants = 1 },
+        .{ .caller = LIR.EmissionUnit.module(1), .callee = LIR.EmissionUnit.module(0), .variants = 0 },
+        .{ .caller = LIR.EmissionUnit.module(0), .callee = .isolated, .variants = 0 },
+        .{ .caller = .program, .callee = .program, .variants = 1 },
+    };
+    for (cases) |case| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+
+        // Each callee parameter is a pair whose owned variant takes its first
+        // list; the caller passes two different fields of one dying record.
+        const left = try f.local(f.pair_list);
+        const right = try f.local(f.pair_list);
+        const left_field = try f.local(f.list_i64);
+        const right_field = try f.local(f.list_i64);
+        const elem = try f.local(.i64);
+        const left_appended = try f.local(f.list_i64);
+        const right_appended = try f.local(f.list_i64);
+        const callee_result = try f.local(.i64);
+        const callee_ret = try f.ret(callee_result);
+        const result_assign = try f.assignI64(callee_result, 1, callee_ret);
+        const append_right = try f.assignLowLevel(right_appended, &.{ right_field, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+        const read_right = try f.assignRefField(right_field, right, 0, append_right);
+        const append_left = try f.assignLowLevel(left_appended, &.{ left_field, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), read_right);
+        const elem_assign = try f.assignI64(elem, 5, append_left);
+        const read_left = try f.assignRefField(left_field, left, 0, elem_assign);
+        const callee = try f.addProc(&.{ left, right }, read_left, .i64);
+
+        const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+            .{ .index = 0, .layout = f.pair_list },
+            .{ .index = 1, .layout = f.pair_list },
+        });
+        const a = try f.local(f.list_i64);
+        const b = try f.local(f.list_i64);
+        const c = try f.local(f.list_i64);
+        const d = try f.local(f.list_i64);
+        const first_pair = try f.local(f.pair_list);
+        const second_pair = try f.local(f.pair_list);
+        const record = try f.local(record_layout);
+        const first_arg = try f.local(f.pair_list);
+        const second_arg = try f.local(f.pair_list);
+        const caller_result = try f.local(.i64);
+        const caller_ret = try f.ret(caller_result);
+        const call = try f.store.addCFStmt(.{ .assign_call = .{
+            .target = caller_result,
+            .proc = callee,
+            .args = try f.span(&.{ first_arg, second_arg }),
+            .next = caller_ret,
+        } }, .test_fixture);
+        const read_second = try f.assignRefField(second_arg, record, 1, call);
+        const read_first = try f.assignRefField(first_arg, record, 0, read_second);
+        const record_assign = try f.assignStruct(record, &.{ first_pair, second_pair }, read_first);
+        const second_assign = try f.assignStruct(second_pair, &.{ c, d }, record_assign);
+        const first_assign = try f.assignStruct(first_pair, &.{ a, b }, second_assign);
+        const d_assign = try f.assignList(d, &.{}, first_assign);
+        const c_assign = try f.assignList(c, &.{}, d_assign);
+        const b_assign = try f.assignList(b, &.{}, c_assign);
+        const caller_body = try f.assignList(a, &.{}, b_assign);
+        const caller = try f.addProc(&.{}, caller_body, .i64);
+        f.store.getProcSpecPtr(callee).emission_unit = case.callee;
+        f.store.getProcSpecPtr(caller).emission_unit = case.caller;
+
+        const base_proc_count = f.store.procSpecCount();
+        try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+        try testing.expectEqual(base_proc_count + case.variants, f.store.procSpecCount());
+        // The base proc keeps its borrowed signature either way and retains
+        // each borrowed field once.
+        try testing.expectEqual(@as(u64, 0b11), f.store.getProcSpec(callee).rc_borrowed_params);
+        try testing.expectEqual(@as(usize, 1), f.countRc(left_field, .incref));
+        try testing.expectEqual(@as(usize, 1), f.countRc(right_field, .incref));
+        if (case.variants == 1) try f.expectRc(record, 0, 0, 0);
+    }
 }
 
 test "RC early_return emits correct number of decrefs for multi-use symbol" {

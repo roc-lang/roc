@@ -493,6 +493,7 @@ const CustomCase = enum {
     issue_11678_dev_cache_boxy_tables,
     boxy_caches_nothing_after_checking,
     boxy_build_and_run_cache_what_check_caches,
+    boxy_module_object_cache,
     issue_11710_shared_object_cache,
     issue_12220_shared_object_cache_literals,
     issue_12564_package_from_numeral_cache,
@@ -3304,6 +3305,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: dev builds whose code reaches the Boxy runtime are identical whatever the dev cache holds, including another app's packs", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_dev_cache_boxy_tables } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no caches nothing after checking", .timeout_ms = 600_000, .body = .{ .custom = .boxy_caches_nothing_after_checking } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no build and run leave the cache check leaves", .timeout_ms = 600_000, .body = .{ .custom = .boxy_build_and_run_cache_what_check_caches } },
+    .{ .id = 0, .suite = .subcommands, .name = "--specialize=no build files one object per module and rebuilds only edited modules", .timeout_ms = 600_000, .body = .{ .custom = .boxy_module_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11710: shared object cache serves a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_11710_shared_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12220: shared object cache keeps each module's list literals in a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_12220_shared_object_cache_literals } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12564: a package from_numeral cached by one app's check converts another app's literal", .timeout_ms = 600_000, .body = .{ .custom = .issue_12564_package_from_numeral_cache } },
@@ -5320,6 +5322,7 @@ fn runCustomCase(
         .issue_11678_dev_cache_boxy_tables => customIssue11678DevCacheBoxyTables(io, allocator, &env, &timer, timeout_ms),
         .boxy_caches_nothing_after_checking => customBoxyCachesNothingAfterChecking(io, allocator, &env, &timer, timeout_ms),
         .boxy_build_and_run_cache_what_check_caches => customBoxyBuildAndRunCacheWhatCheckCaches(io, allocator, &env, &timer, timeout_ms),
+        .boxy_module_object_cache => customBoxyModuleObjectCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11710_shared_object_cache => customIssue11710SharedObjectCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12220_shared_object_cache_literals => customIssue12220SharedObjectCacheLiterals(io, allocator, &env, &timer, timeout_ms),
         .issue_12564_package_from_numeral_cache => customIssue12564PackageFromNumeralCache(io, allocator, &env, &timer, timeout_ms),
@@ -9166,7 +9169,7 @@ const PackStoreFiles = struct {
             if (entry.state != .published) continue;
             switch (entry.family) {
                 .local_pack, .package_pack, .optimized_pack => {},
-                .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .local_discovery, .package_discovery, .program_output, .scratch => continue,
+                .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .local_discovery, .package_discovery, .program_output, .scratch, .boxy_object => continue,
             }
             try result.families.append(allocator, entry.family);
             const path = try allocator.dupe(u8, &std.fmt.bytesToHex(entry.key, .lower));
@@ -11464,6 +11467,103 @@ fn customBoxyCachesNothingAfterChecking(
 /// design.md "Caching Under `.boxy`": `roc check`, `roc build`, and `roc run`
 /// with `--specialize=no` leave identical cache contents for the same
 /// sources, compile-time packs included.
+/// `roc build --specialize=no --opt=dev` files one object per module under
+/// the module's checked key and links cached objects on later builds: a cold
+/// build, a warm build, a build with `--no-cache`, and builds after editing
+/// the app or a library module all produce byte-identical executables, and
+/// an edit rebuilds only the modules whose checked keys changed (design.md
+/// "Caching Under `.boxy`").
+fn customBoxyModuleObjectCache(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const source_dir = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "boxy_module_objects" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the source dir: {}", .{err});
+    std.Io.Dir.cwd().createDirPath(io, source_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create the source dir: {}", .{err});
+    const files = [_][]const u8{ "Main.roc", "Tree.roc", "Combinator.roc" };
+    for (files) |name| {
+        const from = std.fs.path.join(allocator, &.{ "test/cli/boxy_restored_tree", name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate a fixture path: {}", .{err});
+        const contents = std.Io.Dir.cwd().readFileAlloc(io, from, allocator, .limited(1024 * 1024)) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read {s}: {}", .{ from, err });
+        const to = std.fs.path.join(allocator, &.{ source_dir, name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate a source path: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = to, .data = contents }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ to, err });
+    }
+    const main_path = std.fs.path.join(allocator, &.{ source_dir, "Main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the app path: {}", .{err});
+    const tree_path = std.fs.path.join(allocator, &.{ source_dir, "Tree.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the library path: {}", .{err});
+
+    var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err| return customInfraFailure(allocator, timer, "clone environment: {}", .{err}) };
+    defer isolated.env_map.deinit();
+    const cache_root = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "boxy_module_object_cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the cache root: {}", .{err});
+    for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+        isolated.env_map.put(key, cache_root) catch |err| return customInfraFailure(allocator, timer, "failed to set the cache root: {}", .{err});
+    }
+
+    const Build = struct { name: []const u8, no_cache: bool, objects: []const u8, identical: bool };
+    // The program's units are Builtin, Combinator, Tree, Main, and the
+    // default platform's module; the root unit's object makes six. An edit
+    // of the app rebuilds Main's unit and the root unit; an edit of Tree
+    // rebuilds Tree's unit and, since Main imports it, both again. The
+    // builds of unedited sources produce the same bytes whatever the cache
+    // held; an edited module's symbols carry its new content identity, so
+    // an edit's executable is only required to run.
+    const builds = [_]Build{
+        .{ .name = "cold", .no_cache = false, .objects = "Boxy objects: 0 cached, 6 built", .identical = true },
+        .{ .name = "warm", .no_cache = false, .objects = "Boxy objects: 6 cached, 0 built", .identical = true },
+        .{ .name = "nocache", .no_cache = true, .objects = "", .identical = true },
+        .{ .name = "app_edit", .no_cache = false, .objects = "Boxy objects: 4 cached, 2 built", .identical = false },
+        .{ .name = "lib_edit", .no_cache = false, .objects = "Boxy objects: 3 cached, 3 built", .identical = false },
+    };
+    var first_bytes: ?[]const u8 = null;
+    for (builds) |build| {
+        if (std.mem.eql(u8, build.name, "app_edit")) appendLine(io, main_path, "\n# an edit of the app alone\n") catch |err|
+            return customInfraFailure(allocator, timer, "failed to edit the app: {}", .{err});
+        if (std.mem.eql(u8, build.name, "lib_edit")) appendLine(io, tree_path, "\n# an edit of one library module\n") catch |err|
+            return customInfraFailure(allocator, timer, "failed to edit the library: {}", .{err});
+        const output = std.fs.path.join(allocator, &.{ env.dirs.work_dir, build.name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate the output path: {}", .{err});
+        const out_arg = outputArg(allocator, output) catch |err| return customInfraFailure(allocator, timer, "output argument: {}", .{err});
+        var args = std.ArrayList([]const u8).empty;
+        args.appendSlice(allocator, &.{ "build", "--opt=dev", "--specialize=no", "--no-color", "--verbose", out_arg }) catch |err|
+            return customInfraFailure(allocator, timer, "arguments: {}", .{err});
+        if (build.no_cache) args.append(allocator, "--no-cache") catch |err| return customInfraFailure(allocator, timer, "arguments: {}", .{err});
+        const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "module object cache test timed out");
+        const run = runRocInEnv(io, allocator, &isolated, args.items, main_path, .absolute, &.{}, null, remaining) catch |err|
+            return customInfraFailure(allocator, timer, "build: {}", .{err});
+        if (!processSucceeded(run.term)) return failureFromRun(allocator, timer, run, "the build failed");
+        if (build.objects.len != 0 and std.mem.find(u8, run.stdout, build.objects) == null) return failureFromRun(allocator, timer, run, "the build's object summary differs from the expected cache work");
+        if (build.no_cache and std.mem.find(u8, run.stdout, "Boxy objects:") != null) return failureFromRun(allocator, timer, run, "a build with --no-cache reported cached objects");
+        const exe = runnableOutputPath(io, allocator, output) catch |err| return customInfraFailure(allocator, timer, "executable: {}", .{err});
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, exe, allocator, .limited(64 * 1024 * 1024)) catch |err| return customInfraFailure(allocator, timer, "read executable: {}", .{err});
+        if (first_bytes) |expected| {
+            if (build.identical and !std.mem.eql(u8, expected, bytes)) return customFailure(allocator, timer, "the {s} build's executable differs from the cold build's", .{build.name});
+        } else first_bytes = bytes;
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{ .args = &.{}, .stdout_exact = "", .stderr_exact = "" })) |failure| return failure;
+    }
+    return null;
+}
+
+/// Append `text` to the file at `path`.
+fn appendLine(io: std.Io, path: []const u8, text: []const u8) !void {
+    const existing = try std.Io.Dir.cwd().readFileAlloc(io, path, std.heap.page_allocator, .limited(1024 * 1024));
+    defer std.heap.page_allocator.free(existing);
+    const joined = try std.mem.concat(std.heap.page_allocator, u8, &.{ existing, text });
+    defer std.heap.page_allocator.free(joined);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = joined });
+}
+
+/// `roc build --specialize=no --opt=dev` adds exactly the per-module Boxy
+/// object entries to what `roc check --specialize=no` leaves, and `roc run`
+/// of the same program adds nothing (design.md "Caching Under `.boxy`").
 fn customBoxyBuildAndRunCacheWhatCheckCaches(
     io: std.Io,
     allocator: Allocator,
@@ -11503,9 +11603,23 @@ fn customBoxyBuildAndRunCacheWhatCheckCaches(
         if (!processSucceeded(ran.term)) return failureFromRun(allocator, timer, ran, "command did not succeed");
         inventory.* = cacheInventory(io, allocator, cache_root) catch |err|
             return customInfraFailure(allocator, timer, "failed to read the cache: {}", .{err});
-        if (index != 0) if (firstInventoryDifference(inventories[0], inventory.*)) |entry| {
-            return customFailure(allocator, timer, "`roc {s} --specialize=no` left a cache other than `roc check`'s: {s} {x}", .{ args[0], @tagName(entry.family), &entry.key });
-        };
+        if (index == 0) continue;
+        // A build's extra entries are its module objects, and nothing else;
+        // every other command leaves exactly the check's cache.
+        const is_build = std.mem.eql(u8, args[0], "build");
+        var objects: usize = 0;
+        for (inventory.*) |entry| {
+            if (is_build and entry.family == .boxy_object) {
+                objects += 1;
+                continue;
+            }
+            const in_check = for (inventories[0]) |checked| {
+                if (checked.eql(entry)) break true;
+            } else false;
+            if (!in_check) return customFailure(allocator, timer, "`roc {s} --specialize=no` left a cache entry `roc check` does not: {s} {x}", .{ args[0], @tagName(entry.family), &entry.key });
+        }
+        if (inventory.len - objects != inventories[0].len) return customFailure(allocator, timer, "`roc {s} --specialize=no` left fewer of `roc check`'s entries", .{args[0]});
+        if (is_build and objects == 0) return customFailure(allocator, timer, "`roc build --specialize=no` filed no module object", .{});
     }
     return null;
 }

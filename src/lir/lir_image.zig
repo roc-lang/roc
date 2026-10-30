@@ -58,7 +58,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      lowering modules' keys.
 /// v54: combines the independent v51-v53 image changes.
 /// v57: images carry only specialized LIR tables.
-pub const FORMAT_VERSION: u32 = 57;
+/// v58: procedure specs carry their link binding (`linked`, `exported`).
+pub const FORMAT_VERSION: u32 = 58;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.

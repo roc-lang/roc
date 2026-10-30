@@ -314,6 +314,7 @@ fn hashCheckingContextIdentity(identity: CheckingContextIdentity) [32]u8 {
         hashExplicitRootRequestInput(&hasher, root);
     }
     hashByteSlice(&hasher, @tagName(identity.validation));
+    hashByteSlice(&hasher, @tagName(identity.evaluation_strategy));
     return hasher.finalResult();
 }
 
@@ -387,6 +388,12 @@ pub const CheckingContextIdentity = struct {
     /// same source that disagree here produce different checked output and
     /// must not share a cache entry.
     validation: can.Can.Validation = .checking,
+    /// The specialization strategy whose compile-time evaluator completed
+    /// the module's compile-time roots (design.md "Caching Under
+    /// `.boxy`"). Each evaluator lowers and runs the roots its own way, so
+    /// a module checked under one strategy is not the module checked under
+    /// the other, and the two never share a cache entry.
+    evaluation_strategy: base.SpecializationStrategy = .lss,
 
     pub const Serialized = extern struct {
         imports: SerializedSlice(ImportIdentity) = .{},
@@ -394,6 +401,7 @@ pub const CheckingContextIdentity = struct {
         platform_requirement_context: artifact_serialize.SerializedOptional(PlatformRequirementContextKey) = .{},
         platform_app_relation: artifact_serialize.SerializedOptional(PlatformAppRelationKey) = .{},
         validation: artifact_serialize.SerializedScalar(can.Can.Validation, .checking) = .{},
+        evaluation_strategy: artifact_serialize.SerializedScalar(base.SpecializationStrategy, .lss) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CheckingContextIdentity, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -407,6 +415,7 @@ pub const CheckingContextIdentity = struct {
         platform_app_relation: ?PlatformAppRelationKey,
         explicit_roots: []const ExplicitRootRequestInput,
         validation: can.Can.Validation,
+        evaluation_strategy: base.SpecializationStrategy,
     ) Allocator.Error!CheckingContextIdentity {
         const imported_names = module_env.imports.imports.items.items;
         const imports = try allocator.alloc(ImportIdentity, imported_names.len);
@@ -432,6 +441,7 @@ pub const CheckingContextIdentity = struct {
             .platform_app_relation = platform_app_relation,
             .explicit_roots = roots,
             .validation = validation,
+            .evaluation_strategy = evaluation_strategy,
         };
     }
 
@@ -551,6 +561,9 @@ pub const PublishInputs = struct {
     evaluation_phase: enum { immediate, post_frontend } = .immediate,
     problem_store: ?*problem.Store = null,
     validation: can.Can.Validation = .checking,
+    /// The strategy whose compile-time evaluator completes the module's
+    /// roots (`CheckingContextIdentity.evaluation_strategy`).
+    evaluation_strategy: base.SpecializationStrategy = .lss,
 };
 
 /// Public `CompileTimeFinalizer` declaration.
@@ -2405,6 +2418,12 @@ pub const CheckedTypeVariable = struct {
     /// a result row ending in the variable may still be determined by its
     /// request (design.md "Closed Result Rows At Template Boundaries").
     row_default_discharges_constraints: bool = false,
+    /// An implicitly opened row of an annotated definition that the
+    /// annotation bounds (design.md "Polarity"): the definition's body can
+    /// never add a tag to the row, only an instantiation of the definition
+    /// can. `.boxy` seals such a scheme variable to the empty row (design.md
+    /// "Sealed Result Rows").
+    bounded_row_ext: bool = false,
 };
 
 /// Artifact-stable identity of a `??` default in its declaring module; see
@@ -3007,6 +3026,7 @@ pub const StoredTypeVariable = struct {
     numeric_default_phase: ?NumericDefaultPhase = null,
     row_default: ?RowDefault = null,
     row_default_discharges_constraints: bool = false,
+    bounded_row_ext: bool = false,
 };
 
 /// POD form of `CheckedAliasType`: `args` is a range into `type_id_pool`.
@@ -3738,6 +3758,7 @@ fn checkedTypeVariableAlphaStep(
 
     if (left.numeric_default_phase != right.numeric_default_phase or
         left.row_default != right.row_default or
+        left.bounded_row_ext != right.bounded_row_ext or
         left.constraints.len != right.constraints.len)
     {
         return false;
@@ -5516,6 +5537,7 @@ fn cloneCheckedTypeBuildVariable(
         .numeric_default_phase = variable.numeric_default_phase,
         .row_default = variable.row_default,
         .row_default_discharges_constraints = variable.row_default_discharges_constraints,
+        .bounded_row_ext = variable.bounded_row_ext,
     };
 }
 
@@ -8371,7 +8393,7 @@ const CheckedTypePublisher = struct {
             // children first, then hash-cons the immediate payload from interned
             // child ids. Repeated fresh solver graphs therefore stop here without
             // another recursive canonical digest.
-            return .{ .call = .{ .payload = .{ .content = resolved.desc.content } } };
+            return .{ .call = .{ .payload = .{ .content = resolved.desc.content, .bounded_row_ext = resolved.desc.flags.bounded_row_ext } } };
         }
 
         const key_info = try active.scratch.?.key_writer.fromVar(resolved_var);
@@ -8401,7 +8423,7 @@ const CheckedTypePublisher = struct {
         try active.put(resolved_var, id);
         task.id = id;
         task.reserved = true;
-        return .{ .call = .{ .payload = .{ .content = resolved.desc.content } } };
+        return .{ .call = .{ .payload = .{ .content = resolved.desc.content, .bounded_row_ext = resolved.desc.flags.bounded_row_ext } } };
     }
 
     /// Publish a closed acyclic graph's root from its complete payload,
@@ -8462,6 +8484,10 @@ const CheckedTypePublisher = struct {
 
     const PayloadTask = struct {
         content: types.Content,
+        /// The bound of an annotation's implicitly opened row
+        /// (`DescriptorFlags.bounded_row_ext`), a fact of the class rather
+        /// than of its content.
+        bounded_row_ext: bool,
         /// The index in `publisher_builds` of the payload built so far, owned
         /// by this frame once its first step ran.
         build: u32 = undefined,
@@ -8500,6 +8526,7 @@ const CheckedTypePublisher = struct {
                     build.flex.constraints = input.?.get(.constraints);
                     build.flex.numeric_default_phase = numericDefaultPhaseForFlex(module, flex);
                     build.flex.row_default_discharges_constraints = rowDefaultDischargesConstraints(module, flex.constraints);
+                    build.flex.bounded_row_ext = task.bounded_row_ext;
                 },
             },
             .rigid => |rigid| switch (cursor) {
@@ -9264,7 +9291,7 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
     };
     _ = try names.internModuleIdentity(&module_identity.stable_hash);
 
-    var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module_env, &.{}, null, null, &.{}, .checking);
+    var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module_env, &.{}, null, null, &.{}, .checking, .lss);
     defer checking_context_identity.deinit(allocator);
     const artifact_key = CheckedModuleArtifactKey.computeFromSourceHash(
         hashModuleSourceInputs(module_env),
@@ -34391,7 +34418,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 109;
+    const serialized_layout_version: u32 = 110;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -36792,6 +36819,7 @@ const CheckedTypeStoreImportProjector = struct {
             .numeric_default_phase = variable.numeric_default_phase,
             .row_default = variable.row_default,
             .row_default_discharges_constraints = variable.row_default_discharges_constraints,
+            .bounded_row_ext = variable.bounded_row_ext,
         };
     }
 
@@ -37458,6 +37486,7 @@ pub const CheckedModuleKeyInputs = struct {
     platform_app_relation: ?PlatformAppRelationKey = null,
     explicit_roots: []const ExplicitRootRequestInput = &.{},
     validation: can.Can.Validation = .checking,
+    evaluation_strategy: base.SpecializationStrategy = .lss,
 };
 
 /// Compute the checked module cache identity for a module environment whose
@@ -37477,6 +37506,7 @@ pub fn checkedModuleKeyFromModuleEnv(
         inputs.platform_app_relation,
         inputs.explicit_roots,
         inputs.validation,
+        inputs.evaluation_strategy,
     );
     defer checking_context_identity.deinit(allocator);
 
@@ -37571,6 +37601,7 @@ pub fn publishFromTypedModule(
         if (inputs.platform_app_relation) |relation| relation.key else null,
         inputs.explicit_roots,
         inputs.validation,
+        inputs.evaluation_strategy,
     );
     errdefer checking_context_identity.deinit(allocator);
 
@@ -40565,8 +40596,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xD4, 0x0F, 0xFC, 0xF7, 0xEF, 0x9E, 0xCA, 0x71, 0x85, 0xF1, 0xC8, 0xCB, 0xB7, 0xF5, 0x7E, 0xBC,
-        0xCE, 0xED, 0x79, 0x9B, 0xE9, 0x6D, 0x74, 0x92, 0xFF, 0x4A, 0x7F, 0x30, 0x9B, 0x12, 0xED, 0x70,
+        0x5E, 0xD4, 0x7A, 0x70, 0x3E, 0x50, 0x47, 0x7A, 0x5C, 0x1D, 0xB1, 0x01, 0xD3, 0xB9, 0x6D, 0x06,
+        0x2B, 0x96, 0xDF, 0x9A, 0xE6, 0xFE, 0xBA, 0x66, 0xFA, 0x49, 0x94, 0x4F, 0xE1, 0x4C, 0x9F, 0x9A,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

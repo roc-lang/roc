@@ -10,7 +10,9 @@
 //! identities of its operands (descriptor addresses and name ids): composing
 //! again with the same operands returns the same pointer and allocates
 //! nothing. Descriptors and the cache live in immortal memory
-//! (`immortalBytes`) and are never freed.
+//! (`immortalBytes`): a platform's for the life of the process, the
+//! compiler's own for the life of the program composing them
+//! (`compiled.InProcessState`).
 
 const std = @import("std");
 const builtins = @import("builtins");
@@ -148,8 +150,9 @@ pub const VariantInput = extern struct {
     }
 };
 
-/// The process-global composition cache, through which the C entry points
-/// compose.
+/// A platform's composition cache, through which its C entry points
+/// compose. The compiler's process composes into the running program's
+/// `compiled.InProcessState` instead.
 pub var process_cache: Cache = .{};
 
 /// An immortal interning table from constructor keys to descriptors.
@@ -329,18 +332,26 @@ const KeyTag = enum(u64) {
     recursive,
 };
 
-const no_name: u64 = std.math.maxInt(u64);
+/// The key words of a name: its content id (design.md "Name Identity"), so
+/// a composition keyed by a name is one composition whichever name node
+/// names it.
+const name_key_words = 4;
 
 fn ptrWord(ptr: anytype) u64 {
     return @intFromPtr(ptr);
 }
 
-fn nameWord(name: ?*const Name) u64 {
-    return if (name) |n| n.id else no_name;
+/// Write `name`'s key words at `key[at..]`, or the words of no name.
+fn putNameWords(key: []u64, at: usize, name: ?*const Name) void {
+    if (name) |n| {
+        key[at..][0..name_key_words].* = n.id;
+    } else {
+        key[at..][0..name_key_words].* = @splat(std.math.maxInt(u64));
+    }
 }
 
 fn nameOrder(a: *const Name, b: *const Name) std.math.Order {
-    if (a.id == b.id) return .eq;
+    if (a.eql(b)) return .eq;
     return std.mem.order(u8, a.text(), b.text());
 }
 
@@ -430,12 +441,13 @@ fn container(cache: *Cache, ops: *RocOps, comptime kind: Kind, child: *const Typ
 pub fn record(cache: *Cache, ops: *RocOps, fields: []const FieldInput) *const TypeDesc {
     var key_scratch: Scratch(u64, 64) = .{};
     defer key_scratch.deinit(ops);
-    const key = key_scratch.get(2 + 2 * fields.len, ops);
+    const key = key_scratch.get(2 + (name_key_words + 1) * fields.len, ops);
     key[0] = @backingInt(KeyTag.record);
     key[1] = fields.len;
     for (fields, 0..) |field, index| {
-        key[2 + 2 * index] = field.name.id;
-        key[3 + 2 * index] = ptrWord(field.desc);
+        const at = 2 + (name_key_words + 1) * index;
+        putNameWords(key, at, field.name);
+        key[at + name_key_words] = ptrWord(field.desc);
     }
     if (cache.lookup(key)) |existing| return existing;
 
@@ -499,7 +511,7 @@ pub fn tagUnionExtended(cache: *Cache, ops: *RocOps, variants: []const VariantIn
         // A row's remainder can carry a tag the row names: the rows are one
         // union, so it is that tag.
         const named = for (variants) |known| {
-            if (known.name.id == variant.name.id) break known;
+            if (known.name.eql(variant.name)) break known;
         } else null;
         if (named) |known| {
             if (known.payload_count != variant.payload_count) invariant(ops, "a tag row and its remainder give one tag different arities");
@@ -534,13 +546,15 @@ pub fn tagUnionExtended(cache: *Cache, ops: *RocOps, variants: []const VariantIn
 pub fn declaredRecord(cache: *Cache, ops: *RocOps, fields: []const DeclaredFieldInput) *const TypeDesc {
     var key_scratch: Scratch(u64, 64) = .{};
     defer key_scratch.deinit(ops);
-    const key = key_scratch.get(2 + 3 * fields.len, ops);
+    const words_per_field = name_key_words + 2;
+    const key = key_scratch.get(2 + words_per_field * fields.len, ops);
     key[0] = @backingInt(KeyTag.declared_record);
     key[1] = fields.len;
     for (fields, 0..) |field, index| {
-        key[2 + 3 * index] = nameWord(field.name);
-        key[3 + 3 * index] = ptrWord(field.desc);
-        key[4 + 3 * index] = field.is_padding;
+        const at = 2 + words_per_field * index;
+        putNameWords(key, at, field.name);
+        key[at + name_key_words] = ptrWord(field.desc);
+        key[at + name_key_words + 1] = field.is_padding;
     }
     if (cache.lookup(key)) |existing| return existing;
 
@@ -621,7 +635,11 @@ fn positional(cache: *Cache, ops: *RocOps, comptime tag: KeyTag, descs: []const 
 /// An optional record field's presence slot over `payload`: the tag union
 /// `[missing, present(payload)]`, marked as a presence slot.
 pub fn presenceSlot(cache: *Cache, ops: *RocOps, missing: *const Name, present: *const Name, payload: *const TypeDesc) *const TypeDesc {
-    const key = [_]u64{ @backingInt(KeyTag.presence_slot), missing.id, present.id, ptrWord(payload) };
+    var key: [2 + 2 * name_key_words]u64 = undefined;
+    key[0] = @backingInt(KeyTag.presence_slot);
+    putNameWords(&key, 1, missing);
+    putNameWords(&key, 1 + name_key_words, present);
+    key[1 + 2 * name_key_words] = ptrWord(payload);
     if (cache.lookup(&key)) |existing| return existing;
     const payloads = [_]*const TypeDesc{payload};
     const variants = [_]VariantInput{
@@ -639,7 +657,7 @@ pub fn presenceSlot(cache: *Cache, ops: *RocOps, missing: *const Name, present: 
 /// its name's rank in byte-wise text order.
 pub fn tagUnion(cache: *Cache, ops: *RocOps, variants: []const VariantInput) *const TypeDesc {
     var key_len: usize = 2;
-    for (variants) |variant| key_len += 2 + variant.payload_count;
+    for (variants) |variant| key_len += name_key_words + 1 + variant.payload_count;
     var key_scratch: Scratch(u64, 64) = .{};
     defer key_scratch.deinit(ops);
     const key = key_scratch.get(key_len, ops);
@@ -648,9 +666,9 @@ pub fn tagUnion(cache: *Cache, ops: *RocOps, variants: []const VariantInput) *co
     {
         var at: usize = 2;
         for (variants) |variant| {
-            key[at] = variant.name.id;
-            key[at + 1] = variant.payload_count;
-            at += 2;
+            putNameWords(key, at, variant.name);
+            key[at + name_key_words] = variant.payload_count;
+            at += name_key_words + 1;
             for (variant.payloadSlice()) |payload| {
                 key[at] = ptrWord(payload);
                 at += 1;
@@ -713,7 +731,12 @@ pub fn nominal(
     methods: ?*const Methods,
     inspect_opaque: bool,
 ) *const TypeDesc {
-    const key = [_]u64{ @backingInt(KeyTag.nominal), ptrWord(backing), nameWord(name), if (methods) |m| ptrWord(m) else 0, @intFromBool(inspect_opaque) };
+    var key: [4 + name_key_words]u64 = undefined;
+    key[0] = @backingInt(KeyTag.nominal);
+    key[1] = ptrWord(backing);
+    putNameWords(&key, 2, name);
+    key[2 + name_key_words] = if (methods) |m| ptrWord(m) else 0;
+    key[3 + name_key_words] = @intFromBool(inspect_opaque);
     if (cache.lookup(&key)) |existing| return existing;
     const built = immortal(TypeDesc, 1, ops);
     built[0] = .{

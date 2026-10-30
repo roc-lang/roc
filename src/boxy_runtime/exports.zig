@@ -4,8 +4,10 @@
 //! Compiled code carries no `RocOps`, so these reach the host through
 //! `in_process_host.ops()`: in a platform build the process-wide table over
 //! the host's runtime symbols, in-process the ops the current thread entered.
-//! Composition goes through the process-global cache and allocates the
-//! immortal descriptors and dictionaries through `compiled.immortalOps()`.
+//! Composition interns in `compiled.descriptorCache()` and allocates the
+//! immortal descriptors and dictionaries through `compiled.immortalOps()`:
+//! the process's in a platform build, the current program's
+//! (`compiled.InProcessState`) in the compiler's process.
 //! Array operands are a count and a pointer to `extern` items; value operands
 //! are the addresses of the values' bytes. `static_lib.zig` exports these
 //! under their own names, and the dev backend calls them by address when it
@@ -29,7 +31,7 @@ fn ops() *RocOps {
 }
 
 fn cache() *compose.Cache {
-    return &compose.process_cache;
+    return compiled.descriptorCache();
 }
 
 fn composeOps() *RocOps {

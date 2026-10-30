@@ -432,7 +432,7 @@ pub const ModuleType = enum {
             },
             .glue => .{
                 .root = "src/glue/mod.zig",
-                .deps = &.{ .base, .collections, .parse, .compile, .can, .check, .reporting, .echo_platform, .builtins, .roc_target, .types, .layout, .backend, .eval, .lir, .build_options },
+                .deps = &.{ .base, .collections, .parse, .compile, .can, .check, .reporting, .echo_platform, .builtins, .roc_target, .types, .layout, .backend, .eval, .lir, .build_options, .boxy_runtime },
                 .extra_imports = &.{"compiler_platform_sources"},
                 .tests = .{ .unit = .{ .aggregators = &.{"glue tests"} } },
             },

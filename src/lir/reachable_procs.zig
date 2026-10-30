@@ -261,6 +261,9 @@ const Pass = struct {
         for (self.result.root_procs.items) |proc| {
             try self.markProc(proc);
         }
+        for (self.result.exported_procs.items) |proc| {
+            try self.markProc(proc);
+        }
         for (self.result.const_roots.items) |root| {
             try self.markProc(root.proc);
             try self.markConstPlan(root.plan);
@@ -582,6 +585,9 @@ const Pass = struct {
         for (self.result.root_procs.items) |*proc| {
             proc.* = self.remapProc(proc.*);
         }
+        for (self.result.exported_procs.items) |*proc| {
+            proc.* = self.remapProc(proc.*);
+        }
         // An entry that was unreachable takes its served callees with it.
         var kept_served: usize = 0;
         for (self.result.served_callees.items) |edge| {
@@ -833,6 +839,9 @@ const Pass = struct {
         const stmt_count = self.store.cfStmtCount();
         for (self.result.root_procs.items) |proc| {
             if (@backingInt(proc) >= proc_count) reachableProcInvariant("root proc exceeds compact proc_specs len");
+        }
+        for (self.result.exported_procs.items) |proc| {
+            if (@backingInt(proc) >= proc_count) reachableProcInvariant("exported proc exceeds compact proc_specs len");
         }
         for (self.result.const_roots.items) |root| {
             if (@backingInt(root.proc) >= proc_count) reachableProcInvariant("const root proc exceeds compact proc_specs len");

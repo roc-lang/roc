@@ -54,7 +54,7 @@ const Builder = struct {
     fn name(self: *Builder, text: []const u8) TestError!*const Name {
         if (self.names.get(text)) |existing| return existing;
         const created = try self.arena.create(Name);
-        created.* = .{ .id = self.names.count(), .len = @intCast(text.len), .bytes = text.ptr };
+        created.* = .{ .id = boxy.labelId(text), .len = @intCast(text.len), .bytes = text.ptr };
         try self.names.put(self.arena, text, created);
         return created;
     }
