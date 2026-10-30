@@ -2182,7 +2182,7 @@ fn defaultRunCheckedHostIdentity(
     var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-default-checked-host-v2");
     updateHashBytes(&hasher, @tagName(target));
-    updateHashBytes(&hasher, echo_platform.run_shim_platform_main_source);
+    updateHashBytes(&hasher, echo_platform.platform_main_source);
     updateHashBytes(&hasher, echo_platform.echo_module_source);
     // A `.boxy` program's host links the Boxy runtime (design.md "`.boxy`
     // Runtime Lowering", Runtime).
@@ -3399,7 +3399,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, staged: *default_app.S
         return err;
     };
 
-    const app_path = std.fs.path.join(ctx.arena, &.{ temp_dir, "main.roc" }) catch return error.OutOfMemory;
+    const app_path = std.fs.path.join(ctx.arena, &.{ temp_dir, std.fs.path.basename(args.path) }) catch return error.OutOfMemory;
     const platform_main_path = std.fs.path.join(ctx.arena, &.{ platform_dir, "main.roc" }) catch return error.OutOfMemory;
     const echo_module_path = std.fs.path.join(ctx.arena, &.{ platform_dir, "Echo.roc" }) catch return error.OutOfMemory;
 
@@ -3514,12 +3514,12 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
     const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, default_app.platform_dir_name });
     try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, platform_dir);
 
-    const app_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, "main.roc" });
+    const app_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, std.fs.path.basename(args.path) });
     const platform_main_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "main.roc" });
     const echo_module_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "Echo.roc" });
 
     try writeDefaultAppSyntheticRunSource(ctx, app_path, staged);
-    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = platform_main_path, .data = echo_platform.run_shim_platform_main_source });
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = platform_main_path, .data = echo_platform.platform_main_source });
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = echo_module_path, .data = echo_platform.echo_module_source });
 
     const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
@@ -8232,56 +8232,10 @@ fn writeDefaultWindowsRuntime(ctx: *CliCtx, platform_dir: []const u8, args: cli_
 fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
     if (args.target) |target_str| {
         if (RocTarget.fromString(target_str)) |requested| {
-            // Which default platform a target gets follows from its OS and
-            // architecture, which a `v1` target shares with its default twin.
-            return switch (requested.defaultCpuTarget()) {
-                .x64mac,
-                .arm64mac,
-                .x64win,
-                .x64mingw,
-                .arm64win,
-                .arm64mingw,
-                .x64openbsd,
-                => echo_platform.build_c_platform_main_source,
-                .wasm32 => echo_platform.build_wasm_archive_platform_main_source,
-                .x64musl,
-                .x64glibc,
-                .x64linux,
-                .x64elf,
-                .x64freebsd,
-                .x64netbsd,
-                .x64v1mac,
-                .x64v1win,
-                .x64v1mingw,
-                .x64v1freebsd,
-                .x64v1openbsd,
-                .x64v1netbsd,
-                .x64v1musl,
-                .x64v1glibc,
-                .x64v1linux,
-                .x64v1elf,
-                .arm64linux,
-                .arm64musl,
-                .arm64glibc,
-                .arm64v1win,
-                .arm64v1mingw,
-                .arm64v1linux,
-                .arm64v1musl,
-                .arm64v1glibc,
-                .arm32linux,
-                .arm32musl,
-                .wasm32v1,
-                => echo_platform.build_platform_main_source,
-            };
+            if (requested.defaultCpuTarget() == .wasm32) return echo_platform.build_wasm_archive_platform_main_source;
         }
-
-        return echo_platform.build_platform_main_source;
     }
-
-    return switch (RocTarget.detectNative().toOsTag()) {
-        .macos, .windows, .openbsd => echo_platform.build_c_platform_main_source,
-        .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .driverkit, .ios, .maccatalyst, .tvos, .visionos, .watchos, .uefi, .@"3ds", .wiiu, .@"switch", .gba, .psx, .tios, .ashetos, .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => echo_platform.build_platform_main_source,
-    };
+    return echo_platform.platform_main_source;
 }
 
 fn defaultBuildTarget(args: cli_args.BuildArgs) RocTarget {
