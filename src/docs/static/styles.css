@@ -285,6 +285,9 @@ table tr td {
 .module-doc table {
   border-collapse: collapse;
   margin: 16px;
+  display: block;
+  max-width: calc(100% - 32px);
+  overflow-x: auto;
 }
 
 /* Entry type vs value styling */
@@ -563,6 +566,9 @@ padding: 0px 16px;
 .langref-article table {
   border-collapse: collapse;
   margin: 16px;
+  display: block;
+  max-width: calc(100% - 32px);
+  overflow-x: auto;
 }
 
 #sidebar-nav {
