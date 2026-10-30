@@ -6,6 +6,7 @@ const collections = @import("collections");
 const Common = @import("common.zig");
 const Lifted = @import("monotype_lifted/ast.zig");
 const SpecConstr = @import("monotype_lifted/spec_constr.zig");
+const WrapperBody = @import("monotype_lifted/wrapper_body.zig");
 const Solved = @import("lambda_solved/ast.zig");
 const SolvedType = @import("lambda_solved/type.zig");
 const GuardedList = collections.GuardedList;
@@ -13,13 +14,17 @@ const GuardedList = collections.GuardedList;
 /// Post-check inline analysis mode.
 pub const Mode = enum {
     none,
+    /// Retain standalone procedures, with iterator fusion in SpecConstr. Only
+    /// wrappers whose bodies the compiler provides (`provides_low_level`) are
+    /// inlined, since substituting them makes no caller's code depend on
+    /// another procedure's source.
+    procedures,
     /// Inline wrappers, and bodies the whole program calls exactly once.
     wrappers,
     /// Inline wrappers, and bodies whose module's source calls them at
     /// exactly one site (`FnTemplate.single_source_call`). Both depend only on
     /// source, never on which other procedures a program contains, so every
-    /// program inlines the same calls. Dev builds use this: the object cache
-    /// links a dev procedure into programs other than the one compiling it.
+    /// program inlines the same calls, including separately compiled callers.
     wrappers_and_source_single_use,
 };
 
@@ -110,6 +115,7 @@ pub fn analyze(
 ) std.mem.Allocator.Error!OwnedPlan {
     return switch (mode) {
         .none => OwnedPlan.empty(allocator),
+        .procedures => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations, .provided_low_level),
         .wrappers => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations, .program),
         .wrappers_and_source_single_use => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations, .source),
     };
@@ -126,7 +132,10 @@ const Candidate = struct {
     kind: InlineKind,
 };
 
-const SingleUseRule = enum { program, source };
+/// Which bodies are candidates: wrappers and bodies used once by the whole
+/// program's calls or by their module's source, or only wrappers of
+/// compiler-provided low-level templates, which needs no use information.
+const CandidateRule = enum { program, source, provided_low_level };
 
 const MaterializationState = enum {
     unknown,
@@ -142,18 +151,16 @@ const InlineAnalyzer = struct {
     solved_types: SolvedType.Store.View,
     decisions: []Decision,
     keep_keyed_specializations: bool,
-    /// How a body qualifies as used once: by the whole program's calls, or
-    /// by its module's source.
-    single_use: SingleUseRule,
+    rule: CandidateRule,
 
     fn run(
         allocator: std.mem.Allocator,
         procedure_usage: SpecConstr.ProcedureUsage,
         solved: *const Solved.Program,
         keep_keyed_specializations: bool,
-        single_use: SingleUseRule,
+        rule: CandidateRule,
     ) std.mem.Allocator.Error!OwnedPlan {
-        if (procedure_usage.items.len != solved.lifted.fnCount()) {
+        if (rule != .provided_low_level and procedure_usage.items.len != solved.lifted.fnCount()) {
             Common.invariant("optimized inline analysis requires exact use information for every lifted function");
         }
         const decisions = try allocator.alloc(Decision, solved.lifted.fnCount());
@@ -167,7 +174,7 @@ const InlineAnalyzer = struct {
             .solved_types = solved.types.view(),
             .decisions = decisions,
             .keep_keyed_specializations = keep_keyed_specializations,
-            .single_use = single_use,
+            .rule = rule,
         };
         try analyzer.decideCandidates();
 
@@ -204,9 +211,13 @@ const InlineAnalyzer = struct {
     }
 
     fn inlineCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) std.mem.Allocator.Error!?Candidate {
+        if (self.rule == .provided_low_level) {
+            if (!(self.solved.lifted.getFn(fn_id).source orelse return null).provides_low_level) return null;
+            return if (try self.wrapperCandidate(fn_id)) |body| .{ .body = body, .kind = .wrapper } else null;
+        }
         // A pack program inlines a wrapper exactly as any program does.
         if (try self.wrapperCandidate(fn_id)) |body| return .{ .body = body, .kind = .wrapper };
-        if (self.single_use == .source) {
+        if (self.rule == .source) {
             if (self.sourceSingleUseCandidate(fn_id)) |body| return .{ .body = body, .kind = .source_single_use };
             return null;
         }
@@ -709,269 +720,7 @@ const InlineAnalyzer = struct {
     }
 
     fn wrapperCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) std.mem.Allocator.Error!?Lifted.ExprId {
-        const source_fn = self.solved.lifted.getFn(fn_id);
-        if (self.solved.lifted.typedLocalSpan(source_fn.captures).len != 0) return null;
         if (self.solvedCaptureCount(fn_id) != 0) return null;
-
-        const body = switch (source_fn.body) {
-            .roc => |body_expr| body_expr,
-            .hosted => return null,
-        };
-
-        if (!try self.isInlineableWrapperBody(body)) return null;
-        if (!try self.bodyReadsOnlyArgs(fn_id, body)) return null;
-        return body;
-    }
-
-    fn bodyReadsOnlyArgs(self: *const InlineAnalyzer, fn_id: Lifted.FnId, body: Lifted.ExprId) std.mem.Allocator.Error!bool {
-        const source_fn = self.solved.lifted.getFn(fn_id);
-        return self.exprReadsOnlyArgs(body, self.solved.lifted.typedLocalSpan(source_fn.args));
-    }
-
-    /// Whether `root` reads no local other than `args`. Every subexpression
-    /// must, so they are checked in any order on a work stack.
-    fn exprReadsOnlyArgs(self: *const InlineAnalyzer, root: Lifted.ExprId, args: anytype) std.mem.Allocator.Error!bool {
-        const lifted = &self.solved.lifted;
-        var stack: std.ArrayList(Lifted.ExprChild) = .empty;
-        defer stack.deinit(self.allocator);
-        try stack.append(self.allocator, .{ .expr = root });
-        while (stack.pop()) |child| {
-            const expr_id = child.expr;
-            switch (lifted.getExpr(expr_id).data) {
-                .local => |local| if (!localIsArg(local, args)) return false,
-                .@"unreachable",
-                .unit,
-                .int_lit,
-                .frac_f32_lit,
-                .frac_f64_lit,
-                .dec_lit,
-                .str_lit,
-                .crash,
-                .checked_error,
-                .bytes_lit,
-                .def_ref,
-                => {},
-                .fn_ref,
-                .list,
-                .tuple,
-                .record,
-                .record_update,
-                .tag,
-                .static_data_candidate,
-                .comptime_value,
-                .typed_boundary,
-                .row_widen,
-                .nominal,
-                .dbg,
-                .expect,
-                .return_,
-                .expect_err,
-                .literal_rejected,
-                .call_value,
-                .low_level,
-                .field_access,
-                .tuple_access,
-                .structural_eq,
-                .structural_hash,
-                => try Lifted.appendChildren(self.allocator, lifted, expr_id, &stack),
-                .call_proc => |call| {
-                    if (call.is_cold) return false;
-                    try Lifted.appendChildren(self.allocator, lifted, expr_id, &stack);
-                },
-                .block => |block| if (!self.isLiteralCrash(expr_id)) {
-                    if (lifted.stmtSpan(block.statements).len != 0) return false;
-                    try stack.append(self.allocator, .{ .expr = block.final_expr });
-                },
-                .if_ => {
-                    // This admits guarded wrappers, not arbitrary conditional
-                    // arguments inside otherwise call-through wrappers.
-                    if (!try self.isInlineableWrapperBody(expr_id)) return false;
-                    try Lifted.appendChildren(self.allocator, lifted, expr_id, &stack);
-                },
-                .lambda,
-                .fn_def,
-                .let_,
-                .match_,
-                .uninitialized,
-                .uninitialized_payload,
-                .if_initialized_payload,
-                .try_sequence,
-                .try_record_sequence,
-                .loop_,
-                .break_,
-                .continue_,
-                .join_point,
-                .jump,
-                .comptime_exhaustiveness_failed,
-                => return false,
-            }
-        }
-        return true;
-    }
-
-    fn localIsArg(local: Lifted.LocalId, args: anytype) bool {
-        for (0..args.len) |index| {
-            const arg = GuardedList.at(args, index);
-            if (arg.local == local) return true;
-        }
-        return false;
-    }
-
-    /// What a wrapper position must be: a whole wrapper body, a guard arm
-    /// (a literal crash or an operand), or an operand a wrapper builds its
-    /// result from (an argument, a literal, or another wrapper body).
-    const WrapperRole = enum { body, arm, operand };
-
-    /// Whether a body is a checked wrapper: one operation, a constant, or a
-    /// single guard whose arms are each of those or a crash. Such a body does
-    /// less work than its call costs, and substituting it at every call site
-    /// exposes its guard and its constant arguments to LIR range analysis
-    /// before backend instruction selection. `List.get` and the byte reads
-    /// have this shape with a `Try` on each arm. Every position must qualify
-    /// in its role, so positions are checked in any order on a work stack.
-    fn isInlineableWrapperBody(self: *const InlineAnalyzer, root: Lifted.ExprId) std.mem.Allocator.Error!bool {
-        const lifted = &self.solved.lifted;
-        const Item = struct { role: WrapperRole, expr: Lifted.ExprId };
-        var stack: std.ArrayList(Item) = .empty;
-        defer stack.deinit(self.allocator);
-        try stack.append(self.allocator, .{ .role = .body, .expr = root });
-        while (stack.pop()) |item| {
-            const expr = lifted.getExpr(item.expr);
-            // An arm that returns an argument or a literal, the bound of a
-            // saturating operation say, is as cheap as one that calls, so an
-            // arm qualifies as any operand does.
-            const position: WrapperRole = switch (item.role) {
-                .arm => if (self.isLiteralCrash(item.expr)) continue else .operand,
-                .operand, .body => item.role,
-            };
-            const role: WrapperRole = switch (position) {
-                .arm => unreachable, // the switch above maps an arm to .operand or skips it
-                .operand => switch (expr.data) {
-                    .local,
-                    .unit,
-                    .int_lit,
-                    .frac_f32_lit,
-                    .frac_f64_lit,
-                    .dec_lit,
-                    .str_lit,
-                    .bytes_lit,
-                    => continue,
-                    .call_proc,
-                    .low_level,
-                    .tag,
-                    .nominal,
-                    .if_,
-                    .block,
-                    => .body,
-                    .@"unreachable",
-                    .crash,
-                    .checked_error,
-                    .def_ref,
-                    .fn_ref,
-                    .list,
-                    .tuple,
-                    .record,
-                    .record_update,
-                    .static_data_candidate,
-                    .comptime_value,
-                    .typed_boundary,
-                    .row_widen,
-                    .dbg,
-                    .expect,
-                    .return_,
-                    .expect_err,
-                    .literal_rejected,
-                    .call_value,
-                    .field_access,
-                    .tuple_access,
-                    .structural_eq,
-                    .structural_hash,
-                    .lambda,
-                    .fn_def,
-                    .let_,
-                    .match_,
-                    .uninitialized,
-                    .uninitialized_payload,
-                    .if_initialized_payload,
-                    .try_sequence,
-                    .try_record_sequence,
-                    .loop_,
-                    .break_,
-                    .continue_,
-                    .join_point,
-                    .jump,
-                    .comptime_exhaustiveness_failed,
-                    => return false,
-                },
-                .body => .body,
-            };
-            std.debug.assert(role == .body);
-            switch (expr.data) {
-                .call_proc, .low_level => {},
-                .tag => |tag| {
-                    const payloads = lifted.exprSpan(tag.payloads);
-                    for (0..payloads.len) |index| try stack.append(self.allocator, .{ .role = .operand, .expr = GuardedList.at(payloads, index) });
-                },
-                .nominal => |backing| try stack.append(self.allocator, .{ .role = .body, .expr = backing }),
-                .if_ => |if_| {
-                    const branches = lifted.ifBranchSpan(if_.branches);
-                    if (branches.len != 1) return false;
-                    try stack.append(self.allocator, .{ .role = .arm, .expr = GuardedList.at(branches, 0).body });
-                    try stack.append(self.allocator, .{ .role = .arm, .expr = if_.final_else });
-                },
-                .block => |block| {
-                    if (lifted.stmtSpan(block.statements).len != 0) return false;
-                    try stack.append(self.allocator, .{ .role = .body, .expr = block.final_expr });
-                },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
-            }
-        }
-        return true;
-    }
-
-    /// Whether an expression is a crash with a literal message, possibly
-    /// under blocks that hold nothing else.
-    fn isLiteralCrash(self: *const InlineAnalyzer, root: Lifted.ExprId) bool {
-        const lifted = &self.solved.lifted;
-        var expr_id = root;
-        while (true) {
-            switch (lifted.getExpr(expr_id).data) {
-                .crash, .checked_error => return true,
-                .low_level => |call| {
-                    if (call.op != .crash) return false;
-                    const args = lifted.exprSpan(call.args);
-                    return args.len == 1 and
-                        self.isStringLiteral(GuardedList.at(args, 0));
-                },
-                .block => |block| {
-                    const stmts = lifted.stmtSpan(block.statements);
-                    if (stmts.len == 0) {
-                        expr_id = block.final_expr;
-                        continue;
-                    }
-                    // SpecConstr normalizes a terminal crash to a statement
-                    // followed by unreachable. No preceding work is admitted.
-                    if (stmts.len != 1 or lifted.getExpr(block.final_expr).data != .@"unreachable") return false;
-                    switch (lifted.getStmt(GuardedList.at(stmts, 0))) {
-                        .crash, .checked_error => return true,
-                        .expr => |child| expr_id = child,
-                        .uninitialized, .let_, .expect, .dbg, .return_ => return false,
-                    }
-                },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
-            }
-        }
-    }
-
-    fn isStringLiteral(self: *const InlineAnalyzer, root: Lifted.ExprId) bool {
-        var expr_id = root;
-        while (true) {
-            switch (self.solved.lifted.getExpr(expr_id).data) {
-                .str_lit => return true,
-                .nominal => |backing| expr_id = backing,
-                .typed_boundary => |boundary| expr_id = boundary.value,
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .bytes_lit, .static_data_candidate, .comptime_value, .row_widen, .list, .tuple, .record, .record_update, .tag, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
-            }
-        }
+        return WrapperBody.wrapperBody(self.allocator, &self.solved.lifted, fn_id);
     }
 };

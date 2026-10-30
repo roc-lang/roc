@@ -13698,6 +13698,37 @@ const Builder = struct {
         };
     }
 
+    /// Give each dictionary group its checked evidence slot. Checking emits
+    /// a dispatcher's constraints consecutively, in the order its group
+    /// lists them, but orders dispatchers by its own walk of the scheme, so a
+    /// group's position among this worker's groups says nothing about where
+    /// its evidence is. Its slot is the first checked param whose dispatcher
+    /// has the group's representation and whose method is the group's first.
+    fn indexDictionaryGroupEvidence(self: *Builder, worker: WorkerPlan, groups: []HiddenDictionaryParam) Allocator.Error!void {
+        var unindexed: usize = 0;
+        for (groups) |group| {
+            if (group.evidence_index == null and group.dictionaries.len != 0) unindexed += 1;
+        }
+        if (unindexed == 0) return;
+        const schema = self.workerEvidenceParams(worker.source) orelse return;
+        const schema_names = moduleNamesOf(schema.view);
+        for (schema.params, 0..) |param, index| {
+            const binding = self.by_type.get(typeRef(schema.view, param.dispatcher_ty)) orelse continue;
+            const rep = self.plan.type_reps.items[@backingInt(binding)].rep orelse continue;
+            const dictionaries = self.plan.representations.items[@backingInt(rep)].dictionaries;
+            if (dictionaries.len == 0) continue;
+            for (groups) |*group| {
+                if (group.evidence_index != null or !std.meta.eql(group.dictionaries, dictionaries)) continue;
+                const first = self.plan.dictionaries.items[dictionaries.start];
+                if (!methodNameMatches(schema_names, param.method, moduleNamesOf(self.moduleForId(first.source_type.module)), first.fn_name)) break;
+                group.evidence_index = @intCast(index);
+                unindexed -= 1;
+                if (unindexed == 0) return;
+                break;
+            }
+        }
+    }
+
     /// Requirements outside the callable signature, and independent callable
     /// contracts, have explicit checked identities in the worker's scheme.
     /// Their dictionaries cannot be enumerated from signature representations.
@@ -13897,6 +13928,8 @@ const Builder = struct {
                 if (use.worker != worker.id) continue;
                 try self.collectHiddenDictionariesForRep(use.rep, &pending, &seen_reps);
             }
+
+            try self.indexDictionaryGroupEvidence(worker, pending.items);
 
             const start: u32 = @intCast(self.plan.hidden_dictionary_params.items.len);
             try self.plan.hidden_dictionary_params.appendSlice(self.allocator, pending.items);
@@ -22816,6 +22849,24 @@ pub fn recordFieldNameMatches(
         u8,
         source_names.recordFieldLabelText(source_name),
         target_names.recordFieldLabelText(target_name),
+    );
+}
+
+/// True when two method names name the same method, comparing by text when
+/// the names come from different modules.
+pub fn methodNameMatches(
+    source: ModuleNames,
+    source_name: MethodNameId,
+    target: ModuleNames,
+    target_name: MethodNameId,
+) bool {
+    if (source.module == target.module) return source_name == target_name;
+    const source_names = source.canonical_names orelse return source_name == target_name;
+    const target_names = target.canonical_names orelse return source_name == target_name;
+    return std.mem.eql(
+        u8,
+        source_names.methodNameText(source_name),
+        target_names.methodNameText(target_name),
     );
 }
 

@@ -490,6 +490,25 @@ pub const ConstFn = struct {
     evidence_frame_head: ?u32 = null,
 };
 
+/// Explicit old-to-current checked occurrence correspondence, established by
+/// the checked type producer's canonical keys before a stored value is copied.
+pub const TypeOccurrenceMap = collections.DenseMap(checked_ids.CheckedTypeId, checked_ids.CheckedTypeId);
+
+/// Explicit rebinding of a named type's checked occurrence as a type is
+/// cloned into a store with a different occurrence contract, supplied by the
+/// clone's caller: a module's ConstStore holds the storing module's own
+/// occurrence of every closed named type (design.md "Compile-Time Value Reuse
+/// Across Edits"), while the program-wide stores a value is lowered in hold
+/// the program's representative occurrence.
+pub const OccurrenceTranslation = struct {
+    context: *anyopaque,
+    rebind: *const fn (context: *anyopaque, named: NamedType) NamedType,
+
+    pub fn apply(self: OccurrenceTranslation, named: NamedType) NamedType {
+        return self.rebind(self.context, named);
+    }
+};
+
 /// Named type owner for a stored nominal constant.
 pub const NamedType = struct {
     /// The checked module that declares the type.
@@ -760,11 +779,16 @@ pub const ConstTypeStore = struct {
         return self.declared_field_pool.items[range.start .. range.start + range.len];
     }
 
+    /// Clone `ty` from `source`, interning its names into `target_names`
+    /// and rebinding each named type's checked occurrence through
+    /// `occurrences`; null keeps the source's occurrences, for a clone between
+    /// stores with the same occurrence contract.
     pub fn cloneTypeFromTranslated(
         self: *ConstTypeStore,
         source: *const ConstTypeStore,
         source_names: *const names.NameStore,
         target_names: *names.NameStore,
+        occurrences: ?OccurrenceTranslation,
         ty: ConstTypeId,
     ) Allocator.Error!ConstTypeId {
         var map = collections.DenseMap(ConstTypeId, ConstTypeId).init(self.allocator);
@@ -772,12 +796,14 @@ pub const ConstTypeStore = struct {
         return try self.cloneTypeFromInner(source, .{
             .source = source_names,
             .target = target_names,
+            .occurrences = occurrences,
         }, ty, &map);
     }
 
     const NameTranslation = struct {
         source: *const names.NameStore,
         target: *names.NameStore,
+        occurrences: ?OccurrenceTranslation = null,
     };
 
     /// One step of cloning a type node, in the order a direct walk takes
@@ -852,7 +878,7 @@ pub const ConstTypeStore = struct {
             }
             var finished = frames.pop().?;
             defer finished.deinit(self.allocator);
-            try self.finishClone(source, &finished);
+            try self.finishClone(source, name_translation, &finished);
         }
         return result;
     }
@@ -930,7 +956,7 @@ pub const ConstTypeStore = struct {
 
     /// Fills a reserved clone from its components' results, read back in
     /// the order `startClone` listed their steps.
-    fn finishClone(self: *ConstTypeStore, source: *const ConstTypeStore, frame: *const CloneFrame) Allocator.Error!void {
+    fn finishClone(self: *ConstTypeStore, source: *const ConstTypeStore, name_translation: ?NameTranslation, frame: *const CloneFrame) Allocator.Error!void {
         const types = frame.types.items;
         const cloned: ConstType = switch (source.get(frame.source_ty)) {
             .primitive, .zst, .erased => unreachable, // startClone fills leaf types directly and pushes no frame for them
@@ -990,7 +1016,7 @@ pub const ConstTypeStore = struct {
                     };
                 }
                 break :blk .{ .named = .{
-                    .named_type = named.named_type,
+                    .named_type = translateNamedOccurrence(name_translation, named.named_type),
                     .def = frame.def.?,
                     .kind = named.kind,
                     .builtin_owner = named.builtin_owner,
@@ -1026,6 +1052,12 @@ pub const ConstTypeStore = struct {
         };
     }
 
+    fn translateNamedOccurrence(name_translation: ?NameTranslation, named: NamedType) NamedType {
+        const translation = name_translation orelse return named;
+        const occurrences = translation.occurrences orelse return named;
+        return occurrences.apply(named);
+    }
+
     fn translateTypeDef(name_translation: ?NameTranslation, def: TypeDef) Allocator.Error!TypeDef {
         const translation = name_translation orelse return def;
         return .{
@@ -1056,12 +1088,24 @@ pub const ConstTypeStore = struct {
     /// named type or field default that module declares, and no named type
     /// whose checked occurrence is in that module's type store (design.md
     /// "Compile-Time Value Reuse Across Edits").
+    /// Null ownership requires independence from every module version.
     pub fn typePortable(
         self: *const ConstTypeStore,
         type_names: *const names.NameStore,
         root: ConstTypeId,
-        own: names.CheckedModuleDigest,
-        own_identity: *const [32]u8,
+        own: ?names.CheckedModuleDigest,
+        own_identity: ?*const [32]u8,
+    ) Allocator.Error!bool {
+        return self.typePortableWithOccurrences(type_names, root, own, own_identity, null);
+    }
+
+    pub fn typePortableWithOccurrences(
+        self: *const ConstTypeStore,
+        type_names: *const names.NameStore,
+        root: ConstTypeId,
+        own: ?names.CheckedModuleDigest,
+        own_identity: ?*const [32]u8,
+        occurrences: ?*const TypeOccurrenceMap,
     ) Allocator.Error!bool {
         var seen = collections.DenseMap(ConstTypeId, void).init(self.allocator);
         defer seen.deinit();
@@ -1078,7 +1122,8 @@ pub const ConstTypeStore = struct {
                 .tuple => |span| try pending.appendSlice(self.allocator, self.typeSpan(span)),
                 .record => |span| for (self.fieldSpan(span)) |field| {
                     if (field.default) |default| {
-                        if (std.meta.eql(type_names.moduleIdentityBytes(default.module).*, own_identity.*)) return false;
+                        const identity = own_identity orelse return false;
+                        if (std.meta.eql(type_names.moduleIdentityBytes(default.module).*, identity.*)) return false;
                     }
                     try pending.append(self.allocator, field.ty);
                     if (field.value_ty) |value_ty| try pending.append(self.allocator, value_ty);
@@ -1086,9 +1131,11 @@ pub const ConstTypeStore = struct {
                 .tag_union => |span| for (self.tagSpan(span)) |tag| try pending.appendSlice(self.allocator, self.typeSpan(tag.payloads)),
                 .named => |named| {
                     if (named.def.generated != null) return false;
-                    if (std.meta.eql(named.named_type.module.bytes, own.bytes)) return false;
-                    if (std.meta.eql(named.named_type.ty_module.bytes, own.bytes)) return false;
-                    if (std.meta.eql(type_names.moduleIdentityBytes(named.def.module).*, own_identity.*)) return false;
+                    const module = own orelse return false;
+                    if (std.meta.eql(named.named_type.module.bytes, module.bytes)) return false;
+                    if (std.meta.eql(named.named_type.ty_module.bytes, module.bytes) and
+                        (occurrences == null or !occurrences.?.contains(named.named_type.ty))) return false;
+                    if (std.meta.eql(type_names.moduleIdentityBytes(named.def.module).*, own_identity.?.*)) return false;
                     try pending.appendSlice(self.allocator, self.typeSpan(named.args));
                     for (self.declaredFieldSpan(named.declared_order)) |declared| switch (declared) {
                         .named => {},
@@ -1447,7 +1494,8 @@ pub const ConstStore = struct {
     /// The end of a vector of `count` evidence trees starting at `start`, or
     /// null when a nested vector's declared subtree length disagrees with its
     /// entries. Open nested vectors are kept on an explicit stack.
-    fn evidenceVectorEnd(allocator: Allocator, evidence: ConstFnEvidenceVector, start: usize, count: u32) Allocator.Error!?usize {
+    /// Callers validate node target/structural indices before this topology walk.
+    pub fn evidenceVectorEnd(allocator: Allocator, evidence: ConstFnEvidenceVector, start: usize, count: u32) Allocator.Error!?usize {
         const nodes = evidence.nodes;
         const Open = struct {
             remaining: u32,
@@ -1761,7 +1809,12 @@ pub const ConstStore = struct {
     /// module declares, and no named type whose checked occurrence is in that
     /// module's type store (design.md "Compile-Time Value Reuse Across
     /// Edits").
-    pub fn valuePortable(self: *const ConstStore, root: ConstNodeId, own: names.CheckedModuleDigest) Allocator.Error!bool {
+    /// Null ownership requires independence from every module version.
+    pub fn valuePortable(self: *const ConstStore, root: ConstNodeId, own: ?names.CheckedModuleDigest) Allocator.Error!bool {
+        return self.valuePortableWithOccurrences(root, own, null);
+    }
+
+    pub fn valuePortableWithOccurrences(self: *const ConstStore, root: ConstNodeId, own: ?names.CheckedModuleDigest, occurrences: ?*const TypeOccurrenceMap) Allocator.Error!bool {
         var seen = collections.DenseMap(ConstNodeId, void).init(self.allocator);
         defer seen.deinit();
         var pending = std.ArrayList(ConstNodeId).empty;
@@ -1775,8 +1828,10 @@ pub const ConstStore = struct {
                 .pending => constStoreInvariant("a pending node reached a portability walk"),
                 .fn_value => return false,
                 .nominal => |nominal| {
-                    if (std.meta.eql(nominal.named_type.module.bytes, own.bytes)) return false;
-                    if (std.meta.eql(nominal.named_type.ty_module.bytes, own.bytes)) return false;
+                    const module = own orelse return false;
+                    if (std.meta.eql(nominal.named_type.module.bytes, module.bytes)) return false;
+                    if (std.meta.eql(nominal.named_type.ty_module.bytes, module.bytes) and
+                        (occurrences == null or !occurrences.?.contains(nominal.named_type.ty))) return false;
                 },
                 .zst, .scalar, .str, .crash, .checked_error, .box, .list, .tuple, .record, .tag => {},
             }
@@ -2376,4 +2431,32 @@ fn sameBytes(a: []const u8, b: []const u8) bool {
         if (left != right) return false;
     }
     return true;
+}
+
+test "module-independent portability excludes nested version-bearing values and types" {
+    const allocator = std.testing.allocator;
+    var store = ConstStore.init(allocator);
+    defer store.deinit();
+    var type_names = names.NameStore.init(allocator);
+    defer type_names.deinit();
+    const scalar = try store.append(.{ .scalar = .{ .i64 = 17 } });
+    const list = try store.append(.{ .list = .{ .nodes = &.{scalar} } });
+    try std.testing.expect(try store.valuePortable(list, null));
+    const foreign: NamedType = .{ .module = .{ .bytes = @splat(1) }, .ty = @fromBackingInt(1), .ty_module = .{ .bytes = @splat(2) } };
+    const nominal = try store.append(.{ .nominal = .{ .named_type = foreign, .backing = scalar } });
+    const boxed = try store.append(.{ .box = nominal });
+    try std.testing.expect(try store.valuePortable(boxed, .{ .bytes = @splat(3) }));
+    try std.testing.expect(!try store.valuePortable(boxed, null));
+
+    const integer = try store.type_store.append(.{ .primitive = .i64 });
+    const integer_list = try store.type_store.append(.{ .list = integer });
+    try std.testing.expect(try store.type_store.typePortable(&type_names, integer_list, null, null));
+    const named = try store.type_store.append(.{ .named = .{
+        .named_type = foreign,
+        .def = .{ .module = try type_names.internModuleIdentity(&@as([32]u8, @splat(2))), .type_name = try type_names.internTypeName("Foreign") },
+        .kind = .@"opaque",
+        .args = .{},
+    } });
+    const named_list = try store.type_store.append(.{ .list = named });
+    try std.testing.expect(!try store.type_store.typePortable(&type_names, named_list, null, null));
 }

@@ -19,6 +19,8 @@ pub const ImportResolution = @import("ImportResolution.zig");
 pub const resolveDeferredFileImports = ImportResolution.resolveDeferredFileImports;
 /// Drain a module's deferred import worklist. See `ImportResolution`.
 pub const resolveDeferredImports = ImportResolution.resolveDeferredImports;
+/// Declared defaults materialized by nominal record construction.
+pub const default_omissions = @import("default_omissions.zig");
 /// Dependency graph and SCC (Strongly Connected Components) analysis
 pub const DependencyGraph = @import("DependencyGraph.zig");
 /// Hosted function compiler - replaces annotation-only with hosted lambdas

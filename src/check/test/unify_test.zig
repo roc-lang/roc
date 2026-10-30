@@ -106,6 +106,20 @@ const TestEnv = struct {
         return try unify_mod.unify(&env, a, b, .{});
     }
 
+    fn unifyWithOptions(self: *Self, a: Var, b: Var, opts: unify_mod.Options) std.mem.Allocator.Error!Result {
+        const env = unify_mod.Env{
+            .ident_store = self.module_env.getIdentStoreConst(),
+            .self_module_identity = self.module_env.selfModuleIdentity(),
+            .types = &self.module_env.types,
+            .problems = &self.problems,
+            .snapshots = &self.snapshots,
+            .type_writer = &self.type_writer,
+            .unify_scratch = &self.scratch,
+            .occurs_scratch = &self.occurs_scratch,
+        };
+        return try unify_mod.unify(&env, a, b, opts);
+    }
+
     /// Helper to call the write-no-report unify variant from TestEnv.
     fn unifyWriteNoReport(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
         const env = unify_mod.Env{
@@ -421,6 +435,41 @@ test "unify - a field repeated along one row's chain relates its value and kind"
                 );
             },
             .conflicting => try std.testing.expect(result.isProblem()),
+        }
+    }
+}
+
+test "unify - a repeated label whose occurrences conflict is the repeating row's conflict" {
+    for ([_]enum { tag_payload, tag_arity, field }{ .tag_payload, .tag_arity, .field }) |case| {
+        for ([_]bool{ false, true }) |row_is_actual| {
+            var env = try TestEnv.init(std.testing.allocator);
+            defer env.deinit();
+            const store = &env.module_env.types;
+            const outer_payload = try store.freshFromContent(.{ .structure = .empty_record });
+            const inner_payload = try store.freshFromContent(.{ .structure = .empty_tag_union });
+            const row, const other = switch (case) {
+                .tag_payload, .tag_arity => blk: {
+                    const inner_args: []const Var = if (case == .tag_arity) &.{} else &.{inner_payload};
+                    const inner = try store.freshFromContent((try env.mkTagUnionOpen(&.{try env.mkTag("Oops", inner_args)})).content);
+                    break :blk .{
+                        try store.freshFromContent((try env.mkTagUnion(&.{try env.mkTag("Oops", &.{outer_payload})}, inner)).content),
+                        try store.freshFromContent((try env.mkTagUnionOpen(&.{try env.mkTag("Other", &.{})})).content),
+                    };
+                },
+                .field => blk: {
+                    const inner = try store.freshFromContent((try env.mkRecordOpen(&.{try env.mkRecordField("name", inner_payload)})).content);
+                    break :blk .{
+                        try store.freshFromContent((try env.mkRecord(&.{try env.mkRecordField("name", outer_payload)}, inner)).content),
+                        try store.freshFromContent((try env.mkRecordOpen(&.{try env.mkRecordField("other", try store.fresh())})).content),
+                    };
+                },
+            };
+            const a, const b = if (row_is_actual) .{ other, row } else .{ row, other };
+            const result = try env.unifyWithOptions(a, b, .{ .repeated_label_rows = .return_row });
+            try std.testing.expectEqual(.mismatch, result);
+            try std.testing.expectEqual(store.resolveVar(row).var_, store.resolveVar(env.scratch.repeatedLabelRow().?).var_);
+            try std.testing.expectEqual(@as(usize, 0), env.problems.len());
+            try std.testing.expect(store.resolveVar(row).desc.content != .err);
         }
     }
 }

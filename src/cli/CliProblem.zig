@@ -215,6 +215,16 @@ pub const CliProblem = union(enum) {
         target: []const u8,
     },
 
+    /// A stack-first wasm platform's maximum memory reaches the addresses a
+    /// stack pointer wrapped below 0 lands on, so an overflow could write
+    /// memory instead of trapping.
+    wasm_maximum_memory_too_large: struct {
+        target: []const u8,
+        maximum_memory: usize,
+        limit: usize,
+        stack_size: usize,
+    },
+
     /// The requested optimization level is not implemented for this command
     unsupported_opt_level: struct {
         command: []const u8,
@@ -402,6 +412,7 @@ pub const CliProblem = union(enum) {
             .build_not_supported_for_headerless,
             .unsupported_default_platform_target,
             .unsupported_opt_level,
+            .wasm_maximum_memory_too_large,
             .compilation_failed,
             .unreported_error,
             .linker_failed,
@@ -468,6 +479,7 @@ pub const CliProblem = union(enum) {
             .build_not_supported_for_headerless => |info| try createBuildNotSupportedForHeaderlessReport(allocator, info),
             .unsupported_default_platform_target => |info| try createUnsupportedDefaultPlatformTargetReport(allocator, info),
             .unsupported_opt_level => |info| try createUnsupportedOptLevelReport(allocator, info),
+            .wasm_maximum_memory_too_large => |info| try createWasmMaximumMemoryTooLargeReport(allocator, info),
             .compilation_failed => |info| try createCompilationFailedReport(allocator, info),
             .unreported_error => |info| try createUnreportedErrorReport(allocator, info),
             .linker_failed => |info| try createLinkerFailedReport(allocator, info),
@@ -567,7 +579,7 @@ fn createUnknownFlagReport(allocator: Allocator, info: anytype) Allocator.Error!
         try report.document.addLineBreaks(2);
     }
     if (info.passes_args_to_app) {
-        const app_hint = try std.fmt.allocPrint(allocator, "To pass `{s}` to the app, write it after `--`, as in `roc{s}{s} app.roc -- {s}`.", .{ info.arg, separator, info.cmd, info.arg });
+        const app_hint = try std.fmt.allocPrint(allocator, "To pass `{s}` to the app, write it after the app's file, as in `roc{s}{s} app.roc {s}`.", .{ info.arg, separator, info.cmd, info.arg });
         defer allocator.free(app_hint);
         try report.document.addSuggestion(app_hint);
         try report.document.addLineBreak();
@@ -1025,6 +1037,27 @@ fn createUnsupportedOptLevelReport(allocator: Allocator, info: anytype) Allocato
     try report.document.addText(" for compiled builds, or ");
     try report.document.addAnnotated("--opt=interpreter", .emphasized);
     try report.document.addText(" for interpreter builds.");
+
+    return report;
+}
+
+fn createWasmMaximumMemoryTooLargeReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(
+        allocator,
+        "The {s} target's maximum memory of {d} bytes is larger than the {d} bytes its stack layout allows.",
+        .{ info.target, info.maximum_memory, info.limit },
+    );
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Invalid Target Configuration", headline, .fatal);
+    errdefer report.deinit();
+
+    const explanation = try std.fmt.allocPrint(
+        allocator,
+        "The platform sets no `global_base`, so the stack starts at address 0 and a stack overflow wraps the stack pointer to just below 4 GiB, where the first write traps. Memory must stay below 4 GiB minus the {d}-byte stack for that write to trap instead of overwriting memory.",
+        .{info.stack_size},
+    );
+    defer allocator.free(explanation);
+    try report.document.addReflowingTextWithBackticks(explanation);
 
     return report;
 }

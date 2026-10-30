@@ -31,7 +31,7 @@ test "issue 11640 - local recursive closure tail-calls itself after propagating 
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try test_env.assertDefType("f", "Try(ok, [Bad, ..a]) -> Try(ok, [Bad, ..a])");
+    try test_env.assertDefType("f", "Try(ok, err) -> Try(ok, [Bad, ..err])");
 }
 
 test "issue 11640 - top-level function tail-calls itself after a ? return" {
@@ -176,7 +176,7 @@ test "issue 11640 - ? return then a tail method call whose target is checked at 
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try test_env.assertDefType("query_many!", "Str, (U64 -> (U64 -> Try(a, [SqliteErr(Str), ..c]))) => Try(List(a), [SqliteErr(Str), ..c])");
+    try test_env.assertDefType("query_many!", "Str, (U64 -> (U64 -> Try(a, err))) => Try(List(a), [SqliteErr(Str), ..err])");
 }
 
 test "issue 11640 - an infinite type reaching an enclosing function's parameter is reported" {

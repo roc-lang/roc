@@ -1,6 +1,7 @@
 //! Checked modules to Monotype IR.
 
 const std = @import("std");
+const FixedPoint = @import("../fixed_point.zig");
 const TypeDigestHasher = @import("base").TypeDigestHasher;
 const check = @import("check");
 const can = @import("can");
@@ -293,6 +294,7 @@ pub const Options = struct {
     /// linked, so a linked-object entry (`Common.SpecCacheHit.c_abi_entry`)
     /// can, and whether its emitter splices dev code.
     spec_cache_takes: Common.SpecCacheTakes = .dev_code,
+    interface_cache: ?Common.InterfaceSummaryCache = null,
     /// Optional deterministic counters for specialization-shape tests.
     specialization_counters: ?*SpecializationCounters = null,
     /// Optional deterministic workload diagnostics. The checked pipeline
@@ -311,6 +313,7 @@ pub const Options = struct {
     /// the compile-time roots the program demands (design.md "Demand-Driven
     /// Compile-Time Evaluation").
     demand_driven_comptime_roots: bool = false,
+    validated_comptime_roots: ?*const std.AutoHashMapUnmanaged(EntryRoot, void) = null,
     /// With `comptime_value_reads`, receives the compile-time roots the
     /// program demands and the checked roots each of its compile-time roots
     /// reads.
@@ -412,9 +415,10 @@ pub const ComptimeDemand = struct {
 /// nothing reachable references, such as a callee body an immediate claim
 /// lowered for a caller that kept its own copy, demands nothing.
 ///
-/// The state persists across the lowering's drains. Definitions only grow,
-/// and a definition is summarized once its body is final: after the drain
-/// that completed it.
+/// The state persists across lowering drains. A discovery request may expose
+/// a parked declaration before an evaluation request completes its body.
+/// Explicit body-commit events invalidate that declaration's summary and
+/// revisit it if it was already reachable.
 const ComptimeDemandState = struct {
     const Range = struct { start: u32, len: u32 };
     /// `local` is set when the body evaluates a root in place: code that
@@ -429,6 +433,9 @@ const ComptimeDemandState = struct {
     /// two disjoint ranges of one id space.
     const nested_bit: u32 = 1 << 31;
 
+    /// Previously reached declarations whose final bodies were committed
+    /// after an earlier demand round inspected their parked declarations.
+    changed_reached: std.ArrayList(u32) = .empty,
     def_summaries: std.ArrayList(?Summary) = .empty,
     nested_summaries: std.ArrayList(?Summary) = .empty,
     summary_refs: std.ArrayList(u32) = .empty,
@@ -485,6 +492,7 @@ const ComptimeDemandState = struct {
     stored_demanded: std.ArrayList(u32) = .empty,
 
     fn deinit(self: *ComptimeDemandState, allocator: Allocator) void {
+        self.changed_reached.deinit(allocator);
         self.def_summaries.deinit(allocator);
         self.nested_summaries.deinit(allocator);
         self.summary_refs.deinit(allocator);
@@ -598,6 +606,20 @@ const ComptimeDemandState = struct {
 
     fn growTo(allocator: Allocator, list: anytype, len: usize, value: anytype) Allocator.Error!void {
         if (list.items.len < len) try list.appendNTimes(allocator, value, len - list.items.len);
+    }
+
+    /// A body commit is the producer event invalidating an earlier
+    /// summary of a parked declaration. Unreached bodies need no traversal;
+    /// reached ones join the next round at the changed definition itself.
+    fn bodyCommitted(self: *ComptimeDemandState, allocator: Allocator, fn_id: Ast.FnId) Allocator.Error!void {
+        const raw = @backingInt(fn_id);
+        if (raw >= self.fn_items.items.len) return;
+        const item = self.fn_items.items[raw] orelse return;
+        self.summarySlot(item).* = null;
+        const reached = self.itemReached(item);
+        if (!reached.*) return;
+        try self.changed_reached.append(allocator, item);
+        reached.* = false;
     }
 
     fn summarySlot(self: *ComptimeDemandState, item: u32) *?Summary {
@@ -995,8 +1017,8 @@ pub const SpecKeyAliases = struct {
 const DeclaredRoot = struct {
     request: checked.RootRequest,
     source_module: checked.ModuleId,
-    def: Ast.DefId,
-    fn_id: Ast.FnId,
+    def: ?Ast.DefId = null,
+    fn_id: ?Ast.FnId = null,
     /// A validation root (`hoisted_validation`): it produces no value for a
     /// read to reach and runs for its effects, so the program demands it
     /// outright.
@@ -1271,6 +1293,53 @@ const ParallelCoordinatorTimingScope = struct {
         timing.parallel.coordinator_post_batch_work_ns +%= elapsed_ns;
         self.timing = null;
     }
+};
+
+const ResolutionProfile = struct {
+    const Phase = enum { evidence_completion, evidence_encoding, identity, local_lookup, local_reuse, native_classification, native_lookup, evidence_copy, reservation, body_address, discovery_dispatch, immediate_body, demand_shape };
+    const count = @typeInfo(Phase).@"enum".field_names.len;
+    ns: [count]u64 = @splat(0),
+    entries: [count]u64 = @splat(0),
+    active: ?Phase = null,
+    started: i64 = 0,
+    /// The clock of the lowering's timing; without one, phases record no time.
+    std_io: ?std.Io = null,
+
+    fn transition(self: *ResolutionProfile, next: ?Phase) void {
+        const now = if (self.std_io) |std_io| timingNowNs(std_io) else 0;
+        if (self.active) |phase| self.ns[@backingInt(phase)] +%= @intCast(@max(0, now - self.started));
+        self.started = now;
+        self.active = next;
+    }
+
+    fn report(self: *const ResolutionProfile) void {
+        if (!dev_diagnostics.isSet(.spec_resolution_profile)) return;
+        inline for (@typeInfo(Phase).@"enum".field_names, 0..) |name, i| {
+            if (self.entries[i] != 0) std.debug.print("resolution-profile phase={s} ns={d} entries={d}\n", .{ name, self.ns[i], self.entries[i] });
+        }
+    }
+
+    const Scope = struct {
+        profile: ?*ResolutionProfile = null,
+        previous: ?Phase = null,
+        fn begin(profile: *ResolutionProfile, phase: Phase) Scope {
+            if (!dev_diagnostics.isSet(.spec_resolution_profile)) return .{};
+            const previous = profile.active;
+            profile.transition(phase);
+            profile.entries[@backingInt(phase)] += 1;
+            return .{ .profile = profile, .previous = previous };
+        }
+        fn enter(self: *Scope, phase: Phase) void {
+            const profile = self.profile orelse return;
+            profile.transition(phase);
+            profile.entries[@backingInt(phase)] += 1;
+        }
+        fn end(self: *Scope) void {
+            const profile = self.profile orelse return;
+            profile.transition(self.previous);
+            self.profile = null;
+        }
+    };
 };
 
 const BodyWorkTimingPhase = enum {
@@ -1569,7 +1638,7 @@ const ModuleViewData = struct {
     hosted_bindings: *const checked.HostedBindingTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     method_registry: *const static_dispatch.MethodRegistry,
-    method_lookup_scope: []const checked.ModuleId,
+    direct_import_module_keys: []const checked.CheckedModuleArtifactKey,
     resolved_refs: *const checked.ResolvedValueTable,
     nested_proc_sites: *const checked.NestedProcSiteTable,
     exported_procedure_bindings: checked.ExportedProcedureBindingView,
@@ -2910,6 +2979,115 @@ fn closedResultRowOrNull(view: ModuleView, checked_fn_root: checked.CheckedTypeI
     }
 }
 
+/// A checked function type's request-determined result row variable, or
+/// `none` (see `requestDeterminedResultRowVariable`).
+const RequestDeterminedResultRow = union(enum) {
+    none,
+    variable: checked.CheckedTypeId,
+};
+
+/// The variable a function type's result row ends in, when nothing else in
+/// the type reaches it and it carries no constraint that closing a row does
+/// not discharge: the function's direct result row or the error row of its
+/// `Try` result, the positions `closedResultRowOrNull` reads. The variable
+/// may be flex or rigid, with or without a row default, and may be the whole
+/// row. Such a variable is determined by the function's result alone, so a
+/// template that quantifies it is specialized at whatever row its request's
+/// result holds there (design.md "Closed Result Rows At Template
+/// Boundaries"). The type reaches the variable only through the chain of
+/// links from the result down to it; any other path—an argument, a payload,
+/// a link shared with another position—makes the variable an input the
+/// request does not determine.
+fn requestDeterminedResultRowVariable(
+    allocator: Allocator,
+    view: ModuleView,
+    checked_fn_root: checked.CheckedTypeId,
+) Allocator.Error!?checked.CheckedTypeId {
+    const function = switch (resolvedPayload(view, checked_fn_root).payload) {
+        .function => |function| function,
+        .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
+    };
+    var chain: std.ArrayList(checked.CheckedTypeId) = .empty;
+    defer chain.deinit(allocator);
+    var others: std.ArrayList(checked.CheckedTypeId) = .empty;
+    defer others.deinit(allocator);
+    try others.appendSlice(allocator, function.args);
+
+    var current = function.ret;
+    var behind_try = false;
+    const variable = while (true) {
+        if (chain.items.len >= view.types.payloadCount()) {
+            Common.invariant("checked result row chain was cyclic");
+        }
+        try chain.append(allocator, current);
+        const payload = checkedPayload(view, current);
+        switch (payload) {
+            .alias => |alias| {
+                try others.appendSlice(allocator, alias.args);
+                current = alias.backing;
+            },
+            .nominal => |nominal| {
+                if (behind_try or nominal.builtin != .try_) return null;
+                if (nominal.args.len != 2) {
+                    Common.invariant("Builtin.Try checked type did not have exactly two type arguments");
+                }
+                behind_try = true;
+                try others.append(allocator, nominal.args[0]);
+                try others.appendSlice(allocator, nominal.padding_field_types);
+                current = nominal.args[1];
+            },
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| try others.appendSlice(allocator, tag.argsSlice(view.types));
+                current = tag_union.ext;
+            },
+            .flex, .rigid => |row_variable| {
+                if (row_variable.constraints.len != 0 and !row_variable.row_default_discharges_constraints) return null;
+                break current;
+            },
+            .pending, .err, .record, .tuple, .function, .empty_record, .empty_tag_union => return null,
+        }
+    };
+
+    var visited = collections.DenseMap(checked.CheckedTypeId, void).init(allocator);
+    defer visited.deinit();
+    for (chain.items) |link| try visited.put(link, {});
+    while (others.pop()) |ty| {
+        if (visited.contains(ty)) {
+            for (chain.items) |link| {
+                if (link == ty) return null;
+            }
+            continue;
+        }
+        try visited.put(ty, {});
+        switch (checkedPayload(view, ty)) {
+            .pending => Common.invariant("pending checked type reached Monotype result row scan"),
+            .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+            .alias => |alias| {
+                try others.appendSlice(allocator, alias.args);
+                try others.append(allocator, alias.backing);
+            },
+            .record => |record| {
+                for (record.fields) |field| try others.append(allocator, field.ty);
+                try others.append(allocator, record.ext);
+            },
+            .tuple => |items| try others.appendSlice(allocator, items),
+            .nominal => |nominal| {
+                try others.appendSlice(allocator, nominal.args);
+                try others.appendSlice(allocator, nominal.padding_field_types);
+            },
+            .function => |inner| {
+                try others.appendSlice(allocator, inner.args);
+                try others.append(allocator, inner.ret);
+            },
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| try others.appendSlice(allocator, tag.argsSlice(view.types));
+                try others.append(allocator, tag_union.ext);
+            },
+        }
+    }
+    return variable;
+}
+
 /// Whether two tag spans list the same labels in the same order, each at
 /// the same payload arity.
 fn sameTagLabels(left: []const InstTag, right: []const InstTag) bool {
@@ -3679,14 +3857,13 @@ fn evidenceChainEql(allocator: Allocator, a: EvidenceChain, b: EvidenceChain) Al
     }
 }
 
-const ScopedMethodDispatch = struct {
-    scope: [32]u8,
+const MethodDispatchKey = struct {
     owner_tag: u8,
     owner_first: u32,
     owner_second: u32,
     method: u32,
 
-    fn init(scope: checked.ModuleId, owner: static_dispatch.MethodOwner, method: names.MethodNameId) ScopedMethodDispatch {
+    fn init(owner: static_dispatch.MethodOwner, method: names.MethodNameId) MethodDispatchKey {
         const owner_fields: struct { tag: u8, first: u32, second: u32 } = switch (owner) {
             .builtin => |builtin| .{
                 .tag = 1,
@@ -3700,7 +3877,6 @@ const ScopedMethodDispatch = struct {
             },
         };
         return .{
-            .scope = scope.bytes,
             .owner_tag = owner_fields.tag,
             .owner_first = owner_fields.first,
             .owner_second = owner_fields.second,
@@ -3719,7 +3895,7 @@ const MethodLookupResult = union(enum) {
     rejected,
 };
 
-const ScopedMethodResolution = union(enum) {
+const MethodResolution = union(enum) {
     missing,
     found: MethodLookupResult,
 };
@@ -4278,7 +4454,6 @@ fn storedConstFnEvidenceEql(left: StoredConstFnEvidence, right: StoredConstFnEvi
 /// purpose the evidence is materialized for.
 const SiteEvidenceMemoKey = struct {
     view: usize,
-    method_scope: usize,
     refs: usize,
     refs_len: usize,
     subst: usize,
@@ -4430,6 +4605,8 @@ const SharedSummaries = WorkerInputs.AppendIndex(InterfaceReplayAddress, Interfa
 /// sealed, and the reservation already owns its global ids, so the job
 /// outlives the requesting graph and draft.
 const PendingSpecJob = struct {
+    completed_body_address: ?CompletedBodyAddress = null,
+    profile_key: [32]u8 = @splat(0),
     /// Logical enqueue order across the whole build. The inline executor
     /// accepts queue entries strictly in this order. Representation-sensitive
     /// immediate claims are completed as inline work of the executing body;
@@ -4439,7 +4616,6 @@ const PendingSpecJob = struct {
     reservation: TemplateReservation,
     fn_template: Ast.FnTemplate,
     template_ref: names.ProcTemplate,
-    method_scope: checked.ModuleId,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     fn_ty: Type.TypeId,
@@ -4525,6 +4701,13 @@ fn committedTypeRelocation(domain: anytype, program: *Ast.Program) *Type.Store.T
     return &domain.workspace_to_program.?;
 }
 
+// ConstTypeStore nodes are immutable producer data throughout one lowering.
+// The destination owns this map for exactly the lifetime of its Type.Store.
+const ConstTypeMemo = std.AutoHashMapUnmanaged(struct {
+    store: *const check.ConstStore.ConstTypeStore,
+    ty: check.ConstStore.ConstTypeId,
+}, Type.TypeId);
+
 const SpecJobWorkspace = struct {
     allocator: Allocator,
     types: Type.Store,
@@ -4537,6 +4720,7 @@ const SpecJobWorkspace = struct {
     /// it; summaries the coordinator shares are read from its table.
     interface_summaries: InterfaceSummaryCache,
     checked_type_cache: CheckedTypeMemo(Type.TypeId) = .empty,
+    const_type_cache: ConstTypeMemo = .empty,
     captured_types: Type.Store.EpochBoundary,
     captured_names: names.NameStore.EpochBoundary,
     program: ?*Ast.Program = null,
@@ -4650,6 +4834,7 @@ const SpecJobWorkspace = struct {
         if (self.program_to_workspace) |*relocation| relocation.deinit();
         self.interface_summaries.deinit();
         self.checked_type_cache.deinit(self.allocator);
+        self.const_type_cache.deinit(self.allocator);
         self.types.deinit();
         self.name_store.deinit();
         self.superseded.deinit(self.allocator);
@@ -4840,6 +5025,8 @@ const SpecJobLaneState = struct {
 /// One immutable graph-free result handed from ordinary body lowering to
 /// ordered coordinator commit.
 const CompletedSpecJobShard = struct {
+    decoded_body_arena: ?*std.heap.ArenaAllocator = null,
+    frozen_probe_record: ?FrozenProbeRecord = null,
     worker_id: SpecJobWorkerId,
     commit_domain: *SpecJobCommitDomain,
     dispatch_index: u64,
@@ -4855,7 +5042,12 @@ const CompletedSpecJobShard = struct {
 
     fn deinit(self: *CompletedSpecJobShard) void {
         const allocator = self.body_draft.allocator;
+        if (self.frozen_probe_record) |record| allocator.free(record.bytes);
         self.body_draft.deinit();
+        if (self.decoded_body_arena) |arena| {
+            arena.deinit();
+            allocator.destroy(arena);
+        }
         allocator.free(self.interface_summaries);
         if (self.diagnostics) |diagnostics| {
             allocator.destroy(diagnostics);
@@ -4896,12 +5088,14 @@ const SpecJobWorkerInputs = struct {
     lanes: []?*SpecJobLaneState,
     modules: Common.CheckedModules,
     module_views: []const ModuleViewData,
+    closed_occurrences: *const ClosedOccurrenceIndex,
     source_file_ids: *const SourceFileIds,
     lowering_module_ids: *const LoweringModuleIds,
     snapshot: *const WorkerInputs.Snapshot,
     proc_debug_names: bool,
     interface_summaries: *const SharedSummaries,
     interface_summary_end: usize,
+    interface_cache: ?Common.InterfaceSummaryCache,
     collect_counters: bool,
     collect_diagnostics: bool,
     inline_expects: InlineExpectMode,
@@ -4909,7 +5103,7 @@ const SpecJobWorkerInputs = struct {
     comptime_value_reads: bool,
     literal_roots: bool,
     replay_interface_summaries: base.TestSwitch(true),
-    declared_comptime_root_functions: *const DeclaredComptimeRootFunctions,
+    declared_comptime_roots: *const DeclaredComptimeRoots,
     hosted_catalog: []const HostedCatalogEntry,
     current_loc: base.SourceLoc,
     current_region: base.Region,
@@ -4919,7 +5113,6 @@ const SpecJobWorkerInputs = struct {
 const PreparedSpecJob = struct {
     job: PendingSpecJob,
     view: ModuleView,
-    method_scope: ModuleView,
     template: checked.CheckedProcedureTemplate,
 };
 
@@ -5151,14 +5344,12 @@ const GeneratedTryTypeAddress = struct {
 /// Process-local O(1) reuse key for a checker-classified closed direct
 /// procedure call. `evidence` is an interned producer identity in `module`;
 /// the plan's closed callable type is likewise structurally interned there.
-/// The method scope remains part of specialization identity because imported
-/// bodies resolve compiler-generated method calls in that scope. The key is a
+/// The key is a
 /// complete identity only for specializations independent of the caller's
 /// local context, so caller-owned specializations are never stored under it.
 const ClosedDirectCallIdentity = struct {
     callable: CheckedTypeAddress,
     evidence: static_dispatch.EvidenceNodeId,
-    method_scope: checked.ModuleId,
 };
 
 /// Tracks a memoized structural-derivation helper def (is_eq / inspect /
@@ -5241,7 +5432,9 @@ fn appendRuntimeSchemaRequestToProgram(
     try program.addRuntimeSchemaRequest(request);
 }
 
-const DeclaredComptimeRootFunctions = std.AutoHashMap(EntryRoot, Ast.FnId);
+// Immutable request ordinals, fixed before workers start. Function ids
+// are assigned separately by the coordinator only when a declaration is used.
+const DeclaredComptimeRoots = std.AutoHashMap(EntryRoot, u32);
 
 /// Checked module keys cross independent checking environments. Their local
 /// module indices do not; distinct checked modules routinely share an index.
@@ -5254,7 +5447,72 @@ const SourceFileIds = std.AutoHashMap([32]u8, u32);
 /// lowering module id names a row of one program's own module table.
 const LoweringModuleIds = std.AutoHashMap([32]u8, Common.LoweringModuleId);
 
+const CheckedOccurrence = struct { module: checked.ModuleId, ty: checked.CheckedTypeId };
+
+/// The program's representative checked occurrence of every closed named
+/// type, by checked type key: the declaring module's own occurrence when
+/// that module holds one, so the choice does not move with other modules'
+/// keys as they are edited, and otherwise the occurrence in the lowest-keyed
+/// module that holds one. Closed occurrences have no instantiation identity,
+/// so one witness per program keeps freshly lowered, replayed and restored
+/// named types one Monotype. The coordinator builds the index once from every
+/// module view's root rows before any body is lowered, and workers read it.
+const ClosedOccurrenceIndex = struct {
+    entries: std.AutoHashMapUnmanaged([32]u8, Entry) = .empty,
+
+    const Entry = struct {
+        occurrence: CheckedOccurrence,
+        /// The checked key of the module declaring the named type.
+        owner: [32]u8,
+        /// Whether `occurrence` is in the declaring module's own store.
+        declared: bool,
+    };
+
+    fn build(allocator: Allocator, views: []const ModuleViewData) Allocator.Error!ClosedOccurrenceIndex {
+        var index: ClosedOccurrenceIndex = .{};
+        errdefer index.deinit(allocator);
+        for (views) |*view| {
+            for (view.types.rootRows(), 0..) |row, position| {
+                if (row.contains_identity_variables) continue;
+                const id: checked.CheckedTypeId = @fromBackingInt(@intCast(position));
+                if (!view.types.isNamed(id)) continue;
+                // A store represents each key by the root `rootForKey` names.
+                if ((view.types.rootForKey(row.key) orelse continue) != id) continue;
+                const owner: [32]u8 = switch (view.types.payload(id)) {
+                    .nominal => |nominal| nominal.owner_module.bytes,
+                    .alias => |alias| alias.owner_module.bytes,
+                    .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => unreachable, // isNamed admitted only nominal and alias payloads
+                };
+                const candidate: Entry = .{
+                    .occurrence = .{ .module = view.key, .ty = id },
+                    .owner = owner,
+                    .declared = std.mem.eql(u8, &view.key.bytes, &owner),
+                };
+                const slot = try index.entries.getOrPut(allocator, row.key.bytes);
+                if (!slot.found_existing) {
+                    slot.value_ptr.* = candidate;
+                    continue;
+                }
+                if (slot.value_ptr.declared) continue;
+                if (candidate.declared or std.mem.order(u8, &view.key.bytes, &slot.value_ptr.occurrence.module.bytes) == .lt) {
+                    slot.value_ptr.* = candidate;
+                }
+            }
+        }
+        return index;
+    }
+
+    fn deinit(self: *ClosedOccurrenceIndex, allocator: Allocator) void {
+        self.entries.deinit(allocator);
+    }
+
+    fn get(self: *const ClosedOccurrenceIndex, key: [32]u8) ?Entry {
+        return self.entries.get(key);
+    }
+};
+
 const Builder = struct {
+    resolution_profile: ResolutionProfile = .{},
     /// `appModuleIdentity` of this lowering's modules.
     app_module_identity: ?[32]u8,
     allocator: Allocator,
@@ -5263,6 +5521,7 @@ const Builder = struct {
     /// Checked module key -> position in the lowering input; built lazily on
     /// first lookup (see `buildModuleIndex`).
     module_index: std.AutoHashMap([32]u8, ModuleIndexSlot),
+    module_identity_index: std.AutoHashMapUnmanaged([32]u8, u32) = .empty,
     /// Every input module's view: the root, then imports, then relation
     /// modules. A worker's builder borrows its coordinator's views instead,
     /// so a view it hands back stays valid for the whole run.
@@ -5319,6 +5578,7 @@ const Builder = struct {
     field_kind_scope_pool: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind)) = .empty,
     /// The object cache consulted for closed specializations, if any.
     spec_cache: ?Common.SpecCacheLookup,
+    interface_cache: ?Common.InterfaceSummaryCache,
     spec_cache_takes: Common.SpecCacheTakes,
     /// The module identities of the checked modules this lowering reads, which
     /// the object cache serves entries for (`Common.ProgramModules`); built
@@ -5343,11 +5603,18 @@ const Builder = struct {
     /// The program's literal value context, once computed; see
     /// `literalProgramContext`.
     literal_program_context: ??[32]u8 = null,
+    interface_program_context: ??[32]u8 = null,
+    interface_callee_contexts: std.AutoHashMapUnmanaged([32]u8, ?[32]u8) = .empty,
     /// See `literalTopModules`; outer null until computed.
     literal_top_modules: ??std.AutoHashMapUnmanaged([32]u8, [32]u8) = null,
     /// Top-level statements of each top module whose types a literal value
     /// identity named, by module key.
     literal_top_statements: std.AutoHashMapUnmanaged([32]u8, collections.DenseMap(can.CIR.Statement.Idx, void)) = .empty,
+    /// Coordinator only: the program's closed occurrence index, built by
+    /// `seedProgramModuleTables`. Workers borrow the coordinator's.
+    closed_occurrences: ClosedOccurrenceIndex = .{},
+    borrowed_closed_occurrences: ?*const ClosedOccurrenceIndex = null,
+
     /// Compile-time roots by module and site, for the modules whose roots a
     /// stored literal value's reads were looked up in.
     literal_read_sites: std.AutoHashMapUnmanaged(LiteralReadSite, u32) = .empty,
@@ -5357,9 +5624,10 @@ const Builder = struct {
     /// module.
     literal_store_view: ?*ModuleViewData = null,
     replay_interface_summaries: base.TestSwitch(true),
-    declared_comptime_root_functions: DeclaredComptimeRootFunctions,
-    borrowed_comptime_root_functions: ?*const DeclaredComptimeRootFunctions = null,
+    declared_comptime_roots: DeclaredComptimeRoots,
+    borrowed_comptime_roots: ?*const DeclaredComptimeRoots = null,
     demand_driven_comptime_roots: bool,
+    validated_comptime_roots: ?*const std.AutoHashMapUnmanaged(EntryRoot, void),
     comptime_demand_out: ?*ComptimeDemand,
     spec_comptime_reads_out: ?*SpecComptimeReads,
     spec_key_aliases_out: ?*SpecKeyAliases,
@@ -5396,6 +5664,7 @@ const Builder = struct {
     symbols: SymbolDomains = .{},
     next_instantiation_scope: u64 = 0,
     type_cache: CheckedTypeMemo(Type.TypeId) = .empty,
+    const_type_cache: ConstTypeMemo = .empty,
     /// Deterministic FIFO of reserved specializations awaiting body lowering.
     /// Wave drains execute entries in dispatch order; an executing body may
     /// append new entries, which the same drain then reaches.
@@ -5468,6 +5737,9 @@ const Builder = struct {
     /// Whether each checked type reaches the error type (see
     /// `checkedTypeContainsError`).
     checked_type_contains_error: CheckedTypeMemo(bool) = .empty,
+    /// Each checked function type's request-determined result row variable
+    /// (see `requestDeterminedResultRowVariable`).
+    request_determined_result_rows: CheckedTypeMemo(RequestDeterminedResultRow) = .empty,
     /// Whether each checked type is representation-fixed (see
     /// `checkedTypeRepresentationFixed`).
     checked_type_representation_fixed: CheckedTypeMemo(bool) = .empty,
@@ -5490,16 +5762,15 @@ const Builder = struct {
     /// derivation internals, inspect/parser/encode helpers, path synthesis).
     /// Built once; keys use the same program-name interning as `typeDef`, so
     /// owners derived from monomorphic type content correlate directly.
-    /// Scoped method-target resolutions. The same owner and method pair may
-    /// resolve to different targets depending on which module's method-lookup
-    /// registry scope applies. Checked modules output the ordered registry
-    /// scope; this memo only accelerates repeated exact lookups during the
-    /// build and never changes the checked outcome.
-    scoped_method_targets: std.AutoHashMapUnmanaged(ScopedMethodDispatch, ScopedMethodResolution) = .{},
-    /// Scoped inspect-override resolutions, memoized like
-    /// `scoped_method_targets`. `null` means inspection renders the owner's
-    /// default form.
-    scoped_inspect_overrides: std.AutoHashMapUnmanaged(ScopedMethodDispatch, ?MethodLookup) = .{},
+    /// Method-target resolutions. An owner's methods live in its declaring
+    /// module's registry alone, so this memo only accelerates repeated exact
+    /// lookups during the build and never changes the checked outcome.
+    method_targets: std.AutoHashMapUnmanaged(MethodDispatchKey, MethodResolution) = .{},
+    /// The Builtin module's view, found once on first use (`builtinModuleView`).
+    builtin_module_view: ??ModuleView = null,
+    /// Inspect-override resolutions, memoized like `method_targets`. `null`
+    /// means inspection renders the owner's default form.
+    inspect_overrides: std.AutoHashMapUnmanaged(MethodDispatchKey, ?MethodLookup) = .{},
     /// Exact checked identity of the compiler-provided `Try` nominal. `Try`
     /// deliberately retains nominal static-dispatch ownership, so it cannot use
     /// `builtin_owner`; structural parser lowering still needs its producer
@@ -5652,6 +5923,7 @@ const Builder = struct {
             .current_region = program.current_region,
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
+            .interface_cache = options.interface_cache orelse if (options.spec_cache) |cache| cache.interfaces else null,
             .spec_cache_takes = options.spec_cache_takes,
             .counters = counters,
             .diagnostics = options.diagnostics,
@@ -5663,13 +5935,15 @@ const Builder = struct {
             .literal_values = if (options.literal_roots) options.literal_values else null,
             .verify_literal_values = options.verify_literal_values,
             .replay_interface_summaries = options.replay_interface_summaries,
-            .declared_comptime_root_functions = DeclaredComptimeRootFunctions.init(allocator),
+            .declared_comptime_roots = DeclaredComptimeRoots.init(allocator),
             .demand_driven_comptime_roots = options.demand_driven_comptime_roots,
+            .validated_comptime_roots = options.validated_comptime_roots,
             .comptime_demand_out = options.comptime_demand_out,
             .spec_comptime_reads_out = options.spec_comptime_reads_out,
             .spec_key_aliases_out = options.spec_key_aliases_out,
             .post_check_executor = options.post_check_executor,
             .timing = options.timing,
+            .resolution_profile = .{ .std_io = if (options.timing) |timing| timing.std_io else null },
             .interface_summaries = InterfaceSummaryCache.init(allocator),
             .spec_store = spec_store,
             .lowered_templates = collections.DenseMap(Ast.FnId, LoweredTemplate).init(allocator),
@@ -5750,6 +6024,8 @@ const Builder = struct {
     /// tables remain immutable until all workers have finished this lowering
     /// run, so a worker's rows name the same owners the coordinator's do.
     fn seedProgramModuleTables(self: *Builder) Allocator.Error!void {
+        try self.seedModuleIdentityIndex();
+        try self.buildClosedOccurrenceIndex();
         std.debug.assert(self.borrowed_source_file_ids == null);
         std.debug.assert(self.borrowed_lowering_module_ids == null);
         std.debug.assert(self.source_file_ids.count() == 0);
@@ -5821,14 +6097,17 @@ const Builder = struct {
             .comptime_value_reads = inputs.comptime_value_reads,
             .literal_roots = inputs.literal_roots,
             .replay_interface_summaries = inputs.replay_interface_summaries,
+            .interface_cache = inputs.interface_cache,
             .post_check_executor = null,
             .timing = null,
         });
         errdefer builder.deinit();
         builder.borrowed_source_file_ids = inputs.source_file_ids;
         builder.borrowed_module_views = inputs.module_views;
+        builder.borrowed_closed_occurrences = inputs.closed_occurrences;
+        try builder.seedModuleIdentityIndex();
         builder.borrowed_lowering_module_ids = inputs.lowering_module_ids;
-        builder.borrowed_comptime_root_functions = inputs.declared_comptime_root_functions;
+        builder.borrowed_comptime_roots = inputs.declared_comptime_roots;
         builder.hosted_catalog = try worker.allocator.dupe(HostedCatalogEntry, inputs.hosted_catalog);
         builder.current_loc = inputs.current_loc;
         builder.current_region = inputs.current_region;
@@ -5882,6 +6161,7 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
+        self.resolution_profile.report();
         self.allocator.free(self.program_module_buffer);
         deinitSpecJobLanes(self.allocator, self.spec_job_lanes);
         for (self.lower_frame_pool.items) |*frames| frames.deinit(self.allocator);
@@ -5913,7 +6193,7 @@ const Builder = struct {
         self.nominal_parameter_value_masks.deinit(self.allocator);
         self.source_file_ids.deinit();
         self.lowering_module_ids.deinit();
-        self.declared_comptime_root_functions.deinit();
+        self.declared_comptime_roots.deinit();
         self.declared_roots.deinit(self.allocator);
         self.parked_root_jobs.deinit(self.allocator);
         self.deferred_roots.deinit(self.allocator);
@@ -5926,16 +6206,18 @@ const Builder = struct {
         var top_statements = self.literal_top_statements.valueIterator();
         while (top_statements.next()) |statements| statements.deinit();
         self.literal_top_statements.deinit(self.allocator);
+        self.closed_occurrences.deinit(self.allocator);
         self.literal_read_sites.deinit(self.allocator);
         self.literal_read_site_modules.deinit(self.allocator);
         if (self.literal_store_view) |view| self.allocator.destroy(view);
         self.module_index.deinit();
+        self.module_identity_index.deinit(self.allocator);
         self.spec_job_task_buffers.deinit(self.allocator);
         self.unshared_summary_domains.deinit(self.allocator);
         if (self.spec_job_commit_domain) |*domain| domain.deinit();
         if (self.spec_job_worker) |*worker| worker.deinit();
-        self.scoped_method_targets.deinit(self.allocator);
-        self.scoped_inspect_overrides.deinit(self.allocator);
+        self.method_targets.deinit(self.allocator);
+        self.inspect_overrides.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
         self.static_data_eligibility.deinit();
         self.stored_data.deinit();
@@ -5944,6 +6226,7 @@ const Builder = struct {
         self.const_expr_cache.deinit();
         self.nested_site_cache.deinit();
         self.checked_type_contains_error.deinit(self.allocator);
+        self.request_determined_result_rows.deinit(self.allocator);
         self.checked_type_representation_fixed.deinit(self.allocator);
         var scheme_var_slots = self.scheme_var_slots.valueIterator();
         while (scheme_var_slots.next()) |slots| slots.deinit(self.allocator);
@@ -5956,6 +6239,7 @@ const Builder = struct {
         if (self.shared_summaries) |*summaries| summaries.deinit();
         self.worker_inputs.deinit(self.allocator);
         self.interface_summaries.deinit();
+        self.interface_callee_contexts.deinit(self.allocator);
         self.spec_store.deinit();
         self.pending_spec_jobs.deinit(self.allocator);
         self.parked_spec_jobs.deinit(self.allocator);
@@ -5966,6 +6250,7 @@ const Builder = struct {
             self.discovery_callees.deinit(self.allocator);
         }
         self.type_cache.deinit(self.allocator);
+        self.const_type_cache.deinit(self.allocator);
         self.const_evidence_memo.deinit();
         self.const_evidence_by_content.deinit();
         self.site_evidence_memo.deinit();
@@ -5985,6 +6270,55 @@ const Builder = struct {
         if (self.counters) |counters| {
             @field(counters, field) += @intCast(amount);
         }
+    }
+
+    /// `subst` for specializing `template` at a request, with the slot of the
+    /// template's request-determined result row variable
+    /// (`requestDeterminedResultRowVariable`) replaced by a fresh cell. The
+    /// request's result alone determines that variable, so relating the
+    /// template's root to the request binds the cell, and the template's root
+    /// and body read the row the request's result holds there. The variable
+    /// a use site recorded for that slot is the use's own row, which can be
+    /// narrower than the row the request's result flows into (design.md
+    /// "Closed Result Rows At Template Boundaries").
+    fn requestDeterminedSubstitution(
+        self: *Builder,
+        graph: *InstGraph,
+        view: ModuleView,
+        template: *const checked.CheckedProcedureTemplate,
+        subst: SpecSubstitution,
+    ) Allocator.Error!SpecSubstitution {
+        if (subst.len == 0) return subst;
+        const address = checkedTypeAddress(view, template.checked_fn_root);
+        const known = self.request_determined_result_rows.get(address) orelse known: {
+            const found: RequestDeterminedResultRow = if (try requestDeterminedResultRowVariable(
+                self.allocator,
+                view,
+                template.checked_fn_root,
+            )) |variable| .{ .variable = variable } else .none;
+            try self.request_determined_result_rows.put(self.allocator, address, found);
+            break :known found;
+        };
+        const variable = switch (known) {
+            .none => return subst,
+            .variable => |variable| variable,
+        };
+        const scheme_vars = view.templates.templateSchemeVars(template);
+        if (subst.len != scheme_vars.len) {
+            Common.invariant("template specialization substitution length differed from its scheme's quantified variables");
+        }
+        const slot = (try self.schemeVarSlot(scheme_vars, variable)) orelse return subst;
+        if (subst[slot] == .checked_error) return subst;
+        const row_variable = switch (checkedPayload(view, variable)) {
+            .flex, .rigid => |row_variable| row_variable,
+            .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => Common.invariant("request-determined result row was not a variable"),
+        };
+        const released = try graph.arena().dupe(SubstSlot, subst);
+        released[slot] = .{ .node = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(
+            row_variable.numeric_default_phase,
+            row_variable.row_default,
+        ) }) };
+        return released;
     }
 
     /// The slot of `variable` among a scheme's quantified variables. Small
@@ -6162,14 +6496,142 @@ const Builder = struct {
         defer scratch.deinit();
         for (entries) |entry| {
             _ = scratch.reset(.retain_capacity);
-            _ = try self.interface_summaries.insertRelocated(
+            const summary = try self.interface_summaries.insertRelocated(
                 &self.program.types,
                 &self.program.names,
                 entry,
                 try entry.request.copy(scratch.allocator(), relocation),
                 relocation,
             );
+            if (!entry.persisted) try self.recordPersistentInterface(.{ .address = entry.address, .evidence = entry.evidence, .request = try entry.request.copy(scratch.allocator(), relocation), .summary = summary }, &self.program.types, &self.program.names);
         }
+    }
+
+    const PersistentInterfaceFamily = struct { provider: [32]u8, procedure: [8]u8 };
+
+    fn persistentInterfaceFamily(self: *Builder, address: InterfaceReplayAddress) Allocator.Error!?PersistentInterfaceFamily {
+        if (self.interface_cache == null or address.kind != .procedure) return null;
+        const callee = self.moduleForKeyBytes(address.family.module) orelse return null;
+        const template = callee.templates.get(@fromBackingInt(address.family.template));
+        // Checking already supplies the complete relation of a closed
+        // interface, so no callee relation program exists for it.
+        if (templateInterfaceIsClosed(callee, &template)) return null;
+        const scope_context = callee.compile_time_root_identities.valueContext() orelse return null;
+        const program_context = (try self.programValueContext(false)) orelse return null;
+        var hash = base.Sha256.init(.{});
+        hash.update("roc.interface-provider.v3");
+        hash.update(&(callee.code_generation_key orelse callee.key).bytes);
+        hash.update(&scope_context);
+        hash.update(&program_context);
+        hash.update(&((try self.interfaceCalleeContext(callee)) orelse return null));
+        var ordinals: [8]u8 = undefined;
+        std.mem.writeInt(u32, ordinals[0..4], address.family.proc_base, .little);
+        std.mem.writeInt(u32, ordinals[4..8], address.family.template, .little);
+        hash.update(@tagName(self.inline_expects));
+        hash.update(&.{ @intFromBool(self.static_data_literals), @intFromBool(self.comptime_value_reads), @intFromBool(self.literal_roots) });
+        const family = hash.finalResult();
+        if (base.dev_diagnostics.isSet(.pack_trace)) std.debug.print("interface family module={s} proc={d} template={d} code={x} scope={x} program={x} family={x}\n", .{ callee.module_env.module_name, address.family.proc_base, address.family.template, (callee.code_generation_key orelse callee.key).bytes, scope_context, program_context, family });
+        return .{ .provider = family, .procedure = ordinals };
+    }
+
+    /// Explicit import closure and requirement identities supplied by checking.
+    /// Unlike the literal-value program context this does not include exports
+    /// of unrelated modules (in particular the platform's call to app main).
+    fn interfaceCalleeContext(self: *Builder, callee: ModuleView) Allocator.Error!?[32]u8 {
+        if (self.interface_callee_contexts.get(callee.key.bytes)) |known| return known;
+        const top = (try self.literalTopModules()).?;
+        var visited = std.AutoHashMap([32]u8, void).init(self.allocator);
+        defer visited.deinit();
+        var pending = std.ArrayList(ModuleView).empty;
+        defer pending.deinit(self.allocator);
+        var dependencies = std.ArrayList([32]u8).empty;
+        defer dependencies.deinit(self.allocator);
+        var requirements = std.ArrayList([64]u8).empty;
+        defer requirements.deinit(self.allocator);
+        try pending.append(self.allocator, callee);
+        while (pending.pop()) |view| {
+            const seen = try visited.getOrPut(view.key.bytes);
+            if (seen.found_existing) continue;
+            try dependencies.append(self.allocator, (view.code_generation_key orelse view.key).bytes);
+            for (view.direct_import_module_keys) |key| {
+                const imported = self.moduleForKeyBytes(key.bytes) orelse {
+                    // A type-only dependency need not be in the lowering's
+                    // module set. Without its explicit context no record is offered.
+                    try self.interface_callee_contexts.put(self.allocator, callee.key.bytes, null);
+                    return null;
+                };
+                try pending.append(self.allocator, imported);
+            }
+            const identities = view.compile_time_root_identities;
+            for ([_][]const [32]u8{ identities.method_requires, identities.export_requires }) |required| for (required) |name| {
+                var providers = top.keyIterator();
+                while (providers.next()) |key| {
+                    const provider = self.moduleForKeyBytes(key.*) orelse Common.invariant("interface requirement has no checked provider view");
+                    for (provider.compile_time_root_identities.exports) |exported| {
+                        if (!std.mem.eql(u8, &name, &exported.name)) continue;
+                        var pair: [64]u8 = undefined;
+                        pair[0..32].* = name;
+                        pair[32..].* = exported.value;
+                        try requirements.append(self.allocator, pair);
+                    }
+                }
+            };
+        }
+        const Order = struct {
+            fn dependency(_: void, a: [32]u8, b: [32]u8) bool {
+                return std.mem.order(u8, &a, &b) == .lt;
+            }
+            fn requirement(_: void, a: [64]u8, b: [64]u8) bool {
+                return std.mem.order(u8, &a, &b) == .lt;
+            }
+        };
+        std.mem.sort([32]u8, dependencies.items, {}, Order.dependency);
+        std.mem.sort([64]u8, requirements.items, {}, Order.requirement);
+        var hash = base.Sha256.init(.{});
+        hash.update("roc.interface-dependencies.v1");
+        var counts: [8]u8 = undefined;
+        std.mem.writeInt(u32, counts[0..4], @intCast(dependencies.items.len), .little);
+        std.mem.writeInt(u32, counts[4..8], @intCast(requirements.items.len), .little);
+        hash.update(&counts);
+        for (dependencies.items) |key| hash.update(&key);
+        hash.update("requirements");
+        for (requirements.items) |pair| hash.update(&pair);
+        const digest = hash.finalResult();
+        try self.interface_callee_contexts.put(self.allocator, callee.key.bytes, digest);
+        return digest;
+    }
+
+    fn recordPersistentInterface(self: *Builder, entry: InterfaceSummaryEntry, types_: *Type.Store, ns: *const names.NameStore) Allocator.Error!void {
+        const family = (try self.persistentInterfaceFamily(entry.address)) orelse return;
+        const evidence = (try self.persistentInterfaceEvidence(entry.evidence)) orelse return;
+        const summary: PersistentInterface.Summary = switch (entry.summary) {
+            .unchanged => .unchanged,
+            .constraints => |c| .{ .constraints = c },
+        };
+        var stats: PersistentInterface.Stats = .{};
+        const bytes = PersistentInterface.encodeWithStats(self.allocator, types_, ns, entry.request.leaves, summary, BodyContext.PersistentProvenance{ .builder = self }, &stats) catch |err| switch (err) {
+            error.NotRepresentable => {
+                self.count("interface_persistent_unrepresentable");
+                return;
+            },
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        defer self.allocator.free(bytes);
+        const key = PersistentInterface.requestKey(entry.request, evidence, family.procedure);
+        const cache = self.interface_cache.?;
+        try cache.record(cache.context, family.provider, key, bytes);
+        self.count("interface_persistent_records");
+        self.countBy("interface_persistent_bytes", @intCast(bytes.len));
+        self.countBy("interface_persistent_types", @intCast(stats.types));
+        self.countBy("interface_persistent_references", @intCast(stats.references));
+        if (stats.composites != 0) self.count("interface_persistent_composite_records");
+        if (stats.defaults != 0) self.count("interface_persistent_default_records");
+    }
+
+    fn persistentInterfaceEvidence(self: *Builder, evidence: StoredConstFnEvidence) Allocator.Error!?[32]u8 {
+        for (evidence.entries.targets) |target| if (target.method.kind == .local_proc) return null;
+        const contexts = (try self.literalTopModules()) orelse return null;
+        return Ast.fnEvidenceContextDigest(evidence.entries, evidence.frames, evidence.head, contexts).bytes;
     }
 
     fn addDigestStats(self: *Builder, stats: Type.Store.DigestStats) void {
@@ -6524,9 +6986,9 @@ const Builder = struct {
     /// What the lowered program demands of compile-time evaluation, and the
     /// program's roots in their final order: the compile-time roots it
     /// demands, in request order, and then every other root. A declared root
-    /// whose body nothing demanded keeps its reserved declaration, whose body
-    /// crashes; nothing calls it, it is not a root, and reachability drops
-    /// it from every consumer.
+    /// which was never read or validated has no function. A root whose signature
+    /// was prepared but whose body nothing demanded retains its parked crash
+    /// body; it is not a root, and reachability drops it from every consumer.
     fn orderComptimeRoots(self: *Builder) Allocator.Error!void {
         if (!self.comptime_value_reads) return;
         try self.settleLiteralRoots();
@@ -6543,7 +7005,7 @@ const Builder = struct {
             if (self.demand_driven_comptime_roots) {
                 // Only demand lowers a declared root's body, so the roots
                 // whose bodies lowered are exactly the demanded ones.
-                const parked = self.parked_root_jobs.contains(root.fn_id);
+                const parked = if (root.fn_id) |id| self.parked_root_jobs.contains(id) else true;
                 if (!state.demanded.items[index]) {
                     if (!parked) Common.invariant("compile-time root body was lowered without demand");
                     continue;
@@ -6551,18 +7013,19 @@ const Builder = struct {
                 if (parked) Common.invariant("demanded compile-time root body was never lowered");
             }
             const start = reads.items.len;
-            for (try state.rootReads(self.allocator, view, ComptimeDemandState.defItem(root.def))) |read| try reads.append(self.allocator, state.roots.items[read]);
+            for (try state.rootReads(self.allocator, view, ComptimeDemandState.defItem(root.def.?))) |read| try reads.append(self.allocator, state.roots.items[read]);
             try root_reads.append(self.allocator, .{ .start = @intCast(start), .len = @intCast(reads.items.len - start) });
             if (self.demand_driven_comptime_roots) {
-                try self.appendRuntimeSchemaRequestsForDef(root.def);
-                try self.program.addRoot(.{ .def = root.def, .request = root.request, .owner = self.loweringModuleId(root.source_module) });
+                try self.appendRuntimeSchemaRequestsForDef(root.def.?);
+                try self.program.addRoot(.{ .def = root.def.?, .request = root.request, .owner = self.loweringModuleId(root.source_module) });
             }
         }
         if (self.demand_driven_comptime_roots) {
             for (self.deferred_roots.items) |root| try self.program.addRoot(root);
             self.deferred_roots.clearRetainingCapacity();
             for (self.declared_roots.items) |root| {
-                const parked = self.parked_root_jobs.fetchRemove(root.fn_id) orelse continue;
+                const id = root.fn_id orelse continue;
+                const parked = self.parked_root_jobs.fetchRemove(id) orelse continue;
                 try self.finishUndemandedRoot(parked.value);
             }
             if (self.parked_root_jobs.count() != 0) Common.invariant("parked compile-time root body belonged to no declared root");
@@ -6750,21 +7213,30 @@ const Builder = struct {
     /// module's methods, or from an imported module's exports, looks up.
     /// Null when a top module has no value context.
     fn literalProgramContext(self: *Builder) Allocator.Error!?[32]u8 {
-        if (self.literal_program_context) |known| return known;
+        return self.programValueContext(true);
+    }
+
+    fn programValueContext(self: *Builder, comptime include_export_requires: bool) Allocator.Error!?[32]u8 {
+        const cached = if (include_export_requires) &self.literal_program_context else &self.interface_program_context;
+        if (cached.*) |known| return known;
         const top = (try self.literalTopModules()) orelse {
-            self.literal_program_context = @as(?[32]u8, null);
+            cached.* = @as(?[32]u8, null);
             return null;
         };
         var names_list = std.ArrayList([33]u8).empty;
         defer names_list.deinit(self.allocator);
-        for (self.program.view().lowering_modules) |module| {
+        // Workers borrow module views, not the coordinator's output tables.
+        // Persistent interfaces must name the same input set in both domains.
+        const module_count = if (include_export_requires) self.program.view().lowering_modules.len else self.moduleViews().len;
+        for (0..module_count) |index| {
+            const key = if (include_export_requires) self.program.view().lowering_modules[index].bytes else self.moduleViews()[index].key.bytes;
             var name: [33]u8 = undefined;
-            if (top.get(module.bytes)) |context| {
+            if (top.get(key)) |context| {
                 name[0] = 1;
                 name[1..].* = context;
             } else {
                 name[0] = 0;
-                name[1..].* = module.bytes;
+                name[1..].* = key;
             }
             try names_list.append(self.allocator, name);
         }
@@ -6781,7 +7253,7 @@ const Builder = struct {
         defer required.deinit(self.allocator);
         for (self.moduleViews()) |*requirer| {
             const identities = requirer.compile_time_root_identities;
-            const export_requires = if (top.contains(requirer.key.bytes)) &[_][32]u8{} else identities.export_requires;
+            const export_requires = if (!include_export_requires or top.contains(requirer.key.bytes)) &[_][32]u8{} else identities.export_requires;
             for ([_][]const [32]u8{ identities.method_requires, export_requires }) |requirements| for (requirements) |name| {
                 var providers = top.keyIterator();
                 while (providers.next()) |provider_key| {
@@ -6802,13 +7274,13 @@ const Builder = struct {
             }
         }.lessThan);
         var hasher = TypeDigestHasher.init();
-        hasher.update("roc.literal-value.program-context.v1");
+        hasher.update(if (include_export_requires) "roc.literal-value.program-context.v1" else "roc.interface-method-context.v1");
         hashU32(&hasher, @intCast(names_list.items.len));
         for (names_list.items) |name| hasher.update(&name);
         hashU32(&hasher, @intCast(required.items.len));
         for (required.items) |pair| hasher.update(&pair);
         const digest = hasher.finalResult();
-        self.literal_program_context = @as(?[32]u8, digest);
+        cached.* = @as(?[32]u8, digest);
         return digest;
     }
 
@@ -7170,6 +7642,7 @@ const Builder = struct {
         defer demanded_later_fn_tys.deinit(self.allocator);
         var requests = all_requests;
         var source_modules = all_source_modules;
+        var selected_discovery_start = discovery_start;
         // A template root's function type is a function of its checked type
         // alone. Compile-time roots reach `lowerTemplate` twice, so each
         // request lowers its type once, and on the lanes when there are any.
@@ -7188,42 +7661,32 @@ const Builder = struct {
                     Common.invariant("shared compile-time request lacked its checked root identity");
                 const source_module = self.rootSourceModule(all_source_modules, i);
                 const source_view = self.moduleForId(source_module);
-                const template = request.procedure_template orelse
-                    Common.invariant("shared compile-time root lacked its declared entry template");
-                // A demand-driven root's queued body is parked until the
-                // program demands it (see `advanceComptimeDemand`).
-                self.parking_root_job = self.demand_driven_comptime_roots;
-                self.parked_root_job = null;
-                const def = try self.lowerTemplate(template, source_view, request.checked_type, request.root_evidence, &fn_tys[i]);
-                self.parking_root_job = false;
                 const key = EntryRoot{ .module = source_module, .root = root_id };
-                const entry = try self.declared_comptime_root_functions.getOrPut(key);
-                const fn_id = self.defFnId(def);
-                if (entry.found_existing and entry.value_ptr.* != fn_id) {
-                    Common.invariant("checked compile-time root reserved different functions for one declared root");
-                }
-                entry.value_ptr.* = fn_id;
+                const ordinal: u32 = @intCast(self.declared_roots.items.len);
+                try self.declared_comptime_roots.put(key, ordinal);
                 try self.declared_roots.append(self.allocator, .{
                     .request = request,
                     .source_module = source_module,
-                    .def = def,
-                    .fn_id = fn_id,
-                    .validation = source_view.compile_time_roots.root(root_id).kind == .hoisted_validation,
+                    .validation = if (self.validated_comptime_roots) |validated|
+                        !validated.contains(key)
+                    else
+                        source_view.compile_time_roots.root(root_id).kind == .hoisted_validation,
                 });
-                if (self.parked_root_job) |job| {
-                    try self.parked_root_jobs.put(self.allocator, fn_id, job);
-                    self.parked_root_job = null;
-                }
+                if (!self.demand_driven_comptime_roots) _ = try self.prepareDeclaredRoot(ordinal, &fn_tys[i]);
             }
             if (self.demand_driven_comptime_roots) {
                 // Declared compile-time roots become program roots once
                 // demand is known (`orderComptimeRoots`); everything else
-                // lowers now. Only a program without an LSS runtime consumer
-                // has discovery roots, and only one with it is demand-driven,
-                // so the filtered positions need no discovery mapping.
-                if (discovery_start != null) Common.invariant("demand-driven compile-time roots received discovery roots");
+                // lowers now. The discovery boundary is a position in the
+                // original request list, so translate it through the same
+                // filtering as the requests. An application can have both
+                // runtime entrypoints and discovery-only test roots.
+                if (discovery_start != null) selected_discovery_start = 0;
                 for (all_requests, 0..) |request, i| {
                     if (request.abi == .compile_time) continue;
+                    if (discovery_start) |start| if (i < start) {
+                        selected_discovery_start.? += 1;
+                    };
                     try demanded_later_requests.append(self.allocator, request);
                     try demanded_later_sources.append(self.allocator, self.rootSourceModule(all_source_modules, i));
                     try demanded_later_fn_tys.append(self.allocator, fn_tys[i]);
@@ -7235,25 +7698,25 @@ const Builder = struct {
         }
         defer self.root_demand = .evaluation;
         const executor = self.post_check_executor orelse {
-            for (requests, 0..) |request, i| try self.lowerRootWithDemand(request, self.rootSourceModule(source_modules, i), rootDemand(discovery_start, i), &root_fn_tys[i]);
+            for (requests, 0..) |request, i| try self.lowerRootWithDemand(request, self.rootSourceModule(source_modules, i), rootDemand(selected_discovery_start, i), &root_fn_tys[i]);
             return;
         };
         if (executor.worker_count <= 1) {
-            for (requests, 0..) |request, i| try self.lowerRootWithDemand(request, self.rootSourceModule(source_modules, i), rootDemand(discovery_start, i), &root_fn_tys[i]);
+            for (requests, 0..) |request, i| try self.lowerRootWithDemand(request, self.rootSourceModule(source_modules, i), rootDemand(selected_discovery_start, i), &root_fn_tys[i]);
             return;
         }
         var index: usize = 0;
         while (index < requests.len) {
             if (requests[index].procedure_use == null) {
-                try self.lowerRootWithDemand(requests[index], self.rootSourceModule(source_modules, index), rootDemand(discovery_start, index), &root_fn_tys[index]);
+                try self.lowerRootWithDemand(requests[index], self.rootSourceModule(source_modules, index), rootDemand(selected_discovery_start, index), &root_fn_tys[index]);
                 index += 1;
                 continue;
             }
             const start = index;
-            const demand = rootDemand(discovery_start, index);
+            const demand = rootDemand(selected_discovery_start, index);
             while (index < requests.len and
                 requests[index].procedure_use != null and
-                rootDemand(discovery_start, index) == demand and
+                rootDemand(selected_discovery_start, index) == demand and
                 index - start < executor.worker_count) : (index += 1)
             {}
             self.root_demand = demand;
@@ -7277,7 +7740,7 @@ const Builder = struct {
     /// instead, and a binding root through its binding.
     fn rootLowersTemplate(self: *const Builder, request: checked.RootRequest) bool {
         if (request.procedure_template == null) return false;
-        if (self.comptime_value_reads and request.abi == .compile_time) return true;
+        if (self.comptime_value_reads and request.abi == .compile_time) return !self.demand_driven_comptime_roots;
         return request.procedure_binding == null and request.procedure_use == null;
     }
 
@@ -7308,12 +7771,14 @@ const Builder = struct {
             .lanes = try self.specJobLanes(),
             .modules = self.modules,
             .module_views = self.moduleViews(),
+            .closed_occurrences = &self.closed_occurrences,
             .source_file_ids = self.sourceFileIds(),
             .lowering_module_ids = self.loweringModuleIds(),
             .snapshot = &snapshot,
             .proc_debug_names = self.proc_debug_names,
             .interface_summaries = &self.shared_summaries.?,
             .interface_summary_end = self.shared_summaries.?.count,
+            .interface_cache = self.interface_cache,
             .replay_interface_summaries = self.replay_interface_summaries,
             .collect_counters = self.counters != null,
             .collect_diagnostics = self.diagnostics != null,
@@ -7321,7 +7786,7 @@ const Builder = struct {
             .static_data_literals = self.static_data_literals,
             .comptime_value_reads = self.comptime_value_reads,
             .literal_roots = self.literal_roots,
-            .declared_comptime_root_functions = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions,
+            .declared_comptime_roots = self.borrowed_comptime_roots orelse &self.declared_comptime_roots,
             .hosted_catalog = self.hosted_catalog,
             .current_loc = self.current_loc,
             .current_region = self.current_region,
@@ -7520,12 +7985,14 @@ const Builder = struct {
             .lanes = try self.specJobLanes(),
             .modules = self.modules,
             .module_views = self.moduleViews(),
+            .closed_occurrences = &self.closed_occurrences,
             .source_file_ids = self.sourceFileIds(),
             .lowering_module_ids = self.loweringModuleIds(),
             .snapshot = &snapshot,
             .proc_debug_names = self.proc_debug_names,
             .interface_summaries = &self.shared_summaries.?,
             .interface_summary_end = self.shared_summaries.?.count,
+            .interface_cache = self.interface_cache,
             .collect_counters = self.counters != null,
             .collect_diagnostics = self.diagnostics != null,
             .inline_expects = self.inline_expects,
@@ -7533,7 +8000,7 @@ const Builder = struct {
             .comptime_value_reads = self.comptime_value_reads,
             .literal_roots = self.literal_roots,
             .replay_interface_summaries = self.replay_interface_summaries,
-            .declared_comptime_root_functions = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions,
+            .declared_comptime_roots = self.borrowed_comptime_roots orelse &self.declared_comptime_roots,
             .hosted_catalog = self.hosted_catalog,
             .current_loc = self.current_loc,
             .current_region = self.current_region,
@@ -7625,8 +8092,10 @@ const Builder = struct {
                 };
                 if (root_id) |root| {
                     if (self.comptimeValueReadDeclared(view, root)) {
-                        const owners = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions;
-                        const fn_id = owners.get(.{ .module = view.key, .root = root }).?;
+                        const owners = self.borrowed_comptime_roots orelse &self.declared_comptime_roots;
+                        const ordinal = owners.get(.{ .module = view.key, .root = root }).?;
+                        var fn_ty: ?Type.TypeId = null;
+                        const fn_id = try self.prepareDeclaredRoot(ordinal, &fn_ty);
                         const initializer = try self.program.addExpr(.{
                             .ty = ret_ty,
                             .data = .{ .call_proc = .{ .callee = Ast.localProcCallee(fn_id), .args = .empty() } },
@@ -8031,7 +8500,7 @@ const Builder = struct {
                     view.types.rootKey(source_fn_ty),
                     fn_ty,
                 );
-                const callee = try self.lowerFnTemplateCallTarget(view, fn_template, &.{});
+                const callee = try self.lowerFnTemplateCallTarget(fn_template, &.{});
                 break :blk try self.program.addExpr(.{
                     .ty = fn_data.ret,
                     .data = .{ .call_proc = .{
@@ -8123,7 +8592,7 @@ const Builder = struct {
                     view.types.rootKey(source_fn_ty),
                     mono_fn_ty,
                 );
-                const fn_id = try self.lowerFnTemplateDef(view, fn_template, &.{});
+                const fn_id = try self.lowerFnTemplateDef(fn_template, &.{});
                 break :blk try self.program.addExpr(.{
                     .ty = self.program.fnSource(fn_id).mono_fn_ty,
                     .data = .{ .fn_def = .{ .fn_id = fn_id } },
@@ -8292,7 +8761,6 @@ const Builder = struct {
         } else &.{};
         return try self.lowerTemplateWithMono(
             template_ref,
-            view,
             source_fn_ty,
             source_ty_view.types.rootKey(source_fn_ty),
             fn_ty,
@@ -8577,7 +9045,6 @@ const Builder = struct {
     fn lowerTemplateWithMono(
         self: *Builder,
         template_ref: names.ProcTemplate,
-        method_scope: ModuleView,
         source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         fn_ty: Type.TypeId,
@@ -8595,6 +9062,8 @@ const Builder = struct {
     ) Allocator.Error!Ast.DefId {
         var lookup_timing_scope = ProcedureTimingScope.begin(self.timing, .lookup_reservation);
         defer lookup_timing_scope.end();
+        var resolution_profile = ResolutionProfile.Scope.begin(&self.resolution_profile, .evidence_completion);
+        defer resolution_profile.end();
 
         if (request_accounting == .count) self.count("template_requests");
         const lower_fn_ty = fn_ty;
@@ -8612,19 +9081,22 @@ const Builder = struct {
         else
             rootEvidence(template_ref, spec_evidence);
         const identity_topology = source_topology orelse rootEvidence(template_ref, spec_evidence);
+        resolution_profile.enter(.evidence_encoding);
         const identity_evidence = try self.constFnEvidence(identity_topology);
         const evidence_digest = identity_evidence.digest;
         const stored_source_topology = if (source_topology != null) identity_evidence else null;
+        resolution_profile.enter(.identity);
         const request_digest = precomputed_request_digest orelse self.specializationTypeDigest(fn_ty);
         const spec_identity = self.templateSpecIdentity(
             template_ref,
-            method_scope.key,
             evidence_digest,
             self.codecContractIdentity(codec_contract),
             fn_ty,
             request_digest,
         );
+        resolution_profile.enter(.local_lookup);
         if (try self.spec_store.findLocal(spec_identity, specializationEvidenceView(identity_evidence))) |hit| {
+            resolution_profile.enter(.local_reuse);
             if (request_accounting == .count) self.count("template_hits");
             const existing = self.lowered_templates.get(hit.fn_id) orelse
                 Common.invariant("Monotype specialization index found a local template missing from lowering state");
@@ -8671,7 +9143,6 @@ const Builder = struct {
                                 job.reservation,
                                 job.fn_template,
                                 job.template_ref,
-                                self.moduleForId(job.method_scope),
                                 job.source_fn_key,
                                 job.fn_ty,
                                 job.evidence,
@@ -8689,6 +9160,7 @@ const Builder = struct {
             if (request_accounting == .count) self.count("template_misses");
         }
 
+        resolution_profile.enter(.native_classification);
         var fn_template = self.fnDefForTemplate(view, template_ref, source_fn_ty, source_fn_key, lower_fn_ty);
         fn_template.evidence_digest = evidence_digest;
         // Only a closed request names a specialization the object cache can
@@ -8716,6 +9188,7 @@ const Builder = struct {
             }
             std.debug.print("CENSUS_UNKEYED\t{s}\t{s}{d}\t{s}\n", .{ name, where, position, @tagName(spec_identity.callable) });
         }
+        fn_template.provides_low_level = template.provided_low_level != null;
         if (template.target != .hosted and !try self.monoFnTypeMentionsFunction(lower_fn_ty)) {
             const key = Ast.specIdentityKey(spec_identity);
             fn_template.spec_key = key;
@@ -8725,12 +9198,16 @@ const Builder = struct {
                 const name: []const u8 = if (proc_base.export_name) |e| view.names.exportNameText(e) else "?";
                 std.debug.print("CENSUS_KEY\t{s}\t{x}\tev={x}\tcodec={x}\treq={x}\tcallable={s}\n", .{ name, key.bytes[0..8], spec_identity.evidence_digest.bytes[0..6], spec_identity.codec_contract_digest.bytes[0..6], spec_identity.request_fn_ty_digest.bytes[0..6], @tagName(spec_identity.callable) });
             }
+            resolution_profile.enter(.native_lookup);
             // A queued discovery request whose outcome an earlier compilation
             // settled is parked below with no body, so answering it consults
             // no cached code, and a program whose every request is settled
             // reads no code pack.
             const settled_discovery = demand == .discovery and body_scheduling == .queued and !self.parking_root_job and self.discoverySettled(key.bytes);
-            if (!settled_discovery) if (self.spec_cache) |cache| {
+            // Discovery lowers a body to find the literal roots it registers;
+            // cached code records the compile-time values it reads, not those
+            // roots, so only an evaluation request takes a cached body.
+            if (!settled_discovery and demand != .discovery) if (self.spec_cache) |cache| {
                 if (cache.lookup(key.bytes, self.spec_cache_takes, try self.programModules())) |hit| {
                     fn_template.cached = hit;
                     self.count("spec_cache_hits");
@@ -8738,12 +9215,14 @@ const Builder = struct {
                 } else if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("lookup monotype key={x} miss\n", .{key.bytes[0..8]});
             };
         }
+        resolution_profile.enter(.evidence_copy);
         if (stored_source_topology) |stored_evidence| {
             fn_template.const_evidence = try self.program.addConstFnEvidence(stored_evidence.entries);
             fn_template.const_evidence_frames = try self.program.addConstFnEvidenceFrames(stored_evidence.frames);
             fn_template.const_evidence_frame_head = stored_evidence.head;
         }
 
+        resolution_profile.enter(.reservation);
         const ReservedSpec = struct { reservation: TemplateReservation, spec: Ast.SpecId };
         const reserved: ReservedSpec = blk: {
             // This reservation is appended directly to the durable Program even
@@ -8768,7 +9247,6 @@ const Builder = struct {
             });
             const spec = try self.addTemplateSpecRecord(
                 template_ref,
-                method_scope.key,
                 identity_evidence,
                 lower_fn_ty,
                 request_digest,
@@ -8802,13 +9280,15 @@ const Builder = struct {
                 if (retained_topology != null) {
                     Common.invariant("queued Monotype specialization request cannot carry a retained lexical topology");
                 }
+                resolution_profile.enter(.body_address);
                 const job: PendingSpecJob = .{
+                    .completed_body_address = if (dev_diagnostics.isSet(.completed_body_cache)) try self.completedBodyAddress(spec_identity, view, source_fn_key, subst, signature_relation, demand) else null,
+                    .profile_key = if (dev_diagnostics.isSet(.sealed_body_profile)) Ast.specIdentityKey(spec_identity).bytes else @splat(0),
                     .dispatch_index = undefined,
                     .spec = reserved.spec,
                     .reservation = reservation,
                     .fn_template = fn_template,
                     .template_ref = template_ref,
-                    .method_scope = method_scope.key,
                     .source_fn_ty = source_fn_ty,
                     .source_fn_key = source_fn_key,
                     .fn_ty = lower_fn_ty,
@@ -8818,6 +9298,7 @@ const Builder = struct {
                     .codec_contract = codec_contract,
                     .demand = demand,
                 };
+                resolution_profile.enter(.discovery_dispatch);
                 if (self.parking_root_job) {
                     // A demand-driven root's body waits until the program
                     // demands the root; its dispatch index is assigned when
@@ -8861,6 +9342,7 @@ const Builder = struct {
             },
         }
 
+        resolution_profile.enter(.immediate_body);
         if (self.spec_job_parallel_callback) {
             Common.compilerBug("parallel specialization worker attempted coordinator-owned immediate completion");
         }
@@ -8871,7 +9353,6 @@ const Builder = struct {
             reservation,
             fn_template,
             template_ref,
-            method_scope,
             source_fn_key,
             lower_fn_ty,
             spec_evidence,
@@ -9038,7 +9519,6 @@ const Builder = struct {
         reservation: TemplateReservation,
         fn_template: Ast.FnTemplate,
         template_ref: names.ProcTemplate,
-        method_scope: ModuleView,
         source_fn_key: names.TypeDigest,
         lower_fn_ty: Type.TypeId,
         spec_evidence: []const SpecEvidence,
@@ -9151,7 +9631,6 @@ const Builder = struct {
             fn_template,
             template_ref,
             view,
-            method_scope,
             template,
             source_fn_key,
             lower_fn_ty,
@@ -9198,6 +9677,43 @@ const Builder = struct {
         self.next_spec_dispatch_index += 1;
     }
 
+    /// Prepare the signature and reserve a body only for an explicitly read
+    /// or validated root. Request ordinals stay immutable across worker epochs.
+    fn prepareDeclaredRoot(self: *Builder, ordinal: u32, fn_ty: *?Type.TypeId) Allocator.Error!Ast.FnId {
+        if (self.borrowed_comptime_roots != null) Common.invariant("worker attempted to reserve a declared root");
+        const root = self.declared_roots.items[ordinal];
+        if (root.fn_id) |id| return id;
+        const source_view = self.moduleForId(root.source_module);
+        const template = root.request.procedure_template orelse
+            Common.invariant("shared compile-time root lacked its checked entry template");
+        const saved_parking = self.parking_root_job;
+        const saved_job = self.parked_root_job;
+        defer {
+            self.parking_root_job = saved_parking;
+            self.parked_root_job = saved_job;
+        }
+        self.parking_root_job = self.demand_driven_comptime_roots;
+        self.parked_root_job = null;
+        const def = try self.lowerTemplate(template, source_view, root.request.checked_type, root.request.root_evidence, fn_ty);
+        const fn_id = self.defFnId(def);
+        self.declared_roots.items[ordinal].def = def;
+        self.declared_roots.items[ordinal].fn_id = fn_id;
+        if (self.parked_root_job) |job| try self.parked_root_jobs.put(self.allocator, fn_id, job);
+        return fn_id;
+    }
+
+    /// Drafts name checked declaration ordinals. Resolve those explicit intents
+    /// before final ids are assigned; no worker mutates the declaration table.
+    fn resolveDeclaredRootCalls(self: *Builder, draft: *BodyDraftStore) Allocator.Error!void {
+        for (0..draft.exprs.items.len) |index| {
+            const data = draft.exprs.items[index].data;
+            if (data != .call_proc or data.call_proc.callee != .declared_root) continue;
+            var fn_ty: ?Type.TypeId = null;
+            const id = try self.prepareDeclaredRoot(data.call_proc.callee.declared_root, &fn_ty);
+            draft.exprs.items[index].data.call_proc.callee = .{ .func = .{ .local = .{ .final = id } } };
+        }
+    }
+
     /// Move a parked compile-time root body into the specialization queue,
     /// under the next dispatch index.
     fn unparkRootJob(self: *Builder, fn_id: Ast.FnId) Allocator.Error!void {
@@ -9215,10 +9731,12 @@ const Builder = struct {
         if (!self.demand_driven_comptime_roots) return false;
         try self.settleLiteralRoots();
         const state = &self.comptime_demand;
-        const view = self.program.view();
+        var view = self.program.view();
         try state.index(self.allocator, self, view);
         var starts = std.ArrayList(u32).empty;
         defer starts.deinit(self.allocator);
+        try starts.appendSlice(self.allocator, state.changed_reached.items);
+        state.changed_reached.clearRetainingCapacity();
         while (state.walked_deferred_roots < self.deferred_roots.items.len) : (state.walked_deferred_roots += 1) {
             try starts.append(self.allocator, ComptimeDemandState.defItem(self.deferred_roots.items[state.walked_deferred_roots].def));
         }
@@ -9230,7 +9748,7 @@ const Builder = struct {
             try starts.append(self.allocator, ComptimeDemandState.defItem(view.literal_roots[state.walked_literal_roots].def));
         }
         // The drain that just finished lowered every body that was queued.
-        for (state.awaiting_bodies.items) |declared| try starts.append(self.allocator, ComptimeDemandState.defItem(self.declared_roots.items[declared].def));
+        for (state.awaiting_bodies.items) |declared| try starts.append(self.allocator, ComptimeDemandState.defItem(self.declared_roots.items[declared].def.?));
         state.awaiting_bodies.clearRetainingCapacity();
         var newly_demanded = std.ArrayList(u32).empty;
         defer newly_demanded.deinit(self.allocator);
@@ -9249,13 +9767,17 @@ const Builder = struct {
             }
             defer newly_demanded.clearRetainingCapacity();
             for (newly_demanded.items) |declared| {
+                var fn_ty: ?Type.TypeId = null;
+                const fn_id = try self.prepareDeclaredRoot(declared, &fn_ty);
+                view = self.program.view();
+                try state.index(self.allocator, self, view);
                 const root = self.declared_roots.items[declared];
-                if (self.parked_root_jobs.contains(root.fn_id)) {
-                    try self.unparkRootJob(root.fn_id);
+                if (self.parked_root_jobs.contains(fn_id)) {
+                    try self.unparkRootJob(fn_id);
                     try state.awaiting_bodies.append(self.allocator, declared);
                 } else {
                     // Another root sharing its reserved body already lowered it.
-                    try starts.append(self.allocator, ComptimeDemandState.defItem(root.def));
+                    try starts.append(self.allocator, ComptimeDemandState.defItem(root.def.?));
                 }
             }
         }
@@ -9642,7 +10164,7 @@ const Builder = struct {
                     contexts[submitted % capacity] = .{
                         .inputs = undefined,
                         .snapshot = undefined,
-                        .prepared = .{ .job = job, .view = view, .method_scope = self.moduleForId(job.method_scope), .template = template },
+                        .prepared = .{ .job = job, .view = view, .template = template },
                         .completed = true,
                         .coordinator_only = true,
                     };
@@ -9658,12 +10180,14 @@ const Builder = struct {
                             .lanes = try self.specJobLanes(),
                             .modules = self.modules,
                             .module_views = self.moduleViews(),
+                            .closed_occurrences = &self.closed_occurrences,
                             .source_file_ids = self.sourceFileIds(),
                             .lowering_module_ids = self.loweringModuleIds(),
                             .snapshot = &context.snapshot,
                             .proc_debug_names = self.proc_debug_names,
                             .interface_summaries = &self.shared_summaries.?,
                             .interface_summary_end = self.shared_summaries.?.count,
+                            .interface_cache = self.interface_cache,
                             .collect_counters = self.counters != null,
                             .collect_diagnostics = self.diagnostics != null,
                             .inline_expects = self.inline_expects,
@@ -9671,13 +10195,13 @@ const Builder = struct {
                             .comptime_value_reads = self.comptime_value_reads,
                             .literal_roots = self.literal_roots,
                             .replay_interface_summaries = self.replay_interface_summaries,
-                            .declared_comptime_root_functions = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions,
+                            .declared_comptime_roots = self.borrowed_comptime_roots orelse &self.declared_comptime_roots,
                             .hosted_catalog = self.hosted_catalog,
                             .current_loc = self.current_loc,
                             .current_region = self.current_region,
                             .timing_std_io = if (self.timing) |timing| timing.std_io else null,
                         },
-                        .prepared = .{ .job = job, .view = view, .method_scope = self.moduleForId(job.method_scope), .template = template },
+                        .prepared = .{ .job = job, .view = view, .template = template },
                     };
                     try session.submit(.{ .id = slot, .context = context, .run = runSpecJobTask });
                     _ = self.pending_spec_jobs.pop();
@@ -9828,7 +10352,6 @@ const Builder = struct {
             &lane.commit_domain,
             context.prepared.job,
             context.prepared.view,
-            context.prepared.method_scope,
             context.prepared.template,
         ) catch {
             context.failed = true;
@@ -9937,7 +10460,6 @@ const Builder = struct {
                 job.reservation,
                 job.fn_template,
                 job.template_ref,
-                self.moduleForId(job.method_scope),
                 job.source_fn_key,
                 job.fn_ty,
                 job.evidence,
@@ -9957,7 +10479,6 @@ const Builder = struct {
             commit_domain,
             job,
             view,
-            self.moduleForId(job.method_scope),
             template,
         );
         defer shard.deinit();
@@ -10045,15 +10566,328 @@ const Builder = struct {
     /// Deferred preparation executes against the worker's private Builder and
     /// workspace. Representation-sensitive iterator callees lower eagerly into
     /// this same draft, so callbacks never mutate coordinator state.
+    fn completedBodyAddress(
+        self: *Builder,
+        identity: Ast.SpecIdentity,
+        view: ModuleView,
+        source_fn_key: names.TypeDigest,
+        subst: ?SealedSubstitution,
+        relation: Ast.SignatureRelation,
+        demand: Demand,
+    ) Allocator.Error!?CompletedBodyAddress {
+        if (self.interface_cache == null) return null;
+        const scope_context = view.compile_time_root_identities.valueContext() orelse return null;
+        const program_context = (try self.programValueContext(false)) orelse return null;
+        const callee_context = (try self.interfaceCalleeContext(view)) orelse return null;
+        var family = TypeDigestHasher.init();
+        family.update("roc.completed-body-family.v6");
+        family.update(&view.key.bytes);
+        family.update(&(view.code_generation_key orelse view.key).bytes);
+        family.update(&scope_context);
+        family.update(&program_context);
+        family.update(&callee_context);
+        family.update(@tagName(self.inline_expects));
+        family.update(@tagName(demand));
+        family.update(&.{ @intFromBool(self.static_data_literals), @intFromBool(self.comptime_value_reads), @intFromBool(self.literal_roots), @intFromBool(self.proc_debug_names) });
+        var request = TypeDigestHasher.init();
+        request.update("roc.completed-body-request.v1");
+        request.update(&Ast.specIdentityKey(identity).bytes);
+        request.update(&source_fn_key.bytes);
+        request.update(@tagName(relation));
+        if (subst) |slots| {
+            request.update(&.{1});
+            hashU32(&request, @intCast(slots.len));
+            for (slots) |slot| switch (slot) {
+                .checked_error => request.update(&.{0}),
+                .ty => |ty| {
+                    request.update(&.{1});
+                    request.update(&self.specializationTypeDigest(ty).bytes);
+                },
+            };
+        } else request.update(&.{0});
+        return .{ .family = family.finalResult(), .key = request.finalResult() };
+    }
+
+    fn completedBodySourceKeys(self: *Builder, allocator: Allocator) Allocator.Error![]const [32]u8 {
+        var max: usize = 0;
+        var it = self.sourceFileIds().iterator();
+        while (it.next()) |entry| max = @max(max, @as(usize, entry.value_ptr.*) + 1);
+        const keys = try allocator.alloc([32]u8, max);
+        @memset(keys, @splat(0));
+        it = self.sourceFileIds().iterator();
+        while (it.next()) |entry| keys[entry.value_ptr.*] = entry.key_ptr.*;
+        return keys;
+    }
+
+    fn completedBodyModuleKeys(self: *Builder, allocator: Allocator) Allocator.Error![]const [32]u8 {
+        var max: usize = 0;
+        var it = self.loweringModuleIds().iterator();
+        while (it.next()) |entry| max = @max(max, @as(usize, @backingInt(entry.value_ptr.*)) + 1);
+        const keys = try allocator.alloc([32]u8, max);
+        @memset(keys, @splat(0));
+        it = self.loweringModuleIds().iterator();
+        while (it.next()) |entry| keys[@backingInt(entry.value_ptr.*)] = entry.key_ptr.*;
+        return keys;
+    }
+
+    fn completedBodyStaticDependencies(self: *Builder, allocator: Allocator, requests: []const DraftStaticDataRequest) Allocator.Error!?[]const CompletedBodyStaticDependency {
+        const dependencies = try allocator.alloc(CompletedBodyStaticDependency, requests.len);
+        const Owner = struct { module: [32]u8, root: checked.ConstNodeId };
+        var paths: std.AutoHashMapUnmanaged(Owner, CompletedConstPaths) = .empty;
+        for (requests, dependencies) |request, *dependency| {
+            const view = self.moduleForId(request.module);
+            const template = view.const_templates.get(request.const_locator);
+            if (template.state != .stored_const) return null;
+            const stored = template.state.stored_const;
+            if (@backingInt(stored.root) >= view.compile_time_root_identities.rows.len) return null;
+            const entry = try paths.getOrPut(allocator, .{ .module = view.key.bytes, .root = stored.node });
+            if (!entry.found_existing) entry.value_ptr.* = try CompletedConstPaths.init(allocator, view.const_store, stored.node);
+            dependency.* = .{
+                .root = stored.root,
+                .identity = view.compile_time_root_identities.rows[@backingInt(stored.root)],
+                .checked_type_key = self.moduleForId(request.checked_type_module).types.rootKey(request.checked_type),
+                .path = (try entry.value_ptr.path(request.const_node)) orelse return null,
+            };
+        }
+        return dependencies;
+    }
+
+    fn completedBodyRootDependencies(self: *Builder, allocator: Allocator, reads: []const DraftRootValueRead) Allocator.Error!?[]const CompletedBodyRootDependency {
+        const dependencies = try allocator.alloc(CompletedBodyRootDependency, reads.len);
+        for (reads, dependencies) |read, *dependency| {
+            const view = self.moduleForId(read.root.module);
+            const raw = @backingInt(read.root.root);
+            if (raw >= view.compile_time_root_identities.rows.len) return null;
+            dependency.* = .{
+                .root = read.root,
+                .identity = view.compile_time_root_identities.rows[raw],
+                .payload = std.meta.activeTag(view.compile_time_roots.root(read.root.root).payload),
+                .declared_read = self.comptimeValueReadDeclared(view, read.root.root),
+            };
+        }
+        return dependencies;
+    }
+
+    fn loadCompletedBody(
+        self: *Builder,
+        workspace: *SpecJobWorkspace,
+        job: PendingSpecJob,
+    ) Allocator.Error!?RestoredCompletedBody {
+        const address = job.completed_body_address orelse return null;
+        const provider = self.interface_cache.?;
+        const timing_io = if (self.timing) |timing| timing.std_io else null;
+        const start = if (timing_io) |std_io| timingNowNs(std_io) else 0;
+        const bytes = (try provider.load(provider.context, self.allocator, address.family, address.key)) orelse return null;
+        defer self.allocator.free(bytes);
+        const arena = try self.allocator.create(std.heap.ArenaAllocator);
+        arena.* = .init(self.allocator);
+        var owned = true;
+        defer if (owned) {
+            arena.deinit();
+            self.allocator.destroy(arena);
+        };
+        const validation = CompletedBodyValidation{ .builder = self, .job = job, .names = &workspace.name_store };
+        var payload = PersistentInterface.decodeFrozen(FrozenBodyProbe, "BODY0005".*, arena.allocator(), &workspace.types, &workspace.name_store, bytes, BodyContext.PersistentProvenance{ .builder = self, .completed_body_validation = &validation }, null) catch |err| switch (err) {
+            error.InvalidSummary => return null,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        validation.rebind(&payload) catch |err| switch (err) {
+            error.InvalidSummary => return null,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        var draft = BodyDraftStore.init(self.allocator);
+        errdefer draft.deinit();
+        inline for (completed_body_columns) |column| {
+            const values = @field(payload, column);
+            @field(draft, column) = .fromOwnedSlice(try self.allocator.dupe(@typeInfo(@TypeOf(values)).pointer.child, values));
+        }
+        // Substitutions are individually owned by BodyDraftStore. All other
+        // immutable nested data stays in the shard's retained decoding arena.
+        for (payload.templates) |stored| {
+            var spec: SealedTemplateSpec = undefined;
+            inline for (@typeInfo(SealedTemplateSpec).@"struct".field_names) |field| {
+                if (comptime std.mem.eql(u8, field, "evidence")) {
+                    spec.evidence = if (stored.evidence) |evidence| try FrozenEvidenceContext.restore(self, evidence) else null;
+                } else if (comptime std.mem.eql(u8, field, "subst")) {
+                    spec.subst = try self.allocator.dupe(SealedSubstSlot, stored.subst);
+                } else if (comptime std.mem.eql(u8, field, "codec_contract")) {
+                    spec.codec_contract = self.completedBodyCodec(stored.codec_contract);
+                } else @field(spec, field) = @field(stored, field);
+            }
+            errdefer self.allocator.free(spec.subst);
+            try draft.sealed_template_specs.append(self.allocator, spec);
+        }
+        for (payload.nested) |stored| {
+            var spec: SealedNestedSpec = undefined;
+            inline for (@typeInfo(SealedNestedSpec).@"struct".field_names) |field| {
+                if (comptime std.mem.eql(u8, field, "codec_contract")) {
+                    spec.codec_contract = self.completedBodyCodec(stored.codec_contract);
+                } else @field(spec, field) = @field(stored, field);
+            }
+            try draft.sealed_nested_specs.append(self.allocator, spec);
+        }
+        draft.spec_job_workspace = workspace;
+        draft.mutable_graph_names = &workspace.name_store;
+        draft.demand = payload.demand;
+        draft.demand_owner = job.reservation.fn_id;
+        draft.upgrade_all = payload.upgrade_all;
+        draft.upgrade_owner = payload.upgrade_owner;
+        draft.sealWorkerLocalSymbols(payload.worker_local_symbol_count);
+        owned = false;
+        if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("completed-body hit key={x} bytes={d} restore_ns={d}\n", .{ address.key, bytes.len, if (timing_io) |std_io| timingNowNs(std_io) - start else 0 });
+        return .{
+            .arena = arena,
+            .draft = draft,
+            .pending = .{ .reservation = job.reservation, .fn_template = job.fn_template, .signature_relation = job.signature_relation, .root_ty = payload.root_ty, .lowered = payload.lowered },
+        };
+    }
+
+    fn completedBodyCodec(self: *Builder, stored: ?FrozenCodecProbe) ?SealedCodecContractContext {
+        const value = stored orelse return null;
+        return .{ .anchor = .{ .view = self.moduleForId(value.module), .derivation = value.derivation, .call_index = value.call_index, .kind = value.kind }, .constructor_ty = value.constructor_ty, .shape_ty = value.shape_ty };
+    }
+
+    fn profileFrozenBody(self: *Builder, workspace: *SpecJobWorkspace, draft: *const BodyDraftStore, pending: SealedPendingTemplateBody, job: PendingSpecJob, lower_ns: i64) Allocator.Error!?FrozenProbeRecord {
+        var scratch = std.heap.ArenaAllocator.init(self.allocator);
+        defer scratch.deinit();
+        const timing_io = if (self.timing) |timing| timing.std_io else null;
+        const start = if (timing_io) |std_io| timingNowNs(std_io) else 0;
+        const templates = try scratch.allocator().alloc(FrozenTemplateProbe, draft.sealed_template_specs.items.len);
+        for (draft.sealed_template_specs.items, templates) |source, *out| {
+            inline for (@typeInfo(FrozenTemplateProbe).@"struct".field_names) |field| {
+                if (comptime std.mem.eql(u8, field, "evidence")) {
+                    out.evidence = if (source.evidence) |evidence| try FrozenDispatchEvidence.capture(self, scratch.allocator(), source.template_ref, evidence) else null;
+                } else if (comptime std.mem.eql(u8, field, "codec_contract")) {
+                    out.codec_contract = FrozenCodecProbe.of(source.codec_contract);
+                } else @field(out, field) = @field(source, field);
+            }
+        }
+        const nested = try scratch.allocator().alloc(FrozenNestedProbe, draft.sealed_nested_specs.items.len);
+        for (draft.sealed_nested_specs.items, nested) |source, *out| {
+            inline for (@typeInfo(FrozenNestedProbe).@"struct".field_names) |field| {
+                if (comptime std.mem.eql(u8, field, "codec_contract")) {
+                    out.codec_contract = FrozenCodecProbe.of(source.codec_contract);
+                } else @field(out, field) = @field(source, field);
+            }
+        }
+        const address = job.completed_body_address orelse CompletedBodyAddress{ .family = @splat(0), .key = @splat(0) };
+        const dependencies = (try self.completedBodyRootDependencies(scratch.allocator(), draft.root_value_reads.items)) orelse return null;
+        const payload: FrozenBodyProbe = .{
+            .address = address,
+            .source_file_keys = try self.completedBodySourceKeys(scratch.allocator()),
+            .lowering_module_keys = try self.completedBodyModuleKeys(scratch.allocator()),
+            .root_dependencies = dependencies,
+            .static_dependencies = (try self.completedBodyStaticDependencies(scratch.allocator(), draft.static_data_requests.items)) orelse return null,
+            .root_ty = pending.root_ty,
+            .lowered = pending.lowered,
+            .self_reservation = pending.reservation,
+            .worker_local_symbol_count = draft.worker_local_symbol_count,
+            .demand = draft.demand,
+            .upgrade_all = draft.upgrade_all,
+            .upgrade_owner = draft.upgrade_owner,
+            .templates = templates,
+            .nested = nested,
+            .fns = draft.fns.items,
+            .const_fn_evidence = draft.const_fn_evidence.items,
+            .const_fn_evidence_targets = draft.const_fn_evidence_targets.items,
+            .const_fn_evidence_structurals = draft.const_fn_evidence_structurals.items,
+            .const_fn_evidence_frames = draft.const_fn_evidence_frames.items,
+            .defs = draft.defs.items,
+            .def_owners = draft.def_owners.items,
+            .nested_defs = draft.nested_defs.items,
+            .exprs = draft.exprs.items,
+            .pats = draft.pats.items,
+            .stmts = draft.stmts.items,
+            .locals = draft.locals.items,
+            .expr_ids = draft.expr_ids.items,
+            .pat_ids = draft.pat_ids.items,
+            .typed_locals = draft.typed_locals.items,
+            .stmt_ids = draft.stmt_ids.items,
+            .field_exprs = draft.field_exprs.items,
+            .field_access_segments = draft.field_access_segments.items,
+            .fn_def_captures = draft.fn_def_captures.items,
+            .record_destructs = draft.record_destructs.items,
+            .str_pattern_steps = draft.str_pattern_steps.items,
+            .declared_fields = draft.declared_fields.items,
+            .branches = draft.branches.items,
+            .if_branches = draft.if_branches.items,
+            .string_literals = draft.string_literals.items,
+            .string_bytes = draft.string_bytes.items,
+            .proc_debug_names = draft.proc_debug_names.items,
+            .roots = draft.roots.items,
+            .layout_requests = draft.layout_requests.items,
+            .runtime_schema_requests = draft.runtime_schema_requests.items,
+            .comptime_sites = draft.comptime_sites.items,
+            .local_names = draft.local_names.items,
+            .source_text_bytes = draft.source_text_bytes.items,
+            .expr_locs = draft.expr_locs.items,
+            .expr_regions = draft.expr_regions.items,
+            .stmt_locs = draft.stmt_locs.items,
+            .stmt_regions = draft.stmt_regions.items,
+            .owner_runs = draft.owner_runs.items,
+            .static_data_requests = draft.static_data_requests.items,
+            .comptime_value_roots = draft.comptime_value_roots.items,
+            .root_value_reads = draft.root_value_reads.items,
+            .literal_roots = draft.literal_roots.items,
+        };
+        var stats: PersistentInterface.Stats = .{};
+        const replay = dev_diagnostics.isSet(.completed_body_cache);
+        if (replay and !CompletedBodyValidation.coverage(payload)) {
+            if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("completed-body unsupported static={d} comptime={d} literals={d} layouts={d} roots={d} templates={d} nested={d} lower_ns={d}\n", .{ payload.static_data_requests.len, payload.comptime_value_roots.len, payload.literal_roots.len, payload.layout_requests.len, payload.roots.len, payload.templates.len, payload.nested.len, lower_ns });
+            return null;
+        }
+        if (replay and job.completed_body_address == null) return null;
+        const bytes = PersistentInterface.encodeFrozen(FrozenBodyProbe, if (replay) "BODY0005".* else "BODYPR02".*, self.allocator, &workspace.types, &workspace.name_store, payload, BodyContext.PersistentProvenance{ .builder = self }, &stats) catch |err| switch (err) {
+            error.NotRepresentable => return null,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        errdefer self.allocator.free(bytes);
+        if (replay) {
+            if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("completed-body write key={x} bytes={d} encode_ns={d} lower_ns={d}\n", .{ address.key, bytes.len, if (timing_io) |std_io| timingNowNs(std_io) - start else 0, lower_ns });
+            return .{ .family = address.family, .key = address.key, .bytes = bytes };
+        }
+        const elapsed = if (timing_io) |std_io| timingNowNs(std_io) - start else 0;
+        var hash = base.Sha256.init(.{});
+        hash.update("diagnostic-completed-body-record.v2");
+        hash.update(@tagName(self.inline_expects));
+        hash.update(@tagName(job.demand));
+        hash.update(&.{ @intFromBool(self.static_data_literals), @intFromBool(self.comptime_value_reads), @intFromBool(self.literal_roots) });
+        const family = hash.finalResult();
+        const prior = if (self.interface_cache) |provider| try provider.load(provider.context, self.allocator, family, job.profile_key) else null;
+        defer if (prior) |old| self.allocator.free(old);
+        const decoded_fresh = try self.probeFrozenRead(bytes);
+        const decoded_prior = if (prior) |old| try self.probeFrozenRead(old) else null;
+        var refs: FrozenReferenceProbe = .{ .self_fn = job.reservation.fn_id, .self_def = job.reservation.def, .builder = self };
+        refs.scan(FrozenBodyProbe, payload);
+        std.debug.print("body-record key={x} prior={} fresh_decoded={} prior_decoded={} external_fn={d} external_def={d} lifted_fn={d} missing_checked_module={d}\n", .{ job.profile_key, prior != null, decoded_fresh, decoded_prior orelse false, refs.external_fn, refs.external_def, refs.lifted_fn, refs.missing_checked_module });
+        std.debug.print("body-key key={x} source={x} demand={s} native={} lower_ns={d} comptime_roots={d} root_reads={d} literals={d}\n", .{ job.profile_key, job.source_fn_key.bytes, @tagName(job.demand), job.fn_template.spec_key != null, lower_ns, draft.comptime_value_roots.items.len, draft.root_value_reads.items.len, draft.literal_roots.items.len });
+        std.debug.print("frozen-body bytes={d} types={d} refs={d} exprs={d} templates={d} nested={d} encode_ns={d}\n", .{ bytes.len, stats.types, stats.references, draft.exprs.items.len, templates.len, nested.len, elapsed });
+        return .{ .family = family, .key = job.profile_key, .bytes = bytes };
+    }
+
+    // This probe validates the portable type closure only. Its result is never
+    // supplied to compilation: IR references have not yet been rebound.
+    fn probeFrozenRead(self: *Builder, bytes: []const u8) Allocator.Error!bool {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        var ns = names.NameStore.init(arena.allocator());
+        var types_ = Type.Store.init(arena.allocator());
+        _ = PersistentInterface.decodeFrozen(FrozenBodyProbe, "BODYPR02".*, arena.allocator(), &types_, &ns, bytes, BodyContext.PersistentProvenance{ .builder = self }, null) catch |err| switch (err) {
+            error.InvalidSummary => return false,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        return true;
+    }
+
     fn lowerPendingSpecJobToShard(
         self: *Builder,
         worker: *SpecJobWorkerState,
         commit_domain: *SpecJobCommitDomain,
         job: PendingSpecJob,
         view: ModuleView,
-        method_scope: ModuleView,
         template: checked.CheckedProcedureTemplate,
     ) Allocator.Error!CompletedSpecJobShard {
+        const profile_start = if (dev_diagnostics.isSet(.sealed_body_profile) or dev_diagnostics.isSet(.completed_body_cache)) if (self.timing) |timing| timingNowNs(timing.std_io) else 0 else 0;
         switch (template.target) {
             .roc,
             .intrinsic,
@@ -10079,6 +10913,27 @@ const Builder = struct {
         }
         const epoch = workspace.beginEpoch(self.program);
         errdefer workspace.finishEpoch(epoch);
+        if (try self.loadCompletedBody(workspace, job)) |restored_| {
+            var restored = restored_;
+            errdefer {
+                restored.draft.deinit();
+                restored.arena.deinit();
+                self.allocator.destroy(restored.arena);
+            }
+            const store_epoch = try workspace.captureStoreEpoch(epoch);
+            workspace.finishEpoch(epoch);
+            return .{
+                .decoded_body_arena = restored.arena,
+                .worker_id = worker.worker_id,
+                .commit_domain = commit_domain,
+                .dispatch_index = job.dispatch_index,
+                .worker_local_symbol_count = restored.draft.worker_local_symbol_count,
+                .store_epoch = store_epoch,
+                .body_draft = restored.draft,
+                .pending = restored.pending,
+                .diagnostics = null,
+            };
+        }
         const program_types_before = self.program.types.epochBoundary();
         const program_names_before = self.program.names.epochBoundary();
         const program_loc_before = self.program.current_loc;
@@ -10115,7 +10970,6 @@ const Builder = struct {
             job.fn_template,
             job.template_ref,
             view,
-            method_scope,
             template,
             job.source_fn_key,
             job.fn_ty,
@@ -10129,6 +10983,8 @@ const Builder = struct {
         try self.finalizeBodyDraftGraph(graph, &body_draft, final_guard, final_end);
         const sealed_pending = try self.sealOrdinarySpecJobDraft(graph, &body_draft, pending);
         body_draft.sealWorkerLocalSymbols(self.symbols.worker_local.next);
+        const frozen_probe_record = if (dev_diagnostics.isSet(.sealed_body_profile) or dev_diagnostics.isSet(.completed_body_cache)) try self.profileFrozenBody(workspace, &body_draft, sealed_pending, job, if (self.timing) |timing| timingNowNs(timing.std_io) - profile_start else 0) else null;
+        errdefer if (frozen_probe_record) |record| self.allocator.free(record.bytes);
         if (self.spec_job_parallel_callback) {
             const program_types_after = self.program.types.epochBoundary();
             if (!std.meta.eql(program_types_before, program_types_after)) {
@@ -10149,6 +11005,7 @@ const Builder = struct {
         self.countBodyDiagnostic("spec_job_shards_lowered");
         workspace.finishEpoch(epoch);
         return .{
+            .frozen_probe_record = frozen_probe_record,
             .worker_id = worker.worker_id,
             .commit_domain = commit_domain,
             .dispatch_index = job.dispatch_index,
@@ -10220,6 +11077,9 @@ const Builder = struct {
                 Common.compilerBug("Monotype specialization shard lost its coordinator counter sink");
             addFlatCounters(SpecializationCounters, destination, delta);
         }
+        if (shard.frozen_probe_record) |record| if (self.interface_cache) |provider| {
+            try provider.record(provider.context, record.family, record.key, record.bytes);
+        };
         shard.diagnostics_committed = true;
         self.countCoordinatorBodyDiagnostic("spec_job_shards_committed");
         self.acceptSpecDispatch(shard.dispatch_index);
@@ -10275,7 +11135,6 @@ const Builder = struct {
         fn_template: Ast.FnTemplate,
         template_ref: names.ProcTemplate,
         view: ModuleView,
-        method_scope: ModuleView,
         template: checked.CheckedProcedureTemplate,
         source_fn_key: names.TypeDigest,
         lower_fn_ty: Type.TypeId,
@@ -10296,11 +11155,10 @@ const Builder = struct {
         defer self.active_body_draft = saved_body_draft;
         defer self.active_template_root = saved_template_root;
 
-        var body_ctx = try BodyContext.initWithMethodScope(
+        var body_ctx = try BodyContext.init(
             self.allocator,
             self,
             view,
-            method_scope,
             template_ref,
             graph,
             body_draft,
@@ -10339,7 +11197,7 @@ const Builder = struct {
         }
         self.active_template_root = .{
             .graph = graph,
-            .family = DraftTemplateFamilyAddress.init(template_ref, method_scope.key, source_fn_key),
+            .family = DraftTemplateFamilyAddress.init(template_ref, source_fn_key),
             .evidence = body_ctx.evidence.vector,
             .subst = body_ctx.evidence.subst,
             .request_fn_node = root_node,
@@ -10451,13 +11309,13 @@ const Builder = struct {
             try self.completeRootTemplateEvidence(view, template_ref, template, partial_edge);
         edge.vector = try source_ctx.resolveCallableEvidenceAtNode(
             view,
-            template,
+            view.templates.evidenceParams(&template),
             edge.vector,
             request_fn_node,
             .body_lowering,
         );
         const evidence = edge.vector;
-        const family = DraftTemplateFamilyAddress.init(template_ref, source_ctx.method_scope.key, source_fn_key);
+        const family = DraftTemplateFamilyAddress.init(template_ref, source_fn_key);
 
         // The globally reserved root is the active ancestor of recursive calls
         // in its own specialization graph. A checked recursive reference to it
@@ -10696,6 +11554,7 @@ const Builder = struct {
             }
             return .{ .local = .{ .draft = spec.fn_id } };
         }
+        edge.subst = try self.requestDeterminedSubstitution(source_ctx.graph, view, &template, edge.subst);
         const is_local = moduleBytesEqual(view.key.bytes, names.procTemplateModuleDigest(template_ref).bytes);
         const fn_def: Ast.FnDef = switch (template.target) {
             .hosted => self.fnDefForHostedTemplate(template_ref, is_local),
@@ -10743,7 +11602,6 @@ const Builder = struct {
         try source_ctx.draft.template_specs.append(self.allocator, .{
             .state = if (local_context_dependent) .lowering else .deferred,
             .template_ref = template_ref,
-            .method_scope = source_ctx.method_scope.key,
             .source_fn_ty = source_fn_ty,
             .source_fn_key = source_fn_key,
             .symbol = symbol,
@@ -10788,7 +11646,7 @@ const Builder = struct {
         defer owner_scope.leave();
         try self.registerDraftProcDebugNameForTemplate(source_ctx.draft, symbol, view, template_ref);
 
-        var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self, view, source_ctx.method_scope, template_ref, source_ctx.graph, source_ctx.draft);
+        var body_ctx = try BodyContext.init(self.allocator, self, view, template_ref, source_ctx.graph, source_ctx.draft);
         body_ctx.evidence = rootEvidenceWithSubstitution(template_ref, templateSchemaIn(view, &template), edge);
         try body_ctx.seedSubstitution(body_ctx.evidence.schema.?, edge.subst);
         body_ctx.runtime_demand_guard_frames = source_ctx.runtime_demand_guard_frames;
@@ -10953,11 +11811,10 @@ const Builder = struct {
             spec.template_ref,
         );
 
-        var body_ctx = try BodyContext.initWithMethodScope(
+        var body_ctx = try BodyContext.init(
             self.allocator,
             self,
             view,
-            source_ctx.method_scope,
             spec.template_ref,
             source_ctx.graph,
             source_ctx.draft,
@@ -11042,7 +11899,6 @@ const Builder = struct {
         const lookup_prefix = try source_ctx.draft.template_spec_lookup.internPrefix(
             DraftTemplateFamilyAddress.init(
                 spec.template_ref,
-                spec.method_scope,
                 spec.source_fn_key,
             ),
             completed_template.evidence_digest.bytes,
@@ -11065,6 +11921,7 @@ const Builder = struct {
         const entry = self.lowered_templates.get(fn_id) orelse
             Common.invariant("lowered procedure template definition disappeared before completion");
         try self.spec_store.markReady(entry.spec, fn_ty, self.specializationTypeDigest(fn_ty));
+        try self.comptime_demand.bodyCommitted(self.allocator, fn_id);
     }
 
     fn typedLocalsForArgs(self: *Builder, arg_tys: anytype) Allocator.Error!Ast.Span(Ast.TypedLocal) {
@@ -11111,7 +11968,6 @@ const Builder = struct {
     fn addTemplateSpecRecord(
         self: *Builder,
         template_ref: names.ProcTemplate,
-        method_scope: checked.ModuleId,
         evidence: StoredConstFnEvidence,
         request_fn_ty: Type.TypeId,
         request_fn_ty_digest: names.TypeDigest,
@@ -11123,7 +11979,6 @@ const Builder = struct {
         return try self.addSpecRecord(
             self.templateSpecIdentity(
                 template_ref,
-                method_scope,
                 evidence_digest,
                 codec_contract,
                 request_fn_ty,
@@ -11139,7 +11994,6 @@ const Builder = struct {
     fn addNestedSpecRecord(
         self: *Builder,
         nested: Ast.NestedFn,
-        method_scope: checked.ModuleId,
         evidence: StoredConstFnEvidence,
         program_span: ?specialize.ProgramEvidenceSpan,
         capture_abi_digest: names.TypeDigest,
@@ -11150,7 +12004,7 @@ const Builder = struct {
     ) Allocator.Error!Ast.SpecId {
         const evidence_digest = evidence.digest;
         return try self.addSpecRecord(
-            self.nestedSpecIdentity(nested, method_scope, evidence_digest, capture_abi_digest, codec_contract, request_fn_ty, request_fn_ty_digest),
+            self.nestedSpecIdentity(nested, evidence_digest, capture_abi_digest, codec_contract, request_fn_ty, request_fn_ty_digest),
             evidence,
             program_span,
             fn_id,
@@ -11598,7 +12452,7 @@ const Builder = struct {
                 const def = try typeDef(self.activeNameStore(), self.app_module_identity, view, nominal.origin_module, nominal.name, nominal.source_decl);
                 self.noteBuiltinTryDef(nominal.builtin, self.activeNameStore(), def);
                 const named: @FieldType(Type.Content, "named") = .{
-                    .named_type = .{ .module = self.declaredModuleForNominal(view, nominal), .ty = frame.checked_ty, .ty_module = moduleDigestFromId(view.key) },
+                    .named_type = try self.canonicalNamedOccurrence(view, frame.checked_ty, self.declaredModuleForNominal(view, nominal)),
                     .def = def,
                     .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
                     .builtin_owner = builtinOwner(nominal.builtin),
@@ -11982,6 +12836,17 @@ const Builder = struct {
         return view.templates.templateHasSingleSourceCall(checked_template.template);
     }
 
+    /// Closed checked occurrences have no instantiation identity. Give both
+    /// freshly lowered and replayed named types the same exact current witness.
+    /// Open occurrences retain their source cells and are never coalesced here.
+    fn canonicalNamedOccurrence(self: *Builder, view: ModuleView, ty: checked.CheckedTypeId, owner: names.CheckedModuleDigest) Allocator.Error!Type.NamedType {
+        const root = view.types.rootRows()[@backingInt(ty)];
+        if (root.contains_identity_variables) return .{ .module = owner, .ty = ty, .ty_module = moduleDigestFromId(view.key) };
+        const provenance = BodyContext.PersistentProvenance{ .builder = self };
+        return (try provenance.resolveNamedType(.{ .closed = .{ .owner = owner.bytes, .key = root.key.bytes } })) orelse
+            Common.invariant("a lowered closed named type has no current representative occurrence");
+    }
+
     fn moduleForDigest(self: *Builder, module_digest: names.CheckedModuleDigest) ModuleView {
         return self.moduleForKeyBytes(module_digest.bytes) orelse
             Common.invariant("procedure template referenced a checked module that is not in the lowering input");
@@ -12057,23 +12922,34 @@ const Builder = struct {
     /// (used to resolve a defaulted field's declaring module—design.md
     /// "Defaulted Fields").
     fn moduleForIdentityHash(self: *Builder, origin_hash: *const [32]u8) ?ModuleView {
-        const root = self.rootModuleView();
-        if (moduleViewIdentityMatches(root, origin_hash)) return root;
-        for (0..self.modules.imports.len) |index| {
-            const view = self.importModuleView(index);
-            if (moduleViewIdentityMatches(view, origin_hash)) return view;
+        const index = self.module_identity_index.get(origin_hash.*) orelse return null;
+        return &self.moduleViews()[index];
+    }
+
+    /// Coordinator only: index every module view's closed named roots before
+    /// any body is lowered, so every worker borrowing the index sees it complete.
+    fn buildClosedOccurrenceIndex(self: *Builder) Allocator.Error!void {
+        std.debug.assert(self.borrowed_closed_occurrences == null);
+        std.debug.assert(self.closed_occurrences.entries.count() == 0);
+        self.closed_occurrences = try ClosedOccurrenceIndex.build(self.allocator, self.moduleViews());
+    }
+
+    fn closedOccurrenceIndex(self: *const Builder) *const ClosedOccurrenceIndex {
+        return self.borrowed_closed_occurrences orelse &self.closed_occurrences;
+    }
+
+    fn seedModuleIdentityIndex(self: *Builder) Allocator.Error!void {
+        const views = self.moduleViews();
+        try self.module_identity_index.ensureTotalCapacity(self.allocator, @intCast(views.len));
+        for (views, 0..) |view, index| {
+            const entry = self.module_identity_index.getOrPutAssumeCapacity(view.module_identity.stable_hash);
+            if (!entry.found_existing) entry.value_ptr.* = @intCast(index);
         }
-        for (0..self.modules.root.relation_modules.len) |index| {
-            const view = self.relationModuleView(index);
-            if (moduleViewIdentityMatches(view, origin_hash)) return view;
-        }
-        return null;
     }
 
     fn templateSpecIdentity(
         self: *Builder,
         template_ref: names.ProcTemplate,
-        method_scope: checked.ModuleId,
         evidence_digest: Ast.EvidenceDigest,
         codec_contract: ?Ast.CodecContractIdentity,
         request_fn_ty: Type.TypeId,
@@ -12086,7 +12962,6 @@ const Builder = struct {
                 .proc_base = @backingInt(template_ref.proc_base),
                 .template = @backingInt(template_ref.template),
             } },
-            .method_scope = moduleDigestFromId(self.moduleForId(method_scope).code_generation_key orelse method_scope),
             .evidence_digest = evidence_digest,
             .codec_contract_digest = codecContractIdentityDigest(codec_contract),
             .codec_contract = codec_contract,
@@ -12098,7 +12973,6 @@ const Builder = struct {
     fn nestedSpecIdentity(
         self: *Builder,
         nested: Ast.NestedFn,
-        method_scope: checked.ModuleId,
         evidence_digest: Ast.EvidenceDigest,
         capture_abi_digest: names.TypeDigest,
         codec_contract: ?Ast.CodecContractIdentity,
@@ -12119,7 +12993,6 @@ const Builder = struct {
                 .site = @backingInt(nested.site),
                 .default_root_module = nested.default_root,
             } },
-            .method_scope = moduleDigestFromId(self.moduleForId(method_scope).code_generation_key orelse method_scope),
             .evidence_digest = evidence_digest,
             .codec_contract_digest = codecContractIdentityDigest(codec_contract),
             .codec_contract = codec_contract,
@@ -12311,7 +13184,7 @@ const Builder = struct {
     /// on unbound platform requirements from that manifest.
     fn comptimeValueReadDeclared(self: *Builder, view: ModuleView, root_id: checked.ComptimeRootId) bool {
         if (!self.comptime_value_reads) return false;
-        const declarations = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions;
+        const declarations = self.borrowed_comptime_roots orelse &self.declared_comptime_roots;
         return declarations.contains(.{ .module = view.key, .root = root_id });
     }
 
@@ -12641,47 +13514,44 @@ const Builder = struct {
     /// `owner`'s ids belong to: the program's, or a private body graph's.
     fn lookupMethodTarget(
         self: *Builder,
-        scope: ModuleView,
         owner_names: *const names.NameStore,
         owner: static_dispatch.MethodOwner,
         method_view: ModuleView,
         method: names.MethodNameId,
     ) Allocator.Error!?MethodLookupResult {
-        return try self.lookupMethodTargetByName(scope, owner_names, owner, method_view.names.methodNameText(method));
+        return try self.lookupMethodTargetByName(owner_names, owner, method_view.names.methodNameText(method));
     }
 
-    /// Resolve `owner.method_name` in `scope`. Only owners in the program
-    /// name domain are memoized: the memo's raw name-id keys belong to that
-    /// domain alone, so an owner from a private body graph's store is
-    /// resolved directly.
+    /// Resolve `owner.method_name`. Only owners in the program name domain are
+    /// memoized: the memo's raw name-id keys belong to that domain alone, so
+    /// an owner from a private body graph's store is resolved directly.
     fn lookupMethodTargetByName(
         self: *Builder,
-        scope: ModuleView,
         owner_names: *const names.NameStore,
         owner: static_dispatch.MethodOwner,
         method_name: []const u8,
     ) Allocator.Error!?MethodLookupResult {
         if (owner_names != &self.program.names) {
-            return self.findMethodTargetByNameFromStore(scope, owner_names, owner, method_name);
+            return self.findMethodTargetByNameFromStore(owner_names, owner, method_name);
         }
         if (self.activeNameStore() != &self.program.names) {
             Common.invariant("program-domain method owner was looked up under a private name destination");
         }
         const method = try self.program.names.internMethodName(method_name);
-        const address = ScopedMethodDispatch.init(scope.key, owner, method);
-        if (self.scoped_method_targets.get(address)) |resolution| {
+        const address = MethodDispatchKey.init(owner, method);
+        if (self.method_targets.get(address)) |resolution| {
             return switch (resolution) {
                 .missing => null,
                 .found => |found| found,
             };
         }
 
-        const resolution: ScopedMethodResolution = if (self.findMethodTargetByNameFromStore(scope, owner_names, owner, method_name)) |found|
+        const resolution: MethodResolution = if (self.findMethodTargetByNameFromStore(owner_names, owner, method_name)) |found|
             .{ .found = found }
         else
             .missing;
 
-        try self.scoped_method_targets.put(self.allocator, address, resolution);
+        try self.method_targets.put(self.allocator, address, resolution);
         return switch (resolution) {
             .missing => null,
             .found => |found| found,
@@ -12693,57 +13563,54 @@ const Builder = struct {
     /// under the same name-domain rule as `lookupMethodTargetByName`.
     fn inspectOverrideFor(
         self: *Builder,
-        scope: ModuleView,
         owner_names: *const names.NameStore,
         owner: static_dispatch.MethodOwner,
     ) Allocator.Error!?MethodLookup {
         if (owner_names != &self.program.names) {
-            return self.inspectOverrideFromStore(scope, owner_names, owner);
+            return self.inspectOverrideFromStore(owner_names, owner);
         }
         if (self.activeNameStore() != &self.program.names) {
             Common.invariant("program-domain method owner was looked up under a private name destination");
         }
         const method = try self.program.names.internMethodName("to_inspect");
-        const address = ScopedMethodDispatch.init(scope.key, owner, method);
-        if (self.scoped_inspect_overrides.get(address)) |resolution| return resolution;
+        const address = MethodDispatchKey.init(owner, method);
+        if (self.inspect_overrides.get(address)) |resolution| return resolution;
 
-        const resolution = self.inspectOverrideFromStore(scope, owner_names, owner);
-        try self.scoped_inspect_overrides.put(self.allocator, address, resolution);
+        const resolution = self.inspectOverrideFromStore(owner_names, owner);
+        try self.inspect_overrides.put(self.allocator, address, resolution);
         return resolution;
     }
 
-    /// Selects the view that declares `owner.to_inspect` exactly as method
-    /// dispatch does: the scope, then its method lookup scope.
+    /// Reads `owner.to_inspect` from the registry of the module that declares
+    /// `owner`, exactly as method dispatch does.
     fn inspectOverrideFromStore(
         self: *Builder,
-        scope: ModuleView,
         owner_names: *const names.NameStore,
         owner: static_dispatch.MethodOwner,
     ) ?MethodLookup {
+        const owner_view = self.methodOwnerView(owner_names, owner) orelse return null;
         return value_rules.lookupInspectOverride(InspectOverrideViews{
-            .builder = self,
-            .scope = scope,
+            .owner_view = owner_view,
             .owner_names = owner_names,
             .owner = owner,
         });
     }
 
-    /// The views inspection searches for an owner's `to_inspect`.
+    /// The one view inspection reads an owner's `to_inspect` from.
     const InspectOverrideViews = struct {
-        builder: *Builder,
-        scope: ModuleView,
+        owner_view: ModuleView,
         owner_names: *const names.NameStore,
         owner: static_dispatch.MethodOwner,
 
         pub const Found = MethodLookup;
 
-        pub fn viewCount(views: InspectOverrideViews) usize {
-            return 1 + views.scope.method_lookup_scope.len;
+        pub fn viewCount(_: InspectOverrideViews) usize {
+            return 1;
         }
 
         pub fn view(views: InspectOverrideViews, index: usize) ModuleView {
-            if (index == 0) return views.scope;
-            return views.builder.moduleForId(views.scope.method_lookup_scope[index - 1]);
+            std.debug.assert(index == 0);
+            return views.owner_view;
         }
 
         pub fn inspectKey(views: InspectOverrideViews, candidate: ModuleView) ?static_dispatch.MethodKey {
@@ -12761,40 +13628,52 @@ const Builder = struct {
         }
     };
 
-    fn findMethodTargetByNameFromStore(
-        self: *Builder,
-        scope: ModuleView,
-        owner_names: *const names.NameStore,
-        owner: static_dispatch.MethodOwner,
-        method_name: []const u8,
-    ) ?MethodLookupResult {
-        if (self.methodTargetInViewFromStore(scope, owner_names, owner, method_name, true)) |found| return found;
-        for (scope.method_lookup_scope) |module_id| {
-            const candidate = self.moduleForId(module_id);
-            // Only the module declaring a function-body type registers its
-            // methods, so a local procedure found here is that owner's exact
-            // target; its declaration context comes from the evidence purpose.
-            if (self.methodTargetInViewFromStore(candidate, owner_names, owner, method_name, true)) |found| return found;
-        }
-        return null;
+    /// The module that declares `owner`, whose registry holds every method of
+    /// `owner`: the Builtin module for a builtin owner, and the declaring
+    /// module named by a nominal owner's content identity. Null when that
+    /// module is not in the lowering input, where no method of `owner` can be
+    /// either.
+    fn methodOwnerView(self: *Builder, owner_names: *const names.NameStore, owner: static_dispatch.MethodOwner) ?ModuleView {
+        return switch (owner) {
+            .builtin => self.builtinModuleView(),
+            .nominal => |nominal| self.moduleForIdentityHash(owner_names.moduleIdentityBytes(nominal.module)),
+        };
     }
 
-    fn methodTargetInViewFromStore(
-        _: *Builder,
-        view: ModuleView,
+    /// The Builtin module's view, which declares every builtin owner's methods.
+    fn builtinModuleView(self: *Builder) ?ModuleView {
+        if (self.builtin_module_view) |view| return view;
+        const root = self.rootModuleView();
+        const found: ?ModuleView = if (root.module_env.module_role == .builtin) root else found: {
+            for (0..self.modules.imports.len) |index| {
+                const view = self.importModuleView(index);
+                if (view.module_env.module_role == .builtin) break :found view;
+            }
+            for (0..self.modules.root.relation_modules.len) |index| {
+                const view = self.relationModuleView(index);
+                if (view.module_env.module_role == .builtin) break :found view;
+            }
+            break :found null;
+        };
+        self.builtin_module_view = found;
+        return found;
+    }
+
+    /// The target `owner`'s declaring module registers for `method_name`. A
+    /// local procedure found there is that owner's exact target; its
+    /// declaration context comes from the evidence purpose.
+    fn findMethodTargetByNameFromStore(
+        self: *Builder,
         owner_names: *const names.NameStore,
         owner: static_dispatch.MethodOwner,
         method_name: []const u8,
-        allow_local_proc: bool,
     ) ?MethodLookupResult {
-        const view_owner = static_dispatch.methodOwnerInImportedStore(owner_names, view.names, owner) orelse return null;
-        const view_method = view.names.lookupMethodName(method_name) orelse return null;
-        return switch (view.method_registry.lookup(.{ .owner = view_owner, .method = view_method }) orelse return null) {
+        const owner_view = self.methodOwnerView(owner_names, owner) orelse return null;
+        const view_owner = static_dispatch.methodOwnerInImportedStore(owner_names, owner_view.names, owner) orelse return null;
+        const view_method = owner_view.names.lookupMethodName(method_name) orelse return null;
+        return switch (owner_view.method_registry.lookup(.{ .owner = view_owner, .method = view_method }) orelse return null) {
             .rejected => .rejected,
-            .target => |target| if (!allow_local_proc and target.kind == .local_proc)
-                null
-            else
-                .{ .target = .{ .view = view, .target = target } },
+            .target => |target| .{ .target = .{ .view = owner_view, .target = target } },
         };
     }
 
@@ -12971,7 +13850,7 @@ const Builder = struct {
     /// request reserves an id and defers the body; outside one (root and
     /// wrapper paths, whose types come from the builder-global cache without
     /// body evidence), the body lowers now.
-    fn lowerFnTemplateCallTarget(self: *Builder, method_scope: ModuleView, fn_template: Ast.FnTemplate, evidence: []const SpecEvidence) Allocator.Error!Ast.FnSlot {
+    fn lowerFnTemplateCallTarget(self: *Builder, fn_template: Ast.FnTemplate, evidence: []const SpecEvidence) Allocator.Error!Ast.FnSlot {
         const template_ref = switch (fn_template.fn_def) {
             .local_template,
             .imported_template,
@@ -13000,7 +13879,6 @@ const Builder = struct {
         // not even match). Neither states the claim this checks.
         const def = try self.lowerTemplateWithMono(
             template_ref,
-            method_scope,
             fn_template.source_fn_ty,
             fn_template.source_fn_key,
             fn_template.mono_fn_ty,
@@ -13017,8 +13895,8 @@ const Builder = struct {
         return .{ .local = self.defFnId(def) };
     }
 
-    fn lowerFnTemplateDef(self: *Builder, method_scope: ModuleView, fn_template: Ast.FnTemplate, evidence: []const SpecEvidence) Allocator.Error!Ast.FnId {
-        return localFnIdFromSlot(try self.lowerFnTemplateCallTarget(method_scope, fn_template, evidence));
+    fn lowerFnTemplateDef(self: *Builder, fn_template: Ast.FnTemplate, evidence: []const SpecEvidence) Allocator.Error!Ast.FnId {
+        return localFnIdFromSlot(try self.lowerFnTemplateCallTarget(fn_template, evidence));
     }
 
     fn lowerRestoredConstFnTemplate(
@@ -13099,7 +13977,6 @@ const Builder = struct {
                 // call-target site above.
                 const def = try self.lowerTemplateWithMono(
                     template_ref,
-                    fn_view,
                     fn_template.source_fn_ty,
                     fn_template.source_fn_key,
                     fn_template.mono_fn_ty,
@@ -13262,7 +14139,7 @@ const Builder = struct {
         source_fn_key: names.TypeDigest,
         raw_request_fn_node: NodeId,
         capture_entry_guards: []const NodeId,
-        requested_evidence: EvidenceChain,
+        unresolved_evidence: EvidenceChain,
         owned_scope: ?checked.DispatchScopeId,
         recursive_reference: bool,
         signature_relation: Ast.SignatureRelation,
@@ -13276,12 +14153,13 @@ const Builder = struct {
             source_ctx.draft.upgrade_all = true;
         }
         const request_fn_node = try source_ctx.graph.functionRequestRoot(raw_request_fn_node);
+        const requested_evidence = try source_ctx.resolveOwnScopeCallableEvidence(nested, unresolved_evidence, request_fn_node);
         const codec_contract: ?DraftCodecContractContext = switch (codec_contract_selection) {
             .inherit => source_ctx.activeCodecContractContext(),
             .independent => null,
             .anchored => |anchor| source_ctx.activeCodecContractContextForAnchor(anchor),
         };
-        const family = DraftNestedFamilyAddress.init(nested, source_ctx.method_scope.key, source_fn_key);
+        const family = DraftNestedFamilyAddress.init(nested, source_fn_key);
         self.countBodyDiagnostic("nested_lookup_probes");
         const family_exists = source_ctx.draft.nested_spec_families.contains(family);
         const stored_evidence = try source_ctx.storedEvidence(requested_evidence);
@@ -13433,7 +14311,7 @@ const Builder = struct {
                 {
                     continue;
                 }
-                if (!std.meta.eql(DraftNestedFamilyAddress.init(spec.nested, spec.method_scope, spec.source_fn_key), family)) continue;
+                if (!std.meta.eql(DraftNestedFamilyAddress.init(spec.nested, spec.source_fn_key), family)) continue;
                 if (!try evidenceChainEql(self.allocator, spec.evidence, requested_evidence)) continue;
                 if (!substitutionsShareClasses(source_ctx.graph, spec.evidence.subst, requested_evidence.subst)) continue;
                 if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
@@ -13510,7 +14388,6 @@ const Builder = struct {
         try source_ctx.draft.nested_specs.append(self.allocator, .{
             .state = .lowering,
             .nested = nested,
-            .method_scope = source_ctx.method_scope.key,
             .expr_id = expr_id,
             .source_fn_ty = source_fn_ty,
             .source_fn_key = source_fn_key,
@@ -13782,7 +14659,6 @@ const Builder = struct {
 
     fn draftSpecIdentityEql(self: *Builder, left: Ast.SpecIdentity, right: Ast.SpecIdentity) Allocator.Error!bool {
         if (!std.meta.eql(left.callable, right.callable)) return false;
-        if (!std.mem.eql(u8, left.method_scope.bytes[0..], right.method_scope.bytes[0..])) return false;
         if (!std.meta.eql(left.evidence_digest, right.evidence_digest)) return false;
         if (!std.mem.eql(u8, left.codec_contract_digest.bytes[0..], right.codec_contract_digest.bytes[0..])) return false;
         if ((left.codec_contract == null) != (right.codec_contract == null)) return false;
@@ -13900,18 +14776,17 @@ const Builder = struct {
     }
 
     /// A body context for the deferred boundary `boundary`: its module view,
-    /// method scope, owner template, evidence, and enclosing function key.
+    /// owner template, evidence, and enclosing function key.
     inline fn deferredBoundaryContext(
         self: *Builder,
         body_draft: *BodyDraftStore,
         graph: *InstGraph,
         boundary: anytype,
     ) Allocator.Error!BodyContext {
-        var ctx = try BodyContext.initWithMethodScope(
+        var ctx = try BodyContext.init(
             self.allocator,
             self,
             boundary.view,
-            boundary.method_scope,
             boundary.owner_template,
             graph,
             body_draft,
@@ -13958,11 +14833,10 @@ const Builder = struct {
         const loc_scope = self.enterBoundaryLoc(body_draft, boundary.expr);
         defer loc_scope.leave();
 
-        var ctx = try BodyContext.initWithMethodScope(
+        var ctx = try BodyContext.init(
             self.allocator,
             self,
             boundary.view,
-            boundary.method_scope,
             boundary.owner_template,
             graph,
             body_draft,
@@ -14636,6 +15510,10 @@ const Builder = struct {
         codec_contract: ?SealedCodecContractContext,
         demand: Demand,
     ) Allocator.Error!ResolvedTemplateSpec {
+        const evidence = if (@TypeOf(spec.evidence) == ?[]const SpecEvidence)
+            spec.evidence orelse Common.invariant("deferred request lost its dispatch evidence")
+        else
+            spec.evidence;
         const draft_fn = &body_draft.fns.items[@backingInt(spec.fn_id)];
         draft_fn.source.mono_fn_ty = .{ .sealed = draft_fn_ty };
         const signature_relation = draft_fn.signature_relation;
@@ -14655,7 +15533,6 @@ const Builder = struct {
         const request_digest = self.specializationTypeDigest(request_fn_ty);
         const identity = self.templateSpecIdentity(
             spec.template_ref,
-            spec.method_scope,
             draft_fn.source.evidence_digest,
             self.codecContractIdentity(codec_contract),
             request_fn_ty,
@@ -14675,11 +15552,10 @@ const Builder = struct {
         const resolved_slot: Ast.FnSlot = blk: {
             const def = try self.lowerTemplateWithMono(
                 spec.template_ref,
-                self.moduleForId(spec.method_scope),
                 spec.source_fn_ty,
                 spec.source_fn_key,
                 request_fn_ty,
-                spec.evidence,
+                evidence,
                 request_subst,
                 signature_relation,
                 .already_counted,
@@ -14740,6 +15616,8 @@ const Builder = struct {
         fn_ty: Type.TypeId,
         subst: SealedSubstitution,
     ) Allocator.Error!?ShapedRequest {
+        var resolution_profile = ResolutionProfile.Scope.begin(&self.resolution_profile, .demand_shape);
+        defer resolution_profile.end();
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
         const demands = view.templates.templateDemands(&template);
@@ -15038,7 +15916,6 @@ const Builder = struct {
                     const request_digest = self.specializationTypeDigest(request_fn_ty);
                     identity = self.templateSpecIdentity(
                         spec.template_ref,
-                        spec.method_scope,
                         sealed_template.evidence_digest,
                         spec.committed_codec_contract,
                         request_fn_ty,
@@ -15054,7 +15931,6 @@ const Builder = struct {
                         const solved_digest = self.specializationTypeDigest(fn_ty);
                         identity = self.nestedSpecIdentity(
                             spec.nested,
-                            spec.method_scope,
                             sealed_template.evidence_digest,
                             spec.capture_abi_digest,
                             spec.sealed_codec_contract,
@@ -15339,11 +16215,10 @@ const Builder = struct {
             body_draft.sealed_template_specs.appendAssumeCapacity(.{
                 .state = spec.state,
                 .template_ref = spec.template_ref,
-                .method_scope = spec.method_scope,
                 .source_fn_ty = spec.source_fn_ty,
                 .source_fn_key = spec.source_fn_key,
                 .request_fn_ty = request_ty,
-                .evidence = spec.evidence,
+                .evidence = if (spec.local_context_dependent and spec.state == .lowered) null else spec.evidence,
                 .codec_contract = if (spec.codec_contract) |contract| .{
                     .anchor = contract.anchor,
                     .constructor_ty = try sealer.sealNode(contract.constructor_node),
@@ -15367,7 +16242,6 @@ const Builder = struct {
             body_draft.sealed_nested_specs.appendAssumeCapacity(.{
                 .state = spec.state,
                 .nested = spec.nested,
-                .method_scope = spec.method_scope,
                 .source_fn_key = spec.source_fn_key,
                 .request_fn_ty = try sealer.sealNode(spec.request_fn_node),
                 .capture_abi_digest = try graphCaptureAbiDigest(
@@ -15487,6 +16361,7 @@ const Builder = struct {
         }
         try body_draft.finishOwnerRuns();
         try self.resolveDeferredTemplateSpecs(body_draft, &committed_types);
+        try self.resolveDeclaredRootCalls(body_draft);
         var commit_map = try self.buildDraftCommitMap(
             body_draft,
             &committed_types,
@@ -15552,6 +16427,7 @@ const Builder = struct {
         const sealed_roots = try self.allocator.alloc(Type.TypeId, 0);
         errdefer self.allocator.free(sealed_roots);
         try self.resolveDeferredTemplateSpecs(body_draft, committed_types);
+        try self.resolveDeclaredRootCalls(body_draft);
         var commit_map = try self.buildDraftCommitMap(
             body_draft,
             committed_types,
@@ -15657,7 +16533,6 @@ const Builder = struct {
             const evidence = programViewFnEvidence(self.program.view(), fn_template);
             const identity = self.templateSpecIdentity(
                 spec.template_ref,
-                spec.method_scope,
                 fn_template.evidence_digest,
                 spec.committed_codec_contract,
                 request_fn_ty,
@@ -15685,7 +16560,6 @@ const Builder = struct {
 
             const spec_id = try self.addTemplateSpecRecord(
                 spec.template_ref,
-                spec.method_scope,
                 evidence,
                 request_fn_ty,
                 request_digest,
@@ -15696,7 +16570,7 @@ const Builder = struct {
             try self.lowered_templates.put(fn_id, .{
                 .def = ids.def(draft_def),
                 .spec = spec_id,
-                .evidence = spec.evidence,
+                .evidence = spec.evidence orelse Common.invariant("global template commit lost dispatch evidence"),
                 .topology = try self.retainFnEvidence(evidence),
             });
             try self.markTemplateReady(fn_id, solved_fn_ty);
@@ -15724,12 +16598,11 @@ const Builder = struct {
             var view = specializationEvidenceView(evidence);
             view.program_span = program_span;
             if (try self.spec_store.findLocal(
-                self.nestedSpecIdentity(spec.nested, spec.method_scope, fn_template.evidence_digest, capture_abi_digest, spec.sealed_codec_contract, fn_ty, digest),
+                self.nestedSpecIdentity(spec.nested, fn_template.evidence_digest, capture_abi_digest, spec.sealed_codec_contract, fn_ty, digest),
                 view,
             )) |_| continue;
             const spec_id = try self.addNestedSpecRecord(
                 spec.nested,
-                spec.method_scope,
                 evidence,
                 program_span,
                 capture_abi_digest,
@@ -16611,8 +17484,9 @@ const DraftLiteralRoot = struct {
     read: DraftComptimeValueRootId,
 };
 
-fn DraftSpan(comptime _: type) type {
+fn DraftSpan(comptime ElementType: type) type {
     return extern struct {
+        pub const Element = ElementType;
         start: u32,
         len: u32,
 
@@ -16757,6 +17631,7 @@ const DirectCallRequest = struct {
 };
 
 const DraftProcCallee = union(enum(u8)) {
+    declared_root: u32,
     func: DraftFnSlot,
     lifted: Ast.LiftedFnId,
 };
@@ -17386,15 +18261,13 @@ const DraftTemplateFamilyAddress = struct {
     module: [32]u8,
     proc_base: u32,
     template: u32,
-    method_scope: [32]u8,
     source_fn_key: [32]u8,
 
-    fn init(template_ref: names.ProcTemplate, method_scope: checked.ModuleId, source_fn_key: names.TypeDigest) DraftTemplateFamilyAddress {
+    fn init(template_ref: names.ProcTemplate, source_fn_key: names.TypeDigest) DraftTemplateFamilyAddress {
         return .{
             .module = names.procTemplateModuleDigest(template_ref).bytes,
             .proc_base = @backingInt(template_ref.proc_base),
             .template = @backingInt(template_ref.template),
-            .method_scope = method_scope.bytes,
             .source_fn_key = source_fn_key.bytes,
         };
     }
@@ -17403,19 +18276,18 @@ const DraftTemplateFamilyAddress = struct {
     /// input carries everything its instantiation constrains; a checked
     /// source-function key only names how one call site spelled the callee's
     /// type, so it does not split summaries.
-    fn interfaceSummary(template_ref: names.ProcTemplate, method_scope: checked.ModuleId) DraftTemplateFamilyAddress {
-        return init(template_ref, method_scope, .{ .bytes = @splat(0) });
+    fn interfaceSummary(template_ref: names.ProcTemplate) DraftTemplateFamilyAddress {
+        return init(template_ref, .{ .bytes = @splat(0) });
     }
 
     /// Recursive references may instantiate the same checked procedure
-    /// template through a different checked root. Declaration and method scope
-    /// identify the active body; the complete live function interface decides
-    /// whether the reference belongs to that specialization.
+    /// template through a different checked root. The declaration identifies
+    /// the active body; the complete live function interface decides whether
+    /// the reference belongs to that specialization.
     fn sameRecursiveCallable(self: DraftTemplateFamilyAddress, other: DraftTemplateFamilyAddress) bool {
         return std.mem.eql(u8, self.module[0..], other.module[0..]) and
             self.proc_base == other.proc_base and
-            self.template == other.template and
-            std.mem.eql(u8, self.method_scope[0..], other.method_scope[0..]);
+            self.template == other.template;
     }
 };
 
@@ -17448,10 +18320,9 @@ const DraftNestedFamilyAddress = struct {
     /// carries that module's content identity (zeros under `false`).
     default_root: bool,
     default_root_module: [32]u8,
-    method_scope: [32]u8,
     source_fn_key: [32]u8,
 
-    fn init(nested: Ast.NestedFn, method_scope: checked.ModuleId, source_fn_key: names.TypeDigest) DraftNestedFamilyAddress {
+    fn init(nested: Ast.NestedFn, source_fn_key: names.TypeDigest) DraftNestedFamilyAddress {
         return .{
             .module = names.procTemplateModuleDigest(nested.owner).bytes,
             .owner_proc_base = @backingInt(nested.owner.proc_base),
@@ -17460,7 +18331,6 @@ const DraftNestedFamilyAddress = struct {
             .site = @backingInt(nested.site),
             .default_root = nested.default_root != null,
             .default_root_module = if (nested.default_root) |identity| identity.bytes else @splat(0),
-            .method_scope = method_scope.bytes,
             .source_fn_key = source_fn_key.bytes,
         };
     }
@@ -17667,9 +18537,6 @@ const DraftTemplateSpec = struct {
     template_ref: names.ProcTemplate,
     /// The next draft spec of the same template, or `TemplateSpecChain.end`.
     next_in_template: u32 = TemplateSpecChain.end,
-    /// Checked module whose ordered registry scope governs generated method
-    /// dispatch embedded in this specialization's body.
-    method_scope: checked.ModuleId,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     /// Worker-local symbol retained when a deferred request must eagerly lower
@@ -17723,11 +18590,12 @@ const DraftTemplateSpec = struct {
 const SealedTemplateSpec = struct {
     state: DraftSpecState,
     template_ref: names.ProcTemplate,
-    method_scope: checked.ModuleId,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     request_fn_ty: Type.TypeId,
-    evidence: []const SpecEvidence,
+    /// A fully lowered lexical body carries its resolved calls in the draft.
+    /// Only deferred or globally committable requests retain dispatch evidence.
+    evidence: ?[]const SpecEvidence,
     /// The request's substitution sealed in the shard's store epoch.
     subst: SealedSubstitution,
     codec_contract: ?SealedCodecContractContext,
@@ -17775,9 +18643,6 @@ const DraftConstUseProvenance = union(enum) {
 
 const DraftDeferredConstUse = struct {
     view: ModuleView,
-    /// Checked module whose ordered registry scope governs generated method
-    /// dispatch inside the deferred emission, captured at deferral time.
-    method_scope: ModuleView,
     owner_template: names.ProcTemplate,
     owner: DraftOwner,
     expr: DraftExprId,
@@ -17879,7 +18744,6 @@ const MaterializedConstNode = struct {
 /// hasher (whose type is `ret_ty`).
 const DraftDeferredStructuralEq = struct {
     view: ModuleView,
-    method_scope: ModuleView,
     owner_template: names.ProcTemplate,
     owner: DraftOwner,
     expr: DraftExprId,
@@ -17906,7 +18770,6 @@ const DraftStructuralDerivationMode = union(enum) {
 
 const DraftDeferredStructuralSerialization = struct {
     view: ModuleView,
-    method_scope: ModuleView,
     owner_template: names.ProcTemplate,
     owner: DraftOwner,
     expr: DraftExprId,
@@ -17932,7 +18795,6 @@ const CheckedIntrinsicOperands = union(enum) {
 
 const DraftDeferredCallsiteIntrinsic = struct {
     view: ModuleView,
-    method_scope: ModuleView,
     owner_template: names.ProcTemplate,
     owner: DraftOwner,
     expr: DraftExprId,
@@ -17971,7 +18833,6 @@ const DraftStoredCodecEncodingLet = struct {
 /// one to a sealed type is not a comparison this boundary can make.
 const DraftDeferredStoredCodecRestore = struct {
     view: ModuleView,
-    method_scope: ModuleView,
     owner_template: names.ProcTemplate,
     owner: DraftOwner,
     expr: DraftExprId,
@@ -18378,7 +19239,6 @@ const FrozenPreparedFieldDefaults = struct {
 
 const DraftDeferredInspect = struct {
     view: ModuleView,
-    method_scope: ModuleView,
     owner_template: names.ProcTemplate,
     owner: DraftOwner,
     expr: DraftExprId,
@@ -18681,9 +19541,6 @@ fn nestedSpecReusableAt(draft: *const BodyDraftStore, spec: *const DraftNestedSp
 const DraftNestedSpec = struct {
     state: DraftSpecState,
     nested: Ast.NestedFn,
-    /// Checked module whose ordered registry scope governs generated method
-    /// dispatch embedded in this specialization's body.
-    method_scope: checked.ModuleId,
     expr_id: checked.CheckedExprId,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
@@ -18717,7 +19574,6 @@ const DraftNestedSpec = struct {
 const SealedNestedSpec = struct {
     state: DraftSpecState,
     nested: Ast.NestedFn,
-    method_scope: checked.ModuleId,
     source_fn_key: names.TypeDigest,
     request_fn_ty: Type.TypeId,
     capture_abi_digest: names.TypeDigest,
@@ -18905,6 +19761,7 @@ const StaticDataPartRoot = struct {
     node: checked.ConstNodeId,
     const_locator: checked.ConstLocator,
     checked_type: checked.CheckedTypeId,
+    checked_type_module: checked.ModuleId,
 };
 
 /// Draft-local static-data identity. Graph types remain qualified by the body
@@ -18913,6 +19770,7 @@ const DraftStaticDataRequestAddress = struct {
     module: checked.ModuleId,
     node: checked.ConstNodeId,
     checked_type: checked.CheckedTypeId,
+    checked_type_module: checked.ModuleId,
     ty: DraftTypeCell,
 };
 
@@ -18922,6 +19780,7 @@ const DraftStaticDataRequest = struct {
     module: checked.ModuleId,
     const_node: checked.ConstNodeId,
     checked_type: checked.CheckedTypeId,
+    checked_type_module: checked.ModuleId,
     ty: DraftTypeCell,
 };
 
@@ -18930,7 +19789,6 @@ const DraftStaticDataRequest = struct {
 const CachedCodecContractInstance = struct {
     graph: *InstGraph,
     view_key: [32]u8,
-    method_scope_key: [32]u8,
     derivation: static_dispatch.GeneratedCodecDerivationId,
     kind: CodecKind,
     callable_node: NodeId,
@@ -21424,7 +22282,7 @@ const FinalIdOffsets = struct {
                     .final => false,
                 },
             },
-            .lifted => false,
+            .lifted, .declared_root => false,
         };
     }
 
@@ -21437,6 +22295,7 @@ const FinalIdOffsets = struct {
                 },
             } },
             .lifted => |lifted| .{ .lifted = lifted },
+            .declared_root => Common.invariant("unresolved declared root reached Monotype emission"),
         };
     }
 
@@ -21626,6 +22485,8 @@ const ActiveConstBindingScope = struct {
     entered: bool = false,
 };
 
+const PersistentInterface = @import("interface_summary.zig");
+
 const InterfaceReplayStatus = enum { expanding, expanded, ready };
 
 const InterfaceReplayAddress = struct {
@@ -21647,7 +22508,6 @@ const InterfaceReplayAddressContext = struct {
         const scalars = [_]u32{ @backingInt(address.kind), address.family.proc_base, address.family.template };
         hasher.update(std.mem.asBytes(&scalars));
         hasher.update(address.family.module[0..8]);
-        hasher.update(address.family.method_scope[0..8]);
         hasher.update(address.family.source_fn_key[0..8]);
         hasher.update(address.evidence_digest[0..8]);
         hasher.update(address.input_digest[0..8]);
@@ -21675,6 +22535,8 @@ const InterfaceSummaryEntry = struct {
     evidence: StoredConstFnEvidence,
     request: InterfaceConstraints.Identity,
     summary: InterfaceSummary,
+    /// Already loaded from the persistent family; do not encode it again.
+    persisted: bool = false,
 };
 
 /// A completed expansion's contribution to its request roots. An expansion
@@ -21714,6 +22576,7 @@ const InterfaceSummary = union(enum) {
 const FoundInterfaceSummary = struct {
     summary: InterfaceSummary,
     domain: Domain,
+    persistent: bool = false,
 
     const Domain = enum {
         /// The finding body's own type and name stores.
@@ -21900,6 +22763,7 @@ const InterfaceSummaryCache = struct {
             },
             .request = try request.copy(arena, InterfaceSummaryCopy{}),
             .summary = try source.summary.copy(arena, summary_relocation),
+            .persisted = source.persisted,
         };
         self.buckets.appendAssumeCapacity(source.address, @intCast(self.entries.items.len));
         self.entries.appendAssumeCapacity(owned);
@@ -22179,10 +23043,6 @@ const ParserErrorRowKey = struct {
 const BodyContext = struct {
     allocator: Allocator,
     builder: *Builder,
-    /// Checked module whose ordered registry scope governs generated method
-    /// dispatch in this specialization. This can differ from `view` when an
-    /// imported template is specialized for a caller's concrete types.
-    method_scope: ModuleView,
     view: ModuleView,
     /// Source-file identity for `view`, resolved once when this body context is
     /// created instead of through the draft hash table for every source node.
@@ -22215,17 +23075,8 @@ const BodyContext = struct {
     /// This specialization's type solver, shared by every instantiation
     /// context created while lowering the same specialization.
     graph: *InstGraph,
-    /// Reusable recursion-path scratch for exact graph inhabitation walks.
-    /// Node IDs are dense, and each walk unsets on exit, so this replaces a
-    /// fresh visitation hash table per query.
-    inhabitation_visiting: std.bit_set.DynamicBitSetUnmanaged,
-    /// Each node being expanded by the running uninhabitedness scan, with the
-    /// scan's count of unsettled encounters when it was entered.
-    inhabitation_entered: collections.DenseMapUnmanaged(NodeId, usize) = .empty,
-    /// Uninhabitedness of graph roots whose whole reachable structure was
-    /// settled when scanned, per backing access. Nothing can change such an
-    /// answer.
-    settled_node_uninhabited: [2]collections.DenseMapUnmanaged(NodeId, bool) = .{ .empty, .empty },
+    analysis_memo: AnalysisMemo = .{},
+    completion_scratch: CompletionScratch = .{},
     /// The stacks the uninhabitedness scans run on, kept between scans.
     node_uninhabited_scratch: NodeUninhabitedScan.Evaluation.Scratch = .{},
     pattern_uninhabited_scratch: PatternUninhabitedScan.Evaluation.Scratch = .{},
@@ -22614,10 +23465,12 @@ const BodyContext = struct {
         const_locator: checked.ConstLocator,
         node: ?checked.ConstNodeId,
         checked_type: checked.CheckedTypeId,
+        checked_type_module: checked.ModuleId,
         ty: DraftTypeCell,
     ) Allocator.Error!DraftStaticDataId {
         const const_node = self.builder.constNode(const_locator, node);
         const address: DraftStaticDataRequestAddress = .{
+            .checked_type_module = checked_type_module,
             .module = const_node.module.key,
             .node = const_node.id,
             .checked_type = checked_type,
@@ -22632,6 +23485,7 @@ const BodyContext = struct {
         const id: DraftStaticDataId =
             @fromBackingInt(@intCast(@as(u32, @intCast(self.draft.static_data_requests.items.len))));
         self.draft.static_data_requests.appendAssumeCapacity(.{
+            .checked_type_module = checked_type_module,
             .const_locator = const_locator,
             .node = node,
             .module = const_node.module.key,
@@ -23082,23 +23936,10 @@ const BodyContext = struct {
         graph: *InstGraph,
         draft: *BodyDraftStore,
     ) Allocator.Error!BodyContext {
-        return try initWithMethodScope(allocator, builder, view, view, owner_template, graph, draft);
-    }
-
-    fn initWithMethodScope(
-        allocator: Allocator,
-        builder: *Builder,
-        view: ModuleView,
-        method_scope: ModuleView,
-        owner_template: names.ProcTemplate,
-        graph: *InstGraph,
-        draft: *BodyDraftStore,
-    ) Allocator.Error!BodyContext {
         var ctx = try initBodyState(allocator, builder, view, owner_template, graph, draft);
         errdefer ctx.deinit();
         std.debug.assert(allocator.ptr == builder.allocator.ptr);
         if (builder.body_memo_pool.pop()) |memos| ctx.installMemos(memos);
-        ctx.method_scope = method_scope;
         ctx.source_file_id = builder.sourceFileId(view);
         return ctx;
     }
@@ -23118,7 +23959,6 @@ const BodyContext = struct {
         return .{
             .allocator = allocator,
             .builder = builder,
-            .method_scope = view,
             .view = view,
             .source_file_id = null,
             .owner_template = owner_template,
@@ -23132,7 +23972,6 @@ const BodyContext = struct {
             .typed_binders = TypedBinders.init(allocator),
             .local_proc_contexts = LocalProcContexts.init(allocator),
             .graph = graph,
-            .inhabitation_visiting = .{},
             .draft = draft,
             .evidence = rootEvidence(owner_template, &.{}),
             .restore_evidence = rootEvidence(owner_template, &.{}),
@@ -23177,7 +24016,8 @@ const BodyContext = struct {
         self.pattern_literal_guards.deinit(self.allocator);
         self.optional_destruct_binds.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
-        self.inhabitation_visiting.deinit(self.allocator);
+        self.analysis_memo.deinit(self.allocator);
+        self.completion_scratch.deinit(self.allocator);
         self.releaseMemos();
         self.node_uninhabited_scratch.deinit(self.allocator);
         self.pattern_uninhabited_scratch.deinit(self.allocator);
@@ -24760,7 +25600,7 @@ const BodyContext = struct {
 
     fn hasInspectOverride(self: *BodyContext, value_ty: Type.TypeId) Allocator.Error!bool {
         const owner = methodOwnerFromType(self.typeStore(), value_ty) orelse return false;
-        return (try self.builder.inspectOverrideFor(self.method_scope, self.nameStore(), owner)) != null;
+        return (try self.builder.inspectOverrideFor(self.nameStore(), owner)) != null;
     }
 
     fn tagHasProvenUninhabitedPayload(self: *BodyContext, tag: Type.Tag) Allocator.Error!bool {
@@ -24833,7 +25673,7 @@ const BodyContext = struct {
 
     fn toInspectCall(self: *BodyContext, value: DraftExprId, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!?DraftExprId {
         const owner = methodOwnerFromType(self.typeStore(), value_ty) orelse return null;
-        const lookup = try self.withLocalProcContext((try self.builder.inspectOverrideFor(self.method_scope, self.nameStore(), owner)) orelse return null);
+        const lookup = try self.withLocalProcContext((try self.builder.inspectOverrideFor(self.nameStore(), owner)) orelse return null);
         const callee = if (self.frozen_inspect_method_calls) |prepared|
             prepared.get(value_ty) orelse
                 Common.invariant("deferred inspect method was not reserved before relation freeze")
@@ -24921,7 +25761,7 @@ const BodyContext = struct {
         str_ty: Type.TypeId,
         owner: static_dispatch.MethodOwner,
     ) Allocator.Error!?bool {
-        const raw_lookup = (try self.builder.inspectOverrideFor(self.method_scope, self.nameStore(), owner)) orelse return null;
+        const raw_lookup = (try self.builder.inspectOverrideFor(self.nameStore(), owner)) orelse return null;
         const lookup = try self.withLocalProcContext(raw_lookup);
         for (self.draft.prepared_inspect_methods.items) |prepared| {
             if (self.graph.sameClass(prepared.value_node, node)) return false;
@@ -25178,7 +26018,7 @@ const BodyContext = struct {
         current_fn_key: names.TypeDigest,
         copy_type_cells: bool,
     ) Allocator.Error!BodyContext {
-        var child = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
+        var child = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph, self.draft);
         child.evidence = self.evidence;
         errdefer child.deinit();
         child.owner_context_fn_key = self.owner_context_fn_key;
@@ -26403,14 +27243,15 @@ const BodyContext = struct {
     };
 
     const InstStep = union(enum) {
+        /// A child type request carries only its checked identity. Most hits
+        /// need no frame and never copy an uninitialized continuation payload.
+        node: checked.CheckedTypeId,
         call: InstTask,
         ret: InstResult,
     };
 
     /// The per-body memo maps the builder pools across body contexts.
     const Memos = struct {
-        inhabitation_entered: collections.DenseMapUnmanaged(NodeId, usize) = .empty,
-        settled_node_uninhabited: [2]collections.DenseMapUnmanaged(NodeId, bool) = .{ .empty, .empty },
         explicit_binding_memo: collections.DenseMapUnmanaged(checked.CheckedPatternId, bool) = .empty,
 
         /// The chunk-directory span past which a released map gives up its
@@ -26418,30 +27259,22 @@ const BodyContext = struct {
         const retained_chunks = 256;
 
         fn deinit(self: *Memos, allocator: Allocator) void {
-            self.inhabitation_entered.deinit(allocator);
-            for (&self.settled_node_uninhabited) |*settled| settled.deinit(allocator);
             self.explicit_binding_memo.deinit(allocator);
         }
     };
 
     fn installMemos(self: *BodyContext, memos: Memos) void {
-        self.inhabitation_entered = memos.inhabitation_entered;
-        self.settled_node_uninhabited = memos.settled_node_uninhabited;
         self.explicit_binding_memo = memos.explicit_binding_memo;
     }
 
     /// Empty this body's memo maps and return them to the builder's pool.
     fn releaseMemos(self: *BodyContext) void {
         var memos: Memos = .{
-            .inhabitation_entered = self.inhabitation_entered,
-            .settled_node_uninhabited = self.settled_node_uninhabited,
             .explicit_binding_memo = self.explicit_binding_memo,
         };
         // A pooled map keeps the pages of a body-sized key range, not every
         // page any body ever touched.
         const allocator = self.builder.allocator;
-        memos.inhabitation_entered.clearRetainingAtMost(allocator, Memos.retained_chunks);
-        for (&memos.settled_node_uninhabited) |*settled| settled.clearRetainingAtMost(allocator, Memos.retained_chunks);
         memos.explicit_binding_memo.clearRetainingAtMost(allocator, Memos.retained_chunks);
         self.builder.body_memo_pool.append(self.builder.allocator, memos) catch memos.deinit(self.builder.allocator);
     }
@@ -26472,6 +27305,18 @@ const BodyContext = struct {
         while (true) {
             const frame = &frames.items[frames.items.len - 1];
             switch (try self.stepInst(frame, input)) {
+                .node => |checked_ty| {
+                    var task = InstNodeTask{ .checked_ty = checked_ty };
+                    if (try self.probeInstNode(&task)) |existing| {
+                        input = .{ .node = existing };
+                    } else {
+                        const pushed = try frames.addOne(self.allocator);
+                        pushed.cursor = 0;
+                        pushed.index = 0;
+                        pushed.task = .{ .node = task };
+                        input = null;
+                    }
+                },
                 .call => |called| {
                     const pushed = frames.addOne(self.allocator) catch |err| {
                         self.destroyInstTaskBox(called);
@@ -26482,18 +27327,6 @@ const BodyContext = struct {
                     pushed.index = 0;
                     writeActiveVariant(InstTask, &pushed.task, called);
                     input = null;
-                    // Most checked types are already instantiated in their
-                    // scope; such a request answers without keeping a frame.
-                    if (pushed.task == .node) {
-                        const probed = self.probeInstNode(&pushed.task.node) catch |err| {
-                            frames.items.len -= 1;
-                            return err;
-                        };
-                        if (probed) |existing| {
-                            frames.items.len -= 1;
-                            input = .{ .node = existing };
-                        }
-                    }
                 },
                 .ret => |result| {
                     self.destroyInstTaskBox(frames.items[frames.items.len - 1].task);
@@ -26543,7 +27376,7 @@ const BodyContext = struct {
     }
 
     fn instNodeStep(checked_ty: checked.CheckedTypeId) InstStep {
-        return .{ .call = .{ .node = .{ .checked_ty = checked_ty } } };
+        return .{ .node = checked_ty };
     }
 
     fn instSliceStep(checked_tys: []const checked.CheckedTypeId) InstStep {
@@ -26571,6 +27404,8 @@ const BodyContext = struct {
             function_ret: checked.CheckedTypeId,
             tag_union_ext: checked.CheckedTypeId,
             nominal,
+            list_elem,
+            box_elem,
         };
     };
 
@@ -26684,6 +27519,8 @@ const BodyContext = struct {
                     } });
                 },
                 .nominal => break :built result.get(.node),
+                .list_elem => break :built try self.graph.newNode(.{ .list = result.get(.node) }),
+                .box_elem => break :built try self.graph.newNode(.{ .box = result.get(.node) }),
             };
             switch (checkedPayload(self.view, task.checked_ty)) {
                 .pending => Common.invariant("pending checked type reached Monotype instantiation"),
@@ -26730,6 +27567,15 @@ const BodyContext = struct {
                     return .{ .call = .{ .tags = .{ .tags = tag_union.tags } } };
                 },
                 .nominal => |nominal| {
+                    if (nominal.representation == .builtin) switch (checked.builtinRuntimeEncoding(nominal.representation.builtin)) {
+                        .primitive => |primitive| break :built try self.graph.newNode(.{ .primitive = primitive }),
+                        .list, .box => {
+                            if (nominal.args.len != 1) Common.invariant("checked builtin container must have exactly one type argument");
+                            task.next = if (checked.builtinRuntimeEncoding(nominal.representation.builtin) == .list) .list_elem else .box_elem;
+                            return instNodeStep(nominal.args[0]);
+                        },
+                        .bool_tag_union, .try_nominal, .iterator, .parse_tag_union_spec, .fields, .field, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
+                    };
                     task.next = .nominal;
                     return .{ .call = .{ .nominal = try self.boxInstTask(InstNominalTask, .{ .checked_ty = task.checked_ty, .nominal = nominal }) } };
                 },
@@ -26959,10 +27805,9 @@ const BodyContext = struct {
     /// Cursor states of a nominal instantiation.
     const InstNominalCursor = struct {
         const start = 0;
-        const builtin_elem = 1;
-        const args = 2;
-        const backing = 3;
-        const declared_order = 4;
+        const args = 1;
+        const backing = 2;
+        const declared_order = 3;
     };
 
     fn stepInstNominal(self: *BodyContext, frame: *InstFrame, task: *InstNominalTask, input: ?InstResult) Allocator.Error!InstStep {
@@ -26971,18 +27816,8 @@ const BodyContext = struct {
             InstNominalCursor.start => {
                 switch (nominal.representation) {
                     .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
-                        .primitive => |primitive| return .{ .ret = .{ .node = try self.graph.newNode(.{ .primitive = primitive }) } },
+                        .primitive, .list, .box => Common.invariant("simple builtin reached nominal instantiation frame"),
                         .bool_tag_union => {},
-                        .list => {
-                            if (nominal.args.len != 1) Common.invariant("checked List nominal must have exactly one type argument");
-                            frame.cursor = InstNominalCursor.builtin_elem;
-                            return instNodeStep(nominal.args[0]);
-                        },
-                        .box => {
-                            if (nominal.args.len != 1) Common.invariant("checked Box nominal must have exactly one type argument");
-                            frame.cursor = InstNominalCursor.builtin_elem;
-                            return instNodeStep(nominal.args[0]);
-                        },
                         .try_nominal,
                         .iterator,
                         .parse_tag_union_spec,
@@ -27000,14 +27835,6 @@ const BodyContext = struct {
                 }
                 frame.cursor = InstNominalCursor.args;
                 return instSliceStep(nominal.args);
-            },
-            InstNominalCursor.builtin_elem => {
-                const elem = input.?.get(.node);
-                return .{ .ret = .{ .node = try self.graph.newNode(switch (checked.builtinRuntimeEncoding(nominal.representation.builtin)) {
-                    .list => .{ .list = elem },
-                    .box => .{ .box = elem },
-                    .primitive, .bool_tag_union, .try_nominal, .iterator, .parse_tag_union_spec, .fields, .field, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => Common.invariant("builtin nominal element resumed for a builtin without one"),
-                }) } };
             },
             InstNominalCursor.args => {
                 task.args = input.?.get(.nodes);
@@ -27046,7 +27873,7 @@ const BodyContext = struct {
         const nominal = task.nominal;
         task.def = try typeDef(self.nameStoreMut(), self.builder.app_module_identity, self.view, nominal.origin_module, nominal.name, nominal.source_decl);
         self.builder.noteBuiltinTryDef(nominal.builtin, self.nameStore(), task.def);
-        task.named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = task.checked_ty, .ty_module = moduleDigestFromId(self.view.key) };
+        task.named_type = try self.builder.canonicalNamedOccurrence(self.view, task.checked_ty, self.builder.declaredModuleForNominal(self.view, nominal));
         frame.cursor = InstNominalCursor.declared_order;
         return .{ .call = .{ .declared_order = try self.boxInstTask(InstDeclaredOrderTask, .{ .nominal = nominal, .args = task.args }) } };
     }
@@ -27668,11 +28495,10 @@ const BodyContext = struct {
                         continue;
                     }
                     const local_ctx = try self.allocator.create(BodyContext);
-                    local_ctx.* = BodyContext.initWithMethodScope(
+                    local_ctx.* = BodyContext.init(
                         self.allocator,
                         self.builder,
                         self.view,
-                        self.method_scope,
                         self.owner_template,
                         self.graph,
                         self.draft,
@@ -27771,7 +28597,107 @@ const BodyContext = struct {
         return .{ .cache = &workspace.interface_summaries, .types_are_durable = false };
     }
 
-    fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, request: InterfaceConstraints.Identity) Allocator.Error!?FoundInterfaceSummary {
+    fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, request: InterfaceConstraints.Identity, root_count: usize) Allocator.Error!?FoundInterfaceSummary {
+        if (!self.builder.replay_interface_summaries.enabled()) return null;
+        if (try self.findMemoryInterfaceSummary(address, evidence, request)) |found| return found;
+        const family = (try self.builder.persistentInterfaceFamily(address)) orelse return null;
+        const cache = self.builder.interface_cache.?;
+        const evidence_key = (try self.builder.persistentInterfaceEvidence(evidence)) orelse return null;
+        const key = PersistentInterface.requestKey(request, evidence_key, family.procedure);
+        const bytes = (try cache.load(cache.context, self.allocator, family.provider, key)) orelse {
+            self.builder.count("interface_persistent_misses");
+            return null;
+        };
+        defer self.allocator.free(bytes);
+        var stats: PersistentInterface.Stats = .{};
+        const decoded = PersistentInterface.decodeForRequest(self.graph.arena(), self.typeStore(), self.nameStoreMut(), request.leaves, bytes, PersistentProvenance{ .builder = self.builder }, root_count, address.kind != .method_signature, &stats) catch |err| switch (err) {
+            error.InvalidSummary => {
+                self.builder.count("interface_persistent_invalid");
+                return null;
+            },
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        const summary: InterfaceSummary = switch (decoded) {
+            .unchanged => .unchanged,
+            .constraints => |c| .{ .constraints = c },
+        };
+        self.builder.count("interface_persistent_hits");
+        if (stats.composites != 0) self.builder.count("interface_persistent_composite_hits");
+        if (stats.defaults != 0) self.builder.count("interface_persistent_default_hits");
+        // This cache owns the record independently of the graph arena. Worker
+        // records cross to the coordinator only with their accepted shard.
+        return .{ .summary = try self.insertInterfaceSummary(.{ .address = address, .evidence = evidence, .request = request, .summary = summary, .persisted = true }), .domain = .graph, .persistent = true };
+    }
+
+    const PersistentProvenance = struct {
+        builder: *Builder,
+        completed_body_validation: ?*const CompletedBodyValidation = null,
+        pub fn validateFrozenPayload(self: PersistentProvenance, payload: FrozenBodyProbe) PersistentInterface.DecodeError!void {
+            // The optional context is present for actual replay; the separate
+            // diagnostic round-trip deliberately discards the decoded payload.
+            if (self.completed_body_validation) |validation| try validation.validate(payload);
+        }
+
+        pub fn defaultDeclaringModule(self: PersistentProvenance, identity: [32]u8, expr: u32) ?[32]u8 {
+            const declaring = self.builder.moduleForIdentityHash(&identity) orelse return null;
+            _ = declaring.bodies.defaultExpr(expr) orelse return null;
+            return declaring.key.bytes;
+        }
+        pub fn validNamedDefinition(self: PersistentProvenance, ns: *const names.NameStore, named: Type.NamedType, def: Type.TypeDef, kind: Type.NamedKind, owner: ?static_dispatch.BuiltinOwner) bool {
+            if (def.site != self.builder.isAppModuleIdentity(ns.moduleIdentityBytes(def.module))) return false;
+            if (!self.validNamedType(named)) return false;
+            const occurrence = self.builder.moduleForKeyBytes(named.ty_module.bytes).?;
+            const payload = occurrence.types.payload(named.ty);
+            switch (payload) {
+                .alias => |alias| {
+                    return kind == .alias and owner == null and std.mem.eql(u8, &alias.owner_module.bytes, &named.module.bytes) and
+                        std.mem.eql(u8, occurrence.names.moduleIdentityBytes(alias.origin_module), ns.moduleIdentityBytes(def.module)) and
+                        alias.source_decl == def.source_decl and std.mem.eql(u8, occurrence.names.typeNameText(alias.name), ns.typeNameText(def.type_name));
+                },
+                .nominal => |nominal| {
+                    return kind == (if (nominal.is_opaque) Type.NamedKind.@"opaque" else .nominal) and owner == builtinOwner(nominal.builtin) and
+                        std.mem.eql(u8, &nominal.owner_module.bytes, &named.module.bytes) and
+                        std.mem.eql(u8, occurrence.names.moduleIdentityBytes(nominal.origin_module), ns.moduleIdentityBytes(def.module)) and
+                        nominal.source_decl == def.source_decl and std.mem.eql(u8, occurrence.names.typeNameText(nominal.name), ns.typeNameText(def.type_name));
+                },
+                .pending, .err, .flex, .rigid, .record, .tuple, .function, .tag_union, .empty_record, .empty_tag_union => return false,
+            }
+        }
+        pub fn validModuleIdentity(self: PersistentProvenance, identity: [32]u8) bool {
+            return self.builder.moduleForIdentityHash(&identity) != null;
+        }
+        pub fn describeNamedType(self: PersistentProvenance, named: Type.NamedType) PersistentInterface.NamedOccurrence {
+            const view = self.builder.moduleForKeyBytes(named.ty_module.bytes) orelse
+                Common.invariant("persistent named occurrence has no checked artifact");
+            const root = view.types.rootRows()[@backingInt(named.ty)];
+            if (!root.contains_identity_variables) return .{ .closed = .{ .owner = named.module.bytes, .key = root.key.bytes } };
+            return .{ .exact = .{ .owner = named.module.bytes, .occurrence = named.ty_module.bytes, .ty = @backingInt(named.ty) } };
+        }
+        pub fn resolveNamedType(self: PersistentProvenance, stored: PersistentInterface.NamedOccurrence) Allocator.Error!?Type.NamedType {
+            return switch (stored) {
+                .input => null,
+                .exact => |exact| .{ .module = .{ .bytes = exact.owner }, .ty_module = .{ .bytes = exact.occurrence }, .ty = @fromBackingInt(exact.ty) },
+                .closed => |closed| blk: {
+                    const entry = self.builder.closedOccurrenceIndex().get(closed.key) orelse break :blk null;
+                    if (!std.mem.eql(u8, &entry.owner, &closed.owner)) break :blk null;
+                    break :blk .{ .module = .{ .bytes = closed.owner }, .ty_module = entry.occurrence.module, .ty = entry.occurrence.ty };
+                },
+            };
+        }
+        pub fn validNamedType(self: PersistentProvenance, named: Type.NamedType) bool {
+            if (self.builder.moduleForKeyBytes(named.module.bytes) == null) {
+                if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("interface invalid named owner={x}\n", .{named.module.bytes});
+                return false;
+            }
+            const occurrence = self.builder.moduleForKeyBytes(named.ty_module.bytes) orelse {
+                if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("interface invalid occurrence={x} type={d}\n", .{ named.ty_module.bytes, @backingInt(named.ty) });
+                return false;
+            };
+            return @backingInt(named.ty) < occurrence.types.payloadCount();
+        }
+    };
+
+    fn findMemoryInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, request: InterfaceConstraints.Identity) Allocator.Error!?FoundInterfaceSummary {
         if (!self.builder.replay_interface_summaries.enabled()) return null;
         const local = self.interfaceSummaryCache().cache;
         if (try local.find(address, evidence, request, self.typeStore(), self.nameStore())) |summary| {
@@ -27839,7 +28765,9 @@ const BodyContext = struct {
         const binding = self.interfaceSummaryCache();
         if (binding.types_are_durable) {
             // Coordinator leaves already belong to permanent program storage.
-            return try binding.cache.insert(self.typeStore(), self.nameStore(), entry);
+            const summary = try binding.cache.insert(self.typeStore(), self.nameStore(), entry);
+            if (!entry.persisted) try self.builder.recordPersistentInterface(.{ .address = entry.address, .evidence = entry.evidence, .request = entry.request, .summary = summary }, self.typeStore(), self.nameStore());
+            return summary;
         }
         // Retain only settled leaves; open cells remain explicit constraints.
         var sealer = GraphTypeFinals.initRetainedTypeView(self.graph);
@@ -28003,7 +28931,7 @@ const BodyContext = struct {
             );
         edge.vector = try self.resolveCallableEvidenceAtNode(
             callee_view,
-            template,
+            callee_view.templates.evidenceParams(&template),
             edge.vector,
             request_fn_node,
             .interface_summary_input,
@@ -28065,7 +28993,7 @@ const BodyContext = struct {
         for (edge.subst, request_bytes[shape.bytes.len..]) |slot, *byte| byte.* = if (slot == .checked_error) 1 else 0;
         const request: InterfaceConstraints.Identity = .{ .bytes = request_bytes, .leaves = shape.leaves };
         const address = InterfaceReplayAddress{
-            .family = DraftTemplateFamilyAddress.interfaceSummary(template_ref, self.method_scope.key),
+            .family = DraftTemplateFamilyAddress.interfaceSummary(template_ref),
             .evidence_digest = evidence_digest.bytes,
             .input_digest = interfaceRequestBucket(request.bytes),
         };
@@ -28097,14 +29025,14 @@ const BodyContext = struct {
                 },
             }
         }
-        if (cached == null and replay_state.use_finished_summaries) cached = try self.findInterfaceSummary(address, stored_evidence, request);
+        if (cached == null and replay_state.use_finished_summaries) cached = try self.findInterfaceSummary(address, stored_evidence, request, request_roots.items.len);
         var verify_summary: ?InterfaceSummary = null;
         const saved_use_summaries = replay_state.use_finished_summaries;
         expansion.saved_use_summaries = saved_use_summaries;
         expansion.restores_use_summaries = true;
         if (cached) |found| {
             self.builder.count("interface_summary_hits");
-            if (std.debug.runtime_safety and self.builder.diagnostics != null and self.builder.interface_summary_checks < 16) {
+            if (!found.persistent and std.debug.runtime_safety and self.builder.diagnostics != null and self.builder.interface_summary_checks < 16) {
                 self.builder.interface_summary_checks += 1;
                 self.builder.count("interface_summary_verifications");
                 verify_summary = try self.graphDomainSummary(found);
@@ -28130,7 +29058,7 @@ const BodyContext = struct {
             slot.* = .{ .node = roots[slot_index] };
             slot_index += 1;
         };
-        edge.subst = detached_subst;
+        edge.subst = try self.builder.requestDeterminedSubstitution(self.graph, callee_view, &template, detached_subst);
         const replay_index = replay_state.entries.items.len;
         try replay_state.entries.append(self.allocator, .{
             .address = address,
@@ -28155,11 +29083,10 @@ const BodyContext = struct {
         expansion.restores_current = true;
         try replay_state.buckets.append(self.allocator, address, @intCast(replay_index));
 
-        expansion.callee_ctx = try BodyContext.initWithMethodScope(
+        expansion.callee_ctx = try BodyContext.init(
             self.allocator,
             self.builder,
             callee_view,
-            self.method_scope,
             template_ref,
             self.graph,
             self.draft,
@@ -28567,7 +29494,6 @@ const BodyContext = struct {
         }
         try self.draft.deferred_inspects.append(self.allocator, .{
             .view = self.view,
-            .method_scope = self.method_scope,
             .owner_template = self.owner_template,
             .owner = self.draft.current_owner,
             .expr = expr,
@@ -28593,57 +29519,95 @@ const BodyContext = struct {
         produced: NodeId,
     };
 
-    /// Completion revisits many siblings while keeping only the current path.
-    /// Tombstone deletion makes that workload saturate a probing hash table;
-    /// dense-map deletion repairs its index instead, without memoizing the
-    /// provisional answers used to cut recursive cycles.
-    const RequestCompletionPath = struct {
-        const Map = std.array_hash_map.Auto(RequestCompletionPair, void);
-
-        map: Map = .empty,
-        allocator: Allocator,
-
-        fn init(allocator: Allocator) RequestCompletionPath {
-            return .{ .allocator = allocator };
-        }
-
-        fn deinit(self: *RequestCompletionPath) void {
-            self.map.deinit(self.allocator);
-        }
-
-        fn enter(self: *RequestCompletionPath, pair: RequestCompletionPair) Allocator.Error!bool {
-            return !(try self.map.getOrPut(self.allocator, pair)).found_existing;
-        }
-
-        fn leave(self: *RequestCompletionPath, pair: RequestCompletionPair) void {
-            const removed = self.map.swapRemove(pair);
-            std.debug.assert(removed);
-        }
-    };
-
     const ProducedValuePair = struct {
         request: NodeId,
         produced: NodeId,
     };
 
-    /// Request-completion relations of the pairs one produced-value walk
-    /// enters. A pair's relation is a fact about its whole subtree, so a walk
-    /// that asks it of every container on a path would otherwise re-walk each
-    /// subtree once per enclosing container. Relations are recorded while the
-    /// first query walks the subtree and hold while the graph's
-    /// `structure_epoch` is unchanged; a relation decided by assuming a pair
-    /// still on the walked path is not recorded, since it holds only under
-    /// that assumption.
-    const CompletionMemo = struct {
-        epoch: u32,
-        relations: std.AutoHashMap(RequestCompletionPair, RequestCompletion),
+    const AnalysisKey = union(enum) {
+        completion: RequestCompletionPair,
+        inhabitation: struct { node: NodeId, access: UninhabitedBackingAccess },
+    };
+    const AnalysisProofs = @import("../proofs.zig").Cache(AnalysisKey, NodeId);
 
-        fn init(allocator: Allocator) CompletionMemo {
-            return .{ .epoch = 0, .relations = std.AutoHashMap(RequestCompletionPair, RequestCompletion).init(allocator) };
+    /// Distinct analyses share dependency ownership, never truth conditions.
+    const AnalysisMemo = struct {
+        proofs: AnalysisProofs = .{},
+        dependencies: std.ArrayList(AnalysisProofs.Dependency) = .empty,
+        entries: std.ArrayList(AnalysisProofs.Entry) = .empty,
+        depth: usize = 0,
+
+        fn deinit(self: *AnalysisMemo, allocator: Allocator) void {
+            self.proofs.deinit(allocator);
+            self.dependencies.deinit(allocator);
+            self.entries.deinit(allocator);
         }
 
-        fn deinit(self: *CompletionMemo) void {
-            self.relations.deinit();
+        fn begin(self: *AnalysisMemo, ctx: *BodyContext) usize {
+            if (self.depth == 0) {
+                if (dev_diagnostics.isSet(.fresh_type_analysis)) self.proofs.clear(ctx.allocator);
+                const before = self.proofs.invalidations;
+                const nodes_before = self.proofs.changed_nodes;
+                const edges_before = self.proofs.invalidation_edges;
+                self.proofs.refresh(ctx.allocator, ctx.graph.analysis_changes.epoch, ctx.graph);
+                if (ctx.graph.diagnostics) |stats| {
+                    stats.analysis_invalidated_groups += self.proofs.invalidations - before;
+                    stats.analysis_changed_nodes += self.proofs.changed_nodes - nodes_before;
+                    stats.analysis_invalidation_edges += self.proofs.invalidation_edges - edges_before;
+                }
+            }
+            self.depth += 1;
+            return self.dependencies.items.len;
+        }
+
+        fn end(self: *AnalysisMemo, start: usize) void {
+            self.depth -= 1;
+            self.dependencies.shrinkRetainingCapacity(start);
+        }
+
+        fn recordStats(self: *AnalysisMemo, ctx: *BodyContext) void {
+            if (ctx.graph.diagnostics) |stats| {
+                stats.analysis_peak_entries = @max(stats.analysis_peak_entries, self.proofs.proven.count());
+                stats.analysis_peak_payload_bytes = @max(stats.analysis_peak_payload_bytes, self.proofs.retainedPayloadBytes());
+            }
+        }
+
+        fn read(self: *AnalysisMemo, ctx: *BodyContext, node: NodeId) Allocator.Error!void {
+            try self.dependencies.append(ctx.allocator, .{ .node = ctx.graph.rootNode(node) });
+        }
+
+        fn lookup(self: *AnalysisMemo, ctx: *BodyContext, key: AnalysisKey) Allocator.Error!?u2 {
+            if (self.proofs.epoch != ctx.graph.analysis_changes.epoch) return null;
+            const fact = self.proofs.get(key) orelse return null;
+            if (self.depth > 0) try self.dependencies.append(ctx.allocator, .{ .proof = fact.proof });
+            return fact.value;
+        }
+
+        fn get(self: *AnalysisMemo, ctx: *BodyContext, pair: RequestCompletionPair) Allocator.Error!?RequestCompletion {
+            return if (try self.lookup(ctx, .{ .completion = pair })) |value| @fromBackingInt(@intCast(value)) else null;
+        }
+    };
+
+    const CompletionScratch = struct {
+        pairs: std.ArrayList(RequestCompletionPair) = .empty,
+        indices: std.AutoHashMapUnmanaged(RequestCompletionPair, usize) = .empty,
+        equations: FixedPoint = .{},
+        ops: std.ArrayList(RequestCompletionOp) = .empty,
+
+        fn deinit(self: *CompletionScratch, allocator: Allocator) void {
+            self.pairs.deinit(allocator);
+            self.indices.deinit(allocator);
+            self.equations.deinit(allocator);
+            self.ops.deinit(allocator);
+        }
+
+        fn intern(self: *CompletionScratch, allocator: Allocator, pair: RequestCompletionPair) Allocator.Error!usize {
+            const entry = try self.indices.getOrPut(allocator, pair);
+            if (entry.found_existing) return entry.value_ptr.*;
+            const index = try self.equations.add(allocator);
+            try self.pairs.append(allocator, pair);
+            entry.value_ptr.* = index;
+            return index;
         }
     };
 
@@ -28659,31 +29623,7 @@ const BodyContext = struct {
     ) Allocator.Error!bool {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
-        var visiting = RequestCompletionPath.init(self.allocator);
-        defer visiting.deinit();
-        return (try self.requestCompletionRelation(request_ret_node, produced_ret_node, &visiting, null)) == .completed;
-    }
-
-    /// `resultCompletesRequest` for a pair a produced-value walk enters,
-    /// answered from the walk's memo while the graph is unchanged.
-    fn producedPairCompletesRequest(
-        self: *BodyContext,
-        checked_root: NodeId,
-        produced_root: NodeId,
-        memo: *CompletionMemo,
-    ) Allocator.Error!bool {
-        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
-        defer timing_scope.end();
-        const pair = RequestCompletionPair{ .request = self.graph.rootNode(checked_root), .produced = self.graph.rootNode(produced_root) };
-        if (memo.epoch != self.graph.structure_epoch) {
-            memo.relations.clearRetainingCapacity();
-            memo.epoch = self.graph.structure_epoch;
-        } else if (memo.relations.get(pair)) |relation| {
-            return relation == .completed;
-        }
-        var visiting = RequestCompletionPath.init(self.allocator);
-        defer visiting.deinit();
-        return (try self.requestCompletionRelation(checked_root, produced_root, &visiting, memo)) == .completed;
+        return (try self.requestCompletionRelation(request_ret_node, produced_ret_node, &self.analysis_memo)) == .completed;
     }
 
     fn relateCheckedNodeToProducedValue(
@@ -28693,9 +29633,7 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         var visiting = std.AutoHashMap(ProducedValuePair, void).init(self.allocator);
         defer visiting.deinit();
-        var completions = CompletionMemo.init(self.allocator);
-        defer completions.deinit();
-        return try self.relateCheckedNodeToProducedValueInner(checked_node, produced_node, &visiting, &completions);
+        return try self.relateCheckedNodeToProducedValueInner(checked_node, produced_node, &visiting);
     }
 
     /// One step of relating a matching container's children: a child pair
@@ -28706,6 +29644,15 @@ const BodyContext = struct {
         tag: struct { checked_name: names.TagNameId, produced_name: names.TagNameId, checked_len: usize, produced_len: usize },
     };
 
+    /// Completed acyclic witnesses are reusable during one relation traversal
+    /// only while the graph has not changed. Active-path assumptions are never
+    /// published as completed witnesses.
+    const ProducedValueMemo = struct {
+        const Entry = struct { witness: NodeId, epoch: u64 };
+        completed: std.AutoHashMapUnmanaged(ProducedValuePair, Entry) = .empty,
+        cycles: u64 = 0,
+    };
+
     /// A matching container whose children are still relating.
     const ProducedValueFrame = struct {
         checked_node: NodeId,
@@ -28714,6 +29661,8 @@ const BodyContext = struct {
         /// related.
         produced_content: InstNode,
         pair: ProducedValuePair,
+        epoch: u64,
+        cycles: u64,
         ops_start: usize,
         next: usize,
         results_start: usize,
@@ -28734,8 +29683,9 @@ const BodyContext = struct {
         root_checked: NodeId,
         root_produced: NodeId,
         visiting: *std.AutoHashMap(ProducedValuePair, void),
-        completions: *CompletionMemo,
     ) Allocator.Error!NodeId {
+        var memo: ProducedValueMemo = .{};
+        defer memo.completed.deinit(self.allocator);
         var frames: std.ArrayListUnmanaged(ProducedValueFrame) = .empty;
         defer frames.deinit(self.allocator);
         var ops: std.ArrayListUnmanaged(ProducedValueOp) = .empty;
@@ -28746,7 +29696,7 @@ const BodyContext = struct {
             _ = visiting.remove(frame.pair);
         };
 
-        var delivered: ?NodeId = try self.enterProducedValue(root_checked, root_produced, visiting, completions, &frames, &ops, &results);
+        var delivered: ?NodeId = try self.enterProducedValue(root_checked, root_produced, visiting, &memo, &frames, &ops, &results);
         while (true) {
             if (delivered) |node| {
                 if (frames.items.len == 0) return node;
@@ -28760,7 +29710,7 @@ const BodyContext = struct {
                 frames.items[frames.items.len - 1].next += 1;
                 switch (op) {
                     .child => |child| {
-                        delivered = try self.enterProducedValue(child.checked, child.produced, visiting, completions, &frames, &ops, &results);
+                        delivered = try self.enterProducedValue(child.checked, child.produced, visiting, &memo, &frames, &ops, &results);
                         continue;
                     },
                     .field_name => |field| failed = field.checked != field.produced,
@@ -28784,6 +29734,9 @@ const BodyContext = struct {
             const produced_root = self.graph.rootNode(frame.produced_node);
             delivered = witness orelse try self.relateUnmatchedProducedValue(frame.checked_node, frame.produced_node, checked_root, produced_root);
             _ = visiting.remove(frame.pair);
+            if (frame.epoch == self.graph.analysis_changes.epoch and frame.cycles == memo.cycles) {
+                try memo.completed.put(self.allocator, frame.pair, .{ .witness = delivered.?, .epoch = frame.epoch });
+            }
         }
     }
 
@@ -28794,7 +29747,7 @@ const BodyContext = struct {
         checked_node: NodeId,
         produced_node: NodeId,
         visiting: *std.AutoHashMap(ProducedValuePair, void),
-        completions: *CompletionMemo,
+        memo: *ProducedValueMemo,
         frames: *std.ArrayListUnmanaged(ProducedValueFrame),
         ops: *std.ArrayListUnmanaged(ProducedValueOp),
         results: *std.ArrayListUnmanaged(NodeId),
@@ -28805,8 +29758,16 @@ const BodyContext = struct {
         if (checked_root == produced_root) return checked_node;
 
         const pair = ProducedValuePair{ .request = checked_root, .produced = produced_root };
+        if (memo.completed.get(pair)) |known| {
+            if (known.epoch == self.graph.analysis_changes.epoch) return known.witness;
+        }
         const entry = try visiting.getOrPut(pair);
-        if (entry.found_existing) return produced_node;
+        if (entry.found_existing) {
+            memo.cycles += 1;
+            return produced_node;
+        }
+        const epoch = self.graph.analysis_changes.epoch;
+        const cycles = memo.cycles;
         var pushed = false;
         defer if (!pushed) {
             _ = visiting.remove(pair);
@@ -28833,7 +29794,7 @@ const BodyContext = struct {
             }
             return checked_node;
         }
-        if (try self.producedPairCompletesRequest(checked_root, produced_root, completions)) return produced_node;
+        if (try self.resultCompletesRequest(checked_root, produced_root)) return produced_node;
 
         const ops_start = ops.items.len;
         var included_tags: ?[]const InstTag = null;
@@ -28929,6 +29890,8 @@ const BodyContext = struct {
             .produced_node = produced_node,
             .produced_content = (try self.graph.content(produced_root)),
             .pair = pair,
+            .epoch = epoch,
+            .cycles = cycles,
             .ops_start = ops_start,
             .next = ops_start,
             .results_start = results.items.len,
@@ -29259,118 +30222,82 @@ const BodyContext = struct {
         },
     };
 
-    /// Whether a produced value's graph completes a request's. Composite
-    /// relations are explicit frames over their child relations, so type
-    /// depth never becomes native call depth; a pair already on the current
-    /// path is unchanged by assumption. With `memo`, every relation decided
-    /// without such an assumption is recorded for its pair.
+    /// Solve the finite completion equations from unchanged. Shared pairs are
+    /// expanded once, and recursive dependencies settle before publication.
     fn requestCompletionRelation(
         self: *BodyContext,
         request_node: NodeId,
         produced_node: NodeId,
-        visiting: *RequestCompletionPath,
-        memo: ?*CompletionMemo,
+        memo: ?*AnalysisMemo,
     ) Allocator.Error!RequestCompletion {
-        const Frame = struct {
-            pair: RequestCompletionPair,
-            ops_start: usize,
-            next: usize,
-            relation: RequestCompletion,
-            /// Whether a relation below this frame assumed a pair on the path.
-            assumed: bool = false,
-        };
-        var frames: std.ArrayListUnmanaged(Frame) = .empty;
-        defer frames.deinit(self.allocator);
-        var ops: std.ArrayListUnmanaged(RequestCompletionOp) = .empty;
-        defer ops.deinit(self.allocator);
-        errdefer for (frames.items) |frame| {
-            visiting.leave(frame.pair);
-        };
-
-        var delivered: RequestCompletion = undefined;
-        var has_delivery = false;
-        var assumed = false;
-        if (try self.enterRequestCompletion(request_node, produced_node, visiting, &ops, &assumed)) |relation| {
-            if (memo) |m| try m.relations.put(.{ .request = self.graph.rootNode(request_node), .produced = self.graph.rootNode(produced_node) }, relation);
-            return relation;
+        self.graph.countDiagnostic("completion_queries");
+        const recording = self.analysis_memo.begin(self);
+        defer self.analysis_memo.end(recording);
+        const scratch = &self.completion_scratch;
+        std.debug.assert(scratch.pairs.items.len == 0);
+        defer {
+            scratch.pairs.clearRetainingCapacity();
+            scratch.indices.clearRetainingCapacity();
+            scratch.equations.clear();
+            scratch.ops.clearRetainingCapacity();
         }
-        try frames.append(self.allocator, .{
-            .pair = .{ .request = self.graph.rootNode(request_node), .produced = self.graph.rootNode(produced_node) },
-            .ops_start = 0,
-            .next = 0,
-            .relation = .unchanged,
-        });
-        while (true) {
-            const frame = &frames.items[frames.items.len - 1];
-            var finished: ?RequestCompletion = null;
-            if (has_delivery) {
-                has_delivery = false;
-                const op = ops.items[frame.next - 1];
-                switch (op.combine) {
-                    .fold => switch (delivered) {
-                        .unchanged => {},
-                        .completed => frame.relation = .completed,
-                        .mismatch => finished = .mismatch,
-                    },
-                    .unchanged_extension => if (delivered != .unchanged) {
-                        finished = .mismatch;
-                    },
-                    .backing => frame.relation = switch (delivered) {
-                        .unchanged, .completed => .completed,
-                        .mismatch => .mismatch,
-                    },
-                }
+        const epoch = self.graph.analysis_changes.epoch;
+        const root_pair: RequestCompletionPair = .{ .request = self.graph.rootNode(request_node), .produced = self.graph.rootNode(produced_node) };
+        if (memo) |m| if (try m.get(self, root_pair)) |answer| {
+            self.graph.countDiagnostic("completion_memo_hits");
+            return answer;
+        };
+        _ = try scratch.intern(self.allocator, root_pair);
+        var index: usize = 0;
+        while (index < scratch.pairs.items.len) : (index += 1) {
+            const pair = scratch.pairs.items[index];
+            scratch.ops.clearRetainingCapacity();
+            if (try self.enterRequestCompletion(pair.request, pair.produced, &scratch.ops, memo)) |answer| {
+                scratch.equations.set(index, @backingInt(answer));
+                continue;
             }
-            if (finished == null) {
-                if (frame.next < ops.items.len) {
-                    const op = ops.items[frame.next];
-                    frame.next += 1;
-                    const ops_start = ops.items.len;
-                    assumed = false;
-                    if (try self.enterRequestCompletion(op.request, op.produced, visiting, &ops, &assumed)) |relation| {
-                        if (assumed) {
-                            for (frames.items) |*open| open.assumed = true;
-                        } else if (memo) |m| {
-                            try m.relations.put(.{ .request = self.graph.rootNode(op.request), .produced = self.graph.rootNode(op.produced) }, relation);
-                        }
-                        delivered = relation;
-                        has_delivery = true;
-                    } else {
-                        try frames.append(self.allocator, .{
-                            .pair = .{ .request = self.graph.rootNode(op.request), .produced = self.graph.rootNode(op.produced) },
-                            .ops_start = ops_start,
-                            .next = ops_start,
-                            .relation = .unchanged,
-                        });
-                    }
-                    continue;
-                }
-                finished = frame.relation;
+            for (scratch.ops.items) |op| {
+                const child_pair: RequestCompletionPair = .{ .request = self.graph.rootNode(op.request), .produced = self.graph.rootNode(op.produced) };
+                if (scratch.indices.contains(child_pair)) self.graph.countDiagnostic("completion_repeated_pairs");
+                const child = try scratch.intern(self.allocator, child_pair);
+                try scratch.equations.edge(self.allocator, index, child, switch (op.combine) {
+                    .fold => .identity,
+                    .unchanged_extension => .unchanged,
+                    .backing => .backing,
+                });
             }
-
-            const done = frames.pop().?;
-            visiting.leave(done.pair);
-            ops.shrinkRetainingCapacity(done.ops_start);
-            if (memo) |m| if (!done.assumed) try m.relations.put(done.pair, finished.?);
-            if (frames.items.len == 0) return finished.?;
-            delivered = finished.?;
-            has_delivery = true;
         }
+        try scratch.equations.solve(self.allocator);
+        if (memo) |m| if (epoch == self.graph.analysis_changes.epoch and m.proofs.epoch == epoch) {
+            m.entries.clearRetainingCapacity();
+            for (scratch.pairs.items, 0..) |pair, i| {
+                const key: AnalysisKey = .{ .completion = pair };
+                if (!m.proofs.proven.contains(key)) try m.entries.append(self.allocator, .{ .key = key, .value = scratch.equations.value(i) });
+            }
+            try m.proofs.commit(self.allocator, m.entries.items, m.dependencies.items[recording..]);
+            m.recordStats(self);
+        };
+        return @fromBackingInt(@intCast(scratch.equations.value(0)));
     }
 
-    /// A pair's relation when it is decided at once; otherwise mark it on the
-    /// current path, list its child relations, and return null.
+    /// Produce one local equation, or a directly decided relation.
     fn enterRequestCompletion(
         self: *BodyContext,
         request_node: NodeId,
         produced_node: NodeId,
-        visiting: *RequestCompletionPath,
         ops: *std.ArrayListUnmanaged(RequestCompletionOp),
-        assumed: *bool,
+        memo: ?*AnalysisMemo,
     ) Allocator.Error!?RequestCompletion {
         const gpa = self.allocator;
+        self.graph.countDiagnostic("completion_pair_entries");
         const request_root = self.graph.rootNode(request_node);
         const produced_root = self.graph.rootNode(produced_node);
+        if (memo) |m| if (try m.get(self, .{ .request = request_root, .produced = produced_root })) |relation| {
+            self.graph.countDiagnostic("completion_memo_hits");
+            return relation;
+        };
+        try self.analysis_memo.read(self, request_root);
+        try self.analysis_memo.read(self, produced_root);
         if (request_root == produced_root) return .unchanged;
         if (try self.nodeIsProvenUninhabited(request_root) and
             !try self.nodeIsProvenUninhabited(produced_root))
@@ -29378,12 +30305,7 @@ const BodyContext = struct {
             return .completed;
         }
 
-        const pair = RequestCompletionPair{ .request = request_root, .produced = produced_root };
-        if (!try visiting.enter(pair)) {
-            assumed.* = true;
-            return .unchanged;
-        }
-        errdefer visiting.leave(pair);
+        self.graph.countDiagnostic("completion_pair_expansions");
         const start = ops.items.len;
         const relation: ?RequestCompletion = relation: {
             if ((try self.checkedPublicInspectableBacking(produced_root))) |backing| {
@@ -29427,6 +30349,8 @@ const BodyContext = struct {
                     .func => |produced_fn| blk: {
                         if (request_fn.args.len != produced_fn.args.len) break :blk .mismatch;
                         for (request_fn.args, produced_fn.args) |request_arg, produced_arg| {
+                            try self.analysis_memo.read(self, request_arg);
+                            try self.analysis_memo.read(self, produced_arg);
                             if (!self.graph.sameClass(request_arg, produced_arg)) break :blk .mismatch;
                         }
                         try ops.append(gpa, .{ .request = request_fn.ret, .produced = produced_fn.ret, .combine = .fold });
@@ -29490,7 +30414,6 @@ const BodyContext = struct {
         };
         if (relation) |decided| {
             ops.shrinkRetainingCapacity(start);
-            visiting.leave(pair);
             return decided;
         }
         return null;
@@ -30450,7 +31373,7 @@ const BodyContext = struct {
         const contexts = &self.builder.task_storage.contexts;
         const call_ctx = try contexts.create(self.allocator);
         errdefer contexts.destroy(self.allocator, call_ctx);
-        call_ctx.* = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
+        call_ctx.* = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph, self.draft);
         call_ctx.evidence = self.evidence;
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
@@ -36060,7 +36983,6 @@ const BodyContext = struct {
         const direct_key = ClosedDirectCallIdentity{
             .callable = checkedTypeAddress(self.view, plan.callable_ty),
             .evidence = evidence_id,
-            .method_scope = self.method_scope.key,
         };
         const slot = if (self.draft.closed_direct_specializations.get(direct_key)) |existing| blk: {
             switch (existing.slot.local) {
@@ -36698,7 +37620,10 @@ const BodyContext = struct {
     /// Whether a direct call's callee has a closed result row that
     /// `expected_node`'s row includes, so the call is requested at the
     /// expected result and the callee specialized there (design.md "Closed
-    /// Result Rows At Template Boundaries").
+    /// Result Rows At Template Boundaries"). Only a procedure template takes
+    /// a wider row. A local procedure's request relates its instance exactly,
+    /// and a closed row in that instance belongs to the enclosing body, so a
+    /// call to one keeps its own row.
     fn directCallWidensClosedResult(
         self: *BodyContext,
         call_expr: checked.CheckedExprId,
@@ -36706,6 +37631,7 @@ const BodyContext = struct {
         expected_node: NodeId,
     ) Allocator.Error!bool {
         const target = call.direct_target orelse return false;
+        if (self.directCallTargetIsLocalProc(target)) return false;
         const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
         const declared_row = closedResultRowOrNull(self.view, source_fn_ty) orelse return false;
         const call_ret_node = try self.instNode(self.view.bodies.expr(call_expr).ty);
@@ -36715,26 +37641,38 @@ const BodyContext = struct {
     /// Whether a row coercion's value is lowered at the coercion's row rather
     /// than at its own: every value it ends in is a direct call whose callee
     /// takes the row (`directCallWidensClosedResult`), a construction, or a
-    /// divergence, reached through blocks and branches. Anything else—a read
-    /// of a value, a restored compile-time constant, a call through a
-    /// function value—keeps its own row, which every use of that value
-    /// shares, and is widened into the coercion's.
+    /// divergence, reached through blocks and branches. A construction builds
+    /// only its own row, so each payload whose type is not already the
+    /// coercion's payload slot must take that slot by the same rule. Anything
+    /// else—a read of a value, a restored compile-time constant, a call
+    /// through a function value—keeps its own row, which every use of that
+    /// value shares, and is widened into the coercion's.
     fn coercedValueTakesRow(self: *BodyContext, value: checked.CheckedExprId, expected_node: NodeId) Allocator.Error!bool {
-        var pending: std.ArrayListUnmanaged(checked.CheckedExprId) = .empty;
+        const RowDemand = struct { expr: checked.CheckedExprId, expected: NodeId };
+        var pending: std.ArrayListUnmanaged(RowDemand) = .empty;
         defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, value);
-        while (pending.pop()) |expr_id| {
+        try pending.append(self.allocator, .{ .expr = value, .expected = expected_node });
+        while (pending.pop()) |demand| {
+            const expr_id = demand.expr;
             if (self.restoredHoistedConstEntry(expr_id) != null) return false;
             const expr = self.view.bodies.expr(expr_id);
             switch (expr.data) {
-                .call => |call| if (!try self.directCallWidensClosedResult(expr_id, call, expected_node)) return false,
-                .block => |block| try pending.append(self.allocator, block.final_expr),
+                .call => |call| if (!try self.directCallWidensClosedResult(expr_id, call, demand.expected)) return false,
+                .block => |block| try pending.append(self.allocator, .{ .expr = block.final_expr, .expected = demand.expected }),
                 .if_ => |if_| {
-                    for (if_.branches) |branch| try pending.append(self.allocator, branch.body);
-                    try pending.append(self.allocator, if_.final_else);
+                    for (if_.branches) |branch| try pending.append(self.allocator, .{ .expr = branch.body, .expected = demand.expected });
+                    try pending.append(self.allocator, .{ .expr = if_.final_else, .expected = demand.expected });
                 },
-                .match_ => |match| for (match.branches) |branch| try pending.append(self.allocator, branch.value),
-                .tag, .zero_argument_tag, .crash, .runtime_error => {},
+                .match_ => |match| for (match.branches) |branch| try pending.append(self.allocator, .{ .expr = branch.value, .expected = demand.expected }),
+                .tag => |tag| {
+                    const name = try tagName(self.nameStoreMut(), self.view, tag.name);
+                    for (tag.args, 0..) |arg, index| {
+                        const slot = try self.graph.tagConstructionPayloadNode(demand.expected, name, index);
+                        if (self.graph.sameClass(try self.instNode(self.view.bodies.expr(arg).ty), slot)) continue;
+                        try pending.append(self.allocator, .{ .expr = arg, .expected = slot });
+                    }
+                },
+                .zero_argument_tag, .crash, .runtime_error => {},
                 .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .record, .empty_record, .nominal, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return false,
             }
         }
@@ -37104,9 +38042,33 @@ const BodyContext = struct {
         node: NodeId,
         backing_access: UninhabitedBackingAccess,
     ) Allocator.Error!bool {
-        self.inhabitation_entered.clearRetainingCapacity();
+        self.graph.countDiagnostic("inhabitation_queries");
+        const memo = &self.analysis_memo;
+        const recording = memo.begin(self);
+        const epoch = self.graph.analysis_changes.epoch;
+        var ended = false;
+        defer if (!ended) memo.end(recording);
+        const key: AnalysisKey = .{ .inhabitation = .{ .node = self.graph.rootNode(node), .access = backing_access } };
+        if (try memo.lookup(self, key)) |answer| {
+            self.graph.countDiagnostic("inhabitation_memo_hits");
+            const fact = memo.proofs.get(key).?;
+            memo.end(recording);
+            ended = true;
+            if (memo.depth > 0) try memo.dependencies.append(self.allocator, .{ .proof = fact.proof });
+            return answer != 0;
+        }
+        memo.entries.clearRetainingCapacity();
         var scan = NodeUninhabitedScan{ .body = self, .backing_access = backing_access };
-        return try NodeUninhabitedScan.Evaluation.runWith(self.allocator, &self.node_uninhabited_scratch, &scan, node);
+        const answer = try NodeUninhabitedScan.Evaluation.runWith(self.allocator, &self.node_uninhabited_scratch, &scan, node);
+        if (epoch == self.graph.analysis_changes.epoch and memo.proofs.epoch == epoch) {
+            try memo.proofs.commit(self.allocator, memo.entries.items, memo.dependencies.items[recording..]);
+            memo.recordStats(self);
+            const fact = memo.proofs.get(key).?;
+            memo.end(recording);
+            ended = true;
+            if (memo.depth > 0) try memo.dependencies.append(self.allocator, .{ .proof = fact.proof });
+        }
+        return answer;
     }
 
     fn typeIsProvenUninhabited(self: *BodyContext, ty: Type.TypeId) Allocator.Error!bool {
@@ -37360,7 +38322,6 @@ const BodyContext = struct {
         };
         try self.draft.deferred_callsite_intrinsics.append(self.allocator, .{
             .view = self.view,
-            .method_scope = self.method_scope,
             .owner_template = self.owner_template,
             .owner = self.draft.current_owner,
             .expr = expr,
@@ -37538,7 +38499,7 @@ const BodyContext = struct {
             wrapper_fn_ty,
         );
 
-        var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, wrapper.template, self.graph, self.draft);
+        var body_ctx = try BodyContext.init(self.allocator, self.builder, view, wrapper.template, self.graph, self.draft);
         defer body_ctx.deinit();
         const entry_template = view.templates.get(wrapper.template.template);
         const schema = templateSchemaIn(view, &entry_template);
@@ -37606,7 +38567,7 @@ const BodyContext = struct {
         const wrapper = view.entry_wrappers.lookupByRoot(template.root) orelse
             Common.invariant("callable eval template root had no checked entry wrapper");
 
-        var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, wrapper.template, self.graph, self.draft);
+        var body_ctx = try BodyContext.init(self.allocator, self.builder, view, wrapper.template, self.graph, self.draft);
         defer body_ctx.deinit();
         const entry_template = view.templates.get(wrapper.template.template);
         const schema = templateSchemaIn(view, &entry_template);
@@ -37647,11 +38608,11 @@ const BodyContext = struct {
         cell: DraftTypeCell,
         const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
-        const owners = self.builder.borrowed_comptime_root_functions orelse &self.builder.declared_comptime_root_functions;
-        const fn_id = owners.get(.{ .module = view.key, .root = root_id }) orelse
-            Common.invariant("shared root read lacked a declared root function");
+        const owners = self.builder.borrowed_comptime_roots orelse &self.builder.declared_comptime_roots;
+        const ordinal = owners.get(.{ .module = view.key, .root = root_id }) orelse
+            Common.invariant("shared root read lacked its checked declaration");
         const initializer = try self.addExprWithTypeCell(cell, .{ .call_proc = .{
-            .callee = .{ .func = .{ .local = .{ .final = fn_id } } },
+            .callee = .{ .declared_root = ordinal },
             .args = .empty(),
         } });
         return try self.addExprWithTypeCell(cell, .{ .comptime_value = .{
@@ -38876,7 +39837,7 @@ const BodyContext = struct {
                 if ((try self.isGeneratedIteratorEvidenceNode(request_fn.args[0]))) {
                     return try self.graphFunctionNode(
                         &.{request_fn.args[0]},
-                        try self.generatedIteratorStepReturnNode(request_fn.args[0]),
+                        try self.generatedIteratorNextResultNode(request_fn.args[0], public_fn.ret),
                     );
                 }
             },
@@ -39158,6 +40119,19 @@ const BodyContext = struct {
             try self.graph.recordFieldNode(backing.node, topology.len_field),
             try self.graph.recordFieldNode(backing.node, topology.step_field),
         }, iterator);
+    }
+
+    /// The result of a generated-private `next` request: the iterator's step
+    /// row, or, when the public interface's result row includes that closed
+    /// row and more tags, a row at the interface's labels whose own tags keep
+    /// the step row's payloads. The step closure is a call through a function
+    /// value, so its row stays its own and the template body's row coercion
+    /// joins it into the result (design.md "Closed Result Rows At Template
+    /// Boundaries").
+    fn generatedIteratorNextResultNode(self: *BodyContext, iterator: NodeId, public_ret: NodeId) Allocator.Error!NodeId {
+        const step_ret = try self.generatedIteratorStepReturnNode(iterator);
+        if (!try requestRowIncludesClosedRow(self.graph, step_ret, public_ret)) return step_ret;
+        return try self.graph.closedTagRowAtWiderLabels(step_ret, public_ret);
     }
 
     fn generatedIteratorStepReturnNode(self: *BodyContext, iterator: NodeId) Allocator.Error!NodeId {
@@ -44402,6 +45376,17 @@ const BodyContext = struct {
         return try self.graph.containsIteratorInterface(argument_node);
     }
 
+    fn directCallTargetIsLocalProc(self: *const BodyContext, target: checked.ResolvedValueId) bool {
+        const raw = @backingInt(target);
+        if (raw >= self.view.resolved_refs.records.len) {
+            Common.invariant("checked direct call target is outside resolved value table");
+        }
+        return switch (self.view.resolved_refs.records[raw].ref) {
+            .local_proc => true,
+            .platform_required_proc, .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .promoted_top_level_proc => false,
+        };
+    }
+
     fn directCallInstantiationSourceFnType(
         self: *BodyContext,
         target: checked.ResolvedValueId,
@@ -45025,7 +46010,7 @@ const BodyContext = struct {
             Common.invariant("callable eval template root had no checked entry wrapper");
         const edge = try self.evidenceForUseSiteAtNode(use_expr, request_fn_node);
 
-        var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, wrapper.template, self.graph, self.draft);
+        var body_ctx = try BodyContext.init(self.allocator, self.builder, view, wrapper.template, self.graph, self.draft);
         defer body_ctx.deinit();
         const entry_template = view.templates.get(wrapper.template.template);
         const schema = templateSchemaIn(view, &entry_template);
@@ -46197,7 +47182,6 @@ const BodyContext = struct {
         }
         try self.draft.deferred_const_uses.append(self.allocator, .{
             .view = self.view,
-            .method_scope = self.method_scope,
             .owner_template = self.owner_template,
             .owner = self.draft.current_owner,
             .expr = expr,
@@ -46379,7 +47363,6 @@ const BodyContext = struct {
         if (self.builder.active_template_root) |active_root| {
             const family = DraftTemplateFamilyAddress.init(
                 spec.template_ref,
-                spec.method_scope,
                 spec.source_fn_key,
             );
             if (active_root.graph == self.graph and
@@ -46436,7 +47419,6 @@ const BodyContext = struct {
         const lookup_prefix = try self.draft.template_spec_lookup.internPrefix(
             DraftTemplateFamilyAddress.init(
                 completed_spec.template_ref,
-                completed_spec.method_scope,
                 completed_spec.source_fn_key,
             ),
             completed_source.evidence_digest.bytes,
@@ -46712,11 +47694,10 @@ const BodyContext = struct {
         }
         const entry_template = store_view.templates.get(eval.entry_template.template);
 
-        var body_ctx = try BodyContext.initWithMethodScope(
+        var body_ctx = try BodyContext.init(
             self.allocator,
             self.builder,
             store_view,
-            self.method_scope,
             eval.entry_template,
             self.graph,
             self.draft,
@@ -46878,6 +47859,7 @@ const BodyContext = struct {
                 const_locator,
                 node,
                 checked_type,
+                type_view.key,
                 DraftTypeCell.fromSealed(ty),
             );
             const address: StaticDataCandidateAddress = .{
@@ -46890,7 +47872,7 @@ const BodyContext = struct {
                 .{ .stored = try self.storedStaticList(store_view, type_view, shape, .{ .sealed = listElemType(self.typeStore(), ty) }, const_locator) }
             else runtime: {
                 const previous_part_root = self.static_data_part_root;
-                self.static_data_part_root = staticDataPartRootFor(store_view, node, const_locator, checked_type);
+                self.static_data_part_root = staticDataPartRootFor(store_view, node, const_locator, checked_type, type_view.key);
                 defer self.static_data_part_root = previous_part_root;
                 break :runtime .{ .runtime = try runConstRestore(self, store_view, type_view, node, ty, const_locator) };
             };
@@ -46927,7 +47909,7 @@ const BodyContext = struct {
             .{ .stored = try self.storedStaticList(store_view, type_view, shape, .{ .graph = try self.graph.listElementNode(request_node) }, const_locator) }
         else runtime: {
             const previous_part_root = self.static_data_part_root;
-            self.static_data_part_root = if (candidate) staticDataPartRootFor(store_view, node, const_locator, checked_type) else null;
+            self.static_data_part_root = if (candidate) staticDataPartRootFor(store_view, node, const_locator, checked_type, type_view.key) else null;
             defer self.static_data_part_root = previous_part_root;
             break :runtime .{ .runtime = try self.restoreConstNodeAtNodeWithStaticRoot(
                 store_view,
@@ -46942,6 +47924,7 @@ const BodyContext = struct {
                 const_locator,
                 node,
                 checked_type,
+                type_view.key,
                 DraftTypeCell.fromGraphNode(request_node),
             );
             return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(request_node), .{ .static_data_candidate = .{
@@ -46961,6 +47944,7 @@ const BodyContext = struct {
         node: checked.ConstNodeId,
         const_locator: checked.ConstLocator,
         checked_type: checked.CheckedTypeId,
+        checked_type_module: checked.ModuleId,
     ) ?StaticDataPartRoot {
         return switch (store_view.const_store.get(node)) {
             .tuple, .record, .tag, .nominal => .{
@@ -46968,6 +47952,7 @@ const BodyContext = struct {
                 .node = node,
                 .const_locator = const_locator,
                 .checked_type = checked_type,
+                .checked_type_module = checked_type_module,
             },
             .pending, .zst, .scalar, .str, .list, .box, .crash, .checked_error, .fn_value => null,
         };
@@ -47006,7 +47991,7 @@ const BodyContext = struct {
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const root = self.static_data_part_root.?;
-        const id = try self.draftStaticDataRequest(root.const_locator, node, root.checked_type, DraftTypeCell.fromSealed(ty));
+        const id = try self.draftStaticDataRequest(root.const_locator, node, root.checked_type, root.checked_type_module, DraftTypeCell.fromSealed(ty));
         const address: StaticDataCandidateAddress = .{
             .static_data = id,
             .owner = self.draft.current_owner,
@@ -47045,7 +48030,7 @@ const BodyContext = struct {
             break :value .{ .runtime = try self.restoreConstNodeAtNodeWithStaticRoot(store_view, store_view, node, request_node, root.const_locator) };
         };
         const cell = DraftTypeCell.fromGraphNode(request_node);
-        const id = try self.draftStaticDataRequest(root.const_locator, node, root.checked_type, cell);
+        const id = try self.draftStaticDataRequest(root.const_locator, node, root.checked_type, root.checked_type_module, cell);
         return try self.addExprWithTypeCell(cell, .{ .static_data_candidate = .{
             .static_data = id,
             .storage = constStaticDataStorage(store_view, node),
@@ -47367,25 +48352,40 @@ const BodyContext = struct {
         return materialized;
     }
 
+    fn constCaptureTypeCache(self: *BodyContext) *ConstTypeMemo {
+        // Durable types are the program's own; the others belong to the
+        // specialization workspace that owns this body.
+        if (self.interfaceSummaryCache().types_are_durable) return &self.builder.const_type_cache;
+        const workspace = self.draft.spec_job_workspace orelse
+            Common.invariant("stored-type restoration has no owning destination workspace");
+        return &workspace.const_type_cache;
+    }
+
     fn lowerConstCaptureType(
         self: *BodyContext,
         store_view: ModuleView,
         ty: check.ConstStore.ConstTypeId,
     ) Allocator.Error!Type.TypeId {
+        const cache = self.constCaptureTypeCache();
+        const source = &store_view.const_store.type_store;
+        if (cache.get(.{ .store = source, .ty = ty })) |existing| return existing;
         var map = collections.DenseMap(check.ConstStore.ConstTypeId, Type.TypeId).init(self.allocator);
         defer map.deinit();
         const transaction = self.typeStore().beginTransaction();
         errdefer transaction.abort(self.typeStore());
         const speculative = try self.lowerConstCaptureTypeInner(store_view, ty, &map);
+        try cache.ensureUnusedCapacity(self.typeStore().allocator, @intCast(map.count()));
         var result = try self.typeStore().commitTransaction(
             self.nameStore(),
             transaction,
             speculative,
         );
         defer result.deinit();
-        var lowered_types = map.valueIterator();
-        while (lowered_types.next()) |lowered| {
-            lowered.* = result.remapType(lowered.*);
+        // Only committed immutable destination ids enter the durable map.
+        // A failed transaction publishes no entries and cannot poison a retry.
+        var entries = map.iterator();
+        while (entries.next()) |entry| {
+            cache.putAssumeCapacity(.{ .store = source, .ty = entry.key_ptr.* }, result.remapType(entry.value_ptr.*));
         }
         return result.root;
     }
@@ -47489,6 +48489,7 @@ const BodyContext = struct {
         if (map.get(ty)) |existing| return existing;
         const gpa = self.allocator;
         const type_store = &store_view.const_store.type_store;
+        if (self.constCaptureTypeCache().get(.{ .store = type_store, .ty = ty })) |existing| return existing;
         const stored = type_store.get(ty);
         const ops_start = ops.items.len;
         // Stored aliases retain the checked acyclic backing chain. Memoize
@@ -47614,12 +48615,14 @@ const BodyContext = struct {
                 const def = results[cursor].named_def;
                 const args_span = results[cursor + 1].span;
                 cursor += 2;
+                // A stored occurrence is the storing module's own (or, when
+                // open, its lowering view's); the program's representative
+                // occurrence of the same closed type keeps restored and
+                // freshly lowered types one Monotype.
+                const occurrence_view = self.builder.moduleForKeyBytes(named.named_type.ty_module.bytes) orelse
+                    Common.invariant("a stored named type's checked occurrence named a module outside the lowering input");
                 break :blk .{ .named = .{
-                    .named_type = .{
-                        .module = named.named_type.module,
-                        .ty = named.named_type.ty,
-                        .ty_module = named.named_type.ty_module,
-                    },
+                    .named_type = try self.builder.canonicalNamedOccurrence(occurrence_view, named.named_type.ty, named.named_type.module),
                     .def = def,
                     .kind = monotypeNamedKind(named.kind),
                     .builtin_owner = named.builtin_owner,
@@ -47776,11 +48779,10 @@ const BodyContext = struct {
         return switch (fn_def) {
             .nested => |nested| {
                 const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
-                var fn_ctx = try BodyContext.initWithMethodScope(
+                var fn_ctx = try BodyContext.init(
                     self.allocator,
                     self.builder,
                     fn_view,
-                    self.method_scope,
                     ownerTemplateForConstFnDef(fn_value.fn_def),
                     self.graph,
                     self.draft,
@@ -47843,7 +48845,7 @@ const BodyContext = struct {
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
         const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
-        var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, ownerTemplateForConstFnDef(fn_value.fn_def), self.graph, self.draft);
+        var fn_ctx = try BodyContext.init(self.allocator, self.builder, fn_view, ownerTemplateForConstFnDef(fn_value.fn_def), self.graph, self.draft);
         fn_ctx.in_default_expr = constFnDefIsDefaultRoot(fn_value.fn_def);
         fn_ctx.evidence = retained_evidence;
         fn_ctx.inheritFrozenEmissionContext(self);
@@ -48184,7 +49186,7 @@ const BodyContext = struct {
         };
         const fn_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(runtime.owner));
 
-        var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, runtime.owner, self.graph, self.draft);
+        var fn_ctx = try BodyContext.init(self.allocator, self.builder, fn_view, runtime.owner, self.graph, self.draft);
         defer fn_ctx.deinit();
         fn_ctx.inheritFrozenEmissionContext(self);
         try fn_ctx.inheritActiveConstBinding(self);
@@ -48281,7 +49283,6 @@ const BodyContext = struct {
 
         var boundary = DraftDeferredStoredCodecRestore{
             .view = fn_view,
-            .method_scope = fn_ctx.method_scope,
             .owner_template = runtime.owner,
             .owner = fn_ctx.draft.current_owner,
             .expr = runtime_boundary,
@@ -51739,14 +52740,14 @@ const BodyContext = struct {
             switch (entry) {
                 .target => |target| {
                     if (ctx == null) {
-                        ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, owner, self.graph, self.draft);
+                        ctx = try BodyContext.init(self.allocator, self.builder, view, owner, self.graph, self.draft);
                         try ctx.?.seedSubstitution(schema, subst);
                     }
                     try self.relateTargetToConstraint(target, &ctx.?, param);
                 },
                 .structural => |structural| if (structural.checked) |checked_structural| {
                     if (ctx == null) {
-                        ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, owner, self.graph, self.draft);
+                        ctx = try BodyContext.init(self.allocator, self.builder, view, owner, self.graph, self.draft);
                         try ctx.?.seedSubstitution(schema, subst);
                     }
                     try self.relateStructuralEvidenceToConstraint(checked_structural, &ctx.?, param);
@@ -51779,7 +52780,7 @@ const BodyContext = struct {
     /// evidence, then its callable contracts. Nested evidence follows type
     /// nesting, so each nested vector is a frame rather than a native call.
     fn materializeConstFnEvidenceVector(
-        self: *BodyContext,
+        self: anytype,
         evidence: check.ConstStore.ConstFnEvidenceVector,
         cursor: *usize,
         count: u32,
@@ -51950,8 +52951,11 @@ const BodyContext = struct {
     /// known in the live specialization graph. Entries left open here are
     /// retained by ConstStore and resolved when that stored function is used.
     /// Applies one checked evidence path node to the graph node its parent
-    /// selects. A tag label selects its tag union; the payload index after it
-    /// selects the payload.
+    /// selects. A tag label selects the node holding its row; the payload
+    /// index after it selects the payload. Record-field and tag payload reads
+    /// go through the node's structural root, because a use may lift the
+    /// scheme's anonymous record or tag union into a nominal whose backing it
+    /// matches.
     const EvidencePathNodeStepper = struct {
         body: *BodyContext,
         view: ModuleView,
@@ -51974,20 +52978,19 @@ const BodyContext = struct {
         path_node: u32,
     ) Allocator.Error!?NodeId {
         const step = path_nodes[path_node].step;
-        const content = (try self.graph.content(node));
         switch (step.stepKind()) {
-            .fn_arg => switch (content) {
+            .fn_arg => switch (try self.graph.content(node)) {
                 .func => |function| {
                     if (step.data >= function.args.len) return null;
                     return function.args[step.data];
                 },
                 .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
             },
-            .fn_ret => switch (content) {
+            .fn_ret => switch (try self.graph.content(node)) {
                 .func => |function| return function.ret,
                 .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
             },
-            .alias_arg, .nominal_arg => switch (content) {
+            .alias_arg, .nominal_arg => switch (try self.graph.content(node)) {
                 .named => |named| {
                     if (step.data >= named.args.len) return null;
                     return named.args[step.data];
@@ -51998,53 +53001,84 @@ const BodyContext = struct {
                 },
                 .redirect, .leaf, .unresolved, .primitive, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return null,
             },
-            .alias_backing, .nominal_backing => switch (content) {
+            .alias_backing, .nominal_backing => switch (try self.graph.content(node)) {
                 .named => |named| return (named.backing orelse return null).node,
                 .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return null,
             },
-            .tuple_elem => switch (content) {
+            .tuple_elem => switch (try self.graph.content(node)) {
                 .tuple => |items| {
                     if (step.data >= items.len) return null;
                     return items[step.data];
                 },
                 .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
             },
-            .record_field => switch (content) {
-                .record => return try self.graph.recordFieldValueNode(node, try recordFieldName(self.nameStoreMut(), view, @fromBackingInt(step.data))),
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
-            },
-            .tag_payload_tag => switch (content) {
-                .tag_union => return node,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
-            },
+            .record_field => return try self.graph.recordFieldValueNode(node, try recordFieldName(self.nameStoreMut(), view, @fromBackingInt(step.data))),
+            .tag_payload_tag => return node,
             .tag_payload_index => {
                 const tag_node = path_nodes[path_node].parent;
                 if (tag_node == static_dispatch.no_evidence_path_node) return null;
                 const tag_step = path_nodes[tag_node].step;
                 if (tag_step.stepKind() != .tag_payload_tag) return null;
-                return switch (content) {
-                    .tag_union => try self.graph.tagPayloadNode(
-                        node,
-                        try tagName(self.nameStoreMut(), view, @fromBackingInt(@intCast(tag_step.data))),
-                        step.data,
-                    ),
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => null,
-                };
+                return try self.graph.tagPayloadNode(
+                    node,
+                    try tagName(self.nameStoreMut(), view, @fromBackingInt(@intCast(tag_step.data))),
+                    step.data,
+                );
             },
         }
     }
 
+    /// A nested function that owns a dispatch scope and is stored as data
+    /// carries `from_callable` entries in that scope's frame (checked site
+    /// evidence for its construction edge, or the frame retained with the
+    /// stored function). Its request resolves them, exactly as a procedure
+    /// template's request resolves its own. A nested function that owns no
+    /// scope reads its lexical parent's frame, which its enclosing function's
+    /// request already resolved.
+    fn resolveOwnScopeCallableEvidence(
+        self: *BodyContext,
+        nested: Ast.NestedFn,
+        evidence: EvidenceChain,
+        request_fn_node: NodeId,
+    ) Allocator.Error!EvidenceChain {
+        const raw_site = @backingInt(nested.site);
+        if (raw_site >= self.view.nested_proc_sites.sites.len) {
+            Common.invariant("nested function referenced a site absent from the CheckedModule procedure-site table");
+        }
+        const site = self.view.nested_proc_sites.sites[raw_site];
+        const scope_id = switch (site.lexical_scope) {
+            .root => return evidence,
+            .generalized => |scope_id| scope_id,
+        };
+        const scope = self.view.templates.dispatch_scopes[@backingInt(scope_id)];
+        if (site.checked_expr == null or scope.checked_expr != site.checked_expr.?) return evidence;
+        switch (evidence.scope.lexical) {
+            .generalized => |frame_scope| if (frame_scope != scope_id) {
+                Common.invariant("nested function that owns a dispatch scope was requested outside that scope's frame");
+            },
+            .root => Common.invariant("nested function that owns a dispatch scope was requested from its root frame"),
+        }
+        const params = self.view.templates.evidence_params_pool[scope.evidence_params.start .. scope.evidence_params.start + scope.evidence_params.len];
+        var resolved = evidence;
+        resolved.vector = try self.resolveCallableEvidenceAtNode(self.view, params, evidence.vector, request_fn_node, .body_lowering);
+        return resolved;
+    }
+
+    /// Resolve each `from_callable` entry of a function's evidence vector
+    /// whose component its request has determined. `params` is the function's
+    /// checked evidence-parameter row: a procedure template's, or the
+    /// dispatch scope a nested function owns. Each path is written over that
+    /// function's own callable type.
     fn resolveCallableEvidenceAtNode(
         self: *BodyContext,
         view: ModuleView,
-        template: checked.CheckedProcedureTemplate,
+        params: []const static_dispatch.EvidenceParamRecord,
         evidence: []const SpecEvidence,
         request_fn_node: NodeId,
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error![]const SpecEvidence {
-        const params = view.templates.evidenceParams(&template);
         if (evidence.len != params.len) {
-            Common.invariant("callable-derived evidence length differed from its checked template");
+            Common.invariant("callable-derived evidence length differed from its checked parameters");
         }
         const Replacement = struct { index: usize, entry: SpecEvidence };
         var replacements = std.ArrayList(Replacement).empty;
@@ -52315,7 +53349,6 @@ const BodyContext = struct {
             try self.builder.checkedTypesGround(site_view, checked_subst))
             .{
                 .view = @intFromPtr(site_view),
-                .method_scope = @intFromPtr(self.method_scope),
                 .refs = @intFromPtr(refs.ptr),
                 .refs_len = refs.len,
                 .subst = @intFromPtr(checked_subst.ptr),
@@ -52358,11 +53391,10 @@ const BodyContext = struct {
     fn substitutionAtRequest(self: *BodyContext, schema: SchemeRequirements, request_node: NodeId) Allocator.Error!SpecSubstitution {
         if (schema.scheme_vars.len == 0) return &.{};
         const root = schema.root orelse Common.invariant("scheme without a root type received a request substitution");
-        var scheme_ctx = try BodyContext.initWithMethodScope(
+        var scheme_ctx = try BodyContext.init(
             self.allocator,
             self.builder,
             schema.view,
-            self.method_scope,
             self.owner_template,
             self.graph,
             self.draft,
@@ -52452,11 +53484,10 @@ const BodyContext = struct {
     ) Allocator.Error!SpecSubstitution {
         if (tys.len == 0) return &.{};
         const same_module = moduleBytesEqual(site_view.key.bytes, self.view.key.bytes);
-        var site_ctx: ?BodyContext = if (same_module) null else try BodyContext.initWithMethodScope(
+        var site_ctx: ?BodyContext = if (same_module) null else try BodyContext.init(
             self.allocator,
             self.builder,
             site_view,
-            self.method_scope,
             self.owner_template,
             self.graph,
             self.draft,
@@ -52956,11 +53987,10 @@ const BodyContext = struct {
                         switch (forwarded) {
                             .structural => |structural| if (structural.checked) |checked_structural| {
                                 if (scheme_ctx == null) {
-                                    scheme_ctx = try BodyContext.initWithMethodScope(
+                                    scheme_ctx = try BodyContext.init(
                                         self.allocator,
                                         self.builder,
                                         schema.view,
-                                        self.method_scope,
                                         self.owner_template,
                                         self.graph,
                                         self.draft,
@@ -52982,11 +54012,10 @@ const BodyContext = struct {
                 switch (out[k]) {
                     .target => |target| {
                         if (scheme_ctx == null) {
-                            scheme_ctx = try BodyContext.initWithMethodScope(
+                            scheme_ctx = try BodyContext.init(
                                 self.allocator,
                                 self.builder,
                                 schema.view,
-                                self.method_scope,
                                 self.owner_template,
                                 self.graph,
                                 self.draft,
@@ -53124,16 +54153,15 @@ const BodyContext = struct {
                 .module = schema.view.key.bytes,
                 .proc_base = schema.params_start,
                 .template = @intCast(schema.params.len),
-                .method_scope = self.method_scope.key.bytes,
                 .source_fn_key = if (schema.root) |root| schema.view.types.rootKey(root).bytes else @splat(0),
             },
             .evidence_digest = evidence.digest.bytes,
             .input_digest = interfaceRequestBucket(request.bytes),
         };
         var verify_summary: ?InterfaceSummary = null;
-        if (try self.findInterfaceSummary(address, evidence, request)) |found| {
+        if (try self.findInterfaceSummary(address, evidence, request, roots.items.len)) |found| {
             self.builder.count("interface_summary_hits");
-            if (std.debug.runtime_safety and self.builder.diagnostics != null and self.builder.interface_summary_checks < 16) {
+            if (!found.persistent and std.debug.runtime_safety and self.builder.diagnostics != null and self.builder.interface_summary_checks < 16) {
                 self.builder.interface_summary_checks += 1;
                 self.builder.count("interface_summary_verifications");
                 verify_summary = try self.graphDomainSummary(found);
@@ -53186,7 +54214,7 @@ const BodyContext = struct {
         subst: SpecSubstitution,
         contract: []const SpecEvidence,
     ) Allocator.Error!void {
-        var checked_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, schema.view, self.method_scope, self.owner_template, self.graph, self.draft);
+        var checked_ctx = try BodyContext.init(self.allocator, self.builder, schema.view, self.owner_template, self.graph, self.draft);
         defer checked_ctx.deinit();
         try checked_ctx.seedSubstitution(schema, subst);
         try self.relateMaterializedEvidenceConstraints(&checked_ctx, schema, contract);
@@ -53246,13 +54274,13 @@ const BodyContext = struct {
                 .local_proc => .local_method_contract,
                 .structural => unreachable, // the owner-template switch above rejects structural targets before this address is built
             },
-            .family = DraftTemplateFamilyAddress.init(owner, self.method_scope.key, root_view.types.rootKey(root_fn_ty)),
+            .family = DraftTemplateFamilyAddress.init(owner, root_view.types.rootKey(root_fn_ty)),
             .evidence_digest = @splat(0),
             .input_digest = interfaceRequestBucket(request.bytes),
         };
         const use_summaries = self.draft.interface_replay.use_finished_summaries;
         if (use_summaries) {
-            if (try self.findInterfaceSummary(address, evidence, request)) |found| {
+            if (try self.findInterfaceSummary(address, evidence, request, 1)) |found| {
                 switch (found.summary) {
                     .unchanged => {},
                     .constraints => |constraints| try self.graph.unify((try self.instantiateFoundConstraints(found.domain, constraints))[0], constraint_node),
@@ -53312,7 +54340,7 @@ const BodyContext = struct {
         const evidence = StoredConstFnEvidence.empty();
         const request: InterfaceConstraints.Identity = .{ .bytes = &.{}, .leaves = &.{} };
         if (cacheable) {
-            if (try self.findInterfaceSummary(address, evidence, request)) |found| {
+            if (try self.findInterfaceSummary(address, evidence, request, 1)) |found| {
                 return switch (found.summary) {
                     .constraints => |constraints| (try self.instantiateFoundConstraints(found.domain, constraints))[0],
                     .unchanged => Common.invariant("checked method signature snapshot had no root"),
@@ -53320,11 +54348,10 @@ const BodyContext = struct {
             }
         }
         const node = if (target.instantiation) |instantiation| blk: {
-            var instantiation_ctx = try BodyContext.initWithMethodScope(
+            var instantiation_ctx = try BodyContext.init(
                 self.allocator,
                 self.builder,
                 instantiation.view,
-                self.method_scope,
                 self.owner_template,
                 self.graph,
                 self.draft,
@@ -53366,11 +54393,10 @@ const BodyContext = struct {
         scheme_ctx: *BodyContext,
         param: static_dispatch.EvidenceParamRecord,
     ) Allocator.Error!void {
-        var evidence_ctx = try BodyContext.initWithMethodScope(
+        var evidence_ctx = try BodyContext.init(
             self.allocator,
             self.builder,
             structural.view,
-            self.method_scope,
             self.owner_template,
             self.graph,
             self.draft,
@@ -53651,11 +54677,10 @@ const BodyContext = struct {
             .local_proc, .structural => Common.invariant("a callable-derived substitution reached a non-procedure method target"),
         };
         const template = lookup.view.templates.get(procedure.template.template);
-        var target_ctx = try BodyContext.initWithMethodScope(
+        var target_ctx = try BodyContext.init(
             self.allocator,
             self.builder,
             lookup.view,
-            self.method_scope,
             procedure.template,
             self.graph,
             self.draft,
@@ -53715,11 +54740,10 @@ const BodyContext = struct {
     /// Instantiate a substitution recorded in another body together in a
     /// fresh context of its module.
     fn carriedSubstitutionNodes(self: *BodyContext, substitution: CheckedTargetSubstitution) Allocator.Error!SpecSubstitution {
-        var site_ctx = try BodyContext.initWithMethodScope(
+        var site_ctx = try BodyContext.init(
             self.allocator,
             self.builder,
             substitution.view,
-            self.method_scope,
             self.owner_template,
             self.graph,
             self.draft,
@@ -53798,7 +54822,7 @@ const BodyContext = struct {
                     self.scopeSchema(local.view, local.dispatch_scope),
                 },
             };
-            var alias_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, owner_template, self.graph, self.draft);
+            var alias_ctx = try BodyContext.init(self.allocator, self.builder, view, owner_template, self.graph, self.draft);
             defer alias_ctx.deinit();
             if (subst.len != schema.scheme_vars.len) {
                 Common.invariant("procedure alias substitution length differed from its scope's quantified variables");
@@ -54132,7 +55156,7 @@ const BodyContext = struct {
             .local_proc => |local| self.localMethodOwnerTemplate(lookup, local),
             .structural => Common.invariant("structural method registry result has no callable body context"),
         };
-        return BodyContext.initWithMethodScope(self.allocator, self.builder, lookup.view, self.method_scope, owner_template, self.graph, self.draft);
+        return BodyContext.init(self.allocator, self.builder, lookup.view, owner_template, self.graph, self.draft);
     }
 
     fn localMethodOwnerTemplate(
@@ -54190,7 +55214,7 @@ const BodyContext = struct {
             plan_callable_ty,
         );
         if (lookup.instantiation) |instantiation| {
-            var edge_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, instantiation.view, self.method_scope, self.owner_template, self.graph, self.draft);
+            var edge_ctx = try BodyContext.init(self.allocator, self.builder, instantiation.view, self.owner_template, self.graph, self.draft);
             defer edge_ctx.deinit();
             const edge_node = try edge_ctx.instNode(instantiation.callable_ty);
             try self.relateDispatchTargetRequestInterface(lookup, target_node, edge_node);
@@ -54366,7 +55390,7 @@ const BodyContext = struct {
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!SpecEvidence {
         if ((try self.methodOwnerFromNode(component_node))) |owner| {
-            if (try self.builder.lookupMethodTarget(self.method_scope, self.nameStore(), owner, view, method)) |result| {
+            if (try self.builder.lookupMethodTarget(self.nameStore(), owner, view, method)) |result| {
                 const found = switch (result) {
                     .rejected => return .checked_error,
                     .target => |found| found,
@@ -54412,7 +55436,7 @@ const BodyContext = struct {
                 if (variable.row_default) |row_default| break :blk row_default == .empty_tag_union;
                 break :blk switch (variable.origin) {
                     .checked_variable => true,
-                    .row_extension, .placeholder => false,
+                    .row_extension, .placeholder, .interface_parameter => false,
                 };
             },
             .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => false,
@@ -55144,7 +56168,6 @@ const BodyContext = struct {
         };
         try self.draft.deferred_structural_serializations.append(self.allocator, .{
             .view = self.view,
-            .method_scope = self.method_scope,
             .owner_template = self.owner_template,
             .owner = self.draft.current_owner,
             .expr = expr,
@@ -58289,11 +59312,10 @@ const BodyContext = struct {
             };
         }
 
-        var contract_ctx = try BodyContext.initWithMethodScope(
+        var contract_ctx = try BodyContext.init(
             self.allocator,
             self.builder,
             checked_view,
-            self.method_scope,
             self.owner_template,
             self.graph,
             self.draft,
@@ -58340,7 +59362,6 @@ const BodyContext = struct {
             try self.draft.codec_contract_instances.append(self.allocator, .{
                 .graph = self.graph,
                 .view_key = checked_view.key.bytes,
-                .method_scope_key = self.method_scope.key.bytes,
                 .derivation = derivation_id,
                 .kind = kind,
                 .callable_node = boundary.callable_node,
@@ -58377,7 +59398,6 @@ const BodyContext = struct {
                 cached.derivation == derivation_id and
                 cached.kind == kind and
                 moduleBytesEqual(cached.view_key, checked_view.key.bytes) and
-                moduleBytesEqual(cached.method_scope_key, self.method_scope.key.bytes) and
                 self.graph.sameClass(cached.callable_node, boundary.callable_node) and
                 self.graph.sameClass(cached.shape_node, boundary.shape_node)) return cached;
         }
@@ -60880,7 +61900,6 @@ const BodyContext = struct {
         }
         try self.draft.deferred_structural_eqs.append(self.allocator, .{
             .view = self.view,
-            .method_scope = self.method_scope,
             .owner_template = self.owner_template,
             .owner = self.draft.current_owner,
             .expr = expr,
@@ -60996,7 +62015,7 @@ const BodyContext = struct {
                 .named => named: {
                     const named = (try self.graph.namedNodes(raw_node));
                     if ((try self.methodOwnerFromNode(raw_node))) |owner| {
-                        if (try self.builder.lookupMethodTargetByName(self.method_scope, self.nameStore(), owner, structuralDerivationMethodName(mode))) |result| {
+                        if (try self.builder.lookupMethodTargetByName(self.nameStore(), owner, structuralDerivationMethodName(mode))) |result| {
                             // A rejected declaration is this component's
                             // comparison; emission lowers it to a checked error
                             // without calling anything or expanding the backing.
@@ -61556,7 +62575,7 @@ const BodyContext = struct {
         method_name: []const u8,
     ) Allocator.Error!?MethodLookupResult {
         const owner = methodOwnerFromType(self.typeStore(), ty) orelse return null;
-        return switch ((try self.builder.lookupMethodTargetByName(self.method_scope, self.nameStore(), owner, method_name)) orelse return null) {
+        return switch ((try self.builder.lookupMethodTargetByName(self.nameStore(), owner, method_name)) orelse return null) {
             .rejected => .rejected,
             .target => |lookup| .{ .target = try self.withLocalProcContext(lookup) },
         };
@@ -61566,7 +62585,7 @@ const BodyContext = struct {
     /// builtin module checks without diagnostics, so its registry declares
     /// every List derivation method with a target.
     fn builtinListDerivationLookup(self: *BodyContext, method_name: []const u8) Allocator.Error!MethodLookup {
-        return switch ((try self.builder.lookupMethodTargetByName(self.method_scope, self.nameStore(), .{ .builtin = .list }, method_name)) orelse
+        return switch ((try self.builder.lookupMethodTargetByName(self.nameStore(), .{ .builtin = .list }, method_name)) orelse
             Common.invariant("checked method registry is missing the List structural derivation target")) {
             .rejected => Common.invariant("builtin List derivation target was a rejected declaration"),
             .target => |lookup| lookup,
@@ -66503,55 +67522,124 @@ fn numeralTargetFromPrimitive(primitive: Type.Primitive) exact_numeral.Target {
     };
 }
 
-test "completion path retains ancestors across distinct sibling visits" {
-    var path = BodyContext.RequestCompletionPath.init(std.testing.allocator);
-    defer path.deinit();
-    const ancestor: BodyContext.RequestCompletionPair = .{
-        .request = @fromBackingInt(1),
-        .produced = @fromBackingInt(2),
-    };
-    try std.testing.expect(try path.enter(ancestor));
-    for (3..4096) |index| {
-        const sibling: BodyContext.RequestCompletionPair = .{
-            .request = @fromBackingInt(@intCast(index)),
-            .produced = @fromBackingInt(@intCast(index + 4096)),
-        };
-        try std.testing.expect(try path.enter(sibling));
-        try std.testing.expect(!try path.enter(ancestor));
-        try std.testing.expect(!try path.enter(sibling));
-        path.leave(sibling);
-        try std.testing.expectEqual(@as(usize, 1), path.map.count());
+/// Owns exactly the state used by the two graph analyses; no checked program
+/// or backend is needed to exercise their identity and mutation contracts.
+const CompletionAnalysisFixture = struct {
+    allocator: Allocator,
+    types: Type.Store,
+    name_store: names.NameStore,
+    graph: *InstGraph,
+    builder: Builder,
+    ctx: BodyContext,
+    diagnostics: solve.GraphDiagnostics,
+
+    fn init(self: *@This(), allocator: Allocator) Allocator.Error!void {
+        self.allocator = allocator;
+        self.types = Type.Store.init(allocator);
+        errdefer self.types.deinit();
+        self.name_store = names.NameStore.init(allocator);
+        errdefer self.name_store.deinit();
+        self.graph = try InstGraph.create(allocator, &self.types, &self.name_store);
+        self.diagnostics = .{};
+        self.graph.setDiagnostics(&self.diagnostics);
+        self.builder = undefined;
+        self.builder.app_module_identity = null;
+        self.builder.timing = null;
+        self.ctx = undefined;
+        self.ctx.allocator = allocator;
+        self.ctx.builder = &self.builder;
+        self.ctx.graph = self.graph;
+        self.ctx.node_uninhabited_scratch = .{};
+        self.ctx.analysis_memo = .{};
+        self.ctx.completion_scratch = .{};
     }
-    path.leave(ancestor);
-    try std.testing.expectEqual(@as(usize, 0), path.map.count());
-    try std.testing.expect(try path.enter(ancestor));
-    path.leave(ancestor);
+
+    fn deinit(self: *@This()) void {
+        self.ctx.completion_scratch.deinit(self.allocator);
+        self.ctx.analysis_memo.deinit(self.allocator);
+        self.ctx.node_uninhabited_scratch.deinit(self.allocator);
+        self.graph.destroy();
+        self.name_store.deinit();
+        self.types.deinit();
+    }
+
+    fn expectRelation(self: *@This(), expected: BodyContext.RequestCompletion, request: NodeId, produced: NodeId) (Allocator.Error || error{TestExpectedEqual})!void {
+        for (0..2) |_| {
+            try std.testing.expectEqual(expected, try self.ctx.requestCompletionRelation(request, produced, &self.ctx.analysis_memo));
+        }
+        // Compare against a new dependency scope.
+        var fresh: BodyContext.AnalysisMemo = .{};
+        std.mem.swap(BodyContext.AnalysisMemo, &fresh, &self.ctx.analysis_memo);
+        defer {
+            std.mem.swap(BodyContext.AnalysisMemo, &fresh, &self.ctx.analysis_memo);
+            fresh.deinit(self.allocator);
+        }
+        try std.testing.expectEqual(expected, try self.ctx.requestCompletionRelation(request, produced, null));
+    }
+
+    fn expectUninhabited(self: *@This(), node: NodeId, access: BodyContext.UninhabitedBackingAccess, expected: bool) (Allocator.Error || error{TestExpectedEqual})!void {
+        for (0..2) |_| try std.testing.expectEqual(expected, try self.ctx.nodeIsProvenUninhabitedInner(node, access));
+        var fresh: BodyContext.AnalysisMemo = .{};
+        std.mem.swap(BodyContext.AnalysisMemo, &fresh, &self.ctx.analysis_memo);
+        defer {
+            std.mem.swap(BodyContext.AnalysisMemo, &fresh, &self.ctx.analysis_memo);
+            fresh.deinit(self.allocator);
+        }
+        try std.testing.expectEqual(expected, try self.ctx.nodeIsProvenUninhabitedInner(node, access));
+    }
+};
+
+test "completion analysis shared subgraph work" {
+    var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const allocator = counting.allocator();
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(allocator);
+    defer fixture.deinit();
+    const graph = fixture.graph;
+    const ctx = &fixture.ctx;
+    const diagnostics = &fixture.diagnostics;
+    const shared = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    var request = shared;
+    var produced = shared;
+    for (0..16) |_| {
+        request = try graph.newNode(.{ .box = request });
+        produced = try graph.newNode(.{ .box = produced });
+    }
+    const request_items = try graph.arena().alloc(NodeId, 32);
+    const produced_items = try graph.arena().alloc(NodeId, 32);
+    @memset(request_items, request);
+    @memset(produced_items, produced);
+    request = try graph.newNode(.{ .tuple = request_items });
+    produced = try graph.newNode(.{ .tuple = produced_items });
+    const allocations_before = counting.allocations;
+    for (0..128) |_| {
+        try std.testing.expect(!try ctx.resultCompletesRequest(request, produced));
+        try std.testing.expect(!try ctx.nodeIsProvenUninhabited(request));
+    }
+    try std.testing.expectEqual(@as(u64, 17), diagnostics.completion_pair_expansions);
+    try std.testing.expectEqual(@as(u64, 18), diagnostics.inhabitation_node_expansions);
+    try std.testing.expectEqual(@as(usize, 36), ctx.analysis_memo.proofs.proven.count());
+
+    try std.testing.expectEqual(@as(u64, 127), diagnostics.completion_memo_hits);
+    try std.testing.expect(counting.allocations > allocations_before);
+
+    const allocations_warm = counting.allocations;
+    const work_warm = diagnostics.*;
+    for (0..256) |_| {
+        try std.testing.expect(!try ctx.resultCompletesRequest(request, produced));
+        try std.testing.expect(!try ctx.nodeIsProvenUninhabited(request));
+    }
+    try std.testing.expectEqual(allocations_warm, counting.allocations);
+    try std.testing.expectEqual(work_warm.completion_pair_expansions, diagnostics.completion_pair_expansions);
+    try std.testing.expectEqual(work_warm.inhabitation_node_expansions, diagnostics.inhabitation_node_expansions);
 }
 
 test "completion relation preserves recursive and shared DAG outcomes" {
     const allocator = std.testing.allocator;
-    var types = Type.Store.init(allocator);
-    defer types.deinit();
-    var name_store = names.NameStore.init(allocator);
-    defer name_store.deinit();
-    const graph = try InstGraph.create(allocator, &types, &name_store);
-    defer graph.destroy();
-    var builder: Builder = undefined;
-    builder.app_module_identity = null;
-    builder.timing = null;
-    var ctx: BodyContext = undefined;
-    ctx.allocator = allocator;
-    ctx.builder = &builder;
-    ctx.graph = graph;
-    ctx.inhabitation_visiting = .{};
-    defer ctx.inhabitation_visiting.deinit(allocator);
-    ctx.inhabitation_entered = .empty;
-    defer ctx.inhabitation_entered.deinit(allocator);
-    ctx.settled_node_uninhabited = .{ .empty, .empty };
-    defer for (&ctx.settled_node_uninhabited) |*memo| memo.deinit(allocator);
-    ctx.node_uninhabited_scratch = .{};
-    defer ctx.node_uninhabited_scratch.deinit(allocator);
-
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(allocator);
+    defer fixture.deinit();
+    const graph = fixture.graph;
     for ([_]BodyContext.RequestCompletion{ .unchanged, .completed, .mismatch }) |expected| {
         // Each side is a recursive list of pairs. Repeated tuple edges below
         // revisit the same cycle after a sibling traversal has left the path.
@@ -66567,16 +67655,203 @@ test "completion relation preserves recursive and shared DAG outcomes" {
             .{ .primitive = .i64 });
         produced_items[1] = try graph.newNode(.{ .primitive = if (expected == .mismatch) .str else .i64 });
 
+        if (expected == .completed) {
+            request_items[1] = try graph.newNode(.{ .list = request_items[1] });
+            produced_items[1] = try graph.newNode(.{ .list = produced_items[1] });
+        }
+
         const request_siblings = try graph.arena().alloc(NodeId, 64);
         const produced_siblings = try graph.arena().alloc(NodeId, 64);
         @memset(request_siblings, request_items[0]);
         @memset(produced_siblings, produced_items[0]);
         const request = try graph.newNode(.{ .tuple = request_siblings });
         const produced = try graph.newNode(.{ .tuple = produced_siblings });
-        var path = BodyContext.RequestCompletionPath.init(allocator);
-        defer path.deinit();
-        try std.testing.expectEqual(expected, try ctx.requestCompletionRelation(request, produced, &path, null));
-        try std.testing.expectEqual(@as(usize, 0), path.map.count());
+        try fixture.expectRelation(expected, request, produced);
+        // Every recursive equation is settled together, including enclosing pairs.
+        try std.testing.expect(fixture.ctx.analysis_memo.proofs.proven.contains(.{ .completion = .{ .request = request, .produced = produced } }));
+        try std.testing.expect(fixture.ctx.analysis_memo.proofs.proven.contains(.{ .completion = .{ .request = request_tuple, .produced = produced_tuple } }));
+        try std.testing.expect(fixture.diagnostics.completion_repeated_pairs > 0);
+    }
+}
+
+test "completion analysis invalidates joins and keeps unrelated allocation and path compression reusable" {
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(std.testing.allocator);
+    defer fixture.deinit();
+    const graph = fixture.graph;
+    const variable = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const request = try graph.newNode(.{ .box = variable });
+    const produced = try graph.newNode(.{ .box = try graph.newNode(.{ .primitive = .i64 }) });
+    try fixture.expectRelation(.mismatch, request, produced);
+    try fixture.expectUninhabited(request, .inspectable_only, false);
+
+    const empty = try graph.newNode(.empty_tag_union);
+    try graph.unify(variable, empty);
+    try fixture.expectRelation(.completed, request, produced);
+    try fixture.expectUninhabited(request, .inspectable_only, true);
+    try std.testing.expect(fixture.diagnostics.analysis_invalidated_groups > 0);
+
+    const epoch = graph.structure_epoch;
+    const work = fixture.diagnostics;
+    _ = try graph.newNode(.{ .primitive = .str });
+    _ = graph.rootNode(variable);
+    _ = graph.rootNode(empty);
+    try std.testing.expect(try fixture.ctx.resultCompletesRequest(request, produced));
+    try std.testing.expect(try fixture.ctx.nodeIsProvenUninhabited(request));
+    try std.testing.expectEqual(epoch, graph.structure_epoch);
+    try std.testing.expectEqual(work.completion_pair_expansions, fixture.diagnostics.completion_pair_expansions);
+    try std.testing.expectEqual(work.inhabitation_node_expansions, fixture.diagnostics.inhabitation_node_expansions);
+}
+
+test "completion analysis retires facts across lazy expansion and tag reordering" {
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(std.testing.allocator);
+    defer fixture.deinit();
+    const graph = fixture.graph;
+    const scalar = try fixture.types.add(.{ .primitive = .i64 });
+    const boxed = try fixture.types.add(.{ .box = scalar });
+    const request = try graph.importMonoIndependent(boxed);
+    const produced = try graph.newNode(.{ .box = try graph.newNode(.{ .primitive = .i64 }) });
+    const epoch = graph.structure_epoch;
+    try std.testing.expectEqual(.unchanged, try fixture.ctx.requestCompletionRelation(request, produced, &fixture.ctx.analysis_memo));
+    try std.testing.expect(graph.structure_epoch != epoch);
+    // This traversal expanded leaves. Its outer answer cannot be published
+    // as though the whole walk had observed the final epoch.
+    try std.testing.expect(!fixture.ctx.analysis_memo.proofs.proven.contains(.{ .completion = .{ .request = request, .produced = produced } }));
+    try fixture.expectRelation(.unchanged, request, produced);
+    try std.testing.expect(fixture.ctx.analysis_memo.proofs.proven.contains(.{ .completion = .{ .request = request, .produced = produced } }));
+
+    const first = try fixture.name_store.internTagLabel("A");
+    const last = try fixture.name_store.internTagLabel("Z");
+    const empty = try graph.newNode(.empty_tag_union);
+    const tags = [_]InstTag{
+        .{ .name = first, .checked_name = first, .payloads = &.{} },
+        .{ .name = last, .checked_name = last, .payloads = &.{} },
+    };
+    const left = try graph.newNode(.{ .tag_union = .{ .tags = try graph.arena().dupe(InstTag, &.{ tags[1], tags[0] }), .ext = empty } });
+    const right = try graph.newNode(.{ .tag_union = .{ .tags = try graph.arena().dupe(InstTag, &tags), .ext = empty } });
+    try fixture.expectRelation(.mismatch, left, right);
+    const unsorted_epoch = graph.structure_epoch;
+    graph.sortTagHead(left);
+    try std.testing.expect(graph.structure_epoch != unsorted_epoch);
+    const sorted_epoch = graph.structure_epoch;
+    graph.sortTagHead(right);
+    graph.sortTagHead(left);
+    try std.testing.expectEqual(sorted_epoch, graph.structure_epoch);
+    try fixture.expectRelation(.unchanged, left, right);
+}
+
+test "completion analysis separates backing visibility authority and changed backing evidence" {
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(std.testing.allocator);
+    defer fixture.deinit();
+    const graph = fixture.graph;
+    const module = try fixture.name_store.internModuleIdentity(&@as([32]u8, @splat(0x94)));
+    const name = try fixture.name_store.internTypeName("Wrapped");
+    const empty = try graph.newNode(.empty_tag_union);
+    const scalar = try graph.newNode(.{ .primitive = .i64 });
+    inline for (.{ .inspectable, .runtime_layout_only }) |use| {
+        inline for (.{ .checked_public, .generated_private }) |authority| {
+            const wrapped_empty = try graph.newNode(try graph.namedContent(.{
+                .named_type = .{ .module = .{}, .ty = @fromBackingInt(1), .ty_module = .{} },
+                .def = .{ .module = module, .type_name = name },
+                .kind = .nominal,
+                .builtin_owner = null,
+                .args = &.{},
+                .backing = .{ .node = empty, .use = use, .authority = authority },
+            }));
+            try fixture.expectUninhabited(wrapped_empty, .inspectable_only, use == .inspectable);
+            try fixture.expectUninhabited(wrapped_empty, .runtime_layout, true);
+            const wrapped_scalar = try graph.namedValueNodeWithBacking(wrapped_empty, scalar);
+            try fixture.expectRelation(if (use == .inspectable and authority == .checked_public) .completed else .mismatch, scalar, wrapped_scalar);
+            try fixture.expectUninhabited(wrapped_scalar, .runtime_layout, false);
+            // A changed evidence source has its own producer-assigned node;
+            // equal nominal identity does not reuse the old backing's answer.
+            try fixture.expectUninhabited(wrapped_empty, .runtime_layout, true);
+        }
+    }
+}
+
+test "completion analysis preserves open empty rows and invalidates payload replacements" {
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(std.testing.allocator);
+    defer fixture.deinit();
+    const graph = fixture.graph;
+    const empty = try graph.newNode(.empty_tag_union);
+    const open = try graph.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
+    const open_row = try graph.newNode(.{ .tag_union = .{ .tags = &.{}, .ext = open } });
+    try fixture.expectUninhabited(empty, .inspectable_only, true);
+    try fixture.expectUninhabited(open_row, .inspectable_only, false);
+    try graph.unify(open, empty);
+    try fixture.expectUninhabited(open_row, .inspectable_only, true);
+
+    const name = try fixture.name_store.internTagLabel("Value");
+    const row = try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(InstTag, &.{.{ .name = name, .checked_name = name, .payloads = try graph.arena().dupe(NodeId, &.{empty}) }}),
+        .ext = empty,
+    } });
+    try fixture.expectUninhabited(row, .inspectable_only, true);
+    const scalar = try graph.newNode(.{ .primitive = .i64 });
+    try fixture.expectRelation(.completed, row, scalar);
+    try graph.replaceTagPayloadNode(row, name, 0, scalar);
+    try fixture.expectUninhabited(row, .inspectable_only, false);
+    try fixture.expectRelation(.mismatch, row, scalar);
+}
+
+test "completion analysis does not publish a recursive inhabitation assumption" {
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(std.testing.allocator);
+    defer fixture.deinit();
+    const graph = fixture.graph;
+    const components = try graph.arena().alloc(NodeId, 2);
+    const outer = try graph.newNode(.{ .tuple = components });
+    const inner = try graph.newNode(.{ .box = outer });
+    components[0] = inner;
+    components[1] = try graph.newNode(.empty_tag_union);
+    try std.testing.expect(try fixture.ctx.nodeIsProvenUninhabited(outer));
+    // The empty sibling propagates through the back edge before either
+    // recursive node becomes a reusable fact.
+    try std.testing.expectEqual(true, (fixture.ctx.analysis_memo.proofs.get(.{ .inhabitation = .{ .node = inner, .access = .inspectable_only } }).?.value != 0));
+    try fixture.expectUninhabited(inner, .inspectable_only, true);
+}
+
+test "completion analysis scratch and partial memos survive every allocation failure" {
+    const Probe = struct {
+        fn run(ctx: *BodyContext, inhabited: NodeId, request: NodeId, produced: NodeId) (Allocator.Error || error{TestUnexpectedResult})!bool {
+            try std.testing.expect(!try ctx.nodeIsProvenUninhabited(inhabited));
+            return ctx.resultCompletesRequest(request, produced);
+        }
+    };
+    var fail_offset: usize = 0;
+    while (true) : (fail_offset += 1) {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+        var fixture: CompletionAnalysisFixture = undefined;
+        try fixture.init(failing.allocator());
+        defer fixture.deinit();
+        const graph = fixture.graph;
+        const empty = try graph.newNode(.empty_tag_union);
+        const scalar = try graph.newNode(.{ .primitive = .i64 });
+        var request = empty;
+        var produced = scalar;
+        for (0..12) |_| {
+            // Lists keep the outer type inhabited, so completion must visit
+            // every child before finding the empty-to-scalar completion.
+            request = try graph.newNode(.{ .list = request });
+            produced = try graph.newNode(.{ .list = produced });
+        }
+        const inhabited = try graph.newNode(.{ .box = scalar });
+        failing.fail_index = failing.alloc_index + fail_offset;
+        const result = Probe.run(&fixture.ctx, inhabited, request, produced) catch |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expectEqual(@as(usize, 0), fixture.ctx.completion_scratch.pairs.items.len);
+            try std.testing.expectEqual(@as(usize, 0), fixture.ctx.completion_scratch.ops.items.len);
+            failing.fail_index = std.math.maxInt(usize);
+            try std.testing.expect(try Probe.run(&fixture.ctx, inhabited, request, produced));
+            continue;
+        };
+        try std.testing.expect(result);
+        try std.testing.expect(fail_offset > 0);
+        break;
     }
 }
 
@@ -66754,7 +68029,6 @@ test "queued specialization skips a body claimed immediately before dispatch" {
             const def_id: Ast.DefId = @fromBackingInt(@intCast(@as(u32, @intCast(dispatch_index))));
             const identity = Ast.SpecIdentity{
                 .callable = .{ .generated = @fromBackingInt(@intCast(@as(u32, @intCast(dispatch_index)))) },
-                .method_scope = .{},
                 .evidence_digest = .{},
                 .codec_contract_digest = .{},
                 .codec_contract = null,
@@ -66784,7 +68058,6 @@ test "queued specialization skips a body claimed immediately before dispatch" {
                 },
                 .fn_template = fn_template_,
                 .template_ref = template_ref_,
-                .method_scope = .{},
                 // The job is marked ready before draining, so its type is not read.
                 .source_fn_ty = undefined,
                 .source_fn_key = .{},
@@ -68361,7 +69634,7 @@ fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
         .hosted_bindings = view.hosted_bindings,
         .static_dispatch_plans = view.static_dispatch_plans,
         .method_registry = view.method_registry,
-        .method_lookup_scope = view.method_lookup_scope,
+        .direct_import_module_keys = view.direct_import_module_keys,
         .resolved_refs = view.resolved_value_refs,
         .nested_proc_sites = view.nested_proc_sites,
         .exported_procedure_bindings = view.exported_procedure_bindings,
@@ -68977,37 +70250,35 @@ fn methodOwnerFromType(types: *const Type.Store, ty: Type.TypeId) ?static_dispat
     };
 }
 
-/// Decides whether a graph node is proven uninhabited. A node on the active
-/// path is not.
+/// Produces the exact Boolean emptiness equations for a graph node.
 const NodeUninhabitedScan = struct {
     body: *BodyContext,
     backing_access: BodyContext.UninhabitedBackingAccess,
-    /// Encounters whose answer later graph work can change: an unresolved
-    /// node, a named node's backing, or a node already on the path. A node
-    /// whose expansion saw none has a settled answer.
-    unsettled_hits: usize = 0,
 
-    const Evaluation = AnyAll.Evaluation(NodeId, NodeUninhabitedScan);
+    const Evaluation = @import("../inhabitation.zig").Evaluation(NodeId, NodeUninhabitedScan);
 
-    fn settled(self: *NodeUninhabitedScan) *collections.DenseMapUnmanaged(NodeId, bool) {
-        return &self.body.settled_node_uninhabited[@backingInt(self.backing_access)];
+    /// Graph aliases name one equation and one eventual proof entry.
+    pub fn representative(self: *NodeUninhabitedScan, node: NodeId) NodeId {
+        return self.body.graph.rootNode(node);
     }
 
     pub fn enter(self: *NodeUninhabitedScan, items: Evaluation.Items, node: NodeId) Allocator.Error!Evaluation.Expansion {
         const body = self.body;
         const root = body.graph.rootNode(node);
-        const root_index = @backingInt(root);
-        if (body.inhabitation_visiting.bit_length <= root_index) {
-            try body.inhabitation_visiting.resize(body.allocator, root_index + 1, false);
+        body.graph.countDiagnostic("inhabitation_node_entries");
+        const key: BodyContext.AnalysisKey = .{ .inhabitation = .{ .node = root, .access = self.backing_access } };
+        if (try body.analysis_memo.lookup(body, key)) |answer| {
+            body.graph.countDiagnostic("inhabitation_memo_hits");
+            return .{ .value = answer != 0 };
         }
-        if (body.inhabitation_visiting.isSet(root_index)) {
-            self.unsettled_hits += 1;
-            return .{ .value = false };
+        try body.analysis_memo.read(body, root);
+        body.graph.countDiagnostic("inhabitation_node_expansions");
+        // An unread leaf is exactly its immutable finished type. This query
+        // does not expand graph content or change the epoch.
+        if (body.graph.leafType(root)) |ty| {
+            const answer = try body.typeIsProvenUninhabitedWith(ty, self.backing_access);
+            return .{ .value = answer };
         }
-        if (self.settled().get(root)) |answer| return .{ .value = answer };
-        // An unread leaf is exactly its finished type, whose answer is
-        // settled.
-        if (body.graph.leafType(root)) |ty| return .{ .value = try body.typeIsProvenUninhabitedWith(ty, self.backing_access) };
 
         const expansion: Evaluation.Expansion = switch ((try body.graph.content(root))) {
             .redirect => |target| blk: {
@@ -69017,7 +70288,6 @@ const NodeUninhabitedScan = struct {
             .leaf => unreachable, // graph.content reads a class root and expands its leaf, so it never returns a leaf
             .empty_tag_union => .{ .value = true },
             .named => |named| blk: {
-                self.unsettled_hits += 1;
                 const backing = named.backing orelse break :blk .{ .value = false };
                 if (backing.use != .inspectable and self.backing_access != .runtime_layout) break :blk .{ .value = false };
                 try items.add(backing.node);
@@ -69038,6 +70308,9 @@ const NodeUninhabitedScan = struct {
             // Uninhabited when its extension is and every tag has an
             // uninhabited payload.
             .tag_union => |tag_union| blk: {
+                // A nullary alternative is an unconditional value witness.
+                // Unlike a cycle cut, it can discard every payload dependency.
+                for (tag_union.tags) |tag| if (tag.payloads.len == 0) return .{ .value = false };
                 try items.add(tag_union.ext);
                 for (tag_union.tags) |tag| {
                     try items.group(.any, tag.payloads.len);
@@ -69045,10 +70318,7 @@ const NodeUninhabitedScan = struct {
                 }
                 break :blk .{ .group = .all };
             },
-            .unresolved => blk: {
-                self.unsettled_hits += 1;
-                break :blk .{ .value = false };
-            },
+            .unresolved => .{ .value = false },
             .primitive,
             .list,
             .func,
@@ -69058,20 +70328,16 @@ const NodeUninhabitedScan = struct {
             .hole,
             => .{ .value = false },
         };
-        if (expansion == .group) {
-            body.inhabitation_visiting.set(root_index);
-            try body.inhabitation_entered.put(body.allocator, root, self.unsettled_hits);
-        }
         return expansion;
     }
 
     pub fn exit(self: *NodeUninhabitedScan, node: NodeId, result: ?bool) std.mem.Allocator.Error!void {
         const body = self.body;
         const root = body.graph.rootNode(node);
-        body.inhabitation_visiting.unset(@backingInt(root));
-        const hits_before = (body.inhabitation_entered.fetchRemove(root) orelse return).value;
-        const answer = result orelse return;
-        if (self.unsettled_hits == hits_before) try self.settled().put(body.allocator, root, answer);
+        const key: BodyContext.AnalysisKey = .{ .inhabitation = .{ .node = root, .access = self.backing_access } };
+        if (result) |answer| if (!body.analysis_memo.proofs.proven.contains(key)) {
+            try body.analysis_memo.entries.append(body.allocator, .{ .key = key, .value = @intFromBool(answer) });
+        };
     }
 };
 
@@ -71342,7 +72608,10 @@ test "function context identity excludes draft local allocation ids" {
 
 test "issue 11362: checked instantiation allocates placeholders only for recursive lookups" {
     try testLazyCheckedInstantiationAliases(std.testing.allocator);
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, testLazyCheckedInstantiationAliases, .{});
+    // In-place growth under the testing allocator depends on the heap's
+    // layout, so the failure check runs over an allocator that refuses it.
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), testLazyCheckedInstantiationAliases, .{});
 }
 
 fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
@@ -71943,13 +73212,21 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
     builder.active_body_draft = null;
     builder.type_cache = .empty;
     defer builder.type_cache.deinit(gpa);
-    var view_data: ModuleViewData = undefined;
-    const view = &view_data;
+    var views: [1]ModuleViewData = undefined;
+    const view = &views[0];
+    builder.borrowed_module_views = &views;
+    builder.closed_occurrences = .{};
+    builder.borrowed_closed_occurrences = null;
+    defer builder.closed_occurrences.deinit(gpa);
+    builder.module_index = @TypeOf(builder.module_index).init(gpa);
+    defer builder.module_index.deinit();
     view.key = .{};
+    try builder.module_index.put(view.key.bytes, .root);
     view.names = &source_names;
     view.types = checked_types.view();
     // The program seeds this module as its lowering input, as the coordinator does.
     view.lowering_module = try program.addLoweringModule(view.key);
+    try builder.buildClosedOccurrenceIndex();
 
     const pair_ty = try builder.lowerType(view, previous);
     try std.testing.expectEqual(@as(usize, 3), program.types.typeCount());
@@ -71990,14 +73267,34 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     var constants = check.ConstStore.ConstStore.init(gpa);
     defer constants.deinit();
     const stored_types = &constants.type_store;
-    // Two distinct synthetic checked types: the opaque nominal, and the alias
-    // chain that wraps it. This test resolves neither against a checked module;
-    // they only have to stay distinct from each other.
-    const nominal_checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(1));
-    const alias_checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(2));
+    // Two distinct closed checked occurrences in the storing module's own
+    // checked types, as a stored type carries them: the opaque nominal, and
+    // the alias chain that wraps it. Restoring resolves each through the
+    // program's closed occurrence index to that same occurrence.
+    const module_key: checked.ModuleId = .{ .bytes = @splat(7) };
+    var checked_types = checked.CheckedTypeStore{};
+    defer checked_types.deinit(gpa);
+    const nominal_checked_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(1) }, false);
+    try checked_types.fillSyntheticTypeRoot(gpa, nominal_checked_ty, .{ .nominal = .{
+        .name = type_name,
+        .origin_module = origin,
+        .owner_module = module_key,
+        .source_decl = 100,
+        .is_opaque = true,
+        .representation = .opaque_without_backing,
+    } });
+    const alias_checked_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(2) }, false);
+    try checked_types.fillSyntheticTypeRoot(gpa, alias_checked_ty, .{ .alias = .{
+        .name = type_name,
+        .origin_module = origin,
+        .owner_module = module_key,
+        .source_decl = 101,
+        .backing = nominal_checked_ty,
+    } });
+    const stored_owner: names.CheckedModuleDigest = .{ .bytes = module_key.bytes };
     const str = try stored_types.append(.{ .primitive = .str });
     const nominal = try stored_types.append(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = nominal_checked_ty, .ty_module = .{} },
+        .named_type = .{ .module = stored_owner, .ty = nominal_checked_ty, .ty_module = stored_owner },
         .def = .{ .module = origin, .type_name = type_name },
         .kind = .@"opaque",
         .args = .{},
@@ -72006,7 +73303,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     var alias = nominal;
     for (0..32) |_| {
         alias = try stored_types.append(.{ .named = .{
-            .named_type = .{ .module = .{}, .ty = alias_checked_ty, .ty_module = .{} },
+            .named_type = .{ .module = stored_owner, .ty = alias_checked_ty, .ty_module = stored_owner },
             .def = .{ .module = origin, .type_name = type_name },
             .kind = .alias,
             .args = .{},
@@ -72015,7 +73312,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     }
     const recursive = try stored_types.reserve();
     const recursive_alias = try stored_types.append(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} },
+        .named_type = .{ .module = stored_owner, .ty = alias_checked_ty, .ty_module = stored_owner },
         .def = .{ .module = origin, .type_name = type_name },
         .kind = .alias,
         .args = .{},
@@ -72033,7 +73330,10 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     draft.mutable_graph_names = &program.names;
     var builder: Builder = undefined;
     builder.app_module_identity = null;
+    builder.allocator = gpa;
     builder.program = &program;
+    builder.const_type_cache = .empty;
+    defer builder.const_type_cache.deinit(gpa);
     var ctx: BodyContext = undefined;
     builder.task_storage = .{};
     defer builder.task_storage.deinit(ctx.allocator);
@@ -72041,10 +73341,20 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     ctx.builder = &builder;
     ctx.graph = graph;
     ctx.draft = &draft;
-    var view_data: ModuleViewData = undefined;
-    const view = &view_data;
+    var views: [1]ModuleViewData = undefined;
+    const view = &views[0];
+    view.key = module_key;
     view.names = &source_names;
+    view.types = checked_types.view();
     view.const_store = &constants;
+    builder.borrowed_module_views = &views;
+    builder.module_index = @TypeOf(builder.module_index).init(gpa);
+    defer builder.module_index.deinit();
+    try builder.module_index.put(view.key.bytes, .root);
+    builder.closed_occurrences = .{};
+    builder.borrowed_closed_occurrences = null;
+    defer builder.closed_occurrences.deinit(gpa);
+    try builder.buildClosedOccurrenceIndex();
 
     const result = try ctx.lowerConstCaptureType(view, root);
     const items = program.types.span(program.types.get(result).tuple);
@@ -72052,6 +73362,8 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     try std.testing.expectEqual(restored_nominal, GuardedList.at(items, 1));
     const named = program.types.get(restored_nominal).named;
     try std.testing.expectEqual(Type.NamedKind.@"opaque", named.kind);
+    try std.testing.expectEqual(nominal_checked_ty, named.named_type.ty);
+    try std.testing.expectEqualSlices(u8, &module_key.bytes, &named.named_type.ty_module.bytes);
     try std.testing.expectEqual(Type.BackingUse.runtime_layout_only, named.backing.?.use);
     try std.testing.expectEqual(GuardedList.at(items, 2), named.backing.?.ty);
     try std.testing.expect(restored_nominal != named.backing.?.ty);
@@ -72059,6 +73371,21 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     const recursive_items = program.types.span(program.types.get(restored_recursive).tuple);
     try std.testing.expectEqual(restored_recursive, GuardedList.at(recursive_items, 0));
     try std.testing.expectEqual(@as(usize, 4), program.types.typeCount());
+    // Repeated restoration of the complete graph and one of its children
+    // performs no traversal allocations, including through a transparent alias.
+    var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = 0 });
+    ctx.allocator = failing.allocator();
+    try std.testing.expectEqual(result, try ctx.lowerConstCaptureType(view, root));
+    try std.testing.expectEqual(restored_nominal, try ctx.lowerConstCaptureType(view, alias));
+    ctx.allocator = gpa;
+
+    // The same source id in another producer's store is a distinct key.
+    var other = check.ConstStore.ConstStore.init(gpa);
+    defer other.deinit();
+    const other_ty = try other.type_store.append(.{ .primitive = .i64 });
+    view.const_store = &other;
+    const other_result = try ctx.lowerConstCaptureType(view, other_ty);
+    try std.testing.expectEqual(Type.Primitive.i64, program.types.get(other_result).primitive);
 }
 
 test "issue 11737: independent call selects its own nested contract without copying" {
@@ -72097,4 +73424,1109 @@ fn writeActiveVariant(comptime U: type, dest: *U, src: U) void {
         }
     }
     unreachable; // the inline loop covers every variant of U
+}
+
+test "issue 12616 recursive completion and inhabitation survive interleaving and unrelated mutation" {
+    var allocations = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(allocations.allocator());
+    defer fixture.deinit();
+    const graph = fixture.graph;
+    const request_items = try graph.arena().alloc(NodeId, 2);
+    const produced_items = try graph.arena().alloc(NodeId, 2);
+    const request = try graph.newNode(.{ .tuple = request_items });
+    const produced = try graph.newNode(.{ .tuple = produced_items });
+    request_items[0] = try graph.newNode(.{ .list = request });
+    produced_items[0] = try graph.newNode(.{ .list = produced });
+    const variable = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const scalar = try graph.newNode(.{ .primitive = .i64 });
+    request_items[1] = try graph.newNode(.{ .list = variable });
+    produced_items[1] = try graph.newNode(.{ .list = scalar });
+    const other_a = try graph.newNode(.{ .box = scalar });
+    const other_b = try graph.newNode(.{ .box = scalar });
+    const live_before = allocations.allocated_bytes - allocations.freed_bytes;
+    const allocations_before = allocations.allocations;
+    try std.testing.expectEqual(.mismatch, try fixture.ctx.requestCompletionRelation(request, produced, &fixture.ctx.analysis_memo));
+    try std.testing.expectEqual(.unchanged, try fixture.ctx.requestCompletionRelation(other_a, other_b, &fixture.ctx.analysis_memo));
+    const initial = fixture.diagnostics;
+    const bytes = fixture.ctx.analysis_memo.proofs.retainedPayloadBytes();
+    const allocated = allocations.allocations;
+    const total_allocated_bytes = allocations.allocated_bytes;
+    std.debug.print("12616 monotype: pairs={d} inhabitation_nodes={d} facts={d} payload_bytes={d} query_owned_bytes={d} query_allocations={d}; 512 A/B repetitions allocate and expand nothing\n", .{ initial.completion_pair_expansions, initial.inhabitation_node_expansions, fixture.ctx.analysis_memo.proofs.proven.count(), bytes, allocations.allocated_bytes - allocations.freed_bytes - live_before, allocated - allocations_before });
+    for (0..512) |_| {
+        try std.testing.expect(!try fixture.ctx.resultCompletesRequest(request, produced));
+        try std.testing.expect(!try fixture.ctx.resultCompletesRequest(other_a, other_b));
+        try std.testing.expect(!try fixture.ctx.nodeIsProvenUninhabited(request));
+    }
+    try std.testing.expectEqual(initial.completion_pair_expansions, fixture.diagnostics.completion_pair_expansions);
+    try std.testing.expectEqual(initial.inhabitation_node_expansions, fixture.diagnostics.inhabitation_node_expansions);
+    try std.testing.expectEqual(bytes, fixture.ctx.analysis_memo.proofs.retainedPayloadBytes());
+    try std.testing.expectEqual(allocated, allocations.allocations);
+    try std.testing.expectEqual(total_allocated_bytes, allocations.allocated_bytes);
+    const unrelated = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    try graph.unify(unrelated, try graph.newNode(.{ .primitive = .str }));
+    try std.testing.expect(!try fixture.ctx.resultCompletesRequest(request, produced));
+    try std.testing.expectEqual(initial.completion_pair_expansions, fixture.diagnostics.completion_pair_expansions);
+    try graph.unify(variable, try graph.newNode(.empty_tag_union));
+    try fixture.expectRelation(.completed, request, produced);
+    const after = fixture.diagnostics.completion_pair_expansions;
+    try std.testing.expect(!try fixture.ctx.resultCompletesRequest(other_a, other_b));
+    try std.testing.expectEqual(after, fixture.diagnostics.completion_pair_expansions);
+}
+
+test "issue 12616 deep completion and emptiness are iterative" {
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(std.testing.allocator);
+    defer fixture.deinit();
+    const graph = fixture.graph;
+    var request = try graph.newNode(.{ .primitive = .i64 });
+    var produced = try graph.newNode(.{ .primitive = .i64 });
+    for (0..20_000) |_| {
+        request = try graph.newNode(.{ .box = request });
+        produced = try graph.newNode(.{ .box = produced });
+    }
+    try fixture.expectRelation(.unchanged, request, produced);
+    try fixture.expectUninhabited(request, .inspectable_only, false);
+    try std.testing.expectEqual(@as(usize, 0), fixture.ctx.completion_scratch.pairs.items.len);
+}
+
+test "issue 12616 aliased inhabitation children publish one canonical fact" {
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(std.testing.allocator);
+    defer fixture.deinit();
+    const graph = fixture.graph;
+    const empty = try graph.newNode(.empty_tag_union);
+    const alias = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    try graph.unify(alias, empty);
+    const tuple = try graph.newNode(.{ .tuple = try graph.arena().dupe(NodeId, &.{ empty, alias }) });
+    try std.testing.expect(try fixture.ctx.nodeIsProvenUninhabited(tuple));
+    try std.testing.expectEqual(@as(usize, 2), fixture.ctx.analysis_memo.proofs.proven.count());
+    try std.testing.expect(try fixture.ctx.nodeIsProvenUninhabited(alias));
+}
+
+test "issue 12616 completion watches canonical function arguments through old aliases" {
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(std.testing.allocator);
+    defer fixture.deinit();
+    const graph = fixture.graph;
+    const left = try graph.newNode(.{ .primitive = .i64 });
+    const right = try graph.newNode(.{ .primitive = .i64 });
+    const left_alias = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const right_alias = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    try graph.unify(left_alias, left);
+    try graph.unify(right_alias, right);
+    try std.testing.expect(graph.rootNode(left_alias) != left_alias);
+    try std.testing.expect(graph.rootNode(right_alias) != right_alias);
+    const request = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{left_alias}), .ret = left } });
+    const produced = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{right_alias}), .ret = left } });
+    try fixture.expectRelation(.mismatch, request, produced);
+    // Neither old alias is written by this join, but both now denote one class.
+    try graph.unify(left, right);
+    try fixture.expectRelation(.unchanged, request, produced);
+}
+
+test "produced witness relation visits shared container pairs once" {
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(std.testing.allocator);
+    defer fixture.deinit();
+    const graph = fixture.graph;
+    const shared = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    var request = shared;
+    var produced = shared;
+    for (0..12) |_| {
+        request = try graph.newNode(.{ .tuple = try graph.arena().dupe(NodeId, &.{ request, request }) });
+        produced = try graph.newNode(.{ .tuple = try graph.arena().dupe(NodeId, &.{ produced, produced }) });
+    }
+    const witness = try fixture.ctx.relateCheckedNodeToProducedValue(request, produced);
+    try std.testing.expectEqual(produced, witness);
+    try std.testing.expect(fixture.diagnostics.completion_queries <= 24);
+}
+
+test "module identity index retains first current view and rejects absent owners" {
+    const allocator = std.testing.allocator;
+    // Only the explicit owner identity participates in this immutable index.
+    var views: [4]ModuleViewData = undefined;
+    for (&views, [_]u8{ 1, 2, 1, 3 }) |*view, byte| view.module_identity.stable_hash = @splat(byte);
+    var builder: Builder = undefined;
+    builder.allocator = allocator;
+    builder.borrowed_module_views = &views;
+    builder.module_identity_index = .empty;
+    defer builder.module_identity_index.deinit(allocator);
+    try builder.seedModuleIdentityIndex();
+    try std.testing.expect(builder.moduleForIdentityHash(&@as([32]u8, @splat(1))).? == &views[0]);
+    try std.testing.expect(builder.moduleForIdentityHash(&@as([32]u8, @splat(2))).? == &views[1]);
+    try std.testing.expect(builder.moduleForIdentityHash(&@as([32]u8, @splat(3))).? == &views[3]);
+    try std.testing.expect(builder.moduleForIdentityHash(&@as([32]u8, @splat(4))) == null);
+}
+
+test "fresh closed named occurrences agree with persistent replay and preserve open identities" {
+    const a = std.testing.allocator;
+    var first = checked.CheckedTypeStore{};
+    defer first.deinit(a);
+    var second = checked.CheckedTypeStore{};
+    defer second.deinit(a);
+    const owner: names.CheckedModuleDigest = .{ .bytes = @splat(42) };
+    const key: [32]u8 = @splat(73);
+    const Fixture = struct {
+        fn add(store: *checked.CheckedTypeStore, identity: [32]u8, open: bool) Allocator.Error!checked.CheckedTypeId {
+            // Each alias has its own backing root; a shared identity would
+            // name one already-filled root.
+            var backing_identity = identity;
+            backing_identity[0] ^= 0xff;
+            const backing = try store.reserveSyntheticTypeRoot(std.testing.allocator, .{ .bytes = backing_identity }, false);
+            try store.fillSyntheticTypeRoot(std.testing.allocator, backing, .empty_record);
+            const id = try store.reserveSyntheticTypeRoot(std.testing.allocator, .{ .bytes = identity }, open);
+            try store.fillSyntheticTypeRoot(std.testing.allocator, id, .{ .alias = .{
+                .name = @fromBackingInt(@as(u32, 0)),
+                .origin_module = @fromBackingInt(@as(u32, 0)),
+                .owner_module = .{ .bytes = @splat(42) },
+                .backing = backing,
+            } });
+            return id;
+        }
+    };
+    const first_ty = try Fixture.add(&first, key, false);
+    _ = try Fixture.add(&second, @splat(74), false);
+    const second_ty = try Fixture.add(&second, key, false);
+    const open_ty = try Fixture.add(&first, @splat(75), true);
+    var views: [2]ModuleViewData = undefined;
+    views[0].key = .{ .bytes = @splat(20) };
+    views[0].types = first.view();
+    views[1].key = .{ .bytes = @splat(10) };
+    views[1].types = second.view();
+    var builder: Builder = undefined;
+    builder.allocator = a;
+    builder.borrowed_module_views = &views;
+    builder.closed_occurrences = .{};
+    builder.borrowed_closed_occurrences = null;
+    defer builder.closed_occurrences.deinit(a);
+    builder.module_index = @TypeOf(builder.module_index).init(a);
+    defer builder.module_index.deinit();
+    try builder.module_index.put(views[0].key.bytes, .root);
+    try builder.module_index.put(views[1].key.bytes, .{ .import = 0 });
+    try builder.buildClosedOccurrenceIndex();
+    const left = try builder.canonicalNamedOccurrence(&views[0], first_ty, owner);
+    const right = try builder.canonicalNamedOccurrence(&views[1], second_ty, owner);
+    const provenance = BodyContext.PersistentProvenance{ .builder = &builder };
+    const restored = (try provenance.resolveNamedType(.{ .closed = .{ .owner = owner.bytes, .key = key } })).?;
+    try std.testing.expectEqualDeep(left, right);
+    try std.testing.expectEqualDeep(left, restored);
+    try std.testing.expectEqual(second_ty, left.ty);
+    try std.testing.expectEqualSlices(u8, &views[1].key.bytes, &left.ty_module.bytes);
+    const open = try builder.canonicalNamedOccurrence(&views[0], open_ty, owner);
+    try std.testing.expectEqual(open_ty, open.ty);
+    try std.testing.expectEqualSlices(u8, &views[0].key.bytes, &open.ty_module.bytes);
+}
+
+// Experimental complete-result encoding, enabled only by a diagnostic variable.
+// The separate completed_body_cache diagnostic enables validated replay.
+const FrozenBodyProbe = struct {
+    address: CompletedBodyAddress,
+    source_file_keys: []const [32]u8,
+    lowering_module_keys: []const [32]u8,
+    root_dependencies: []const CompletedBodyRootDependency,
+    static_dependencies: []const CompletedBodyStaticDependency,
+    root_ty: Type.TypeId,
+    lowered: SealedLoweredTemplateBody,
+    self_reservation: TemplateReservation,
+    worker_local_symbol_count: u32,
+    demand: Demand,
+    upgrade_all: bool,
+    upgrade_owner: bool,
+    templates: []const FrozenTemplateProbe,
+    nested: []const FrozenNestedProbe,
+    fns: []const DraftFn,
+    const_fn_evidence: []const check.ConstStore.ConstFnEvidence,
+    const_fn_evidence_targets: []const check.ConstStore.ConstFnTargetEvidence,
+    const_fn_evidence_structurals: []const check.ConstStore.ConstFnStructuralEvidence,
+    const_fn_evidence_frames: []const check.ConstStore.ConstFnEvidenceFrame,
+    defs: []const DraftDef,
+    def_owners: []const DraftOwner,
+    nested_defs: []const DraftNestedDef,
+    exprs: []const DraftExpr,
+    pats: []const DraftPat,
+    stmts: []const DraftStmt,
+    locals: []const DraftLocal,
+    expr_ids: []const DraftExprId,
+    pat_ids: []const DraftPatId,
+    typed_locals: []const DraftTypedLocal,
+    stmt_ids: []const DraftStmtId,
+    field_exprs: []const DraftFieldExpr,
+    field_access_segments: []const DraftFieldAccessSegment,
+    fn_def_captures: []const DraftFnDefCapture,
+    record_destructs: []const DraftRecordDestruct,
+    str_pattern_steps: []const DraftStrPatternStep,
+    declared_fields: []const DraftDeclaredField,
+    branches: []const DraftBranch,
+    if_branches: []const DraftIfBranch,
+    string_literals: []const DraftStringLiteral,
+    string_bytes: []const u8,
+    proc_debug_names: []const Ast.ProcDebugName,
+    roots: []const DraftRoot,
+    layout_requests: []const DraftLayoutRequest,
+    runtime_schema_requests: []const DraftRuntimeSchemaRequest,
+    comptime_sites: []const DraftComptimeSite,
+    local_names: []const DraftSpan(u8),
+    source_text_bytes: []const u8,
+    expr_locs: []const base.SourceLoc,
+    expr_regions: []const base.Region,
+    stmt_locs: []const base.SourceLoc,
+    stmt_regions: []const base.Region,
+    owner_runs: []const DraftOwnerRun,
+    static_data_requests: []const DraftStaticDataRequest,
+    comptime_value_roots: []const Common.ComptimeValueRoot,
+    root_value_reads: []const DraftRootValueRead,
+    literal_roots: []const DraftLiteralRoot,
+};
+const FrozenCodecProbe = struct {
+    module: checked.ModuleId,
+    derivation: static_dispatch.GeneratedCodecDerivationId,
+    call_index: u32,
+    kind: CodecKind,
+    constructor_ty: Type.TypeId,
+    shape_ty: Type.TypeId,
+    fn of(value: ?SealedCodecContractContext) ?FrozenCodecProbe {
+        const v = value orelse return null;
+        return .{ .module = v.anchor.view.key, .derivation = v.anchor.derivation, .call_index = v.anchor.call_index, .kind = v.anchor.kind, .constructor_ty = v.constructor_ty, .shape_ty = v.shape_ty };
+    }
+};
+const FrozenTemplateProbe = struct {
+    state: DraftSpecState,
+    template_ref: names.ProcTemplate,
+    source_fn_ty: checked.CheckedTypeId,
+    source_fn_key: names.TypeDigest,
+    request_fn_ty: Type.TypeId,
+    evidence: ?FrozenDispatchEvidence,
+    /// The request's substitution sealed in the shard's store epoch.
+    subst: SealedSubstitution,
+    codec_contract: ?FrozenCodecProbe,
+    requires_local: bool,
+    local_context_dependent: bool,
+    lexical_owner: ?DraftOwner,
+    fn_id: DraftFnId,
+    def_id: ?DraftDefId,
+    resolved_slot: ?Ast.FnSlot,
+    committed_request_fn_ty: ?Type.TypeId = null,
+    committed_codec_contract: ?Ast.CodecContractIdentity = null,
+    demand: Demand = .evaluation,
+    /// Whether the resolved specialization is this request shaped by its
+    /// template's demand, so every call to it is demand-shaped.
+    demand_shaped: bool = false,
+    /// Whether the draft body uses this request's function as a value rather
+    /// than only calling it. A value's type is the program's, so such a
+    /// request is never shaped.
+    value_used: bool = false,
+};
+const FrozenNestedProbe = struct {
+    state: DraftSpecState,
+    nested: Ast.NestedFn,
+    source_fn_key: names.TypeDigest,
+    request_fn_ty: Type.TypeId,
+    capture_abi_digest: names.TypeDigest,
+    codec_contract: ?FrozenCodecProbe,
+    sealed_codec_contract: ?Ast.CodecContractIdentity = null,
+    lexical_owner: DraftOwner,
+    requires_local: bool,
+    local_context_dependent: bool,
+    fn_id: DraftFnId,
+};
+
+const FrozenProbeRecord = struct { family: [32]u8, key: [32]u8, bytes: []u8 };
+const FrozenReferenceProbe = struct {
+    self_fn: Ast.FnId,
+    self_def: Ast.DefId,
+    builder: *Builder,
+    external_fn: u32 = 0,
+    external_def: u32 = 0,
+    lifted_fn: u32 = 0,
+    missing_checked_module: u32 = 0,
+    fn scan(self: *FrozenReferenceProbe, comptime T: type, value: T) void {
+        if (T == Ast.FnId) {
+            if (value != self.self_fn) self.external_fn += 1;
+            return;
+        }
+        if (T == Ast.DefId) {
+            if (value != self.self_def) self.external_def += 1;
+            return;
+        }
+        if (T == Ast.LiftedFnId) {
+            self.lifted_fn += 1;
+            return;
+        }
+        if (T == checked.ModuleId) {
+            if (self.builder.moduleForKeyBytes(value.bytes) == null) self.missing_checked_module += 1;
+            return;
+        }
+        switch (@typeInfo(T)) {
+            .@"struct" => |info| inline for (info.field_names, info.field_types) |field, F| self.scan(F, @field(value, field)),
+            .@"union" => |info| inline for (info.field_names, info.field_types) |field, F| {
+                if (std.meta.activeTag(value) == @field(info.tag_type.?, field)) {
+                    self.scan(F, @field(value, field));
+                    return;
+                }
+            },
+            .optional => |info| {
+                if (value) |v| self.scan(info.child, v);
+            },
+            .pointer => |info| {
+                if (info.size == .slice) {
+                    for (value) |v| self.scan(info.child, v);
+                } else @compileError("probe pointer is not a slice");
+            },
+            .array => |info| for (value) |v| self.scan(info.child, v),
+            .type,
+            .void,
+            .bool,
+            .noreturn,
+            .int,
+            .float,
+            .comptime_float,
+            .comptime_int,
+            .undefined,
+            .null,
+            .error_union,
+            .error_set,
+            .@"enum",
+            .@"fn",
+            .@"opaque",
+            .frame,
+            .@"anyframe",
+            .vector,
+            .enum_literal,
+            .spirv,
+            => {},
+        }
+    }
+};
+
+const completed_body_columns = .{ "fns", "const_fn_evidence", "const_fn_evidence_targets", "const_fn_evidence_structurals", "const_fn_evidence_frames", "defs", "def_owners", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "record_destructs", "str_pattern_steps", "declared_fields", "branches", "if_branches", "string_literals", "string_bytes", "proc_debug_names", "roots", "layout_requests", "runtime_schema_requests", "comptime_sites", "local_names", "source_text_bytes", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions", "owner_runs", "static_data_requests", "comptime_value_roots", "root_value_reads", "literal_roots" };
+const CompletedBodyAddress = struct { family: [32]u8, key: [32]u8 };
+const CompletedBodyRootDependency = struct {
+    root: EntryRoot,
+    identity: checked.CompileTimeRootIdentity,
+    payload: std.meta.Tag(checked.CompileTimeRootPayload),
+    declared_read: bool,
+};
+const RestoredCompletedBody = struct {
+    arena: *std.heap.ArenaAllocator,
+    draft: BodyDraftStore,
+    pending: SealedPendingTemplateBody,
+};
+
+const CompletedBodyValidation = struct {
+    builder: *Builder,
+    job: PendingSpecJob,
+    names: *const names.NameStore,
+    const Error = PersistentInterface.DecodeError;
+
+    fn rejected(comptime line: u32) error{InvalidSummary} {
+        if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("completed-body rejected line={d}\n", .{line});
+        return error.InvalidSummary;
+    }
+    fn coverage(payload: FrozenBodyProbe) bool {
+        if (payload.comptime_value_roots.len != 0 or payload.literal_roots.len != 0 or payload.layout_requests.len != 0 or payload.roots.len != 0) return false;
+        for (payload.templates) |spec| if (spec.state == .lowering or (spec.local_context_dependent and spec.state != .lowered)) return false;
+        for (payload.nested) |spec| if (spec.state == .lowering or (spec.local_context_dependent and spec.state != .lowered)) return false;
+        return true;
+    }
+    fn staticNode(self: *const CompletedBodyValidation, request: DraftStaticDataRequest, dependency: CompletedBodyStaticDependency) Error!checked.ConstNodeId {
+        if (!std.mem.eql(u8, &request.module.bytes, &request.const_locator.artifact.bytes)) return rejected(@src().line);
+        const view = self.builder.moduleForKeyBytes(request.module.bytes) orelse return rejected(@src().line);
+        const raw = @backingInt(request.const_locator.template);
+        if (raw >= view.const_templates.templates.items.len) return rejected(@src().line);
+        const template = view.const_templates.templates.items[raw];
+        if (!std.meta.eql(template.owner, request.const_locator.owner) or !std.meta.eql(template.source_scheme, request.const_locator.source_scheme) or template.state != .stored_const) return rejected(@src().line);
+        const stored = template.state.stored_const;
+        if (dependency.root != stored.root or @backingInt(stored.root) >= view.compile_time_root_identities.rows.len) return rejected(@src().line);
+        if (!std.meta.eql(dependency.identity, view.compile_time_root_identities.rows[@backingInt(stored.root)])) return rejected(@src().line);
+        const type_view = self.builder.moduleForKeyBytes(request.checked_type_module.bytes) orelse return rejected(@src().line);
+        if (@backingInt(request.checked_type) >= type_view.types.payloadCount() or !std.meta.eql(dependency.checked_type_key, type_view.types.rootKey(request.checked_type))) return rejected(@src().line);
+        if (request.node == null and dependency.path.len != 0) return rejected(@src().line);
+        return CompletedConstPaths.follow(view.const_store, stored.node, dependency.path) orelse rejected(@src().line);
+    }
+
+    fn validate(self: *const CompletedBodyValidation, payload: FrozenBodyProbe) Error!void {
+        if (!std.meta.eql(payload.address, self.job.completed_body_address.?)) return rejected(@src().line);
+        if (payload.demand != self.job.demand) return rejected(@src().line);
+        // These columns need additional checked-value or declaration binding
+        // contracts. This format never admits them without those contracts.
+        if (payload.comptime_value_roots.len != 0 or payload.literal_roots.len != 0 or payload.layout_requests.len != 0 or payload.roots.len != 0) return rejected(@src().line);
+        if (payload.static_dependencies.len != payload.static_data_requests.len) return rejected(@src().line);
+        for (payload.static_data_requests, payload.static_dependencies) |request, dependency| _ = try self.staticNode(request, dependency);
+        if (payload.root_dependencies.len != payload.root_value_reads.len) return rejected(@src().line);
+        for (payload.root_dependencies, payload.root_value_reads) |dependency, read| {
+            if (!std.meta.eql(dependency.root, read.root)) return rejected(@src().line);
+            const view = self.builder.moduleForKeyBytes(read.root.module.bytes) orelse return rejected(@src().line);
+            const raw = @backingInt(read.root.root);
+            if (raw >= view.compile_time_roots.roots.len or raw >= view.compile_time_root_identities.rows.len) return rejected(@src().line);
+            if (!std.meta.eql(dependency.identity, view.compile_time_root_identities.rows[raw])) return rejected(@src().line);
+            if (dependency.payload != std.meta.activeTag(view.compile_time_roots.root(read.root.root).payload)) return rejected(@src().line);
+            if (dependency.declared_read != self.builder.comptimeValueReadDeclared(view, read.root.root)) return rejected(@src().line);
+        }
+        for (payload.local_names) |span| try bounds(span.start, span.len, payload.source_text_bytes.len);
+        for (payload.string_literals) |literal| {
+            const len = if (literal.const_blob) |blob| blk: {
+                const view = self.builder.moduleForKeyBytes(blob.module_bytes) orelse return rejected(@src().line);
+                if (@backingInt(blob.data) >= view.const_store.blob_views.items.len) return rejected(@src().line);
+                if (!std.mem.eql(u8, blob.bytes, view.const_store.blobData(blob.data))) return rejected(@src().line);
+                break :blk blob.bytes.len;
+            } else blk: {
+                try bounds(literal.backing.start, literal.backing.len, payload.string_bytes.len);
+                break :blk literal.backing.len;
+            };
+            try bounds(literal.offset, literal.len, len);
+        }
+        for (payload.locals) |local| if (@backingInt(local.symbol) >= payload.worker_local_symbol_count) return rejected(@src().line);
+        for (payload.defs) |def| if (@backingInt(def.symbol) >= payload.worker_local_symbol_count) return rejected(@src().line);
+        for (payload.nested_defs) |def| if (@backingInt(def.symbol) >= payload.worker_local_symbol_count) return rejected(@src().line);
+        for (payload.proc_debug_names) |name| if (@backingInt(name.symbol) >= payload.worker_local_symbol_count) return rejected(@src().line);
+        for (payload.owner_runs) |owner_run| inline for (@typeInfo(DraftCoreKind).@"enum".field_names, 0..) |column, index| {
+            if (owner_run.starts[index] > owner_run.ends[index] or owner_run.ends[index] > @field(payload, column).len) return rejected(@src().line);
+        };
+        for (payload.fns, 0..) |fn_, index| switch (fn_.parent_owner) {
+            .draft_fn => |parent| if (@backingInt(parent) >= index) return rejected(@src().line),
+            .root, .reserved_fn => {},
+        };
+        for (payload.templates) |spec| {
+            if (spec.state == .lowering or (spec.local_context_dependent and spec.state != .lowered)) return rejected(@src().line);
+            const closed_local = spec.local_context_dependent and spec.state == .lowered;
+            if ((spec.evidence == null) != closed_local) return rejected(@src().line);
+            if (closed_local and (spec.def_id != null or spec.lexical_owner == null)) return rejected(@src().line);
+            if (spec.evidence) |stored_evidence| {
+                try self.evidence(stored_evidence.stored);
+                try stored_evidence.validate(self);
+            }
+        }
+        for (payload.nested) |spec| if (spec.state == .lowering or (spec.local_context_dependent and spec.state != .lowered)) return rejected(@src().line);
+        var walker = Walker{ .validation = self, .payload = &payload };
+        var read_only = payload;
+        try walker.walk(FrozenBodyProbe, &read_only, false);
+    }
+
+    fn bounds(start: u32, len: u32, limit: usize) Error!void {
+        if (start > limit or len > limit - start) return rejected(@src().line);
+    }
+
+    fn procedure(self: *const CompletedBodyValidation, ref: names.ProcTemplate) Error!ModuleView {
+        const view = self.builder.moduleForKeyBytes(names.procTemplateModuleDigest(ref).bytes) orelse return rejected(@src().line);
+        if (@backingInt(ref.template) >= view.templates.templates.items.len) return rejected(@src().line);
+        const template = view.templates.get(ref.template);
+        if (template.proc_base != ref.proc_base) return rejected(@src().line);
+        return view;
+    }
+
+    fn evidence(self: *const CompletedBodyValidation, stored: StoredConstFnEvidence) Error!void {
+        if (stored.frames.len != 1 or stored.head != 0 or stored.frames[0].scope() != .root or stored.frames[0].parent != null or stored.frames[0].roots_start != 0) return rejected(@src().line);
+        for (stored.entries.nodes) |node| switch (node) {
+            .target => |index| if (index >= stored.entries.targets.len) return rejected(@src().line),
+            .structural => |index| if (index >= stored.entries.structurals.len) return rejected(@src().line),
+            .from_callable,
+            .from_scheme,
+            .unreachable_value,
+            .checked_error,
+            => {},
+        };
+        const end = (try checked.ConstStore.evidenceVectorEnd(self.builder.allocator, stored.entries, 0, stored.frames[0].roots_len)) orelse return rejected(@src().line);
+        if (end != stored.entries.nodes.len) return rejected(@src().line);
+        if (!std.meta.eql(stored.digest, Ast.fnEvidenceDigest(stored.entries, stored.frames, stored.head))) return rejected(@src().line);
+        for (stored.entries.targets) |target| {
+            const view = self.builder.moduleForKeyBytes(target.view.bytes) orelse return rejected(@src().line);
+            if (target.method.kind == .local_proc or @backingInt(target.method.callable_ty) >= view.types.payloadCount()) return rejected(@src().line);
+            if (!std.meta.eql(target.method_callable_key, view.types.rootKey(target.method.callable_ty))) return rejected(@src().line);
+            if (target.instantiation) |instantiation| {
+                const owner = self.builder.moduleForKeyBytes(instantiation.view.bytes) orelse return rejected(@src().line);
+                if (@backingInt(instantiation.callable_ty) >= owner.types.payloadCount()) return rejected(@src().line);
+                if (!std.meta.eql(instantiation.callable_key, owner.types.rootKey(instantiation.callable_ty))) return rejected(@src().line);
+            }
+        }
+        for (stored.entries.structurals) |structural| if (structural.checked) |checked_| {
+            const view = self.builder.moduleForKeyBytes(checked_.view.bytes) orelse return rejected(@src().line);
+            if (@backingInt(checked_.dispatcher_ty) >= view.types.payloadCount() or @backingInt(checked_.callable_ty) >= view.types.payloadCount()) return rejected(@src().line);
+            if (!std.meta.eql(checked_.dispatcher_key, view.types.rootKey(checked_.dispatcher_ty)) or !std.meta.eql(checked_.callable_key, view.types.rootKey(checked_.callable_ty))) return rejected(@src().line);
+            if (checked_.generated_codec_derivation) |id| {
+                if (@backingInt(id) >= view.static_dispatch_plans.generated_codec_derivations.len) return rejected(@src().line);
+                if (!std.meta.eql(checked_.generated_codec_content, view.static_dispatch_plans.generated_codec_derivations[@backingInt(id)].content)) return rejected(@src().line);
+            } else if (checked_.generated_codec_content != null) return rejected(@src().line);
+        };
+    }
+
+    fn rebind(self: *const CompletedBodyValidation, payload: *FrozenBodyProbe) Error!void {
+        for (@constCast(payload.static_data_requests), payload.static_dependencies) |*request, dependency| {
+            const node = try self.staticNode(request.*, dependency);
+            if (request.node != null) request.node = node;
+            request.const_node = node;
+        }
+        var walker = Walker{ .validation = self, .payload = payload };
+        try walker.walk(FrozenBodyProbe, payload, true);
+    }
+
+    const Walker = struct {
+        validation: *const CompletedBodyValidation,
+        payload: *const FrozenBodyProbe,
+        fn walk(self: *Walker, comptime T: type, value: anytype, comptime rebind_: bool) Error!void {
+            const p = self.payload;
+            const v = self.validation;
+            if (T == TemplateReservation) {
+                if (rebind_) value.* = v.job.reservation;
+                return;
+            }
+            if (T == Ast.FnId) {
+                if (rebind_) value.* = v.job.reservation.fn_id else if (value.* != p.self_reservation.fn_id) return rejected(@src().line);
+                return;
+            }
+            if (T == Ast.DefId) {
+                if (rebind_) value.* = v.job.reservation.def else if (value.* != p.self_reservation.def) return rejected(@src().line);
+                return;
+            }
+            if (T == Ast.LiftedFnId) return rejected(@src().line);
+            if (T == base.SourceLoc) {
+                if (value.file == base.SourceLoc.no_file) return;
+                if (value.file >= p.source_file_keys.len) return rejected(@src().line);
+                const current = v.builder.sourceFileIds().get(p.source_file_keys[value.file]) orelse return rejected(@src().line);
+                if (rebind_) value.file = current;
+                return;
+            }
+            if (T == Common.LoweringModuleId) {
+                if (@backingInt(value.*) >= p.lowering_module_keys.len) return rejected(@src().line);
+                const current = v.builder.loweringModuleIds().get(p.lowering_module_keys[@backingInt(value.*)]) orelse return rejected(@src().line);
+                if (rebind_) value.* = current;
+                return;
+            }
+            if (T == checked.ModuleId) {
+                if (v.builder.moduleForKeyBytes(value.bytes) == null) return rejected(@src().line);
+                return;
+            }
+            if (T == names.ProcTemplate) {
+                _ = try v.procedure(value.*);
+                return;
+            }
+            if (T == Ast.HostedFn) {
+                _ = try v.procedure(value.template);
+                const entry = for (v.builder.hosted_catalog) |entry| {
+                    if (names.procedureTemplateRefEql(entry.template, value.template)) break entry;
+                } else return rejected(@src().line);
+                if (entry.binding != .mapped) return rejected(@src().line);
+                if (!std.mem.eql(u8, v.names.externalSymbolNameText(value.external_symbol_name), v.builder.program.names.externalSymbolNameText(entry.external_symbol_name))) return rejected(@src().line);
+                if (rebind_) value.* = v.builder.hostedFn(value.template);
+                return;
+            }
+            if (T == Ast.NestedFn) {
+                const owner = try v.procedure(value.owner);
+                const site_view = if (value.default_root) |identity|
+                    v.builder.moduleForIdentityHash(&identity.bytes) orelse return rejected(@src().line)
+                else
+                    owner;
+                if (@backingInt(value.site) >= site_view.nested_proc_sites.sites.len) return rejected(@src().line);
+                switch (site_view.nested_proc_sites.sites[@backingInt(value.site)].owner) {
+                    .template => |site_owner| if (value.default_root != null or !names.procedureTemplateRefEql(site_owner, value.owner)) return rejected(@src().line),
+                    .default_root => if (value.default_root == null) return rejected(@src().line),
+                }
+                return;
+            }
+            if (T == DraftTypeCell) {
+                if (value.* != .sealed) return rejected(@src().line);
+                return;
+            }
+            if (T == DraftProcCallee) if (value.* != .func) return rejected(@src().line);
+            if (T == FrozenCodecProbe) {
+                const owner = v.builder.moduleForKeyBytes(value.module.bytes) orelse return rejected(@src().line);
+                if (@backingInt(value.derivation) >= owner.static_dispatch_plans.generated_codec_derivations.len) return rejected(@src().line);
+            }
+            inline for (.{ .{ DraftExprId, "exprs" }, .{ DraftPatId, "pats" }, .{ DraftStmtId, "stmts" }, .{ DraftLocalId, "locals" }, .{ DraftFnId, "fns" }, .{ DraftDefId, "defs" }, .{ DraftNestedDefId, "nested_defs" }, .{ DraftStringLiteralId, "string_literals" }, .{ DraftComptimeSiteId, "comptime_sites" }, .{ DraftStaticDataId, "static_data_requests" }, .{ DraftComptimeValueRootId, "comptime_value_roots" } }) |column| {
+                if (T == column[0]) {
+                    if (@backingInt(value.*) >= @field(p.*, column[1]).len) return rejected(@src().line);
+                    return;
+                }
+            }
+            // u8 spans have two distinct owners and were checked by their
+            // owning fields above; no generic choice of backing is permitted.
+            if (T == DraftSpan(u8)) return;
+            inline for (.{ "expr_ids", "pat_ids", "stmt_ids", "typed_locals", "field_exprs", "field_access_segments", "fn_def_captures", "record_destructs", "str_pattern_steps", "declared_fields", "branches", "if_branches", "const_fn_evidence", "const_fn_evidence_targets", "const_fn_evidence_structurals", "const_fn_evidence_frames" }) |column| {
+                const Child = @typeInfo(@TypeOf(@field(p.*, column))).pointer.child;
+                if (T == DraftSpan(Child)) {
+                    try CompletedBodyValidation.bounds(value.start, value.len, @field(p.*, column).len);
+                    return;
+                }
+            }
+            switch (@typeInfo(T)) {
+                .@"struct" => |info| inline for (info.field_names, info.field_types) |field, F| try self.walk(F, &@field(value, field), rebind_),
+                .@"union" => |info| inline for (info.field_names, info.field_types) |field, F| {
+                    if (std.meta.activeTag(value.*) == @field(info.tag_type.?, field)) return self.walk(F, &@field(value, field), rebind_);
+                },
+                .optional => |info| if (value.*) |*present| try self.walk(info.child, present, rebind_),
+                .pointer => |info| {
+                    if (info.size != .slice) @compileError("completed bodies contain bounded owned slices");
+                    for (@constCast(value.*)) |*item| try self.walk(info.child, item, rebind_);
+                },
+                .array => |info| for (value) |*item| try self.walk(info.child, item, rebind_),
+                .type,
+                .void,
+                .bool,
+                .noreturn,
+                .int,
+                .float,
+                .comptime_float,
+                .comptime_int,
+                .undefined,
+                .null,
+                .error_union,
+                .error_set,
+                .@"enum",
+                .@"fn",
+                .@"opaque",
+                .frame,
+                .@"anyframe",
+                .vector,
+                .enum_literal,
+                .spirv,
+                => {},
+            }
+        }
+    };
+};
+
+/// ConstStore evidence intentionally omits edge-local substitutions. A queued
+/// body frontier can still consume them, so completed bodies retain them in
+/// addition to the value's dispatch identity. The shared walk gives these
+/// entries the same explicit order during capture and restoration.
+const FrozenDispatchEvidence = struct {
+    stored: StoredConstFnEvidence,
+    substitutions: []const ?Substitution,
+
+    const Substitution = struct {
+        module: checked.ModuleId,
+        tys: []const checked.CheckedTypeId,
+        keys: []const names.TypeDigest,
+        alias: ?struct { module: checked.ModuleId, value: static_dispatch.MethodAlias },
+    };
+
+    fn capture(builder: *Builder, allocator: Allocator, owner: names.ProcTemplate, vector: []const SpecEvidence) Allocator.Error!FrozenDispatchEvidence {
+        var walk = SpecEvidenceWalk{};
+        defer walk.deinit(allocator);
+        var substitutions = std.ArrayList(?Substitution).empty;
+        var cursor = vector;
+        while (try walk.next(allocator, &cursor)) |entry| switch (entry) {
+            .target => |target| {
+                const stored: ?Substitution = if (target.substitution) |substitution| blk: {
+                    const keys = try allocator.alloc(names.TypeDigest, substitution.tys.len);
+                    for (substitution.tys, keys) |ty, *key| key.* = substitution.view.types.rootKey(ty);
+                    break :blk .{
+                        .module = substitution.view.key,
+                        .tys = substitution.tys,
+                        .keys = keys,
+                        .alias = if (substitution.alias) |alias| .{ .module = alias.view.key, .value = alias.alias } else null,
+                    };
+                } else null;
+                try substitutions.append(allocator, stored);
+            },
+            .structural,
+            .from_callable,
+            .from_scheme,
+            .unreachable_value,
+            .checked_error,
+            => {},
+        };
+        return .{ .stored = try builder.constFnEvidence(rootEvidence(owner, vector)), .substitutions = substitutions.items };
+    }
+
+    fn validate(self: FrozenDispatchEvidence, validation: *const CompletedBodyValidation) CompletedBodyValidation.Error!void {
+        var targets: usize = 0;
+        for (self.stored.entries.nodes) |entry| if (entry == .target) {
+            targets += 1;
+        };
+        if (targets != self.substitutions.len) return CompletedBodyValidation.rejected(@src().line);
+        for (self.substitutions) |maybe| if (maybe) |substitution| {
+            const view = validation.builder.moduleForKeyBytes(substitution.module.bytes) orelse return CompletedBodyValidation.rejected(@src().line);
+            if (substitution.tys.len != substitution.keys.len) return CompletedBodyValidation.rejected(@src().line);
+            for (substitution.tys, substitution.keys) |ty, key| {
+                if (@backingInt(ty) >= view.types.payloadCount()) return CompletedBodyValidation.rejected(@src().line);
+                if (!std.meta.eql(key, view.types.rootKey(ty))) return CompletedBodyValidation.rejected(@src().line);
+            }
+            if (substitution.alias) |alias| {
+                const alias_view = validation.builder.moduleForKeyBytes(alias.module.bytes) orelse return CompletedBodyValidation.rejected(@src().line);
+                switch (alias.value) {
+                    .top_level => |pattern| {
+                        for (alias_view.callable_eval_templates.templates) |template| {
+                            if (template.pattern == pattern) break;
+                        } else return CompletedBodyValidation.rejected(@src().line);
+                    },
+                    .local => |local| {
+                        if (@backingInt(local.lookup) >= alias_view.bodies.stored_exprs.len) return CompletedBodyValidation.rejected(@src().line);
+                        if (local.dispatch_scope) |scope| if (@backingInt(scope) >= alias_view.templates.dispatch_scopes.len) return CompletedBodyValidation.rejected(@src().line);
+                    },
+                }
+            }
+        };
+    }
+
+    fn restoreSubstitutions(self: FrozenDispatchEvidence, builder: *Builder, vector: []const SpecEvidence) Allocator.Error!void {
+        var walk = SpecEvidenceWalk{};
+        defer walk.deinit(builder.allocator);
+        var cursor = vector;
+        var index: usize = 0;
+        while (try walk.next(builder.allocator, &cursor)) |entry| switch (entry) {
+            .target => |target| {
+                if (index >= self.substitutions.len) Common.invariant("validated body evidence lost a target substitution");
+                @constCast(target).substitution = if (self.substitutions[index]) |substitution| .{
+                    .view = builder.moduleForId(substitution.module),
+                    // Global specialization records may outlive the shard.
+                    .tys = try builder.evidence_arena.allocator().dupe(checked.CheckedTypeId, substitution.tys),
+                    .alias = if (substitution.alias) |alias| .{ .view = builder.moduleForId(alias.module), .alias = alias.value } else null,
+                } else null;
+                index += 1;
+            },
+            .structural,
+            .from_callable,
+            .from_scheme,
+            .unreachable_value,
+            .checked_error,
+            => {},
+        };
+        if (index != self.substitutions.len) Common.invariant("validated body evidence changed target count");
+    }
+};
+
+const FrozenEvidenceContext = struct {
+    allocator: Allocator,
+    builder: *Builder,
+    fn restore(builder: *Builder, evidence: FrozenDispatchEvidence) Allocator.Error![]const SpecEvidence {
+        var self = FrozenEvidenceContext{ .allocator = builder.allocator, .builder = builder };
+        var cursor: usize = 0;
+        const vector = try BodyContext.materializeConstFnEvidenceVector(&self, evidence.stored.entries, &cursor, evidence.stored.frames[0].roots_len);
+        try evidence.restoreSubstitutions(builder, vector);
+        return vector;
+    }
+    fn finishStoredEvidenceTarget(self: *FrozenEvidenceContext, target: *SpecEvidenceTarget, stored: check.ConstStore.ConstFnTargetEvidence, nested: NestedSpecEvidence) Allocator.Error!void {
+        if (stored.method.kind == .local_proc) Common.invariant("validated completed body retained a local procedure context");
+        target.* = .{
+            .view = self.builder.moduleForDigest(stored.view),
+            .target = stored.method,
+            .instantiation = if (stored.instantiation) |instance| .{ .view = self.builder.moduleForDigest(instance.view), .callable_ty = instance.callable_ty } else null,
+            .local_proc_context = null,
+            .nested = nested,
+        };
+    }
+};
+
+test "completed body frontier retains nested target substitutions with owned checked types" {
+    const a = std.testing.allocator;
+    var ns = names.NameStore.init(a);
+    defer ns.deinit();
+    var types = checked.CheckedTypeStore{};
+    defer types.deinit(a);
+    const first = try types.reserveSyntheticTypeRoot(a, .{ .bytes = @splat(7) }, false);
+    try types.fillSyntheticTypeRoot(a, first, .empty_record);
+    const second = try types.reserveSyntheticTypeRoot(a, .{ .bytes = @splat(8) }, false);
+    try types.fillSyntheticTypeRoot(a, second, .empty_tag_union);
+    const owner: checked.ModuleId = .{ .bytes = @splat(11) };
+    var views: [1]ModuleViewData = undefined;
+    views[0].key = owner;
+    views[0].types = types.view();
+    var builder: Builder = undefined;
+    builder.allocator = a;
+    builder.borrowed_module_views = &views;
+    builder.module_index = @TypeOf(builder.module_index).init(a);
+    defer builder.module_index.deinit();
+    try builder.module_index.put(owner.bytes, .root);
+    builder.evidence_arena = base.SingleThreadArena.init(a);
+    defer builder.evidence_arena.deinit();
+    const validation = CompletedBodyValidation{ .builder = &builder, .job = undefined, .names = &ns };
+    var ids = [_]checked.CheckedTypeId{ first, second };
+    var keys = [_]names.TypeDigest{ views[0].types.rootKey(first), views[0].types.rootKey(second) };
+    var substitutions = [_]?FrozenDispatchEvidence.Substitution{
+        .{ .module = owner, .tys = ids[0..1], .keys = keys[0..1], .alias = null },
+        .{ .module = owner, .tys = ids[1..2], .keys = keys[1..2], .alias = null },
+    };
+    var frozen = FrozenDispatchEvidence{ .stored = StoredConstFnEvidence.empty(), .substitutions = &substitutions };
+    frozen.stored.entries.nodes = &.{ .{ .target = 0 }, .{ .target = 1 } };
+    try frozen.validate(&validation);
+    var child: SpecEvidenceTarget = undefined;
+    child.nested = .synthesize;
+    child.callable_contracts = &.{};
+    var parent: SpecEvidenceTarget = undefined;
+    parent.nested = .{ .resolved = &.{.{ .target = &child }} };
+    parent.callable_contracts = &.{};
+    try frozen.restoreSubstitutions(&builder, &.{.{ .target = &parent }});
+    try std.testing.expectEqual(first, parent.substitution.?.tys[0]);
+    try std.testing.expectEqual(second, child.substitution.?.tys[0]);
+    try std.testing.expectEqual(&views[0], child.substitution.?.view);
+    ids[1] = first;
+    try std.testing.expectEqual(second, child.substitution.?.tys[0]);
+    try std.testing.expectError(error.InvalidSummary, frozen.validate(&validation));
+    ids[1] = second;
+    substitutions[1].?.module.bytes[0] ^= 1;
+    try std.testing.expectError(error.InvalidSummary, frozen.validate(&validation));
+    substitutions[1].?.module = owner;
+    frozen.substitutions = substitutions[0..1];
+    try std.testing.expectError(error.InvalidSummary, frozen.validate(&validation));
+}
+
+test "completed body rejects foreign reservations and rebinds its own references" {
+    const a = std.testing.allocator;
+    var ns = names.NameStore.init(a);
+    defer ns.deinit();
+    var builder: Builder = undefined;
+    var job: PendingSpecJob = undefined;
+    job.completed_body_address = .{ .family = @splat(2), .key = @splat(3) };
+    job.demand = .evaluation;
+    job.reservation = .{ .def = @fromBackingInt(17), .fn_id = @fromBackingInt(18), .symbol = @fromBackingInt(19) };
+    var payload = std.mem.zeroes(FrozenBodyProbe);
+    payload.address = job.completed_body_address.?;
+    payload.demand = .evaluation;
+    var exprs = [_]DraftExpr{.{ .ty = .{ .sealed = @fromBackingInt(1) }, .data = .{ .def_ref = .{ .final = payload.self_reservation.def } } }};
+    payload.exprs = &exprs;
+    const validation = CompletedBodyValidation{ .builder = &builder, .job = job, .names = &ns };
+    try validation.validate(payload);
+    exprs[0].data.def_ref.final = @fromBackingInt(1);
+    try std.testing.expectError(error.InvalidSummary, validation.validate(payload));
+    exprs[0].data.def_ref.final = payload.self_reservation.def;
+    try validation.rebind(&payload);
+    try std.testing.expectEqual(job.reservation.def, exprs[0].data.def_ref.final);
+    try std.testing.expectEqualDeep(job.reservation, payload.self_reservation);
+}
+
+test "completed body rejects incompatible demand missing columns and invalid draft references" {
+    const a = std.testing.allocator;
+    var ns = names.NameStore.init(a);
+    defer ns.deinit();
+    var builder: Builder = undefined;
+    var job: PendingSpecJob = undefined;
+    job.completed_body_address = .{ .family = @splat(2), .key = @splat(3) };
+    job.demand = .evaluation;
+    var payload = std.mem.zeroes(FrozenBodyProbe);
+    payload.address = job.completed_body_address.?;
+    payload.demand = .evaluation;
+    const exprs = [_]DraftExpr{.{ .ty = .{ .sealed = @fromBackingInt(1) }, .data = .unit }};
+    payload.exprs = &exprs;
+    const validation = CompletedBodyValidation{ .builder = &builder, .job = job, .names = &ns };
+    try validation.validate(payload);
+    payload.demand = .discovery;
+    try std.testing.expectError(error.InvalidSummary, validation.validate(payload));
+    payload.demand = .evaluation;
+    const valid_body = payload.lowered.body;
+    payload.lowered.body = @fromBackingInt(1);
+    try std.testing.expectError(error.InvalidSummary, validation.validate(payload));
+    payload.lowered.body = valid_body;
+    payload.lowered.args = .{ .start = 0, .len = 1 };
+    try std.testing.expectError(error.InvalidSummary, validation.validate(payload));
+    payload.lowered.args = .empty();
+    const layouts = [_]DraftLayoutRequest{undefined};
+    payload.layout_requests = &layouts;
+    try std.testing.expect(!CompletedBodyValidation.coverage(payload));
+    try std.testing.expectError(error.InvalidSummary, validation.validate(payload));
+}
+
+test "completed body admits context-free procedure values but requires finished lexical bodies" {
+    var payload = std.mem.zeroes(FrozenBodyProbe);
+    var specs = [_]FrozenTemplateProbe{std.mem.zeroes(FrozenTemplateProbe)};
+    payload.templates = &specs;
+    // Taking a context-free procedure as a value sets requires_local even
+    // while its body remains a deferred coordinator request.
+    specs[0].state = .deferred;
+    specs[0].requires_local = true;
+    try std.testing.expect(CompletedBodyValidation.coverage(payload));
+    specs[0].local_context_dependent = true;
+    try std.testing.expect(!CompletedBodyValidation.coverage(payload));
+    specs[0].state = .lowering;
+    try std.testing.expect(!CompletedBodyValidation.coverage(payload));
+    specs[0].state = .lowered;
+    try std.testing.expect(CompletedBodyValidation.coverage(payload));
+}
+
+/// A selector in the producer's stored value, independent of allocation ids.
+const CompletedConstStep = struct {
+    kind: enum(u8) { box, nominal, list, tuple, record, tag, capture },
+    index: u32 = 0,
+    capture: ?checked.CaptureId = null,
+};
+const CompletedBodyStaticDependency = struct {
+    root: checked.ComptimeRootId,
+    identity: checked.CompileTimeRootIdentity,
+    checked_type_key: names.TypeDigest,
+    path: []const CompletedConstStep,
+};
+
+/// Explicit paths in one immutable stored value. Sharing and cycles terminate
+/// at the first visited node; each retained edge is an actual constructor or
+/// capture edge. No old node number is interpreted by the reader.
+const CompletedConstPaths = struct {
+    const Entry = struct { node: checked.ConstNodeId, parent: ?u32, step: CompletedConstStep };
+    entries: std.ArrayList(Entry) = .empty,
+    by_node: collections.DenseMapUnmanaged(checked.ConstNodeId, u32) = .empty,
+    allocator: Allocator,
+    fn add(self: *CompletedConstPaths, node: checked.ConstNodeId, parent: ?u32, step: CompletedConstStep) Allocator.Error!void {
+        const entry = try self.by_node.getOrPut(self.allocator, node);
+        if (entry.found_existing) return;
+        entry.value_ptr.* = @intCast(self.entries.items.len);
+        try self.entries.append(self.allocator, .{ .node = node, .parent = parent, .step = step });
+    }
+    fn init(allocator: Allocator, store: *const checked.ConstStore, root: checked.ConstNodeId) Allocator.Error!CompletedConstPaths {
+        var self = CompletedConstPaths{ .allocator = allocator };
+        try self.add(root, null, .{ .kind = .box });
+        var index: u32 = 0;
+        while (index < self.entries.items.len) : (index += 1) {
+            const value = store.get(self.entries.items[index].node);
+            switch (value) {
+                .box => |child| try self.add(child, index, .{ .kind = .box }),
+                .nominal => |nominal| try self.add(nominal.backing, index, .{ .kind = .nominal }),
+                .tuple => |children| for (children, 0..) |child, i| try self.add(child, index, .{ .kind = .tuple, .index = @intCast(i) }),
+                .record => |children| for (children, 0..) |child, i| try self.add(child, index, .{ .kind = .record, .index = @intCast(i) }),
+                .list => |list| switch (list) {
+                    .nodes => |children| for (children, 0..) |child, i| try self.add(child, index, .{ .kind = .list, .index = @intCast(i) }),
+                    .packed_bytes, .empty => {},
+                },
+                .tag => |tag| for (tag.payloads, 0..) |child, i| try self.add(child, index, .{ .kind = .tag, .index = @intCast(i) }),
+                .fn_value => |fn_id| for (store.getFn(fn_id).captures, 0..) |capture, i| try self.add(capture.value, index, .{ .kind = .capture, .index = @intCast(i), .capture = capture.id }),
+                .pending, .zst, .scalar, .str, .crash, .checked_error => {},
+            }
+        }
+        return self;
+    }
+    fn path(self: *const CompletedConstPaths, node: checked.ConstNodeId) Allocator.Error!?[]const CompletedConstStep {
+        var index = self.by_node.get(node) orelse return null;
+        var reversed = std.ArrayList(CompletedConstStep).empty;
+        while (self.entries.items[index].parent) |parent| {
+            try reversed.append(self.allocator, self.entries.items[index].step);
+            index = parent;
+        }
+        std.mem.reverse(CompletedConstStep, reversed.items);
+        return reversed.items;
+    }
+    fn follow(store: *const checked.ConstStore, root: checked.ConstNodeId, steps: []const CompletedConstStep) ?checked.ConstNodeId {
+        var node = root;
+        for (steps) |step| {
+            const value = store.get(node);
+            node = switch (step.kind) {
+                .box => if (value == .box and step.index == 0) value.box else return null,
+                .nominal => if (value == .nominal and step.index == 0) value.nominal.backing else return null,
+                .list => if (value == .list and value.list == .nodes and step.index < value.list.nodes.len) value.list.nodes[step.index] else return null,
+                .tuple => if (value == .tuple and step.index < value.tuple.len) value.tuple[step.index] else return null,
+                .record => if (value == .record and step.index < value.record.len) value.record[step.index] else return null,
+                .tag => if (value == .tag and step.index < value.tag.payloads.len) value.tag.payloads[step.index] else return null,
+                .capture => blk: {
+                    if (value != .fn_value) return null;
+                    const captures = store.getFn(value.fn_value).captures;
+                    if (step.index >= captures.len or step.capture == null or !std.meta.eql(captures[step.index].id, step.capture.?)) return null;
+                    break :blk captures[step.index].value;
+                },
+            };
+        }
+        return node;
+    }
+};
+
+test "completed body constant paths survive node renumbering and sharing changes" {
+    const a = std.testing.allocator;
+    var scratch = std.heap.ArenaAllocator.init(a);
+    defer scratch.deinit();
+    var first = checked.ConstStore.init(a);
+    defer first.deinit();
+    var second = checked.ConstStore.init(a);
+    defer second.deinit();
+    const old_leaf = try first.append(.{ .scalar = .{ .u64 = 42 } });
+    const old_box = try first.append(.{ .box = old_leaf });
+    const old_root = try first.append(.{ .record = &.{ old_box, old_box } });
+    _ = try second.append(.zst);
+    const new_root = try second.reserve();
+    const new_box = try second.reserve();
+    const new_leaf = try second.append(.{ .scalar = .{ .u64 = 42 } });
+    const second_leaf = try second.append(.{ .scalar = .{ .u64 = 42 } });
+    const second_box = try second.append(.{ .box = second_leaf });
+    second.fill(new_box, .{ .box = new_leaf });
+    second.fill(new_root, .{ .record = &.{ new_box, second_box } });
+    const paths = try CompletedConstPaths.init(scratch.allocator(), &first, old_root);
+    const path = (try paths.path(old_leaf)).?;
+    try std.testing.expectEqual(@as(usize, 2), path.len);
+    try std.testing.expectEqual(new_leaf, CompletedConstPaths.follow(&second, new_root, path).?);
+    try std.testing.expectEqual(@as(?checked.ConstNodeId, null), CompletedConstPaths.follow(&second, new_box, path));
+    const invalid = [_]CompletedConstStep{.{ .kind = .record, .index = 2 }};
+    try std.testing.expectEqual(@as(?checked.ConstNodeId, null), CompletedConstPaths.follow(&second, new_root, &invalid));
+}
+
+test "completed body constant path publication terminates on shared cyclic values" {
+    const a = std.testing.allocator;
+    var scratch = std.heap.ArenaAllocator.init(a);
+    defer scratch.deinit();
+    var store = checked.ConstStore.init(a);
+    defer store.deinit();
+    const root = try store.reserve();
+    const child = try store.append(.{ .box = root });
+    store.fill(root, .{ .tuple = &.{ child, child } });
+    const paths = try CompletedConstPaths.init(scratch.allocator(), &store, root);
+    try std.testing.expectEqual(@as(usize, 2), paths.entries.items.len);
+    const path = (try paths.path(child)).?;
+    try std.testing.expectEqual(child, CompletedConstPaths.follow(&store, root, path).?);
+    try std.testing.expectEqual(@as(usize, 0), (try paths.path(root)).?.len);
+}
+
+test "completed body static paths require current producer identity and checked type owner" {
+    const a = std.testing.allocator;
+    var ns = names.NameStore.init(a);
+    defer ns.deinit();
+    var store = checked.ConstStore.init(a);
+    defer store.deinit();
+    const leaf = try store.append(.zst);
+    const root = try store.append(.{ .box = leaf });
+    var types = checked.CheckedTypeStore{};
+    defer types.deinit(a);
+    const ty = try types.reserveSyntheticTypeRoot(a, .{ .bytes = @splat(7) }, false);
+    try types.fillSyntheticTypeRoot(a, ty, .empty_record);
+    const owner: checked.ModuleId = .{ .bytes = @splat(11) };
+    var templates: checked.ConstTemplateTable = .{};
+    defer templates.templates.deinit(a);
+    const locator: checked.ConstLocator = .{
+        .artifact = owner,
+        .owner = .{ .top_level_binding = .{ .module_idx = 0, .pattern = @fromBackingInt(1) } },
+        .template = @fromBackingInt(@intCast(templates.templates.items.len)),
+        .source_scheme = .{ .bytes = @splat(12) },
+    };
+    // The template's root is the identity table's only row.
+    const identity_row = 0;
+    try templates.templates.append(a, .{
+        .id = locator.template,
+        .owner = locator.owner,
+        .source_scheme = locator.source_scheme,
+        .state = .{ .stored_const = .{ .node = root, .root = @fromBackingInt(identity_row), .root_type = @fromBackingInt(1) } },
+    });
+    var rows = [_]checked.CompileTimeRootIdentity{.{ .value = @splat(13), .site = @splat(14) }};
+    const identities: checked.CompileTimeRootIdentityTable = .{ .rows = &rows };
+    var views: [1]ModuleViewData = undefined;
+    views[0].key = owner;
+    views[0].const_templates = &templates;
+    views[0].const_store = &store;
+    views[0].types = types.view();
+    views[0].compile_time_root_identities = &identities;
+    var builder: Builder = undefined;
+    builder.allocator = a;
+    builder.borrowed_module_views = &views;
+    builder.module_index = @TypeOf(builder.module_index).init(a);
+    defer builder.module_index.deinit();
+    try builder.module_index.put(owner.bytes, .root);
+    const validation = CompletedBodyValidation{ .builder = &builder, .job = undefined, .names = &ns };
+    var request: DraftStaticDataRequest = .{
+        .const_locator = locator,
+        .module = owner,
+        // The old allocation ids deliberately do not exist in this store.
+        .node = @fromBackingInt(111),
+        .const_node = @fromBackingInt(111),
+        .checked_type = ty,
+        .checked_type_module = owner,
+        .ty = .{ .sealed = @fromBackingInt(1) },
+    };
+    const path = [_]CompletedConstStep{.{ .kind = .box }};
+    const dependency: CompletedBodyStaticDependency = .{
+        .root = @fromBackingInt(identity_row),
+        .identity = rows[identity_row],
+        .checked_type_key = views[0].types.rootKey(ty),
+        .path = &path,
+    };
+    try std.testing.expectEqual(leaf, try validation.staticNode(request, dependency));
+    rows[0].value[0] ^= 1;
+    try std.testing.expectError(error.InvalidSummary, validation.staticNode(request, dependency));
+    rows[0] = dependency.identity;
+    request.checked_type_module.bytes[0] ^= 1;
+    try std.testing.expectError(error.InvalidSummary, validation.staticNode(request, dependency));
+    request.checked_type_module = owner;
+    templates.templates.items[0].state = .reserved;
+    try std.testing.expectError(error.InvalidSummary, validation.staticNode(request, dependency));
 }

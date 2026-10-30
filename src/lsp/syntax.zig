@@ -1328,9 +1328,9 @@ pub const SyntaxChecker = struct {
         // When we already have a lookup expression, resolve directly to avoid
         // region/offset ambiguity around delimiters.
         const documentation = if (lookup_result_opt) |lookup_result|
-            try self.resolveDocForLookup(env, module_env, build.absolute_path, lookup_result)
+            try self.resolveDocForLookup(env, build.handle, module_env, build.absolute_path, lookup_result, hover_type_var)
         else
-            try self.findDocumentationForDeclarationName(module_env, target_offset);
+            try self.findDocumentationForDeclarationName(env, build.handle, module_env, target_offset, hover_type_var);
 
         defer if (documentation) |doc| self.allocator.free(doc);
 
@@ -1349,28 +1349,33 @@ pub const SyntaxChecker = struct {
         };
     }
 
-    /// Documentation of the declaration whose name is at `offset`: a def's
-    /// pattern, a declaration statement's pattern, or a type declaration's
-    /// header.
-    fn findDocumentationForDeclarationName(self: *SyntaxChecker, module_env: *ModuleEnv, offset: u32) Allocator.Error!?[]const u8 {
+    /// Documentation of the declaration whose name is at `offset`: a binding
+    /// (see `bindingDoc`) or a type declaration's header.
+    fn findDocumentationForDeclarationName(
+        self: *SyntaxChecker,
+        env: *BuildEnv,
+        handle: *BuildEnvHandle,
+        module_env: *ModuleEnv,
+        offset: u32,
+        type_var: types.Var,
+    ) Allocator.Error!?[]const u8 {
         const source = module_env.common.source;
         const store = &module_env.store;
 
-        for (store.sliceDefs(module_env.all_defs)) |def_idx| {
-            const def = store.getDef(def_idx);
-            if (cir_queries.regionContainsOffset(store.getPatternRegion(def.pattern), offset)) {
-                return try doc_comments.extractDocForDef(self.allocator, source, store, def);
+        for (try handle.scopeBindings(module_env)) |binding| {
+            if (cir_queries.regionContainsOffset(store.getPatternRegion(binding.pattern_idx), offset)) {
+                return try self.bindingDoc(env, module_env, binding.owner, type_var);
             }
         }
 
         for (store.sliceStatements(module_env.all_statements)) |stmt_idx| {
             const stmt = store.getSourceStatement(stmt_idx);
-            const name_region = switch (stmt) {
-                .s_decl => |decl| store.getPatternRegion(decl.pattern),
-                .s_var => |var_stmt| store.getPatternRegion(var_stmt.pattern_idx),
-                .s_var_uninitialized => |var_stmt| store.getPatternRegion(var_stmt.pattern_idx),
-                .s_alias_decl => |alias| store.getRegionAt(@fromBackingInt(@backingInt(alias.header))),
-                .s_nominal_decl => |nominal| store.getRegionAt(@fromBackingInt(@backingInt(nominal.header))),
+            const header = switch (stmt) {
+                .s_alias_decl => |alias| alias.header,
+                .s_nominal_decl => |nominal| nominal.header,
+                .s_decl,
+                .s_var,
+                .s_var_uninitialized,
                 .s_reassign,
                 .s_crash,
                 .s_dbg,
@@ -1389,7 +1394,7 @@ pub const SyntaxChecker = struct {
                 .s_runtime_error,
                 => continue,
             };
-            if (cir_queries.regionContainsOffset(name_region, offset)) {
+            if (cir_queries.regionContainsOffset(store.getRegionAt(@fromBackingInt(@backingInt(header))), offset)) {
                 return try doc_comments.extractDocForStatement(self.allocator, source, store, stmt, stmt_idx);
             }
         }
@@ -1397,51 +1402,74 @@ pub const SyntaxChecker = struct {
         return null;
     }
 
-    /// Resolve documentation for a local lookup, external lookup, or attached method dispatch.
-    fn resolveDocForLookup(
+    /// Documentation of a binding of type `type_var`: the doc comment of the
+    /// declaration that owns it, or, when it has none, the doc comment of the
+    /// declaration of its checked type.
+    fn bindingDoc(
         self: *SyntaxChecker,
         env: *BuildEnv,
         module_env: *ModuleEnv,
+        owner: scope_map.Binding.Owner,
+        type_var: types.Var,
+    ) Allocator.Error!?[]const u8 {
+        if (try doc_comments.extractDocForBinding(self.allocator, module_env.common.source, &module_env.store, owner)) |doc| return doc;
+        return try self.findTypeDeclarationDoc(env, module_env, type_var);
+    }
+
+    /// Documentation of the alias or nominal type declaration that `type_var`
+    /// resolves to, read from the module that declares it.
+    fn findTypeDeclarationDoc(self: *SyntaxChecker, env: *BuildEnv, module_env: *ModuleEnv, type_var: types.Var) Allocator.Error!?[]const u8 {
+        const type_owner = resolveMethodOwnerForLookup(module_env, type_var) orelse return null;
+        const owner_env = methodOwnerModuleEnv(env, module_env, type_owner) orelse return null;
+        const owner_store = &owner_env.store;
+        return try doc_comments.extractDocForStatement(
+            self.allocator,
+            owner_env.common.source,
+            owner_store,
+            owner_store.getSourceStatement(type_owner.owner),
+            type_owner.owner,
+        );
+    }
+
+    /// Resolve documentation for a local lookup, external lookup, or attached
+    /// method dispatch. A looked-up value whose declaration has no doc comment
+    /// shows the doc comment of its type's declaration.
+    fn resolveDocForLookup(
+        self: *SyntaxChecker,
+        env: *BuildEnv,
+        handle: *BuildEnvHandle,
+        module_env: *ModuleEnv,
         doc_path: []const u8,
         lookup_result: cir_queries.LookupResult,
+        type_var: types.Var,
     ) Allocator.Error!?[]const u8 {
-        const source = module_env.common.source;
-        const store = &module_env.store;
         const expr_idx = switch (lookup_result) {
             .expr => |idx| idx,
             .field_access => return null,
         };
-        const expr = store.getSourceExpr(expr_idx);
+        const expr = module_env.store.getSourceExpr(expr_idx);
 
         const expr_tag = std.meta.activeTag(expr);
         if (expr_tag == .e_lookup_local) {
             const lookup = expr.e_lookup_local;
-            // Local lookup - resolve to the owning def or statement
-            if (module_lookup.findDefOwningPattern(module_env, lookup.pattern_idx)) |def| {
-                return try doc_comments.extractDocForDef(self.allocator, source, store, def);
+            for (try handle.scopeBindings(module_env)) |binding| {
+                if (binding.pattern_idx == lookup.pattern_idx) {
+                    return try self.bindingDoc(env, module_env, binding.owner, type_var);
+                }
             }
-            if (module_lookup.findStatementOwningPattern(module_env, lookup.pattern_idx)) |result| {
-                return try doc_comments.extractDocForStatement(self.allocator, source, store, result.stmt, result.idx);
-            }
-
-            // Some local bindings are nested inside expressions (e.g. block
-            // locals) and are not owned by top-level defs/statements. Fall
-            // back to doc extraction directly from the bound pattern region.
-            return try doc_comments.extractDocCommentBefore(
-                self.allocator,
-                source,
-                store.getPatternRegion(lookup.pattern_idx).start.offset,
-            );
+            return null;
         }
         if (expr_tag == .e_lookup_external) {
             const lookup = expr.e_lookup_external;
             const target_env = importedEnvForImport(env, module_env, doc_path, lookup.module_idx) orelse return null;
-            return try findDocForValueNode(self.allocator, target_env, lookup.target_node_idx);
+            return try findDocForValueNode(self.allocator, target_env, lookup.target_node_idx) orelse
+                try self.findTypeDeclarationDoc(env, module_env, type_var);
         }
         if (expr_tag == .e_lookup_associated_resolved) {
             const resolved = expr.e_lookup_associated_resolved;
             const target_env = moduleEnvForIdentity(env, module_env, resolved.module_identity) orelse return null;
-            return try doc_comments.extractDocForDef(self.allocator, target_env.common.source, &target_env.store, target_env.store.getDef(resolved.target_def_idx));
+            return try doc_comments.extractDocForDef(self.allocator, target_env.common.source, &target_env.store, target_env.store.getDef(resolved.target_def_idx)) orelse
+                try self.findTypeDeclarationDoc(env, module_env, type_var);
         }
         if (expr_tag == .e_dispatch_call) {
             const method_call = expr.e_dispatch_call;
@@ -1934,7 +1962,7 @@ pub const SyntaxChecker = struct {
         const def = store.getDef(@fromBackingInt(value_node));
         const ident = module_lookup.extractIdentFromPattern(store, def.pattern) orelse return null;
         for (module_env.method_idents.entries.items) |entry| {
-            if (entry.key.owner_module == ModuleEnv.MethodOwner.self_module and entry.value.eql(ident)) return entry.key.owner;
+            if (entry.value.eql(ident)) return entry.key.owner;
         }
         return null;
     }

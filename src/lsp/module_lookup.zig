@@ -143,32 +143,6 @@ pub fn findDefinitionByModuleMember(module_env: *ModuleEnv, module_name: []const
     return null;
 }
 
-/// Find the Def that owns a specific pattern index.
-/// Searches through all_defs for a def whose pattern matches the target.
-/// Returns the full Def struct if found.
-pub fn findDefOwningPattern(module_env: *ModuleEnv, target_pattern: CIR.Pattern.Idx) ?CIR.Def {
-    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
-    for (defs_slice) |def_idx| {
-        const def = module_env.store.getDef(def_idx);
-        if (def.pattern == target_pattern) return def;
-    }
-    return null;
-}
-
-/// Find the Statement and its index that own a specific pattern index.
-/// Searches through all_statements for a statement whose pattern matches the target.
-pub fn findStatementOwningPattern(module_env: *ModuleEnv, target_pattern: CIR.Pattern.Idx) ?struct { stmt: CIR.Statement, idx: CIR.Statement.Idx } {
-    const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
-    for (statements_slice) |stmt_idx| {
-        const stmt = module_env.store.getSourceStatement(stmt_idx);
-        const pattern_idx_opt = getDeclarationPattern(stmt);
-        if (pattern_idx_opt) |pat_idx| {
-            if (pat_idx == target_pattern) return .{ .stmt = stmt, .idx = stmt_idx };
-        }
-    }
-    return null;
-}
-
 // Module Lookup Functions
 
 // Type Variable Functions

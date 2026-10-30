@@ -242,17 +242,6 @@ const PendingProvidesEntry = struct {
 
 const TopLevelValueDefMap = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx);
 
-const MethodRegistrationKind = enum {
-    declaration_owner,
-    receiver_extension,
-};
-
-const MethodRegistration = struct {
-    kind: MethodRegistrationKind,
-    table_index: ModuleEnv.MethodTableIndex,
-    region: Region,
-};
-
 env: *ModuleEnv,
 parse_ir: *AST,
 /// Track whether we're in statement position (true) or expression position (false)
@@ -335,10 +324,6 @@ is_entry_module: bool = false,
 /// Platform provides declarations awaiting local-definition resolution after
 /// all top-level declarations have been canonicalized.
 pending_provides_entries: std.ArrayListUnmanaged(PendingProvidesEntry) = .empty,
-/// Construction-time collision policy for methods keyed by their dispatch
-/// owner and name. Declaration-owned methods take precedence over receiver
-/// extensions independently of source order.
-method_registrations: std.AutoHashMapUnmanaged(ModuleEnv.MethodKey, MethodRegistration) = .{},
 /// Tracks which pattern indices have been used/referenced
 used_patterns: collections.DenseMap(Pattern.Idx, void),
 /// Patterns for values that resolve from module-global storage rather than
@@ -544,7 +529,6 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .validation = .input,
     .is_entry_module = .input,
     .pending_provides_entries = .settled,
-    .method_registrations = .keyed,
     .used_patterns = .keyed,
     .globally_resolvable_patterns = .keyed,
     .builtin_auto_imported_types = .input,
@@ -962,7 +946,6 @@ pub fn deinit(
     self.exposed_qualified_type_idents.deinit(gpa);
     self.header_exposed_modules.deinit(gpa);
     self.pending_provides_entries.deinit(gpa);
-    self.method_registrations.deinit(gpa);
 
     for (0..self.scopes.items.len) |i| {
         var scope = &self.scopes.items[i];
@@ -1228,13 +1211,6 @@ const DeferredRef = struct {
     selects_type: bool = false,
     /// An exposed-item check selects constructors with `Type.*`.
     exposes_constructors: bool = false,
-    /// For a receiver-extension method registration, the method this entry
-    /// registers once the receiver type resolves. `qualified_name` carries the
-    /// qualified name it is registered under.
-    method_ident: Ident.Idx = Ident.Idx.NONE,
-    /// For a receiver-extension method registration, the method's binding.
-    /// A reference that registers no method has none.
-    method_binding: ?ModuleEnv.MethodBinding = null,
     /// The region a diagnostic for this reference reports at, when the source
     /// position names something narrower than the node itself. Null reports at
     /// the node's own region.
@@ -1263,7 +1239,6 @@ fn pushDeferredRef(self: *Self, ref: DeferredRef) std.mem.Allocator.Error!Module
         .item_name_bits = @bitCast(ref.item_name),
         .parent_name_bits = @bitCast(ref.parent_name),
         .qualified_name_bits = @bitCast(ref.qualified_name),
-        .method_ident_bits = @bitCast(ref.method_ident),
         .kind = ref.kind,
         .missing_module_failure = ref.missing_module_failure,
         .not_found_failure = ref.not_found_failure,
@@ -1276,14 +1251,6 @@ fn pushDeferredRef(self: *Self, ref: DeferredRef) std.mem.Allocator.Error!Module
             (if (ref.exposes_constructors) ModuleEnv.DeferredImportRef.Flags.exposes_constructors else 0) |
             (if (ref.file_import_is_bytes) ModuleEnv.DeferredImportRef.Flags.file_import_is_bytes else 0) |
             (if (ref.diagnostic_region != null) ModuleEnv.DeferredImportRef.Flags.has_diagnostic_region else 0),
-        .method_binding_type_node = if (ref.method_binding) |binding|
-            @backingInt(binding.type_node_idx)
-        else
-            ModuleEnv.DeferredImportRef.no_method_binding,
-        .method_binding_def = if (ref.method_binding) |binding|
-            @backingInt(binding.def_idx)
-        else
-            ModuleEnv.DeferredImportRef.no_method_binding,
         .file_dependency_idx = ref.file_dependency_idx,
         .diagnostic_region_start = if (ref.diagnostic_region) |r| r.start.offset else 0,
         .diagnostic_region_end = if (ref.diagnostic_region) |r| r.end.offset else 0,
@@ -1560,239 +1527,17 @@ fn globalDefIntroducesValueBinding(
     return expr != .e_anno_only or self.topLevelDefIsSelected(selected_by_ident, def_idx);
 }
 
-/// Register a method on its explicit owner declaration.
+/// Register a method on its owner declaration.
 fn registerAssociatedMethodIdent(
     self: *Self,
     owner_stmt_idx: Statement.Idx,
     method_ident: Ident.Idx,
     qualified_ident: Ident.Idx,
     binding: ModuleEnv.MethodBinding,
-    type_anno_idx: ?TypeAnno.Idx,
 ) std.mem.Allocator.Error!void {
-    const associated_owner = ModuleEnv.MethodOwner.initSelf(owner_stmt_idx);
-    const region = self.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(binding.def_idx));
-    try self.registerMethodForDispatchOwner(
-        associated_owner,
-        method_ident,
-        qualified_ident,
-        binding,
-        region,
-        .declaration_owner,
-    );
-
-    if (!self.associatedOwnerAllowsReceiverMethods(owner_stmt_idx)) return;
-    switch (try self.receiverMethodOwnerFromFunctionAnno(type_anno_idx)) {
-        .none => {},
-        .owner => |receiver_owner| {
-            if (receiver_owner.eql(associated_owner)) return;
-            try self.registerMethodForDispatchOwner(
-                receiver_owner,
-                method_ident,
-                qualified_ident,
-                binding,
-                region,
-                .receiver_extension,
-            );
-        },
-        .deferred => |anno_idx| {
-            // The receiver type comes through an import, so this registration
-            // waits for the import-resolution drain to settle its owner.
-            const pending = self.env.store.getTypeAnno(anno_idx);
-            const pending_base = switch (pending) {
-                .lookup => |lookup| lookup.base.pending,
-                .apply => |apply| apply.base.pending,
-                .rigid_var,
-                .rigid_var_lookup,
-                .underscore,
-                .tag_union,
-                .tag,
-                .tuple,
-                .record,
-                .@"fn",
-                .parens,
-                .malformed,
-                => unreachable, // only a name reference is deferred
-            };
-            const ref = try self.pushDeferredRef(.{
-                .import_idx = pending_base.module_idx,
-                .kind = .receiver_method_owner,
-                .path = method_ident,
-                .module_name = method_ident,
-                .item_name = method_ident,
-                .parent_name = method_ident,
-                .qualified_name = qualified_ident,
-                .method_ident = method_ident,
-                .method_binding = binding,
-                .missing_module_failure = .value_not_exposed,
-                .not_found_failure = .value_not_exposed,
-            });
-            self.setDeferredRefNode(ref, @backingInt(anno_idx));
-        },
-    }
-}
-
-fn registerMethodForDispatchOwner(
-    self: *Self,
-    owner: ModuleEnv.MethodOwner,
-    method_ident: Ident.Idx,
-    qualified_ident: Ident.Idx,
-    binding: ModuleEnv.MethodBinding,
-    region: Region,
-    kind: MethodRegistrationKind,
-) std.mem.Allocator.Error!void {
-    const key = ModuleEnv.MethodKey.init(owner, method_ident);
-    const entry = try self.method_registrations.getOrPut(self.env.gpa, key);
-    if (!entry.found_existing) {
-        entry.value_ptr.* = .{
-            .kind = kind,
-            .table_index = try self.env.appendMethodForMethodOwner(owner, method_ident, qualified_ident, binding),
-            .region = region,
-        };
-        return;
-    }
-
-    switch (entry.value_ptr.kind) {
-        .declaration_owner => switch (kind) {
-            // The associated-value duplicate check owns this source error.
-            .declaration_owner => base.invariant("canonicalization invariant violated: duplicate declaration-owned method registration", .{}),
-            // A method declared by its receiver wins over a namespace extension.
-            .receiver_extension => return,
-        },
-        .receiver_extension => switch (kind) {
-            // Preserve declaration-owned precedence even when the extension
-            // appeared earlier in source order.
-            .declaration_owner => {
-                const table_index = entry.value_ptr.table_index;
-                self.env.replaceMethodAt(table_index, owner, method_ident, qualified_ident, binding);
-                entry.value_ptr.* = .{
-                    .kind = .declaration_owner,
-                    .table_index = table_index,
-                    .region = region,
-                };
-            },
-            // Two extensions in one module compete for the same receiver call.
-            // Report the same source-order shadowing rule used by duplicate
-            // associated values, and keep the later declaration explicitly.
-            .receiver_extension => {
-                try self.env.pushDiagnostic(Diagnostic{ .shadowing_warning = .{
-                    .ident = method_ident,
-                    .region = region,
-                    .original_region = entry.value_ptr.region,
-                } });
-                self.env.replaceMethodAt(entry.value_ptr.table_index, owner, method_ident, qualified_ident, binding);
-                entry.value_ptr.region = region;
-            },
-        },
-    }
-}
-
-fn associatedOwnerAllowsReceiverMethods(self: *const Self, owner_stmt_idx: Statement.Idx) bool {
-    if (self.env.module_role == .builtin) return false;
-
-    const owner_stmt = self.env.store.getStatement(owner_stmt_idx);
-    if (owner_stmt != .s_nominal_decl) return false;
-    const nominal = owner_stmt.s_nominal_decl;
-    const owner_anno = self.unwrapTypeAnnoParens(nominal.anno);
-    const anno = self.env.store.getTypeAnno(owner_anno);
-    if (anno != .tag_union) return false;
-    const tag_union = anno.tag_union;
-    return tag_union.ext == null and self.env.store.sliceTypeAnnos(tag_union.tags).len == 0;
-}
-
-/// The dispatch owner a receiver-extension method registers under.
-const ReceiverMethodOwner = union(enum) {
-    /// The receiver's type names no owner this registration can use.
-    none,
-    /// The owner is settled.
-    owner: ModuleEnv.MethodOwner,
-    /// The receiver's type comes through an import, so its owner is settled
-    /// when this annotation's deferred reference resolves.
-    deferred: TypeAnno.Idx,
-};
-
-fn receiverMethodOwnerFromFunctionAnno(
-    self: *Self,
-    maybe_type_anno_idx: ?TypeAnno.Idx,
-) std.mem.Allocator.Error!ReceiverMethodOwner {
-    const type_anno_idx = maybe_type_anno_idx orelse return .none;
-    const root_idx = self.unwrapTypeAnnoParens(type_anno_idx);
-    const anno = self.env.store.getTypeAnno(root_idx);
-    if (anno != .@"fn") return .none;
-    const func = anno.@"fn";
-    const args = self.env.store.sliceTypeAnnos(func.args);
-    if (args.len == 0) return .none;
-    return try self.receiverMethodOwnerFromTypeAnno(args[0]);
-}
-
-fn receiverMethodOwnerFromTypeAnno(
-    self: *Self,
-    type_anno_idx: TypeAnno.Idx,
-) std.mem.Allocator.Error!ReceiverMethodOwner {
-    const root_idx = self.unwrapTypeAnnoParens(type_anno_idx);
-    const anno = self.env.store.getTypeAnno(root_idx);
-    const anno_base = switch (anno) {
-        .lookup => |lookup| lookup.base,
-        .apply => |apply| apply.base,
-        .rigid_var,
-        .rigid_var_lookup,
-        .underscore,
-        .tag_union,
-        .tag,
-        .tuple,
-        .record,
-        .@"fn",
-        .parens,
-        .malformed,
-        => return .none,
-    };
-    if (anno_base == .pending) return .{ .deferred = root_idx };
-    const owner = (try self.receiverMethodOwnerFromTypeBase(anno_base)) orelse return .none;
-    return .{ .owner = owner };
-}
-
-fn unwrapTypeAnnoParens(self: *const Self, type_anno_idx: TypeAnno.Idx) TypeAnno.Idx {
-    var current = type_anno_idx;
-    while (true) {
-        const anno = self.env.store.getTypeAnno(current);
-        if (anno != .parens) return current;
-        current = anno.parens.anno;
-    }
-}
-
-fn receiverMethodOwnerFromTypeBase(
-    self: *Self,
-    type_base: TypeAnno.LocalOrExternal,
-) std.mem.Allocator.Error!?ModuleEnv.MethodOwner {
-    return switch (type_base) {
-        .local => |local| ModuleEnv.MethodOwner.initSelf(local.decl_idx),
-        .external => |external| try self.receiverMethodOwnerFromExternalType(external),
-        .external_identity => |external| self.receiverMethodOwnerFromIdentityType(external),
-        .builtin => null,
-        .pending => null,
-    };
-}
-
-/// The owner of a receiver-extension method whose receiver type the drain
-/// resolved by following an exposed alias into another module. That module's
-/// content identity is already interned here, so the owner is complete.
-fn receiverMethodOwnerFromIdentityType(
-    _: *Self,
-    external: @TypeOf(@as(TypeAnno.LocalOrExternal, undefined).external_identity),
-) ?ModuleEnv.MethodOwner {
-    return ModuleEnv.MethodOwner.initImported(
-        external.module_identity,
-        @fromBackingInt(@intCast(external.target_node_idx)),
-    );
-}
-
-/// The only external type reference canonicalization resolves for itself names
-/// the compiler's own baked `Builtin` module, which owns no receiver
-/// extension. Every other one is deferred, and its registration with it.
-fn receiverMethodOwnerFromExternalType(
-    _: *Self,
-    _: @TypeOf(@as(TypeAnno.LocalOrExternal, undefined).external),
-) std.mem.Allocator.Error!?ModuleEnv.MethodOwner {
-    return null;
+    // The associated-value duplicate check rejects a second declaration of one
+    // method, so each owner-and-name pair is registered once.
+    try self.env.appendMethodForMethodOwner(ModuleEnv.MethodOwner.initSelf(owner_stmt_idx), method_ident, qualified_ident, binding);
 }
 
 fn hasBuiltinAutoImportedType(self: *const Self, ident: Ident.Idx) bool {
@@ -4029,6 +3774,7 @@ fn prepareAssociatedDeclBody(
     assoc_key: ?AST.DeclIndex.AssocValue,
     type_anno_idx: ?CIR.TypeAnno.Idx,
     mb_where_clauses: ?CIR.WhereClause.Span,
+    anno_name_region: ?Region,
     type_var_scope: ?TypeVarScopeIdx,
 ) std.mem.Allocator.Error!AssociatedDeclBodyWork {
     const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
@@ -4044,6 +3790,7 @@ fn prepareAssociatedDeclBody(
         try self.env.addAnnotation(CIR.Annotation{
             .anno = anno_idx,
             .where = mb_where_clauses,
+            .name_region = anno_name_region,
         }, pattern_region)
     else
         null;
@@ -4084,7 +3831,7 @@ fn finishAssociatedDeclBody(
     if (state.owner_is_module_visible) {
         try self.env.setExposedValueNodeIndexById(work.qualified_ident, def_idx_u32);
     }
-    try self.registerAssociatedMethodIdent(state.work.owner_stmt_idx, work.decl_ident, work.qualified_ident, method_binding, work.type_anno_idx);
+    try self.registerAssociatedMethodIdent(state.work.owner_stmt_idx, work.decl_ident, work.qualified_ident, method_binding);
 
     const def_cir = self.env.store.getDef(associated_def.def_idx);
     const pattern_idx = def_cir.pattern;
@@ -4612,6 +4359,7 @@ fn canonicalizeAssociatedItems(
                                         assoc_key,
                                         type_anno_idx,
                                         where_clauses,
+                                        self.parse_ir.tokens.resolve(ta.name),
                                         type_var_scope,
                                     ) };
                                 }
@@ -4676,7 +4424,7 @@ fn canonicalizeAssociatedItems(
                         owner_is_module_visible,
                         block_context,
                     );
-                    try self.registerAssociatedMethodIdent(owner_stmt_idx, name_ident, qualified_idx, method_binding, type_anno_idx);
+                    try self.registerAssociatedMethodIdent(owner_stmt_idx, name_ident, qualified_idx, method_binding);
 
                     const def_cir_anno = self.env.store.getDef(def_idx);
                     const anno_pattern_idx = def_cir_anno.pattern;
@@ -4747,6 +4495,7 @@ fn canonicalizeAssociatedItems(
                             decl_ident,
                             type_qualified_decl_idx,
                             assoc_key,
+                            null,
                             null,
                             null,
                             null,
@@ -15421,7 +15170,6 @@ fn notCanonicalized(kind: ModuleEnv.DeferredRefKind, region: Region) Diagnostic 
         .type_anno_lookup,
         .type_anno_apply,
         .numeric_suffix,
-        .receiver_method_owner,
         .import_statement,
         .exposed_item,
         .hosted_entry,
