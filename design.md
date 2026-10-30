@@ -15250,6 +15250,21 @@ the interning keys are addresses in the program's code and static data, which
 the process reuses once the program is gone, so the state is destroyed with
 the program and never shared between programs.
 
+A generic body composes its instantiation's descriptors and dictionaries on
+every call, so a cache hit is the hot path, and the compile-time workers of
+a build compose concurrently. The interning table is therefore read without
+its lock: a reader loads the current table and probes it from the key's
+hashed slot to the first empty one. That is sound because a table is only
+ever added to, never changed or compacted; an entry publishes its value
+last, after its key, so a reader that sees the value sees the key it was
+stored under, and one that sees an empty slot treats it as a miss; and
+growth builds a new table, copies every entry into it, and publishes it
+whole, leaving the replaced table alive for the readers still probing it.
+A reader that misses, whether the entry is absent or another thread is
+adding it, takes the lock, probes the current table again, and interns on a
+true miss. Only insertion and growth hold the lock. Keys are a few words of
+constructor tags and operand addresses, hashed by mixing each word.
+
 #### Lowering Implementation Constraints
 
 - The lowerer runs one worklist over reachable workers, seeded from the
