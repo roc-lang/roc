@@ -205,6 +205,11 @@ pub const WorkerKey = union(enum) {
     /// value (design.md "Literal Arguments"), for an instantiation checking
     /// recorded no edge for.
     literal_thunk: struct { target: WorkerId, bound: TypeId, literal_requirement: u32 },
+    /// The thunk of literal argument root `root` of `module` in the
+    /// compile-time program evaluating it: an erased worker with no
+    /// arguments reading the root's compile-time value slot
+    /// (`Program.rootValueSlot`), which readers call once the root completes.
+    root_slot: struct { module: ModuleIndex, root: checked.ComptimeRootId },
     /// A compiler-derived structural method over the descriptor its
     /// dictionary captures.
     structural: StructuralMethod,
@@ -450,6 +455,12 @@ pub const Program = struct {
     /// The app type each platform requirement identity variable takes
     /// (`types.Converter.platform_identities`).
     platform_identities: std.AutoHashMapUnmanaged(types.Converter.IdentityKey, TypeId) = .empty,
+    /// The compile-time value slot a compile-time program reads a root it
+    /// evaluates later from (`rootValueSlot`), by root.
+    root_value_slots: std.AutoHashMapUnmanaged(RootSlotKey, LIR.StaticDataId) = .empty,
+    /// The compile-time roots this program evaluates (`Input.roots`), by
+    /// module and root (`evaluatesRoot`).
+    requested_roots: std.AutoHashMapUnmanaged(RootSlotKey, void) = .empty,
     /// The Builtin `Hasher` type, once asked for (`defaultHasher`).
     default_hasher: ?TypeId = null,
     /// Each module's callable-eval templates, by their binding pattern.
@@ -530,7 +541,7 @@ pub const Program = struct {
                 hasher.update(&self.module(default.module).view.module_identity.stable_hash);
                 hasher.update(std.mem.asBytes(&@as(u32, @backingInt(default.expr))));
             },
-            .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk => invariant("a worker no module's object exports has no content identity"),
+            .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a worker no module's object exports has no content identity"),
         }
         return .{ .bytes = hasher.finalResult() };
     }
@@ -540,7 +551,7 @@ pub const Program = struct {
     pub fn exportableKind(key: WorkerKey) bool {
         return switch (key) {
             .template, .lambda, .method_entry, .default => true,
-            .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk => false,
+            .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => false,
         };
     }
 
@@ -1287,7 +1298,7 @@ pub const Program = struct {
         if (requirements.len == 0) return .{ .bound = bound, .requirements = requirements };
         const key = switch (target_worker.key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk => invariant("a worker with dictionary parameters is not a template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.module(key.module).view.checked_procedure_templates;
         const params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
@@ -1334,7 +1345,7 @@ pub const Program = struct {
         if (target_worker.dictionary_params.len != 0) {
             const key = switch (target_worker.key) {
                 .template => |key| key,
-                .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk => invariant("a worker with dictionary parameters is not a template's"),
+                .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a worker with dictionary parameters is not a template's"),
             };
             const templates = self.module(key.module).view.checked_procedure_templates;
             const all_params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
@@ -1696,7 +1707,7 @@ pub const Program = struct {
             const scoped = self.worker(current).*;
             const outer: ?WorkerId = switch (scoped.key) {
                 .lambda => |lambda| lambda.outer,
-                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk => null,
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => null,
             };
             const own = if (outer) |o| scoped.literal_scopes.len != self.worker(o).literal_scopes.len else scoped.literal_scopes.len != 0;
             if (own) try owners.append(allocator, current);
@@ -1792,6 +1803,15 @@ pub const Program = struct {
         const ty = target_worker.literal_scopes[0][literal_requirement].ty;
         const ret = try self.converter().convert(target_worker.module, ty, .{ .module = target_worker.module, .vars = target_worker.scheme_vars, .bound = bound });
         return try self.addErasedWorker(key, target_worker.module, &.{}, &.{}, ret, "boxy.literal_thunk");
+    }
+
+    /// The thunk reading the compile-time value slot of literal argument root
+    /// `root` of `module_index`, whose value has type `ty`
+    /// (`WorkerKey.root_slot`).
+    pub fn rootSlotThunkWorker(self: *Program, module_index: ModuleIndex, root: checked.ComptimeRootId, ty: TypeId) Allocator.Error!WorkerId {
+        const key: WorkerKey = .{ .root_slot = .{ .module = module_index, .root = root } };
+        if (self.worker_ids.get(key)) |existing| return existing;
+        return try self.addErasedWorker(key, module_index, &.{}, &.{}, ty, "boxy.root_slot");
     }
 
     /// The structural method worker of `method`, generic over one type `a`
@@ -1904,6 +1924,75 @@ pub const Program = struct {
         };
     }
 
+    /// A compile-time root of a module of the program.
+    pub const RootSlotKey = struct { module: ModuleIndex, root: checked.ComptimeRootId };
+
+    /// Whether this program evaluates compile-time root `root` of module
+    /// `module_index`: the root is one of the program's requests. A pending
+    /// root no program evaluates (a literal in a branch, whose conversion
+    /// runs where it is reached) has no value to read.
+    pub fn evaluatesRoot(self: *const Program, module_index: ModuleIndex, root: checked.ComptimeRootId) bool {
+        return self.requested_roots.contains(.{ .module = module_index, .root = root });
+    }
+
+    /// Whether a read of root `root` of module `module_index` reads its
+    /// compile-time value slot: this program evaluates the root, at one
+    /// type. A polymorphic constant computes at each instance it is read
+    /// at, as its entry procedure's value.
+    pub fn readsRootSlot(self: *const Program, module_index: ModuleIndex, root: checked.ComptimeRootId) bool {
+        if (!self.evaluatesRoot(module_index, root)) return false;
+        const view = self.module(module_index);
+        return !types.Converter.rootHasIdentityVariables(view, view.view.compile_time_roots.root(root).checked_type);
+    }
+
+    /// The static data slot holding the value of compile-time root `root` of
+    /// module `module_index`, of type `ty`, once the evaluator completes it:
+    /// a compile-time value slot with a failure record, which every read
+    /// guards (`lir.ComptimeValueGuards`). The evaluator marks the slot
+    /// failed before any root runs, so a read of a root not yet completed
+    /// fails as the recursion evaluating the value in place would end in,
+    /// and the evaluator reruns the reader once the root completes
+    /// (design.md "Compile-Time Evaluation Strategy").
+    pub fn rootValueSlot(self: *Program, module_index: ModuleIndex, root: checked.ComptimeRootId, ty: TypeId) Allocator.Error!LIR.StaticDataId {
+        const key: RootSlotKey = .{ .module = module_index, .root = root };
+        if (self.root_value_slots.get(key)) |slot| return slot;
+        const module_key = self.module(module_index).key;
+        const failure_layout = try self.result.layouts.putStructFields(&.{
+            .{ .index = 0, .layout = .u8 },
+            .{ .index = 1, .layout = .str },
+        });
+        const struct_idx = self.result.layouts.getLayout(failure_layout).getStruct().idx;
+        const failure_slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.result.static_data_values.items.len));
+        try self.result.static_data_values.append(self.allocator, .{
+            .initializer = null,
+            .layout_idx = failure_layout,
+            .compile_time_root = .{
+                .module = module_key,
+                .root = .{ .checked = root },
+                .const_locator = null,
+                .role = .{ .failure_message = .{
+                    .failed_field = 0,
+                    .message_field = 1,
+                    .failed_offset = self.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0),
+                    .message_offset = self.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1),
+                } },
+            },
+        });
+        const slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.result.static_data_values.items.len));
+        try self.result.static_data_values.append(self.allocator, .{
+            .initializer = null,
+            .layout_idx = try self.layouts.layoutOf(ty),
+            .compile_time_root = .{
+                .module = module_key,
+                .root = .{ .checked = root },
+                .const_locator = null,
+                .role = .{ .value = .{ .failure_slot = failure_slot, .plan = try const_schema.constPlanOf(self, ty) } },
+            },
+        });
+        try self.root_value_slots.put(self.allocator, key, slot);
+        return slot;
+    }
+
     pub fn templateRefWorker(self: *Program, ref: checked_names.ProcedureTemplateRef) Allocator.Error!WorkerId {
         const view = self.moduleByKey(.{ .bytes = ref.artifact.bytes });
         return try self.templateWorker(view.index, ref.template);
@@ -1950,6 +2039,8 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         program.exported_bindings.deinit(allocator);
         program.callable_eval_by_pattern.deinit(allocator);
         program.platform_identities.deinit(allocator);
+        program.root_value_slots.deinit(allocator);
+        program.requested_roots.deinit(allocator);
         program.const_schema.deinit(allocator);
         program.wrapper_by_root.deinit(allocator);
         program.hosted.deinit(allocator);
@@ -2047,6 +2138,14 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
 
     const requests = input.roots.requests;
     for (requests, 0..) |request, index| {
+        const root_id = request.compile_time_root orelse continue;
+        const source_module = if (input.roots.source_modules.len == 0)
+            program.modules.views.items[0].index
+        else
+            program.moduleByKey(input.roots.source_modules[index]).index;
+        try program.requested_roots.put(allocator, .{ .module = source_module, .root = root_id }, {});
+    }
+    for (requests, 0..) |request, index| {
         const source_module = if (input.roots.source_modules.len == 0)
             program.modules.views.items[0].index
         else
@@ -2138,7 +2237,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                     const export_name = names.procBase(template.proc_base).export_name orelse break :blk "boxy.template";
                     break :blk names.exportNameText(export_name);
                 },
-                inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .crash_dictionary, .convert, .literal_thunk => |_, kind| "boxy." ++ @tagName(kind),
+                inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => |_, kind| "boxy." ++ @tagName(kind),
             };
             try program.result.store.setProcDebugName(worker.proc, name);
         }

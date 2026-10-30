@@ -15257,19 +15257,31 @@ describes. Under `.boxy`, the `.boxy` compile-time evaluator
 computed from the checked modules alone (`eval/checked_root_graph.zig`: a
 root's wrapper template and every template it reaches through its value
 references, in any module of the program, with every read a dependency), and
-lowers each level as one `.boxy` program of compile-time roots
-(`TargetConfig.boxy_compile_time`). The roots of a level read every earlier
-level's values from their modules' constant stores, exactly as a runtime
-`.boxy` program reads stored values, and each root's value is stored by the
-plan and stored type its own result type gives it
-(`postcheck/boxy/const_schema.zig`). A group of roots that read each other is
-evaluated in passes: each pass lowers the members not yet completed, in which
-a read of another such member crashes as the recursion evaluating it in
-place would end in (`CrashExtra.failed_value`), and a member that failed only
-by such a read runs again once another completes. Both evaluators run the
-same LIR interpreter or native dev evaluator and store the same checked
-values, so a `.boxy` runtime program restores constants the same way under
-either, and reports the same diagnostics.
+lowers each module's pending roots as one `.boxy` program of compile-time
+roots (`TargetConfig.boxy_compile_time`), module by module in an order that
+puts an import before the modules importing it. A root reads an earlier
+module's values from that module's constant store, exactly as a runtime
+`.boxy` program reads stored values, and reads a root of its own module
+through the root's compile-time value slot (`Program.rootValueSlot`): a
+static data slot with a failure record, which every read guards
+(`lir.ComptimeValueGuards`), exactly as a Solved program reads a completed
+value. Before any root runs, the evaluator marks every slot of the program
+failed with the failure a read of a value not yet evaluated reports
+(`markRootSlotsUnfilled`); completing a root writes its value into its slot
+and clears the mark, so a read of a root the program has not completed
+fails as the recursion evaluating it in place would end in
+(`CrashExtra.failed_value`). The program's roots run in the levels the
+values their checked references read give them. Those references do not name
+every read (a method a dictionary selects at runtime reaches no checked
+reference, and a group of hoisted roots can read itself), so the order is only
+a good first guess: a root that failed only by reading a value not yet complete
+stays pending, the pending roots run again in passes once the levels finish,
+and when a pass completes none, the rest fail as they read. Each
+root's value is stored by the plan and stored type its own result type gives
+it (`postcheck/boxy/const_schema.zig`). Both evaluators run the same LIR
+interpreter or native dev evaluator and store the same checked values, so a
+`.boxy` runtime program restores constants the same way under either, and
+reports the same diagnostics.
 
 A root whose value holds a function value (anywhere in its type, or a
 callable binding) is evaluated by the Solved evaluator under either strategy.
@@ -15279,10 +15291,12 @@ for every closure it creates; a `.boxy` function value carries runtime
 descriptors and dictionaries instead, which name neither the checked
 evidence nor a nominal's phantom arguments, so a `.boxy` evaluation has
 nothing to store such a value by. The `.boxy` evaluator specializes exactly
-those roots, in one Solved program per level (`RootFilter`), with the group
-each belongs to. A literal argument root ("Literal Arguments") is the
-`.boxy` evaluator's whatever its value: one whose value holds a function is
-evaluated for its outcome and discarded.
+those roots, with every pending root of their module they read (whose values
+the Solved program then stores before the module's `.boxy` program is
+lowered, which restores them), in one Solved program per module
+(`RootFilter`), before the module's `.boxy` program. A literal argument root
+("Literal Arguments") is the `.boxy` evaluator's whatever its value: one
+whose value holds a function is evaluated for its outcome and discarded.
 
 A literal in a generic body converts at the first instantiation that fixes
 its type, under either strategy: as a literal root of the specialization

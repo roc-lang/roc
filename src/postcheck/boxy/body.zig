@@ -1099,6 +1099,7 @@ pub const Builder = struct {
             .crash_dictionary => |kind| return try self.lowerCrashDictionary(kind),
             .convert => |key| return try self.lowerConvertBody(key.from, key.to),
             .literal_thunk => |key| return try self.lowerLiteralThunkBody(key),
+            .root_slot => |key| return try self.lowerRootSlotThunkBody(key),
         };
         // Signature: explicit parameters, then hidden descriptors,
         // dictionaries, and literal arguments.
@@ -2679,9 +2680,10 @@ pub const Builder = struct {
         if (entry.pattern != null and root.guarded) return null;
         return switch (self.view.view.const_templates.get(entry.const_ref).state) {
             .stored_const => |stored| .{ .stored = stored },
-            // A polymorphic hoisted value computes at its instance, as its
-            // entry procedure would.
-            .eval_template => null,
+            // A value this compile-time program evaluates is read from its
+            // slot; a polymorphic hoisted value computes at its instance, as
+            // its entry procedure would.
+            .eval_template => if (self.program.readsRootSlot(self.module, entry.root)) .{ .pending = entry.root } else null,
             // A compile-time evaluator reads a value its own level has not
             // completed only as a member of a group that reads itself.
             .reserved => if (self.program.input.compile_time) .{ .pending = entry.root } else invariant("a hoisted root reached runtime lowering without a stored value or an entry procedure"),
@@ -2703,12 +2705,24 @@ pub const Builder = struct {
     /// compile-time evaluator, a root the evaluator has not completed.
     const HoistedRead = union(enum) { stored: checked.StoredConstTemplate, pending: checked.ComptimeRootId };
 
-    /// The read of a compile-time value no evaluation has completed, which
-    /// only a group of roots that read each other makes: it fails as the
-    /// recursion that evaluating the value in place would end in, and the
-    /// evaluator retries the reading root once the value completes
-    /// (design.md "Dependency-Ordered Compile-Time Evaluation").
+    /// The read of a compile-time value the evaluator has not completed when
+    /// the body is lowered: a root of the same compile-time program, read
+    /// from its compile-time value slot (`Program.rootValueSlot`). The
+    /// evaluator fills the slot when the root completes; until then a read
+    /// fails as the recursion that evaluating the value in place would end
+    /// in, and the evaluator reruns the reading root once the value
+    /// completes (design.md "Compile-Time Evaluation Strategy").
     fn pendingValueRead(self: *Builder, module_index: ModuleIndex, root: checked.ComptimeRootId, ty: TypeId) Allocator.Error!void {
+        if (self.program.evaluatesRoot(module_index, root)) {
+            if (!try self.closed(ty)) invariant("a compile-time root's value has an open type");
+            const slot = try self.program.rootValueSlot(module_index, root, ty);
+            const local = try self.closedLocal(try self.program.layouts.layoutOf(ty));
+            try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = slot } }, .next = undefined } });
+            try self.pushValue(local);
+            return;
+        }
+        // A value no program evaluates: the read fails as the recursion
+        // evaluating it in place would end in.
         const message = try self.store.insertString(base.stack_overflow.program_message);
         try self.emitTerminal(.{ .crash = .{
             .msg = .{ .literal = message },
@@ -3294,10 +3308,21 @@ pub const Builder = struct {
     pub fn rootThunk(self: *Builder, root: checked.ComptimeRootId) Allocator.Error!LocalId {
         const key: RootThunkKey = .{ .module = self.module, .root = root };
         if (self.root_thunks.get(key)) |existing| return existing;
-        const wrapper = self.program.wrapper_by_root.get(.{ .module = self.module, .root = root }) orelse
-            invariant("a literal argument root has no entry wrapper");
-        const callee = try self.program.templateRefWorker(wrapper);
-        const thunk = try self.composeDictionary(try self.program.methodEntryWorker(callee), &.{});
+        const compile_time_root = self.view.view.compile_time_roots.root(root);
+        const argument = compile_time_root.literal_argument orelse invariant("a literal argument root records no literal argument");
+        // In the compile-time program evaluating the root, a reader reads
+        // its value from its slot once it completes; its wrapper converts
+        // the literal only as the root's own evaluation. A validate-only
+        // root stores no value, so its wrapper converts for every reader.
+        const slot_read = compile_time_root.payload == .pending and !argument.validate_only and self.program.evaluatesRoot(self.module, root);
+        const entry = if (slot_read)
+            try self.program.rootSlotThunkWorker(self.module, root, try self.convert(argument.ty))
+        else blk: {
+            const wrapper = self.program.wrapper_by_root.get(.{ .module = self.module, .root = root }) orelse
+                invariant("a literal argument root has no entry wrapper");
+            break :blk try self.program.methodEntryWorker(try self.program.templateRefWorker(wrapper));
+        };
+        const thunk = try self.composeDictionary(entry, &.{});
         try self.root_thunks.put(self.allocator, key, thunk);
         return thunk;
     }
@@ -3410,6 +3435,27 @@ pub const Builder = struct {
         }
         if (target.literal_scopes.len == 0) invariant("a literal thunk's target has no scope");
         try self.lowerLiteralChain(target.literal_scopes[0], key.literal_requirement, worker.ret);
+        try self.run();
+        try self.finishProc(start.entry, body_start, &.{start.capture_ptr}, ret_layout);
+        const proc = self.store.getProcSpecPtr(worker.proc);
+        proc.erased_capture_arg = start.capture_ptr;
+        proc.abi = .erased_record;
+    }
+
+    /// The body of a root slot thunk (`WorkerKey.root_slot`): the read of
+    /// the root's compile-time value slot (`pendingValueRead`).
+    pub fn lowerRootSlotThunkBody(self: *Builder, key: @FieldType(lower.WorkerKey, "root_slot")) Allocator.Error!void {
+        const worker = self.currentWorker().*;
+        const start = try self.beginErasedWorker(&.{});
+        defer self.allocator.free(start.captures);
+        self.var_descs = &.{};
+        self.dict_locals = &.{};
+        self.literal_locals = &.{};
+        const ret_layout = try self.program.layouts.layoutOf(worker.ret);
+        const body_start = try self.newHole();
+        self.hole = body_start;
+        try self.tasks.append(self.allocator, .ret);
+        try self.pendingValueRead(key.module, key.root, worker.ret);
         try self.run();
         try self.finishProc(start.entry, body_start, &.{start.capture_ptr}, ret_layout);
         const proc = self.store.getProcSpecPtr(worker.proc);
@@ -3626,7 +3672,15 @@ pub const Builder = struct {
     pub fn restoreConversionRoot(self: *Builder, root_id: checked.ComptimeRootId, expr_id: CheckedExprId, kind: LIR.LiteralRejectionKind, plan_id: ?static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
         switch (self.view.view.compile_time_roots.root(root_id).payload) {
             .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = try self.exprType(expr_id), .root = root_id } }),
-            .pending, .unevaluated => try self.lowerLiteralConversion(expr_id, kind, plan_id orelse invariant("a literal with a conversion root has no conversion plan"), try self.exprType(expr_id)),
+            // The literal converts where it is reached: as the root's own
+            // evaluation, or at a site no evaluation converts (a literal in
+            // a branch). Any other body of the compile-time program
+            // evaluating the root reads the value from the root's slot once
+            // it completes.
+            .pending, .unevaluated => if ((self.own_root != null and self.own_root.? == root_id) or !self.program.evaluatesRoot(self.module, root_id))
+                try self.lowerLiteralConversion(expr_id, kind, plan_id orelse invariant("a literal with a conversion root has no conversion plan"), try self.exprType(expr_id))
+            else
+                try self.pendingValueRead(self.module, root_id, try self.exprType(expr_id)),
             inline .fn_value, .discarded, .expect, .runtime => |_, tag| invariantFmt("a literal conversion root holding {s} reached runtime lowering", .{@tagName(tag)}),
         }
     }
@@ -4000,7 +4054,7 @@ pub const Builder = struct {
             if (self.program.worker_ids.get(.{ .lambda = .{ .module = self.module, .expr = lambda_expr, .outer = scope_worker } })) |id| return .{ scope_worker, id };
             switch (self.program.worker(scope_worker).key) {
                 .lambda => |key| scope_worker = key.outer,
-                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk => break,
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => break,
             }
         }
         // No body of the chain declared it: the chain is a stored closure
@@ -4350,9 +4404,12 @@ pub const Builder = struct {
         const template = owner.view.const_templates.get(use.const_ref);
         switch (template.state) {
             .stored_const => |stored| try self.pushStoredRestore(.{ .module = owner.index }, stored, ty, rootOfConstRef(owner, use.const_ref)),
-            // A polymorphic constant compile-time evaluation did not store
-            // is its entry procedure's value at the read's instantiation.
+            // A constant this compile-time program evaluates is read from
+            // its slot. A polymorphic constant compile-time evaluation did
+            // not store is its entry procedure's value at the read's
+            // instantiation.
             .eval_template => |eval| {
+                if (rootOfConstRef(owner, use.const_ref)) |root| if (self.program.readsRootSlot(owner.index, root)) return try self.pendingValueRead(owner.index, root, ty);
                 const callee = try self.program.templateRefWorker(eval.entry_template);
                 const read_ty = try self.exprType(expr_id);
                 const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = read_ty, .effectful = false } });
@@ -4803,7 +4860,7 @@ pub const Builder = struct {
     pub fn templateEvidenceParams(self: *Builder, worker_id: WorkerId) []const static_dispatch.EvidenceParamRecord {
         const key = switch (self.program.worker(worker_id).key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk => invariant("evidence parameters of a worker that is not a procedure template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("evidence parameters of a worker that is not a procedure template's"),
         };
         const view = self.program.module(key.module).view;
         const template = view.checked_procedure_templates.templates.items[@backingInt(key.template)];
@@ -5293,7 +5350,7 @@ pub const Builder = struct {
         const target = self.program.worker(callee).*;
         const key = switch (target.key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk => invariant("a worker with dictionary parameters is not a template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.program.module(key.module).view.checked_procedure_templates;
         return .{

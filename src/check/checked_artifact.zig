@@ -1271,9 +1271,10 @@ const CompileTimeRequestScheduler = struct {
         errdefer sorted.deinit(self.allocator);
 
         while (sorted.items.len < self.entries.len) {
-            const next = self.nextReadyRequestIndex() orelse {
-                checkedArtifactInvariant("compile-time root dependency cycle reached request scheduling", .{});
-            };
+            // Hoisted roots can read each other ("Dependency-Ordered
+            // Compile-Time Evaluation"): with none ready, the next is a
+            // member of a group that depends on no other unemitted root.
+            const next = self.nextReadyRequestIndex() orelse try self.nextGroupRequestIndex();
             self.emitted[next] = true;
             try sorted.append(self.allocator, self.entries[next].request);
 
@@ -1295,6 +1296,47 @@ const CompileTimeRequestScheduler = struct {
             return i;
         }
         return null;
+    }
+
+    /// The first unemitted request of a group of roots that read each other
+    /// and depend on no root outside the group: a request with the fewest
+    /// unemitted requests reaching it, itself included. Any other request
+    /// is reached from such a group and so by strictly more.
+    fn nextGroupRequestIndex(self: *CompileTimeRequestScheduler) Allocator.Error!usize {
+        const dependencies = try self.allocator.alloc(std.ArrayList(u32), self.entries.len);
+        defer self.allocator.free(dependencies);
+        @memset(dependencies, .empty);
+        defer for (dependencies) |*list| list.deinit(self.allocator);
+        for (self.dependents, 0..) |list, dependency| {
+            if (self.emitted[dependency]) continue;
+            for (list.items) |dependent| try dependencies[dependent].append(self.allocator, @intCast(dependency));
+        }
+        const reached = try self.allocator.alloc(bool, self.entries.len);
+        defer self.allocator.free(reached);
+        var pending = std.ArrayList(u32).empty;
+        defer pending.deinit(self.allocator);
+        var best: ?usize = null;
+        var best_count: usize = std.math.maxInt(usize);
+        for (self.emitted, 0..) |emitted, start| {
+            if (emitted) continue;
+            @memset(reached, false);
+            reached[start] = true;
+            var count: usize = 1;
+            try pending.append(self.allocator, @intCast(start));
+            while (pending.pop()) |request| {
+                for (dependencies[request].items) |dependency| {
+                    if (reached[dependency]) continue;
+                    reached[dependency] = true;
+                    count += 1;
+                    try pending.append(self.allocator, dependency);
+                }
+            }
+            if (count < best_count) {
+                best = start;
+                best_count = count;
+            }
+        }
+        return best orelse checkedArtifactInvariant("request scheduling looked for a group with every request emitted", .{});
     }
 
     fn buildEdges(self: *CompileTimeRequestScheduler) Allocator.Error!void {

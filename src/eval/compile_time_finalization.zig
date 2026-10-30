@@ -1685,7 +1685,7 @@ fn specializeAndEvaluate(
 pub const RootFilter = std.AutoHashMapUnmanaged(RootFilterKey, void);
 const RootFilterKey = struct { module: [32]u8, root: checked.ComptimeRootId };
 
-/// The target a `.boxy` compile-time evaluator lowers a level's roots under:
+/// The target a `.boxy` compile-time evaluator lowers a module's roots under:
 /// every setting is a dev build's, so compile-time code is the code a
 /// `--specialize=no` dev build compiles, and each lowering is marked as the
 /// evaluator's (`TargetConfig.boxy_compile_time`).
@@ -1711,15 +1711,15 @@ const IdentityScheduler = struct {
 };
 
 /// Complete the modules' pending compile-time roots with the `.boxy`
-/// compile-time evaluator (design.md "Caching Under `.boxy`"): the roots
-/// are ordered by the values they read, from the checked modules alone
-/// (`checked_root_graph`), and each level is lowered as one `.boxy` program
-/// whose roots read every earlier level's values from their modules'
-/// constant stores. A root whose value holds a function value is
-/// specialized and evaluated by the Solved program's evaluator instead,
-/// which records the evidence a stored function value restores with;
-/// a group of roots that read each other is evaluated whole by whichever
-/// evaluator any of its members needs.
+/// compile-time evaluator (design.md "Compile-Time Evaluation Strategy"):
+/// each module's roots are lowered as one `.boxy` program whose roots read
+/// each other through compile-time value slots and read earlier modules'
+/// values from their constant stores, and run in the order the values they
+/// read give them, from the checked modules alone (`checked_root_graph`).
+/// A root whose value holds a function value is specialized and evaluated
+/// by the Solved program's evaluator instead, with the roots of its module
+/// it reads, since that evaluator records the evidence a stored function
+/// value restores with.
 ///
 /// The runtime consumer of a `.boxy` program lowers from the checked
 /// modules once every root is stored, so the session carries no specialized
@@ -1791,11 +1791,11 @@ fn finalizeProgramBoxy(
     };
 }
 
-/// Evaluate the pending roots `roots` with the `.boxy` evaluator: the roots
-/// in dependency levels, each level's independent roots together, the
-/// roots whose values hold functions as one Solved program and the rest as
-/// one `.boxy` program, and each group of roots that read each other as a
-/// cycle (`evaluateBoxyCycle`).
+/// Evaluate the pending roots `roots` with the `.boxy` evaluator: each
+/// module's roots as one `.boxy` program (`evaluateModuleRootsBoxy`), in
+/// the modules' order, which lists an import before the modules importing
+/// it, so a root reads only values of its own module and of modules already
+/// complete.
 fn evaluateRootsBoxy(
     allocator: Allocator,
     modules: []const ProgramModule,
@@ -1807,10 +1807,11 @@ fn evaluateRootsBoxy(
     if (roots.len == 0) return;
     var evaluation_options = options;
     evaluation_options.debug_events = debug_events;
-    // Every value a root reads is in its module's store once the root's
-    // level runs; no program slot is published. The object cache holds
-    // specialized code, which a `.boxy` program neither splices nor offers.
-    evaluation_options.publish_shared_slots = false;
+    // A module's program reads each root it completes from the root's
+    // compile-time value slot (`markRootSlotsUnfilled`). The object cache
+    // holds specialized code, which a `.boxy` program neither splices nor
+    // offers.
+    evaluation_options.publish_shared_slots = true;
     evaluation_options.object_cache = null;
     evaluation_options.keep_artifacts = false;
     evaluation_options.retry = null;
@@ -1849,43 +1850,16 @@ fn evaluateRootsBoxy(
         flag.* = artifacts[root.module].compile_time_roots.root(root.root).kind != .literal_argument and
             try checked_root_graph.rootHoldsFunction(allocator, artifacts, lowering_modules.imports, root);
     }
-    var groups = try ProducerGroups.build(allocator, IdentityScheduler{}, graph.deps);
-    defer groups.deinit(allocator);
-    var level_boxy = std.ArrayList(u32).empty;
-    defer level_boxy.deinit(allocator);
-    var level_specialized = std.ArrayList(u32).empty;
-    defer level_specialized.deinit(allocator);
-    var cycles = std.ArrayList(ProducerGroups.Group).empty;
-    defer cycles.deinit(allocator);
-    for (0..groups.level_count) |level| {
+    var members = std.ArrayList(u32).empty;
+    defer members.deinit(allocator);
+    for (0..modules.len) |module_index| {
+        members.clearRetainingCapacity();
+        for (roots, 0..) |root, ordinal| {
+            if (root.module == module_index) try members.append(allocator, @intCast(ordinal));
+        }
+        if (members.items.len == 0) continue;
         try options.checkCancelRequest();
-        level_boxy.clearRetainingCapacity();
-        level_specialized.clearRetainingCapacity();
-        cycles.clearRetainingCapacity();
-        for (groups.groups.items) |group| {
-            if (group.level != level) continue;
-            const members = groups.membersOf(group);
-            const any_specialized = for (members) |member| {
-                if (specialized[member]) break true;
-            } else false;
-            if (any_specialized) {
-                for (members) |member| try level_specialized.append(allocator, @intCast(member));
-            } else if (group.cyclic) {
-                try cycles.append(allocator, group);
-            } else {
-                for (members) |member| try level_boxy.append(allocator, @intCast(member));
-            }
-        }
-        std.sort.pdq(u32, level_boxy.items, {}, std.sort.asc(u32));
-        // The independent roots of a level run together: the
-        // specialized ones in one Solved program, the rest in one
-        // `.boxy` program.
-        if (level_specialized.items.len != 0) {
-            if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: specialized roots {any} at level {d}\n", .{ level_specialized.items, level });
-            try evaluateSpecializedRoots(allocator, modules, lowering_modules, roots, level_specialized.items, evaluation_options, debug_events);
-        }
-        if (level_boxy.items.len != 0) try evaluateBoxyRoots(allocator, modules, lowering_modules, states, roots, level_boxy.items, evaluation_options, null);
-        for (cycles.items) |group| try evaluateBoxyCycle(allocator, modules, lowering_modules, states, roots, groups.membersOf(group), evaluation_options);
+        try evaluateModuleRootsBoxy(allocator, modules, lowering_modules, states, roots, &graph, specialized, members.items, evaluation_options, debug_events);
     }
 }
 
@@ -1915,45 +1889,114 @@ fn evaluateSpecializedRoots(
     specialized.deinit();
 }
 
-/// Lower the roots `members` (positions in `roots`, ascending) as one `.boxy`
-/// program and evaluate them, each module's roots as one batch. `retry`
-/// leaves a root whose evaluation read a member of its group not yet
-/// evaluated for the group to run again.
-fn evaluateBoxyRoots(
+/// Evaluate the pending roots `members` (positions in `roots`, ascending)
+/// of one module. The roots whose values hold function values run first,
+/// with every pending root of the module they read, as one Solved program
+/// (`evaluateSpecializedRoots`): a `.boxy` program restores a stored
+/// function value by the evidence the Solved evaluator records, so it is
+/// lowered only once those values are stored. Every root still pending is
+/// then lowered as one `.boxy` program, whose roots read each other through
+/// compile-time value slots (`Program.rootValueSlot`), and evaluated in the
+/// levels the values they read give them (`ProducerGroups`). A root that read
+/// a value not yet complete stays pending and runs again (`runBoxyPasses`).
+fn evaluateModuleRootsBoxy(
     allocator: Allocator,
     modules: []const ProgramModule,
     lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
     states: []RootCompletionState,
     roots: []const checked_root_graph.Root,
+    graph: *const checked_root_graph.Graph,
+    specialized: []const bool,
     members: []const u32,
     options: Options,
-    retry: ?*const CycleRetry,
+    debug_events: *DebugEvents,
 ) FinalizeError!void {
-    const requests = try allocator.alloc(checked.RootRequest, members.len);
+    const module_index = roots[members[0]].module;
+    const artifact = modules[module_index].module;
+    const chosen = try allocator.alloc(bool, roots.len);
+    defer allocator.free(chosen);
+    @memset(chosen, false);
+    var solved = std.ArrayList(u32).empty;
+    defer solved.deinit(allocator);
+    var work = std.ArrayList(u32).empty;
+    defer work.deinit(allocator);
+    for (members) |member| {
+        if (!specialized[member]) continue;
+        chosen[member] = true;
+        try work.append(allocator, member);
+    }
+    while (work.pop()) |member| {
+        try solved.append(allocator, member);
+        for (graph.deps[member]) |dep| {
+            if (roots[dep].module != module_index) {
+                if (roots[dep].module > module_index) finalizationInvariant("a compile-time root reads a value of a module evaluated after its own");
+                continue;
+            }
+            // A literal argument root is the `.boxy` evaluator's whatever
+            // reads it (design.md "Literal Arguments").
+            if (chosen[dep] or artifact.compile_time_roots.root(roots[dep].root).kind == .literal_argument) continue;
+            chosen[dep] = true;
+            try work.append(allocator, dep);
+        }
+    }
+    if (solved.items.len != 0) {
+        std.sort.pdq(u32, solved.items, {}, std.sort.asc(u32));
+        if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: specialized roots {any} of {s}\n", .{ solved.items, artifact.moduleEnvConst().module_name });
+        try evaluateSpecializedRoots(allocator, modules, lowering_modules, roots, solved.items, options, debug_events);
+    }
+
+    var pending = std.ArrayList(u32).empty;
+    defer pending.deinit(allocator);
+    for (members) |member| {
+        if (artifact.compile_time_roots.root(roots[member].root).payload != .pending) continue;
+        try pending.append(allocator, member);
+    }
+    if (pending.items.len == 0) return;
+    // The module's roots in the levels the values they read give them.
+    const position = try allocator.alloc(u32, roots.len);
+    defer allocator.free(position);
+    @memset(position, std.math.maxInt(u32));
+    for (pending.items, 0..) |member, index| position[member] = @intCast(index);
+    const local_deps = try allocator.alloc([]const u32, pending.items.len);
+    var built: usize = 0;
+    defer {
+        for (local_deps[0..built]) |deps| allocator.free(deps);
+        allocator.free(local_deps);
+    }
+    for (pending.items, local_deps) |member, *out| {
+        var deps = std.ArrayList(u32).empty;
+        errdefer deps.deinit(allocator);
+        for (graph.deps[member]) |dep| {
+            if (position[dep] != std.math.maxInt(u32)) try deps.append(allocator, position[dep]);
+        }
+        out.* = try deps.toOwnedSlice(allocator);
+        built += 1;
+    }
+    var groups = try ProducerGroups.build(allocator, IdentityScheduler{}, local_deps);
+    defer groups.deinit(allocator);
+
+    const requests = try allocator.alloc(checked.RootRequest, pending.items.len);
     defer allocator.free(requests);
-    const source_modules = try allocator.alloc(checked.ModuleId, members.len);
+    const source_modules = try allocator.alloc(checked.ModuleId, pending.items.len);
     defer allocator.free(source_modules);
-    for (members, requests, source_modules) |member, *request, *source| {
-        const root = roots[member];
-        request.* = root.request;
-        source.* = modules[root.module].module.key.digest();
+    for (pending.items, requests, source_modules) |member, *request, *source| {
+        request.* = roots[member].request;
+        source.* = artifact.key.digest();
     }
     if (options.timing) |timing| timing.specialization_passes.add(1);
     if (base.dev_diagnostics.isSet(.trace_boxy_work)) {
-        std.debug.print("boxy-work: compile-time level of {d} roots\n", .{members.len});
-        for (members) |member| {
-            const root = roots[member];
-            const artifact = modules[root.module].module;
-            const compile_time_root = artifact.compile_time_roots.root(root.root);
+        std.debug.print("boxy-work: compile-time program of {s}: {d} roots in {d} levels\n", .{ artifact.moduleEnvConst().module_name, pending.items.len, groups.level_count });
+        for (pending.items) |member| {
+            const compile_time_root = artifact.compile_time_roots.root(roots[member].root);
             var label = try devRootLabel(allocator, artifact, compile_time_root);
             defer label.deinit(allocator);
-            std.debug.print("boxy-work:   root {s} {s} #{d}: {s}\n", .{ artifact.moduleEnvConst().module_name, @tagName(compile_time_root.kind), @backingInt(root.root), label.snippet });
+            std.debug.print("boxy-work:   root {s} #{d}: {s}\n", .{ @tagName(compile_time_root.kind), @backingInt(roots[member].root), label.snippet });
         }
     }
     var lowered = try lowerFinalizationModulesToLir(allocator, lowering_modules, .{ .requests = requests, .source_modules = source_modules }, boxyCompileTimeTarget(options));
     defer lowered.deinit();
     const const_roots = lowered.lir_result.const_roots.items;
-    if (const_roots.len != members.len) finalizationInvariant("the Boxy evaluator's lowering published a different count of compile-time roots than it was asked for");
+    if (const_roots.len != pending.items.len) finalizationInvariant("the Boxy evaluator's lowering published a different count of compile-time roots than it was asked for");
     var owners = try ModuleOwners.init(allocator, lowered.lir_result.lowering_modules.items, modules);
     defer owners.deinit(allocator);
     owners.unfinalized = options.unfinalized_reports;
@@ -1961,89 +2004,177 @@ fn evaluateBoxyRoots(
     var program_storage = try initEvaluationProgram(ProgramPtr, allocator, lowering_modules, &lowered, options);
     defer program_storage.deinit();
     const program = program_storage.ptr();
-    var stage_options = options;
-    stage_options.retry = retry;
+    try markRootSlotsUnfilled(program, &lowered);
 
-    var batch_requests = std.ArrayList(checked.RootRequest).empty;
-    defer batch_requests.deinit(allocator);
-    var batch_root_ids = std.ArrayList(checked.ComptimeRootId).empty;
-    defer batch_root_ids.deinit(allocator);
-    var batch_plans = std.ArrayList(LirProgram.ConstRootPlan).empty;
-    defer batch_plans.deinit(allocator);
-    for (modules, states, 0..) |entry, *state, module_index| {
-        batch_requests.clearRetainingCapacity();
-        batch_root_ids.clearRetainingCapacity();
-        batch_plans.clearRetainingCapacity();
-        for (members, const_roots) |member, plan| {
-            const root = roots[member];
-            if (root.module != module_index) continue;
-            try batch_requests.append(allocator, root.request);
-            try batch_root_ids.append(allocator, root.root);
-            try batch_plans.append(allocator, plan);
+    var batch = std.ArrayList(u32).empty;
+    defer batch.deinit(allocator);
+    var keys = std.ArrayList(StaticSlotEnvironment.ProducerOriginKey).empty;
+    defer keys.deinit(allocator);
+    for (0..groups.level_count) |level| {
+        try options.checkCancelRequest();
+        batch.clearRetainingCapacity();
+        for (groups.groups.items) |group| {
+            if (group.level != level) continue;
+            for (groups.membersOf(group)) |local| try batch.append(allocator, @intCast(local));
         }
-        if (batch_requests.items.len == 0) continue;
-        _ = try evalProgramRoots(allocator, entry.module, batch_requests.items, batch_root_ids.items, state, entry.problem_store, &owners, stage_options, &lowered, batch_plans.items, program);
-        // Every other artifact of the module's checked identity repeats
-        // each root that completed; it owns its own store and diagnostics,
-        // while site observations apply once.
-        for (modules, states, 0..) |alias_entry, *alias_state, alias_index| {
-            if (alias_index == module_index or !alias_entry.module.key.digest().eql(entry.module.key.digest())) continue;
-            var alias_options = stage_options;
-            alias_options.retry = null;
-            const previous_report_sites = owners.report_sites;
-            owners.report_sites = false;
-            defer owners.report_sites = previous_report_sites;
-            const alias_requests = alias_entry.module.root_requests.compile_time_requests;
-            for (batch_root_ids.items, batch_plans.items) |id, plan| {
-                if (!state.isDone(id)) continue;
-                const request_index = alias_state.requestIndexForRoot(id);
-                _ = try evalProgramRoots(allocator, alias_entry.module, alias_requests[request_index..][0..1], alias_state.request_root_ids[request_index..][0..1], alias_state, alias_entry.problem_store, &owners, alias_options, &lowered, &.{plan}, program);
-            }
+        std.sort.pdq(u32, batch.items, {}, std.sort.asc(u32));
+        if (batch.items.len == 0) continue;
+        try collectUndoneKeys(allocator, modules, states, roots, pending.items, &keys);
+        const retry = CycleRetry{ .pending = keys.items };
+        try runBoxyBatch(allocator, modules, states, roots, pending.items, batch.items, options, &lowered, const_roots, &owners, program, &retry);
+    }
+    // The levels order the roots by the reads checking records. A root that
+    // read a value not yet complete (a member of a group that reads itself,
+    // or a method a dictionary selects at runtime, which no checked
+    // reference names) stayed pending, and runs again now.
+    batch.clearRetainingCapacity();
+    for (pending.items, 0..) |member, local| {
+        const root = roots[member];
+        if (!states[root.module].isDone(root.root)) try batch.append(allocator, @intCast(local));
+    }
+    if (batch.items.len != 0) try runBoxyPasses(allocator, modules, states, roots, pending.items, batch.items, options, &lowered, const_roots, &owners, program, &keys);
+}
+
+/// The roots of `pending` not yet complete, as a retry names them.
+fn collectUndoneKeys(
+    allocator: Allocator,
+    modules: []const ProgramModule,
+    states: []RootCompletionState,
+    roots: []const checked_root_graph.Root,
+    pending: []const u32,
+    keys: *std.ArrayList(StaticSlotEnvironment.ProducerOriginKey),
+) Allocator.Error!void {
+    keys.clearRetainingCapacity();
+    for (pending) |member| {
+        const root = roots[member];
+        if (states[root.module].isDone(root.root)) continue;
+        try keys.append(allocator, .{ .module = modules[root.module].module.key.digest().bytes, .producer = .{ .checked = root.root } });
+    }
+}
+
+/// Mark every compile-time value slot of a `.boxy` program failed with the
+/// failure a read of a value not yet evaluated reports: a root reading
+/// another the program has not completed fails as the recursion that
+/// evaluating it in place would end in, and the evaluator reruns it once
+/// the value completes (`CycleRetry`). Completing a root publishes its
+/// value and clears the mark (`publishRoot`).
+fn markRootSlotsUnfilled(program: anytype, lowered: *lir.CheckedPipeline.LoweredProgram) FinalizeError!void {
+    const result = &lowered.lir_result;
+    for (result.static_data_values.items) |entry| {
+        const root = entry.compile_time_root orelse continue;
+        if (root.role != .value) continue;
+        const owner = result.loweringModuleId(root.module) orelse finalizationInvariant("a compile-time value slot names a module its program does not lower");
+        if (builtin.mode == .debug) {
+            const evaluated = for (result.const_roots.items) |plan| {
+                const root_id = plan.request.compile_time_root orelse continue;
+                if (plan.owner == owner and root.root.eql(.{ .checked = root_id })) break true;
+            } else false;
+            if (!evaluated) finalizationInvariant("a compile-time program reads the slot of a root it does not evaluate");
+        }
+        const failure: SlotFailure = .{ .message = base.stack_overflow.program_message, .kind = .crash };
+        if (@TypeOf(program) == *DevProgram) {
+            try program.publishFailure(lowered, owner, root.root, failure);
+        } else {
+            try program.slotEnvironment().publishFailure(lowered, owner, root.root, failure, .{ .resolve = InterpreterProgram.resolveFunction });
         }
     }
 }
 
-/// Evaluate a group of roots that read each other with the `.boxy`
-/// evaluator (see `Evaluation.evaluateCycle`): each pass lowers the members
-/// not yet completed, in which a read of another such member crashes as the
-/// recursion evaluating it in place would end in; a member that failed only
-/// by such a read runs again once another completes, and when a pass
-/// completes none, the rest fail as they read.
-fn evaluateBoxyCycle(
+/// Run the roots `batch` (positions in `pending`, which are positions in
+/// `roots`) of a module's `.boxy` program and store their values. `retry`
+/// leaves a root whose evaluation read a member of its group not yet
+/// evaluated for the group to run again.
+fn runBoxyBatch(
     allocator: Allocator,
     modules: []const ProgramModule,
-    lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
     states: []RootCompletionState,
     roots: []const checked_root_graph.Root,
-    members: []const usize,
+    pending: []const u32,
+    batch: []const u32,
     options: Options,
+    lowered: *lir.CheckedPipeline.LoweredProgram,
+    const_roots: []const LirProgram.ConstRootPlan,
+    owners: *ModuleOwners,
+    program: anytype,
+    retry: ?*const CycleRetry,
 ) FinalizeError!void {
-    var pending = std.ArrayList(u32).empty;
-    defer pending.deinit(allocator);
-    for (members) |member| try pending.append(allocator, @intCast(member));
-    std.sort.pdq(u32, pending.items, {}, std.sort.asc(u32));
-    var keys = std.ArrayList(StaticSlotEnvironment.ProducerOriginKey).empty;
-    defer keys.deinit(allocator);
-    while (pending.items.len != 0) {
-        keys.clearRetainingCapacity();
-        for (pending.items) |member| {
-            const root = roots[member];
-            try keys.append(allocator, .{ .module = modules[root.module].module.key.digest().bytes, .producer = .{ .checked = root.root } });
+    const module_index = roots[pending[batch[0]]].module;
+    const entry = modules[module_index];
+    const state = &states[module_index];
+    var stage_options = options;
+    stage_options.retry = retry;
+    const requests = try allocator.alloc(checked.RootRequest, batch.len);
+    defer allocator.free(requests);
+    const root_ids = try allocator.alloc(checked.ComptimeRootId, batch.len);
+    defer allocator.free(root_ids);
+    const plans = try allocator.alloc(LirProgram.ConstRootPlan, batch.len);
+    defer allocator.free(plans);
+    for (batch, requests, root_ids, plans) |local, *request, *root_id, *plan| {
+        const root = roots[pending[local]];
+        if (root.module != module_index) finalizationInvariant("a module's compile-time program ran another module's root");
+        request.* = root.request;
+        root_id.* = root.root;
+        plan.* = const_roots[local];
+    }
+    _ = try evalProgramRoots(allocator, entry.module, requests, root_ids, state, entry.problem_store, owners, stage_options, lowered, plans, program);
+    // Every other artifact of the module's checked identity repeats each
+    // root that completed; it owns its own store and diagnostics, while
+    // site observations apply once.
+    for (modules, states, 0..) |alias_entry, *alias_state, alias_index| {
+        if (alias_index == module_index or !alias_entry.module.key.digest().eql(entry.module.key.digest())) continue;
+        var alias_options = stage_options;
+        alias_options.retry = null;
+        const previous_report_sites = owners.report_sites;
+        owners.report_sites = false;
+        defer owners.report_sites = previous_report_sites;
+        const alias_requests = alias_entry.module.root_requests.compile_time_requests;
+        for (root_ids, plans) |id, plan| {
+            if (!state.isDone(id)) continue;
+            const request_index = alias_state.requestIndexForRoot(id);
+            _ = try evalProgramRoots(allocator, alias_entry.module, alias_requests[request_index..][0..1], alias_state.request_root_ids[request_index..][0..1], alias_state, alias_entry.problem_store, owners, alias_options, lowered, &.{plan}, program);
         }
+    }
+}
+
+/// Evaluate the roots `remaining_roots` (positions in `pending`) that read a
+/// value not yet complete, in passes: each pass runs the roots not yet
+/// complete, in which a read of another such root fails as the recursion
+/// evaluating it in place would end in (its slot is unfilled); a root that
+/// failed only by such a read runs again once another completes, and when a
+/// pass completes none, the rest fail as they read.
+fn runBoxyPasses(
+    allocator: Allocator,
+    modules: []const ProgramModule,
+    states: []RootCompletionState,
+    roots: []const checked_root_graph.Root,
+    pending: []const u32,
+    remaining_roots: []const u32,
+    options: Options,
+    lowered: *lir.CheckedPipeline.LoweredProgram,
+    const_roots: []const LirProgram.ConstRootPlan,
+    owners: *ModuleOwners,
+    program: anytype,
+    keys: *std.ArrayList(StaticSlotEnvironment.ProducerOriginKey),
+) FinalizeError!void {
+    var remaining = std.ArrayList(u32).empty;
+    defer remaining.deinit(allocator);
+    try remaining.appendSlice(allocator, remaining_roots);
+    while (remaining.items.len != 0) {
+        try collectUndoneKeys(allocator, modules, states, roots, pending, keys);
         const retry = CycleRetry{ .pending = keys.items };
-        try evaluateBoxyRoots(allocator, modules, lowering_modules, states, roots, pending.items, options, &retry);
+        try runBoxyBatch(allocator, modules, states, roots, pending, remaining.items, options, lowered, const_roots, owners, program, &retry);
         var kept: usize = 0;
-        for (pending.items) |member| {
-            const root = roots[member];
+        for (remaining.items) |local| {
+            const root = roots[pending[local]];
             if (states[root.module].isDone(root.root)) continue;
-            pending.items[kept] = member;
+            remaining.items[kept] = local;
             kept += 1;
         }
-        if (kept == pending.items.len) {
-            try evaluateBoxyRoots(allocator, modules, lowering_modules, states, roots, pending.items, options, null);
+        if (kept == remaining.items.len) {
+            try runBoxyBatch(allocator, modules, states, roots, pending, remaining.items, options, lowered, const_roots, owners, program, null);
             return;
         }
-        pending.shrinkRetainingCapacity(kept);
+        remaining.shrinkRetainingCapacity(kept);
     }
 }
 
