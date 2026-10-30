@@ -56,6 +56,7 @@ const TestOptions = struct {
     /// overflow traps out of bounds; a stack above a platform's reserved low
     /// memory traps at the generated bound check instead.
     expect_stack_overflow_trap: bool = false,
+    assert_generation_zero: bool = false,
 };
 
 /// Host import implementations for the WASM module.
@@ -154,6 +155,14 @@ fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_
         .stack_size = 1024 * 256,
         .imports = &imports,
     });
+
+    if (options.assert_generation_zero) {
+        const handle = try module_instance.getFunctionHandle(shim_symbols.roc_hot_reload_generation);
+        var params: [0]bytebox.Val = undefined;
+        var returns: [1]bytebox.Val = undefined;
+        _ = try module_instance.invoke(handle, &params, &returns, .{});
+        if (returns[0].I64 != 0) return error.UnexpectedHotReloadGeneration;
+    }
 
     // Now that memory is available, update host context
     global_host_context.memory = module_instance.store.getMemory(0);
@@ -415,6 +424,7 @@ pub fn main(init: std.process.Init) anyerror!void {
             std.debug.print("  --max-allocs N       Maximum canonical roc_alloc count when counting allocations\n", .{});
             std.debug.print("  --max-bytes N        Maximum .wasm file size in bytes\n", .{});
             std.debug.print("  --expect-stack-overflow-trap  Require wasm_main to trap on stack overflow without touching static data\n", .{});
+            std.debug.print("  --assert-generation-zero  Require roc_hot_reload_generation to return zero\n", .{});
             std.debug.print("  --help               Display this help message\n", .{});
             return;
         } else if (std.mem.eql(u8, arg, "--wasm-path")) {
@@ -427,6 +437,8 @@ pub fn main(init: std.process.Init) anyerror!void {
                 std.debug.print("Error: --expected requires an argument\n", .{});
                 return;
             };
+        } else if (std.mem.eql(u8, arg, "--assert-generation-zero")) {
+            options.assert_generation_zero = true;
         } else if (std.mem.eql(u8, arg, "--expect-stack-overflow-trap")) {
             options.expect_stack_overflow_trap = true;
         } else if (std.mem.eql(u8, arg, "--assert-alloc-balanced")) {
