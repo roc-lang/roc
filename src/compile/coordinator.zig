@@ -56,6 +56,7 @@ const compile_build = @import("compile_build.zig");
 const module_discovery = @import("module_discovery.zig");
 const cache_manager_mod = @import("cache_manager.zig");
 const boxy_unit = @import("boxy_unit.zig");
+const boxy_interface = @import("boxy_interface.zig");
 const cache_versioning = @import("cache_versioning.zig");
 const discovery_roots = @import("discovery_roots.zig");
 const cache_key_mod = @import("cache_key.zig");
@@ -1465,6 +1466,7 @@ const BoxyObjects = struct {
     lowering: BoxyObjectLowering,
     manager: *CacheManager,
     interfaces: eval.CompileTimeFinalization.ExportInterfaces,
+    digests: boxy_interface.Digests,
     arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator),
     /// Each module's object, once it has been asked for; null for a module
     /// with none of its own.
@@ -1477,11 +1479,12 @@ const BoxyObjects = struct {
     fn deinit(self: *BoxyObjects) void {
         self.objects.deinit(self.coordinator.gpa);
         self.interfaces.deinit();
+        self.digests.deinit();
         self.arena.deinit();
     }
 
     fn source(self: *BoxyObjects) eval.CompileTimeFinalization.BoxyObjectSource {
-        return .{ .context = self, .objects = objectSet, .interfaces = &self.interfaces, .target = self.lowering.config };
+        return .{ .context = self, .objects = objectSet, .interfaces = &self.interfaces, .names = &self.digests.names, .target = self.lowering.config };
     }
 
     fn objectSet(context: *anyopaque, module: *const Artifact) Error!?eval.CompileTimeFinalization.BoxyObjectSet {
@@ -1572,7 +1575,7 @@ const BoxyObjects = struct {
         const arena = self.arena.allocator();
         const views = try self.viewsOf(artifact);
         var config = self.lowering.config;
-        config.boxy_unit = .{ .imports = &self.interfaces, .root = false };
+        config.boxy_unit = .{ .imports = &self.interfaces, .root = false, .names = &self.digests.names };
         config.checked_module_state = if (artifact.evaluation_state == .finalized) .complete else .checking_finalization;
         const built = boxy_unit.restoreOrBuild(.{
             .gpa = gpa,
@@ -1583,12 +1586,13 @@ const BoxyObjects = struct {
             .config = config,
             .interfaces = &self.interfaces,
             .cache_manager = self.manager,
-            .key = try boxy_unit.objectKey(gpa, artifact, platform, self.lowering.opt, self.lowering.inline_expects, self.lowering.target, false),
+            .key = try boxy_unit.objectKey(gpa, &self.digests, artifact, platform, self.lowering.opt, self.lowering.inline_expects, self.lowering.target, &.{}),
         }) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => Coordinator.coordinatorInvariant("a module's object failed to compile for compile-time evaluation: {s}", .{@errorName(err)}),
         };
         defer built.deinit(gpa);
+        try self.digests.recordExports(artifact, built.exports);
         const symbols = try arena.alloc([]const u8, built.hosted_symbols.len);
         for (built.hosted_symbols, symbols) |symbol, *copy| copy.* = try arena.dupe(u8, symbol);
         return .{ .module = artifact.key.bytes, .object = try arena.dupe(u8, built.object), .code_locations = try arena.dupe(u8, built.code_locations), .hosted_symbols = symbols };
@@ -3524,7 +3528,7 @@ pub const Coordinator = struct {
                 // lowering, code generation, and cache writes count toward it.
                 var unit_lowering = lowering;
                 unit_lowering.config.timing = &self.ctfe_timing.lowering;
-                boxy_objects = .{ .coordinator = self, .lowering = unit_lowering, .manager = manager, .interfaces = .init(self.gpa, self.roc_ctx.std_io) };
+                boxy_objects = .{ .coordinator = self, .lowering = unit_lowering, .manager = manager, .digests = try self.boxyLinkDigests(), .interfaces = .init(self.gpa, self.roc_ctx.std_io) };
             };
             if (boxy_objects) |*objects| options.boxy_objects = objects.source();
         }
@@ -4453,6 +4457,20 @@ pub const Coordinator = struct {
     ) Allocator.Error!void {
         const serialized = try writer.appendAlloc(arena_alloc, T.Serialized);
         try serialized.serialize(value, arena_alloc, writer);
+    }
+
+    /// The digests of every checked module of this compilation, its link.
+    pub fn boxyLinkDigests(self: *Coordinator) Allocator.Error!boxy_interface.Digests {
+        var artifacts = std.ArrayList(*const CheckedModuleArtifact).empty;
+        defer artifacts.deinit(self.gpa);
+        try artifacts.append(self.gpa, &self.builtin_modules.checked_artifact);
+        var packages = self.packages.iterator();
+        while (packages.next()) |package| {
+            for (package.value_ptr.*.modules.items) |*mod| {
+                if (mod.checkedArtifact()) |artifact| try artifacts.append(self.gpa, artifact);
+            }
+        }
+        return try boxy_interface.Digests.init(self.gpa, artifacts.items);
     }
 
     fn checkedModuleCacheKey(

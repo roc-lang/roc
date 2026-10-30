@@ -76,6 +76,7 @@ const watch_inputs = @import("watch_inputs.zig");
 const module_discovery = @import("module_discovery.zig");
 
 // Actor model components
+const boxy_interface = @import("boxy_interface.zig");
 const coordinator_mod = @import("coordinator.zig");
 const Coordinator = coordinator_mod.Coordinator;
 const DiscoveredParse = @import("messages.zig").DiscoveredParse;
@@ -3662,6 +3663,11 @@ pub const BuildEnv = struct {
             try artifacts.append(allocator, artifact);
         }
         return artifacts.toOwnedSlice(allocator);
+    }
+
+    /// The digests of every checked module of this build, its link.
+    pub fn boxyLinkDigests(self: *BuildEnv) Allocator.Error!boxy_interface.Digests {
+        return self.builtCoordinator().boxyLinkDigests();
     }
 
     /// Collect published checked artifacts available to post-check lowering.

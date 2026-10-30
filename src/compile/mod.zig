@@ -27,6 +27,7 @@ pub const app_header = @import("app_header.zig");
 
 pub const key = @import("cache_key.zig");
 pub const boxy_object_cache = @import("boxy_object_cache.zig");
+pub const boxy_interface = @import("boxy_interface.zig");
 pub const boxy_unit = @import("boxy_unit.zig");
 pub const config = @import("cache_config.zig");
 pub const manager = @import("cache_manager.zig");
