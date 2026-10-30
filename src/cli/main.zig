@@ -241,6 +241,9 @@ const CliBuildEnvOptions = struct {
     source_dir_override: ?[]const u8 = null,
     post_check_publication_mode: compile.build.PostCheckPublicationMode = .executable_artifacts,
     runtime_lowering: ?compile.build.RuntimeLoweringConfig = null,
+    /// The strategy whose compile-time evaluator completes every module's
+    /// compile-time roots, part of each checked module's cache identity.
+    specialization_strategy: base.SpecializationStrategy = .lss,
     /// The bundle URL a URL/installed root came from; becomes the root's
     /// package identity in place of the extracted path.
     root_source_url: ?[]const u8 = null,
@@ -273,6 +276,7 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     build_env.setWatchInputTracking(opts.track_watch_inputs);
     build_env.release_checked_solver_types = opts.release_checked_solver_types;
     build_env.setPostCheckPublicationMode(opts.post_check_publication_mode);
+    build_env.setSpecializationStrategy(opts.specialization_strategy);
     if (opts.runtime_lowering) |config| build_env.setRuntimeLowering(config);
     if (opts.source_dir_override) |source_dir| {
         build_env.setRootSourceDirOverride(source_dir);
@@ -6632,6 +6636,7 @@ fn initRunBuildEnv(ctx: *CliCtx, opts: RunBuildEnvOptions) CliMainError!BuildEnv
         .release_checked_solver_types = true,
         .source_dir_override = opts.source_dir_override,
         .post_check_publication_mode = .executable_artifacts,
+        .specialization_strategy = opts.specialization_strategy,
         // A run whose post-check work writes no cache writes the compile-time
         // packs `roc check` writes (design.md "Caching Under `.boxy`").
         .compile_time_pack_publisher = if (cachesPostCheckWork(opts.specialization_strategy)) null else check_compile_time_pack_publisher,
@@ -11252,6 +11257,7 @@ fn initBuildCommandEnv(ctx: *CliCtx, args: cli_args.BuildArgs) InitCliBuildEnvEr
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
         .release_checked_solver_types = true,
+        .specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy),
         .compile_time_pack_publisher = compileTimePackPublisher(.build, args.opt, args.specialization_strategy),
         .source_dir_override = args.source_dir_override,
         .root_source_url = args.root_source_url,
@@ -11408,8 +11414,6 @@ fn buildBoxyLibraryObjects(
         }
     }
 
-    const session = build_env.runtimeProgramSession() orelse
-        base.invariant("roc build invariant violated: a .boxy build has no program session", .{});
     const tasks = try ctx.gpa.alloc(BoxyUnitTask, units.items.len);
     defer {
         for (tasks) |*task| task.deinit(ctx.gpa);
@@ -11425,7 +11429,6 @@ fn buildBoxyLibraryObjects(
             .views = try build_env.collectImportedArtifactViews(ctx.gpa, artifact),
             .target = target,
             .interfaces = interfaces,
-            .literal_values = session.boxyLiteralValues(),
             .cache_manager = if (args.no_cache) null else build_env.cache_manager,
         };
     }
@@ -11648,7 +11651,6 @@ const BoxyUnitTask = struct {
     views: []check.CheckedArtifact.ImportedModuleView,
     target: RocTarget,
     interfaces: *postcheck.Boxy.Lower.ExportInterfaces,
-    literal_values: ?*const lir.CheckedPipeline.BoxyLiteralValues,
     cache_manager: ?*CacheManager,
     outcome: union(enum) { pending, failed: CliMainError, done: Result } = .pending,
 
@@ -11712,7 +11714,7 @@ const BoxyUnitTask = struct {
         };
         var config = checkedRuntimeLoweringConfig(.linked_output, self.args.opt, .boxy, self.target, self.args.synthetic_default_platform);
         config.target.boxy_unit = .{ .imports = self.interfaces, .root = false };
-        var lowered = try eval.CompileTimeFinalization.lowerBoxyRuntime(gpa, modules, .{}, config.target, self.literal_values);
+        var lowered = try eval.CompileTimeFinalization.lowerBoxyRuntime(gpa, modules, .{}, config.target);
         defer lowered.deinit();
         if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: lowered {s} ({d} procs)\n", .{ module_name, lowered.lir_result.store.procSpecCount() });
 
@@ -12329,7 +12331,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         null;
     const boxy_cache_manager: ?*CacheManager = if (args.no_cache) null else build_env.cache_manager;
     const boxy_root_key: ?compile.boxy_object_cache.Key = if (boxy_library) |library| try boxyObjectKey(ctx.gpa, root_artifact, boxyUnitPlatform(root_artifact, library.platform), args, target, true) else null;
-    if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: library objects {d}, root key {s}\n", .{ if (boxy_library) |library| library.objects.len else 0, if (boxy_root_key) |key| &std.fmt.bytesToHex(key.bytes[0..8], .lower) else "none" });
+    if (dev_diagnostics.isSet(.trace_boxy_work)) if (boxy_library) |library| std.debug.print("boxy-work: library objects {d}, root key {s}\n", .{ library.objects.len, &std.fmt.bytesToHex(boxy_root_key.?.bytes[0..8], .lower) });
     // The root program's object is cached under its own key too: a build
     // whose every module is cached lowers nothing.
     if (boxy_library) |library| if (try restoreBoxyObject(ctx.gpa, boxy_cache_manager, boxy_root_key.?, &boxy_interfaces.?)) |entry| {
@@ -17550,6 +17552,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = complete_cache_enabled or args.watch_inputs_file != null,
         .release_checked_solver_types = true,
+        .specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy),
         .compile_time_pack_publisher = compileTimePackPublisher(.test_run, args.opt, args.specialization_strategy),
         .root_source_url = args.root_source_url,
         .main_source_url = args.main_source_url,
@@ -20629,6 +20632,7 @@ fn checkFileWithBuildEnvPreserved(
     track_watch_inputs: bool,
     synthetic_default_app: ?SyntheticDefaultAppMapping,
     reporter: ?*progress.Reporter,
+    specialization_strategy: base.SpecializationStrategy,
 ) CheckFileWithBuildEnvPreservedError!CheckResultWithBuildEnv {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -20642,6 +20646,7 @@ fn checkFileWithBuildEnvPreserved(
         .timings = timings,
         .resolution_config = resolution_config,
         .track_watch_inputs = track_watch_inputs,
+        .specialization_strategy = specialization_strategy,
         .compile_time_pack_publisher = check_compile_time_pack_publisher,
         .source_dir_override = source_dir_override,
         .root_source_url = root_source_url,
@@ -20679,6 +20684,7 @@ fn checkFileWithBuildEnv(
     source_dir_override: ?[]const u8,
     synthetic_default_app: ?SyntheticDefaultAppMapping,
     reporter: ?*progress.Reporter,
+    specialization_strategy: base.SpecializationStrategy,
 ) CheckFileWithBuildEnvPreservedError!CheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -20690,6 +20696,7 @@ fn checkFileWithBuildEnv(
         .timings = timings,
         .resolution_config = resolution_config,
         .release_checked_solver_types = true,
+        .specialization_strategy = specialization_strategy,
         .compile_time_pack_publisher = check_compile_time_pack_publisher,
         .source_dir_override = source_dir_override,
         .root_source_url = root_source_url,
@@ -20871,6 +20878,7 @@ fn rocCheckDefaultApp(
         original_source_dir,
         SyntheticDefaultAppMapping.fromStaged(args.path, staged),
         reporter,
+        currentRuntimeSpecializationStrategy(args.specialization_strategy),
     );
     errdefer check_result.deinit(ctx.gpa);
 
@@ -20918,6 +20926,7 @@ fn rocCheckDefaultAppPreserved(
         track_watch_inputs,
         SyntheticDefaultAppMapping.fromStaged(args.path, staged),
         reporter,
+        currentRuntimeSpecializationStrategy(args.specialization_strategy),
     );
     errdefer result_with_env.deinit(ctx.gpa);
 
@@ -21018,6 +21027,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             true,
             null,
             &reporter,
+            currentRuntimeSpecializationStrategy(args.specialization_strategy),
         ) catch |err| {
             reporter.fail();
             try writeWatchInputsFile(ctx, file_path, null, extra_paths);
@@ -21057,6 +21067,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             null,
             null,
             &reporter,
+            currentRuntimeSpecializationStrategy(args.specialization_strategy),
         ) catch |err| {
             reporter.fail();
             return handleProcessFileError(err, stderr, args.path);
@@ -21457,6 +21468,7 @@ fn bumpCheckSide(
         false,
         null,
         null,
+        .lss,
     ) catch |err| {
         try handleProcessFileError(err, stderr, path);
         return error.CliError;
@@ -21940,6 +21952,7 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
         false,
         null,
         null,
+        .lss,
     ) catch |err| {
         return handleProcessFileError(err, stderr, args.path);
     };

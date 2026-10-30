@@ -314,6 +314,7 @@ fn hashCheckingContextIdentity(identity: CheckingContextIdentity) [32]u8 {
         hashExplicitRootRequestInput(&hasher, root);
     }
     hashByteSlice(&hasher, @tagName(identity.validation));
+    hashByteSlice(&hasher, @tagName(identity.evaluation_strategy));
     return hasher.finalResult();
 }
 
@@ -387,6 +388,12 @@ pub const CheckingContextIdentity = struct {
     /// same source that disagree here produce different checked output and
     /// must not share a cache entry.
     validation: can.Can.Validation = .checking,
+    /// The specialization strategy whose compile-time evaluator completed
+    /// the module's compile-time roots (design.md "Caching Under
+    /// `.boxy`"). Each evaluator lowers and runs the roots its own way, so
+    /// a module checked under one strategy is not the module checked under
+    /// the other, and the two never share a cache entry.
+    evaluation_strategy: base.SpecializationStrategy = .lss,
 
     pub const Serialized = extern struct {
         imports: SerializedSlice(ImportIdentity) = .{},
@@ -394,6 +401,7 @@ pub const CheckingContextIdentity = struct {
         platform_requirement_context: artifact_serialize.SerializedOptional(PlatformRequirementContextKey) = .{},
         platform_app_relation: artifact_serialize.SerializedOptional(PlatformAppRelationKey) = .{},
         validation: artifact_serialize.SerializedScalar(can.Can.Validation, .checking) = .{},
+        evaluation_strategy: artifact_serialize.SerializedScalar(base.SpecializationStrategy, .lss) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CheckingContextIdentity, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -407,6 +415,7 @@ pub const CheckingContextIdentity = struct {
         platform_app_relation: ?PlatformAppRelationKey,
         explicit_roots: []const ExplicitRootRequestInput,
         validation: can.Can.Validation,
+        evaluation_strategy: base.SpecializationStrategy,
     ) Allocator.Error!CheckingContextIdentity {
         const imported_names = module_env.imports.imports.items.items;
         const imports = try allocator.alloc(ImportIdentity, imported_names.len);
@@ -432,6 +441,7 @@ pub const CheckingContextIdentity = struct {
             .platform_app_relation = platform_app_relation,
             .explicit_roots = roots,
             .validation = validation,
+            .evaluation_strategy = evaluation_strategy,
         };
     }
 
@@ -551,6 +561,9 @@ pub const PublishInputs = struct {
     evaluation_phase: enum { immediate, post_frontend } = .immediate,
     problem_store: ?*problem.Store = null,
     validation: can.Can.Validation = .checking,
+    /// The strategy whose compile-time evaluator completes the module's
+    /// roots (`CheckingContextIdentity.evaluation_strategy`).
+    evaluation_strategy: base.SpecializationStrategy = .lss,
 };
 
 /// Public `CompileTimeFinalizer` declaration.
@@ -9265,7 +9278,7 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
     };
     _ = try names.internModuleIdentity(&module_identity.stable_hash);
 
-    var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module_env, &.{}, null, null, &.{}, .checking);
+    var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module_env, &.{}, null, null, &.{}, .checking, .lss);
     defer checking_context_identity.deinit(allocator);
     const artifact_key = CheckedModuleArtifactKey.computeFromSourceHash(
         hashModuleSourceInputs(module_env),
@@ -37460,6 +37473,7 @@ pub const CheckedModuleKeyInputs = struct {
     platform_app_relation: ?PlatformAppRelationKey = null,
     explicit_roots: []const ExplicitRootRequestInput = &.{},
     validation: can.Can.Validation = .checking,
+    evaluation_strategy: base.SpecializationStrategy = .lss,
 };
 
 /// Compute the checked module cache identity for a module environment whose
@@ -37479,6 +37493,7 @@ pub fn checkedModuleKeyFromModuleEnv(
         inputs.platform_app_relation,
         inputs.explicit_roots,
         inputs.validation,
+        inputs.evaluation_strategy,
     );
     defer checking_context_identity.deinit(allocator);
 
@@ -37573,6 +37588,7 @@ pub fn publishFromTypedModule(
         if (inputs.platform_app_relation) |relation| relation.key else null,
         inputs.explicit_roots,
         inputs.validation,
+        inputs.evaluation_strategy,
     );
     errdefer checking_context_identity.deinit(allocator);
 

@@ -105,7 +105,6 @@ pub const Task = union(enum) {
     jump: LIR.JoinPointId,
     /// Jump to a join that carries no value (a loop's head or exit).
     jump_without_value: LIR.JoinPointId,
-    /// Pop a literal conversion's `Try` result and unwrap it.
     /// Push the `Numeral` argument of a `from_numeral` call.
     numeral_arg: struct { literal: NumeralLiteral, ty: TypeId },
     /// Pop a `for` loop's iterable and run the loop.
@@ -147,9 +146,9 @@ pub const Task = union(enum) {
     unreachable_value: TypeId,
     /// Push the `{}` value of a construct whose value nothing reads.
     unreachable_or_unit,
-    /// Crash with this message: a literal whose conversion failed at the
-    /// instance a literal table selects.
-    literal_failed: []const u8,
+    /// Pop a literal conversion's `Try` result and unwrap it
+    /// (`Builder.finishLiteralConversion`).
+    finish_literal_conversion: FinishLiteralConversion,
     /// Pop a generalized local procedure call's explicit arguments and call
     /// its function value with them after its own scheme's words.
     /// `params` and `ret` are the procedure's signature, `arg_types` the
@@ -181,6 +180,10 @@ pub const Task = union(enum) {
     /// Pop a match guard's value into `cond`, continuing at `next`.
     match_guard_done: struct { cond: LocalId, next: CFStmtId },
 };
+
+/// A literal conversion whose `Try` result is unwrapped: the literal, the
+/// conversion's `Try` type, and the type of the literal's value.
+pub const FinishLiteralConversion = struct { expr: CheckedExprId, kind: LIR.LiteralRejectionKind, try_ty: TypeId, result: TypeId };
 
 /// A control-flow construct's merge of the binders it reassigns (a checked
 /// state merge plan): their values before it, and the join parameters that
@@ -1129,10 +1132,11 @@ pub const Builder = struct {
             .entry_wrapper => |wrapper_id| {
                 const wrapper = self.view.view.entry_wrappers.get(wrapper_id);
                 const root = self.view.view.compile_time_roots.root(wrapper.root);
+                // A conversion root's body is its literal, whose own
+                // conversion runs here (`restoreConversionRoot`).
                 switch (root.kind) {
-                    .expect, .repl_expr, .callable_binding, .constant, .hoisted_constant => {},
+                    .expect, .repl_expr, .callable_binding, .constant, .hoisted_constant, .numeral_conversion, .quote_conversion => {},
                     .hoisted_validation => invariant("a validation root's entry wrapper produces no value for a runtime read to reach"),
-                    .numeral_conversion, .quote_conversion => invariant("a literal conversion root's value is read from its literal table, never by calling its entry wrapper"),
                 }
                 if (params.len != 0) invariant("an entry wrapper has parameters");
                 self.own_root = wrapper.root;
@@ -2360,10 +2364,7 @@ pub const Builder = struct {
             .restore_merge => |merge| try self.restoreMerge(merge),
             .enter_merge => |merge| try self.enterMerge(merge),
             .loop_test => |loop| try self.loopTest(loop.body, loop.head, loop.exit),
-            .literal_failed => |message| {
-                const literal = try self.store.insertString(message);
-                try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal } } });
-            },
+            .finish_literal_conversion => |conversion| try self.finishLiteralConversion(conversion),
             .fill_recursive_slots => |pattern| try self.fillRecursiveSlots(pattern),
             .rejected_for => |plan_id| {
                 _ = self.popValue();
@@ -2563,19 +2564,43 @@ pub const Builder = struct {
     /// reads it instead of computing it: not the root this body computes,
     /// not a root whose evaluation failed (it runs in place), and not a
     /// guarded binding's root, whose declaration keeps its right-hand side.
-    fn storedHoisted(self: *Builder, expr_id: CheckedExprId) ?checked.StoredConstTemplate {
+    fn storedHoisted(self: *Builder, expr_id: CheckedExprId) ?HoistedRead {
         const entry = self.view.view.hoisted_constants.lookupByExpr(expr_id) orelse return null;
         if (self.own_root) |own| if (own == entry.root) return null;
         const root = self.view.view.compile_time_roots.root(entry.root);
         if (root.payload == .runtime) return null;
         if (entry.pattern != null and root.guarded) return null;
         return switch (self.view.view.const_templates.get(entry.const_ref).state) {
-            .stored_const => |stored| stored,
+            .stored_const => |stored| .{ .stored = stored },
             // A polymorphic hoisted value computes at its instance, as its
             // entry procedure would.
             .eval_template => null,
-            .reserved, .unimplemented => invariant("a hoisted root reached runtime lowering without a stored value or an entry procedure"),
+            // A compile-time evaluator reads a value its own level has not
+            // completed only as a member of a group that reads itself.
+            .reserved => if (self.program.input.compile_time) .{ .pending = entry.root } else invariant("a hoisted root reached runtime lowering without a stored value or an entry procedure"),
+            .unimplemented => invariant("a hoisted root reached runtime lowering without a stored value or an entry procedure"),
         };
+    }
+
+    /// What a body reads for a hoisted root: its stored value, or, under a
+    /// compile-time evaluator, a root the evaluator has not completed.
+    const HoistedRead = union(enum) { stored: checked.StoredConstTemplate, pending: checked.ComptimeRootId };
+
+    /// The read of a compile-time value no evaluation has completed, which
+    /// only a group of roots that read each other makes: it fails as the
+    /// recursion that evaluating the value in place would end in, and the
+    /// evaluator retries the reading root once the value completes
+    /// (design.md "Dependency-Ordered Compile-Time Evaluation").
+    fn pendingValueRead(self: *Builder, module_index: ModuleIndex, root: checked.ComptimeRootId, ty: TypeId) Allocator.Error!void {
+        const message = try self.store.insertString(base.stack_overflow.program_message);
+        try self.emitTerminal(.{ .crash = .{
+            .msg = .{ .literal = message },
+            .extra = try self.store.addStmtRow(LIR.CrashExtra, .{ .failed_value = .{
+                .owner = self.program.lowering_module_ids[@backingInt(module_index)],
+                .producer = .{ .checked = root },
+            } }),
+        } });
+        try self.pushValue(try self.localOf(ty, .frame));
     }
 
     pub fn stepExpr(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
@@ -2588,9 +2613,10 @@ pub const Builder = struct {
         }
         // An expression compile-time evaluation hoisted and stored is read
         // (design.md "Runtime Programs Read Stored Values").
-        if (self.storedHoisted(expr_id)) |stored| {
-            return try self.pushStoredRestore(.{ .module = self.module }, stored, try self.exprType(expr_id));
-        }
+        if (self.storedHoisted(expr_id)) |read| switch (read) {
+            .stored => |stored| return try self.pushStoredRestore(.{ .module = self.module }, stored, try self.exprType(expr_id)),
+            .pending => |root| return try self.pendingValueRead(self.module, root, try self.exprType(expr_id)),
+        };
         switch (expr.data) {
             .numeral => |numeral| try self.lowerNumeral(expr_id, numeral),
             .str_segment => |literal| try self.pushValue(try self.strLiteral(self.bodies().stringLiteral(literal))),
@@ -2776,8 +2802,8 @@ pub const Builder = struct {
                 try self.push(.{ .expr = expect_err.expr });
             },
             .str_from_quote => |quote| {
-                if (quote.conversion_root) |root| return try self.restoreConversionRoot(root, expr_id, .quote);
-                if (quote.plan != null) return try self.lowerLiteralTable(expr_id, .quote);
+                if (quote.conversion_root) |root| return try self.restoreConversionRoot(root, expr_id, .quote, quote.plan);
+                if (quote.plan) |plan| return try self.lowerLiteralConversion(expr_id, .quote, plan, try self.exprType(expr_id));
                 try self.pushValue(try self.strLiteral(self.bodies().stringLiteral(quote.literal)));
             },
             .return_ => |ret| {
@@ -2885,8 +2911,8 @@ pub const Builder = struct {
     }
 
     pub fn lowerNumeral(self: *Builder, expr_id: CheckedExprId, numeral: checked.CheckedNumeralData) Allocator.Error!void {
-        if (numeral.conversion_root) |root| return try self.restoreConversionRoot(root, expr_id, .numeral);
-        if (numeral.plan != null) return try self.lowerLiteralTable(expr_id, .numeral);
+        if (numeral.conversion_root) |root| return try self.restoreConversionRoot(root, expr_id, .numeral, numeral.plan);
+        if (numeral.plan) |plan| return try self.lowerLiteralConversion(expr_id, .numeral, plan, try self.exprType(expr_id));
         try self.pushValue(try self.builtinNumeral(numeral.literal, try self.exprType(expr_id)));
     }
 
@@ -2963,133 +2989,120 @@ pub const Builder = struct {
         return local;
     }
 
-    /// A literal whose conversion depends on its instance: the value
-    /// compile-time evaluation converted it to at the instance it has here
-    /// (design.md "Literal Tables"). Each instance the program's
-    /// compile-time specialization converted the literal at is a candidate,
-    /// selected by comparing the literal's descriptor with each candidate
-    /// type's; the selected candidate's stored value is restored, or its
-    /// failed conversion crashes. No user conversion runs here. A literal of
-    /// a builtin type is converted by the builtin rule, which no compile-time
-    /// root runs: a numeral by its number type, a quote as a Str.
-    pub fn lowerLiteralTable(self: *Builder, expr_id: CheckedExprId, kind: LIR.LiteralRejectionKind) Allocator.Error!void {
-        return try self.lowerLiteralTableAt(expr_id, kind, try self.exprType(expr_id));
+    /// A literal whose conversion depends on its instance (design.md
+    /// "Literal Conversions Under `.boxy`"): the literal's checked
+    /// conversion call runs where the literal is evaluated, at the
+    /// instance the body has there, and its `Try` result is unwrapped: the
+    /// `Ok` payload is the literal's value, and an `Err` rejects the literal
+    /// with the conversion's message. No value of the conversion is
+    /// stored; a literal whose conversion is independent of its instance
+    /// has a conversion root instead (`restoreConversionRoot`).
+    pub fn lowerLiteralConversion(self: *Builder, expr_id: CheckedExprId, kind: LIR.LiteralRejectionKind, plan_id: static_dispatch.StaticDispatchPlanId, result_ty: TypeId) Allocator.Error!void {
+        const call_plan = self.dispatchPlan(plan_id);
+        if (call_plan.result_mode != .value) invariant("a literal conversion plan has a non-value result mode");
+        const try_ty = switch (self.program.store.get(try self.convert(call_plan.callable_ty))) {
+            .function => |function| function.ret,
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a literal conversion's callable type is not a function type"),
+        };
+        try self.push(.{ .finish_literal_conversion = .{ .expr = expr_id, .kind = kind, .try_ty = try_ty, .result = result_ty } });
+        try self.lowerDispatchAt(plan_id, try_ty);
     }
 
-    /// `lowerLiteralTable` for a literal whose converted value has type
-    /// `lit_ty`: an interpolation's conversion produces its assembler.
-    pub fn lowerLiteralTableAt(self: *Builder, expr_id: CheckedExprId, kind: LIR.LiteralRejectionKind, lit_ty: TypeId) Allocator.Error!void {
-        const values = self.program.input.literal_values;
-        const indices: []const u32 = if (self.program.literal_entries.get(.{ .module = self.module, .expr = expr_id })) |list| list.items else &.{};
-        // One candidate per converted type.
-        var candidate_types: std.ArrayList(TypeId) = .empty;
-        defer candidate_types.deinit(self.allocator);
-        var candidates: std.ArrayList(u32) = .empty;
-        defer candidates.deinit(self.allocator);
-        for (indices) |index| {
-            const ty = try self.constType(.literals, values.?.entries.items[index].ty);
-            const seen = for (candidate_types.items) |existing| {
-                if (existing == ty) break true;
-            } else false;
-            if (seen) continue;
-            try candidate_types.append(self.allocator, ty);
-            try candidates.append(self.allocator, index);
-        }
-        // A literal of a closed type converted at that type is its value.
-        if (try self.closed(lit_ty)) {
-            for (candidate_types.items, candidates.items) |ty, index| {
-                if (ty != lit_ty) continue;
-                return try self.pushLiteralOutcome(values.?.entries.items[index].outcome, ty, lit_ty);
-            }
-        }
-        if (candidates.items.len == 0) return try self.pushValue(try self.builtinLiteral(expr_id, kind, lit_ty));
-        // Compile-time evaluation converts every interpolation at each type
-        // the program reaches it at, so one of its candidates describes the
-        // literal's type: with one candidate, it is that one.
-        if (kind == .interpolation and candidates.items.len == 1) {
-            return try self.pushLiteralOutcome(values.?.entries.items[candidates.items[0]].outcome, candidate_types.items[0], lit_ty);
-        }
-        const selected = try self.closedLocal(.u32);
-        try self.emitDyn(selected, .{ .desc_index = .{ .desc = try self.descOf(lit_ty), .candidates = try self.argsRecordDesc(candidate_types.items) } });
-        const result = try self.localOf(lit_ty, .frame);
+    /// Pop a literal conversion's `Try` result: push its `Ok` payload at
+    /// the literal's type, or crash as the literal's rejection with the
+    /// `Err` payload's message. The checker fixes every conversion's error
+    /// row to one tag carrying the message (`[InvalidNumeral(Str)]`,
+    /// `[BadQuotedBytes(Str)]`, `[InvalidInterpolation(Str)]`), so the row
+    /// is closed even where the `Ok` payload is an open instance type.
+    fn finishLiteralConversion(self: *Builder, conversion: FinishLiteralConversion) Allocator.Error!void {
+        const store = &self.program.store;
+        const try_value = self.popValue();
+        const try_ty = try self.structuralType(conversion.try_ty);
+        const ok_name = try store.internName("Ok");
+        const err_name = try store.internName("Err");
+        const result = try self.localOf(conversion.result, .frame);
         const join = self.freshJoin();
         const after = try self.declareMergeJoin(join, result, null);
-        const holes = try self.allocator.alloc(CFStmtId, candidates.items.len);
+        // Whether the result is `Ok`: its discriminant against `Ok`'s.
+        const actual = try self.closedLocal(.u32);
+        const expected = try self.closedLocal(.u32);
+        if (try self.closed(try_ty)) {
+            const ok_variant = try self.closedVariant(try_ty, ok_name);
+            const committed = self.program.result.layouts.getLayout(try self.program.layouts.layoutOf(try_ty));
+            if (committed.tag == .tag_union) {
+                try self.emitLinear(.{ .assign_ref = .{ .target = actual, .op = LIR.RefOp.discriminant(try_value), .next = undefined } });
+            } else {
+                try self.emitLinear(.{ .assign_literal = .{ .target = actual, .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u32 } }, .next = undefined } });
+            }
+            try self.emitLinear(.{ .assign_literal = .{ .target = expected, .value = .{ .i64_literal = .{ .value = @intCast(ok_variant.index), .layout_idx = .u32 } }, .next = undefined } });
+        } else {
+            const desc = try self.descOf(try_ty);
+            try self.emitDyn(actual, .{ .tag_discriminant = .{ .base = try_value, .desc = desc } });
+            try self.emitDyn(expected, .{ .tag_discriminant_of = .{ .desc = desc, .name = try self.nameDesc(ok_name) } });
+        }
+        const is_ok = try self.closedLocal(.bool);
+        try self.emitLowLevel(is_ok, .num_is_eq, &.{ actual, expected });
+        const ok_hole = try self.newHole();
+        const err_hole = try self.newHole();
+        try self.emitTerminal(.{ .switch_stmt = .{
+            .cond = is_ok,
+            .branches = try self.store.addCFSwitchBranches(&.{.{ .value = 1, .body = ok_hole }}),
+            .default_branch = err_hole,
+        } });
+        self.hole = ok_hole;
+        const ok = try self.tagPayloadValue(try_value, conversion.try_ty, ok_name, 0);
+        try self.emitJump(join, try self.adaptValue(ok.value, ok.ty, conversion.result));
+        self.hole = err_hole;
+        const err = try self.tagPayloadValue(try_value, conversion.try_ty, err_name, 0);
+        const err_ty = try self.structuralType(err.ty);
+        if (!try self.closed(err_ty)) invariant("a literal conversion's error row is open; the checker closes it");
+        const tags = try self.allocator.dupe(types.Tag, switch (store.get(err_ty)) {
+            .tag_union => |union_ty| store.tagSpan(union_ty.tags),
+            .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a literal conversion's error type is not a tag union"),
+        });
+        defer self.allocator.free(tags);
+        if (tags.len == 0) invariant("a literal conversion's error row has no tag");
+        const site: LIR.LiteralRejectionSite = .{
+            .owner = self.program.lowering_module_ids[@backingInt(self.module)],
+            .checked_expr = @backingInt(conversion.expr),
+            .kind = conversion.kind,
+        };
+        // Each tag of the row carries the message as its one payload.
+        const holes = try self.allocator.alloc(CFStmtId, tags.len);
         defer self.allocator.free(holes);
-        for (holes) |*hole| hole.* = try self.newHole();
-        if (kind == .interpolation) {
-            // Some candidate describes the literal's type: the last is
-            // the one no earlier candidate is.
-            const branches = try self.allocator.alloc(LIR.CFSwitchBranch, candidates.items.len - 1);
+        if (tags.len == 1) {
+            holes[0] = self.hole.?;
+        } else {
+            for (holes) |*hole| hole.* = try self.newHole();
+            const branches = try self.allocator.alloc(LIR.CFSwitchBranch, tags.len - 1);
             defer self.allocator.free(branches);
             for (branches, holes[0..branches.len], 0..) |*branch, hole, position| branch.* = .{ .value = position, .body = hole };
-            try self.emitTerminal(.{ .switch_stmt = .{ .cond = selected, .branches = try self.store.addCFSwitchBranches(branches), .default_branch = holes[holes.len - 1] } });
-        } else {
-            const branches = try self.allocator.alloc(LIR.CFSwitchBranch, candidates.items.len);
-            defer self.allocator.free(branches);
-            for (branches, holes, 0..) |*branch, hole, position| branch.* = .{ .value = position, .body = hole };
-            const builtin_hole = try self.newHole();
-            try self.emitTerminal(.{ .switch_stmt = .{ .cond = selected, .branches = try self.store.addCFSwitchBranches(branches), .default_branch = builtin_hole } });
-            // No candidate describes the literal's type: it is a builtin type.
-            self.hole = builtin_hole;
-            try self.emitJump(join, try self.builtinLiteral(expr_id, kind, lit_ty));
+            const discriminant = try self.closedLocal(.u32);
+            try self.emitLinear(.{ .assign_ref = .{ .target = discriminant, .op = LIR.RefOp.discriminant(err.value), .next = undefined } });
+            try self.emitTerminal(.{ .switch_stmt = .{ .cond = discriminant, .branches = try self.store.addCFSwitchBranches(branches), .default_branch = holes[holes.len - 1] } });
         }
-        // Pushed in reverse execution order: each candidate's branch, then
-        // what follows the literal.
-        try self.push(.{ .push_value = result });
-        try self.push(.{ .resume_at = after });
-        var position = candidates.items.len;
-        while (position > 0) {
-            position -= 1;
-            switch (values.?.entries.items[candidates.items[position]].outcome) {
-                .value => |node| {
-                    try self.push(.{ .jump = join });
-                    try self.push(.{ .retag = .{ .from = candidate_types.items[position], .to = lit_ty } });
-                    try self.push(.{ .restore = .{ .source = .literals, .node = node, .ty = candidate_types.items[position] } });
-                },
-                .failed => |message| try self.push(.{ .literal_failed = message }),
-            }
-            try self.push(.{ .resume_at = holes[position] });
+        for (tags, holes, 0..) |tag, hole, index| {
+            self.hole = hole;
+            const payloads = store.span(tag.payloads);
+            if (payloads.len != 1) invariant("a literal conversion's error tag does not carry one message");
+            const message = try self.readTagPayload(err.value, err_ty, index, payloads, 0);
+            try self.emitTerminal(.{ .crash = .{
+                .msg = .{ .local = message },
+                .extra = try self.store.addStmtRow(LIR.CrashExtra, .{ .literal_rejection = site }),
+            } });
         }
-    }
-
-    /// The value of a literal table's entry at the literal's type `lit_ty`,
-    /// the entry's own closed type being `ty`.
-    fn pushLiteralOutcome(self: *Builder, outcome: @import("literal_values.zig").LiteralValues.Outcome, ty: TypeId, lit_ty: TypeId) Allocator.Error!void {
-        switch (outcome) {
-            .value => |node| {
-                if (ty != lit_ty) try self.push(.{ .retag = .{ .from = ty, .to = lit_ty } });
-                try self.push(.{ .restore = .{ .source = .literals, .node = node, .ty = ty } });
-            },
-            .failed => |message| try self.crashValue(message, lit_ty),
-        }
-    }
-
-    /// A literal at the builtin type its descriptor names: a numeral by its
-    /// number type, a quote as the Str it spells.
-    fn builtinLiteral(self: *Builder, expr_id: CheckedExprId, kind: LIR.LiteralRejectionKind, lit_ty: TypeId) Allocator.Error!LocalId {
-        return switch (kind) {
-            .numeral => try self.descriptorNumeral(self.bodies().expr(expr_id).data.numeral.literal, lit_ty),
-            .quote => blk: {
-                const text = try self.strLiteral(self.bodies().stringLiteral(self.bodies().expr(expr_id).data.str_from_quote.literal));
-                const str_ty = try self.program.store.primitive(.str);
-                if (lit_ty == str_ty) break :blk text;
-                const adapted = try self.localOf(lit_ty, .frame);
-                try self.emitDyn(adapted, .{ .adapt = .{ .src = text, .from = try self.descOf(str_ty), .to = try self.descOf(lit_ty) } });
-                break :blk adapted;
-            },
-            .interpolation => invariant("compile-time evaluation converted no instance of a reached interpolation"),
-        };
+        self.hole = after;
+        try self.pushValue(result);
     }
 
     /// A literal with a conversion root of its own: the root's stored value
-    /// (design.md "Runtime Programs Read Stored Values"). A root whose type
-    /// holds a variable no evaluation requests; the program converts the
-    /// literal per instance instead, as a literal table.
-    pub fn restoreConversionRoot(self: *Builder, root_id: checked.ComptimeRootId, expr_id: CheckedExprId, kind: LIR.LiteralRejectionKind) Allocator.Error!void {
+    /// (design.md "Runtime Programs Read Stored Values"). A root no
+    /// evaluation completed converts the literal where it is evaluated, as
+    /// an instance-dependent literal does.
+    pub fn restoreConversionRoot(self: *Builder, root_id: checked.ComptimeRootId, expr_id: CheckedExprId, kind: LIR.LiteralRejectionKind, plan_id: ?static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
         switch (self.view.view.compile_time_roots.root(root_id).payload) {
             .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = try self.exprType(expr_id) } }),
-            .pending, .unevaluated => try self.lowerLiteralTable(expr_id, kind),
+            .pending, .unevaluated => try self.lowerLiteralConversion(expr_id, kind, plan_id orelse invariant("a literal with a conversion root has no conversion plan"), try self.exprType(expr_id)),
             inline .fn_value, .discarded, .expect, .runtime => |_, tag| invariantFmt("a literal conversion root holding {s} reached runtime lowering", .{@tagName(tag)}),
         }
     }
@@ -3101,11 +3114,11 @@ pub const Builder = struct {
             .function => |function| function.ret,
             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("an interpolation's conversion type is not a function type"),
         };
-        // The conversion's assembler is read from the interpolation's
-        // literal table, as compile-time evaluation produced it.
+        // The conversion's `Ok` payload is the assembler the interpolation
+        // calls with its values.
         const assembler_ty = try self.tryOkPayload(try_ty);
         try self.push(.{ .finish_interpolation = expr_id });
-        try self.lowerLiteralTableAt(expr_id, .interpolation, assembler_ty);
+        try self.lowerLiteralConversion(expr_id, .interpolation, plan_id, assembler_ty);
     }
 
     /// The `Ok` payload type of the `Try` type `try_ty`.
@@ -3766,7 +3779,14 @@ pub const Builder = struct {
                 self.region = unimplemented.region;
                 try self.crashValue(@import("../common.zig").unimplemented_declaration_crash, ty);
             },
-            .reserved => invariant("a constant read at runtime was not stored by compile-time evaluation"),
+            .reserved => {
+                if (!self.program.input.compile_time) invariant("a constant read at runtime was not stored by compile-time evaluation");
+                const root = switch (use.const_ref.owner) {
+                    .top_level_binding => |top_level| owner.view.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse invariant("a reserved constant has no compile-time root"),
+                    .hoisted_expr => |hoisted| (owner.view.hoisted_constants.lookupByExpr(hoisted.expr) orelse invariant("a reserved hoisted constant has no hoisted entry")).root,
+                };
+                try self.pendingValueRead(owner.index, root, ty);
+            },
         }
     }
 

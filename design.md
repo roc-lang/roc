@@ -15080,24 +15080,27 @@ parallel.
 
 #### Caching Under `.boxy`
 
-With `--specialize=no`, the compiler today writes nothing to any cache after
-the `roc check` work completes. Checked module and composition entries, the
-canonicalized module cache, and the compile-time evaluation results `roc
-check` produces (including `ConstStore` constants and the compile-time object
-cache that evaluation itself uses) are written exactly as `roc check` writes
-them. Lowered output, dev packs, run object caches, optimized packs, and
+With `--specialize=no`, the compiler writes what `roc check` writes, plus one
+object per module. Checked module and composition entries, the canonicalized
+module cache, and the compile-time evaluation results `roc check` produces
+(`ConstStore` constants, and the compile-time object cache the Solved
+evaluator uses for the roots it still evaluates) are written exactly as `roc
+check` writes them. Dev packs, run object caches, optimized packs, and
 recorded program outputs are not written, and the compile-time packs and
 discovery summaries are filed where `roc check` files them, whatever the
-command. `roc check`, `roc build`, and `roc run` with `--specialize=no`
-therefore leave identical cache contents for the same sources. `roc test`
-checks its root for explicit test roots (`Validation.explicit_roots`), which is
-its own check under either strategy, and with `--specialize=no` it leaves
-exactly what that check leaves. `roc check` accepts `--specialize` and `--opt`
-and ignores both, so the same command line can be used across commands.
+command. `roc check` and `roc run` with `--specialize=no` therefore leave
+identical cache contents for the same sources, and `roc build` adds exactly
+its module objects (`compile.boxy_object_cache`, the `boxy_object` family).
+`roc test` checks its root for explicit test roots
+(`Validation.explicit_roots`), which is its own check under either strategy,
+and with `--specialize=no` it leaves exactly what that check leaves. `roc
+check` accepts `--opt` and ignores it; it honors `--specialize`, because the
+strategy selects the compile-time evaluator and so is part of every checked
+module's cache identity (`CheckingContextIdentity.evaluation_strategy`): a
+module checked under one strategy is never served to the other.
 
-The per-module Boxy cache is designed to be exactly as simple as the
-checked-module cache, and Per-Module Output is the invariant that makes it
-possible:
+The per-module Boxy cache is exactly as simple as the checked-module cache,
+and Per-Module Output is the invariant that makes it possible:
 
 - The KEY of a module's lowered output is the module's checked-module cache
   key (its content identity plus its direct imports' checked keys, which
@@ -15129,13 +15132,52 @@ their specializations are inherently cross-module and keep their own caches.
 
 ### Compile-Time Evaluation Strategy
 
-`--specialize` does not affect compile-time evaluation during checking
-finalization. Compile-time evaluation always selects `.lss` explicitly, uses
-the existing checked-finalization pipeline described in Compile-Time Constants,
-runs the LIR interpreter or native dev evaluator, and stores checked values in
-`ConstStore`. Runtime `.boxy` builds do not make compile-time roots use
-descriptors or dictionaries. A `.boxy` body that restores a stored constant
-emits ordinary construction statements for the constant's checked type.
+`--specialize` selects the compile-time evaluator as well as the runtime
+lowering (`CompileTimeFinalization.Options.strategy`). Under `.lss`,
+compile-time evaluation specializes the pending roots into a Solved program
+and evaluates it in dependency-ordered stages, as Compile-Time Constants
+describes. Under `.boxy`, the `.boxy` compile-time evaluator
+(`finalizeProgramBoxy`) orders the pending roots by the values they read,
+computed from the checked modules alone (`eval/checked_root_graph.zig`: a
+root's wrapper template and every template it reaches through its value
+references, in any module of the program, with every read a dependency), and
+lowers each level as one `.boxy` program of compile-time roots
+(`TargetConfig.boxy_compile_time`). The roots of a level read every earlier
+level's values from their modules' constant stores, exactly as a runtime
+`.boxy` program reads stored values, and each root's value is stored by the
+plan and stored type its own result type gives it
+(`postcheck/boxy/const_schema.zig`). A group of roots that read each other is
+evaluated in passes: each pass lowers the members not yet completed, in which
+a read of another such member crashes as the recursion evaluating it in
+place would end in (`CrashExtra.failed_value`), and a member that failed only
+by such a read runs again once another completes. Both evaluators run the
+same LIR interpreter or native dev evaluator and store the same checked
+values, so a `.boxy` runtime program restores constants the same way under
+either, and reports the same diagnostics.
+
+A root whose value holds a function value (anywhere in its type, or a
+callable binding) is evaluated by the Solved evaluator under either strategy.
+A stored function value restores through the checked dispatch evidence its
+evaluation recorded (`ConstStore.FnDef`), which specialization has statically
+for every closure it creates; a `.boxy` function value carries runtime
+descriptors and dictionaries instead, which name neither the checked
+evidence nor a nominal's phantom arguments, so a `.boxy` evaluation has
+nothing to store such a value by. The `.boxy` evaluator specializes exactly
+those roots, one Solved program per level (`RootFilter`), and the group they
+belong to with them.
+
+A `.boxy` program converts an instance-dependent literal where it is
+evaluated: the checked `from_numeral`, `from_quote`, or interpolation
+dispatch plan runs at the instance the body has there, and its `Try` result
+is unwrapped in place (`Builder.finishLiteralConversion`), the `Ok` payload
+being the value and an `Err` rejecting the literal with the conversion's
+message, under the one-tag error row the checker fixes for every conversion.
+No literal root is registered and no converted value is stored for such a
+literal; a literal whose conversion is independent of its instance has a
+conversion root, evaluated like any other root, whose stored value every use
+restores. A rejected literal in a generic body is therefore reported where
+the Solved evaluator's discovery would report it only when a compile-time
+root reaches the literal; a runtime body reports it when it runs.
 
 ### Strategy Equivalence Tests
 
@@ -23965,10 +24007,9 @@ call, and then the graph orders the member's reads before the stage, so a
 member that does not run may read a value a later level evaluates. The stage
 reserves that value's slot uninitialized: no code it runs reads it, and later
 levels and the runtime consumer compile their own members against the
-completed value. A Boxy program has no Solved program; its literal roots take
-the same order from its own LIR (`CompileTimeRootGraph`), where a Boxy
-dictionary call, comparison, hash, or inspection is a value call that may
-run any of the program's Boxy workers.
+completed value. The `.boxy` compile-time evaluator has no Solved program;
+it orders its roots from the checked modules alone
+(`eval/checked_root_graph.zig`, see Compile-Time Evaluation Strategy).
 
 Each level is lowered as its own consumer of the Solved program once every
 level before it has run: a completed value that lowers as a construction is

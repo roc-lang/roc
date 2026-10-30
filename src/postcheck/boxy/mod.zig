@@ -7,7 +7,6 @@ pub const Layouts = @import("layouts.zig");
 pub const StaticDescs = @import("static_descs.zig");
 pub const Body = @import("body.zig");
 pub const Match = @import("match.zig");
-pub const LiteralValues = @import("literal_values.zig").LiteralValues;
 
 /// Lower checked modules to LIR under `.boxy`.
 pub const run = Lower.run;

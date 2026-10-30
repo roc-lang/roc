@@ -1502,6 +1502,11 @@ pub const Coordinator = struct {
     checked_program: bool = false,
     runtime_lowering: ?compile_build.RuntimeLoweringConfig = null,
     runtime_output_probe: ?compile_build.RuntimeOutputProbe = null,
+    /// The strategy whose compile-time evaluator completes every module's
+    /// compile-time roots: `.boxy` under `--specialize=no`, `.lss`
+    /// otherwise (design.md "Caching Under `.boxy`"). It is part of each
+    /// checked module's cache identity.
+    specialization_strategy: base.SpecializationStrategy = .lss,
     /// A completed result owns the semantic outcome independently of checked
     /// modules, which can remain prepared when no live finalization is needed.
     compilation_result: union(enum) { live, recorded: *const completed.Outcome } = .live,
@@ -3358,6 +3363,7 @@ pub const Coordinator = struct {
             .include_internal_static_data = config.include_internal_static_data,
         } else .{};
         var options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, &self.ctfe_timing);
+        options.strategy = self.specialization_strategy;
         options.post_check_executor = self.postCheckExecutor();
         options.cancel_request = self.cancel_request;
         options.object_cache = self.compile_time_object_cache;
@@ -3516,6 +3522,9 @@ pub const Coordinator = struct {
         const serialized: *const CheckedArtifact.CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(buffer.ptr));
         serialized.validate(buffer.len) catch return;
         if (!std.mem.eql(u8, &serialized.key.bytes, &previous_key)) return;
+        // A value another strategy's evaluator stored is restored by that
+        // strategy's programs alone.
+        if (serialized.checking_context_identity.evaluation_strategy.value != artifact.checking_context_identity.evaluation_strategy) return;
         var previous = eval.CompileTimeReuse.Previous.fromSerialized(serialized, self.gpa);
         var previous_owned = true;
         defer if (previous_owned) previous.deinit();
@@ -4295,6 +4304,7 @@ pub const Coordinator = struct {
             self.gpa,
             env,
             .{
+                .evaluation_strategy = self.specialization_strategy,
                 .imports = imported_artifacts,
                 .platform_requirement_context = platform_requirement_context,
                 .explicit_roots = explicit_roots,
@@ -7010,7 +7020,8 @@ pub const Coordinator = struct {
         var local_ctfe_timing = eval.CompileTimeFinalization.Timing.init(self.roc_ctx.std_io);
         if (self.detailed_lowering_timing) local_ctfe_timing.lowering.enableDetailedMonotypeBody();
         const ctfe_timing = &local_ctfe_timing;
-        const ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing);
+        var ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing);
+        ctfe_options.strategy = self.specialization_strategy;
         // Import resolution runs inside the type-check task and records its
         // own diagnostics on the env, after the canonicalize task already
         // reported the ones canonicalization recorded.
@@ -7029,6 +7040,7 @@ pub const Coordinator = struct {
             task.validation,
             task.source_pin_validation,
             ctfe_options,
+            self.specialization_strategy,
             .{ .explicit = task.deferred_imports },
             task.missing_public_types,
             if (self.cache_entry_dirs.inference) |directory| .{ .manager = self.cache_manager.?, .directory = directory } else null,

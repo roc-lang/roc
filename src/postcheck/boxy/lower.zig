@@ -23,6 +23,8 @@ const Layouts = @import("layouts.zig").Layouts;
 const StaticDescs = @import("static_descs.zig").StaticDescs;
 const Body = @import("body.zig");
 const Codec = @import("codec.zig");
+const const_schema = @import("const_schema.zig");
+const ConstSchema = const_schema.ConstSchema;
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
@@ -50,9 +52,13 @@ pub const Input = struct {
     list_in_place_map: bool = false,
     /// Record each platform entrypoint's host boundary digest.
     host_boundary_digests: bool = false,
-    /// The values compile-time evaluation converted the program's
-    /// instance-dependent literals to, when the program was evaluated.
-    literal_values: ?*const @import("literal_values.zig").LiteralValues = null,
+    /// The lowering is a compile-time evaluator's: its roots are
+    /// compile-time roots, each lowered with the plan and stored type the
+    /// store writer keeps its value by (`LirProgram.ConstRootPlan`), and a
+    /// read of a compile-time value no evaluation has completed crashes as
+    /// a read of a failed value, which the evaluator retries once the value
+    /// completes (design.md "Dependency-Ordered Compile-Time Evaluation").
+    compile_time: bool = false,
     /// What this lowering emits: one program, or one module's object.
     unit: Unit = .program,
 };
@@ -221,9 +227,8 @@ pub const WorkerKey = union(enum) {
 /// Why a dictionary slot's method crashes.
 pub const CrashDictionary = enum { checked_error, unreachable_value };
 
-/// Where a stored constant lives: a checked module's constant store, or the
-/// program's converted literal values (`Input.literal_values`).
-pub const ConstSource = union(enum) { module: ModuleIndex, literals };
+/// Where a stored constant lives: a checked module's constant store.
+pub const ConstSource = union(enum) { module: ModuleIndex };
 
 /// Whether `primitive` is a 128-bit SIMD vector.
 fn descFormatIsVector(primitive: types.Primitive) bool {
@@ -409,9 +414,9 @@ pub const Program = struct {
     lowering_module_ids: []LIR.LoweringModuleId = &.{},
     /// Modules by the checker's `module_idx`.
     by_module_idx: std.AutoHashMapUnmanaged(u32, ModuleIndex) = .empty,
-    /// The converted values of each instance-dependent literal, by the
-    /// literal: indices into `Input.literal_values.entries`.
-    literal_entries: std.AutoHashMapUnmanaged(ExprKey, std.ArrayList(u32)) = .empty,
+    /// The constant store plans and stored types of the compile-time roots
+    /// this lowering evaluates (`ConstSchema`).
+    const_schema: ConstSchema = .{},
     /// The app type each platform requirement identity variable takes
     /// (`types.Converter.platform_identities`).
     platform_identities: std.AutoHashMapUnmanaged(types.Converter.IdentityKey, TypeId) = .empty,
@@ -595,7 +600,6 @@ pub const Program = struct {
     pub fn constStore(self: *const Program, source: ConstSource) *const check.ConstStore.ConstStore {
         return switch (source) {
             .module => |index| self.module(index).view.const_store,
-            .literals => &(self.input.literal_values orelse invariant("a literal table names values no evaluation converted")).store,
         };
     }
 
@@ -603,7 +607,6 @@ pub const Program = struct {
     pub fn constNames(self: *const Program, source: ConstSource) *const checked_names.CanonicalNameStore {
         return switch (source) {
             .module => |index| self.module(index).nameStore(),
-            .literals => &(self.input.literal_values orelse invariant("a literal table names values no evaluation converted")).names,
         };
     }
 
@@ -1850,11 +1853,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         program.exported_bindings.deinit(allocator);
         program.callable_eval_by_pattern.deinit(allocator);
         program.platform_identities.deinit(allocator);
-        {
-            var entries = program.literal_entries.valueIterator();
-            while (entries.next()) |list| list.deinit(allocator);
-            program.literal_entries.deinit(allocator);
-        }
+        program.const_schema.deinit(allocator);
         program.wrapper_by_root.deinit(allocator);
         program.hosted.deinit(allocator);
         program.local_scopes.deinit(allocator);
@@ -1891,16 +1890,6 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         }
         for (view.view.entry_wrappers.wrappers.items) |wrapper| {
             try program.wrapper_by_root.put(allocator, .{ .module = view.index, .root = wrapper.root }, wrapper.template);
-        }
-    }
-    if (input.literal_values) |values| {
-        for (values.entries.items, 0..) |entry, index| {
-            // The values are the program's; a module unit lowers the
-            // literals of its own modules.
-            const module = program.modules.find(entry.module) orelse continue;
-            const slot = try program.literal_entries.getOrPut(allocator, .{ .module = module.index, .expr = entry.expr });
-            if (!slot.found_existing) slot.value_ptr.* = .empty;
-            try slot.value_ptr.append(allocator, @intCast(index));
         }
     }
     try solvePlatformIdentities(&program);
@@ -1965,8 +1954,24 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             program.modules.views.items[0].index
         else
             program.moduleByKey(input.roots.source_modules[index]).index;
-        const proc = try lowerRoot(&program, request, @intCast(index), source_module);
+        const worker_id = try lowerRoot(&program, request, @intCast(index), source_module);
+        const proc = program.worker(worker_id).proc;
         try program.result.root_procs.append(allocator, proc);
+        // A compile-time evaluator stores each root's value by the plan
+        // and stored type of the root's own result type.
+        if (request.abi == .compile_time) {
+            if (!input.compile_time) invariant("a compile-time root reached a lowering that evaluates none");
+            const ret = program.worker(worker_id).ret;
+            try program.result.const_roots.append(allocator, .{
+                .root_order = @intCast(index),
+                .owner = program.lowering_module_ids[@backingInt(source_module)],
+                .request = request,
+                .proc = proc,
+                .ret_layout = try program.layouts.layoutOf(ret),
+                .ret_type = try const_schema.constTypeOf(&program, ret),
+                .plan = try const_schema.constPlanOf(&program, ret),
+            });
+        }
         var metadata = RootMetadata.fromCheckedRoot(request);
         metadata.test_plan = Common.testPlanMetadataForRoot(input.roots, request, index);
         if (input.host_boundary_digests and request.abi == .platform) {
@@ -2165,9 +2170,9 @@ fn solvePlatformIdentities(program: *Program) Allocator.Error!void {
     }
 }
 
-/// A root's procedure: its template's worker, which a host-shaped wrapper
-/// would call with static hidden arguments when the worker has any.
-fn lowerRoot(program: *Program, request: checked.RootRequest, index: u32, source_module: ModuleIndex) Allocator.Error!LIR.LirProcSpecId {
+/// A root's worker: its template's, which a host-shaped wrapper would call
+/// with static hidden arguments when the worker has any.
+fn lowerRoot(program: *Program, request: checked.RootRequest, index: u32, source_module: ModuleIndex) Allocator.Error!WorkerId {
     // A root whose target takes no hidden arguments is the target itself.
     const direct: ?checked_names.ProcedureTemplateRef = if (request.procedure_template) |template|
         template
@@ -2179,9 +2184,9 @@ fn lowerRoot(program: *Program, request: checked.RootRequest, index: u32, source
     if (direct) |template| {
         const id = try program.templateRefWorker(template);
         const worker = program.worker(id);
-        if (worker.scheme_vars.len == 0 and worker.dictionary_params.len == 0) return worker.proc;
+        if (worker.scheme_vars.len == 0 and worker.dictionary_params.len == 0) return id;
     }
-    return program.worker(try program.rootWorker(index, request, source_module)).proc;
+    return try program.rootWorker(index, request, source_module);
 }
 
 /// The host boundary digest of a platform entrypoint: the types and layouts

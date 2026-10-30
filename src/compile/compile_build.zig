@@ -238,6 +238,9 @@ pub const BuildEnv = struct {
     // Actor model coordinator (owns all mutable compilation state)
     coordinator: ?*Coordinator = null,
     runtime_lowering: ?RuntimeLoweringConfig = null,
+    /// The strategy whose compile-time evaluator completes every module's
+    /// compile-time roots (`Coordinator.specialization_strategy`).
+    specialization_strategy: base.SpecializationStrategy = .lss,
     runtime_output_probe: ?RuntimeOutputProbe = null,
     debug_observer: ?eval.CompileTimeFinalization.DebugObserver = null,
     /// Instrumentation only; never participates in checked or object identity.
@@ -1080,6 +1083,7 @@ pub const BuildEnv = struct {
             self.cache_manager,
             self.filesystem,
         );
+        coord.specialization_strategy = self.specialization_strategy;
         coord.source_pin_version = self.source_pin_version;
         if (self.staged_entry_user_path) |user_path| {
             if (self.discovered_root_abs) |staged_path| coord.staged_entry = .{ .staged_path = staged_path, .user_path = user_path };
@@ -1133,6 +1137,13 @@ pub const BuildEnv = struct {
         if (self.recorded_completion != null) return true;
         const coordinator = self.coordinator orelse return false;
         return coordinator.compilation_result == .recorded;
+    }
+
+    /// Set the strategy whose compile-time evaluator completes every
+    /// module's compile-time roots, before any module is checked.
+    pub fn setSpecializationStrategy(self: *BuildEnv, strategy: base.SpecializationStrategy) void {
+        if (self.coordinator) |coordinator| coordinator.specialization_strategy = strategy;
+        self.specialization_strategy = strategy;
     }
 
     pub fn setRuntimeLowering(self: *BuildEnv, config: RuntimeLoweringConfig) void {
