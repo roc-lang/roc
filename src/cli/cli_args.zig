@@ -294,6 +294,7 @@ pub const DocsArgs = struct {
     no_cache: bool = false, // disable cache
     verbose: bool = false, // enable verbose output
     serve: bool = false, // start an HTTP server after generating docs
+    search_config: ?[]const u8 = null, // optional tab-separated search categories, documents, and terms
     with_lang_ref: bool = false, // include the language reference articles from docs/langref
     builtins: bool = false, // document the builtin module embedded in this compiler instead of a file
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
@@ -999,6 +1000,7 @@ const commands = [_]Command{
             .{ .name = "--main", .form = .attached, .field = "main", .value_name = "<main>", .help = "The .roc file of the main app/package module to resolve dependencies from" },
             .{ .name = "--output", .form = .attached, .field = "output", .value_name = "<dir>", .help = "Output directory for generated documentation" },
             .{ .name = "--serve", .field = "serve", .help = "Start an HTTP server to view the documentation" },
+            .{ .name = "--search-config", .form = .attached, .field = "search_config", .value_name = "<file>", .help = "Add search categories, documents, and curated terms from a TSV file" },
             .{ .name = "--with-lang-ref", .field = "with_lang_ref", .help = "Include the language reference articles from docs/langref" },
             .{ .name = "--builtins", .field = "builtins", .help = "Document the builtins of this roc compiler instead of a .roc file" },
             .{ .name = "--time", .field = "time", .help = "Print timing information for each compilation phase. Will not print anything if everything is cached." },
@@ -2202,6 +2204,12 @@ test "roc version" {
     }
 }
 
+test "roc docs search config" {
+    const result = try parse(testing.allocator, testing.io, &.{ "docs", "--search-config=search.tsv" });
+    defer result.deinit(testing.allocator);
+    try testing.expectEqualStrings("search.tsv", result.docs.search_config.?);
+}
+
 test "roc docs" {
     const gpa = testing.allocator;
     {
@@ -3307,14 +3315,15 @@ test "golden help: roc docs --help" {
         \\  [ROC_FILE]  The .roc file to generate docs for [default: main.roc]
         \\
         \\Options:
-        \\      --main=<main>    The .roc file of the main app/package module to resolve dependencies from
-        \\      --output=<dir>   Output directory for generated documentation [default: generated-docs]
-        \\      --serve          Start an HTTP server to view the documentation
-        \\      --with-lang-ref  Include the language reference articles from docs/langref
-        \\      --builtins       Document the builtins of this roc compiler instead of a .roc file
-        \\      --time           Print timing information for each compilation phase. Will not print anything if everything is cached.
-        \\      --no-cache       Disable caching
-        \\      --verbose        Enable verbose output including cache statistics
+        \\      --main=<main>           The .roc file of the main app/package module to resolve dependencies from
+        \\      --output=<dir>          Output directory for generated documentation [default: generated-docs]
+        \\      --serve                 Start an HTTP server to view the documentation
+        \\      --search-config=<file>  Add search categories, documents, and curated terms from a TSV file
+        \\      --with-lang-ref         Include the language reference articles from docs/langref
+        \\      --builtins              Document the builtins of this roc compiler instead of a .roc file
+        \\      --time                  Print timing information for each compilation phase. Will not print anything if everything is cached.
+        \\      --no-cache              Disable caching
+        \\      --verbose               Enable verbose output including cache statistics
         \\      --replace-dep OLD NEW    Load NEW wherever a dependency declares exactly OLD, for this invocation only.
         \\                               Each is a complete package URL or a path to a root .roc file; repeatable.
         \\                               Run `roc deps` to see the declared sources
@@ -3322,7 +3331,7 @@ test "golden help: roc docs --help" {
         \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
         \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
         \\                               Also caps each platform bundle during extraction
-        \\  -h, --help           Print help
+        \\  -h, --help                  Print help
         \\
     );
 }

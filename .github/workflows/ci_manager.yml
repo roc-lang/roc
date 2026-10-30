@@ -180,6 +180,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: zig build minici -- --minici-verify-workflows
 
+      - name: Test documentation search
+        if: ${{ !cancelled() }}
+        run: node --test test/docs-search/search.test.cjs
+
       # Not a MiniCI job; covers ci/tidy.zig itself.
       - name: Run tidy unit tests
         if: ${{ !cancelled() }}
