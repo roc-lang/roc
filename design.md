@@ -3670,10 +3670,19 @@ producer's checked dependency identity (`test_rows`) when an imported entry
 changes. This identity includes the referenced implementations, checked type
 contexts, checking policy, and file inputs. Admission requires both the value
 and its stored type to contain no named type, field default, callable or other
-module-version reference, and its recorded root-read set to be empty. These
-conditions are checked against the previous committed result, not guessed from
-source syntax. Debug observations are copied and replayed in the ordinary root
-order. Values carrying version-specific references keep their entry-key
+module-version reference, and every recorded root read to retain its
+producer-authored value identity.
+When committing a checked module, the coordinator records each read's source
+placement, semantic root site and semantic value identity beside its exact
+module key and root id. Reuse resolves these placements and sites in the current
+checked program, checks every value identity, and installs the reads under the
+current module keys and root ids. This includes reads of roots in the same
+module, imported constants and transitive reads. Builtins and retained platform
+interface artifacts keep exact version keys in place of source placements.
+An absent producer, changed input or missing optional read identity makes the
+candidate a cache miss. These conditions are checked against the previous
+committed result, not guessed from source syntax. Debug observations are copied
+and replayed in the ordinary root order. Values carrying version-specific references keep their entry-key
 identity contract; checked equality alone does not authorize retaining an old
 checked-type occurrence or root id. Verification builds independently evaluate
 and compare these transplants just like other compile-time value reuse.
