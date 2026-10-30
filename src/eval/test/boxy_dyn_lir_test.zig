@@ -56,14 +56,15 @@ const TestError = std.mem.Allocator.Error || Interpreter.Error || @import("llvm_
 };
 const wasm_word_size: u32 = base.target.TargetUsize.u32.size();
 
-fn testName(comptime text: []const u8, comptime id: u32) boxy.Name {
-    return .{ .id = id, .len = text.len, .bytes = text.ptr };
+fn testName(comptime text: []const u8) boxy.Name {
+    @setEvalBranchQuota(200_000);
+    return .{ .id = boxy.labelId(text), .len = text.len, .bytes = text.ptr };
 }
 
-var name_a = testName("a", 1);
-var name_b = testName("b", 2);
-var name_err = testName("Err", 3);
-var name_ok = testName("Ok", 4);
+var name_a = testName("a");
+var name_b = testName("b");
+var name_err = testName("Err");
+var name_ok = testName("Ok");
 
 /// An immortal object a static-data slot addresses.
 const StaticObject = union(enum) {
@@ -266,7 +267,7 @@ const Builder = struct {
         const bytes = try allocator.alloc(u8, name_layout.size);
         errdefer allocator.free(bytes);
         @memset(bytes, 0);
-        std.mem.writeInt(u32, bytes[name_layout.of(.id)..][0..4], name.id, .little);
+        @memcpy(bytes[name_layout.of(.id)..][0..32], &boxy.desc.nameIdDigest(name.id));
         std.mem.writeInt(u32, bytes[name_layout.of(.len)..][0..4], name.len, .little);
         const relocations = try allocator.alloc(StaticDataRelocation, 1);
         errdefer allocator.free(relocations);

@@ -8001,13 +8001,17 @@ pub const Interpreter = struct {
     /// Descriptors, dictionary callables, and dictionary records that `.boxy`
     /// operations compose while this interpreter runs, with their interning
     /// tables. All of it is immortal until the interpreter is destroyed.
+    /// The program's composition state (`boxy.compiled.InProcessState`) is
+    /// current on the interpreter's thread for as long as it exists, so the
+    /// runtime's own walkers and adapters, which the interpreter calls,
+    /// compose into the same tables.
     const BoxyImmortals = struct {
         arena: std.heap.ArenaAllocator,
         /// Descriptor composition allocates through these ops: arena memory,
         /// with a crash delivered to the running evaluation.
         ops: RocOps,
         roc_env: *InterpreterRocEnv,
-        cache: boxy.Cache = .{},
+        composition: Composition,
         /// Dictionary callables and records, keyed by constructor tag and
         /// operand words.
         dictionaries: std.HashMapUnmanaged([]const u64, [*]u8, WordsContext, std.hash_map.default_max_load_percentage) = .empty,
@@ -8015,8 +8019,44 @@ pub const Interpreter = struct {
         const dict_compose_tag: u64 = 1;
         const dict_record_tag: u64 = 2;
 
+        /// Where composition interns. A platform's runtime allocates
+        /// through its host symbols whatever ops it is given, so there
+        /// composition interns in the process-global cache and its
+        /// descriptors live as long as the process; in the compiler's
+        /// process the interpreter's program owns its state and keeps it
+        /// current on its thread.
+        const Composition = if (builtins.host_abi.host_role == .platform) struct {
+            fn create(_: Allocator) Allocator.Error!@This() {
+                return .{};
+            }
+
+            fn destroy(_: *@This()) void {}
+
+            fn cache(_: *@This()) *boxy.Cache {
+                return &boxy.compose.process_cache;
+            }
+        } else struct {
+            state: *boxy.compiled.InProcessState,
+            entered: boxy.compiled.InProcessState.Entered,
+
+            fn create(allocator: Allocator) Allocator.Error!@This() {
+                const state = try boxy.compiled.InProcessState.create(allocator);
+                return .{ .state = state, .entered = state.enter() };
+            }
+
+            fn destroy(self: *@This()) void {
+                boxy.compiled.InProcessState.leave(self.entered);
+                self.state.destroy();
+            }
+
+            fn cache(self: *@This()) *boxy.Cache {
+                return &self.state.descriptors;
+            }
+        };
+
         fn create(allocator: Allocator, roc_env: *InterpreterRocEnv, hosted_fns: builtins.host_abi.HostedFunctions) Allocator.Error!*BoxyImmortals {
             const self = try allocator.create(BoxyImmortals);
+            errdefer allocator.destroy(self);
             self.* = .{
                 .arena = .init(allocator),
                 .ops = .{
@@ -8030,22 +8070,21 @@ pub const Interpreter = struct {
                     .hosted_fns = hosted_fns,
                 },
                 .roc_env = roc_env,
+                .composition = try Composition.create(allocator),
             };
             return self;
         }
 
         fn destroy(self: *BoxyImmortals, allocator: Allocator) void {
+            self.composition.destroy();
             self.dictionaries.deinit(allocator);
             self.arena.deinit();
             allocator.destroy(self);
         }
 
-        /// The cache and ops descriptor composition uses. A platform's
-        /// runtime allocates through its host symbols whatever ops it is
-        /// given, so there composition interns in the process-global cache
-        /// and its descriptors live as long as the process.
+        /// The cache descriptor composition interns in.
         fn composeCache(self: *BoxyImmortals) *boxy.Cache {
-            return if (comptime builtins.host_abi.host_role == .platform) &boxy.compose.process_cache else &self.cache;
+            return self.composition.cache();
         }
 
         fn fromOps(ops: *RocOps) *BoxyImmortals {
