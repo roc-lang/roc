@@ -493,6 +493,7 @@ const CustomCase = enum {
     issue_11678_dev_cache_boxy_tables,
     boxy_caches_nothing_after_checking,
     boxy_build_and_run_cache_what_check_caches,
+    boxy_compile_time_objects,
     boxy_module_object_cache,
     issue_11710_shared_object_cache,
     issue_12220_shared_object_cache_literals,
@@ -3318,6 +3319,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: cached recursive callbacks retain method result rows", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_recursive_callback_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: dev builds whose code reaches the Boxy runtime are identical whatever the dev cache holds, including another app's packs", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_dev_cache_boxy_tables } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no caches nothing after checking", .timeout_ms = 600_000, .body = .{ .custom = .boxy_caches_nothing_after_checking } },
+    .{ .id = 0, .suite = .subcommands, .name = "--specialize=no compile-time evaluation links cached module objects", .timeout_ms = 600_000, .body = .{ .custom = .boxy_compile_time_objects } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no build and run leave the cache check leaves", .timeout_ms = 600_000, .body = .{ .custom = .boxy_build_and_run_cache_what_check_caches } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no build files one object per module and rebuilds only edited modules", .timeout_ms = 600_000, .body = .{ .custom = .boxy_module_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11710: shared object cache serves a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_11710_shared_object_cache } },
@@ -5340,6 +5342,7 @@ fn runCustomCase(
         .issue_11678_dev_cache_boxy_tables => customIssue11678DevCacheBoxyTables(io, allocator, &env, &timer, timeout_ms),
         .boxy_caches_nothing_after_checking => customBoxyCachesNothingAfterChecking(io, allocator, &env, &timer, timeout_ms),
         .boxy_build_and_run_cache_what_check_caches => customBoxyBuildAndRunCacheWhatCheckCaches(io, allocator, &env, &timer, timeout_ms),
+        .boxy_compile_time_objects => customBoxyCompileTimeObjects(io, allocator, &env, &timer, timeout_ms),
         .boxy_module_object_cache => customBoxyModuleObjectCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11710_shared_object_cache => customIssue11710SharedObjectCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12220_shared_object_cache_literals => customIssue12220SharedObjectCacheLiterals(io, allocator, &env, &timer, timeout_ms),
@@ -11582,6 +11585,69 @@ fn appendLine(io: std.Io, path: []const u8, text: []const u8) (std.Io.Dir.ReadFi
 /// `roc build --specialize=no --opt=dev` adds exactly the per-module Boxy
 /// object entries to what `roc check --specialize=no` leaves, and `roc run`
 /// of the same program adds nothing (design.md "Caching Under `.boxy`").
+/// `roc check` compiles and files the objects of the modules a module's
+/// compile-time program imports; a later command reuses them, and a crash in
+/// another module's code reports what a compilation with no cache reports.
+fn customBoxyCompileTimeObjects(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err| return customInfraFailure(allocator, timer, "clone environment: {}", .{err}) };
+    defer isolated.env_map.deinit();
+    const cache_root = std.fmt.allocPrint(allocator, "{s}/boxy_compile_time_objects_cache", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
+    for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+        isolated.env_map.put(key, cache_root) catch |err| return customInfraFailure(allocator, timer, "failed to set the cache root: {}", .{err});
+    }
+    const app = "test/cli/boxy_compile_time_objects/App.roc";
+    const crashes = "test/cli/boxy_compile_time_objects/Crashes.roc";
+    const check_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "case timeout exhausted before check");
+    const checked = runRocInEnv(io, allocator, &isolated, &.{ "check", "--specialize=no" }, app, .relative, &.{}, null, check_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "command spawn error: {}", .{err});
+    if (!processSucceeded(checked.term)) return failureFromRun(allocator, timer, checked, "`roc check` did not succeed");
+    const inventory = cacheInventory(io, allocator, cache_root) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read the cache: {}", .{err});
+    var objects: usize = 0;
+    for (inventory) |entry| {
+        if (entry.family == .boxy_object) objects += 1;
+    }
+    // Builtin, Lib, and Echo, the module the default platform gives the app.
+    if (objects < 2) return customFailure(allocator, timer, "`roc check` filed {d} module objects, expected the app's imports' to be there", .{objects});
+    const run_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "case timeout exhausted before run");
+    const ran = runRocInEnv(io, allocator, &isolated, &.{ "--opt=dev", "--specialize=no" }, app, .relative, &.{}, null, run_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "command spawn error: {}", .{err});
+    if (!processSucceeded(ran.term)) return failureFromRun(allocator, timer, ran, "the app did not run");
+    if (!std.mem.eql(u8, ran.stdout, "22 [2, 3]")) return customFailure(allocator, timer, "the app printed `{s}`", .{ran.stdout});
+    const after_run = cacheInventory(io, allocator, cache_root) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read the cache: {}", .{err});
+    var objects_after: usize = 0;
+    for (after_run) |entry| {
+        if (entry.family == .boxy_object) objects_after += 1;
+    }
+    // A run reuses the objects of Builtin and Lib. Echo's declares hosted
+    // functions, whose object the running platform's bindings key.
+    if (objects_after > objects + 1) return customFailure(allocator, timer, "`roc run` rebuilt module objects: {d} became {d}", .{ objects, objects_after });
+
+    var reports: [2][]const u8 = undefined;
+    for ([_]bool{ false, true }, &reports) |no_cache, *report| {
+        const args: []const []const u8 = if (no_cache) &.{ "check", "--specialize=no", "--no-cache" } else &.{ "check", "--specialize=no" };
+        const crash_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "case timeout exhausted before the crash");
+        const crashed = runRocInEnv(io, allocator, &isolated, args, crashes, .relative, &.{}, null, crash_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "command spawn error: {}", .{err});
+        if (processSucceeded(crashed.term)) return customFailure(allocator, timer, "`roc check` accepted a constant that crashes", .{});
+        if (std.mem.find(u8, crashed.stderr, "too big") == null or std.mem.find(u8, crashed.stderr, "Lib (line 12") == null) return failureFromRun(allocator, timer, crashed, "the report does not name the crash's location");
+        const first = std.mem.find(u8, crashed.stderr, "[dbg] 3") orelse return failureFromRun(allocator, timer, crashed, "the crash's `dbg` did not print");
+        if (std.mem.findPos(u8, crashed.stderr, first + 1, "[dbg] 3") != null) return failureFromRun(allocator, timer, crashed, "the crash's `dbg` printed twice");
+        const summary = std.mem.findLast(u8, crashed.stderr, "── ") orelse crashed.stderr.len;
+        report.* = crashed.stderr[0..summary];
+    }
+    if (!std.mem.eql(u8, reports[0], reports[1])) return customFailure(allocator, timer, "the crash reports differently with a cache:\n{s}\nthan without one:\n{s}", .{ reports[0], reports[1] });
+    return null;
+}
+
 fn customBoxyBuildAndRunCacheWhatCheckCaches(
     io: std.Io,
     allocator: Allocator,
@@ -11622,19 +11688,20 @@ fn customBoxyBuildAndRunCacheWhatCheckCaches(
         inventory.* = cacheInventory(io, allocator, cache_root) catch |err|
             return customInfraFailure(allocator, timer, "failed to read the cache: {}", .{err});
         if (index == 0) continue;
-        // A build's extra entries are its module objects, and nothing else;
+        // A build's extra entries are module objects, and nothing else;
         // every other command leaves exactly the check's cache.
         const is_build = std.mem.eql(u8, args[0], "build");
         var objects: usize = 0;
         for (inventory.*) |entry| {
+            const in_check = for (inventories[0]) |checked| {
+                if (checked.eql(entry)) break true;
+            } else false;
+            if (in_check) continue;
             if (is_build and entry.family == .boxy_object) {
                 objects += 1;
                 continue;
             }
-            const in_check = for (inventories[0]) |checked| {
-                if (checked.eql(entry)) break true;
-            } else false;
-            if (!in_check) return customFailure(allocator, timer, "`roc {s} --specialize=no` left a cache entry `roc check` does not: {s} {x}", .{ args[0], @tagName(entry.family), &entry.key });
+            return customFailure(allocator, timer, "`roc {s} --specialize=no` left a cache entry `roc check` does not: {s} {x}", .{ args[0], @tagName(entry.family), entry.key });
         }
         if (inventory.len - objects != inventories[0].len) return customFailure(allocator, timer, "`roc {s} --specialize=no` left fewer of `roc check`'s entries", .{args[0]});
         if (is_build and objects == 0) return customFailure(allocator, timer, "`roc build --specialize=no` filed no module object", .{});

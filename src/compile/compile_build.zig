@@ -247,6 +247,9 @@ pub const BuildEnv = struct {
     detailed_monotype_diagnostics: bool = false,
     /// See `eval.CompileTimeFinalization.CompileTimeObjectCache`.
     compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
+    /// The lowering of the module objects a `.boxy` compile-time evaluation
+    /// links against.
+    boxy_object_lowering: ?@import("coordinator.zig").BoxyObjectLowering = null,
     compile_time_object_cache_owner: ?CompileTimeObjectCacheOwner = null,
     /// Let a caller declare a test plan from prepared artifacts before CTFE.
     defer_post_check: bool = false,
@@ -1099,6 +1102,7 @@ pub const BuildEnv = struct {
         coord.debug_observer = self.debug_observer;
         coord.setDetailedLoweringTiming(self.detailed_lowering_timing);
         coord.compile_time_object_cache = self.compile_time_object_cache;
+        coord.boxy_object_lowering = self.boxy_object_lowering;
         if (self.detailed_monotype_diagnostics) coord.ctfe_timing.lowering.enableDetailedMonotypeBody();
         self.coordinator = coord;
     }

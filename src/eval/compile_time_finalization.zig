@@ -8,6 +8,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 const backend = @import("backend");
+const object_image = @import("object_image.zig");
 const builtins = @import("builtins");
 const check = @import("check");
 const collections = @import("collections");
@@ -31,7 +32,7 @@ const interpreter_static_data = @import("interpreter_static_data.zig");
 const static_data_exports = @import("static_data");
 const Interpreter = interpreter_mod.Interpreter;
 const ExpectFailure = interpreter_mod.ExpectFailure;
-const FinalizeError = checked.CompileTimeFinalizer.Error;
+pub const FinalizeError = checked.CompileTimeFinalizer.Error;
 pub const RuntimeMaterializationError = lir.CheckedPipeline.LowerResourceError || FinalizeError;
 const LirProgram = lir.Program;
 const NativeProcCompiler = backend.dev.NativeProcCompiler;
@@ -144,6 +145,16 @@ pub const Options = struct {
     /// Set for an artifact no later compilation reopens, the baked Builtin,
     /// which must be complete for either strategy's programs.
     complete_baked_module: bool = false,
+    /// The cached module objects a `.boxy` evaluation links a module's
+    /// compile-time program against (`BoxyObjectSource`), when this
+    /// compilation has a cache to keep them in.
+    boxy_objects: ?BoxyObjectSource = null,
+    /// A root of this evaluation that crashes or emits an event stays
+    /// pending, without a report: a whole program evaluates it next, with
+    /// the source locations of every module it reaches (`BoxyLinkedImages`).
+    defer_failures: bool = false,
+    /// The loaded objects a native program links against.
+    boxy_linked_images: ?*BoxyLinkedImages = null,
     /// Where a compile-time failure is reported when the source it names
     /// belongs to a checked module this finalization does not complete: a
     /// literal in a module whose checking finished in an earlier compilation,
@@ -1685,6 +1696,97 @@ fn specializeAndEvaluate(
 pub const RootFilter = std.AutoHashMapUnmanaged(RootFilterKey, void);
 const RootFilterKey = struct { module: [32]u8, root: checked.ComptimeRootId };
 
+/// The export interfaces a `.boxy` module unit compiles its calls against.
+pub const ExportInterfaces = lir.CheckedPipeline.BoxyExportInterfaces;
+
+/// One imported module's object, loaded into the compiler's process.
+pub const BoxyObject = struct {
+    /// The module's checked key.
+    module: [32]u8,
+    object: []const u8,
+    hosted_symbols: []const []const u8,
+};
+
+/// A module's imports as objects, and as the views its unit lowers against.
+pub const BoxyObjectSet = struct {
+    /// Every transitive import's object, each before those of its importers.
+    objects: []const BoxyObject,
+    views: []const checked.ImportedModuleView,
+};
+
+/// Where a `.boxy` evaluation gets the objects of a module's imports.
+pub const BoxyObjectSource = struct {
+    context: *anyopaque,
+    /// The object of each module `module` imports, restored from the cache
+    /// or built and filed there. Null when an import has no object of its
+    /// own: a platform module with requirements belongs to its app's program.
+    objects: *const fn (context: *anyopaque, module: *const checked.CheckedModuleArtifact) FinalizeError!?BoxyObjectSet,
+    interfaces: *ExportInterfaces,
+    /// The lowering the objects were compiled under, which a program calling
+    /// into them shares.
+    target: lir.CheckedPipeline.TargetConfig,
+};
+
+/// The imported objects a `.boxy` evaluation has loaded into this process,
+/// each once, which a module's compile-time program calls by symbol. An
+/// object carries machine code and no source locations, so a program linked
+/// against these reports nothing itself: a root that crashes or emits an
+/// event stays pending (`Options.defer_failures`) for the whole program that
+/// follows it, and evaluation is pure, so running it twice observes nothing.
+const BoxyLinkedImages = struct {
+    allocator: Allocator,
+    images: std.ArrayList(object_image.Image) = .empty,
+    loaded: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
+    hosted: std.StringHashMapUnmanaged(void) = .empty,
+
+    fn deinit(self: *BoxyLinkedImages) void {
+        for (self.images.items) |*image| image.deinit();
+        self.images.deinit(self.allocator);
+        self.loaded.deinit(self.allocator);
+        var names = self.hosted.keyIterator();
+        while (names.next()) |name| self.allocator.free(name.*);
+        self.hosted.deinit(self.allocator);
+    }
+
+    fn load(self: *BoxyLinkedImages, objects: []const BoxyObject) FinalizeError!void {
+        for (objects) |object| {
+            if ((try self.loaded.getOrPut(self.allocator, object.module)).found_existing) continue;
+            for (object.hosted_symbols) |symbol| {
+                if (self.hosted.contains(symbol)) continue;
+                try self.hosted.put(self.allocator, try self.allocator.dupe(u8, symbol), {});
+            }
+            const image = object_image.Image.load(self.allocator, object.object, .{ .context = self, .resolve = resolve }) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => finalizationInvariantFmt("a cached Boxy module object would not load: {s}", .{@errorName(err)}),
+            };
+            try self.images.append(self.allocator, image);
+        }
+    }
+
+    /// The address an object's or a program's reference to `name` binds to.
+    fn lookup(self: *const BoxyLinkedImages, name: []const u8) ?usize {
+        for (self.images.items) |*image| if (image.lookupAddress(name)) |address| return address;
+        return null;
+    }
+
+    fn resolve(context: ?*anyopaque, name: []const u8) ?usize {
+        const self: *BoxyLinkedImages = @ptrCast(@alignCast(context.?));
+        if (backend.dev.HostSplice.hostFunction(name)) |address| return address;
+        if (self.lookup(name)) |address| return address;
+        if (self.hosted.contains(name)) return @intFromPtr(&hostedCallAtCompileTime);
+        return null;
+    }
+
+    fn external(context: *const anyopaque, name: []const u8) ?usize {
+        const self: *const BoxyLinkedImages = @ptrCast(@alignCast(context));
+        return self.lookup(name);
+    }
+
+    fn hostedCallAtCompileTime() callconv(.c) noreturn {
+        finalizationInvariant("compile-time code called a hosted function");
+    }
+};
+
 /// The target a `.boxy` compile-time evaluator lowers a module's roots under:
 /// every setting is a dev build's, so compile-time code is the code a
 /// `--specialize=no` dev build compiles, and each lowering is marked as the
@@ -1701,6 +1803,20 @@ fn boxyCompileTimeTarget(options: Options) lir.CheckedPipeline.TargetConfig {
         .post_check_executor = options.post_check_executor,
         .timing = if (options.timing) |timing| &timing.lowering else null,
     };
+}
+
+/// The target of a module's compile-time program linked against `source`'s
+/// objects: their lowering, so the two call each other, as a module unit
+/// that lowers only what its roots reach.
+fn boxyLinkedCompileTimeTarget(source: BoxyObjectSource, options: Options) lir.CheckedPipeline.TargetConfig {
+    var target = source.target;
+    target.boxy_compile_time = true;
+    target.boxy_unit = .{ .imports = source.interfaces, .root = false };
+    target.checked_module_state = .checking_finalization;
+    target.proc_debug_names = true;
+    target.post_check_executor = options.post_check_executor;
+    target.timing = if (options.timing) |timing| &timing.lowering else null;
+    return target;
 }
 
 /// The scheduler of a graph whose producers are all distinct.
@@ -1850,6 +1966,8 @@ fn evaluateRootsBoxy(
         flag.* = artifacts[root.module].compile_time_roots.root(root.root).kind != .literal_argument and
             try checked_root_graph.rootHoldsFunction(allocator, artifacts, lowering_modules.imports, root);
     }
+    var images = BoxyLinkedImages{ .allocator = allocator };
+    defer images.deinit();
     var members = std.ArrayList(u32).empty;
     defer members.deinit(allocator);
     for (0..modules.len) |module_index| {
@@ -1859,7 +1977,7 @@ fn evaluateRootsBoxy(
         }
         if (members.items.len == 0) continue;
         try options.checkCancelRequest();
-        try evaluateModuleRootsBoxy(allocator, modules, lowering_modules, states, roots, &graph, specialized, members.items, evaluation_options, debug_events);
+        try evaluateModuleRootsBoxy(allocator, modules, lowering_modules, states, roots, &graph, specialized, members.items, evaluation_options, debug_events, &images);
     }
 }
 
@@ -1910,6 +2028,7 @@ fn evaluateModuleRootsBoxy(
     members: []const u32,
     options: Options,
     debug_events: *DebugEvents,
+    images: *BoxyLinkedImages,
 ) FinalizeError!void {
     const module_index = roots[members[0]].module;
     const artifact = modules[module_index].module;
@@ -1952,6 +2071,49 @@ fn evaluateModuleRootsBoxy(
         try pending.append(allocator, member);
     }
     if (pending.items.len == 0) return;
+    // A module's program runs against its imports' objects where the host
+    // runs native code and it can have them. What that leaves pending runs
+    // as a whole program, the only form with every module's source locations.
+    if (options.boxy_objects) |source| if (comptime !compilerHostMustUseInterpreterForCtfe()) {
+        if (artifact.platform_type_inputs.requirements.len == 0) if (try source.objects(source.context, artifact)) |set| {
+            try images.load(set.objects);
+            var linked_options = options;
+            linked_options.defer_failures = true;
+            linked_options.boxy_linked_images = images;
+            const modules_of_unit: lir.CheckedPipeline.CheckedModuleSet = .{
+                .root = checked.loweringViewWithRelations(artifact, &.{}),
+                .imports = set.views,
+            };
+            try runBoxyProgram(allocator, modules, modules_of_unit, states, roots, graph, pending.items, boxyLinkedCompileTimeTarget(source, options), linked_options);
+            var kept: usize = 0;
+            for (pending.items) |member| {
+                const root = roots[member];
+                if (states[root.module].isDone(root.root)) continue;
+                pending.items[kept] = member;
+                kept += 1;
+            }
+            pending.shrinkRetainingCapacity(kept);
+            if (pending.items.len == 0) return;
+        };
+    };
+    try runBoxyProgram(allocator, modules, lowering_modules, states, roots, graph, pending.items, boxyCompileTimeTarget(options), options);
+}
+
+/// Lower the pending roots `pending` of one module as one `.boxy` program
+/// under `target` and evaluate them.
+fn runBoxyProgram(
+    allocator: Allocator,
+    modules: []const ProgramModule,
+    lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
+    states: []RootCompletionState,
+    roots: []const checked_root_graph.Root,
+    graph: *const checked_root_graph.Graph,
+    pending_members: []const u32,
+    target: lir.CheckedPipeline.TargetConfig,
+    options: Options,
+) FinalizeError!void {
+    const pending: struct { items: []const u32 } = .{ .items = pending_members };
+    const artifact = modules[roots[pending.items[0]].module].module;
     // The module's roots in the levels the values they read give them.
     const position = try allocator.alloc(u32, roots.len);
     defer allocator.free(position);
@@ -1993,7 +2155,7 @@ fn evaluateModuleRootsBoxy(
             std.debug.print("boxy-work:   root {s} #{d}: {s}\n", .{ @tagName(compile_time_root.kind), @backingInt(roots[member].root), label.snippet });
         }
     }
-    var lowered = try lowerFinalizationModulesToLir(allocator, lowering_modules, .{ .requests = requests, .source_modules = source_modules }, boxyCompileTimeTarget(options));
+    var lowered = try lowerFinalizationModulesToLir(allocator, lowering_modules, .{ .requests = requests, .source_modules = source_modules }, target);
     defer lowered.deinit();
     const const_roots = lowered.lir_result.const_roots.items;
     if (const_roots.len != pending.items.len) finalizationInvariant("the Boxy evaluator's lowering published a different count of compile-time roots than it was asked for");
@@ -2027,6 +2189,7 @@ fn evaluateModuleRootsBoxy(
     // read a value not yet complete (a member of a group that reads itself,
     // or a method a dictionary selects at runtime, which no checked
     // reference names) stayed pending, and runs again now.
+    if (options.defer_failures) return;
     batch.clearRetainingCapacity();
     for (pending.items, 0..) |member, local| {
         const root = roots[member];
@@ -5394,8 +5557,22 @@ fn evaluationDemand(
     materialized: []LirProgram.StaticDataExport,
     splice_source: ?backend.dev.SpliceSource,
 ) Allocator.Error![]lir.LIR.LirProcSpecId {
-    const source = splice_source orelse return lir.ReachableProcs.collectProcDemand(allocator, result, roots, materialized);
     const proc_specs = result.store.getProcSpecs();
+    const source = splice_source orelse {
+        // A worker another object defines is reached by symbol
+        // (`LIR.LirProcSpec.linked`); nothing compiles it here.
+        const demand = try lir.ReachableProcs.collectProcDemand(allocator, result, roots, materialized);
+        var kept: usize = 0;
+        for (demand) |proc_id| {
+            if (proc_specs[@backingInt(proc_id)].linked) continue;
+            demand[kept] = proc_id;
+            kept += 1;
+        }
+        if (kept == demand.len) return demand;
+        const trimmed = try allocator.dupe(lir.LIR.LirProcSpecId, demand[0..kept]);
+        allocator.free(demand);
+        return trimmed;
+    };
     var procs_by_identity = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(allocator);
     defer procs_by_identity.deinit();
     for (proc_specs, 0..) |proc, index| {
@@ -5508,6 +5685,7 @@ const DevProgram = struct {
         var splice = backend.dev.HostSplice.init(allocator);
         errdefer splice.deinit();
         splice.reserveStaticData(&static_layout);
+        if (options.boxy_linked_images) |images| splice.external = .{ .context = images, .resolve = BoxyLinkedImages.external };
         if (options.object_cache) |cache| try splice.spliceExternal(&codegen, evaluation_demand, cache.splice_source);
         const static_rc_helpers = try static_data_exports.collectRequiredRcHelpers(allocator, materialized);
         defer allocator.free(static_rc_helpers);
@@ -5557,6 +5735,7 @@ const DevProgram = struct {
         const StaticFunctionResolver = struct {
             codegen: *const backend.HostLirCodeGen,
             executable: *const backend.ExecutableMemory,
+            images: ?*const BoxyLinkedImages,
 
             fn resolve(raw: ?*anyopaque, relocation: backend.StaticDataRelocation) ?usize {
                 const self: *@This() = @ptrCast(@alignCast(raw.?));
@@ -5566,13 +5745,16 @@ const DevProgram = struct {
                 }
                 if (relocation.callable_capture_offset == null) return null;
                 const proc_id = relocation.procedure orelse return null;
-                const compiled = self.codegen.compiledProcSymbol(proc_id) orelse return null;
-                return @intFromPtr(self.executable.codePtr() + compiled.code_start);
+                if (self.codegen.compiledProcSymbol(proc_id)) |compiled| return @intFromPtr(self.executable.codePtr() + compiled.code_start);
+                // A worker another object defines.
+                const images = self.images orelse return null;
+                return images.lookup(relocation.target_symbol_name);
             }
         };
         var static_function_resolver = StaticFunctionResolver{
             .codegen = &codegen,
             .executable = &executable,
+            .images = options.boxy_linked_images,
         };
         slots.image.resolveFunctionRelocations(.{
             .context = @ptrCast(&static_function_resolver),
@@ -5911,6 +6093,10 @@ fn evalDevProgramRoots(
     for (jobs[0..jobs_len]) |*job| {
         if (options.retry) |retry| {
             if (job.result == .crashed and retry.holds(native.failedAt(job.host.failure).meaning)) continue;
+        }
+        if (options.defer_failures and (job.result == .crashed or job.host.events.items.len != 0)) {
+            if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: deferred root #{d} ({s}, {d} events): {s}\n", .{ @backingInt(job.root_id), @tagName(job.result), job.host.events.items.len, if (job.result == .crashed) job.host.crashMessage() orelse "" else "" });
+            continue;
         }
         const payload: checked.CompileTimeRootPayload = switch (job.result) {
             .pending => finalizationInvariant("dev backend compile-time root was not evaluated"),

@@ -27,6 +27,7 @@ pub const app_header = @import("app_header.zig");
 
 pub const key = @import("cache_key.zig");
 pub const boxy_object_cache = @import("boxy_object_cache.zig");
+pub const boxy_unit = @import("boxy_unit.zig");
 pub const config = @import("cache_config.zig");
 pub const manager = @import("cache_manager.zig");
 pub const artifacts = @import("artifact_store.zig");
@@ -70,6 +71,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("cache_config.zig"));
     std.testing.refAllDecls(@import("cache_key.zig"));
     std.testing.refAllDecls(boxy_object_cache);
+    std.testing.refAllDecls(boxy_unit);
     std.testing.refAllDecls(@import("cache_manager.zig"));
     std.testing.refAllDecls(@import("cache_module.zig"));
     std.testing.refAllDecls(@import("cache_versioning.zig"));

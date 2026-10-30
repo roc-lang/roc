@@ -66,6 +66,25 @@ pub const HostSplice = struct {
     static_data: ?*const StaticDataImage.Layout = null,
     /// Where `link` placed the static data in the mapping.
     static_data_offset: usize = 0,
+    /// Binds the code of objects already loaded into this process, which the
+    /// image reaches through stubs as it reaches the compiler's functions.
+    external: ?External = null,
+
+    /// Addresses of functions defined outside the image, by symbol name.
+    pub const External = struct {
+        context: *const anyopaque,
+        resolve: *const fn (context: *const anyopaque, name: []const u8) ?usize,
+    };
+
+    fn definedExternally(self: *const HostSplice, name: []const u8) bool {
+        const defined = self.external orelse return false;
+        return defined.resolve(defined.context, name) != null;
+    }
+
+    /// The function of the compiler compiled code calls by `name`.
+    pub fn hostFunction(name: []const u8) ?usize {
+        return compilerFunction(name);
+    }
 
     pub fn init(allocator: Allocator) HostSplice {
         return .{
@@ -162,7 +181,7 @@ pub const HostSplice = struct {
                 },
                 .local_data, .retired => continue,
             };
-            if (compilerFunction(name) != null or code_symbols.contains(name) or self.data_names.contains(name) or self.hosted_stubs.contains(name)) continue;
+            if (compilerFunction(name) != null or code_symbols.contains(name) or self.data_names.contains(name) or self.hosted_stubs.contains(name) or self.definedExternally(name)) continue;
             if (!containsName(needed.items, name)) try needed.append(self.allocator, name);
         }
         // A carried constant can hold a hosted function as a value.
@@ -170,7 +189,7 @@ pub const HostSplice = struct {
             // Data declarations are not hosted functions.
             if (!relocation.function) continue;
             const name = relocation.name;
-            if (compilerFunction(name) != null or code_symbols.contains(name) or self.data_names.contains(name) or self.hosted_stubs.contains(name)) continue;
+            if (compilerFunction(name) != null or code_symbols.contains(name) or self.data_names.contains(name) or self.hosted_stubs.contains(name) or self.definedExternally(name)) continue;
             if (!containsName(needed.items, name)) try needed.append(self.allocator, name);
         };
         for (needed.items) |name| {
@@ -324,7 +343,16 @@ const Binder = struct {
             return .compiler_function;
         }
         if (self.splice.hosted_stubs.contains(name) or self.code_symbols.contains(name) or self.splice.data_names.contains(name)) return .image;
+        if (self.externalFunction(name)) |target| {
+            try self.stub_targets.put(self.allocator, target, {});
+            return .compiler_function;
+        }
         return .unresolved;
+    }
+
+    fn externalFunction(self: *const Binder, name: []const u8) ?usize {
+        const external = self.splice.external orelse return null;
+        return external.resolve(external.context, name);
     }
 
     fn address(self: *const Binder, name: []const u8) ?usize {
@@ -337,6 +365,10 @@ const Binder = struct {
         if (self.splice.data_offsets.get(name)) |offset| {
             const index = self.splice.data_names.get(name) orelse unreachable; // link keys data_offsets by data items, and addDataItems names every data item in data_names
             return self.image_base + offset + self.splice.data.items[index].symbol_offset;
+        }
+        if (self.externalFunction(name)) |target| {
+            const index = self.stub_targets.getIndex(target) orelse return null;
+            return self.image_base + self.stubs_start + index * stub_size;
         }
         return null;
     }

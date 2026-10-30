@@ -15193,17 +15193,21 @@ parallel.
 
 #### Caching Under `.boxy`
 
-With `--specialize=no`, the compiler writes what `roc check` writes, plus one
-object per module. Checked module and composition entries, the canonicalized
+With `--specialize=no`, every command writes what `roc check` writes, and
+`roc build` adds its remaining module objects. Checked module and composition entries, the canonicalized
 module cache, and the compile-time evaluation results `roc check` produces
 (`ConstStore` constants, and the compile-time object cache the Solved
 evaluator uses for the roots it still evaluates) are written exactly as `roc
 check` writes them. Dev packs, run object caches, optimized packs, and
 recorded program outputs are not written, and the compile-time packs and
 discovery summaries are filed where `roc check` files them, whatever the
-command. `roc check` and `roc run` with `--specialize=no` therefore leave
-identical cache contents for the same sources, and `roc build` adds exactly
-its module objects (`compile.boxy_object_cache`, the `boxy_object` family).
+command. `roc check` also files the host-target, dev-opt object of every
+module a module with roots left to evaluate imports, which compile-time
+evaluation runs against (Compile-Time Evaluation Strategy). `roc check` and
+`roc run` with `--specialize=no` therefore leave identical cache contents for
+the same sources, except that a module declaring hosted functions has one
+object per platform binding of them, and `roc build` adds exactly the module
+objects still missing (`compile.boxy_object_cache`, the `boxy_object` family).
 `roc test` checks its root for explicit test roots
 (`Validation.explicit_roots`), which is its own check under either strategy,
 and with `--specialize=no` it leaves exactly what that check leaves. `roc
@@ -15282,6 +15286,22 @@ it (`postcheck/boxy/const_schema.zig`). Both evaluators run the same LIR
 interpreter or native dev evaluator and store the same checked values, so a
 `.boxy` runtime program restores constants the same way under either, and
 reports the same diagnostics.
+
+Where a cache exists and the compiler runs native code, a module's roots first
+run in a program linked against its imports' cached objects: a module unit
+(`TargetConfig.boxy_unit`) lowering only what those roots reach, compiled into
+the compiler's process and calling the imports' objects, loaded once per
+evaluation (`BoxyLinkedImages`), by symbol. A module with no object yet is
+compiled whole and filed the first time an importer needs it, whichever
+command that is; the root module's own constant code is compiled for the
+evaluation and discarded. A platform module with requirements has no object of
+its own, so a module importing one skips this step. An object carries machine
+code and no source locations, so this program reports nothing: a root that
+crashes or emits an event stays pending (`Options.defer_failures`), and every
+such root then runs in the whole program described above, which has the
+locations of every module it reaches. Compile-time code is pure, so running a
+root twice observes nothing, and a compilation with no cache runs only the
+whole program, so the cache never changes what a compilation reports.
 
 A root whose value holds a function value (anywhere in its type, or a
 callable binding) is evaluated by the Solved evaluator under either strategy.

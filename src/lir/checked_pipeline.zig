@@ -87,6 +87,9 @@ pub fn resolveCheckedAbiLayouts(
     return .{ .allocator = allocator, .lowered = lowered, .roots = roots };
 }
 
+/// The export interfaces a `.boxy` module unit compiles its calls against.
+pub const BoxyExportInterfaces = postcheck.Boxy.Lower.ExportInterfaces;
+
 /// Resource failure while lowering checked modules to LIR, plus the one
 /// checked input this entrance rejects outright: see
 /// `requireHostedProceduresBound`.
