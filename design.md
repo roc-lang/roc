@@ -15130,7 +15130,10 @@ Nothing a module emits depends on a module that imports it:
   rows (Sealed Result Rows), so no caller's instantiation reaches a body;
   every template's body and its dictionary entry are emitted, since another
   module may call a template or compose it as a function value, and the
-  entries of its registered methods and its `??` defaults with them;
+  entries of its registered methods and its `??` defaults with them; the
+  wrappers of its `expect` and REPL roots are not, since nothing reaches them
+  but a test plan's or a REPL's own roots, and each of those lowers as one
+  program whose roots may name modules no unit lowers;
 - its conversion workers are its own and memoized within it alone;
 - ARC solves each of its procedures' ownership signatures from the procedure's
   body and its callees, and a call from another module never demands an

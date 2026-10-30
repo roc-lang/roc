@@ -586,8 +586,13 @@ pub const Builder = struct {
         return id;
     }
 
+    /// How a merge ends: at a join whose parameters carry the binders' values
+    /// out, or in tail position, where every branch returns and the merge
+    /// only restores the binders' starting values for each branch.
+    pub const MergeEnd = enum { joined, tail };
+
     /// Start a merge of `binders`, recording their current values.
-    pub fn beginMerge(self: *Builder, plan_binders: []const checked.PatternBinderId) Allocator.Error!?MergeId {
+    pub fn beginMerge(self: *Builder, plan_binders: []const checked.PatternBinderId, end: MergeEnd) Allocator.Error!?MergeId {
         // A binder the construct reassigns but that is not bound before it
         // is declared inside it, and goes out of scope with it.
         const arena = self.program.arena.allocator();
@@ -598,16 +603,22 @@ pub const Builder = struct {
         const binders = in_scope.items;
         if (binders.len == 0) return null;
         const pre = try arena.alloc(LocalId, binders.len);
-        const params = try arena.alloc(LocalId, binders.len);
-        for (binders, pre, params) |binder, *before, *param| {
-            before.* = self.binders.get(binder).?;
-            var local = self.store.getLocal(before.*);
-            if (local.dyn) |*dyn| {
-                dyn.storage = .frame;
-                self.has_dynamic_frame = true;
-            }
-            param.* = try self.addLocal(local);
-        }
+        for (binders, pre) |binder, *before| before.* = self.binders.get(binder).?;
+        const params: []LocalId = switch (end) {
+            .tail => &.{},
+            .joined => blk: {
+                const params = try arena.alloc(LocalId, binders.len);
+                for (pre, params) |before, *param| {
+                    var local = self.store.getLocal(before);
+                    if (local.dyn) |*dyn| {
+                        dyn.storage = .frame;
+                        self.has_dynamic_frame = true;
+                    }
+                    param.* = try self.addLocal(local);
+                }
+                break :blk params;
+            },
+        };
         const id: MergeId = @intCast(self.merges.items.len);
         try self.merges.append(self.allocator, .{ .binders = binders, .pre = pre, .params = params });
         return id;
@@ -633,6 +644,7 @@ pub const Builder = struct {
 
     pub fn enterMerge(self: *Builder, merge: MergeId) Allocator.Error!void {
         const m = self.merges.items[merge];
+        if (m.params.len != m.binders.len) invariant("a merge in tail position carries no binder out");
         for (m.binders, m.params) |binder, value| try self.binders.put(self.allocator, binder, value);
     }
 
@@ -2802,16 +2814,18 @@ pub const Builder = struct {
                     for (if_.branches) |branch| try self.tail_exprs.put(self.allocator, branch.body, {});
                     try self.tail_exprs.put(self.allocator, if_.final_else, {});
                     // Each branch returns; nothing reads the construct's
-                    // own value.
+                    // own value, and each branch starts from the binder
+                    // values the construct started with.
+                    const merge = try self.beginMerge(if (if_.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{}, .tail);
                     try self.push(.unreachable_or_unit);
-                    try self.push(.{ .if_test = .{ .expr = expr_id, .index = 0, .join = null, .merge = null } });
+                    try self.push(.{ .if_test = .{ .expr = expr_id, .index = 0, .join = null, .merge = merge } });
                     try self.push(.{ .expr = if_.branches[0].cond });
                     return;
                 }
                 const result_ty = try self.exprType(expr_id);
                 const result = try self.localOf(result_ty, .frame);
                 const join = self.freshJoin();
-                const merge = try self.beginMerge(if (if_.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{});
+                const merge = try self.beginMerge(if (if_.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{}, .joined);
                 const after = try self.declareMergeJoin(join, result, merge);
                 try self.push(.{ .push_value = result });
                 if (merge) |m| try self.push(.{ .enter_merge = m });
@@ -5510,7 +5524,15 @@ pub const Builder = struct {
         for (scopes[depth], 0..) |param_index, position| {
             if (param_index == index.index) return self.dict_locals[offset + position];
         }
-        invariant("evidence named a dictionary parameter its scope does not have");
+        invariantFmt("evidence named dictionary parameter {d} at depth {d}, which worker {s} (scope depth {d} of {d}, {d} dictionaries, {d} sealed) does not have", .{
+            index.index,
+            index.depth,
+            @tagName(self.currentWorker().key),
+            depth,
+            scopes.len,
+            scopes[depth].len,
+            self.currentWorker().checked_scheme_count - self.currentWorker().checked_slots.len,
+        });
     }
 
     pub fn siteSubstitution(self: *Builder, site: CheckedExprId) []const checked.CheckedTypeId {
@@ -6439,13 +6461,17 @@ pub const Builder = struct {
             .merge = null,
             .remainder = undefined,
         };
+        const merge_binders: []const checked.PatternBinderId = if (match.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{};
         if (tail) {
-            // Each branch returns; nothing reads the construct's own value.
+            // Each branch returns; nothing reads the construct's own value,
+            // and each branch starts from the binder values the construct
+            // started with.
             for (match.branches) |branch| try self.tail_exprs.put(self.allocator, branch.value, {});
+            state.merge = try self.beginMerge(merge_binders, .tail);
             try self.push(.unreachable_or_unit);
         } else {
             const result = try self.localOf(try self.exprType(expr_id), .frame);
-            state.merge = try self.beginMerge(if (match.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{});
+            state.merge = try self.beginMerge(merge_binders, .joined);
             const after = try self.declareMergeJoin(state.done, result, state.merge);
             try self.push(.{ .push_value = result });
             if (state.merge) |m| try self.push(.{ .enter_merge = m });
@@ -7200,8 +7226,8 @@ pub const Builder = struct {
             const range = self.bodies().loopMutations(plan).binders;
             break :blk self.bodies().patternBinderIdPool()[range.start..][0..range.len];
         } else &.{};
-        const exit_merge = try self.beginMerge(binders);
-        const head_merge = try self.beginMerge(binders);
+        const exit_merge = try self.beginMerge(binders, .joined);
+        const head_merge = try self.beginMerge(binders, .joined);
         const exit = self.freshJoin();
         const head = self.freshJoin();
         const after = try self.declareMergeJoin(exit, null, exit_merge);
@@ -7255,8 +7281,8 @@ pub const Builder = struct {
             const range = self.bodies().loopMutations(id).binders;
             break :blk self.bodies().patternBinderIdPool()[range.start..][0..range.len];
         } else &.{};
-        const exit_merge = try self.beginMerge(binders);
-        const head_merge = try self.beginMerge(binders);
+        const exit_merge = try self.beginMerge(binders, .joined);
+        const head_merge = try self.beginMerge(binders, .joined);
         const exit = self.freshJoin();
         const head = self.freshJoin();
         const state = try self.localOf(iterator_ty, .frame);
