@@ -3,6 +3,47 @@ const setupSearch = () => {
   let searchBox = document.getElementById("module-search");
   let searchForm = document.getElementById("module-search-form");
   let topSearchResultListItem = undefined;
+  const mobileSearch = window.matchMedia("(max-width: 768px)");
+  const searchDialog = document.createElement("dialog");
+  searchDialog.className = "mobile-search-dialog";
+  searchDialog.setAttribute("aria-label", "Search documentation");
+  document.body.append(searchDialog);
+  const backButton = document.createElement("button");
+  backButton.type = "button";
+  backButton.className = "search-back";
+  backButton.textContent = "←";
+  backButton.setAttribute("aria-label", "Back to documentation");
+  const placeholder = document.createComment("Search form position");
+  let closingSearch = false;
+  let pageScrollY = 0;
+  function closeMobileSearch() {
+    if (!searchDialog.open) return;
+    closingSearch = true;
+    searchTypeAhead.classList.add("hidden");
+    searchDialog.close();
+    placeholder.replaceWith(searchForm);
+    backButton.remove();
+    searchBox.blur();
+    window.scrollTo(0, pageScrollY);
+    closingSearch = false;
+  }
+  function openMobileSearch() {
+    if (!mobileSearch.matches || searchDialog.open || closingSearch) return;
+    pageScrollY = window.scrollY;
+    searchForm.before(placeholder);
+    searchDialog.append(searchForm);
+    searchForm.prepend(backButton);
+    searchDialog.showModal();
+    searchBox.focus({ preventScroll: true });
+  }
+  backButton.addEventListener("click", closeMobileSearch);
+  searchDialog.addEventListener("cancel", event => {
+    event.preventDefault();
+    closeMobileSearch();
+  });
+  mobileSearch.addEventListener("change", () => {
+    if (!mobileSearch.matches) closeMobileSearch();
+  });
 
   // Keep results and their scroll position when opening a link in another tab.
   // Ordinary result clicks and clicks outside the search still dismiss them.
@@ -11,11 +52,13 @@ const setupSearch = () => {
     if (result && (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)) return;
     if (!searchForm?.contains(event.target) || result) {
       searchTypeAhead.classList.add("hidden");
+      closeMobileSearch();
     }
-  });
+  }, { capture: true });
 
   if (searchBox != null) {
     function searchKeyDown(event) {
+      if (event.key === "Escape" && searchDialog.open) { event.preventDefault(); closeMobileSearch(); return; }
       if (event.key === "Escape") { searchBox.focus(); searchTypeAhead.classList.add("hidden"); return; }
       if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
       event.preventDefault();
@@ -37,6 +80,7 @@ const setupSearch = () => {
     const expandedCategories = new Set();
     let showSnippets = false;
     let prose = [];
+    const apiDocumentation = new Map();
     let loaded = false;
     let loading;
     let failed = false;
@@ -98,6 +142,11 @@ const setupSearch = () => {
           }
           entry.terms.push(node.dataset.searchTerm);
         });
+        for (const entry of prose) {
+          if (entry.category === "api" && entry.text.trim() && !apiDocumentation.has(entry.href)) {
+            apiDocumentation.set(entry.href, entry.text);
+          }
+        }
         loaded = true;
       }).catch(() => { failed = true; }).then(() => {
         // Never replace a result while someone is navigating it with the keyboard.
@@ -106,6 +155,8 @@ const setupSearch = () => {
       return loading;
     }
     function reopenSearch() {
+      if (closingSearch) return;
+      openMobileSearch();
       loadIndex();
       if (searchTypeAhead.classList.contains("hidden")) search();
     }
@@ -125,6 +176,21 @@ const setupSearch = () => {
     function addHeading(label) {
       appendItem(dynamic("li", "search-group-label", label));
     }
+    function addSnippet(link, text, query, fromStart = false) {
+      if (!showSnippets || !text?.trim()) return;
+      const snippet = dynamic("small", "search-snippet");
+      for (const part of engine.highlightParts(engine.snippet(text, fromStart ? "" : query), query)) {
+        snippet.append(part.match ? dynamic("mark", "", part.text) : document.createTextNode(part.text));
+      }
+      link.append(snippet);
+      dynamicItems.push(snippet);
+    }
+    function addApi(entry, query, fromStart = true) {
+      entry.li.classList.remove("hidden");
+      searchTypeAhead.appendChild(entry.li);
+      shownItems.push(entry.li);
+      addSnippet(entry.li.querySelector("a"), apiDocumentation.get(entry.href), query, fromStart);
+    }
     function addProse(entry, query) {
       const item = dynamic("li", "search-prose-result");
       const link = dynamic("a", "type-ahead-link type-ahead-langref");
@@ -134,13 +200,7 @@ const setupSearch = () => {
       if (entry.matchedTerm && engine.normalize(entry.title) !== engine.normalize(entry.matchedTerm)) {
         link.append(dynamic("small", "search-match-note", ` (search term: ${entry.matchedTerm})`));
       }
-      if (showSnippets && entry.text.trim()) {
-        const snippet = dynamic("small", "search-snippet");
-        for (const part of engine.highlightParts(engine.snippet(entry.text, query), query)) {
-          snippet.append(part.match ? dynamic("mark", "", part.text) : document.createTextNode(part.text));
-        }
-        link.append(snippet);
-      }
+      addSnippet(link, entry.text, query);
       item.append(link);
       appendItem(item);
       shownItems.push(item);
@@ -166,6 +226,30 @@ const setupSearch = () => {
       // If a visible snippet disappears, keep its result from scrolling entirely out of view.
       const offset = Math.max(position.offset, -rect.height + 1);
       searchTypeAhead.scrollTop += rect.top - top - offset;
+    }
+    function addExpansion(group, groupLabel, count, expanded) {
+      const row = dynamic("li", "search-more");
+      const button = dynamic("button", "", expanded ? `Less ${groupLabel} matches` : `More ${groupLabel} matches (${count})`);
+      button.type = "button";
+      row.dataset.group = group;
+      button.setAttribute("aria-expanded", String(expanded));
+      button.addEventListener("click", event => {
+        event.stopPropagation();
+        const scrollTop = searchTypeAhead.scrollTop;
+        const offset = row.getBoundingClientRect().top - searchTypeAhead.getBoundingClientRect().top;
+        if (expanded) expandedCategories.delete(group);
+        else expandedCategories.add(group);
+        search({ scrollTop });
+        if (expanded) {
+          const replacement = Array.from(searchTypeAhead.querySelectorAll(".search-more"))
+            .find(node => node.dataset.group === group);
+          searchTypeAhead.scrollTop += replacement.getBoundingClientRect().top -
+            searchTypeAhead.getBoundingClientRect().top - offset;
+          replacement.querySelector("button").focus({ preventScroll: true });
+        } else searchBox.focus({ preventScroll: true });
+      });
+      row.append(button);
+      appendItem(row);
     }
     function search(position) {
       topSearchResultListItem = undefined;
@@ -222,9 +306,7 @@ const setupSearch = () => {
       for (const item of curated.slice(0, MAX_RESULTS)) {
         const api = apiEntries.find(entry => entry.href === item.href);
         if (api) {
-          api.li.classList.remove("hidden");
-          searchTypeAhead.appendChild(api.li);
-          shownItems.push(api.li);
+          addApi(api, query);
           const note = dynamic("small", "search-match-note", ` (alias: ${item.matchedTerm})`);
           api.li.querySelector(".type-ahead-def-name").after(note);
           dynamicItems.push(note);
@@ -232,47 +314,36 @@ const setupSearch = () => {
         seen.add(item.href);
       }
       if (!curatedSymbol && (!selectedCategory || selectedCategory === "api")) {
-        const matches = apiMatches.filter(item => !seen.has(item.href)).slice(0, MAX_RESULTS);
+        const nameMatches = apiMatches.filter(item => !seen.has(item.href));
+        const apiMatchHrefs = new Set(apiMatches.map(item => item.href));
+        const documentationMatches = ranked.filter(item => item.category === "api" &&
+          !seen.has(item.href) && !apiMatchHrefs.has(item.href));
+        const matches = [
+          ...nameMatches.map(entry => ({ entry, fromStart: true })),
+          ...documentationMatches.map(documentation => ({
+            entry: apiEntries.find(entry => entry.href === documentation.href),
+            documentation,
+            fromStart: false,
+          })),
+        ];
+        const expanded = expandedCategories.has("api");
         if (matches.length && loaded && used.size > 1) addHeading(categories.get("api"));
-        for (const item of matches) {
-          item.li.classList.remove("hidden");
-          searchTypeAhead.appendChild(item.li);
-          shownItems.push(item.li);
-          seen.add(item.href);
+        for (const match of matches.slice(0, expanded ? matches.length : MAX_RESULTS)) {
+          if (match.entry) addApi(match.entry, query, match.fromStart);
+          else addProse(match.documentation, query);
         }
+        if (matches.length > MAX_RESULTS) addExpansion("api", "API", matches.length, expanded);
       }
       for (const [category, label] of categories) {
-        if (selectedCategory && category !== selectedCategory) continue;
+        if (category === "api" || (selectedCategory && category !== selectedCategory)) continue;
         const matches = ranked.filter(item => item.category === category && !seen.has(item.href));
         if (!matches.length) continue;
-        addHeading(category === "api" ? `${label} documentation` : label);
+        addHeading(label);
         const expanded = expandedCategories.has(category);
         const limit = expanded ? matches.length : 5;
         for (const item of matches.slice(0, limit)) { addProse(item, query); seen.add(item.href); }
         if (matches.length > 5) {
-          const row = dynamic("li", "search-more");
-          const groupLabel = category === "api" ? `${label} docs` : label;
-          const button = dynamic("button", "", expanded ? `Less ${groupLabel} matches` : `More ${groupLabel} matches (${matches.length})`);
-          button.type = "button";
-          row.dataset.category = category;
-          button.setAttribute("aria-expanded", String(expanded));
-          button.addEventListener("click", event => {
-            event.stopPropagation();
-            const scrollTop = searchTypeAhead.scrollTop;
-            const offset = row.getBoundingClientRect().top - searchTypeAhead.getBoundingClientRect().top;
-            if (expanded) expandedCategories.delete(category);
-            else expandedCategories.add(category);
-            search({ scrollTop });
-            if (expanded) {
-              const replacement = Array.from(searchTypeAhead.querySelectorAll(".search-more"))
-                .find(node => node.dataset.category === category);
-              searchTypeAhead.scrollTop += replacement.getBoundingClientRect().top -
-                searchTypeAhead.getBoundingClientRect().top - offset;
-              replacement.querySelector("button").focus({ preventScroll: true });
-            } else searchBox.focus({ preventScroll: true });
-          });
-          row.append(button);
-          appendItem(row);
+          addExpansion(category, label, matches.length, expanded);
         }
       }
       if (!loaded) appendItem(dynamic("li", "search-status", failed ? "Additional documentation search is unavailable. API search still works." : "Searching documentation…"));
