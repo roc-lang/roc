@@ -15091,6 +15091,9 @@ Nothing a module emits depends on a module that imports it:
   Type; no row joins);
 - its workers are lowered once at their definition types, with sealed result
   rows (Sealed Result Rows), so no caller's instantiation reaches a body;
+  every template's body and its dictionary entry are emitted, since another
+  module may call a template or compose it as a function value, and the
+  entries of its registered methods and its `??` defaults with them;
 - its conversion workers are its own and memoized within it alone;
 - ARC solves each of its procedures' ownership signatures from the procedure's
   body and its callees, and a call from another module never demands an
@@ -15186,23 +15189,40 @@ for every closure it creates; a `.boxy` function value carries runtime
 descriptors and dictionaries instead, which name neither the checked
 evidence nor a nominal's phantom arguments, so a `.boxy` evaluation has
 nothing to store such a value by. The `.boxy` evaluator specializes exactly
-those roots, one Solved program per level (`RootFilter`), and the group they
-belong to with them.
+those roots: one that a `.boxy`-evaluated root reads, directly or through
+other roots, in one Solved program per level (`RootFilter`), with the group
+it belongs to; every other one in the discovery pass that follows the
+levels, together with the runtime bodies, so a stored function value
+restores within the program that stored it and no program is specialized
+for it alone.
 
 An instance-dependent literal (one in a generic body, converted at each
-instance the program reaches it at) is converted by the Solved evaluator's
-discovery under either strategy: once every root is complete, the `.boxy`
-evaluator runs the same demand-driven discovery the Solved evaluator runs
-(`specializeAndEvaluate` with the program roots as discovery roots), which
-specializes a runtime body only where it can register a literal root,
-evaluates each literal root, and records the values a `.boxy` runtime
-program reads as its literal tables. A numeral requirement is no runtime
-dictionary (descriptor selection converts a numeral at a builtin instance),
-so a custom instance's conversion exists at runtime only through its table;
-the tables are what keep a `.boxy` program's literal rejections, conversion
-effects, and dormant-code diagnostics identical to a specialized program's.
-A module whose object embeds a literal table is keyed by the program the
-table was converted for (`boxy_object_cache.KeyInput.literal_program`).
+instance the program reaches it at) is converted for the runtime program by
+the Solved evaluator's discovery under either strategy: once every root is
+complete, the `.boxy` evaluator runs the same demand-driven discovery the
+Solved evaluator runs (`specializeAndEvaluate` with the program roots as
+discovery roots), which specializes a runtime body only where it can
+register a literal root, evaluates each literal root, and records the values
+a `.boxy` runtime program reads as its literal tables. A numeral requirement
+is no runtime dictionary (descriptor selection converts a numeral at a
+builtin instance), so a custom instance's conversion exists at runtime only
+through its table; the tables are what keep a `.boxy` program's literal
+rejections, conversion effects, and dormant-code diagnostics identical to a
+specialized program's. A module whose object embeds a literal table is keyed
+by the program the table was converted for
+(`boxy_object_cache.KeyInput.literal_program`).
+
+The `.boxy` evaluator's own programs run before any table exists, so they
+convert each instance-dependent literal where it is: the literal's checked
+conversion plan (`from_numeral`, `from_quote`, `from_interpolation`) is
+called at the instance the body has there and its `Try` result unwrapped,
+an `Err` crashing as the literal's rejection with the conversion's message
+(`Body.lowerLiteralConversion`). So that the call has its instance, every
+evidence parameter of a compile-time program's worker is a dictionary
+(`Program.runtimeDictionary`), numeral requirements included; the program
+is lowered and run whole, so its parameter lists are its own. A literal with
+a conversion root of its own converts the same way until the root is
+evaluated, which the discovery after the roots does.
 
 ### Strategy Equivalence Tests
 

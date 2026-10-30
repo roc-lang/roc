@@ -11441,7 +11441,10 @@ fn buildBoxyLibraryObjects(
     var ready: std.ArrayList(u32) = .empty;
     defer ready.deinit(ctx.gpa);
     for (remaining, 0..) |count, index| if (count == 0) try ready.append(ctx.gpa, @intCast(index));
-    var objects: std.ArrayList([]const u8) = .empty;
+    // The units' objects in unit order, whatever order they finish in, so
+    // the link's inputs (and so the executable) are the same every build.
+    const objects = try ctx.arena.alloc(?[]const u8, units.items.len);
+    @memset(objects, null);
     var hosted_symbols: std.ArrayList([]const u8) = .empty;
     var seen_hosted = std.StringHashMap(void).init(ctx.arena);
     var restored: u32 = 0;
@@ -11480,7 +11483,7 @@ fn buildBoxyLibraryObjects(
             .done => |*result| {
                 if (first_error != null) continue;
                 if (result.restored) restored += 1 else built += 1;
-                try objects.append(ctx.arena, link_objects.materialize(result.object) catch return error.NativeCompilationFailed);
+                objects[index] = link_objects.materialize(result.object) catch return error.NativeCompilationFailed;
                 for (result.hosted_symbols) |symbol| {
                     const owned = try ctx.arena.dupe(u8, symbol);
                     if ((try seen_hosted.getOrPut(owned)).found_existing) continue;
@@ -11494,9 +11497,12 @@ fn buildBoxyLibraryObjects(
         }
     }
     if (first_error) |err| return err;
-    build_env.recordBoxyObjects(restored, built);
+    // The summary counts cache work; a build without a cache does none.
+    if (!args.no_cache) build_env.recordBoxyObjects(restored, built);
     reporter.end();
-    return .{ .objects = objects.items, .hosted_symbols = hosted_symbols.items, .platform = platform };
+    const ordered = try ctx.arena.alloc([]const u8, units.items.len);
+    for (objects, ordered) |object, *slot| slot.* = object orelse base.invariant("roc build invariant violated: a .boxy unit completed without an object", .{});
+    return .{ .objects = ordered, .hosted_symbols = hosted_symbols.items, .platform = platform };
 }
 
 /// The platform module whose hosted section binds every hosted function
@@ -11716,6 +11722,7 @@ const BoxyUnitTask = struct {
         if (dev_diagnostics.isSet(.trace_boxy_work)) {
             std.debug.print("boxy-work: object cache miss for {s} key {s} checked {s}\n", .{ module_name, &std.fmt.bytesToHex(object_key.bytes[0..8], .lower), &std.fmt.bytesToHex(self.artifact.key.bytes[0..8], .lower) });
             for (self.views) |view| std.debug.print("boxy-work:   in view: {s} ({s})\n", .{ view.module_env.module_name, &std.fmt.bytesToHex(view.key.bytes[0..8], .lower) });
+            if (self.platform) |view| std.debug.print("boxy-work:   platform in view: {s} ({s}), {d} hosted procs declared\n", .{ view.module_env.module_name, &std.fmt.bytesToHex(view.key.bytes[0..8], .lower), self.artifact.hosted_procs.procs.len });
         }
 
         // The platform module whose hosted section binds the hosted

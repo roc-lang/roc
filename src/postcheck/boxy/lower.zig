@@ -61,6 +61,9 @@ pub const Input = struct {
     /// read of a compile-time value no evaluation has completed crashes as
     /// a read of a failed value, which the evaluator retries once the value
     /// completes (design.md "Dependency-Ordered Compile-Time Evaluation").
+    /// Its program runs before any literal table exists, so every evidence
+    /// parameter is a dictionary (`Program.runtimeDictionary`) and each
+    /// instance-dependent literal is converted where it is.
     compile_time: bool = false,
     /// What this lowering emits: one program, or one module's object.
     unit: Unit = .program,
@@ -469,6 +472,15 @@ pub const Program = struct {
     /// for the root unit, each module with platform requirements, whose
     /// workers are lowered at the app's types (design.md "Per-Module
     /// Output").
+    /// Whether a worker receives `param` as a dictionary. A runtime
+    /// program's numeral evidence selects descriptors and is no dictionary:
+    /// its literals come converted from the literal tables. The compile-time
+    /// evaluator's program converts its literals where they are, through
+    /// every evidence parameter, so there each one is a dictionary.
+    pub fn runtimeDictionary(self: *const Program, param: static_dispatch.EvidenceParamRecord) bool {
+        return param.runtime_dictionary or self.input.compile_time;
+    }
+
     pub fn ownsModule(self: *const Program, index: ModuleIndex) bool {
         const unit = switch (self.input.unit) {
             .program => return true,
@@ -688,7 +700,7 @@ pub const Program = struct {
         }
         var dictionary_params: std.ArrayList(u32) = .empty;
         for (evidence_params, 0..) |param, index| {
-            if (!param.runtime_dictionary) continue;
+            if (!self.runtimeDictionary(param)) continue;
             const sealed_dispatcher = if (param.slot) |slot| std.mem.findScalar(u32, sealed_slots.items, slot) != null else false;
             if (sealed_dispatcher) continue;
             try dictionary_params.append(self.arena.allocator(), @intCast(index));
@@ -2069,13 +2081,16 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
 }
 
 /// Queue every worker a module unit's modules define for other objects:
-/// each template, the dictionary entry of each registered method, and
-/// each `??` default expression (design.md "Per-Module Output").
+/// each template and its dictionary entry (a template is a function value
+/// wherever another module names it, and a method wherever one dispatches
+/// to it), and each `??` default expression (design.md "Per-Module
+/// Output").
 fn seedUnitWorkers(program: *Program) Allocator.Error!void {
     for (program.modules.views.items) |*view| {
         if (!program.ownsModule(view.index)) continue;
         for (0..view.view.checked_procedure_templates.templates.items.len) |index| {
-            _ = try program.templateWorker(view.index, @fromBackingInt(@intCast(index)));
+            const worker = try program.templateWorker(view.index, @fromBackingInt(@intCast(index)));
+            _ = try program.methodEntryWorker(worker);
         }
         for (view.view.method_registry.entries) |entry| {
             const target = entry.target orelse continue;
@@ -2149,7 +2164,13 @@ fn initHosted(program: *Program) Allocator.Error!void {
     }
     if (platform) |view| {
         for (view.view.hosted_bindings.bindings, 0..) |binding, index| {
-            const target = program.moduleByKey(binding.target_checked_module);
+            const target = switch (program.input.unit) {
+                .program => program.moduleByKey(binding.target_checked_module),
+                // A unit binds the hosted functions of the modules it lowers;
+                // a binding of another module's function is that module's
+                // unit's.
+                .module => program.modules.find(binding.target_checked_module) orelse continue,
+            };
             const key = by_def.get(.{ .module = target.index, .def = @backingInt(binding.target_def) }) orelse
                 invariant("a hosted section names a function with no hosted declaration in scope");
             program.hosted.getPtr(key).?.* = .{

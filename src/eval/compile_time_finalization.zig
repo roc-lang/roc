@@ -1810,6 +1810,34 @@ fn finalizeProgramBoxy(
         const specialized = try allocator.alloc(bool, roots.items.len);
         defer allocator.free(specialized);
         for (roots.items, specialized) |root, *flag| flag.* = try checked_root_graph.rootHoldsFunction(allocator, artifacts, lowering_modules.imports, root);
+        // A specialized root that a `.boxy`-evaluated root reads, directly
+        // or through other roots, is evaluated at its level. Every other
+        // specialized root waits for the discovery pass below, which
+        // specializes it together with the runtime bodies as one Solved
+        // program: a stored function value then restores within the program
+        // that stored it, and no second program is specialized for it.
+        const early = try allocator.alloc(bool, roots.items.len);
+        defer allocator.free(early);
+        @memset(early, false);
+        {
+            const visited = try allocator.alloc(bool, roots.items.len);
+            defer allocator.free(visited);
+            @memset(visited, false);
+            var stack = std.ArrayList(u32).empty;
+            defer stack.deinit(allocator);
+            for (specialized, 0..) |is_specialized, ordinal| {
+                if (is_specialized) continue;
+                try stack.append(allocator, @intCast(ordinal));
+                while (stack.pop()) |member| {
+                    if (visited[member]) continue;
+                    visited[member] = true;
+                    for (graph.deps[member]) |dep| {
+                        if (specialized[dep]) early[dep] = true;
+                        try stack.append(allocator, dep);
+                    }
+                }
+            }
+        }
         var groups = try ProducerGroups.build(allocator, IdentityScheduler{}, graph.deps);
         defer groups.deinit(allocator);
         var level_boxy = std.ArrayList(u32).empty;
@@ -1830,6 +1858,13 @@ fn finalizeProgramBoxy(
                     if (specialized[member]) break true;
                 } else false;
                 if (any_specialized) {
+                    // A group only specialized roots make up, none of which
+                    // a `.boxy`-evaluated root reads, is the discovery
+                    // pass's.
+                    const deferred = for (members) |member| {
+                        if (!specialized[member] or early[member]) break false;
+                    } else true;
+                    if (deferred) continue;
                     for (members) |member| try level_specialized.append(allocator, @intCast(member));
                 } else if (group.cyclic) {
                     try cycles.append(allocator, group);
@@ -1846,8 +1881,9 @@ fn finalizeProgramBoxy(
             for (cycles.items) |group| try evaluateBoxyCycle(allocator, modules, lowering_modules, states, roots.items, groups.membersOf(group), evaluation_options);
         }
     }
-    // Every compile-time root is complete. The program's instance-dependent
-    // literals are converted by the Solved evaluator's discovery: it
+    // Every root the `.boxy` evaluator runs is complete. The Solved
+    // evaluator's discovery evaluates the specialized roots still pending
+    // and converts the program's instance-dependent literals: it
     // specializes a runtime body only where it can register a literal
     // root, evaluates each literal root, and records the values a `.boxy`
     // runtime program reads as its literal tables (design.md "Literal

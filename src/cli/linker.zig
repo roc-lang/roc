@@ -375,7 +375,8 @@ fn undefinedCompilerSymbols(arena: std.mem.Allocator, diagnostics: []const u8) s
         for (symbols.items) |existing| {
             if (std.mem.eql(u8, existing, name)) seen = true;
         }
-        if (!seen) try symbols.append(name);
+        // The diagnostics are released with the link; the report outlives it.
+        if (!seen) try symbols.append(try arena.dupe(u8, name));
     }
     return symbols.items;
 }
