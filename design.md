@@ -24487,6 +24487,13 @@ chooses the output kind; `roc build` produces what the platform declares for
 the selected target, and there is no `--no-link` style flag. `--target` and
 `--output` (the output path) remain per-build choices.
 
+Every native command reads one default platform header
+(`echo_platform.platform_main_source`), and staging keeps the user's filename,
+so `roc check`, `roc run` and `roc build` share a program's checked modules and
+compile-time values, and an error result reports the same way however the
+program was started. Only a hostless wasm build has its own header, because it
+has no process to take arguments from or exit status to report.
+
 For headerless applications, the synthetic default platform owns the process
 entrypoint. Every native program build path, including embedded interpreter
 builds, links its target-specific process startup object. The generated

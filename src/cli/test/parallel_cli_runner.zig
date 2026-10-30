@@ -11630,8 +11630,10 @@ fn customBoxyCompileTimeObjects(
     const inventory = cacheInventory(io, allocator, cache_root) catch |err|
         return customInfraFailure(allocator, timer, "failed to read the cache: {}", .{err});
     var objects: usize = 0;
+    var checked_modules: usize = 0;
     for (inventory) |entry| {
         if (entry.family == .boxy_object) objects += 1;
+        if (entry.family == .checked) checked_modules += 1;
     }
     // Builtin, Lib, and Echo, the module the default platform gives the app.
     if (objects < 2) return customFailure(allocator, timer, "`roc check` filed {d} module objects, expected the app's imports' to be there", .{objects});
@@ -11643,9 +11645,14 @@ fn customBoxyCompileTimeObjects(
     const after_run = cacheInventory(io, allocator, cache_root) catch |err|
         return customInfraFailure(allocator, timer, "failed to read the cache: {}", .{err});
     var objects_after: usize = 0;
+    var checked_modules_after: usize = 0;
     for (after_run) |entry| {
         if (entry.family == .boxy_object) objects_after += 1;
+        if (entry.family == .checked) checked_modules_after += 1;
     }
+    // Every native command reads one default platform header, so a run reuses
+    // the app's checked module, and with it the constants it stores.
+    if (checked_modules_after != checked_modules) return customFailure(allocator, timer, "`roc run` checked modules again: {d} became {d}", .{ checked_modules, checked_modules_after });
     // A run reuses every object the check filed.
     if (objects_after != objects) return customFailure(allocator, timer, "`roc run` rebuilt module objects: {d} became {d}", .{ objects, objects_after });
 
