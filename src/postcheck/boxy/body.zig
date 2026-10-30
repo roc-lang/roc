@@ -3312,11 +3312,30 @@ pub const Builder = struct {
     /// Fill `out` with the literal arguments of a call of `callee` at the
     /// edge `edge` of this body's module: one per literal requirement of the callee's
     /// scheme, from the checked edge arguments (`literalEdgeArgs`).
-    pub fn fillLiteralArgs(self: *Builder, edge: checked.LiteralEdge, out: []LocalId) Allocator.Error!void {
+    pub fn fillLiteralArgs(self: *Builder, callee: ?WorkerId, edge: checked.LiteralEdge, out: []LocalId) Allocator.Error!void {
         if (out.len == 0) return;
         const args = self.view.view.checked_procedure_templates.literalEdgeArgs(edge);
-        if (args.len != out.len) invariant("an edge's literal arguments do not cover its callee's literal_requirements");
+        if (args.len != out.len) invariantFmt("an edge's {d} literal arguments do not cover its callee's {d} literal requirements (caller {s}, callee {s}{s})", .{
+            args.len,
+            out.len,
+            self.workerName(self.worker_id),
+            if (callee) |id| self.workerName(id) else "a local procedure",
+            if (callee) |id| (if (self.program.worker(id).imported) " of an imported module" else "") else "",
+        });
         for (args, out) |source, *word| word.* = try self.literalArg(source);
+    }
+
+    /// The source name of a template worker's procedure, for diagnostics.
+    pub fn workerName(self: *Builder, id: WorkerId) []const u8 {
+        return switch (self.program.worker(id).key) {
+            .template => |key| blk: {
+                const view = self.program.module(key.module);
+                const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+                const export_name = view.nameStore().procBase(template.proc_base).export_name orelse break :blk "a template";
+                break :blk view.nameStore().exportNameText(export_name);
+            },
+            inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => |_, kind| @tagName(kind),
+        };
     }
 
     /// The literal argument an edge argument source denotes.
@@ -4020,7 +4039,7 @@ pub const Builder = struct {
         const literals = try self.allocator.alloc(LocalId, scheme.literal_requirements.len + declaring_literals);
         defer self.allocator.free(literals);
         if (edge) |use_edge| {
-            try self.fillLiteralArgs(use_edge, literals[0..scheme.literal_requirements.len]);
+            try self.fillLiteralArgs(null, use_edge, literals[0..scheme.literal_requirements.len]);
         } else {
             const bound_all = try std.mem.concat(self.allocator, TypeId, &.{ self.env.bound[0..outer_count], own_types });
             defer self.allocator.free(bound_all);
@@ -4346,7 +4365,7 @@ pub const Builder = struct {
             if (param_index >= evidence.len) invariant("a local procedure call's evidence does not cover its dictionaries");
             dict.* = try self.paramDictionary(evidence, param_index, context);
         }
-        try self.fillLiteralArgs(.{ .use = call.func }, words[own_types.len + scheme.dictionaries.len ..]);
+        try self.fillLiteralArgs(null, .{ .use = call.func }, words[own_types.len + scheme.dictionaries.len ..]);
         try self.push(.{ .finish_local_call = .{
             .closure = closure,
             .words = try self.program.arena.allocator().dupe(LocalId, words),
@@ -5230,7 +5249,7 @@ pub const Builder = struct {
             // its instantiation, as it does its dictionaries.
             try self.derivedLiteralArgs(callee, bound, literals);
         } else {
-            try self.fillLiteralArgs(edge, literals);
+            try self.fillLiteralArgs(callee, edge, literals);
         }
         return .{ .hidden = hidden, .bound = bound, .ret = try self.program.substitute(self.allocator, target.ret, bound) };
     }
@@ -5670,7 +5689,7 @@ pub const Builder = struct {
                     errdefer self.allocator.free(hidden);
                     for (target_bound, hidden[0..target_subst.len]) |ty, *desc| desc.* = try self.descOf(ty);
                     if (alias_module == edge_module) {
-                        try self.fillLiteralArgs(edge, hidden[target_subst.len + target.dictionary_params.len ..]);
+                        try self.fillLiteralArgs(null, edge, hidden[target_subst.len + target.dictionary_params.len ..]);
                     } else {
                         try self.derivedLiteralArgs(callee, target_bound, hidden[target_subst.len + target.dictionary_params.len ..]);
                     }
@@ -6051,15 +6070,7 @@ pub const Builder = struct {
             if (param_index == index.index) return self.dict_locals[offset + position];
         }
         const worker = self.currentWorker().*;
-        const named: []const u8 = switch (worker.key) {
-            .template => |key| blk: {
-                const view = self.program.module(key.module);
-                const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
-                const export_name = view.nameStore().procBase(template.proc_base).export_name orelse break :blk "a template";
-                break :blk view.nameStore().exportNameText(export_name);
-            },
-            inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => |_, kind| @tagName(kind),
-        };
+        const named = self.workerName(self.worker_id);
         const evidence_params = if (worker.key == .template) self.templateEvidenceParams(self.worker_id) else &.{};
         var listing: [2048]u8 = undefined;
         var written: usize = 0;

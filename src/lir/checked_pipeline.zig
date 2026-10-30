@@ -396,6 +396,8 @@ pub const Timing = struct {
     inline_plan_ns: TimingCounter = .{},
     lir_gen_ns: TimingCounter = .{},
     boxy_lowering_ns: TimingCounter = .{},
+    boxy_unit_codegen_ns: TimingCounter = .{},
+    boxy_unit_cache_ns: TimingCounter = .{},
     lir_passes_ns: TimingCounter = .{},
     arc_ns: TimingCounter = .{},
 
@@ -453,6 +455,8 @@ pub const Timing = struct {
             .inline_plan_ns = self.inline_plan_ns.load(),
             .lir_gen_ns = self.lir_gen_ns.load(),
             .boxy_lowering_ns = self.boxy_lowering_ns.load(),
+            .boxy_unit_codegen_ns = self.boxy_unit_codegen_ns.load(),
+            .boxy_unit_cache_ns = self.boxy_unit_cache_ns.load(),
             .lir_passes_ns = self.lir_passes_ns.load(),
             .arc_ns = self.arc_ns.load(),
             .monotype_diagnostics = diagnostics,
@@ -510,6 +514,8 @@ pub const Timing = struct {
         self.inline_plan_ns.add(snapshot_value.inline_plan_ns);
         self.lir_gen_ns.add(snapshot_value.lir_gen_ns);
         self.boxy_lowering_ns.add(snapshot_value.boxy_lowering_ns);
+        self.boxy_unit_codegen_ns.add(snapshot_value.boxy_unit_codegen_ns);
+        self.boxy_unit_cache_ns.add(snapshot_value.boxy_unit_cache_ns);
         self.lir_passes_ns.add(snapshot_value.lir_passes_ns);
         self.arc_ns.add(snapshot_value.arc_ns);
         self.addMonotypeDiagnostics(snapshot_value.monotype_diagnostics);
@@ -530,6 +536,8 @@ pub const Timing = struct {
             .inline_plan => self.inline_plan_ns.add(elapsed_ns),
             .lir_gen => self.lir_gen_ns.add(elapsed_ns),
             .boxy_lowering => self.boxy_lowering_ns.add(elapsed_ns),
+            .boxy_unit_codegen => self.boxy_unit_codegen_ns.add(elapsed_ns),
+            .boxy_unit_cache => self.boxy_unit_cache_ns.add(elapsed_ns),
             .lir_passes => self.lir_passes_ns.add(elapsed_ns),
             .arc => self.arc_ns.add(elapsed_ns),
         }
@@ -678,13 +686,15 @@ pub const TimingSnapshot = struct {
     inline_plan_ns: u64 = 0,
     lir_gen_ns: u64 = 0,
     boxy_lowering_ns: u64 = 0,
+    boxy_unit_codegen_ns: u64 = 0,
+    boxy_unit_cache_ns: u64 = 0,
     lir_passes_ns: u64 = 0,
     arc_ns: u64 = 0,
     monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
     demand: DemandMetrics = .{},
 };
 
-const TimingPhase = enum {
+pub const TimingPhase = enum {
     monotype,
     lift,
     spec_constr,
@@ -692,6 +702,10 @@ const TimingPhase = enum {
     inline_plan,
     lir_gen,
     boxy_lowering,
+    /// Native code generation of a module unit's object (`compile.boxy_unit`).
+    boxy_unit_codegen,
+    /// Encoding and filing a module unit's object in the object cache.
+    boxy_unit_cache,
     lir_passes,
     arc,
 };
@@ -699,13 +713,13 @@ const TimingPhase = enum {
 /// One post-check stage in progress: records the stage for crash reports and,
 /// when timing is enabled, its duration. `end` is idempotent so a stage can end
 /// explicitly and still be covered by a `defer` on error paths.
-const PipelineStageScope = struct {
+pub const PipelineStageScope = struct {
     timing: ?*Timing = null,
     started_ns: i64 = 0,
     phase: TimingPhase,
     ice: ?base.ice_context.Guard,
 
-    fn begin(timing: ?*Timing, phase: TimingPhase) PipelineStageScope {
+    pub fn begin(timing: ?*Timing, phase: TimingPhase) PipelineStageScope {
         const ice = base.ice_context.enter(.{ .phase = .post_check, .stage = @tagName(phase) });
         const active = timing orelse return .{ .phase = phase, .ice = ice };
         return .{
@@ -716,7 +730,7 @@ const PipelineStageScope = struct {
         };
     }
 
-    fn end(self: *PipelineStageScope) void {
+    pub fn end(self: *PipelineStageScope) void {
         if (self.ice) |ice| {
             ice.leave();
             self.ice = null;
