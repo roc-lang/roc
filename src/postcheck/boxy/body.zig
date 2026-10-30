@@ -1215,7 +1215,11 @@ pub const Builder = struct {
                             try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = self.currentWorker().ret, .root = wrapper.root } })
                         else
                             try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
-                        .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
+                        .fn_value => |fn_id| if (self.program.moduleUnit() != null)
+                            try self.restoreFn(.{ .module = self.module }, fn_id, self.currentWorker().ret)
+                        else
+                            try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
+                        .pending, .unevaluated, .discarded, .expect, .runtime => try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
                     },
                     // A literal argument's body is the conversion its root
                     // names, called on another module's literal.

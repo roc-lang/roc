@@ -755,9 +755,7 @@ pub fn storedEdge(b: *Builder, source: lower.ConstSource, edge: check.ConstStore
         },
         .codec => |codec| codec,
     };
-    const store_module = switch (source) {
-        .module => |module| module,
-    };
+    const store_module = source.module;
     var reached = std.AutoHashMapUnmanaged([32]u8, void).empty;
     defer reached.deinit(b.allocator);
     var pending = std.ArrayList(ModuleIndex).empty;

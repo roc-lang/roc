@@ -9207,15 +9207,22 @@ const PackStoreFiles = struct {
                 .local_pack, .package_pack, .optimized_pack => {},
                 .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .local_discovery, .package_discovery, .program_output, .scratch, .boxy_object => continue,
             }
+            var artifact = (try store.acquireKey(entry.key, store.now())) orelse return error.InvalidArtifact;
+            defer artifact.deinit();
+            const bytes = try artifact.read(allocator);
+            // Interface summaries are hints a worker writes unless another
+            // finished the relation first (design.md "Persistent
+            // Specialization Interface Summaries"). They are no pack's code.
+            if (std.mem.startsWith(u8, bytes, "RIFACE")) {
+                allocator.free(bytes);
+                continue;
+            }
             try result.families.append(allocator, entry.family);
             const path = try allocator.dupe(u8, &std.fmt.bytesToHex(entry.key, .lower));
             result.paths.append(allocator, path) catch |err| {
                 allocator.free(path);
                 return err;
             };
-            var artifact = (try store.acquireKey(entry.key, store.now())) orelse return error.InvalidArtifact;
-            defer artifact.deinit();
-            const bytes = try artifact.read(allocator);
             result.contents.append(allocator, bytes) catch |err| {
                 allocator.free(bytes);
                 return err;
@@ -10825,7 +10832,6 @@ fn customCompatibleNativeProcedureCache(
             .pack_hit_proc = "Closed.total",
             .early_hit_only = true,
             .compile_debug = "[dbg] \"compatible first\"\n[dbg] \"compatible second\"",
-            .compile_debug_absent = "compatible undemanded",
             .stdout = "",
             .stderr = "original 45 120 earth | Got the following from the host: string from host\n\x1b[32mSUCCESS\x1b[0m: Result contains expected substring!\n",
             .extra_args = &.{ target_arg, "--jobs=1" },
@@ -10839,7 +10845,6 @@ fn customCompatibleNativeProcedureCache(
         .pack_hit_proc = "Closed.total",
         .early_hit_only = true,
         .compile_debug = "[dbg] \"compatible first\"\n[dbg] \"compatible second\"",
-        .compile_debug_absent = "compatible undemanded",
         .stdout = "",
         .stderr = "original 45 120 earth | Got the following from the host: string from host\n\x1b[32mSUCCESS\x1b[0m: Result contains expected substring!\n",
         .extra_args = &.{ "--target=x64glibc", "--specialize=yes", "--jobs=1" },
@@ -10860,7 +10865,6 @@ fn customCompatibleNativeProcedureCache(
         .early_hit_only = true,
         .fresh_proc = "Closed.total",
         .compile_debug = "[dbg] \"compatible first\"\n[dbg] \"compatible second\"",
-        .compile_debug_absent = "compatible undemanded",
         .stdout = "",
         .stderr = "original 46 121 earth | Got the following from the host: string from host\n\x1b[32mSUCCESS\x1b[0m: Result contains expected substring!\n",
         .extra_args = &.{ "--target=x64glibc", "--specialize=yes", "--jobs=1" },
@@ -12522,15 +12526,12 @@ fn customDemandCtfeDiagnostics(
     timer: *harness.Timer,
     timeout_ms: u64,
 ) ?TestResult {
-    // `builds` is false for a root no build demands: checking reports its
-    // error, and a build, which evaluates only the roots its program reads,
-    // does not.
-    const fixtures = [_]struct { path: []const u8, diagnostic: []const u8, builds: bool = true }{
+    const fixtures = [_]struct { path: []const u8, diagnostic: []const u8 }{
         .{ .path = "test/cli/demand_ctfe/RejectedNumeral.roc", .diagnostic = "invalid number" },
         .{ .path = "test/cli/demand_ctfe/NestedLiteral.roc", .diagnostic = "invalid string" },
         .{ .path = "test/cli/demand_ctfe/RejectedDispatch.roc", .diagnostic = "describe" },
         .{ .path = "test/cli/demand_ctfe/EmpiricalMatch.roc", .diagnostic = "This match expression doesn't cover all possible cases." },
-        .{ .path = "test/cli/demand_ctfe/UnusedTopLevelExpect.roc", .diagnostic = "This expect failed during compile-time evaluation.", .builds = false },
+        .{ .path = "test/cli/demand_ctfe/UnusedTopLevelExpect.roc", .diagnostic = "This expect failed during compile-time evaluation." },
     };
     for (fixtures) |entry| {
         const fixture = .{ .name = std.fs.path.basename(entry.path), .diagnostic = entry.diagnostic };
@@ -12565,7 +12566,6 @@ fn customDemandCtfeDiagnostics(
             &.{ "build", "--no-color" },
         };
         for (commands) |args| {
-            if (!entry.builds and std.mem.eql(u8, args[0], "build")) continue;
             const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse
                 return timeoutFailure(allocator, timer, .run, "demand fixture timeout exhausted");
             const run = runRocInEnv(io, allocator, &isolated, args, app, .relative, &.{}, null, remaining) catch |err|
@@ -12723,8 +12723,8 @@ fn customRecordedProgramOutput(
     }, &app)) |failure| return failure;
     const original = std.Io.Dir.cwd().readFileAlloc(io, app, allocator, .limited(1024 * 1024)) catch |err|
         return customInfraFailure(allocator, timer, "failed to read app: {}", .{err});
-    const source = std.fmt.allocPrint(allocator, "{s}\nunused : U64\nunused = {{\n    expect 1 == 2\n    99\n}}\n", .{original}) catch |err|
-        return customInfraFailure(allocator, timer, "failed to create unused failing root: {}", .{err});
+    const source = std.fmt.allocPrint(allocator, "{s}\nunused : U64\nunused = {{\n    expect 1 == 1\n    99\n}}\n", .{original}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create unused root: {}", .{err});
     const edited = std.mem.replaceOwned(u8, allocator, source, "Closed.total(10)", "Closed.total(11)") catch |err|
         return customInfraFailure(allocator, timer, "failed to edit app: {}", .{err});
     const revised = std.mem.replaceOwned(u8, allocator, edited, "expect initial == 45", "expect initial == 55") catch |err|
@@ -12835,16 +12835,6 @@ fn customRecordedProgramOutput(
     };
     if (completionCounter(evicted.stderr, "Early completed result hits") != 1 or completionCounter(evicted.stderr, "Checked modules loaded") != 0 or completionCounter(evicted.stderr, "Checked modules compiled") != 0)
         return failureFromRun(allocator, timer, evicted, "completed result depended on evicted checked IR");
-    // Check and test demand the unused failing root; build never does, even
-    // after those commands have populated their caches.
-    for ([_][]const []const u8{ &.{ "check", "--no-color" }, &.{ "test", "--opt=dev", "--no-color" }, &.{ "build", "--opt=dev", "--specialize=no", "--no-color", out_arg } }) |args| {
-        if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{
-            .args = args,
-            .roc_file = app,
-            .exit = .failure,
-            .contains = &.{.{ .stream = .stderr, .text = "compile time expect failed" }},
-        })) |failure| return failure;
-    }
     for ([_][]const []const u8{ &.{ "build", "--opt=dev", "--no-cache", "--no-color", out_arg }, &.{ "build", "--opt=dev", "--specialize=yes", "--no-color", out_arg } }) |args| {
         // Replacing the executable must not preserve these unrelated bytes.
         std.Io.Dir.cwd().writeFile(io, .{ .sub_path = exe, .data = "stale output" }) catch |err|
@@ -12856,17 +12846,20 @@ fn customRecordedProgramOutput(
         })) |failure| return failure;
         if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{ .args = &.{}, .stdout_exact = "45 155\n", .stderr_exact = "" })) |failure| return failure;
     }
-    // An edit making the failure demanded must not use the older success.
-    const failed = std.mem.replaceOwned(u8, allocator, source, "Closed.total(10)", "unused") catch |err|
-        return customInfraFailure(allocator, timer, "failed to demand failing root: {}", .{err});
+    // An edit making a root fail must not use the older success.
+    const failed = std.mem.replaceOwned(u8, allocator, source, "expect 1 == 1", "expect 1 == 2") catch |err|
+        return customInfraFailure(allocator, timer, "failed to make a root fail: {}", .{err});
     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = failed }) catch |err|
         return customInfraFailure(allocator, timer, "failed to edit source: {}", .{err});
-    if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{
-        .args = &.{ "build", "--opt=dev", "--no-color", out_arg },
-        .roc_file = app,
-        .exit = .failure,
-        .contains = &.{.{ .stream = .stderr, .text = "compile time expect failed" }},
-    })) |failure| return failure;
+    // Every command reports it, though nothing reads the root.
+    for ([_][]const []const u8{ &.{ "build", "--opt=dev", "--no-color", out_arg }, &.{ "check", "--no-color" }, &.{ "test", "--opt=dev", "--no-color" }, &.{ "build", "--opt=dev", "--specialize=no", "--no-color", out_arg } }) |args| {
+        if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{
+            .args = args,
+            .roc_file = app,
+            .exit = .failure,
+            .contains = &.{.{ .stream = .stderr, .text = "compile time expect failed" }},
+        })) |failure| return failure;
+    }
     // Warning-only successful compilations remain eligible; the frontend
     // reports the warning once even when finalization comes from the record.
     const warning = std.mem.replaceOwned(u8, allocator, source, "main! = |args| {", "main! = |args| {\n    unused_local = 0") catch |err|
@@ -13558,7 +13551,6 @@ const StoreExpectations = struct {
     /// Root debug output must appear once on every build, including cache reuse.
     compile_debug: ?[]const u8 = null,
     /// An undemanded root must produce no observation.
-    compile_debug_absent: ?[]const u8 = null,
     /// Run an uncached build before populating the store.
     uncached_baseline: bool = false,
     /// Which cached build must consume an object pack. Later checked-cache
@@ -13651,9 +13643,6 @@ fn storeBuildsBehaveIdentically(
             if (std.mem.count(u8, built.stderr, message) != 1) {
                 return failureFromRun(allocator, timer, built, "compile-time debug output was not preserved exactly once");
             }
-        }
-        if (expect.compile_debug_absent) |message| {
-            if (std.mem.find(u8, built.stderr, message) != null) return failureFromRun(allocator, timer, built, "an undemanded root produced debug output");
         }
         if (expect.monotype_body_reduction) {
             const contexts = timingCounter(built.stderr, "Shared Monotype body + dispatch", "Body contexts created") orelse

@@ -8,8 +8,8 @@ offset = {
     Generic.f7(2) + Generic.composite({}).value
 }
 
-unused : U64
-unused = crash "unused failing interface root"
+unused : U64 -> U64
+unused = |_| crash "unused failing interface root"
 
 main! = |args| {
     total = Generic.f7(args.len().to_u64() + 10) + offset + Generic.composite({}).value
