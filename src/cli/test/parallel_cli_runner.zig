@@ -11504,17 +11504,20 @@ fn customBoxyModuleObjectCache(
         isolated.env_map.put(key, cache_root) catch |err| return customInfraFailure(allocator, timer, "failed to set the cache root: {}", .{err});
     }
 
-    const Build = struct { name: []const u8, no_cache: bool, objects: []const u8 };
+    const Build = struct { name: []const u8, no_cache: bool, objects: []const u8, identical: bool };
     // The program's units are Builtin, Combinator, Tree, Main, and the
     // default platform's module; the root unit's object makes six. An edit
     // of the app rebuilds Main's unit and the root unit; an edit of Tree
-    // rebuilds Tree's unit and, since Main imports it, both again.
+    // rebuilds Tree's unit and, since Main imports it, both again. The
+    // builds of unedited sources produce the same bytes whatever the cache
+    // held; an edited module's symbols carry its new content identity, so
+    // an edit's executable is only required to run.
     const builds = [_]Build{
-        .{ .name = "cold", .no_cache = false, .objects = "Boxy objects: 0 cached, 6 built" },
-        .{ .name = "warm", .no_cache = false, .objects = "Boxy objects: 6 cached, 0 built" },
-        .{ .name = "nocache", .no_cache = true, .objects = "" },
-        .{ .name = "app_edit", .no_cache = false, .objects = "Boxy objects: 4 cached, 2 built" },
-        .{ .name = "lib_edit", .no_cache = false, .objects = "Boxy objects: 3 cached, 3 built" },
+        .{ .name = "cold", .no_cache = false, .objects = "Boxy objects: 0 cached, 6 built", .identical = true },
+        .{ .name = "warm", .no_cache = false, .objects = "Boxy objects: 6 cached, 0 built", .identical = true },
+        .{ .name = "nocache", .no_cache = true, .objects = "", .identical = true },
+        .{ .name = "app_edit", .no_cache = false, .objects = "Boxy objects: 4 cached, 2 built", .identical = false },
+        .{ .name = "lib_edit", .no_cache = false, .objects = "Boxy objects: 3 cached, 3 built", .identical = false },
     };
     var first_bytes: ?[]const u8 = null;
     for (builds) |build| {
@@ -11538,7 +11541,7 @@ fn customBoxyModuleObjectCache(
         const exe = runnableOutputPath(io, allocator, output) catch |err| return customInfraFailure(allocator, timer, "executable: {}", .{err});
         const bytes = std.Io.Dir.cwd().readFileAlloc(io, exe, allocator, .limited(64 * 1024 * 1024)) catch |err| return customInfraFailure(allocator, timer, "read executable: {}", .{err});
         if (first_bytes) |expected| {
-            if (!std.mem.eql(u8, expected, bytes)) return customFailure(allocator, timer, "the {s} build's executable differs from the cold build's", .{build.name});
+            if (build.identical and !std.mem.eql(u8, expected, bytes)) return customFailure(allocator, timer, "the {s} build's executable differs from the cold build's", .{build.name});
         } else first_bytes = bytes;
         if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{ .args = &.{}, .stdout_exact = "", .stderr_exact = "" })) |failure| return failure;
     }

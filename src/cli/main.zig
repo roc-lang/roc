@@ -12485,7 +12485,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             .app_export_symbols = link_facts.app_export_symbols,
             .object = written.object_bytes,
         });
-        build_env.recordBoxyObjects(0, 1);
+        // The summary counts cache work; a build without a cache does none.
+        if (!args.no_cache) build_env.recordBoxyObjects(0, 1);
     }
     ctx.gpa.free(written.object_bytes);
     written.object_bytes = &.{};
