@@ -721,6 +721,16 @@ Same-program retained fragments remain exact-target for now. Their separate
 `rejected_target` metric exposes this limitation; revision, transferred LIR and
 layout ownership, CPU, static-data and runtime-context checks are unchanged.
 
+### Closed Named Occurrences
+
+A closed checked occurrence (a root without identity variables) has no
+instantiation identity, so lowering chooses one representative for each
+closed named type inside each lowering's occurrence scope
+(`Builder.canonicalNamedOccurrence`, "Occurrence scope"). The candidates come
+from an index of every module view's closed named roots by checked type key
+(`ClosedOccurrenceIndex`), each key's holders sorted by module key. The
+coordinator builds it once, before any body is lowered, and workers borrow it.
+
 ### Persistent Specialization Interface Summaries
 
 The earliest reusable result of an open specialization request is its settled
@@ -3634,21 +3644,21 @@ type contain no function value, no function, erased or generated named type,
 no named type or field default declared in the module itself, and nothing
 else carrying a module-version id. A `runtime` payload (a guarded root whose
 evaluation failed) and an `expect` root are never reused. A named type
-carries the checked occurrence it was lowered from: `named_type.ty`, an id
-in the type store of `named_type.ty_module`, the module whose checked types
-the occurrence came from. That module is the declaring module when the type
-was lowered inside it and the module that used the type otherwise, so
-`ty_module` is explicit and need not be `named_type.module`. Static data
-planning re-enters `ty_module`'s store at `ty`, and the occurrence takes part
-in a Monotype type's full and specialization digests. An occurrence in the
+carries a checked occurrence: `named_type.ty`, an id in the type store of
+`named_type.ty_module`, the module whose checked types the occurrence is in,
+which is explicit and need not be `named_type.module`. Static data planning
+re-enters `ty_module`'s store at `ty`, and the occurrence takes part in a
+Monotype type's full and specialization digests. Monotype lowering names only
+occurrences inside the storing module's import closure ("Occurrence scope"),
+so the module's cache entry names only modules its own identity covers, and a
+stored type is restored with the occurrences it holds. An occurrence in the
 module's own store names a type of the version that stored it: after an edit
 the same id names another type of the new version, or none. A root holding
-one is therefore not portable. An occurrence in another module's store stays
-valid, because the value identity covers that module's key: Monotype lowering
-names only occurrences inside the storing module's import closure (see
-"Occurrence scope"). Compilers with
-runtime safety check, for every transplanted root, that each named type's
-occurrence re-enters another module's store at the nominal type it names.
+one is therefore not portable without the key relocation above. An occurrence
+in another module's store stays valid, because the value identity covers that
+module's key. Compilers with runtime safety check, for every transplanted
+root, that each named type's occurrence re-enters a store of the compilation
+at the nominal type it names.
 A literal conversion stores no type, so its value is portable when its checked
 type mentions one of the module's own types only where the value holds nothing
 of it (a phantom parameter of an imported nominal); its value identity still
@@ -10038,10 +10048,14 @@ A clone that admits only productive direct inlines (every clone outside
 `.none`'s fusion pass) inlines a direct call only when the copied body pays for
 itself. Three kinds of call always qualify: the checker-stamped iterator
 protocol (`IteratorProcedureId`), a wrapper whose body does less work than its
-call (the definition solved inline analysis uses, shared in `wrapper_body.zig`)
-and that lies on no cycle of direct calls, where inlining it would only unroll
-the recursion, and a call whose captures the context substituted, which cannot
-stay residual.
+call (the definition solved inline analysis uses, shared in `wrapper_body.zig`),
+that lies on no cycle of direct calls, where inlining it would only unroll the
+recursion, and that passes none of its own calls a value it builds itself where
+the callee consumes it, and a call whose captures the context substituted,
+which cannot stay residual. A body like `|msg| for_each!(msg, Stdout.line!)`
+inlines `for_each!` into itself on the function reference it supplies, so its
+clone is a whole loop wherever it lands; it stays one procedure, and copies of
+it at each caller are admitted only where they are productive there.
 Any other call qualifies only when inlining lets a known value meet a consumer
 that gains from it:
 
@@ -10069,7 +10083,7 @@ each parameter and capture, either directly or by placing it in the function's
 result, and which result parts the body constructs or passes through on every
 path that returns; it records each call's demand on its result too. Demand
 flows from consumers to the values that reach them through bindings,
-projections, constructors, branches, loops, join points, and calls, including
+field and payload reads, constructors, branches, loops, join points, and calls, including
 a function value's captures when the value may be called. Parts are paths of
 field, item, and tag-payload steps. A value's parts recur only through a tag
 payload, so a path that repeats a payload step folds to that step's first
@@ -11737,7 +11751,12 @@ request itself is formed at the widened row: a direct call whose result flows
 into a wider row, through a row coercion or a lambda body whose composed `?`
 result is wider than its own, is lowered at that row's cell, and a callee
 request whose row includes the callee's closed row widens it
-(`stepCallExprAtNode`, `coercedValueTakesRow`). A construction builds only
+(`stepCallExprAtNode`, `coercedValueTakesRow`). That holds for a procedure
+template, which is instantiated afresh for each request. A local
+procedure's request relates the instance the enclosing body holds exactly,
+so a closed row in its result is the enclosing body's own, such as the row
+of a captured function value it calls, and a direct call to it keeps that
+row like any other value. A construction builds only
 its own row: each payload whose type is not already the destination's slot
 for it must take that slot by the same rule, so `Err(tag)` forwarding a
 parameter whose row the `?` result widens is not lowered at the result's
@@ -11778,7 +11797,7 @@ two, so that variable does not seal to its row default either. The use
 then never counts as closed, and the call keeps its own row and is
 widened by a `row_widen`. The template side and the use side apply the
 same discharge rule (`row_default_discharges_constraints`, which the
-checked artifact records for flex and rigid variables alike).
+checked module data records for flex and rigid variables alike).
 Specialization therefore never meets a request wider than a template
 that cannot take it.
 
@@ -11835,7 +11854,13 @@ Five consumers keep the rule exact:
 
 - Unification relates every repeated occurrence it gathers to the first one
   (`relateChainDuplicateTags` / `relateChainDuplicateFields`), so a relation
-  that flattens a chain never discards a repeated occurrence's payload.
+  that flattens a chain never discards a repeated occurrence's payload. When
+  occurrences fail to relate, the conflict belongs to the row, not to the
+  relation: the unifier stops and names the row (`Scratch.repeatedLabelRow`),
+  and the checker, outside speculative probes, normalizes that row and relates
+  the operands again. A conflicting repeat is reported once, as the row's
+  conflicting-label report, never also as a mismatch of the relation that
+  found it.
 - `normalizeRowUnion` relates each repeated occurrence to the next one out,
   then rewrites the row part that holds the outer copy to omit it. Inner
   parts may be shared by other types (a callback's own error row) and keep
@@ -11857,7 +11882,7 @@ Five consumers keep the rule exact:
   source row's heads into one projected row, so it normalizes every source
   row whose chain repeats a label before inventorying the batch, and every
   source tail it gathers after relating heads, which those relations can
-  expose. A conflict is reported at the contribution. A projection never
+  expose. A conflict is reported at the contribution. A projected row never
   holds a label twice.
 - Type rendering (`TypeWriter`, and the snapshot diff's row gatherers) shows
   each label once, with its innermost occurrence, since that is what the row
@@ -11900,19 +11925,20 @@ call, is reported at the output root whose walk found it, and one of the
 cycle's variables becomes `.err` after every report has its snapshot.
 
 Normalization needs no metadata on type variables and adds no work where no
-label repeats: detection rides on the unifier's gather,
-the key writer's row sort, and the settled row walk, which already compare
-labels, and the `?` composition compares labels only along a source chain
-with two or more tag-bearing parts. A conflict is reported as a conflicting
-tag or field: each occurrence is shown as a closed single-label row at the
-source of the row part holding it, so the report names where each copy of
-the label came from. Its location is the value whose type holds the row when
-the settled walk reached the row from an output root, and otherwise the
-outer occurrence. The walk finishes each root before starting the next, in
-source-node order, so the value is the
-earliest source node whose type reaches the row; choosing it is a reporting
-decision and changes nothing about which programs check. The row is poisoned
-once every diagnostic has snapshotted the settled graph.
+label repeats: detection rides on the unifier's gather, the key writer's row
+sort, and the settled row walk, which already compare labels, and the `?`
+composition compares labels only along a source chain with two or more
+tag-bearing parts. A conflict is reported as a conflicting tag or field: each
+occurrence is shown as a closed single-label row at the source of the row part
+holding it, so the report names where each copy of the label came from. Its
+location is the value whose type holds the row: the actual operand of the
+relation that found the conflict, the contribution of a `?` composition, or the
+output root the settled walk reached the row from; and otherwise the outer
+occurrence. The walk finishes each root before starting the next, in source-node
+order, so the value is the earliest source node whose type reaches the row;
+choosing it is a reporting decision and changes nothing about which programs
+check. The row is poisoned once every diagnostic has snapshotted the settled
+graph.
 
 The accepted side is pinned by `src/check/test/row_union_normalization_test.zig`
 (a callback raising the tag its wrapper adds, a repeated tag reaching a method
@@ -11921,6 +11947,9 @@ repeated two extensions down), by `src/check/test/issue_11621_test.zig`
 (recursive functions using `?`, directly, mutually, through a generalized
 helper, and through dispatch), and by the chain-duplicate unifier tests and the
 `normalizeRowUnion` test in `src/check/Check.zig`, which cover records.
+`src/check/test/issue_12677_test.zig` pins `?` composition and rendering of
+a repeated tag, and a conflicting repeat reported once whether a `?`
+composition or a plain relation finds it.
 `src/compile/test/issue_11621_test.zig` pins the output of a mutually
 recursive group's substitution rows, and
 `test/fx-open/issue_11621_recursive_try.roc` runs those programs on every
@@ -12510,7 +12539,9 @@ A boundary whose root does not generalize outputs no scheme, and no use of
 its monomorphic binding instantiates one, so `retireNonGeneralizedTypeSchemes`
 hands each requirement it captured to the innermost enclosing root still
 prospective, exactly as a use's copy would; every use shares the binding's one
-type, so that single copy stands for all of them. A generated codec relation
+type, so that single copy stands for all of them. No use made that copy, so it
+keeps the requirement's own failure expression rather than whichever expression
+is being checked when the boundary runs. A generated codec relation
 over an enclosing scope's variable (`g = |{}| Json.to_str(W.(r))` inside a
 function of `r`) is attached to no receiver descriptor, so this transfer is how
 the enclosing scheme learns of it and validates it at each of its own uses.
@@ -13102,14 +13133,16 @@ The kind rules:
   whose presence var the current boundary OWNS (rank at or above the
   boundary's); lower-ranked entries stay pending for the scope that owns
   them, so nested boundaries fired mid-statement never pin an enclosing
-  destructure prematurely. Before a value flows into an annotated
-  function's result, a pass binds only the binders whose kind is already
-  determined (`DestructJudgment.determined_kinds`), which is the binding a
-  later commitment point would make. The row coercion decides from the
+  destructure prematurely. A value flowing into an annotated function's
+  result is a commitment point too: the row coercion decides from the
   value's type (Row Subsumption), so a function read out of a record
   pattern and called into the result widens exactly as one read with a
-  field access does (`Stream.next!`'s body is the first; a still-flex
-  kind stays pending).
+  field access does, whether the record's kind was declared
+  (`Stream.next!`'s body) or is a literal's still-flex kind. An entry a
+  boundary retains for an enclosing owner pins every class its binder's
+  type reaches at the owner's rank: whichever binding the owner makes
+  relates that type to the field's value there, so no boundary nested
+  inside the owner may quantify it first.
   Binding a destructure can also ground a deferred static-dispatch receiver
   without adding an ordinary equality constraint. Every literal-defaulting
   boundary therefore begins with a ROUND-ZERO constraint quiescence: ordinary
@@ -18018,7 +18051,7 @@ is reachable through the function's own callable type is not
 `unreachable`. Two edges do this: a value use of a procedure, and the
 construction edge of an expression-position function stored in a containing
 value (`hooks = { shout: |s| s.concat("!") }`), whose instantiated scheme is
-the dispatch scope that function owns. Both publish their record through one
+the dispatch scope that function owns. Both record their evidence through one
 rule (`UnpinnedRecordEvidence.from_callable`). A lambda that a stored
 conditional, match, or block selects has no construction edge and shares its
 variables with the value holding it, yet an importing use copies that value's
@@ -18026,7 +18059,7 @@ type exactly as it copies a construction edge's instance. When its own type
 reaches the receiver of a dispatch plan whose variable checking left
 unquantified, the lambda owns a callable-derived dispatch scope whose schema
 is enumerated over its own type (`collectCallableDerivedSchemes`); the
-lambda's own construction then publishes that scope's evidence, forwarding a
+lambda's own construction then outputs that scope's evidence, forwarding a
 receiver an enclosing scope binds and recording `from_callable` for the
 rest. A template's root function never owns one, and a module with no
 unquantified dispatch receiver walks no types for it. Checker output records a
@@ -25659,15 +25692,19 @@ runs only when something calls a function value, so it joins a producer's
 evaluation exactly when that evaluation makes a value call: then every
 function value the evaluation creates, and every one a value it reads holds,
 may run. The graph over-approximates any one lowering's reads, and lowering
-checks that every compile-time slot a program declares is either completed or
-one of its own roots'. An erased callable type's member set names every
-function the whole program may put in a value of that type, so a program
-compiles a member only when its own code creates it or a completed value it
-reads holds it (`CompletedErasedMembers`, collected from each stage's frozen
-image); its erased callable plans keep only the members it compiled. A member
-a completed value holds was compiled by the stage that created it, so every
-value that member reads is already complete. A Boxy program has no Solved program; its literal roots
-take the same order from its own LIR (`CompileTimeRootGraph`), where a Boxy
+checks that every compile-time slot a program declares is completed, one of
+its own roots', or one a later level evaluates. An erased callable type's
+member set names every function the whole program may put in a value of that
+type, so a program compiles a member only when its own code creates it or a
+completed value it reads holds it (`CompletedErasedMembers`, collected from
+each stage's frozen image); its erased callable plans keep only the members it
+compiled. A compiled member runs in a stage only when the stage makes a value
+call, and then the graph orders the member's reads before the stage, so a
+member that does not run may read a value a later level evaluates. The stage
+reserves that value's slot uninitialized: no code it runs reads it, and later
+levels and the runtime consumer compile their own members against the
+completed value. A Boxy program has no Solved program; its literal roots take
+the same order from its own LIR (`CompileTimeRootGraph`), where a Boxy
 dictionary call, comparison, hash, inspection, or adaptation is a value call
 that may run any of the program's Boxy workers.
 

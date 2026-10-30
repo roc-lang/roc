@@ -3222,6 +3222,19 @@ pub const CheckedTypeStoreView = struct {
         return reconstructTypeData(CheckedTypePayload, self, &self.stored_payloads[index]);
     }
 
+    /// Whether `id` is a nominal or alias type, read from its stored payload
+    /// tag without materializing the payload.
+    pub fn isNamed(self: CheckedTypeStoreView, id: CheckedTypeId) bool {
+        const index: usize = @backingInt(id);
+        if (index >= self.stored_payloads.len) {
+            checkedArtifactInvariant("checked type payload id is out of range", .{});
+        }
+        return switch (self.stored_payloads[index]) {
+            .alias, .nominal => true,
+            .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => false,
+        };
+    }
+
     /// Looks up a published checked type root by canonical source type key.
     pub fn rootForKey(self: CheckedTypeStoreView, key: canonical.CanonicalTypeKey) ?CheckedTypeId {
         const index = CheckedRootIndex.fromCells(self.root_index, self.root_index_count);

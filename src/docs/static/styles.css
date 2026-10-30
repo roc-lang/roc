@@ -118,6 +118,7 @@ table tr td {
   min-width: 0;
   padding: 0;
   white-space: inherit;
+  overflow-wrap: anywhere;
 }
 
 .entry-signature-code,
@@ -140,7 +141,9 @@ table tr td {
   color: var(--text-color);
   padding: 12px 16px;
   margin: 0 0 16px;
+  min-width: 0;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   font-size: var(--font-base);
   line-height: 1.5;
 }
@@ -285,6 +288,9 @@ table tr td {
 .module-doc table {
   border-collapse: collapse;
   margin: 16px;
+  display: block;
+  max-width: calc(100% - 32px);
+  overflow-x: auto;
 }
 
 /* Entry type vs value styling */
@@ -563,6 +569,9 @@ padding: 0px 16px;
 .langref-article table {
   border-collapse: collapse;
   margin: 16px;
+  display: block;
+  max-width: calc(100% - 32px);
+  overflow-x: auto;
 }
 
 #sidebar-nav {
