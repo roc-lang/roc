@@ -1725,16 +1725,6 @@ main > .main-content[aria-busy="true"] {
   outline-offset: -2px;
 }
 
-.search-filters .search-snippet-toggle[aria-pressed="true"]::after {
-  content: "";
-  position: absolute;
-  bottom: 2px;
-  left: 10px;
-  right: 10px;
-  height: 3px;
-  background: currentColor;
-}
-
 .search-group-label, .search-status, .search-more {
   padding: 8px;
   font-family: var(--font-sans);
@@ -1790,11 +1780,34 @@ main > .main-content[aria-busy="true"] {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 5px;
 }
 
-.search-snippet-toggle svg {
-  width: 16px;
-  height: 16px;
+.search-snippet-switch {
+  position: relative;
+  width: 24px;
+  height: 14px;
+  border-radius: 7px;
+  background: var(--faded-color);
+}
+
+.search-snippet-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--body-bg-color);
+}
+
+.search-snippet-toggle[aria-checked="true"] .search-snippet-switch {
+  background: var(--violet);
+}
+
+.search-snippet-toggle[aria-checked="true"] .search-snippet-switch::after {
+  left: 12px;
 }
 
 /* Keep API snippets free of link underlines while retaining the compact row. */
