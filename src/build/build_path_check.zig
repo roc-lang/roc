@@ -54,9 +54,10 @@ pub fn main(init: std.process.Init) MainError!void {
     try paths.append(arena, try std.Io.Dir.cwd().realPathFileAlloc(io, args[3], arena));
     const binary_real = try std.Io.Dir.cwd().realPathFileAlloc(io, binary_path, arena);
     if (localCacheOf(binary_real)) |cache| try paths.append(arena, cache);
+    // `zig env` prints directories under the cwd relative to it.
     const env = try zigEnv(gpa, arena, io, args[4]);
-    try paths.append(arena, env.global_cache_dir);
-    try paths.append(arena, env.lib_dir);
+    try paths.append(arena, try std.Io.Dir.cwd().realPathFileAlloc(io, env.global_cache_dir, arena));
+    try paths.append(arena, try std.Io.Dir.cwd().realPathFileAlloc(io, env.lib_dir, arena));
     if (init.environ_map.get("ZIG_LOCAL_PKG_DIR")) |dir| {
         try paths.append(arena, try std.Io.Dir.cwd().realPathFileAlloc(io, dir, arena));
     }
