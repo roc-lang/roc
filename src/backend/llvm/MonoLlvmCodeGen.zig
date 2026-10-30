@@ -13723,35 +13723,21 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeListCapacity(ptr, builder.intValue(self.ptrSizedIntType(), cap) catch return error.OutOfMemory);
     }
 
-    fn entrypointParamSlotSize(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) u32 {
-        const runtime_layout_idx = self.layouts().runtimeRepresentationLayoutIdx(layout_idx);
-        if (runtime_layout_idx == .str) return self.rocStrSize();
-        if (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec) return 16;
-        const layout_val = self.layoutValue(runtime_layout_idx);
-        const size = self.layoutByteSize(runtime_layout_idx);
-        if (layout_val.tag == .zst or size == 0) return 0;
-        // Internal Roc procedure arguments use fixed-size slots in a shared
-        // byte buffer. A vector occupies its full 16-byte value; rounding it
-        // down to the ordinary scalar slot size makes the following argument
-        // overlap the vector's upper half.
-        if (layout_val.tag == .scalar and layout_val.getScalar().tag == .vector) return 16;
-        if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return RocList.word_count * @sizeOf(u64);
-        if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
-            if (size > 8) return @intCast(std.mem.alignForward(u32, size, 8));
-        }
-        return 8;
-    }
-
     fn computeArgOffsets(self: *MonoLlvmCodeGen, arg_layouts: []const layout.Idx, rounded_slots: bool) Error![]u32 {
+        const offsets = try self.allocator.alloc(u32, arg_layouts.len);
+        errdefer self.allocator.free(offsets);
+        if (rounded_slots) {
+            layout.entrypoint_args.computeOffsets(self.layouts(), arg_layouts, offsets);
+            return offsets;
+        }
         const ordered = try self.allocator.alloc(ArgOrder, arg_layouts.len);
         defer self.allocator.free(ordered);
-        const offsets = try self.allocator.alloc(u32, arg_layouts.len);
         for (arg_layouts, 0..) |arg_layout, i| {
             const sa = self.sizeAlignOf(arg_layout);
             ordered[i] = .{
                 .index = i,
                 .alignment = @intCast(@max(sa.alignment.toByteUnits(), 1)),
-                .size = if (rounded_slots) self.entrypointParamSlotSize(arg_layout) else sa.size,
+                .size = sa.size,
             };
         }
         const SortCtx = struct {
@@ -13776,7 +13762,7 @@ pub const MonoLlvmCodeGen = struct {
         defer self.allocator.free(offsets);
         var total: u32 = 0;
         for (arg_layouts, offsets) |arg_layout, offset| {
-            const slot_size = if (rounded_slots) self.entrypointParamSlotSize(arg_layout) else self.layoutByteSize(arg_layout);
+            const slot_size = if (rounded_slots) layout.entrypoint_args.slotSize(self.layouts(), arg_layout) else self.layoutByteSize(arg_layout);
             total = @max(total, offset + slot_size);
         }
         return @max(total, 8);

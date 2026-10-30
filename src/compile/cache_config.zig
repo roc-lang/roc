@@ -346,7 +346,9 @@ pub const Constants = struct {
     ///      applied to every type that holds a variable.
     /// 162: modules publish checking interfaces and imported callable eligibility.
     /// 163: producer-owned declaration slots and stored checking diagnostics.
-    pub const CACHE_VERSION = 163;
+    /// 164: sorted array builders serialize zeroed entry padding and an
+    ///      integer offset that the cache validator checks.
+    pub const CACHE_VERSION = 164;
 };
 
 /// Configuration for the Roc cache system.

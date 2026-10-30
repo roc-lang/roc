@@ -8,7 +8,7 @@ platform ""
     }
     exposes [Simple]
     packages {}
-    provides { "roc_init": init_for_host, "roc_update": update_for_host, "roc_render": render_for_host, "roc_test_mixed_args": test_mixed_args_for_host, "roc_test_struct_arg": test_struct_arg_for_host, "roc_test_effectful_struct_arg": test_effectful_struct_arg_for_host!, "roc_test_simple_pure": test_simple_pure_for_host, "roc_test_simple_effectful": test_simple_effectful_for_host!, "roc_test_three_floats_pure": test_three_floats_pure_for_host, "roc_test_three_floats_effectful": test_three_floats_effectful_for_host! }
+    provides { "roc_init": init_for_host, "roc_update": update_for_host, "roc_render": render_for_host, "roc_test_mixed_args": test_mixed_args_for_host, "roc_test_struct_arg": test_struct_arg_for_host, "roc_test_effectful_struct_arg": test_effectful_struct_arg_for_host!, "roc_test_simple_pure": test_simple_pure_for_host, "roc_test_simple_effectful": test_simple_effectful_for_host!, "roc_test_three_floats_pure": test_three_floats_pure_for_host, "roc_test_three_floats_effectful": test_three_floats_effectful_for_host!, "roc_test_two_u32_args": test_two_u32_args_for_host }
     targets: {
         inputs_dir: "targets/",
         x64mac: { inputs: ["libhost.a", app] },
@@ -140,3 +140,8 @@ test_three_floats_effectful_for_host! = |input| {
     bbb: input.bbb,
     ccc: input.ccc,
 }
+
+# Two 4-byte arguments: each takes its own slot in the entrypoint argument
+# buffer, so the second must not be read from the first one's padding.
+test_two_u32_args_for_host : U32, U32 -> (U32, U32)
+test_two_u32_args_for_host = |first, second| (first, second)
