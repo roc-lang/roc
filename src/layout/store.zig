@@ -1643,7 +1643,7 @@ pub const Store = struct {
             component_ids: []u32,
 
             /// How a parent reads a child: as its final value, or as a
-            /// pointer target, which looks through nominal wrappers.
+            /// pointer target.
             const ChildMode = enum { value, pointer };
 
             /// The layout of child `ref`, or the node that must be finalized
@@ -1653,18 +1653,21 @@ pub const Store = struct {
                 finalize: GraphNodeId,
             };
 
+            /// A nominal wrapper's layout is its child's in either mode, so
+            /// a read looks through it: a parent on a cycle through the
+            /// wrapper then reads the child's slot, and the wrapper never
+            /// fills a slot of its own with a copy of the child's layout.
             fn childLayout(self_finalizer: *@This(), ref: GraphRef, mode: ChildMode) ChildLayout {
+                _ = mode;
                 var current = ref;
                 while (true) {
                     const node_id = switch (current) {
                         .canonical => |layout_idx| return .{ .layout = layout_idx },
                         .local => |node_id| node_id,
                     };
-                    if (mode == .pointer) {
-                        if (self_finalizer.graph.getNode(node_id) == .nominal) {
-                            current = self_finalizer.graph.getNode(node_id).nominal;
-                            continue;
-                        }
+                    if (self_finalizer.graph.getNode(node_id) == .nominal) {
+                        current = self_finalizer.graph.getNode(node_id).nominal;
+                        continue;
                     }
                     const index = @backingInt(node_id);
                     return switch (self_finalizer.finalize_state[index]) {

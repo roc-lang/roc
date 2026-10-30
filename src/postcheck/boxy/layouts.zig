@@ -46,9 +46,10 @@ pub const Layouts = struct {
 
     const no_component = std.math.maxInt(u32);
 
-    /// A component a type stores inline: in a struct slot (a record field
-    /// or tuple element), as a tag's payload, or as a nominal's backing.
-    pub const InlineEdge = struct { child: TypeId, slot: enum { field, payload, backing } };
+    /// A component a type's descriptor composes from: one stored inline, in
+    /// a struct slot (a record field or tuple element), as a tag's payload,
+    /// or as a nominal's backing, or one a list or box points at.
+    pub const InlineEdge = struct { child: TypeId, slot: enum { field, payload, backing, list_elem, box_payload } };
 
     pub fn deinit(self: *Layouts) void {
         self.memo.deinit(self.allocator);
@@ -62,10 +63,13 @@ pub const Layouts = struct {
         self.member_vars.deinit(self.allocator);
     }
 
-    /// The components `ty` stores inline, as the committed layout graph has
-    /// them: a tag with several payloads stores their tuple.
+    /// The components `ty`'s descriptor composes from: those it stores
+    /// inline, as the committed layout graph has them (a tag with several
+    /// payloads stores their tuple), and the one a list or box points at.
     pub fn inlineEdges(self: *Layouts, ty: TypeId, out: *std.ArrayList(InlineEdge)) Allocator.Error!void {
         switch (self.store.get(ty)) {
+            .list => |elem| try out.append(self.allocator, .{ .child = elem, .slot = .list_elem }),
+            .box => |payload| try out.append(self.allocator, .{ .child = payload, .slot = .box_payload }),
             .record => |record| {
                 const fields = try self.allocator.dupe(types.Field, self.store.fieldSpan(record.fields));
                 defer self.allocator.free(fields);
@@ -89,7 +93,7 @@ pub const Layouts = struct {
             .nominal => |nominal| if (nominal.has_backing) {
                 try out.append(self.allocator, .{ .child = try self.converter.backing(ty), .slot = .backing });
             },
-            .list, .box, .primitive, .empty_record, .function, .variable => {},
+            .primitive, .empty_record, .function, .variable => {},
         }
     }
 
@@ -104,15 +108,16 @@ pub const Layouts = struct {
         return if (component == no_component) null else component;
     }
 
-    /// Whether the inline edge from `parent` to `edge.child` is a slot the
-    /// committed layout boxes: a struct slot or a non-struct tag payload
-    /// leading back into `parent`'s recursive component, as the shared
-    /// layout store boxes the slot edges of a recursive component.
+    /// Whether the edge from `parent` to `edge.child` leads back into
+    /// `parent`'s recursive component through a pointer: a struct slot or a
+    /// non-struct tag payload, which the shared layout store boxes for a
+    /// recursive component, or a list element or box payload, which is a
+    /// pointer already.
     pub fn boxedEdge(self: *Layouts, parent: TypeId, edge: InlineEdge) Allocator.Error!bool {
         const component = try self.recursiveComponent(parent) orelse return false;
         if (self.components.get(edge.child) != component) return false;
         return switch (edge.slot) {
-            .field => true,
+            .field, .list_elem, .box_payload => true,
             .payload => switch (self.store.get(edge.child)) {
                 .record, .tuple => false,
                 .primitive, .empty_record, .tag_union, .list, .box, .nominal, .function, .variable => true,
@@ -353,7 +358,8 @@ pub const Layouts = struct {
         while (it.next()) |entry| {
             const index = @backingInt(entry.value_ptr.*);
             const digest: ?layout.GraphDigest = if (commit.digests.len > index) commit.digests[index] else null;
-            try self.memo.put(self.allocator, entry.key_ptr.*, .{ .idx = commit.value_layouts[index], .digest = digest });
+            const new_idx = commit.value_layouts[index];
+            try self.memo.put(self.allocator, entry.key_ptr.*, .{ .idx = new_idx, .digest = digest });
         }
         return self.memo.get(ty).?.idx;
     }
