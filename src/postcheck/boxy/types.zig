@@ -157,7 +157,7 @@ pub const Tag = struct {
     payloads: Span,
 };
 
-/// A range of `TypeId`s in `Store.type_ids`.
+/// A stored list of `TypeId`s: its entry in `Store.type_ids`.
 pub const Span = struct { start: u32, len: u32 };
 /// A range of fields in `Store.fields`.
 pub const FieldSpan = struct { start: u32, len: u32 };
@@ -228,9 +228,13 @@ pub const Store = struct {
     /// variable: no `variable` node is reachable from it except through a
     /// function type, whose values are erased callables.
     closed_flags: std.ArrayList(bool) = .empty,
-    type_ids: std.ArrayList(TypeId) = .empty,
-    fields: std.ArrayList(Field) = .empty,
-    tags: std.ArrayList(Tag) = .empty,
+    /// Every stored child list, indexed by its span's `start`. Each list is
+    /// its own allocation in `span_arena`, so a slice `span`, `fieldSpan`, or
+    /// `tagSpan` returns stays valid as the store grows.
+    type_ids: std.ArrayList([]const TypeId) = .empty,
+    fields: std.ArrayList([]const Field) = .empty,
+    tags: std.ArrayList([]const Tag) = .empty,
+    span_arena: std.heap.ArenaAllocator,
     interned: std.HashMapUnmanaged(InternKey, TypeId, InternContext, std.hash_map.default_max_load_percentage) = .empty,
     key_bytes: std.ArrayList(u8) = .empty,
     scratch_key: std.ArrayList(u8) = .empty,
@@ -297,7 +301,11 @@ pub const Store = struct {
     };
 
     pub fn init(allocator: Allocator) Store {
-        return .{ .allocator = allocator, .name_arena = std.heap.ArenaAllocator.init(allocator) };
+        return .{
+            .allocator = allocator,
+            .span_arena = std.heap.ArenaAllocator.init(allocator),
+            .name_arena = std.heap.ArenaAllocator.init(allocator),
+        };
     }
 
     pub fn deinit(self: *Store) void {
@@ -306,6 +314,7 @@ pub const Store = struct {
         self.type_ids.deinit(self.allocator);
         self.fields.deinit(self.allocator);
         self.tags.deinit(self.allocator);
+        self.span_arena.deinit();
         self.interned.deinit(self.allocator);
         self.key_bytes.deinit(self.allocator);
         self.scratch_key.deinit(self.allocator);
@@ -409,15 +418,15 @@ pub const Store = struct {
     }
 
     pub fn span(self: *const Store, value: Span) []const TypeId {
-        return self.type_ids.items[value.start..][0..value.len];
+        return self.type_ids.items[value.start];
     }
 
     pub fn fieldSpan(self: *const Store, value: FieldSpan) []const Field {
-        return self.fields.items[value.start..][0..value.len];
+        return self.fields.items[value.start];
     }
 
     pub fn tagSpan(self: *const Store, value: TagSpan) []const Tag {
-        return self.tags.items[value.start..][0..value.len];
+        return self.tags.items[value.start];
     }
 
     pub fn nominalArgs(self: *const Store, nominal: Nominal) []const TypeId {
@@ -535,22 +544,21 @@ pub const Store = struct {
 
     fn addSpan(self: *Store, ids: []const TypeId) Allocator.Error!Span {
         const start: u32 = @intCast(self.type_ids.items.len);
-        try appendStored(TypeId, self.allocator, &self.type_ids, ids);
+        try self.type_ids.append(self.allocator, try self.span_arena.allocator().dupe(TypeId, ids));
         return .{ .start = start, .len = @intCast(ids.len) };
     }
 
     fn addFields(self: *Store, fields: []const Field) Allocator.Error!FieldSpan {
         const start: u32 = @intCast(self.fields.items.len);
-        try appendStored(Field, self.allocator, &self.fields, fields);
+        try self.fields.append(self.allocator, try self.span_arena.allocator().dupe(Field, fields));
         return .{ .start = start, .len = @intCast(fields.len) };
     }
 
     fn addTags(self: *Store, tags: []const TagInput) Allocator.Error!TagSpan {
+        const stored = try self.span_arena.allocator().alloc(Tag, tags.len);
+        for (stored, tags) |*tag, input| tag.* = .{ .name = input.name, .payloads = try self.addSpan(input.payloads) };
         const start: u32 = @intCast(self.tags.items.len);
-        for (tags) |tag| {
-            const payloads = try self.addSpan(tag.payloads);
-            try self.tags.append(self.allocator, .{ .name = tag.name, .payloads = payloads });
-        }
+        try self.tags.append(self.allocator, stored);
         return .{ .start = start, .len = @intCast(tags.len) };
     }
 
@@ -571,19 +579,6 @@ pub const Store = struct {
         return self.intern(.{ .tag_union = .{ .tags = &.{}, .ext = null } });
     }
 };
-
-/// Append `items` to `list`. `items` may be a span of `list` itself (a
-/// caller interning a node from another node's children), which growing
-/// `list` moves, so such a span is copied from its new place.
-fn appendStored(comptime T: type, allocator: Allocator, list: *std.ArrayList(T), items: []const T) Allocator.Error!void {
-    if (items.len == 0) return;
-    const start = @intFromPtr(list.items.ptr);
-    const addr = @intFromPtr(items.ptr);
-    if (addr < start or addr >= start + list.items.len * @sizeOf(T)) return list.appendSlice(allocator, items);
-    const offset = (addr - start) / @sizeOf(T);
-    try list.ensureUnusedCapacity(allocator, items.len);
-    list.appendSliceAssumeCapacity(list.items[offset..][0..items.len]);
-}
 
 /// A tag to intern: its name and payload types.
 pub const TagInput = struct {
