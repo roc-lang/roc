@@ -23,7 +23,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 19;
+pub const format_version: u32 = 21;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// excerpt holding its procedure, and the ownership signature and
@@ -119,13 +119,9 @@ pub fn writeWithNames(allocator: Allocator, set: *const CodeExcerpt.Set, specs: 
                 try writer.byte(1);
                 try writer.str(name);
             },
-            .boxy_thunk => |identity| {
-                try writer.byte(2);
-                try writer.raw(&identity.bytes);
-            },
-            .entrypoint => try writer.byte(3),
-            .message_pool_run => try writer.byte(4),
-            .branch_island => try writer.byte(5),
+            .entrypoint => try writer.byte(2),
+            .message_pool_run => try writer.byte(3),
+            .branch_island => try writer.byte(4),
         }
         try writer.word(excerpt.entry);
         if (excerpt.frame) |frame| {
@@ -177,10 +173,6 @@ pub fn writeWithNames(allocator: Allocator, set: *const CodeExcerpt.Set, specs: 
                 .rc_helper => |name| {
                     try writer.byte(1);
                     try writer.str(name);
-                },
-                .boxy_thunk => |identity| {
-                    try writer.byte(2);
-                    try writer.raw(&identity.bytes);
                 },
             }
         }
@@ -252,27 +244,13 @@ pub fn writeWithNames(allocator: Allocator, set: *const CodeExcerpt.Set, specs: 
             const scope: CodeExcerpt.SymbolScope = if (names.renames(relocation.name)) .shared else relocation.scope;
             try writer.byte(@backingInt(scope));
         }
-        try writer.word(@intCast(excerpt.runtime_numbers.len));
-        for (excerpt.runtime_numbers) |runtime_number| {
-            try writer.word(runtime_number.site);
-            switch (runtime_number.ref) {
-                .layout => |idx| {
-                    try writer.byte(0);
-                    try writer.word(idx);
-                },
-                .erased_arg_layouts => |span| {
-                    try writer.byte(1);
-                    try writer.word(span.start);
-                    try writer.word(span.len);
-                },
-            }
-        }
         try writer.word(@intCast(excerpt.data.len));
         for (excerpt.data) |item| {
             try writer.str(names.of(item.name));
             try writer.str(item.bytes);
             try writer.word(item.alignment);
             try writer.word(item.symbol_offset);
+            try writer.byte(@intFromBool(item.is_mutable));
             try writer.word(@intCast(item.relocations.len));
             for (item.relocations) |relocation| {
                 try writer.word(relocation.offset);
@@ -324,10 +302,9 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
         const kind: CodeExcerpt.Kind = switch (try reader.byte()) {
             0 => .{ .proc = .{ .bytes = (try reader.raw(32))[0..32].* } },
             1 => .{ .rc_helper = try reader.str() },
-            2 => .{ .boxy_thunk = .{ .bytes = (try reader.raw(32))[0..32].* } },
-            3 => .entrypoint,
-            4 => .message_pool_run,
-            5 => .branch_island,
+            2 => .entrypoint,
+            3 => .message_pool_run,
+            4 => .branch_island,
             else => return error.MalformedPack,
         };
         const entry = try reader.word();
@@ -393,7 +370,6 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
                 .target = switch (try reader.byte()) {
                     0 => .{ .proc = .{ .bytes = (try reader.raw(32))[0..32].* } },
                     1 => .{ .rc_helper = try reader.str() },
-                    2 => .{ .boxy_thunk = .{ .bytes = (try reader.raw(32))[0..32].* } },
                     else => return error.MalformedPack,
                 },
             };
@@ -457,21 +433,17 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
                 },
             };
         }
-        const runtime_numbers = try arena_allocator.alloc(CodeExcerpt.RuntimeNumberLoad, try reader.word());
-        for (runtime_numbers) |*runtime_number| {
-            const site = try reader.word();
-            runtime_number.* = .{ .site = site, .ref = switch (try reader.byte()) {
-                0 => .{ .layout = try reader.word() },
-                1 => .{ .erased_arg_layouts = .{ .start = try reader.word(), .len = try reader.word() } },
-                else => return error.MalformedPack,
-            } };
-        }
         const data = try arena_allocator.alloc(CodeExcerpt.DataItem, try reader.word());
         for (data) |*item| {
             const name = try reader.str();
             const item_bytes = try reader.str();
             const alignment = try reader.word();
             const symbol_offset = try reader.word();
+            const is_mutable = switch (try reader.byte()) {
+                0 => false,
+                1 => true,
+                else => return error.MalformedPack,
+            };
             const data_relocations = try arena_allocator.alloc(CodeExcerpt.DataRelocation, try reader.word());
             for (data_relocations) |*relocation| {
                 const offset = try reader.word();
@@ -494,11 +466,13 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
                     .external = external,
                 };
             }
+            if (is_mutable and (data_relocations.len != 0 or !std.mem.allEqual(u8, item_bytes, 0))) return error.MalformedPack;
             item.* = .{
                 .name = name,
                 .bytes = item_bytes,
                 .alignment = alignment,
                 .symbol_offset = symbol_offset,
+                .is_mutable = is_mutable,
                 .relocations = data_relocations,
             };
         }
@@ -512,7 +486,6 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
             .lines = lines,
             .failure_sites = failure_sites,
             .relocations = relocations,
-            .runtime_numbers = runtime_numbers,
             .data = data,
             .loc = loc,
         };
@@ -521,12 +494,11 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
         }
     }
 
-    for (excerpts) |artifact| for (artifact.symbolic_refs) |ref| {
+    for (excerpts) |excerpt| for (excerpt.symbolic_refs) |ref| {
         if (ref.binding != .local) continue;
         const kind = excerpts[ref.binding.local].kind;
         const matches = switch (ref.target) {
             .proc => |identity| kind == .proc and std.meta.eql(identity, kind.proc),
-            .boxy_thunk => |identity| kind == .boxy_thunk and std.meta.eql(identity, kind.boxy_thunk),
             .rc_helper => |name| kind == .rc_helper and std.mem.eql(u8, name, kind.rc_helper),
         };
         if (!matches) return error.MalformedPack;
@@ -879,7 +851,6 @@ test "pack bytes round-trip every excerpt field and spec entry" {
             .symbolic_refs = &.{
                 .{ .site = 0, .form = .call, .target = .{ .proc = lir.ProcIdentity.forTest(8) } },
                 .{ .site = 1, .form = .call, .veneer = 4, .target = .{ .rc_helper = "roc__rc_later" } },
-                .{ .site = 2, .form = .addr, .target = .{ .boxy_thunk = lir.ProcIdentity.forTest(9) } },
             },
             .lines = &.{
                 .{ .offset = 0, .loc = .{ .file = 3, .line = 42, .column = 7 }, .region = base.Region.zero() },
@@ -962,7 +933,7 @@ test "pack bytes round-trip every excerpt field and spec entry" {
     try testing.expectEqualSlices(u8, &lir.ProcIdentity.forTest(7).bytes, &proc.kind.proc.bytes);
     try testing.expectEqualSlices(u8, excerpts[0].code, proc.code);
     try testing.expectEqual(@as(usize, 2), proc.refs.len);
-    try testing.expectEqual(@as(usize, 3), proc.symbolic_refs.len);
+    try testing.expectEqual(@as(usize, 2), proc.symbolic_refs.len);
     try testing.expectEqualDeep(excerpts[0].symbolic_refs, proc.symbolic_refs);
     try testing.expectEqual(excerpts[0].lines.len, proc.lines.len);
     for (excerpts[0].lines, proc.lines) |written, read_back| {

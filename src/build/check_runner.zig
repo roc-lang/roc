@@ -193,9 +193,6 @@ const CheckTypeCheckerPatternsStep = struct {
 
     const ExcludedRange = struct { file: []const u8, start: usize, end: usize };
     const excluded_ranges = [_]ExcludedRange{
-        // Runtime equality compares Roc value bytes, never compiler identifiers.
-        .{ .file = "boxy_runtime.zig", .start = 5614, .end = 5614 },
-        .{ .file = "boxy_runtime.zig", .start = 5624, .end = 5624 },
         // Cross-module name matching in Check.zig requires string comparison (lines 5530-5547)
         // This is necessary because origin_module is an ident from the type's defining module,
         // while module_name is from the importing module's ident store - no way to compare without strings
@@ -210,7 +207,10 @@ const CheckTypeCheckerPatternsStep = struct {
         .{ .file = "cir_to_lir.zig", .start = 110, .end = 115 },
         // inspected.zig resolves a type module's import statement from the caller's
         // module name, which arrives as text from outside this module's ident store.
-        .{ .file = "inspected.zig", .start = 226, .end = 232 },
+        .{ .file = "inspected.zig", .start = 223, .end = 229 },
+        // object_image.zig binds a loaded object's `roc_desc_*` references to the
+        // Boxy runtime's entry points, which are matched by symbol name.
+        .{ .file = "object_image.zig", .start = 33, .end = 38 },
         // inspected.zig trims the trailing newline off a rendered report. This is
         // presentation text on its way out, not a type-checker comparison.
         .{ .file = "inspected.zig", .start = 2474, .end = 2474 },

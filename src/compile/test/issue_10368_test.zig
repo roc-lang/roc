@@ -67,6 +67,10 @@ fn retainReachesPrepare(
                 if (assign.target == retained_alias) return false;
                 current = assign.next;
             },
+            .dyn => |assign| {
+                if (assign.target == retained_alias) return false;
+                current = assign.next;
+            },
             inline .store_struct,
             .store_tag,
             .debug,
@@ -76,19 +80,6 @@ fn retainReachesPrepare(
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,

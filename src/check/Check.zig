@@ -13238,6 +13238,11 @@ fn finalizeTopLevelDemandDependencies(self: *Self) Allocator.Error!void {
     // propagate it once more before checked bodies are published.
     try self.poisonErroneousValueUses();
     try self.poisonErroneousValueExprs();
+
+    // Retiring an open parameter sends its uses through one more sweep.
+    try self.retireParamsOfRejectedDispatches();
+    try self.poisonErroneousValueUses();
+    try self.poisonErroneousValueExprs();
 }
 
 /// Resolves the foreign functions a module's lookups name to their owners'
@@ -15104,8 +15109,12 @@ const DispatchSite = struct {
 /// (`component_derivation_by_child_fn_var`), belongs to the dispatch it
 /// derives (design.md "Every Rejection Is Explicit Recovery").
 fn dispatchSiteOf(self: *const Self, constraint: StaticDispatchConstraint) ?DispatchSite {
-    if (self.own_dispatch_exprs.get(constraint.fn_var)) |expr| return .{ .expr = expr, .kind = .own };
-    var fn_var = constraint.fn_var;
+    return self.dispatchSiteOfFn(constraint.fn_var);
+}
+
+fn dispatchSiteOfFn(self: *const Self, constraint_fn_var: Var) ?DispatchSite {
+    if (self.own_dispatch_exprs.get(constraint_fn_var)) |expr| return .{ .expr = expr, .kind = .own };
+    var fn_var = constraint_fn_var;
     var guard = types_mod.debug.IterationGuard.init("dispatchSiteOf");
     while (true) {
         guard.tick();
@@ -37293,6 +37302,50 @@ fn valueIsErroneous(self: *Self, value: CIR.Expr.Idx) Allocator.Error!bool {
         try self.markErroneousValuePattern(pattern);
     }
     return true;
+}
+
+/// A lambda a rejected dispatch evaluates as an operand never runs, because
+/// the dispatch crashes after evaluating it, so nothing pins a parameter it
+/// leaves open and a dispatch on that parameter has no owner. Such a
+/// parameter is undetermined because of the rejection, which owns the report:
+/// it becomes erroneous, and each use a runtime error with no report of its
+/// own.
+fn retireParamsOfRejectedDispatches(self: *Self) Allocator.Error!void {
+    var operands: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
+    defer operands.deinit(self.gpa);
+    for (self.cir.rejectedStaticDispatches()) |dispatch| {
+        const site = self.dispatchSiteOfFn(@fromBackingInt(dispatch.constraint_fn_var)) orelse continue;
+        if (site.kind == .loop_derived) continue;
+        operands.clearRetainingCapacity();
+        const site_expr = self.cir.store.getExpr(site.expr);
+        if (site_expr == .e_runtime_error) {
+            try operands.appendSlice(self.gpa, self.cir.store.sliceExpr(site_expr.e_runtime_error.evaluated));
+        } else {
+            try self.appendEvaluationOperands(site.expr, &operands);
+        }
+        for (operands.items) |operand| {
+            const lambda = self.evaluatedLambda(operand) orelse continue;
+            for (self.cir.store.slicePatterns(lambda.args)) |param| {
+                if (self.types.resolveVar(ModuleEnv.varFrom(param)).desc.content == .flex) try self.markErroneousValuePattern(param);
+            }
+        }
+    }
+}
+
+/// The lambda `expr` evaluates to: a lambda, closure, or block ending in one.
+fn evaluatedLambda(self: *const Self, expr: CIR.Expr.Idx) ?@FieldType(CIR.Expr, "e_lambda") {
+    var current = expr;
+    while (true) {
+        const value = self.cir.store.getExpr(current);
+        if (value == .e_lambda) return value.e_lambda;
+        if (value == .e_closure) {
+            current = value.e_closure.lambda_idx;
+        } else if (value == .e_block) {
+            current = value.e_block.final_expr;
+        } else {
+            return null;
+        }
+    }
 }
 
 fn poisonErroneousValueUses(self: *Self) Allocator.Error!void {

@@ -6,7 +6,6 @@
 //! returns; the returned exports then own every reachable byte independently.
 
 const std = @import("std");
-const collections = @import("collections");
 const base = @import("base");
 const compilerInvariant = base.invariant;
 const builtins = @import("builtins");
@@ -31,7 +30,6 @@ pub const CallableResolution = struct {
 /// Evaluator callback supplying exact callable procedure and capture identities.
 /// Missing evaluator registry evidence propagates its terminal runtime error.
 pub const CallableResolver = struct {
-    runtime: ?*const @import("boxy_runtime.zig").BoxyRuntime = null,
     context: ?*anyopaque = null,
     resolve: *const fn (?*anyopaque, [*]u8) error{RuntimeError}!CallableResolution = missingCallableResolver,
 };
@@ -130,7 +128,6 @@ const Builder = struct {
     graph: frozen_graph.Graph(AllocationKey),
     callables: CallableResolver,
     jobs: std.ArrayList(Job) = .empty,
-    frozen_descriptors: collections.DenseMapUnmanaged(Program.BoxyTypeDescId, Destination) = .empty,
 
     fn enqueue(self: *Builder, plan: Program.ConstPlanId, idx: layout.Idx, source: Value, dest: Destination, storage: Program.CaptureSlotStorage) Allocator.Error!void {
         try self.jobs.append(self.graph.allocator, .{ .plan = plan, .layout_idx = idx, .source = source, .dest = dest, .storage = storage });
@@ -160,9 +157,7 @@ const Builder = struct {
         const plan = self.graph.program.const_plans.items[@backingInt(job.plan)];
         switch (plan) {
             .pending, .layout_only => invariant("incomplete const plan reached native root export"),
-            .boxy_box => |box| if (self.graph.size(box.layout_idx) != 0) {
-                try self.boxed(job, box.payload, box.layout_idx);
-            },
+            .boxy_fn => invariant("a function value's root was published to a slot"),
             .zst => {},
             .scalar => {
                 if (physical.tag != .scalar or physical.getScalar().tag == .opaque_ptr or physical.getScalar().tag == .str) invariant("scalar export plan did not name pointer-free scalar bytes");
@@ -184,7 +179,8 @@ const Builder = struct {
                 .box => try self.boxed(job, element, physical.getIdx()),
                 .erased_callable => try self.enqueue(element, job.layout_idx, job.source, job.dest, .value),
                 .hole => invariant("a demand hole reached a native root export"),
-                .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .tag_union, .ptr, .erased_box => invariant("box export plan had incompatible layout"),
+                .dynamic => invariant("a dynamic value reached a native root export"),
+                .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .tag_union, .ptr => invariant("box export plan had incompatible layout"),
             },
             .tuple, .record => |child_plans| {
                 if (physical.tag == .box) return self.boxed(job, job.plan, physical.getIdx());
@@ -320,43 +316,13 @@ const Builder = struct {
         } else invariant("native callable capture plan had non-struct multiple captures");
     }
 
-    fn frozenDescriptor(self: *Builder, id: Program.BoxyTypeDescId) Allocator.Error!Destination {
-        if (self.frozen_descriptors.get(id)) |dest| return dest;
-        const dest = try self.graph.frozenDescriptor(id);
-        try self.frozen_descriptors.put(self.graph.allocator, id, dest);
-        return dest;
-    }
-
-    fn matchesBoxyEnvironment(self: *Builder, entry: Program.ErasedFn, source: Value) Allocator.Error!bool {
-        const boxy = entry.boxy orelse return true;
-        var matcher = @import("boxy_frozen_evidence.zig").Matcher{ .allocator = self.graph.allocator, .program = self.graph.program, .runtime = self.callables.runtime orelse invariant("Boxy freeze recipe lacked evaluator evidence tables") };
-        defer matcher.deinit();
-        for (boxy.captures) |capture| switch (capture.value) {
-            .value, .contents_descriptor => {},
-            .descriptor => |id| {
-                const field = frozen_graph.boxyCaptureLocation(self.graph.program, entry.capture_layout, capture.slot);
-                const ptr = source.offset(field.offset).read(usize);
-                if (ptr == 0) return false;
-                if (!try matcher.descriptor(@ptrFromInt(ptr), &self.graph.program.boxy_type_descs.items[@backingInt(id)])) return false;
-            },
-            .dictionary => |id| {
-                const field = frozen_graph.boxyCaptureLocation(self.graph.program, entry.capture_layout, capture.slot);
-                const ptr = source.offset(field.offset).read(usize);
-                if (ptr == 0) return false;
-                if (!try matcher.dictionary(@ptrFromInt(ptr), &self.graph.program.boxy_dicts.items[@backingInt(id)])) return false;
-            },
-        };
-        return true;
-    }
-
     fn erased(self: *Builder, job: Job, set_id: Program.ErasedFnsId) Error!void {
         const address = job.source.read(usize);
         if (address == 0) invariant("native erased callable had a null payload");
         const resolved = try self.callables.resolve(self.callables.context, @ptrFromInt(address));
         const set = self.graph.program.erased_fns.items[@backingInt(set_id)];
-        for (set.entries, 0..) |entry, recipe_index| {
+        for (set.entries) |entry| {
             if (entry.entry != resolved.proc) continue;
-            if (!try self.matchesBoxyEnvironment(entry, .{ .ptr = resolved.capture_ptr })) continue;
             // The program's erased capture prefix stays zeroed: a static value
             // is never dropped, so nothing reads the header it reserves.
             const prefix = self.graph.program.erased_capture_prefix;
@@ -368,7 +334,7 @@ const Builder = struct {
                 .layout_idx = job.layout_idx,
                 .count = 1,
                 .kind = .erased,
-            }, if (entry.boxy != null) builtins.erased_callable.compilerPayloadSize(capture_size) else builtins.erased_callable.payloadSize(capture_size), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
+            }, builtins.erased_callable.payloadSize(capture_size), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
             try self.graph.relocate(job.dest, result.dest);
             if (!result.fresh) return;
             const proc_name = try static_data.procSymbolName(self.graph.allocator, self.graph.program.store.getProcSpec(resolved.proc).identity);
@@ -378,12 +344,10 @@ const Builder = struct {
                 .kind = .function_pointer,
                 .callable_capture_offset = capture_offset,
                 .procedure = resolved.proc,
-                .boxy_recipe = if (entry.boxy != null) @intCast(recipe_index) else null,
             });
             const on_drop: ?layout.RcHelperKey = switch (entry.on_drop) {
                 .none => null,
                 .rc_helper => |helper| helper,
-                .boxy_capture => invariant("frozen callable lacks durable producer drop authority"),
             };
             if (on_drop) |helper| {
                 try self.graph.node(result.dest).relocations.append(self.graph.allocator, .{
@@ -393,18 +357,7 @@ const Builder = struct {
                     .rc_helper = helper,
                 });
             }
-            if (entry.boxy) |boxy| {
-                for (boxy.captures) |capture| {
-                    const field = frozen_graph.boxyCaptureLocation(self.graph.program, entry.capture_layout, capture.slot);
-                    const dest = result.dest.offsetBy(capture_offset + field.offset);
-                    switch (capture.value) {
-                        .value => |plan| try self.enqueue(plan, field.idx, .{ .ptr = resolved.capture_ptr + field.offset }, dest, .value),
-                        .descriptor, .contents_descriptor => |id| try self.graph.relocate(dest, try self.frozenDescriptor(id)),
-                        .dictionary => |id| try self.graph.relocate(dest, try self.graph.frozenDictionary(id)),
-                    }
-                }
-                if (boxy.result_desc) |id| try self.graph.relocate(result.dest.offsetBy(builtins.erased_callable.capture_offset + builtins.erased_callable.compilerMetadataOffset(capture_size)), try self.frozenDescriptor(id));
-            } else try self.captures(entry.captures, entry.capture_layout, .{ .ptr = resolved.capture_ptr }, result.dest.offsetBy(capture_offset));
+            try self.captures(entry.captures, entry.capture_layout, .{ .ptr = resolved.capture_ptr }, result.dest.offsetBy(capture_offset));
             return;
         }
         invariant("native erased callable did not match an explicit entry");

@@ -1,5 +1,5 @@
 //! Selecting the `to_inspect` override inspection calls (design.md "Inspect
-//! Overrides"), shared by Monotype lowering, Boxy planning, and Boxy lowering.
+//! Overrides"), shared by every consumer that lowers inspection.
 //!
 //! Whether a `to_inspect` declaration is an eligible override is checked data:
 //! the checked method registry records the decision once per declaration. What

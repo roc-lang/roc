@@ -1,35 +1,11 @@
-//! Boxy plans one generated codec constructor worker per checked structural
-//! codec derivation, whichever path reaches it: a direct structural
+//! `.boxy` lowers one generated codec constructor worker per checked
+//! structural codec derivation, whichever path reaches it: a direct structural
 //! `parser_for`/`encoder_for` call or structural callable-dictionary evidence
 //! (`structuralCodecWorkerSource`).
 
 const std = @import("std");
-const postcheck = @import("postcheck");
+const lir = @import("lir");
 const harness = @import("lower_to_lir_harness.zig");
-
-const Plan = postcheck.Boxy.Plan;
-
-fn expectOneWorkerPerCodecDerivation(plan: *const Plan.ProgramPlan) harness.LowerToLirHarnessError!void {
-    var constructors: usize = 0;
-    for (plan.workers.items, 0..) |worker, index| {
-        if (worker.source != .generated_codec) continue;
-        const codec = worker.source.generated_codec;
-        if (codec.kind != .parser_constructor and codec.kind != .encoder_constructor) continue;
-        const derivation = codec.contract_derivation orelse continue;
-        constructors += 1;
-        for (plan.workers.items[index + 1 ..]) |other| {
-            if (other.source != .generated_codec) continue;
-            const other_codec = other.source.generated_codec;
-            if (other_codec.kind != codec.kind) continue;
-            const other_derivation = other_codec.contract_derivation orelse continue;
-            if (other_derivation != derivation) continue;
-            if (!std.meta.eql(other_codec.shape.module, codec.shape.module)) continue;
-            std.debug.print("one structural codec derivation planned two constructor workers\n", .{});
-            return error.TestUnexpectedResult;
-        }
-    }
-    try std.testing.expect(constructors > 0);
-}
 
 test "structural codec: one derivation reached by dictionary evidence at several uses plans one worker" {
     const source =
@@ -42,5 +18,24 @@ test "structural codec: one derivation reached by dictionary evidence at several
         \\    Ok({})
         \\}
     ;
-    try harness.expectLowersToLirWithOptions(source, .{ .boxy_plan_inspect = expectOneWorkerPerCodecDerivation });
+    // `.boxy` lowers one codec constructor worker per derivation, however
+    // many uses reach it: the two uses at `{ a : List(Str), b : {} }` share
+    // one, and the use at `{ a : Bool, b : List(Str) }` has its own.
+    try harness.runLoweredInspection(source, .{
+        .specialization_strategy = .boxy,
+        .proc_debug_names = true,
+    }, expectTwoCodecConstructors);
+}
+
+/// Exactly one generated codec constructor worker per record encoder
+/// derivation.
+fn expectTwoCodecConstructors(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLirHarnessError!void {
+    var constructors: usize = 0;
+    const store = &lowered.lir_result.store;
+    for (0..store.getProcSpecs().len) |index| {
+        const id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
+        const name = store.procDebugName(id) orelse continue;
+        if (std.mem.eql(u8, name, "boxy.codec.constructor")) constructors += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), constructors);
 }

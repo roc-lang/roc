@@ -19,41 +19,15 @@ pub const host_abi = builtins.host_abi;
 pub const RocStr = builtins.str.RocStr;
 pub const RocList = builtins.list.RocList;
 
-/// Embedded source for the echo platform's main.roc (platform header + main_for_host!).
-pub const platform_main_source = @embedFile("platform/main.roc");
 /// Embedded source for the echo platform's Echo.roc module (hosted line! function).
 pub const echo_module_source = @embedFile("platform/Echo.roc");
 
-/// Default `roc` command platform source used by the shared-memory shim path.
-/// The process entrypoint lives in the generated shim host, so this platform
-/// only exposes the Roc entrypoint and binds echo! to the default runtime
-/// object's hosted symbol.
-pub const run_shim_platform_main_source =
-    \\platform ""
-    \\    requires {} { main! : List(Str) => Try(_, [Exit(I8), ..]) }
-    \\    exposes [Echo]
-    \\    packages {}
-    \\    provides { "roc_main": main_for_host! }
-++ "\n    hosted { \"" ++ builtins.shim_symbols.roc_default_echo_line ++ "\": Echo.line! }\n" ++
-    \\
-    \\import Echo
-    \\
-    \\main_for_host! : List(Str) => I8
-    \\main_for_host! = |args|
-    \\    match main!(args) {
-    \\        Ok(_) => 0
-    \\        Err(Exit(code)) => code
-    \\        Err(other) => {
-    \\            Echo.line!("Program exited with error: ${Str.inspect(other)}\n")
-    \\            1
-    \\        }
-    \\    }
-    \\
-;
-
-/// Build-only Linux default platform. The default-platform runtime owns the
-/// process entrypoint and passes the process arguments to this Roc entrypoint.
-pub const build_platform_main_source =
+/// The default platform of every native command: `roc check`, `roc run`, and
+/// `roc build` read this one header, so a program's checked modules and
+/// compile-time values are the same for all of them. A process entrypoint
+/// outside Roc (a default-platform runtime, a C runtime, or the `roc run`
+/// host) passes the arguments here and exits with the status this returns.
+pub const platform_main_source =
     \\platform ""
     \\    requires {} { main! : List(Str) => Try(_, [Exit(I8), ..]) }
     \\    exposes [Echo]
@@ -74,32 +48,6 @@ pub const build_platform_main_source =
     \\        x64netbsd: { inputs: [app] },
     \\        x64v1freebsd: { inputs: [app] },
     \\        x64v1netbsd: { inputs: [app] },
-    \\    }
-    \\
-    \\import Echo
-    \\
-    \\main_for_host! : List(Str) => I32
-    \\main_for_host! = |args|
-    \\    match main!(args) {
-    \\        Ok(_) => 0
-    \\        Err(Exit(code)) => I8.to_i32(code)
-    \\        Err(_) => 1
-    \\    }
-    \\
-;
-
-/// Build-only default platform for targets that use a C runtime entrypoint.
-/// The C runtime object owns `main`; it calls this exported Roc entrypoint and
-/// folds failed inline expects into the process status code.
-pub const build_c_platform_main_source =
-    \\platform ""
-    \\    requires {} { main! : List(Str) => Try(_, [Exit(I8), ..]) }
-    \\    exposes [Echo]
-    \\    packages {}
-++ "\n    provides { \"" ++ builtins.shim_symbols.roc_default_start_main ++ "\": main_for_host! }" ++
-    "\n    hosted { \"" ++ builtins.shim_symbols.roc_default_echo_line ++ "\": Echo.line! }\n" ++
-    \\    targets: {
-    \\        inputs_dir: "targets/",
     \\        x64mac: { inputs: [app] },
     \\        arm64mac: { inputs: [app] },
 ++ "\n        x64win: { inputs: " ++ msvc_runtime.executable_inputs ++ " }," ++ "\n        x64mingw: { inputs: " ++ mingw_runtime.executable_inputs ++ " },\n" ++
@@ -118,7 +66,10 @@ pub const build_c_platform_main_source =
     \\    match main!(args) {
     \\        Ok(_) => 0
     \\        Err(Exit(code)) => I8.to_i32(code)
-    \\        Err(_) => 1
+    \\        Err(other) => {
+    \\            Echo.line!("Program exited with error: ${Str.inspect(other)}\n")
+    \\            1
+    \\        }
     \\    }
     \\
 ;

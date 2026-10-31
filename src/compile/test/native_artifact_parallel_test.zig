@@ -200,14 +200,11 @@ fn emit(
     const program = &lowered.lir_result;
     var strings = try backend.StaticStringData.build(allocator, &program.store, target.detectNative());
     defer strings.deinit();
-    var cg = try CG.initWithBoxyMetadata(
+    var cg = try CG.initWithCapturePrefix(
         allocator,
         &program.store,
         &program.layouts,
         strings.view(),
-        program.boxy_erased_arg_desc_offsets.items,
-        program.boxy_erased_arg_desc_params.items,
-        program.boxy_worker_procs.items,
         program.erased_capture_prefix,
         .default,
     );
@@ -228,8 +225,7 @@ fn emit(
     const data = try retained.dataItems(allocator);
     defer allocator.free(data);
     try splice.addDataItems(data);
-    const boxy_fns = eval.boxy_abi.nativeFnTable();
-    var image = try splice.link(&cg, &boxy_fns);
+    var image = try splice.link(&cg);
     defer image.deinit();
     var answer: i64 = 0;
     image.callRocABIAt(result.entry_offset, @ptrCast(&answer), null);
@@ -249,9 +245,6 @@ fn object(lowered: *const lir.CheckedPipeline.LoweredProgram, executor: ?tasks.E
         &.{},
         &.{},
         program.store.getProcSpecs(),
-        program.boxy_erased_arg_desc_offsets.items,
-        program.boxy_erased_arg_desc_params.items,
-        program.boxy_worker_procs.items,
         target.detectNative(),
     );
     metrics.* = timing.snapshot().native_emission;

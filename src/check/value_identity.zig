@@ -1065,6 +1065,22 @@ const State = struct {
                 hashU32(&site, try self.nextOrdinal(ordinals, class_digest));
             },
             .expr => |expr| switch (root.kind) {
+                // A literal argument is the literal of another module's
+                // generic function at a type this module fixes: its
+                // identity is the literal's and the type's.
+                .literal_argument => {
+                    const argument = root.literal_argument orelse base.invariant("value identity invariant violated: a literal argument root names no literal", .{});
+                    var class = Sha256.init(.{});
+                    hashTag(&class, "literal-argument");
+                    class.update(&argument.site.module.bytes);
+                    hashU32(&class, @backingInt(argument.site.expr));
+                    hashBytes(&class, @tagName(argument.site.kind));
+                    class.update(&type_digest);
+                    const class_digest = class.finalResult();
+                    value.update(&class_digest);
+                    site.update(&class_digest);
+                    hashU32(&site, try self.nextOrdinal(ordinals, class_digest));
+                },
                 .numeral_conversion, .quote_conversion => {
                     const text = self.regionText(env.store.getExprRegion(expr));
                     hashBytes(&value, text);
@@ -1248,6 +1264,7 @@ const TypeDigest = struct {
                 hashValue(hasher, variable.numeric_default_phase);
                 hashValue(hasher, variable.row_default);
                 hashValue(hasher, variable.row_default_discharges_constraints);
+                hashValue(hasher, variable.bounded_row_ext);
                 hashU32(hasher, @intCast(variable.constraints.len));
                 for (variable.constraints) |constraint| {
                     hashBytes(hasher, names.methodNameText(constraint.fn_name));

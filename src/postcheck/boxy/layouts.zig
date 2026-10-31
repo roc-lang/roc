@@ -1,1508 +1,502 @@
-//! Boxy runtime layout planning.
-//!
-//! This stage consumes the target-independent boxy representation plan and
-//! commits storage layouts into the LIR layout store. Dynamic boxy values keep
-//! their descriptor-governed meaning in this table instead of encoding it in
-//! the ordinary layout id; the layout id only describes storage width,
-//! alignment, and aggregate placement.
+//! The committed layout of a closed Boxy type (design.md "One
+//! Representation Per Type"): the layout of its row-join set's
+//! representative, committed through the shared layout graph so recursive
+//! nominal types box their back edges exactly as every other strategy's
+//! layouts do.
 
 const std = @import("std");
-const base = @import("base");
-const check = @import("check");
 const collections = @import("collections");
 const layout = @import("layout");
-
+const types = @import("types.zig");
 const Common = @import("../common.zig");
-const Plan = @import("plan.zig");
-const test_fixtures = @import("test_fixtures.zig");
 
-/// Shared Boxy stage-test fixtures, aliased so every stage builds the same
-/// synthetic checked payloads from one definition.
-const fixtureTableIndex = test_fixtures.tableIndex;
-const builtinNominal = test_fixtures.builtinNominal;
+/// The layout of a primitive type.
+pub const primitiveLayout = Common.primitiveLayout;
 
 const Allocator = std.mem.Allocator;
-const checked = check.CheckedModule;
-const checked_names = check.CanonicalNames;
-const RecordFieldLabelId = @TypeOf(@as(checked.CheckedRecordField, undefined).name);
-const TagLabelId = @TypeOf(@as(checked.CheckedTag, undefined).name);
+const TypeId = types.TypeId;
 
-/// Storage layout and descriptor requirement for a dynamic Boxy value.
-pub const DynamicBoxLayout = struct {
-    storage_layout: layout.Idx,
-    desc: Plan.DescriptorRequirementId,
-};
+/// The presence slot variant of an omitted optional field.
+pub const missing_label = "#Missing";
+/// The presence slot variant of a supplied optional field.
+pub const present_label = "#Present";
 
-/// Concrete or descriptor-governed storage committed for one representation.
-pub const RuntimeLayout = union(enum) {
-    concrete: layout.Idx,
-    dynamic_box: DynamicBoxLayout,
-
-    pub fn layoutIdx(self: RuntimeLayout) layout.Idx {
-        return switch (self) {
-            .concrete => |idx| idx,
-            .dynamic_box => |dynamic| dynamic.storage_layout,
-        };
-    }
-
-    pub fn descriptor(self: RuntimeLayout) ?Plan.DescriptorRequirementId {
-        return switch (self) {
-            .concrete => null,
-            .dynamic_box => |dynamic| dynamic.desc,
-        };
-    }
-};
-
-/// Storage and descriptor-payload layouts for one planned representation.
-pub const RepLayouts = struct {
-    worker: RuntimeLayout,
-    descriptor_payload_layout: ?layout.Idx = null,
-};
-
-/// Committed argument, capture, return, and value layouts for one worker.
-pub const WorkerLayouts = struct {
-    worker: Plan.WorkerPlanId,
-    args: Plan.Span = .{},
-    hidden_descs: Plan.Span = .{},
-    hidden_dicts: Plan.Span = .{},
-    erased_capture_layout: layout.Idx = .zst,
-    ret: ?RuntimeLayout = null,
-    value: RuntimeLayout,
-};
-
-/// Host-facing layouts committed for one requested root.
-pub const RootLayouts = struct {
-    root: Plan.RootPlanId,
-    worker: Plan.WorkerPlanId,
-    host_args: Plan.Span = .{},
-    host_ret: ?RuntimeLayout = null,
-    host_value: ?RuntimeLayout = null,
-};
-
-/// Fixed compiler-owned layouts used by generated parser evidence values.
-pub const GeneratedEvidenceLayouts = struct {
-    field: layout.Idx,
-    field_list: layout.Idx,
-    field_names: layout.Idx,
-    field_names_list: layout.Idx,
-    tag_union_spec: layout.Idx,
-};
-
-/// Complete target-specific layout assignment for a Boxy program plan.
-pub const LayoutPlan = struct {
+/// Committed layouts of closed Boxy types, memoized per joined type.
+pub const Layouts = struct {
     allocator: Allocator,
-    rep_layouts: []RepLayouts,
-    worker_layouts: []WorkerLayouts,
-    worker_layout_values: std.ArrayList(RuntimeLayout),
-    roots: std.ArrayList(RootLayouts),
-    root_layout_values: std.ArrayList(RuntimeLayout),
-    dynamic_storage_layout: layout.Idx,
-    generated_evidence: GeneratedEvidenceLayouts,
+    store: *types.Store,
+    converter: types.Converter,
+    layouts: *layout.Store,
+    memo: collections.DenseMapUnmanaged(TypeId, Committed) = .empty,
+    slot_memo: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty,
+    /// The payload of each presence-slot type.
+    slot_payloads: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty,
+    /// The recursive component of each open type `recursiveComponent` has
+    /// placed, or `no_component` for one in no cycle.
+    components: collections.DenseMapUnmanaged(TypeId, u32) = .empty,
+    /// The recursive component of each open type over size edges alone
+    /// (`sizeComponent`), or `no_component` for one in no such cycle.
+    size_components: collections.DenseMapUnmanaged(TypeId, u32) = .empty,
+    /// The members of each recursive component that a pointer slot of the
+    /// component points at, by component.
+    component_targets: std.ArrayList([]const TypeId) = .empty,
+    /// The type variables of each recursive member asked about.
+    member_vars: collections.DenseMapUnmanaged(TypeId, []const TypeId) = .empty,
 
-    pub fn deinit(self: *LayoutPlan) void {
-        self.root_layout_values.deinit(self.allocator);
-        self.roots.deinit(self.allocator);
-        self.worker_layout_values.deinit(self.allocator);
-        self.allocator.free(self.worker_layouts);
-        self.allocator.free(self.rep_layouts);
-        self.* = undefined;
-    }
+    const Committed = struct { idx: layout.Idx, digest: ?layout.GraphDigest };
 
-    pub fn workerLayoutFor(self: *const LayoutPlan, worker: Plan.WorkerPlanId) WorkerLayouts {
-        const index = @backingInt(worker);
-        if (index >= self.worker_layouts.len) boxyLayoutInvariant("worker layout id exceeded worker layout table");
-        const layouts = self.worker_layouts[index];
-        if (layouts.worker != worker) boxyLayoutInvariant("worker layout table disagreed with worker plan order");
-        return layouts;
-    }
+    const no_component = std.math.maxInt(u32);
 
-    pub fn workerLayoutSlice(self: *const LayoutPlan, span: Plan.Span) []const RuntimeLayout {
-        return self.worker_layout_values.items[span.start .. span.start + span.len];
-    }
+    /// A component a type's descriptor composes from: one stored inline, in
+    /// a struct slot (a record field or tuple element), as a tag's payload,
+    /// or as a nominal's backing, or one a list or box points at.
+    pub const InlineEdge = struct {
+        child: TypeId,
+        slot: enum { field, payload, backing, list_elem, box_payload },
 
-    pub fn rootLayoutSlice(self: *const LayoutPlan, span: Plan.Span) []const RuntimeLayout {
-        return self.root_layout_values.items[span.start .. span.start + span.len];
-    }
-};
-
-/// Configuration for committing a Boxy representation plan to layouts.
-pub const BuildOptions = struct {};
-
-/// Commit target layouts for every representation, worker, and root in a plan.
-pub fn build(
-    allocator: Allocator,
-    program: *const Plan.ProgramPlan,
-    store: *layout.Store,
-    _: BuildOptions,
-) Allocator.Error!LayoutPlan {
-    var builder = Builder.init(allocator, program, store);
-    defer builder.deinit();
-    return try builder.finish();
-}
-
-/// Commit only checked ABI roots. No worker descriptors, generated evidence
-/// layouts, or LIR procedures are constructed for layout-only clients.
-pub fn commitHostAbi(allocator: Allocator, program: *const Plan.ProgramPlan, store: *layout.Store) Allocator.Error![]layout.Idx {
-    var builder = Builder.init(allocator, program, store);
-    defer builder.deinit();
-    builder.caches = try allocator.alloc(?RuntimeLayout, program.representations.items.len);
-    @memset(builder.caches, null);
-    const roots = try allocator.alloc(layout.Idx, program.root_reps.items.len);
-    errdefer allocator.free(roots);
-    for (program.root_reps.items, roots) |rep, *root| root.* = (try builder.runtimeLayoutForRep(rep)).layoutIdx();
-    return roots;
-}
-
-const Builder = struct {
-    allocator: Allocator,
-    program: *const Plan.ProgramPlan,
-    store: *layout.Store,
-    caches: []?RuntimeLayout,
-    graph_nodes: collections.DenseMap(Plan.TypeRepId, layout.GraphNodeId),
-    worker_layout_values: std.ArrayList(RuntimeLayout),
-    root_layouts: std.ArrayList(RootLayouts),
-    root_layout_values: std.ArrayList(RuntimeLayout),
-    dynamic_storage_layout: ?layout.Idx = null,
-    generated_field_layout: ?layout.Idx = null,
-    generated_field_list_layout: ?layout.Idx = null,
-    generated_field_names_layout: ?layout.Idx = null,
-    generated_field_names_list_layout: ?layout.Idx = null,
-    generated_tag_union_spec_layout: ?layout.Idx = null,
-
-    /// Shared read-only queries over the representation plan.
-    fn repQuery(self: *const Builder) Plan.RepQuery {
-        return .{ .plan = self.program, .allocator = self.allocator };
-    }
-
-    fn init(allocator: Allocator, program: *const Plan.ProgramPlan, store: *layout.Store) Builder {
-        return .{
-            .allocator = allocator,
-            .program = program,
-            .store = store,
-            .caches = &.{},
-            .graph_nodes = collections.DenseMap(Plan.TypeRepId, layout.GraphNodeId).init(allocator),
-            .worker_layout_values = .empty,
-            .root_layouts = .empty,
-            .root_layout_values = .empty,
-        };
-    }
-
-    fn deinit(self: *Builder) void {
-        self.root_layout_values.deinit(self.allocator);
-        self.root_layouts.deinit(self.allocator);
-        self.worker_layout_values.deinit(self.allocator);
-        self.allocator.free(self.caches);
-        self.graph_nodes.deinit();
-    }
-
-    fn finish(self: *Builder) Allocator.Error!LayoutPlan {
-        self.caches = try self.allocator.alloc(?RuntimeLayout, self.program.representations.items.len);
-        @memset(self.caches, null);
-
-        for (self.program.representations.items, 0..) |_, index| {
-            _ = try self.runtimeLayoutForRep(@fromBackingInt(@intCast(index)));
-        }
-        for (self.program.roots.items) |root| {
-            try self.appendRoot(root);
-        }
-
-        const rep_layouts = try self.allocator.alloc(RepLayouts, self.program.representations.items.len);
-        errdefer self.allocator.free(rep_layouts);
-        for (rep_layouts, 0..) |*out, index| {
-            const rep_id: Plan.TypeRepId = @fromBackingInt(@intCast(index));
-            const worker = self.caches[index] orelse boxyLayoutInvariant("worker layout cache was not populated");
-            out.* = .{
-                .worker = worker,
-                .descriptor_payload_layout = try self.descriptorPayloadLayout(rep_id),
+        /// Whether the edge places its child inside its parent: the shared
+        /// layout store's size edges, whose cycles are the components it
+        /// boxes slots of. A list or box points at its child.
+        pub fn placesInline(self: InlineEdge) bool {
+            return switch (self.slot) {
+                .field, .payload, .backing => true,
+                .list_elem, .box_payload => false,
             };
         }
-
-        const worker_layouts = try self.allocator.alloc(WorkerLayouts, self.program.workers.items.len);
-        errdefer self.allocator.free(worker_layouts);
-        for (self.program.workers.items, worker_layouts) |worker, *out| {
-            out.* = try self.layoutForWorker(worker);
-        }
-
-        const dynamic_storage_layout = try self.dynamicStorageLayout();
-        const generated_evidence = GeneratedEvidenceLayouts{
-            .field = try self.generatedFieldLayout(),
-            .field_list = try self.generatedFieldListLayout(),
-            .field_names = try self.generatedFieldNamesLayout(),
-            .field_names_list = try self.generatedFieldNamesListLayout(),
-            .tag_union_spec = try self.generatedTagUnionSpecLayout(),
-        };
-        const worker_layout_values = self.worker_layout_values;
-        const roots = self.root_layouts;
-        const root_layout_values = self.root_layout_values;
-        self.worker_layout_values = .empty;
-        self.root_layouts = .empty;
-        self.root_layout_values = .empty;
-
-        return .{
-            .allocator = self.allocator,
-            .rep_layouts = rep_layouts,
-            .worker_layouts = worker_layouts,
-            .worker_layout_values = worker_layout_values,
-            .roots = roots,
-            .root_layout_values = root_layout_values,
-            .dynamic_storage_layout = dynamic_storage_layout,
-            .generated_evidence = generated_evidence,
-        };
-    }
-
-    fn layoutForWorker(self: *Builder, worker: Plan.WorkerPlan) Allocator.Error!WorkerLayouts {
-        const worker_value = try self.runtimeLayoutForRep(worker.rep);
-        var worker_layout: WorkerLayouts = .{
-            .worker = worker.id,
-            .value = worker_value,
-        };
-
-        if (self.repQuery().functionChildren(worker.rep)) |function| {
-            const start = self.layoutValueStart(&self.worker_layout_values);
-            try self.appendFunctionLayouts(&self.worker_layout_values, function);
-            worker_layout.args = self.layoutSpanFrom(start, function.arg_count);
-            worker_layout.ret = self.worker_layout_values.items[start + function.arg_count];
-        }
-        const hidden_descs = self.program.hiddenDescriptorParamSlice(worker.hidden_descs);
-        if (hidden_descs.len != 0) {
-            const hidden_start = self.layoutValueStart(&self.worker_layout_values);
-            for (hidden_descs) |_| {
-                try self.worker_layout_values.append(self.allocator, .{ .concrete = .opaque_ptr });
-            }
-            worker_layout.hidden_descs = self.layoutSpanFrom(hidden_start, @intCast(hidden_descs.len));
-        }
-        const hidden_dicts = self.program.hiddenDictionaryParamSlice(worker.hidden_dicts);
-        if (hidden_dicts.len != 0) {
-            const hidden_start = self.layoutValueStart(&self.worker_layout_values);
-            for (hidden_dicts) |_| {
-                try self.worker_layout_values.append(self.allocator, .{ .concrete = .opaque_ptr });
-            }
-            worker_layout.hidden_dicts = self.layoutSpanFrom(hidden_start, @intCast(hidden_dicts.len));
-        }
-        worker_layout.erased_capture_layout = try self.erasedCaptureLayout(worker.erased_captures);
-
-        return worker_layout;
-    }
-
-    fn erasedCaptureLayout(self: *Builder, span: Plan.Span) Allocator.Error!layout.Idx {
-        const captures = self.program.erasedCaptureSlice(span);
-        if (captures.len == 0) return .zst;
-
-        const fields = try self.allocator.alloc(layout.StructField, captures.len);
-        defer self.allocator.free(fields);
-        for (captures, fields, 0..) |capture, *field, index| {
-            const field_layout: layout.Idx = switch (capture.kind) {
-                .captured_value => (try self.runtimeLayoutForRep(capture.rep)).layoutIdx(),
-                .hidden_desc, .hidden_dict, .hidden_literal => .opaque_ptr,
-            };
-            field.* = .{ .index = @intCast(index), .layout = field_layout };
-        }
-        return try self.store.putStructFields(fields);
-    }
-
-    fn appendRoot(self: *Builder, root: Plan.RootPlan) Allocator.Error!void {
-        var root_layout: RootLayouts = .{
-            .root = root.id,
-            .worker = root.worker,
-        };
-
-        if (self.repQuery().functionChildren(if (root.wrapper_kind == .host_shaped_wrapper) self.program.hostRepFor(root.host_rep) else root.host_rep)) |function| {
-            if (root.wrapper_kind == .host_shaped_wrapper) {
-                const host_start = self.layoutValueStart(&self.root_layout_values);
-                try self.appendFunctionLayouts(&self.root_layout_values, function);
-                root_layout.host_args = self.layoutSpanFrom(host_start, function.arg_count);
-                root_layout.host_ret = self.root_layout_values.items[host_start + function.arg_count];
-            }
-        } else if (root.wrapper_kind == .host_shaped_wrapper) {
-            root_layout.host_value = try self.runtimeLayoutForRep(self.program.hostRepFor(root.host_rep));
-        }
-
-        try self.root_layouts.append(self.allocator, root_layout);
-    }
-
-    fn appendFunctionLayouts(
-        self: *Builder,
-        values: *std.ArrayList(RuntimeLayout),
-        function: Plan.FunctionChildren,
-    ) Allocator.Error!void {
-        const identity_children = self.program.childSlice(self.program.representations.items[@backingInt(function.rep)].children);
-        for (identity_children[function.args_start..][0..function.arg_count]) |child| {
-            try values.append(self.allocator, try self.runtimeLayoutForRep(child.rep));
-        }
-        try values.append(self.allocator, try self.runtimeLayoutForRep(function.ret));
-    }
-
-    fn layoutValueStart(_: *const Builder, values: *const std.ArrayList(RuntimeLayout)) u32 {
-        return @intCast(values.items.len);
-    }
-
-    fn layoutSpanFrom(_: *const Builder, start: u32, len: u32) Plan.Span {
-        return .{ .start = start, .len = len };
-    }
-
-    /// A representation's runtime layout. A representation whose layout is
-    /// another's (a builtin nominal's backing, or a box's dynamic or callable
-    /// payload) shares it; the whole chain is cached.
-    fn runtimeLayoutForRep(self: *Builder, root: Plan.TypeRepId) Allocator.Error!RuntimeLayout {
-        var chain: std.ArrayList(Plan.TypeRepId) = .empty;
-        defer chain.deinit(self.allocator);
-        var rep_id = root;
-        const runtime = while (true) {
-            if (self.caches[@backingInt(rep_id)]) |cached| break cached;
-            switch (try self.immediateRuntimeStep(rep_id)) {
-                .layout => |immediate| {
-                    self.caches[@backingInt(rep_id)] = immediate;
-                    break immediate;
-                },
-                .same_as => |next| {
-                    try chain.append(self.allocator, rep_id);
-                    rep_id = next;
-                },
-                .graph => break try self.graphRuntimeLayout(rep_id),
-            }
-        };
-        for (chain.items) |shared| self.caches[@backingInt(shared)] = runtime;
-        return runtime;
-    }
-
-    /// The runtime layout of a representation built as a layout graph.
-    fn graphRuntimeLayout(self: *Builder, rep_id: Plan.TypeRepId) Allocator.Error!RuntimeLayout {
-        const index = @backingInt(rep_id);
-
-        var graph = layout.Graph{};
-        defer graph.deinit(self.allocator);
-        const local_nodes = &self.graph_nodes;
-        local_nodes.clearRetainingCapacity();
-
-        var graph_builder = GraphBuilder{
-            .parent = self,
-            .graph = &graph,
-            .local_nodes = local_nodes,
-        };
-        const root = try graph_builder.inputForRep(rep_id);
-        var commit = try self.store.commitGraph(&graph, root);
-        defer commit.deinit(self.allocator);
-
-        const root_layout_idx = switch (root) {
-            .canonical => |layout_idx| layout_idx,
-            .local => |node| commit.value_layouts[@backingInt(node)],
-        };
-        const runtime: RuntimeLayout = .{ .concrete = root_layout_idx };
-        self.caches[index] = runtime;
-
-        var nodes = local_nodes.iterator();
-        while (nodes.next()) |entry| {
-            self.caches[@backingInt(entry.key_ptr.*)] = .{ .concrete = commit.value_layouts[@backingInt(entry.value_ptr.*)] };
-        }
-
-        return self.caches[index].?;
-    }
-
-    /// A representation's runtime layout when it needs no layout graph of
-    /// its own, or null.
-    fn immediateRuntimeLayout(self: *Builder, rep_id: Plan.TypeRepId) Allocator.Error!?RuntimeLayout {
-        return switch (try self.immediateRuntimeStep(rep_id)) {
-            .layout => |runtime| runtime,
-            .same_as => |next| try self.runtimeLayoutForRep(next),
-            .graph => null,
-        };
-    }
-
-    const ImmediateRuntimeStep = union(enum) {
-        layout: RuntimeLayout,
-        /// The representation has this other representation's layout.
-        same_as: Plan.TypeRepId,
-        /// The representation's layout is a layout graph.
-        graph,
     };
 
-    fn immediateRuntimeStep(self: *Builder, rep_id: Plan.TypeRepId) Allocator.Error!ImmediateRuntimeStep {
-        const rep = self.program.representations.items[@backingInt(rep_id)];
-        if (rep.abi_boxed_backing) return .graph;
-        return switch (rep.kind) {
-            .in_progress => boxyLayoutInvariant("in-progress representation reached boxy layout planning"),
-            .dynamic => .{ .layout = .{ .dynamic_box = .{
-                .storage_layout = try self.dynamicStorageLayout(),
-                .desc = rep.descriptor.get() orelse boxyLayoutInvariant("dynamic layout had no descriptor requirement"),
-            } } },
-            .primitive => |primitive| .{ .layout = .{ .concrete = Common.primitiveLayout(primitive) } },
-            .bool_tag_union => .{ .layout = .{ .concrete = .bool } },
-            .empty_record, .empty_tag_union => .{ .layout = .{ .concrete = .zst } },
-            .erased_callable => .{ .layout = .{ .concrete = try self.store.insertErasedCallable() } },
-            .generated_field => .{ .layout = .{ .concrete = try self.generatedFieldLayout() } },
-            .generated_field_names => .{ .layout = .{ .concrete = try self.generatedFieldNamesLayout() } },
-            .generated_tag_union_spec => .{ .layout = .{ .concrete = try self.generatedTagUnionSpecLayout() } },
-            .box => self.boxRuntimeStep(rep_id),
-            .nominal => |kind| switch (kind) {
-                .opaque_nominal => .{ .layout = .{ .concrete = try self.dynamicStorageLayout() } },
-                .builtin_other => if (self.singleChild(rep_id, .nominal_backing)) |child|
-                    .{ .same_as = child.rep }
-                else
-                    .graph,
-                .transparent => .graph,
+    /// Which edges a component placement follows.
+    const Edges = enum { all, size };
+
+    pub fn deinit(self: *Layouts) void {
+        self.memo.deinit(self.allocator);
+        self.slot_memo.deinit(self.allocator);
+        self.slot_payloads.deinit(self.allocator);
+        self.components.deinit(self.allocator);
+        self.size_components.deinit(self.allocator);
+        for (self.component_targets.items) |targets| self.allocator.free(targets);
+        self.component_targets.deinit(self.allocator);
+        var vars = self.member_vars.valueIterator();
+        while (vars.next()) |slice| self.allocator.free(slice.*);
+        self.member_vars.deinit(self.allocator);
+    }
+
+    /// The components `ty`'s descriptor composes from: those it stores
+    /// inline, as the committed layout graph has them (a tag with several
+    /// payloads stores their tuple), and the one a list or box points at.
+    pub fn inlineEdges(self: *Layouts, ty: TypeId, out: *std.ArrayList(InlineEdge)) Allocator.Error!void {
+        switch (self.store.get(ty)) {
+            .list => |elem| try out.append(self.allocator, .{ .child = elem, .slot = .list_elem }),
+            .box => |payload| try out.append(self.allocator, .{ .child = payload, .slot = .box_payload }),
+            .record => |record| {
+                const fields = try self.allocator.dupe(types.Field, self.store.fieldSpan(record.fields));
+                defer self.allocator.free(fields);
+                for (fields) |field| try out.append(self.allocator, .{ .child = try self.fieldStorage(field), .slot = .field });
             },
-            .alias,
-            .record,
-            .tuple,
-            .list,
-            .tag_union,
-            => .graph,
-        };
-    }
-
-    fn generatedFieldLayout(self: *Builder) Allocator.Error!layout.Idx {
-        if (self.generated_field_layout) |existing| return existing;
-        const committed = try self.store.putStructFields(&.{
-            .{ .index = 0, .layout = .str },
-            .{ .index = 1, .layout = .u64 },
-            .{ .index = 2, .layout = .u64 },
-        });
-        self.generated_field_layout = committed;
-        return committed;
-    }
-
-    fn generatedFieldNamesLayout(self: *Builder) Allocator.Error!layout.Idx {
-        if (self.generated_field_names_layout) |existing| return existing;
-        const committed = try self.store.putStructFields(&.{
-            .{ .index = 0, .layout = try self.generatedFieldListLayout() },
-            .{ .index = 1, .layout = .u64 },
-            .{ .index = 2, .layout = .u64 },
-        });
-        self.generated_field_names_layout = committed;
-        return committed;
-    }
-
-    fn generatedTagUnionSpecLayout(self: *Builder) Allocator.Error!layout.Idx {
-        if (self.generated_tag_union_spec_layout) |existing| return existing;
-        const committed = try self.store.putStructFields(&.{
-            .{ .index = 0, .layout = try self.generatedFieldNamesListLayout() },
-            .{ .index = 1, .layout = .u64 },
-        });
-        self.generated_tag_union_spec_layout = committed;
-        return committed;
-    }
-
-    fn generatedFieldListLayout(self: *Builder) Allocator.Error!layout.Idx {
-        if (self.generated_field_list_layout) |existing| return existing;
-        const committed = try self.store.insertList(try self.generatedFieldLayout());
-        self.generated_field_list_layout = committed;
-        return committed;
-    }
-
-    fn generatedFieldNamesListLayout(self: *Builder) Allocator.Error!layout.Idx {
-        if (self.generated_field_names_list_layout) |existing| return existing;
-        const committed = try self.store.insertList(try self.generatedFieldNamesLayout());
-        self.generated_field_names_list_layout = committed;
-        return committed;
-    }
-
-    fn boxRuntimeStep(self: *Builder, rep_id: Plan.TypeRepId) ImmediateRuntimeStep {
-        const child = self.repQuery().requiredSingleChild(rep_id, .box_payload);
-        // Box payloads reach here behind alias chains (`I64ToI64 : I64 -> I64`);
-        // the erased-callable collapse below is a host ABI convention keyed on
-        // the underlying value type, so resolve aliases before classifying.
-        const payload_rep_id = self.aliasResolvedRep(child.rep);
-        const child_rep = self.program.representations.items[@backingInt(payload_rep_id)];
-        if (child_rep.kind == .dynamic) return .{ .same_as = payload_rep_id };
-        // A boxed erased callable is one flat refcounted allocation whose
-        // data pointer IS the callable value (see builtins.erased_callable),
-        // so Box(fn) shares the callable's layout instead of boxing it.
-        if (child_rep.kind == .erased_callable) return .{ .same_as = payload_rep_id };
-        return .graph;
-    }
-
-    fn aliasResolvedRep(self: *Builder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
-        var current = rep_id;
-        while (true) {
-            const rep = self.program.representations.items[@backingInt(current)];
-            if (rep.kind != .alias) return current;
-            current = self.repQuery().requiredSingleChild(current, .alias_backing).rep;
+            .tuple => |items_span| {
+                const items = try self.allocator.dupe(TypeId, self.store.span(items_span));
+                defer self.allocator.free(items);
+                for (items) |item| try out.append(self.allocator, .{ .child = item, .slot = .field });
+            },
+            .tag_union => |tag_union| {
+                const tags = try self.allocator.dupe(types.Tag, self.store.tagSpan(tag_union.tags));
+                defer self.allocator.free(tags);
+                for (tags) |tag| {
+                    const payloads = try self.allocator.dupe(TypeId, self.store.span(tag.payloads));
+                    defer self.allocator.free(payloads);
+                    const payload = try self.tagPayload(payloads) orelse continue;
+                    try out.append(self.allocator, .{ .child = payload, .slot = .payload });
+                }
+            },
+            .nominal => |nominal| if (nominal.has_backing) {
+                try out.append(self.allocator, .{ .child = try self.converter.backing(ty), .slot = .backing });
+            },
+            .primitive, .empty_record, .function, .variable => {},
         }
     }
 
-    /// The payload layout a descriptor for `root` describes. A wrapper's
-    /// payload is its backing's; a backing without a descriptor of its own
-    /// is described by its runtime layout.
-    fn descriptorPayloadLayout(self: *Builder, root: Plan.TypeRepId) Allocator.Error!?layout.Idx {
-        var rep_id = root;
-        var at_root = true;
-        while (true) : (at_root = false) {
-            const rep = self.program.representations.items[@backingInt(rep_id)];
-            if (rep.descriptor.get() == null) {
-                if (at_root) return null;
-                return (try self.runtimeLayoutForRep(rep_id)).layoutIdx();
-            }
-            const backing: ?Plan.TypeRepId = if (rep.kind == .alias)
-                self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep
-            else if (rep.kind == .nominal) switch (rep.kind.nominal) {
-                .transparent => if (rep.declared_fields.len == 0)
-                    self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep
-                else
-                    null,
-                .builtin_other => if (self.singleChild(rep_id, .nominal_backing)) |child| child.rep else null,
-                .opaque_nominal => null,
-            } else null;
-            if (backing) |next| {
-                rep_id = next;
+    /// The recursive component of the open type `ty` in the graph of inline
+    /// components, or null when `ty` is in no cycle. Every type of a
+    /// component reaches every other, so all are open when one is.
+    pub fn recursiveComponent(self: *Layouts, ty: TypeId) Allocator.Error!?u32 {
+        if (self.components.get(ty)) |component| return if (component == no_component) null else component;
+        if (try self.converter.representationClosed(ty)) return null;
+        try self.placeComponents(ty, .all);
+        const component = self.components.get(ty).?;
+        return if (component == no_component) null else component;
+    }
+
+    /// The recursive component of the open type `ty` in the graph of the
+    /// components it stores inline (`InlineEdge.placesInline`), or null when
+    /// no such cycle holds it: the shared layout store boxes a slot only for
+    /// a cycle that would otherwise place a type inside itself, so a type
+    /// recursive only through a list or box has no boxed slot.
+    fn sizeComponent(self: *Layouts, ty: TypeId) Allocator.Error!?u32 {
+        if (self.size_components.get(ty)) |component| return if (component == no_component) null else component;
+        if (try self.converter.representationClosed(ty)) return null;
+        try self.placeComponents(ty, .size);
+        const component = self.size_components.get(ty).?;
+        return if (component == no_component) null else component;
+    }
+
+    /// Whether `parent` stores `edge.child` in a recursion box: a struct
+    /// slot or a non-struct tag payload leading back into `parent`'s size
+    /// component, which the shared layout store boxes.
+    pub fn boxedEdge(self: *Layouts, parent: TypeId, edge: InlineEdge) Allocator.Error!bool {
+        const component = try self.sizeComponent(parent) orelse return false;
+        if (self.size_components.get(edge.child) != component) return false;
+        return switch (edge.slot) {
+            .field => true,
+            .payload => switch (self.store.get(edge.child)) {
+                .record, .tuple => false,
+                .primitive, .empty_record, .tag_union, .list, .box, .nominal, .function, .variable => true,
+            },
+            .backing, .list_elem, .box_payload => false,
+        };
+    }
+
+    /// Whether the edge from `parent` to `edge.child` leads back into
+    /// `parent`'s recursive component through a pointer: a recursion box
+    /// (`boxedEdge`), or a list element or box payload, which is a pointer
+    /// already.
+    pub fn pointerEdge(self: *Layouts, parent: TypeId, edge: InlineEdge) Allocator.Error!bool {
+        if (edge.placesInline()) return try self.boxedEdge(parent, edge);
+        const component = try self.recursiveComponent(parent) orelse return false;
+        return self.components.get(edge.child) == component;
+    }
+
+    /// The members of recursive component `component` that a pointer slot
+    /// points at.
+    pub fn componentTargets(self: *const Layouts, component: u32) []const TypeId {
+        return self.component_targets.items[component];
+    }
+
+    /// Tarjan's strongly connected components over the open types reachable
+    /// from `root` through inline edges (`edges`), with an explicit stack.
+    fn placeComponents(self: *Layouts, root: TypeId, comptime edges_followed: Edges) Allocator.Error!void {
+        const placed = switch (edges_followed) {
+            .all => &self.components,
+            .size => &self.size_components,
+        };
+        const Frame = struct { ty: TypeId, edges: []InlineEdge, next: usize };
+        var frames: std.ArrayList(Frame) = .empty;
+        defer {
+            for (frames.items) |frame| self.allocator.free(frame.edges);
+            frames.deinit(self.allocator);
+        }
+        var index_of: collections.DenseMapUnmanaged(TypeId, u32) = .empty;
+        defer index_of.deinit(self.allocator);
+        var low: collections.DenseMapUnmanaged(TypeId, u32) = .empty;
+        defer low.deinit(self.allocator);
+        var on_stack: collections.DenseMapUnmanaged(TypeId, void) = .empty;
+        defer on_stack.deinit(self.allocator);
+        var stack: std.ArrayList(TypeId) = .empty;
+        defer stack.deinit(self.allocator);
+        var edges: std.ArrayList(InlineEdge) = .empty;
+        defer edges.deinit(self.allocator);
+
+        var counter: u32 = 0;
+        var pending_root: ?TypeId = root;
+        while (pending_root != null or frames.items.len != 0) {
+            if (pending_root) |ty| {
+                pending_root = null;
+                try index_of.put(self.allocator, ty, counter);
+                try low.put(self.allocator, ty, counter);
+                counter += 1;
+                try stack.append(self.allocator, ty);
+                try on_stack.put(self.allocator, ty, {});
+                edges.clearRetainingCapacity();
+                try self.inlineEdges(ty, &edges);
+                if (edges_followed == .size) {
+                    var kept: usize = 0;
+                    for (edges.items) |edge| {
+                        if (!edge.placesInline()) continue;
+                        edges.items[kept] = edge;
+                        kept += 1;
+                    }
+                    edges.shrinkRetainingCapacity(kept);
+                }
+                const owned = try self.allocator.dupe(InlineEdge, edges.items);
+                errdefer self.allocator.free(owned);
+                try frames.append(self.allocator, .{ .ty = ty, .edges = owned, .next = 0 });
                 continue;
             }
-            if (rep.kind == .dynamic and rep.tag_variants.len != 0) {
-                return try self.aggregatePayloadLayout(.tag_union, rep_id);
-            }
-            if (rep.kind == .dynamic and repHasRecordFields(self.program, rep)) {
-                return try self.aggregatePayloadLayout(.record, rep_id);
-            }
-            return (try self.runtimeLayoutForRep(rep_id)).layoutIdx();
-        }
-    }
-
-    /// The descriptor payload layout of the record or tag union `rep_id`.
-    fn aggregatePayloadLayout(self: *Builder, comptime shape: enum { record, tag_union }, rep_id: Plan.TypeRepId) Allocator.Error!layout.Idx {
-        var graph = layout.Graph{};
-        defer graph.deinit(self.allocator);
-
-        const local_nodes = &self.graph_nodes;
-        local_nodes.clearRetainingCapacity();
-
-        var graph_builder = GraphBuilder{
-            .parent = self,
-            .descriptor_payload = true,
-            .graph = &graph,
-            .local_nodes = local_nodes,
-        };
-        const root = try graph.reserveNode(self.allocator);
-        try local_nodes.put(rep_id, root);
-        try graph_builder.buildNode(.{ .state = switch (shape) {
-            .record => .{ .fields = .{ .node = root, .rep_id = rep_id, .kind = .record } },
-            .tag_union => .{ .tag = .{ .node = root, .rep_id = rep_id, .mode = .descriptor_payload } },
-        } });
-
-        var commit = try self.store.commitGraph(&graph, .{ .local = root });
-        defer commit.deinit(self.allocator);
-        return commit.value_layouts[@backingInt(root)];
-    }
-
-    fn dynamicStorageLayout(self: *Builder) Allocator.Error!layout.Idx {
-        if (self.dynamic_storage_layout) |existing| return existing;
-        const idx = try self.store.insertErasedBox();
-        self.dynamic_storage_layout = idx;
-        return idx;
-    }
-
-    fn singleChild(self: *Builder, rep_id: Plan.TypeRepId, role: Plan.ChildRole) ?Plan.RepChild {
-        var found: ?Plan.RepChild = null;
-        const rep = self.program.representations.items[@backingInt(rep_id)];
-        for (self.program.childSlice(rep.children)) |child| {
-            if (Plan.sameChildRoleKind(child.role, role)) {
-                if (found != null) boxyLayoutInvariant("representation had duplicate required child role");
-                found = child;
-            }
-        }
-        return found;
-    }
-};
-
-const GraphBuilder = struct {
-    parent: *Builder,
-    descriptor_payload: bool = false,
-    graph: *layout.Graph,
-    local_nodes: *collections.DenseMap(Plan.TypeRepId, layout.GraphNodeId),
-
-    // A node's contents are built from its children's inputs, and children
-    // follow type nesting, so each node still waiting on a child input is a
-    // frame on one heap-backed stack. Nodes are reserved, and field and ref
-    // spans appended, in the order a direct recursive build would.
-
-    const TagPayloadMode = enum {
-        concrete_runtime,
-        descriptor_payload,
-    };
-
-    /// A graph node waiting on its children's inputs.
-    const GraphFrame = struct {
-        /// Whether the frame's last requested child input is still due.
-        awaiting: bool = false,
-        state: union(enum) {
-            /// A node with one child input.
-            single: struct { node: layout.GraphNodeId, kind: enum { list, box, nominal }, child: Plan.TypeRepId },
-            /// A record's field nodes, or a tuple's element nodes.
-            fields: struct {
-                node: layout.GraphNodeId,
-                rep_id: Plan.TypeRepId,
-                kind: enum { record, tuple },
-                fields: std.ArrayList(layout.GraphField) = .empty,
-                next: usize = 0,
-            },
-            /// A transparent nominal's declared fields.
-            declared: struct {
-                node: layout.GraphNodeId,
-                rep_id: Plan.TypeRepId,
-                fields: []layout.GraphField,
-                next: usize = 0,
-            },
-            tag: struct {
-                node: layout.GraphNodeId,
-                rep_id: Plan.TypeRepId,
-                mode: TagPayloadMode,
-                refs: std.ArrayList(layout.GraphInput) = .empty,
-                variant: usize = 0,
-            },
-            /// A variant's several payloads, as a struct reserved once they
-            /// are built.
-            payload: struct {
-                payloads: []Plan.TypeRepId,
-                fields: []layout.GraphField,
-                next: usize = 0,
-            },
-        },
-
-        fn deinit(self: *GraphFrame, allocator: Allocator) void {
-            switch (self.state) {
-                .single => {},
-                .fields => |*fields| fields.fields.deinit(allocator),
-                .declared => |declared| allocator.free(declared.fields),
-                .tag => |*tag| tag.refs.deinit(allocator),
-                .payload => |payload| {
-                    allocator.free(payload.payloads);
-                    allocator.free(payload.fields);
-                },
-            }
-        }
-    };
-
-    const GraphStep = union(enum) {
-        /// The frame needs this representation's input next.
-        request: Plan.TypeRepId,
-        /// The frame pushed a frame of its own to run next.
-        pushed,
-        /// The frame finished with this input and was popped.
-        done: layout.GraphInput,
-    };
-
-    fn inputForRep(self: *GraphBuilder, rep_id: Plan.TypeRepId) Allocator.Error!layout.GraphInput {
-        var frames: std.ArrayList(GraphFrame) = .empty;
-        defer {
-            for (frames.items) |*frame| frame.deinit(self.parent.allocator);
-            frames.deinit(self.parent.allocator);
-        }
-        const input = try self.beginInput(rep_id, &frames);
-        return try self.runGraphFrames(&frames, input);
-    }
-
-    /// Build the node `frame` describes, which the caller reserved.
-    fn buildNode(self: *GraphBuilder, frame: GraphFrame) Allocator.Error!void {
-        var frames: std.ArrayList(GraphFrame) = .empty;
-        defer {
-            for (frames.items) |*pending| pending.deinit(self.parent.allocator);
-            frames.deinit(self.parent.allocator);
-        }
-        try frames.append(self.parent.allocator, frame);
-        _ = try self.runGraphFrames(&frames, null);
-    }
-
-    /// Run `frames` to completion; the result is the input the bottom frame
-    /// finished with, or `first` when there were no frames.
-    fn runGraphFrames(self: *GraphBuilder, frames: *std.ArrayList(GraphFrame), first: ?layout.GraphInput) Allocator.Error!layout.GraphInput {
-        var delivered = first;
-        while (frames.items.len != 0) {
-            switch (try self.stepGraphFrame(frames, delivered)) {
-                .request => |child| delivered = try self.beginInput(child, frames),
-                .pushed => delivered = null,
-                .done => |input| delivered = input,
-            }
-        }
-        return delivered orelse boxyLayoutInvariant("boxy layout graph finished without an input");
-    }
-
-    /// The input for `rep_id` when it needs no new node, or null with the
-    /// frame that builds its node pushed.
-    fn beginInput(self: *GraphBuilder, root_rep_id: Plan.TypeRepId, frames: *std.ArrayList(GraphFrame)) Allocator.Error!?layout.GraphInput {
-        var rep_id = root_rep_id;
-        while (true) {
-            const index = @backingInt(rep_id);
-            if (self.local_nodes.get(rep_id)) |node| return .{ .local = node };
-
-            const rep = self.parent.program.representations.items[index];
-            if (self.descriptor_payload) {
-                if (rep.kind == .alias) {
-                    rep_id = self.parent.repQuery().requiredSingleChild(rep_id, .alias_backing).rep;
+            const top = &frames.items[frames.items.len - 1];
+            if (top.next < top.edges.len) {
+                const child = top.edges[top.next].child;
+                top.next += 1;
+                if (placed.contains(child)) continue;
+                if (index_of.get(child)) |child_index| {
+                    if (on_stack.contains(child)) {
+                        const entry = low.getPtr(top.ty).?;
+                        entry.* = @min(entry.*, child_index);
+                    }
                     continue;
                 }
-                if (rep.kind == .nominal) {
-                    switch (rep.kind.nominal) {
-                        .transparent => {
-                            if (rep.declared_fields.len == 0) {
-                                rep_id = self.parent.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
-                                continue;
-                            }
-                        },
-                        .opaque_nominal, .builtin_other => {},
-                    }
-                }
-                if (rep.kind == .dynamic and rep.descriptor.get() != null) {
-                    if (rep.tag_variants.len != 0) {
-                        const node = try self.reserveLocalNode(rep_id);
-                        try self.pushGraphFrame(frames, .{ .tag = .{ .node = node, .rep_id = rep_id, .mode = .descriptor_payload } });
-                        return null;
-                    }
-                    if (repHasRecordFields(self.parent.program, rep)) {
-                        const node = try self.reserveLocalNode(rep_id);
-                        try self.pushGraphFrame(frames, .{ .fields = .{ .node = node, .rep_id = rep_id, .kind = .record } });
-                        return null;
-                    }
-                }
-            }
-
-            if (self.parent.caches[index]) |runtime| return .{ .canonical = runtime.layoutIdx() };
-            if (rep.abi_boxed_backing) {
-                const node = try self.reserveLocalNode(rep_id);
-                try self.pushGraphFrame(frames, .{ .single = .{
-                    .node = node,
-                    .kind = .box,
-                    .child = self.parent.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep,
-                } });
-                return null;
-            }
-
-            // Stay in this graph when opening nominal wrappers. Calling the
-            // top-level resolver here would overwrite its reusable graph scratch.
-            if (rep.kind == .nominal and rep.kind.nominal == .builtin_other) {
-                rep_id = self.parent.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
+                if (try self.converter.representationClosed(child)) continue;
+                pending_root = child;
                 continue;
             }
-            if (try self.parent.immediateRuntimeLayout(rep_id)) |runtime| {
-                self.parent.caches[index] = runtime;
-                return .{ .canonical = runtime.layoutIdx() };
+            const frame = frames.pop().?;
+            defer self.allocator.free(frame.edges);
+            const ty_low = low.get(frame.ty).?;
+            if (frames.items.len != 0) {
+                const parent = low.getPtr(frames.items[frames.items.len - 1].ty).?;
+                parent.* = @min(parent.*, ty_low);
             }
-
-            if (rep.kind == .alias) {
-                rep_id = self.parent.repQuery().requiredSingleChild(rep_id, .alias_backing).rep;
-                continue;
+            if (ty_low != index_of.get(frame.ty).?) continue;
+            var start = stack.items.len;
+            while (true) {
+                start -= 1;
+                if (stack.items[start] == frame.ty) break;
             }
-            if (rep.kind == .nominal) {
-                switch (rep.kind.nominal) {
-                    .transparent => {
-                        const needs_field_node = rep.record_field_order == .declared or
-                            (self.descriptor_payload and rep.declared_fields.len != 0);
-                        if (needs_field_node) {
-                            const node = try self.reserveLocalNode(rep_id);
-                            const fields = try self.parent.allocator.alloc(layout.GraphField, rep.declared_fields.len);
-                            errdefer self.parent.allocator.free(fields);
-                            try self.pushGraphFrame(frames, .{ .declared = .{ .node = node, .rep_id = rep_id, .fields = fields } });
-                            return null;
-                        }
-                        rep_id = self.parent.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
-                        continue;
-                    },
-                    .opaque_nominal, .builtin_other => {},
-                }
+            const members = stack.items[start..];
+            var cyclic = members.len > 1;
+            if (!cyclic) for (frame.edges) |edge| {
+                if (edge.child == frame.ty) cyclic = true;
+            };
+            const component: u32 = switch (edges_followed) {
+                .all => if (cyclic) @intCast(self.component_targets.items.len) else no_component,
+                .size => if (cyclic) counter else no_component,
+            };
+            for (members) |member| {
+                _ = on_stack.remove(member);
+                try placed.put(self.allocator, member, component);
             }
-
-            const node = try self.reserveLocalNode(rep_id);
-            try self.pushGraphFrame(frames, switch (rep.kind) {
-                .record => .{ .fields = .{ .node = node, .rep_id = rep_id, .kind = .record } },
-                .tuple => .{ .fields = .{ .node = node, .rep_id = rep_id, .kind = .tuple } },
-                .list => .{ .single = .{ .node = node, .kind = .list, .child = self.parent.repQuery().requiredSingleChild(rep_id, .list_elem).rep } },
-                .box => .{ .single = .{ .node = node, .kind = .box, .child = self.parent.repQuery().requiredSingleChild(rep_id, .box_payload).rep } },
-                .tag_union => .{ .tag = .{ .node = node, .rep_id = rep_id, .mode = .concrete_runtime } },
-                .nominal => |kind| switch (kind) {
-                    .transparent => .{ .single = .{ .node = node, .kind = .nominal, .child = self.parent.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep } },
-                    .opaque_nominal, .builtin_other => boxyLayoutInvariant("opaque or unsupported builtin nominal reached graph layout"),
-                },
-                .alias,
-                .in_progress,
-                .dynamic,
-                .primitive,
-                .bool_tag_union,
-                .erased_callable,
-                .generated_field,
-                .generated_field_names,
-                .generated_tag_union_spec,
-                .empty_record,
-                .empty_tag_union,
-                => boxyLayoutInvariant("non-aggregate representation reached graph layout"),
-            });
-            return null;
+            if (edges_followed == .all and cyclic) try self.component_targets.append(self.allocator, try self.pointerTargets(members));
+            stack.shrinkRetainingCapacity(start);
         }
     }
 
-    fn reserveLocalNode(self: *GraphBuilder, rep_id: Plan.TypeRepId) Allocator.Error!layout.GraphNodeId {
-        const node = try self.graph.reserveNode(self.parent.allocator);
-        try self.local_nodes.put(rep_id, node);
-        return node;
+    fn pointerTargets(self: *Layouts, members: []const TypeId) Allocator.Error![]const TypeId {
+        var targets: std.ArrayList(TypeId) = .empty;
+        errdefer targets.deinit(self.allocator);
+        var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
+        defer seen.deinit(self.allocator);
+        var edges: std.ArrayList(InlineEdge) = .empty;
+        defer edges.deinit(self.allocator);
+        for (members) |member| {
+            edges.clearRetainingCapacity();
+            try self.inlineEdges(member, &edges);
+            for (edges.items) |edge| {
+                if (!try self.pointerEdge(member, edge)) continue;
+                if ((try seen.getOrPut(self.allocator, edge.child)).found_existing) continue;
+                try targets.append(self.allocator, edge.child);
+            }
+        }
+        return try targets.toOwnedSlice(self.allocator);
     }
 
-    fn pushGraphFrame(self: *GraphBuilder, frames: *std.ArrayList(GraphFrame), state: @FieldType(GraphFrame, "state")) Allocator.Error!void {
-        var frame: GraphFrame = .{ .state = state };
-        frames.append(self.parent.allocator, frame) catch |err| {
-            frame.deinit(self.parent.allocator);
-            return err;
+    /// The type variables the descriptor of the recursive member `ty`
+    /// depends on, in a fixed order.
+    pub fn memberVars(self: *Layouts, ty: TypeId) Allocator.Error![]const TypeId {
+        if (self.member_vars.get(ty)) |vars| return vars;
+        var vars: std.ArrayList(TypeId) = .empty;
+        errdefer vars.deinit(self.allocator);
+        var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
+        defer seen.deinit(self.allocator);
+        var pending: std.ArrayList(TypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, ty);
+        try seen.put(self.allocator, ty, {});
+        var cursor: usize = 0;
+        while (cursor < pending.items.len) : (cursor += 1) {
+            const current = pending.items[cursor];
+            const before = pending.items.len;
+            switch (self.store.get(current)) {
+                .variable => try vars.append(self.allocator, current),
+                .list => |elem| try pending.append(self.allocator, elem),
+                .box => |payload| try pending.append(self.allocator, payload),
+                .tuple => |items| try pending.appendSlice(self.allocator, self.store.span(items)),
+                .record => |record| {
+                    if (record.ext) |ext| try pending.append(self.allocator, ext);
+                    const fields = try self.allocator.dupe(types.Field, self.store.fieldSpan(record.fields));
+                    defer self.allocator.free(fields);
+                    for (fields) |field| try pending.append(self.allocator, try self.fieldStorage(field));
+                },
+                .tag_union => |tag_union| {
+                    if (tag_union.ext) |ext| try pending.append(self.allocator, ext);
+                    const tags = try self.allocator.dupe(types.Tag, self.store.tagSpan(tag_union.tags));
+                    defer self.allocator.free(tags);
+                    for (tags) |tag| try pending.appendSlice(self.allocator, self.store.span(tag.payloads));
+                },
+                .nominal => |nominal| if (nominal.has_backing) try pending.append(self.allocator, try self.converter.backing(current)),
+                .primitive, .empty_record, .function => {},
+            }
+            // Keep each newly reached open type once.
+            var write = before;
+            for (pending.items[before..]) |child| {
+                if (seen.contains(child) or try self.converter.representationClosed(child)) continue;
+                try seen.put(self.allocator, child, {});
+                pending.items[write] = child;
+                write += 1;
+            }
+            pending.shrinkRetainingCapacity(write);
+        }
+        const owned = try vars.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(owned);
+        try self.member_vars.put(self.allocator, ty, owned);
+        return owned;
+    }
+
+    /// The presence-slot type `[#Missing, #Present(payload)]` of an
+    /// optional field (design.md "Field Kinds").
+    pub fn presenceSlot(self: *Layouts, payload: TypeId) Allocator.Error!TypeId {
+        if (self.slot_memo.get(payload)) |slot| return slot;
+        const missing = try self.store.internName(missing_label);
+        const present = try self.store.internName(present_label);
+        const slot = try self.store.intern(.{ .tag_union = .{ .tags = &.{
+            .{ .name = missing, .payloads = &.{} },
+            .{ .name = present, .payloads = &.{payload} },
+        }, .ext = null } });
+        try self.slot_memo.put(self.allocator, payload, slot);
+        try self.slot_payloads.put(self.allocator, slot, payload);
+        return slot;
+    }
+
+    /// The payload of `ty` when it is an optional field's presence slot.
+    pub fn presenceSlotPayload(self: *const Layouts, ty: TypeId) ?TypeId {
+        return self.slot_payloads.get(ty);
+    }
+
+    /// The stored type of a record field: its value type for an inline slot,
+    /// its presence slot otherwise.
+    pub fn fieldStorage(self: *Layouts, field: types.Field) Allocator.Error!TypeId {
+        return switch (field.kind) {
+            .inline_slot => field.ty,
+            .presence_slot => try self.presenceSlot(field.ty),
         };
     }
 
-    fn stepGraphFrame(self: *GraphBuilder, frames: *std.ArrayList(GraphFrame), delivered: ?layout.GraphInput) Allocator.Error!GraphStep {
-        const allocator = self.parent.allocator;
-        const frame = &frames.items[frames.items.len - 1];
-        const child_input: ?layout.GraphInput = if (frame.awaiting)
-            delivered orelse boxyLayoutInvariant("boxy layout frame resumed without its child input")
-        else
-            null;
-        frame.awaiting = false;
-        const program = self.parent.program;
-        switch (frame.state) {
-            .single => |single| {
-                const input = child_input orelse {
-                    frame.awaiting = true;
-                    return .{ .request = single.child };
-                };
-                self.graph.setNode(single.node, switch (single.kind) {
-                    .list => .{ .list = input },
-                    .box => .{ .box = input },
-                    .nominal => .{ .nominal = input },
-                });
-                return self.finishGraphFrame(frames, .{ .local = single.node });
-            },
-            .fields => |*fields| {
-                const rep = program.representations.items[@backingInt(fields.rep_id)];
-                const children = program.childSlice(rep.children);
-                if (child_input) |input| {
-                    const child = children[fields.next - 1];
-                    try fields.fields.append(allocator, .{
-                        .index = switch (fields.kind) {
-                            .record => @intCast(fields.fields.items.len),
-                            .tuple => @intCast(child.role.tuple_elem),
-                        },
-                        .child = input,
-                    });
-                } else if (fields.next == 0 and fields.kind == .record) {
-                    try self.requireClosedRecord(children);
-                }
-                while (fields.next < children.len) {
-                    const child = children[fields.next];
-                    fields.next += 1;
-                    const wanted = switch (fields.kind) {
-                        .record => child.role == .record_field,
-                        .tuple => child.role == .tuple_elem,
-                    };
-                    if (!wanted) continue;
-                    frame.awaiting = true;
-                    return .{ .request = child.rep };
-                }
-                const span = try self.graph.appendFields(allocator, fields.fields.items);
-                self.graph.setNode(fields.node, .{ .struct_ = span });
-                return self.finishGraphFrame(frames, .{ .local = fields.node });
-            },
-            .declared => |*declared| {
-                const rep = program.representations.items[@backingInt(declared.rep_id)];
-                const declared_fields = program.declaredFieldSlice(rep.declared_fields);
-                if (child_input) |input| {
-                    const field = declared_fields[declared.next - 1];
-                    declared.fields[declared.next - 1] = .{
-                        .index = field.index,
-                        .child = input,
-                        .is_padding = field.is_padding,
-                    };
-                }
-                if (declared.next < declared_fields.len) {
-                    declared.next += 1;
-                    frame.awaiting = true;
-                    return .{ .request = declared_fields[declared.next - 1].rep };
-                }
-                const fields = if (declared_fields.len == 0)
-                    layout.GraphFieldSpan.empty()
-                else
-                    try self.graph.appendFields(allocator, declared.fields);
-                self.graph.setNode(declared.node, .{ .struct_ = if (rep.record_field_order == .declared)
-                    self.graph.declaredOrder(fields)
-                else
-                    fields });
-                return self.finishGraphFrame(frames, .{ .local = declared.node });
-            },
-            .tag => |*tag| {
-                if (child_input) |input| try tag.refs.append(allocator, input);
-                const rep = program.representations.items[@backingInt(tag.rep_id)];
-                const variants = program.tagVariantSlice(rep.tag_variants);
-                while (tag.variant < variants.len) {
-                    const variant = variants[tag.variant];
-                    tag.variant += 1;
-                    const payload_children = program.childSlice(variant.payloads);
-                    for (payload_children, 0..) |child, index| {
-                        if (child.role != .tag_payload) {
-                            boxyLayoutInvariant("tag variant payload span included a non-payload child");
-                        }
-                        const payload = child.role.tag_payload;
-                        if (payload.tag != variant.name or payload.index != index) {
-                            boxyLayoutInvariant("tag variant payload span did not match its payload child roles");
-                        }
-                    }
-                    switch (payload_children.len) {
-                        0 => try tag.refs.append(allocator, .{ .canonical = .zst }),
-                        1 => {
-                            frame.awaiting = true;
-                            return .{ .request = payload_children[0].rep };
-                        },
-                        else => {
-                            const payloads = try allocator.alloc(Plan.TypeRepId, payload_children.len);
-                            errdefer allocator.free(payloads);
-                            for (payload_children, payloads) |child, *payload| payload.* = child.rep;
-                            const fields = try allocator.alloc(layout.GraphField, payload_children.len);
-                            errdefer allocator.free(fields);
-                            frame.awaiting = true;
-                            try self.pushGraphFrame(frames, .{ .payload = .{ .payloads = payloads, .fields = fields } });
-                            return .pushed;
-                        },
-                    }
-                }
-                if (self.tagExtensionPayload(program.childSlice(rep.children)) != null) {
-                    switch (tag.mode) {
-                        .concrete_runtime => boxyLayoutInvariant("open tag-union layout reached concrete boxy layout planning"),
-                        .descriptor_payload => try tag.refs.append(allocator, .{ .canonical = try self.parent.dynamicStorageLayout() }),
-                    }
-                }
-                const span = try self.graph.appendRefs(allocator, tag.refs.items);
-                self.graph.setNode(tag.node, .{ .tag_union = span });
-                return self.finishGraphFrame(frames, .{ .local = tag.node });
-            },
-            .payload => |*payload| {
-                if (child_input) |input| {
-                    payload.fields[payload.next - 1] = .{ .index = @intCast(payload.next - 1), .child = input };
-                }
-                if (payload.next < payload.payloads.len) {
-                    payload.next += 1;
-                    frame.awaiting = true;
-                    return .{ .request = payload.payloads[payload.next - 1] };
-                }
-                const node = try self.graph.reserveNode(allocator);
-                self.graph.setNode(node, .{ .struct_ = try self.graph.appendFields(allocator, payload.fields) });
-                return self.finishGraphFrame(frames, .{ .local = node });
-            },
+    /// The payload type a tag variant stores: nothing, its one argument, or a
+    /// tuple of its arguments.
+    pub fn tagPayload(self: *Layouts, payloads: []const TypeId) Allocator.Error!?TypeId {
+        return switch (payloads.len) {
+            0 => null,
+            1 => payloads[0],
+            else => try self.store.intern(.{ .tuple = payloads }),
+        };
+    }
+
+    /// The committed layout of the closed type `ty`.
+    pub fn layoutOf(self: *Layouts, ty: TypeId) Allocator.Error!layout.Idx {
+        if (!try self.converter.representationClosed(ty)) types.invariant("asked for the committed layout of an open type");
+        if (self.memo.get(ty)) |committed| return committed.idx;
+        if (try self.directLayout(ty)) |idx| {
+            try self.memo.put(self.allocator, ty, .{ .idx = idx, .digest = null });
+            return idx;
         }
+
+        var graph = layout.Graph{};
+        defer graph.deinit(self.allocator);
+        var nodes: collections.DenseMapUnmanaged(TypeId, layout.GraphNodeId) = .empty;
+        defer nodes.deinit(self.allocator);
+        var order: std.ArrayList(TypeId) = .empty;
+        defer order.deinit(self.allocator);
+
+        // Reserve one node per reachable type that needs one; fill every
+        // node once all are reserved, so back edges resolve to their node.
+        const root = try self.input(&graph, &nodes, &order, ty);
+        var cursor: usize = 0;
+        while (cursor < order.items.len) : (cursor += 1) {
+            const node_ty = order.items[cursor];
+            const node = nodes.get(node_ty).?;
+            const content = try self.nodeContent(&graph, &nodes, &order, node_ty);
+            graph.setNode(node, content);
+        }
+
+        var commit = try self.layouts.commitGraph(&graph, root);
+        defer commit.deinit(self.allocator);
+        if (layout.graphInputCommitted(root)) |idx| return idx;
+        var it = nodes.iterator();
+        while (it.next()) |entry| {
+            const index = @backingInt(entry.value_ptr.*);
+            const digest: ?layout.GraphDigest = if (commit.digests.len > index) commit.digests[index] else null;
+            const new_idx = commit.value_layouts[index];
+            try self.memo.put(self.allocator, entry.key_ptr.*, .{ .idx = new_idx, .digest = digest });
+        }
+        return self.memo.get(ty).?.idx;
     }
 
-    fn finishGraphFrame(self: *GraphBuilder, frames: *std.ArrayList(GraphFrame), input: layout.GraphInput) GraphStep {
-        var frame = frames.pop().?;
-        frame.deinit(self.parent.allocator);
-        return .{ .done = input };
+    /// A layout that needs no graph node.
+    fn directLayout(self: *Layouts, ty: TypeId) Allocator.Error!?layout.Idx {
+        return switch (self.store.get(ty)) {
+            .primitive => |primitive| primitiveLayout(primitive),
+            .empty_record => .zst,
+            .function => try self.layouts.insertErasedCallable(),
+            // `Box(function)` is the function's erased callable, which is
+            // already an allocation of its own (design.md "Host ABI").
+            .box => |payload| if (self.store.get(payload) == .function) try self.layouts.insertErasedCallable() else null,
+            .variable => types.invariant("a type variable reached committed layout selection"),
+            .record, .tuple, .tag_union, .list, .nominal => null,
+        };
     }
 
-    fn requireClosedRecord(self: *GraphBuilder, children: []const Plan.RepChild) Allocator.Error!void {
-        for (children) |child| {
-            if (child.role != .record_ext) continue;
-            const ext_rep = self.parent.program.representations.items[@backingInt(child.rep)];
-            if (ext_rep.kind != .empty_record) {
-                boxyLayoutInvariant("open record layout reached boxy layout planning without an explicit closed row");
+    fn input(self: *Layouts, graph: *layout.Graph, nodes: *collections.DenseMapUnmanaged(TypeId, layout.GraphNodeId), order: *std.ArrayList(TypeId), ty: TypeId) Allocator.Error!layout.GraphInput {
+        if (nodes.get(ty)) |node| return layout.localGraphInput(node);
+        if (self.memo.get(ty)) |committed| {
+            if (committed.digest) |digest| {
+                const node = try graph.addCommitted(self.allocator, committed.idx, digest);
+                try nodes.put(self.allocator, ty, node);
+                return layout.localGraphInput(node);
             }
+            return layout.committedGraphInput(committed.idx);
         }
+        if (try self.directLayout(ty)) |idx| return layout.committedGraphInput(idx);
+        const node = try graph.reserveNode(self.allocator);
+        try nodes.put(self.allocator, ty, node);
+        try order.append(self.allocator, ty);
+        return layout.localGraphInput(node);
     }
 
-    fn tagExtensionPayload(self: *GraphBuilder, children: []const Plan.RepChild) ?Plan.TypeRepId {
-        for (children) |child| {
-            if (child.role != .tag_ext) continue;
-            const ext_rep = self.parent.program.representations.items[@backingInt(child.rep)];
-            if (ext_rep.kind == .empty_tag_union) return null;
-            return child.rep;
+    fn nodeContent(self: *Layouts, graph: *layout.Graph, nodes: *collections.DenseMapUnmanaged(TypeId, layout.GraphNodeId), order: *std.ArrayList(TypeId), ty: TypeId) Allocator.Error!layout.GraphNode {
+        switch (self.store.get(ty)) {
+            .list => |elem| return .{ .list = try self.input(graph, nodes, order, elem) },
+            .box => |payload| return .{ .box = try self.input(graph, nodes, order, payload) },
+            .tuple => |items_span| {
+                const items = try self.allocator.dupe(TypeId, self.store.span(items_span));
+                defer self.allocator.free(items);
+                const fields = try self.allocator.alloc(layout.GraphField, items.len);
+                defer self.allocator.free(fields);
+                for (items, fields, 0..) |item, *field, index| {
+                    field.* = .{ .index = @intCast(index), .child = try self.input(graph, nodes, order, item) };
+                }
+                return .{ .struct_ = try graph.appendFields(self.allocator, fields) };
+            },
+            .record => |record| {
+                if (record.ext != null) types.invariant("an open record reached committed layout selection");
+                const record_fields = try self.allocator.dupe(types.Field, self.store.fieldSpan(record.fields));
+                defer self.allocator.free(record_fields);
+                const fields = try self.allocator.alloc(layout.GraphField, record_fields.len);
+                defer self.allocator.free(fields);
+                for (record_fields, fields, 0..) |record_field, *field, index| {
+                    const storage = try self.fieldStorage(record_field);
+                    field.* = .{ .index = @intCast(index), .child = try self.input(graph, nodes, order, storage) };
+                }
+                return .{ .struct_ = try graph.appendFields(self.allocator, fields) };
+            },
+            .tag_union => |tag_union| {
+                if (tag_union.ext != null) types.invariant("an open tag union reached committed layout selection");
+                const tags = try self.allocator.dupe(types.Tag, self.store.tagSpan(tag_union.tags));
+                defer self.allocator.free(tags);
+                const refs = try self.allocator.alloc(layout.GraphInput, tags.len);
+                defer self.allocator.free(refs);
+                for (tags, refs) |tag, *ref| {
+                    const payloads = try self.allocator.dupe(TypeId, self.store.span(tag.payloads));
+                    defer self.allocator.free(payloads);
+                    ref.* = if (try self.tagPayload(payloads)) |payload|
+                        try self.input(graph, nodes, order, payload)
+                    else
+                        layout.committedGraphInput(.zst);
+                }
+                return .{ .tag_union = try graph.appendRefs(self.allocator, refs) };
+            },
+            .nominal => |nominal| {
+                if (!nominal.has_backing) types.invariant("an opaque type without a backing reached committed layout selection");
+                const backing = try self.converter.backing(ty);
+                return .{ .nominal = try self.input(graph, nodes, order, backing) };
+            },
+            .primitive, .empty_record, .function, .variable => unreachable, // `directLayout` answers these
         }
-        return null;
     }
 };
-
-fn repHasRecordFields(program: *const Plan.ProgramPlan, rep: Plan.TypeRepresentation) bool {
-    for (program.childSlice(rep.children)) |child| {
-        if (child.role == .record_field) return true;
-    }
-    return false;
-}
-
-fn boxyLayoutInvariant(comptime message: []const u8) noreturn {
-    base.invariant("boxy layout invariant violated: {s}", .{message});
-}
-
-test "boxy layout planner records dynamic worker boxes separately from storage layout" {
-    const gpa = std.testing.allocator;
-
-    const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .flex = .{} },
-    };
-    const view = checked.CheckedTypeStoreView{ .stored_payloads = &payloads };
-
-    var program = try Plan.analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0))))}, .{});
-    defer program.deinit();
-
-    var store = try layout.Store.init(gpa, .u64);
-    defer store.deinit();
-
-    var layouts = try build(gpa, &program, &store, .{});
-    defer layouts.deinit();
-
-    const rep_layout = layouts.rep_layouts[@backingInt(program.root_reps.items[0])].worker;
-    try std.testing.expectEqual(std.meta.Tag(RuntimeLayout).dynamic_box, std.meta.activeTag(rep_layout));
-    try std.testing.expectEqual(layout.LayoutTag.erased_box, store.getLayout(rep_layout.layoutIdx()).tag);
-    try std.testing.expect(rep_layout.descriptor() != null);
-}
-
-test "boxy layout planner reuses dynamic storage for Box(a) worker layout" {
-    const gpa = std.testing.allocator;
-
-    const type_pool = [_]checked.CheckedTypeId{@fromBackingInt(@intCast(fixtureTableIndex(0)))};
-    const payloads_nominal_rows = [_]checked.StoredNominal{
-        builtinNominal(.box, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    };
-    const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .flex = .{} },
-        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
-    };
-    const view = checked.CheckedTypeStoreView{
-        .stored_payloads = &payloads,
-        .nominal_row_pool = &payloads_nominal_rows,
-        .type_id_pool = &type_pool,
-    };
-
-    var program = try Plan.analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @fromBackingInt(@intCast(1)))}, .{});
-    defer program.deinit();
-
-    var store = try layout.Store.init(gpa, .u64);
-    defer store.deinit();
-
-    var layouts = try build(gpa, &program, &store, .{});
-    defer layouts.deinit();
-
-    const box_layouts = layouts.rep_layouts[@backingInt(program.root_reps.items[0])];
-    const host_layout = layouts.rep_layouts[@backingInt(program.hostRepFor(program.root_reps.items[0]))].worker;
-    try std.testing.expectEqual(layout.LayoutTag.box_of_zst, store.getLayout(host_layout.layoutIdx()).tag);
-    try std.testing.expectEqual(std.meta.Tag(RuntimeLayout).dynamic_box, std.meta.activeTag(box_layouts.worker));
-    try std.testing.expectEqual(layout.LayoutTag.erased_box, store.getLayout(box_layouts.worker.layoutIdx()).tag);
-}
-
-test "boxy layout planner substitutes dynamic boxes into list elements" {
-    const gpa = std.testing.allocator;
-
-    const type_pool = [_]checked.CheckedTypeId{@fromBackingInt(@intCast(fixtureTableIndex(0)))};
-    const payloads_nominal_rows = [_]checked.StoredNominal{
-        builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    };
-    const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .flex = .{} },
-        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
-    };
-    const view = checked.CheckedTypeStoreView{
-        .stored_payloads = &payloads,
-        .nominal_row_pool = &payloads_nominal_rows,
-        .type_id_pool = &type_pool,
-    };
-
-    var program = try Plan.analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @fromBackingInt(@intCast(1)))}, .{});
-    defer program.deinit();
-
-    var store = try layout.Store.init(gpa, .u64);
-    defer store.deinit();
-
-    var layouts = try build(gpa, &program, &store, .{});
-    defer layouts.deinit();
-
-    const list_runtime = layouts.rep_layouts[@backingInt(program.root_reps.items[0])].worker;
-    const list_layout = store.getLayout(list_runtime.layoutIdx());
-    try std.testing.expectEqual(layout.LayoutTag.list, list_layout.tag);
-    try std.testing.expectEqual(layouts.dynamic_storage_layout, list_layout.getIdx());
-}
-
-test "boxy layout planner preserves zero-payload tag variants" {
-    const gpa = std.testing.allocator;
-
-    const tag_a: TagLabelId = @fromBackingInt(@intCast(1));
-    const tag_b: TagLabelId = @fromBackingInt(@intCast(2));
-    const type_pool = [_]checked.CheckedTypeId{@fromBackingInt(@intCast(fixtureTableIndex(0)))};
-    const tags = [_]checked.CheckedTag{
-        .{ .name = tag_a, .args_start = 0, .args_len = 0 },
-        .{ .name = tag_b, .args_start = 0, .args_len = 1 },
-    };
-    const payloads_nominal_rows = [_]checked.StoredNominal{
-        builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    };
-    const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
-        .empty_tag_union,
-        .{ .tag_union = .{ .tags = .{ .start = 0, .len = tags.len }, .ext = @fromBackingInt(@intCast(1)) } },
-    };
-    const view = checked.CheckedTypeStoreView{
-        .stored_payloads = &payloads,
-        .nominal_row_pool = &payloads_nominal_rows,
-        .type_id_pool = &type_pool,
-        .tag_pool = &tags,
-    };
-
-    var program = try Plan.analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @fromBackingInt(@intCast(2)))}, .{});
-    defer program.deinit();
-
-    var store = try layout.Store.init(gpa, .u64);
-    defer store.deinit();
-
-    var layouts = try build(gpa, &program, &store, .{});
-    defer layouts.deinit();
-
-    const runtime = layouts.rep_layouts[@backingInt(program.root_reps.items[0])].worker;
-    const tag_layout = store.getLayout(runtime.layoutIdx());
-    try std.testing.expectEqual(layout.LayoutTag.tag_union, tag_layout.tag);
-
-    const info = store.getTagUnionInfo(tag_layout);
-    try std.testing.expectEqual(@as(usize, 2), info.variants.len);
-    try std.testing.expectEqual(layout.Idx.zst, info.variants.get(0).payload_layout);
-    try std.testing.expectEqual(layout.Idx.u64, info.variants.get(1).payload_layout);
-}
-
-test "boxy projected closed singleton layouts cannot alias multi-variant storage" {
-    const gpa = std.testing.allocator;
-    const payload_cases_nominal_rows = [_]checked.StoredNominal{
-        builtinNominal(.u64, @fromBackingInt(fixtureTableIndex(0)), .{}),
-        builtinNominal(.str, @fromBackingInt(fixtureTableIndex(0)), .{}),
-    };
-    const payload_cases = [_]checked.StoredCheckedTypePayload{
-        .empty_record,
-        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
-        .{ .nominal = @fromBackingInt(1) },
-        .{ .flex = .{} },
-        .{ .tag_union = .{ .tags = .{ .start = 3, .len = 2 }, .ext = @fromBackingInt(1) } },
-    };
-    for (payload_cases) |payload| {
-        for (0..3) |arity| {
-            const type_pool = [_]checked.CheckedTypeId{
-                @fromBackingInt(fixtureTableIndex(0)),
-                @fromBackingInt(fixtureTableIndex(0)),
-            };
-            const tags = [_]checked.CheckedTag{
-                .{ .name = @fromBackingInt(1), .args_start = 0, .args_len = @intCast(arity) },
-                .{ .name = @fromBackingInt(2), .args_start = 0, .args_len = @intCast(arity) },
-                .{ .name = @fromBackingInt(3), .args_start = 0, .args_len = @intCast(arity) },
-                .{ .name = @fromBackingInt(4), .args_start = 0, .args_len = 0 },
-                .{ .name = @fromBackingInt(5), .args_start = 0, .args_len = 1 },
-            };
-            const payloads = [_]checked.StoredCheckedTypePayload{
-                payload,
-                .empty_tag_union,
-                .{ .tag_union = .{ .tags = .{ .start = 0, .len = 1 }, .ext = @fromBackingInt(1) } },
-                .{ .tag_union = .{ .tags = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(1) } },
-                .{ .tag_union = .{ .tags = .{ .start = 0, .len = 3 }, .ext = @fromBackingInt(1) } },
-            };
-            const view = checked.CheckedTypeStoreView{
-                .stored_payloads = &payloads,
-                .nominal_row_pool = &payload_cases_nominal_rows,
-                .type_id_pool = &type_pool,
-                .tag_pool = &tags,
-            };
-            var program = try Plan.analyzeCheckedTypes(gpa, view, &.{
-                @fromBackingInt(2), @fromBackingInt(3), @fromBackingInt(4),
-            }, .{});
-            defer program.deinit();
-            var store = try layout.Store.init(gpa, .u64);
-            defer store.deinit();
-            var layouts = try build(gpa, &program, &store, .{});
-            defer layouts.deinit();
-            const singleton = layouts.rep_layouts[@backingInt(program.root_reps.items[0])].worker.layoutIdx();
-            for (program.root_reps.items) |rep_id| {
-                // Dynamic payload storage does not turn a closed root row into
-                // an open-row representation that erases its variant universe.
-                try std.testing.expectEqual(Plan.RepresentationKind.tag_union, program.representations.items[@backingInt(rep_id)].kind);
-            }
-            for (program.root_reps.items[1..]) |rep_id| {
-                try std.testing.expect(singleton != layouts.rep_layouts[@backingInt(rep_id)].worker.layoutIdx());
-            }
-        }
-    }
-}
-
-test "boxy layout planner gives open tag descriptors a row-extension payload layout" {
-    const gpa = std.testing.allocator;
-
-    const tag_exit: TagLabelId = @fromBackingInt(@intCast(1));
-    const type_pool = [_]checked.CheckedTypeId{@fromBackingInt(@intCast(fixtureTableIndex(0)))};
-    const tags = [_]checked.CheckedTag{
-        .{ .name = tag_exit, .args_start = 0, .args_len = 1 },
-    };
-    const payloads_nominal_rows = [_]checked.StoredNominal{
-        builtinNominal(.i64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    };
-    const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
-        .{ .flex = .{} },
-        .{ .tag_union = .{ .tags = .{ .start = 0, .len = tags.len }, .ext = @fromBackingInt(@intCast(1)) } },
-    };
-    const view = checked.CheckedTypeStoreView{
-        .stored_payloads = &payloads,
-        .nominal_row_pool = &payloads_nominal_rows,
-        .type_id_pool = &type_pool,
-        .tag_pool = &tags,
-    };
-
-    var program = try Plan.analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @fromBackingInt(@intCast(2)))}, .{});
-    defer program.deinit();
-
-    var store = try layout.Store.init(gpa, .u64);
-    defer store.deinit();
-
-    var layouts = try build(gpa, &program, &store, .{});
-    defer layouts.deinit();
-
-    const rep_layouts = layouts.rep_layouts[@backingInt(program.root_reps.items[0])];
-    try std.testing.expectEqual(std.meta.Tag(RuntimeLayout).dynamic_box, std.meta.activeTag(rep_layouts.worker));
-    try std.testing.expectEqual(layout.LayoutTag.erased_box, store.getLayout(rep_layouts.worker.layoutIdx()).tag);
-
-    const payload_layout = rep_layouts.descriptor_payload_layout orelse return error.TestExpectedEqual;
-    const tag_layout = store.getLayout(payload_layout);
-    try std.testing.expectEqual(layout.LayoutTag.tag_union, tag_layout.tag);
-
-    const info = store.getTagUnionInfo(tag_layout);
-    try std.testing.expectEqual(@as(usize, 2), info.variants.len);
-    try std.testing.expectEqual(layout.Idx.i64, info.variants.get(0).payload_layout);
-    try std.testing.expectEqual(layout.LayoutTag.erased_box, store.getLayout(info.variants.get(1).payload_layout).tag);
-}
-
-test "boxy layout planner records private worker function arg and return layouts" {
-    const gpa = std.testing.allocator;
-
-    const type_pool = [_]checked.CheckedTypeId{
-        @fromBackingInt(@intCast(fixtureTableIndex(0))), // List(a) argument.
-        @fromBackingInt(@intCast(fixtureTableIndex(0))), // Function argument a.
-    };
-    const payloads_nominal_rows = [_]checked.StoredNominal{
-        builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    };
-    const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .flex = .{} },
-        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
-        .{ .function = .{
-            .kind = .pure,
-            .args = .{ .start = 1, .len = 1 },
-            .ret = @fromBackingInt(@intCast(1)),
-        } },
-    };
-    const view = checked.CheckedTypeStoreView{
-        .stored_payloads = &payloads,
-        .nominal_row_pool = &payloads_nominal_rows,
-        .type_id_pool = &type_pool,
-    };
-    const roots = [_]checked.RootRequest{
-        .{
-            .order = 0,
-            .module_idx = 0,
-            .kind = .runtime_entrypoint,
-            .source = .{ .def = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-            .checked_type = @fromBackingInt(@intCast(2)),
-            .abi = .roc,
-            .exposure = .private,
-            .procedure_binding = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        },
-    };
-    const template_ref = checked_names.ProcedureTemplateRef{
-        .proc_base = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .template = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-    };
-    var templates = [_]checked.CheckedProcedureTemplate{.{
-        .proc_base = template_ref.proc_base,
-        .template_id = template_ref.template,
-        .body = .{ .checked_body = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-        .checked_fn_scheme = .{},
-        .checked_fn_root = @fromBackingInt(@intCast(2)),
-        .static_dispatch_plans = .{},
-        .direct_dispatch_plans = .{},
-        .dispatch_relations = .{},
-        .resolved_value_refs = .{},
-        .top_level_value_uses = .{},
-        .nested_proc_sites = .{},
-        .target = .roc,
-    }};
-    var template_table = checked.CheckedProcedureTemplateTable{ .templates = .{ .items = &templates, .capacity = templates.len, .pointer_stability = .{} } };
-    var bindings = [_]checked.TopLevelProcedureBinding{.{
-        .source_scheme = .{},
-        .body = .{ .direct_template = .{
-            .proc_value = .{
-                .proc_base = template_ref.proc_base,
-            },
-            .template = .{ .checked = template_ref },
-        } },
-    }};
-    var binding_table = checked.TopLevelProcedureBindingTable{ .bindings = .{ .items = &bindings, .capacity = bindings.len, .pointer_stability = .{} } };
-    const root_view = Plan.ModuleView{
-        .checked_types = view,
-        .checked_procedure_templates = &template_table,
-        .top_level_procedure_bindings = &binding_table,
-    };
-
-    var program = try Plan.analyzeProgram(gpa, .{ .root_view = root_view, .roots = &roots }, .{});
-    defer program.deinit();
-    const extra_source = program.workers.items[0].source;
-    const extra_rep = program.root_reps.items[0];
-    try program.workers.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
-        .root_request = roots[0],
-        .source = extra_source,
-        .checked_type = .{ .module = .root, .ty = @fromBackingInt(@intCast(2)) },
-        .rep = extra_rep,
-    });
-
-    var store = try layout.Store.init(gpa, .u64);
-    defer store.deinit();
-
-    var layouts = try build(gpa, &program, &store, .{});
-    defer layouts.deinit();
-
-    try std.testing.expectEqual(@as(usize, 1), layouts.roots.items.len);
-    try std.testing.expectEqual(@as(usize, 2), layouts.worker_layouts.len);
-    const root = layouts.roots.items[0];
-    try std.testing.expectEqual(program.workers.items[0].id, root.worker);
-
-    const root_worker = layouts.workerLayoutFor(root.worker);
-    const worker_args = layouts.workerLayoutSlice(root_worker.args);
-    try std.testing.expectEqual(@as(usize, 1), worker_args.len);
-    try std.testing.expectEqual(std.meta.Tag(RuntimeLayout).dynamic_box, std.meta.activeTag(worker_args[0]));
-
-    const ret = root_worker.ret orelse return error.TestUnexpectedResult;
-    const ret_layout = store.getLayout(ret.layoutIdx());
-    try std.testing.expectEqual(layout.LayoutTag.list, ret_layout.tag);
-    try std.testing.expectEqual(layouts.dynamic_storage_layout, ret_layout.getIdx());
-    try std.testing.expectEqual(@as(usize, 0), layouts.rootLayoutSlice(root.host_args).len);
-    try std.testing.expect(root.host_ret == null);
-
-    const extra_worker = layouts.workerLayoutFor(@fromBackingInt(@intCast(1)));
-    try std.testing.expectEqual(@as(usize, 1), layouts.workerLayoutSlice(extra_worker.args).len);
-    try std.testing.expect(extra_worker.ret != null);
-}
-
-test "boxy layout planner commits nominal declared fields through shared layout store" {
-    const gpa = std.testing.allocator;
-
-    const field_a: RecordFieldLabelId = @fromBackingInt(@intCast(1));
-    const field_b: RecordFieldLabelId = @fromBackingInt(@intCast(2));
-    const type_pool = [_]checked.CheckedTypeId{@fromBackingInt(@intCast(fixtureTableIndex(0)))};
-    const record_fields = [_]checked.CheckedRecordField{
-        .{ .name = field_a, .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-        .{ .name = field_b, .ty = @fromBackingInt(@intCast(1)) },
-    };
-    const declared_fields = [_]checked.CheckedDeclaredField{
-        .{ .named = field_a },
-        .{ .padding = 0 },
-        .{ .named = field_b },
-    };
-    const nominal_declarations = [_]checked.CheckedNominalDeclaration{.{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .nominal = .{ .module = @fromBackingInt(@intCast(4)), .source_decl = 0 },
-        .source_statement = 0,
-        .declaration_root = @fromBackingInt(@intCast(4)),
-        .backing = @fromBackingInt(@intCast(3)),
-        .pf_start = 0,
-        .pf_len = 1,
-        .df_start = 0,
-        .df_len = declared_fields.len,
-    }};
-    const payloads_nominal_rows = [_]checked.StoredNominal{
-        builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-        builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}),
-        .{
-            .name = @fromBackingInt(@intCast(3)),
-            .origin_module = @fromBackingInt(@intCast(4)),
-            .owner_module = .{},
-            .source_decl = 0,
-            .is_opaque = false,
-            .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-            .padding_field_types = .{ .start = 0, .len = 1 },
-            .declared_fields = .{ .start = 0, .len = 3 },
-        },
-    };
-    const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
-        .{ .nominal = @fromBackingInt(1) },
-        .{ .empty_record = {} },
-        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
-        .{ .nominal = @fromBackingInt(2) },
-    };
-    const view = checked.CheckedTypeStoreView{
-        .stored_payloads = &payloads,
-        .nominal_row_pool = &payloads_nominal_rows,
-        .nominal_declarations = &nominal_declarations,
-        .type_id_pool = &type_pool,
-        .record_field_pool = &record_fields,
-        .declared_field_pool = &declared_fields,
-    };
-
-    var program = try Plan.analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @fromBackingInt(@intCast(4)))}, .{});
-    defer program.deinit();
-    const nominal = program.representations.items[@backingInt(program.root_reps.items[0])];
-    try std.testing.expectEqual(Plan.RecordFieldOrder.declared, nominal.record_field_order);
-
-    var store = try layout.Store.init(gpa, .u64);
-    defer store.deinit();
-
-    var layouts = try build(gpa, &program, &store, .{});
-    defer layouts.deinit();
-
-    const runtime = layouts.rep_layouts[@backingInt(program.root_reps.items[0])].worker;
-    const struct_idx = store.getLayout(runtime.layoutIdx()).getStruct().idx;
-    try std.testing.expectEqual(@as(u32, 0), store.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
-    try std.testing.expectEqual(@as(u32, 2), store.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
-    try std.testing.expectEqual(@as(u32, 4), store.getStructSize(struct_idx));
-}
-
-test "boxy layout planner reuses structural backing order without padding" {
-    const gpa = std.testing.allocator;
-
-    const field_a: RecordFieldLabelId = @fromBackingInt(@intCast(1));
-    const field_b: RecordFieldLabelId = @fromBackingInt(@intCast(2));
-    const record_fields = [_]checked.CheckedRecordField{
-        .{ .name = field_a, .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-        .{ .name = field_b, .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-    };
-    const declared_fields = [_]checked.CheckedDeclaredField{
-        .{ .named = field_b },
-        .{ .named = field_a },
-    };
-    const nominal_declarations = [_]checked.CheckedNominalDeclaration{.{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .nominal = .{ .module = @fromBackingInt(@intCast(4)), .source_decl = 0 },
-        .source_statement = 0,
-        .declaration_root = @fromBackingInt(@intCast(3)),
-        .backing = @fromBackingInt(@intCast(2)),
-        .df_start = 0,
-        .df_len = declared_fields.len,
-    }};
-    const payloads_nominal_rows = [_]checked.StoredNominal{
-        builtinNominal(.f32, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-        .{
-            .name = @fromBackingInt(@intCast(3)),
-            .origin_module = @fromBackingInt(@intCast(4)),
-            .owner_module = .{},
-            .source_decl = 0,
-            .is_opaque = false,
-            .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-            .declared_fields = .{ .start = 0, .len = 2 },
-        },
-    };
-    const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
-        .{ .empty_record = {} },
-        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(1)) } },
-        .{ .nominal = @fromBackingInt(1) },
-    };
-    const view = checked.CheckedTypeStoreView{
-        .stored_payloads = &payloads,
-        .nominal_row_pool = &payloads_nominal_rows,
-        .nominal_declarations = &nominal_declarations,
-        .record_field_pool = &record_fields,
-        .declared_field_pool = &declared_fields,
-    };
-
-    var program = try Plan.analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @fromBackingInt(@intCast(3)))}, .{});
-    defer program.deinit();
-    const nominal = program.representations.items[@backingInt(program.root_reps.items[0])];
-    try std.testing.expectEqual(@as(usize, 2), program.declaredFieldSlice(nominal.declared_fields).len);
-    try std.testing.expectEqual(Plan.RecordFieldOrder.structural, nominal.record_field_order);
-
-    var store = try layout.Store.init(gpa, .u64);
-    defer store.deinit();
-
-    var layouts = try build(gpa, &program, &store, .{});
-    defer layouts.deinit();
-
-    const runtime = layouts.rep_layouts[@backingInt(program.root_reps.items[0])].worker;
-    const struct_idx = store.getLayout(runtime.layoutIdx()).getStruct().idx;
-    try std.testing.expectEqual(@as(u32, 0), store.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
-    try std.testing.expectEqual(@as(u32, 4), store.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
-    try std.testing.expectEqual(@as(u32, 8), store.getStructSize(struct_idx));
-}

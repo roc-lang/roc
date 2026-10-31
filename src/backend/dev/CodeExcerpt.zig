@@ -60,7 +60,6 @@ pub const SymbolicReference = struct {
     target: union(enum) {
         proc: lir.ProcIdentity,
         rc_helper: []const u8,
-        boxy_thunk: lir.ProcIdentity,
     },
 };
 
@@ -81,13 +80,6 @@ pub const Reference = struct {
     /// Offset within the target excerpt the reference resolves to.
     delta: u32,
     veneer: ?u32 = null,
-};
-
-/// A runtime table number the excerpt's code loads, with the offset of its
-/// patchable load relative to the excerpt.
-pub const RuntimeNumberLoad = struct {
-    site: u32,
-    ref: RelocationMod.RuntimeNumber,
 };
 
 /// A relocation against a named symbol, with its offset relative to the excerpt.
@@ -114,14 +106,13 @@ pub const Frame = struct {
     uses_frame_pointer: bool,
 };
 
-/// What an excerpt holds. Procedures, helpers, and thunks are named by
+/// What an excerpt holds. Procedures and helpers are named by
 /// content; the rest are program-local ranges that only ever travel with
 /// their own program.
 pub const Kind = union(enum) {
     proc: lir.ProcIdentity,
     /// Symbol name of the helper (`roc__rc_*`).
     rc_helper: []const u8,
-    boxy_thunk: lir.ProcIdentity,
     entrypoint,
     message_pool_run,
     /// Never lifted as a standalone excerpt: islands belong to placement.
@@ -130,7 +121,7 @@ pub const Kind = union(enum) {
     branch_island,
 };
 
-/// A readonly datum the excerpt's relocations name and its program
+/// A static datum the excerpt's relocations name and its program
 /// defined: carried so a program that lacks it can define it.
 pub const DataItem = struct {
     name: []const u8,
@@ -145,6 +136,8 @@ pub const DataItem = struct {
     /// can give to a different constant. A pack names such a datum by
     /// content instead; see `ContentNames`.
     program_local_name: bool = false,
+    /// Program-owned zero-initialized state, identified by site rather than content.
+    is_mutable: bool = false,
 };
 
 /// One pointer-sized relocation inside a data item.
@@ -177,9 +170,6 @@ pub const Excerpt = struct {
     lines: []const LineEntry = &.{},
     failure_sites: []const FailureSite = &.{},
     relocations: []const NamedRelocation,
-    /// The Boxy runtime table numbers the code loads, in the producing
-    /// program's numbering until a arranged image renumbers them.
-    runtime_numbers: []const RuntimeNumberLoad = &.{},
     data: []const DataItem,
     /// The source location a procedure's debug entry names: its procedure's
     /// location (`LirStore.procLoc`) in the set's source-file domain, the
@@ -256,7 +246,6 @@ pub const Set = struct {
         for (self.excerpts, 0..) |candidate, candidate_index| {
             const matches = switch (target) {
                 .proc => |identity| candidate.kind == .proc and std.meta.eql(identity, candidate.kind.proc),
-                .boxy_thunk => |identity| candidate.kind == .boxy_thunk and std.meta.eql(identity, candidate.kind.boxy_thunk),
                 .rc_helper => |name| candidate.kind == .rc_helper and std.mem.eql(u8, name, candidate.kind.rc_helper),
             };
             if (matches) return @intCast(candidate_index);
@@ -374,6 +363,7 @@ fn cloneData(a: Allocator, item: DataItem) Allocator.Error!DataItem {
         .symbol_offset = item.symbol_offset,
         .relocations = relocations,
         .program_local_name = item.program_local_name,
+        .is_mutable = item.is_mutable,
     };
 }
 
@@ -419,7 +409,7 @@ pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!S
 }
 
 /// Deep-copy sets compiled from programs of one Solved program, which name a
-/// procedure, refcount helper, or Boxy thunk only by the code they hold, into
+/// procedure or refcount helper only by the code they hold, into
 /// one ownership domain with one copy of each: a later set's copy of one is
 /// dropped, and references to it resolve to the first copy. The sets share
 /// one source-file table, as programs of one Solved program do.
@@ -434,17 +424,13 @@ pub fn combineDistinct(allocator: Allocator, sets: []const *const Set) Allocator
     var arena = collections.SingleThreadArena.init(allocator);
     errdefer arena.deinit();
     const a = arena.allocator();
-    const Named = union(enum) { proc: lir.ProcIdentity, thunk: lir.ProcIdentity, helper: []const u8 };
+    const Named = union(enum) { proc: lir.ProcIdentity, helper: []const u8 };
     const NamedContext = struct {
         pub fn hash(_: @This(), key: Named) u64 {
             var hasher = std.hash.Wyhash.init(0);
             switch (key) {
                 .proc => |identity| {
                     hasher.update("p");
-                    hasher.update(&identity.bytes);
-                },
-                .thunk => |identity| {
-                    hasher.update("t");
                     hasher.update(&identity.bytes);
                 },
                 .helper => |name| {
@@ -457,7 +443,6 @@ pub fn combineDistinct(allocator: Allocator, sets: []const *const Set) Allocator
         pub fn eql(_: @This(), left: Named, right: Named) bool {
             return switch (left) {
                 .proc => |identity| right == .proc and std.meta.eql(identity, right.proc),
-                .thunk => |identity| right == .thunk and std.meta.eql(identity, right.thunk),
                 .helper => |name| right == .helper and std.mem.eql(u8, name, right.helper),
             };
         }
@@ -486,7 +471,6 @@ pub fn combineDistinct(allocator: Allocator, sets: []const *const Set) Allocator
         for (set.excerpts, map.*, flags.*) |excerpt, *index, *keep| {
             const named: ?Named = switch (excerpt.kind) {
                 .proc => |identity| .{ .proc = identity },
-                .boxy_thunk => |identity| .{ .thunk = identity },
                 .rc_helper => |name| .{ .helper = name },
                 .entrypoint, .message_pool_run, .branch_island => null,
             };
@@ -573,7 +557,7 @@ fn copyExcerpts(a: Allocator, excerpts: *std.ArrayList(Excerpt), set: *const Set
         var excerpt = source;
         excerpt.kind = switch (source.kind) {
             .rc_helper => |name| .{ .rc_helper = try a.dupe(u8, name) },
-            .proc, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => source.kind,
+            .proc, .entrypoint, .message_pool_run, .branch_island => source.kind,
         };
         excerpt.code = try a.dupe(u8, source.code);
         const refs = try a.dupe(Reference, source.refs);
@@ -585,7 +569,7 @@ fn copyExcerpts(a: Allocator, excerpts: *std.ArrayList(Excerpt), set: *const Set
         };
         for (symbolic_refs) |*ref| switch (ref.target) {
             .rc_helper => |name| ref.target = .{ .rc_helper = try a.dupe(u8, name) },
-            .proc, .boxy_thunk => {},
+            .proc => {},
         };
         excerpt.symbolic_refs = symbolic_refs;
         const lines = try a.dupe(LineEntry, source.lines);
@@ -598,7 +582,6 @@ fn copyExcerpts(a: Allocator, excerpts: *std.ArrayList(Excerpt), set: *const Set
         const relocations = try a.dupe(NamedRelocation, source.relocations);
         for (relocations) |*relocation| relocation.name = try a.dupe(u8, relocation.name);
         excerpt.relocations = relocations;
-        excerpt.runtime_numbers = try a.dupe(RuntimeNumberLoad, source.runtime_numbers);
         const data = try a.alloc(DataItem, source.data.len);
         for (source.data, data) |item, *owned| owned.* = try cloneData(a, item);
         excerpt.data = data;
@@ -711,6 +694,7 @@ pub const ContentNames = struct {
                 .symbol_offset = 0,
                 .relocations = relocations,
                 .program_local_name = !data_export.is_exported,
+                .is_mutable = data_export.is_mutable,
             };
         }
         for (items) |item| try self.items.put(allocator, item.name, item);
@@ -720,7 +704,7 @@ pub const ContentNames = struct {
 
     /// Give `item` its content name, when its program named it for itself.
     fn nameItem(self: *ContentNames, item: DataItem) Allocator.Error!void {
-        if (!item.program_local_name or self.names.contains(item.name)) return;
+        if (item.is_mutable or !item.program_local_name or self.names.contains(item.name)) return;
         var hasher = Sha256.init(.{});
         _ = try self.write(&hasher, item);
         const digest = self.digests.get(item.name) orelse unreachable; // a top-level write has no enclosing active item, so it records the item's digest
@@ -825,7 +809,7 @@ pub const ContentNames = struct {
                 previous = .{
                     .name = relocation.name,
                     .code = code,
-                    .target = if (target != null and target.?.program_local_name) try self.render(target.?) else null,
+                    .target = if (target != null and target.?.program_local_name and !target.?.is_mutable) try self.render(target.?) else null,
                 };
             }
             if (previous.?.target) |rendered| {
@@ -912,6 +896,7 @@ pub const PreparedData = struct {
                 .symbol_offset = constant.symbol_offset,
                 .relocations = relocations,
                 .program_local_name = !constant.is_exported,
+                .is_mutable = constant.is_mutable,
             };
             try items.put(a, item.name, item);
         }
@@ -1010,7 +995,7 @@ pub fn extractPrepared(
     const refs = codegen.codeRefs();
     for (relocations) |relocation| switch (relocation) {
         .local_data => return error.UnsupportedRelocation,
-        .retired, .linked_function, .linked_data, .runtime_number => {},
+        .retired, .linked_function, .linked_data => {},
     };
 
     // Standalone branch islands belong to this placement, not the excerpt
@@ -1046,12 +1031,10 @@ pub fn extractPrepared(
         const kind: Kind = switch (region.kind) {
             .proc => |proc_id| .{ .proc = proc_specs[@backingInt(proc_id)].identity },
             .rc_helper => |key| .{ .rc_helper = try LirCodeGenMod.compiledRcHelperSymbolName(arena_allocator, layout_store, key) },
-            .boxy_thunk => |proc_id| .{ .boxy_thunk = proc_specs[@backingInt(proc_id)].identity },
             .entrypoint => .entrypoint,
             .message_pool_run => .message_pool_run,
             .branch_island, .hosted_stub => unreachable, // regionHasExcerpt is false for these, so excerpt_of_region skipped them above
             .spliced_proc => |identity| .{ .proc = identity },
-            .spliced_boxy_thunk => |identity| .{ .boxy_thunk = identity },
             .spliced_helper => .{ .rc_helper = try arena_allocator.dupe(u8, codegen.splicedHelperName(region.start + region.entry) orelse return error.DanglingReference) },
         };
 
@@ -1073,7 +1056,7 @@ pub fn extractPrepared(
         // spliced into calls its own code of the procedure.
         const region_names_code = switch (region.kind) {
             .proc => |proc_id| proc_specs[@backingInt(proc_id)].code_key == null,
-            .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island, .hosted_stub, .spliced_proc, .spliced_boxy_thunk, .spliced_helper => true,
+            .rc_helper, .entrypoint, .message_pool_run, .branch_island, .hosted_stub, .spliced_proc, .spliced_helper => true,
         };
         var region_refs = std.ArrayList(Reference).empty;
         var symbolic_refs = std.ArrayList(SymbolicReference).empty;
@@ -1086,7 +1069,6 @@ pub fn extractPrepared(
                 else
                     null,
                 .rc_helper => |key| if (codegen.compiledRcHelperOffset(key) == null) .{ .rc_helper = try LirCodeGenMod.compiledRcHelperSymbolName(arena_allocator, layout_store, key) } else null,
-                .boxy_thunk => |proc_id| if (codegen.boxyThunkOffset(proc_id) == null) .{ .boxy_thunk = proc_specs[@backingInt(proc_id)].identity } else null,
                 .message, .offset => null,
             };
             if (symbolic_target) |target| {
@@ -1106,7 +1088,6 @@ pub fn extractPrepared(
                 .proc => |proc_id| (codegen.compiledProcSymbol(proc_id) orelse return error.DanglingReference).code_start,
                 .rc_helper => |key| codegen.compiledRcHelperOffset(key) orelse return error.DanglingReference,
                 .message => |message_offset| message_runs.codeOffset(regions, message_offset) orelse return error.DanglingReference,
-                .boxy_thunk => |proc_id| codegen.boxyThunkOffset(proc_id) orelse return error.DanglingReference,
                 .offset => |offset| offset,
             };
             const target_region = regionContaining(CG, regions, target_offset) orelse return error.DanglingReference;
@@ -1114,7 +1095,7 @@ pub fn extractPrepared(
             if (region_names_code) site: {
                 const target_proc = switch (regions[target_region].kind) {
                     .proc => |proc_id| proc_id,
-                    .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island, .hosted_stub, .spliced_proc, .spliced_boxy_thunk, .spliced_helper => break :site,
+                    .rc_helper, .entrypoint, .message_pool_run, .branch_island, .hosted_stub, .spliced_proc, .spliced_helper => break :site,
                 };
                 if (proc_specs[@backingInt(target_proc)].code_key == null) break :site;
                 if (target_offset != regions[target_region].start + regions[target_region].entry) return error.DanglingReference;
@@ -1144,14 +1125,9 @@ pub fn extractPrepared(
         }
 
         var region_relocations = std.ArrayList(NamedRelocation).empty;
-        var region_runtime_numbers = std.ArrayList(RuntimeNumberLoad).empty;
         for (relocation_groups.of(region_index)) |relocation_index| {
             const relocation = relocations[relocation_index];
             const offset = relocation.getOffset();
-            if (relocation == .runtime_number) {
-                try region_runtime_numbers.append(arena_allocator, .{ .site = @intCast(offset - region.start), .ref = relocation.runtime_number.ref });
-                continue;
-            }
             try region_relocations.append(arena_allocator, switch (relocation) {
                 .linked_function => |function| .{
                     .offset = @intCast(offset - region.start),
@@ -1165,7 +1141,7 @@ pub fn extractPrepared(
                     .scope = codegen.symbolScope(data.symbol),
                     .kind = .{ .data = data.kind },
                 },
-                .retired, .local_data, .runtime_number => unreachable, // the switch above skipped or rejected these kinds, and the loop took runtime references
+                .retired, .local_data => unreachable, // the switch above skipped or rejected these kinds
             });
         }
 
@@ -1212,14 +1188,13 @@ pub fn extractPrepared(
             .lines = try lines.toOwnedSlice(arena_allocator),
             .failure_sites = try failure_sites.toOwnedSlice(arena_allocator),
             .relocations = try region_relocations.toOwnedSlice(arena_allocator),
-            .runtime_numbers = try region_runtime_numbers.toOwnedSlice(arena_allocator),
             .data = region_data,
             .loc = switch (region.kind) {
                 // A procedure placed from another set carries the location
                 // that set recorded; any other has its own.
                 .proc => |proc_id| codegen.assembledProcLoc(proc_specs[@backingInt(proc_id)].identity) orelse codegen.store.procLoc(proc_id),
                 .spliced_proc => |identity| codegen.assembledProcLoc(identity) orelse .none,
-                .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island, .hosted_stub, .spliced_boxy_thunk, .spliced_helper => .none,
+                .rc_helper, .entrypoint, .message_pool_run, .branch_island, .hosted_stub, .spliced_helper => .none,
             },
         };
     }
@@ -1235,7 +1210,7 @@ fn refSite(ref: anytype) ?usize {
 fn relocationOffset(relocation: anytype) ?usize {
     return switch (relocation) {
         .retired => null,
-        .linked_function, .linked_data, .runtime_number => @intCast(relocation.getOffset()),
+        .linked_function, .linked_data => @intCast(relocation.getOffset()),
         .local_data => unreachable, // extraction rejected these kinds before grouping relocations
     };
 }
@@ -1311,7 +1286,7 @@ const MessageRuns = struct {
         defer runs.deinit(allocator);
         for (regions, 0..) |region, index| switch (region.kind) {
             .message_pool_run => |pool_from| try runs.append(allocator, .{ .pool_from = pool_from, .region = @intCast(index) }),
-            .proc, .rc_helper, .boxy_thunk, .entrypoint, .branch_island, .hosted_stub, .spliced_proc, .spliced_boxy_thunk, .spliced_helper => {},
+            .proc, .rc_helper, .entrypoint, .branch_island, .hosted_stub, .spliced_proc, .spliced_helper => {},
         };
         std.mem.sort(Run, runs.items, {}, struct {
             fn lessThan(_: void, lhs: Run, rhs: Run) bool {
@@ -1451,7 +1426,7 @@ fn appendDataTargets(allocator: Allocator, pending: *std.ArrayList([]const u8), 
 fn regionHasExcerpt(kind: anytype) bool {
     return switch (kind) {
         .branch_island, .hosted_stub => false,
-        .proc, .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .spliced_proc, .spliced_boxy_thunk, .spliced_helper => true,
+        .proc, .rc_helper, .entrypoint, .message_pool_run, .spliced_proc, .spliced_helper => true,
     };
 }
 
@@ -1488,8 +1463,6 @@ pub const ImageRoots = struct {
     /// Further names code and constants relocate to that name a helper
     /// excerpt, by the helper's excerpt name.
     helper_aliases: *const std.StringHashMap([]const u8),
-    /// Every Boxy thunk is reached, from the program's descriptor sidecar.
-    all_thunks: bool,
 };
 
 /// The excerpts of `set` that the image's roots reach: through
@@ -1507,14 +1480,11 @@ pub fn retainReachable(allocator: Allocator, set: *const Set, catalog: *const Pr
     const names_allocator = names_arena.allocator();
     var by_proc = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
     defer by_proc.deinit();
-    var by_thunk = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
-    defer by_thunk.deinit();
     for (set.excerpts, 0..) |excerpt, index| switch (excerpt.kind) {
         .proc => |identity| {
             try by_proc.put(identity, @intCast(index));
             try by_name.put(try identity.symbolName(names_allocator), @intCast(index));
         },
-        .boxy_thunk => |identity| try by_thunk.put(identity, @intCast(index)),
         .rc_helper => |name| try by_name.put(name, @intCast(index)),
         .entrypoint, .message_pool_run, .branch_island => {},
     };
@@ -1535,10 +1505,6 @@ pub fn retainReachable(allocator: Allocator, set: *const Set, catalog: *const Pr
 
     for (roots.procs) |identity| if (by_proc.get(identity)) |index| try excerpt_work.append(allocator, index);
     for (roots.data) |name| try data_work.append(allocator, name);
-    if (roots.all_thunks) {
-        var thunks = by_thunk.valueIterator();
-        while (thunks.next()) |index| try excerpt_work.append(allocator, index.*);
-    }
     while (excerpt_work.items.len != 0 or data_work.items.len != 0) {
         while (excerpt_work.pop()) |index| {
             if (reached[index]) continue;
@@ -1551,7 +1517,6 @@ pub fn retainReachable(allocator: Allocator, set: *const Set, catalog: *const Pr
                     .absent => null,
                     .unresolved => switch (ref.target) {
                         .proc => |identity| by_proc.get(identity),
-                        .boxy_thunk => |identity| by_thunk.get(identity),
                         .rc_helper => |name| by_name.get(name),
                     },
                 };
@@ -1588,7 +1553,7 @@ pub fn retainReachable(allocator: Allocator, set: *const Set, catalog: *const Pr
         var excerpt = source;
         excerpt.kind = switch (source.kind) {
             .rc_helper => |name| .{ .rc_helper = try a.dupe(u8, name) },
-            .proc, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => source.kind,
+            .proc, .entrypoint, .message_pool_run, .branch_island => source.kind,
         };
         excerpt.code = try a.dupe(u8, source.code);
         const refs = try a.dupe(Reference, source.refs);
@@ -1600,7 +1565,7 @@ pub fn retainReachable(allocator: Allocator, set: *const Set, catalog: *const Pr
         };
         for (symbolic_refs) |*ref| switch (ref.target) {
             .rc_helper => |name| ref.target = .{ .rc_helper = try a.dupe(u8, name) },
-            .proc, .boxy_thunk => {},
+            .proc => {},
         };
         excerpt.symbolic_refs = symbolic_refs;
         excerpt.lines = try a.dupe(LineEntry, source.lines);
@@ -1608,7 +1573,6 @@ pub fn retainReachable(allocator: Allocator, set: *const Set, catalog: *const Pr
         const relocations = try a.dupe(NamedRelocation, source.relocations);
         for (relocations) |*relocation| relocation.name = try a.dupe(u8, relocation.name);
         excerpt.relocations = relocations;
-        excerpt.runtime_numbers = try a.dupe(RuntimeNumberLoad, source.runtime_numbers);
         const data = try a.alloc(DataItem, source.data.len);
         for (source.data, data) |item, *owned| owned.* = try cloneData(a, item);
         excerpt.data = data;
@@ -1623,7 +1587,7 @@ pub fn retainReachable(allocator: Allocator, set: *const Set, catalog: *const Pr
 }
 
 /// A program's machine code in its one layout: every excerpt of the code
-/// its procedures, helpers, and thunks are, compiled for this program or
+/// its procedures and helpers are, compiled for this program or
 /// spliced from an object-cache entry, in an order and under names that
 /// depend only on what each excerpt is (design.md "Deterministic Dev Images").
 /// `data` holds every constant the code names, and every constant a
@@ -1650,8 +1614,8 @@ pub const ArrangedDatum = struct {
 /// (`ContentNames`), so a constant this program named for itself and the
 /// same constant carried by a spliced entry are one symbol.
 ///
-/// Excerpts are ordered by what they are: procedures by identity, then Boxy
-/// thunks by identity, then refcount helpers by name. A message pool run
+/// Excerpts are ordered by what they are: procedures by identity, then
+/// refcount helpers by name. A message pool run
 /// belongs to the one excerpt whose code addresses it and follows that
 /// excerpt, in the order the excerpt first addresses its runs.
 pub fn arrange(allocator: Allocator, set: *const Set, host_visible: []const DataItem) Allocator.Error!ArrangedImage {
@@ -1690,7 +1654,7 @@ pub fn arrange(allocator: Allocator, set: *const Set, host_visible: []const Data
     defer unowned_runs.deinit(allocator);
     for (set.excerpts, 0..) |excerpt, index| switch (excerpt.kind) {
         .message_pool_run => if (owner_of[index] == null) try unowned_runs.append(allocator, @intCast(index)),
-        .proc, .boxy_thunk, .rc_helper, .entrypoint, .branch_island => try heads.append(allocator, @intCast(index)),
+        .proc, .rc_helper, .entrypoint, .branch_island => try heads.append(allocator, @intCast(index)),
     };
     std.mem.sort(u32, heads.items, set, canonicalBefore);
     std.mem.sort(u32, unowned_runs.items, set, struct {
@@ -1736,7 +1700,7 @@ pub fn arrange(allocator: Allocator, set: *const Set, host_visible: []const Data
         out.* = source;
         out.kind = switch (source.kind) {
             .rc_helper => |name| .{ .rc_helper = try a.dupe(u8, name) },
-            .proc, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => source.kind,
+            .proc, .entrypoint, .message_pool_run, .branch_island => source.kind,
         };
         out.code = try a.dupe(u8, source.code);
         const refs = try a.dupe(Reference, source.refs);
@@ -1748,12 +1712,11 @@ pub fn arrange(allocator: Allocator, set: *const Set, host_visible: []const Data
         };
         for (symbolic_refs) |*ref| switch (ref.target) {
             .rc_helper => |name| ref.target = .{ .rc_helper = try a.dupe(u8, name) },
-            .proc, .boxy_thunk => {},
+            .proc => {},
         };
         out.symbolic_refs = symbolic_refs;
         out.lines = try a.dupe(LineEntry, source.lines);
         out.failure_sites = try a.dupe(FailureSite, source.failure_sites);
-        out.runtime_numbers = try a.dupe(RuntimeNumberLoad, source.runtime_numbers);
         const relocations = try a.dupe(NamedRelocation, source.relocations);
         for (relocations) |*relocation| {
             const renamed = names.renames(relocation.name);
@@ -1810,6 +1773,7 @@ fn renamedData(a: Allocator, item: DataItem, names: *const ContentNames) Allocat
         .symbol_offset = item.symbol_offset,
         .relocations = relocations,
         .program_local_name = false,
+        .is_mutable = item.is_mutable,
     };
 }
 
@@ -1823,7 +1787,6 @@ fn canonicalBefore(set: *const Set, a: u32, b: u32) bool {
     if (lhs_rank != rhs_rank) return lhs_rank < rhs_rank;
     return switch (lhs) {
         .proc => |identity| std.mem.lessThan(u8, &identity.bytes, &rhs.proc.bytes),
-        .boxy_thunk => |identity| std.mem.lessThan(u8, &identity.bytes, &rhs.boxy_thunk.bytes),
         .rc_helper => |name| std.mem.lessThan(u8, name, rhs.rc_helper),
         // Only one placement's own code has these kinds, which name nothing;
         // the code bytes order them.
@@ -1834,16 +1797,15 @@ fn canonicalBefore(set: *const Set, a: u32, b: u32) bool {
 fn canonicalRank(kind: Kind) u8 {
     return switch (kind) {
         .proc => 0,
-        .boxy_thunk => 1,
-        .rc_helper => 2,
-        .entrypoint => 3,
-        .branch_island => 4,
-        .message_pool_run => 5,
+        .rc_helper => 1,
+        .entrypoint => 2,
+        .branch_island => 3,
+        .message_pool_run => 4,
     };
 }
 
-/// Place every excerpt of a arranged image's set into an open code
-/// generator, in set order, and resolve every reference. A procedure or thunk
+/// Place every excerpt of an arranged image's set into an open code
+/// generator, in set order, and resolve every reference. A procedure
 /// the program declares lands as that procedure, and a helper whose key the
 /// program knows as that helper; any other lands as spliced code, as a
 /// splice places it. Returns each excerpt's start; the caller owns it.
@@ -1860,7 +1822,6 @@ pub fn assembleArranged(
     for (set.excerpts, starts) |excerpt, *start| {
         const kind: CG.CodeRegionKind = switch (excerpt.kind) {
             .proc => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .proc = proc_id } else .{ .spliced_proc = identity },
-            .boxy_thunk => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .boxy_thunk = proc_id } else .{ .spliced_boxy_thunk = identity },
             .rc_helper => |name| if (helper_keys.get(name)) |key| .{ .rc_helper = key } else .spliced_helper,
             .entrypoint => .entrypoint,
             .message_pool_run => .{ .message_pool_run = 0 },
@@ -1868,7 +1829,6 @@ pub fn assembleArranged(
         };
         start.* = try codegen.appendAssembledRegion(excerpt.code, kind, excerpt.entry, excerpt.frame);
         try appendMetadata(CG, codegen, excerpt, start.*, .same_domain);
-        try appendRuntimeNumbers(CG, codegen, excerpt, start.*);
         for (excerpt.relocations) |relocation| {
             const symbol = try codegen.internSymbolName(relocation.name, relocation.scope);
             const offset: u64 = start.* + relocation.offset;
@@ -1883,7 +1843,6 @@ pub fn assembleArranged(
             const target_start = starts[ref.target];
             const target: CG.CodeRefTarget = switch (set.excerpts[ref.target].kind) {
                 .proc => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .proc = proc_id } else .{ .offset = target_start + ref.delta },
-                .boxy_thunk => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .boxy_thunk = proc_id } else .{ .offset = target_start + ref.delta },
                 .rc_helper => |name| if (helper_keys.get(name)) |key| .{ .rc_helper = key } else .{ .offset = target_start + ref.delta },
                 .entrypoint, .message_pool_run, .branch_island => .{ .offset = target_start + ref.delta },
             };
@@ -1905,7 +1864,7 @@ pub fn assembleArranged(
 
 /// Why an excerpt set could not be placed into a program.
 pub const AssembleError = Allocator.Error || error{
-    /// A procedure or thunk excerpt names an identity the program has no proc for.
+    /// A procedure excerpt names an identity the program has no proc for.
     UnknownProcIdentity,
     /// A helper excerpt names a helper the program has no key for.
     UnknownRcHelper,
@@ -1967,14 +1926,12 @@ pub fn appendPrepared(
         const kind: CG.CodeRegionKind = switch (excerpt.kind) {
             .proc => |identity| .{ .proc = procs_by_identity.get(identity) orelse return error.UnknownProcIdentity },
             .rc_helper => |name| .{ .rc_helper = helper_keys.get(name) orelse return error.UnknownRcHelper },
-            .boxy_thunk => |identity| .{ .boxy_thunk = procs_by_identity.get(identity) orelse return error.UnknownProcIdentity },
             .entrypoint => .entrypoint,
             .message_pool_run => .{ .message_pool_run = 0 },
             .branch_island => .branch_island,
         };
         starts[index] = try codegen.appendAssembledRegion(excerpt.code, kind, excerpt.entry, excerpt.frame);
         try appendMetadata(CG, codegen, excerpt, starts[index], .same_domain);
-        try appendRuntimeNumbers(CG, codegen, excerpt, starts[index]);
         for (excerpt.relocations) |relocation| {
             const symbol = try codegen.internSymbolName(relocation.name, relocation.scope);
             const offset: u64 = starts[index] + relocation.offset;
@@ -1991,7 +1948,6 @@ pub fn appendPrepared(
             const target: CG.CodeRefTarget = switch (target_excerpt.kind) {
                 .proc => |identity| .{ .proc = procs_by_identity.get(identity) orelse return error.UnknownProcIdentity },
                 .rc_helper => |name| .{ .rc_helper = helper_keys.get(name) orelse return error.UnknownRcHelper },
-                .boxy_thunk => |identity| .{ .boxy_thunk = procs_by_identity.get(identity) orelse return error.UnknownProcIdentity },
                 // Imported pools do not share the destination's message-ID
                 // domain. Preserve this exact placed target for later extraction.
                 .message_pool_run, .entrypoint, .branch_island => .{ .offset = starts[ref.target] + ref.delta },
@@ -2018,13 +1974,6 @@ const LineBinding = union(enum) {
     file_map: []const ?u32,
 };
 
-/// Record the runtime table numbers an excerpt placed at `start` loads.
-fn appendRuntimeNumbers(comptime CG: type, codegen: *CG, excerpt: Excerpt, start: usize) Allocator.Error!void {
-    for (excerpt.runtime_numbers) |runtime_number| {
-        try codegen.appendAssembledRelocation(.{ .runtime_number = .{ .offset = start + runtime_number.site, .ref = runtime_number.ref } });
-    }
-}
-
 fn appendMetadata(comptime CG: type, codegen: *CG, excerpt: Excerpt, start: usize, lines: LineBinding) Allocator.Error!void {
     if (excerpt.payload_record) |record| codegen.retainAssembledPayload(start, .{ .record = record, .metadata_origin = excerpt.metadata_origin, .code = excerpt.code, .data = excerpt.data });
     switch (excerpt.kind) {
@@ -2042,7 +1991,6 @@ fn appendMetadata(comptime CG: type, codegen: *CG, excerpt: Excerpt, start: usiz
             });
         },
         .rc_helper => |name| try codegen.registerSplicedHelper(name, start + excerpt.entry),
-        .boxy_thunk => |identity| try codegen.registerAssembledThunk(identity, start + excerpt.entry),
         .entrypoint, .message_pool_run, .branch_island => {},
     }
     for (excerpt.symbolic_refs) |ref| {
@@ -2192,7 +2140,6 @@ fn relocationEql(comptime CG: type, original: *CG, fresh: *CG, lhs: IndexedReloc
             std.mem.eql(u8, original.symbolName(function.symbol), fresh.symbolName(rhs.linked_function.symbol)),
         .linked_data => |data| data.offset == rhs.linked_data.offset and data.kind == rhs.linked_data.kind and
             std.mem.eql(u8, original.symbolName(data.symbol), fresh.symbolName(rhs.linked_data.symbol)),
-        .runtime_number => |ref| ref.offset == rhs.runtime_number.offset and std.meta.eql(ref.ref, rhs.runtime_number.ref),
         .local_data, .retired => false,
     };
 }
@@ -2239,8 +2186,6 @@ pub fn markNewReferrers(allocator: Allocator, set: *const Set, marked: []bool, f
     if (std.mem.findScalar(bool, marked, true) == null) return;
     var by_proc = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
     defer by_proc.deinit();
-    var by_thunk = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
-    defer by_thunk.deinit();
     var by_helper = std.StringHashMap(u32).init(allocator);
     defer by_helper.deinit();
     const unresolved = blk: {
@@ -2253,7 +2198,6 @@ pub fn markNewReferrers(allocator: Allocator, set: *const Set, marked: []bool, f
         std.debug.assert(first == 0);
         for (set.excerpts, 0..) |excerpt, index| switch (excerpt.kind) {
             .proc => |identity| _ = try by_proc.getOrPutValue(identity, @intCast(index)),
-            .boxy_thunk => |identity| _ = try by_thunk.getOrPutValue(identity, @intCast(index)),
             .rc_helper => |name| _ = try by_helper.getOrPutValue(name, @intCast(index)),
             .entrypoint, .message_pool_run, .branch_island => {},
         };
@@ -2277,7 +2221,6 @@ pub fn markNewReferrers(allocator: Allocator, set: *const Set, marked: []bool, f
                 .absent => null,
                 .unresolved => switch (ref.target) {
                     .proc => |identity| by_proc.get(identity),
-                    .boxy_thunk => |identity| by_thunk.get(identity),
                     .rc_helper => |name| by_helper.get(name),
                 },
             } orelse continue;
@@ -2308,13 +2251,13 @@ pub fn reachingIdentities(allocator: Allocator, set: *const Set, identities: any
     for (set.excerpts, marked) |excerpt, *is_marked| {
         is_marked.* = switch (excerpt.kind) {
             .proc => |identity| identities.contains(identity),
-            .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => false,
+            .rc_helper, .entrypoint, .message_pool_run, .branch_island => false,
         };
         for (excerpt.symbolic_refs) |ref| switch (ref.target) {
             .proc => |identity| if (identities.contains(identity)) {
                 is_marked.* = true;
             },
-            .boxy_thunk, .rc_helper => {},
+            .rc_helper => {},
         };
     }
     try markReferrers(allocator, set, marked, .follow);
@@ -2349,8 +2292,6 @@ pub fn reachingAbsentFiles(allocator: Allocator, set: *const Set, present: []con
 /// direct call; refcount helpers register by name so a later request for the
 /// same helper reuses the spliced code. `placed` remembers which excerpts of
 /// `set` are already in the buffer across calls.
-/// Worker identities also name Boxy thunks, but the two ABIs have separate
-/// registries and region kinds so neither can satisfy demand for the other.
 pub fn splice(
     comptime CG: type,
     allocator: Allocator,
@@ -2391,7 +2332,6 @@ pub fn splice(
         const excerpt = set.excerpts[index];
         const existing: ?usize = switch (excerpt.kind) {
             .proc => |identity| codegen.splicedProcStart(identity),
-            .boxy_thunk => |identity| if (codegen.assembledThunkEntry(identity)) |entry| entry - excerpt.entry else null,
             .rc_helper => |name| if (codegen.splicedHelperEntry(name)) |entry| entry - excerpt.entry else null,
             .entrypoint, .message_pool_run, .branch_island => null,
         };
@@ -2414,7 +2354,7 @@ pub fn splice(
             // a copy from this pack never stands in for it.
             switch (ref.target) {
                 .proc => |identity| if (procs_by_identity.contains(identity)) continue,
-                .boxy_thunk, .rc_helper => {},
+                .rc_helper => {},
             }
             if (set.symbolicDefinition(ref)) |definition| try stack.append(allocator, definition);
         }
@@ -2424,7 +2364,6 @@ pub fn splice(
         const excerpt = set.excerpts[index];
         const kind: CG.CodeRegionKind = switch (excerpt.kind) {
             .proc => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .proc = proc_id } else .{ .spliced_proc = identity },
-            .boxy_thunk => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .boxy_thunk = proc_id } else .{ .spliced_boxy_thunk = identity },
             .rc_helper => .spliced_helper,
             .entrypoint => .entrypoint,
             .message_pool_run => .{ .message_pool_run = 0 },
@@ -2432,14 +2371,10 @@ pub fn splice(
         };
         const start = try codegen.appendAssembledRegion(excerpt.code, kind, excerpt.entry, excerpt.frame);
         try appendMetadata(CG, codegen, excerpt, start, .{ .file_map = file_map });
-        // A program's own code loads its table numbers; code another
-        // program compiled never reaches the runtime's tables.
-        if (excerpt.runtime_numbers.len != 0)
-            base.invariant("a spliced excerpt loads another program's Boxy runtime table numbers", .{});
         switch (excerpt.kind) {
             .rc_helper => |name| try codegen.registerSplicedHelper(name, start + excerpt.entry),
             .proc => |identity| try codegen.registerSplicedProc(identity, start),
-            .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
+            .entrypoint, .message_pool_run, .branch_island => {},
         }
         try placed.putNoClobber(index, start);
         for (excerpt.data) |item| try data_out.append(allocator, item);
@@ -2461,7 +2396,6 @@ pub fn splice(
             const target_excerpt = set.excerpts[ref.target];
             const target: CG.CodeRefTarget = switch (target_excerpt.kind) {
                 .proc => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .proc = proc_id } else .{ .offset = target_start + ref.delta },
-                .boxy_thunk => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .boxy_thunk = proc_id } else .{ .offset = target_start + ref.delta },
                 .rc_helper, .entrypoint, .message_pool_run, .branch_island => .{ .offset = target_start + ref.delta },
             };
             try codegen.patchAssembledRef(
@@ -2498,12 +2432,12 @@ test "independent message pools preserve their targets across repeated excerpt a
                 .ret_layout = .zst,
             }, .none);
         }
-        var image = try CG.init(allocator, &store, &layouts, .{}, &.{}, .default);
+        var image = try CG.init(allocator, &store, &layouts, .{}, .default);
         defer image.deinit();
         var helpers = HelperKeys.init(allocator);
         defer helpers.deinit();
         for (procs) |proc| {
-            var producer = try CG.init(allocator, &store, &layouts, .{}, &.{}, .default);
+            var producer = try CG.init(allocator, &store, &layouts, .{}, .default);
             defer producer.deinit();
             var fragment = try compileProcFragment(CG, allocator, &producer, proc, store.getProcSpecs(), &layouts, &.{}, &.{});
             defer fragment.deinit();
@@ -2515,7 +2449,7 @@ test "independent message pools preserve their targets across repeated excerpt a
             if (region.kind == .message_pool_run) pools += 1;
         }
         try std.testing.expectEqual(@as(usize, 2), pools);
-        var fresh = try CG.init(allocator, &store, &layouts, .{}, &.{}, .default);
+        var fresh = try CG.init(allocator, &store, &layouts, .{}, .default);
         defer fresh.deinit();
         try verifyRoundTrip(CG, allocator, &image, &fresh, store.getProcSpecs(), &layouts, &.{});
     }
@@ -2528,7 +2462,7 @@ test "excerpt local calls reserve veneers before later regions exceed reach" {
     defer store.deinit();
     var layouts = try layout.Store.init(allocator, .u64);
     defer layouts.deinit();
-    var image = try CG.init(allocator, &store, &layouts, .{}, &.{}, .default);
+    var image = try CG.init(allocator, &store, &layouts, .{}, .default);
     defer image.deinit();
     image.codegen.branch_reach_limit = 4096;
     const gap = @as([8192]u8, @splat(0));
@@ -2613,7 +2547,6 @@ test "excerpt metadata queues unresolved targets, preserves same-offset line ord
         }
         pub fn registerAssembledProcLoc(_: *Self, _: lir.ProcIdentity, _: base.SourceLoc) Allocator.Error!void {}
         pub fn retainAssembledPayload(_: *Self, _: usize, _: AssembledPayload) void {}
-        pub fn registerAssembledThunk(_: *Self, _: lir.ProcIdentity, _: usize) Allocator.Error!void {}
         pub fn registerSplicedHelper(_: *Self, _: []const u8, _: usize) Allocator.Error!void {}
         pub fn queueAssembledSymbolicRef(self: *Self, ref: SymbolicReference) Allocator.Error!void {
             self.refs[self.refs_len] = ref;
@@ -3002,13 +2935,12 @@ test "an image keeps only the code its roots reach" {
         .procs = &.{lir.ProcIdentity.forTest(1)},
         .data = &.{},
         .helper_aliases = &aliases,
-        .all_thunks = false,
     });
     defer kept.deinit();
     try std.testing.expectEqual(@as(usize, 4), kept.excerpts.len);
     for (kept.excerpts) |excerpt| switch (excerpt.kind) {
         .proc => |identity| try std.testing.expect(!std.meta.eql(identity, lir.ProcIdentity.forTest(3))),
-        .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
+        .rc_helper, .entrypoint, .message_pool_run, .branch_island => {},
     };
     try std.testing.expectEqual(lir.ProcIdentity.forTest(2), kept.excerpts[kept.excerpts[0].refs[0].target].kind.proc);
 }
@@ -3045,4 +2977,32 @@ test "a splice reaches a procedure through references and stable references" {
     const reached = try reachingAbsentFiles(allocator, &lined_set, &.{ true, false });
     defer allocator.free(reached);
     try std.testing.expectEqualSlices(bool, &.{ true, true, true, false }, reached);
+}
+
+test "boxy composition slots keep identity through canonical arrangement and packing" {
+    const a = std.testing.allocator;
+    const zeros = @as([8]u8, @splat(0));
+    const items = [_]DataItem{
+        .{ .name = "site_a", .bytes = &zeros, .alignment = 8, .symbol_offset = 0, .program_local_name = true, .is_mutable = true },
+        .{ .name = "site_b", .bytes = &zeros, .alignment = 8, .symbol_offset = 0, .program_local_name = true, .is_mutable = true },
+        .{ .name = "constant", .bytes = &zeros, .alignment = 8, .symbol_offset = 0, .program_local_name = true },
+    };
+    var storage: [1]Excerpt = undefined;
+    var source = testDataSet(&storage, &items);
+    defer source.arena.deinit();
+    var arranged = try arrange(a, &source, &.{});
+    defer arranged.deinit();
+    try std.testing.expectEqual(@as(usize, 3), arranged.data.len);
+    const Pack = @import("PackFile.zig");
+    const bytes = try Pack.write(a, &arranged.set, &.{});
+    defer a.free(bytes);
+    var read_back = try Pack.read(a, bytes);
+    defer read_back.deinit();
+    var mutable: usize = 0;
+    for (read_back.set.excerpts[0].data) |item| {
+        if (!item.is_mutable) continue;
+        mutable += 1;
+        try std.testing.expect(std.mem.eql(u8, item.name, "site_a") or std.mem.eql(u8, item.name, "site_b"));
+    }
+    try std.testing.expectEqual(@as(usize, 2), mutable);
 }

@@ -100,6 +100,9 @@ events: std.ArrayListUnmanaged(HostEvent) = .empty,
 /// The address range of the generated code this host runs.
 code_start: usize = 0,
 code_end: usize = 0,
+/// The loaded objects a linked program's code calls into, which a failure's
+/// frames run through too. Borrowed from the evaluation.
+linked_code: []const []const u8 = &.{},
 /// The frame that called into generated code; every generated frame lies
 /// below it on the stack.
 entry_frame: usize = 0,
@@ -170,14 +173,20 @@ pub fn noteStackOverflow(self: *CompileTimeHost) void {
     self.termination = .crashed;
 }
 
-/// Set the generated code this host runs, for locating its failures.
-pub fn setGeneratedCode(self: *CompileTimeHost, code: []const u8) void {
+/// Set the generated code this host runs, for locating its failures, and
+/// the loaded objects it calls into.
+pub fn setGeneratedCode(self: *CompileTimeHost, code: []const u8, linked_code: []const []const u8) void {
     self.code_start = @intFromPtr(code.ptr);
     self.code_end = self.code_start + code.len;
+    self.linked_code = linked_code;
 }
 
 fn inGeneratedCode(self: *const CompileTimeHost, address: usize) bool {
-    return address >= self.code_start and address < self.code_end;
+    if (address >= self.code_start and address < self.code_end) return true;
+    for (self.linked_code) |code| {
+        if (address >= @intFromPtr(code.ptr) and address < @intFromPtr(code.ptr) + code.len) return true;
+    }
+    return false;
 }
 
 /// Every return address into generated code on the frame-pointer chain that

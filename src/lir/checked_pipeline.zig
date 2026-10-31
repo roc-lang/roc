@@ -46,34 +46,53 @@ const checked = check.CheckedModule;
 /// Committed ordinary-data layouts for checked source ABI requests.
 pub const CheckedAbiLayouts = struct {
     allocator: Allocator,
-    layouts: @import("layout").Store,
+    lowered: LoweredProgram,
     roots: []const @import("layout").Idx,
+
+    /// The layout store every root layout belongs to.
+    pub fn layouts(self: *CheckedAbiLayouts) *@import("layout").Store {
+        return &self.lowered.lir_result.layouts;
+    }
 
     pub fn deinit(self: *CheckedAbiLayouts) void {
         self.allocator.free(self.roots);
-        self.layouts.deinit();
+        self.lowered.deinit();
     }
 };
 
-/// Resolve public data layouts without running procedure specialization or LIR
-/// lowering. Requests and results have the same order and share one layout store.
+/// Resolve public data layouts for checked source ABI requests. Requests and
+/// results have the same order and share one layout store. Every ABI fact a
+/// caller reads is an explicit width query, so `target_usize` only sizes the
+/// store.
 pub fn resolveCheckedAbiLayouts(
     allocator: Allocator,
     modules: CheckedModuleSet,
     requests: []const checked.CheckedTypeId,
     target_usize: base.target.TargetUsize,
-) Allocator.Error!CheckedAbiLayouts {
-    var plan = try postcheck.Boxy.Plan.analyzeHostAbi(allocator, .{
-        .root_module = modules.root,
-        .imports = modules.imports,
-        .layout_requests = requests,
-    });
-    defer plan.deinit();
-    var layouts = try @import("layout").Store.init(allocator, target_usize);
-    errdefer layouts.deinit();
-    const roots = try postcheck.Boxy.Layouts.commitHostAbi(allocator, &plan, &layouts);
-    return .{ .allocator = allocator, .layouts = layouts, .roots = roots };
+) LowerResourceError!CheckedAbiLayouts {
+    var lowered = try lowerCheckedModulesToLir(
+        allocator,
+        modules,
+        .{ .layout_requests = requests },
+        .{ .target_usize = target_usize, .specialization_strategy = .lss, .layout_request_const_plans = false },
+    );
+    errdefer lowered.deinit();
+    const roots = try allocator.alloc(@import("layout").Idx, requests.len);
+    errdefer allocator.free(roots);
+    for (requests, roots) |request, *root| {
+        root.* = for (lowered.lir_result.requested_layouts.items) |served| {
+            if (served.checked_type == request) break served.layout_idx;
+        } else checkedPipelineInvariant("lowering served no layout for a requested checked ABI type");
+    }
+    return .{ .allocator = allocator, .lowered = lowered, .roots = roots };
 }
+
+/// The export interfaces a `.boxy` module unit compiles its calls against.
+pub const BoxyExportInterfaces = postcheck.Boxy.Lower.ExportInterfaces;
+/// What reading a `.boxy` program's function values takes after lowering.
+pub const BoxyStoredFunctions = postcheck.Boxy.StoredFn.Retained;
+/// The names the modules of one link give their workers and nominal types.
+pub const BoxyModuleNames = postcheck.Boxy.Types.ModuleNames;
 
 /// Resource failure while lowering checked modules to LIR, plus the one
 /// checked input this entrance rejects outright: see
@@ -169,6 +188,16 @@ pub const TargetConfig = struct {
     /// Monotype records what each one reads of compile-time evaluation
     /// (`SpecComptimeReads`).
     spec_comptime_reads: bool = false,
+    /// For `.boxy`: the module whose object this lowering emits, with every
+    /// other module's worker an imported symbol (design.md "Per-Module
+    /// Output"); null lowers everything the roots reach as one program.
+    boxy_unit: ?postcheck.Boxy.Lower.ModuleUnit = null,
+    /// A `.boxy` lowering of a compile-time evaluator's roots
+    /// (`postcheck.Boxy.Lower.Input.compile_time`).
+    boxy_compile_time: bool = false,
+    /// With `boxy_compile_time`, the roots hold function values
+    /// (`postcheck.Boxy.Lower.Input.stored_functions`).
+    boxy_stored_functions: bool = false,
     /// The compilation session evaluates the program's literal roots.
     literal_roots: bool = false,
     /// With `literal_roots`, the literal values an earlier compilation of the
@@ -182,6 +211,10 @@ pub const TargetConfig = struct {
     /// Optional ARC mode specialization belongs to the consumer's optimization
     /// policy, independently of whether source wrappers are inlined.
     specialize_arc_modes: bool = false,
+    /// ARC's static uniqueness proofs. They only remove runtime refcount
+    /// checks, so optimized consumers enable them and the rest keep the
+    /// checks and skip the analysis.
+    prove_uniqueness: bool = false,
     /// Direct-call inlining scope for SpecConstr's value-aware clones.
     /// Optimized builds use `.all_calls`; dev builds use `.iterator_fusion`
     /// so post-check time and emitted program size stay bounded. Consulted
@@ -368,13 +401,14 @@ pub const Timing = struct {
     monotype_parallel_within_lowering_lane_reuse_tasks: TimingCounter = .{},
     monotype_parallel_peak_specialization_jobs_pending: TimingCounter = .{},
     monotype_parallel_peak_specialization_shards_retained: TimingCounter = .{},
-    boxy_plan_ns: TimingCounter = .{},
-    boxy_lower_ns: TimingCounter = .{},
     lift_ns: TimingCounter = .{},
     spec_constr_ns: TimingCounter = .{},
     lambda_solve_ns: TimingCounter = .{},
     inline_plan_ns: TimingCounter = .{},
     lir_gen_ns: TimingCounter = .{},
+    boxy_lowering_ns: TimingCounter = .{},
+    boxy_unit_codegen_ns: TimingCounter = .{},
+    boxy_unit_cache_ns: TimingCounter = .{},
     lir_passes_ns: TimingCounter = .{},
     arc_ns: TimingCounter = .{},
 
@@ -426,13 +460,14 @@ pub const Timing = struct {
                 .peak_specialization_jobs_pending = self.monotype_parallel_peak_specialization_jobs_pending.load(),
                 .peak_specialization_shards_retained = self.monotype_parallel_peak_specialization_shards_retained.load(),
             },
-            .boxy_plan_ns = self.boxy_plan_ns.load(),
-            .boxy_lower_ns = self.boxy_lower_ns.load(),
             .lift_ns = self.lift_ns.load(),
             .spec_constr_ns = self.spec_constr_ns.load(),
             .lambda_solve_ns = self.lambda_solve_ns.load(),
             .inline_plan_ns = self.inline_plan_ns.load(),
             .lir_gen_ns = self.lir_gen_ns.load(),
+            .boxy_lowering_ns = self.boxy_lowering_ns.load(),
+            .boxy_unit_codegen_ns = self.boxy_unit_codegen_ns.load(),
+            .boxy_unit_cache_ns = self.boxy_unit_cache_ns.load(),
             .lir_passes_ns = self.lir_passes_ns.load(),
             .arc_ns = self.arc_ns.load(),
             .monotype_diagnostics = diagnostics,
@@ -484,13 +519,14 @@ pub const Timing = struct {
         self.addLirPassParallel(snapshot_value.lir_pass_parallel);
         self.addArcParallel(snapshot_value.arc_parallel);
         self.addDemand(snapshot_value.demand);
-        self.boxy_plan_ns.add(snapshot_value.boxy_plan_ns);
-        self.boxy_lower_ns.add(snapshot_value.boxy_lower_ns);
         self.lift_ns.add(snapshot_value.lift_ns);
         self.spec_constr_ns.add(snapshot_value.spec_constr_ns);
         self.lambda_solve_ns.add(snapshot_value.lambda_solve_ns);
         self.inline_plan_ns.add(snapshot_value.inline_plan_ns);
         self.lir_gen_ns.add(snapshot_value.lir_gen_ns);
+        self.boxy_lowering_ns.add(snapshot_value.boxy_lowering_ns);
+        self.boxy_unit_codegen_ns.add(snapshot_value.boxy_unit_codegen_ns);
+        self.boxy_unit_cache_ns.add(snapshot_value.boxy_unit_cache_ns);
         self.lir_passes_ns.add(snapshot_value.lir_passes_ns);
         self.arc_ns.add(snapshot_value.arc_ns);
         self.addMonotypeDiagnostics(snapshot_value.monotype_diagnostics);
@@ -510,10 +546,11 @@ pub const Timing = struct {
             .lambda_solve => self.lambda_solve_ns.add(elapsed_ns),
             .inline_plan => self.inline_plan_ns.add(elapsed_ns),
             .lir_gen => self.lir_gen_ns.add(elapsed_ns),
+            .boxy_lowering => self.boxy_lowering_ns.add(elapsed_ns),
+            .boxy_unit_codegen => self.boxy_unit_codegen_ns.add(elapsed_ns),
+            .boxy_unit_cache => self.boxy_unit_cache_ns.add(elapsed_ns),
             .lir_passes => self.lir_passes_ns.add(elapsed_ns),
             .arc => self.arc_ns.add(elapsed_ns),
-            .boxy_plan => self.boxy_plan_ns.add(elapsed_ns),
-            .boxy_lower => self.boxy_lower_ns.add(elapsed_ns),
         }
     }
 
@@ -654,42 +691,47 @@ pub const TimingSnapshot = struct {
     spec_constr_parallel: SpecConstrParallelMetrics = .{},
     lir_pass_parallel: LirPassParallelMetrics = .{},
     arc_parallel: ArcParallelMetrics = .{},
-    boxy_plan_ns: u64 = 0,
-    boxy_lower_ns: u64 = 0,
     lift_ns: u64 = 0,
     spec_constr_ns: u64 = 0,
     lambda_solve_ns: u64 = 0,
     inline_plan_ns: u64 = 0,
     lir_gen_ns: u64 = 0,
+    boxy_lowering_ns: u64 = 0,
+    boxy_unit_codegen_ns: u64 = 0,
+    boxy_unit_cache_ns: u64 = 0,
     lir_passes_ns: u64 = 0,
     arc_ns: u64 = 0,
     monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
     demand: DemandMetrics = .{},
 };
 
-const TimingPhase = enum {
+/// A post-check stage `--timings` itemizes on its own line.
+pub const TimingPhase = enum {
     monotype,
     lift,
     spec_constr,
     lambda_solve,
     inline_plan,
     lir_gen,
+    boxy_lowering,
+    /// Native code generation of a module unit's object (`compile.boxy_unit`).
+    boxy_unit_codegen,
+    /// Encoding and filing a module unit's object in the object cache.
+    boxy_unit_cache,
     lir_passes,
     arc,
-    boxy_plan,
-    boxy_lower,
 };
 
 /// One post-check stage in progress: records the stage for crash reports and,
 /// when timing is enabled, its duration. `end` is idempotent so a stage can end
 /// explicitly and still be covered by a `defer` on error paths.
-const PipelineStageScope = struct {
+pub const PipelineStageScope = struct {
     timing: ?*Timing = null,
     started_ns: i64 = 0,
     phase: TimingPhase,
     ice: ?base.ice_context.Guard,
 
-    fn begin(timing: ?*Timing, phase: TimingPhase) PipelineStageScope {
+    pub fn begin(timing: ?*Timing, phase: TimingPhase) PipelineStageScope {
         const ice = base.ice_context.enter(.{ .phase = .post_check, .stage = @tagName(phase) });
         const active = timing orelse return .{ .phase = phase, .ice = ice };
         return .{
@@ -700,7 +742,7 @@ const PipelineStageScope = struct {
         };
     }
 
-    fn end(self: *PipelineStageScope) void {
+    pub fn end(self: *PipelineStageScope) void {
         if (self.ice) |ice| {
             ice.leave();
             self.ice = null;
@@ -956,7 +998,6 @@ test "pipeline timing keeps aggregate Monotype worker work separate from wall ti
         .peak_specialization_jobs_pending = 42,
         .peak_specialization_shards_retained = 43,
     });
-    timing.addSnapshot(.{ .boxy_plan_ns = 43, .boxy_lower_ns = 47 });
 
     const snapshot_value = timing.snapshot();
     const parallel = snapshot_value.monotype_parallel;
@@ -974,8 +1015,6 @@ test "pipeline timing keeps aggregate Monotype worker work separate from wall ti
     try std.testing.expectEqual(@as(u64, 62), parallel.within_lowering_lane_reuse_tasks);
     try std.testing.expectEqual(@as(u64, 42), parallel.peak_specialization_jobs_pending);
     try std.testing.expectEqual(@as(u64, 43), parallel.peak_specialization_shards_retained);
-    try std.testing.expectEqual(@as(u64, 43), snapshot_value.boxy_plan_ns);
-    try std.testing.expectEqual(@as(u64, 47), snapshot_value.boxy_lower_ns);
 }
 
 /// Whether the root checked module is complete or inside checking finalization.
@@ -1135,6 +1174,7 @@ pub const SolvedPolicy = struct {
 /// under. A consumer continuing a shared Solved program brings its own.
 pub const LirPolicy = struct {
     specialize_arc_modes: bool,
+    prove_uniqueness: bool,
     consume_dead_boxes: bool,
     zero_dict_seed: bool,
     list_in_place_map: bool,
@@ -1321,8 +1361,11 @@ pub const LoweredProgram = struct {
     frozen_static_data: ?LirProgram.FrozenStaticData = null,
     /// See `TargetConfig.spec_comptime_reads`.
     spec_comptime_reads: ?SpecComptimeReads = null,
+    /// See `TargetConfig.boxy_stored_functions`.
+    boxy_functions: ?*postcheck.Boxy.StoredFn.Retained = null,
 
     pub fn deinit(self: *LoweredProgram) void {
+        if (self.boxy_functions) |retained| retained.deinit();
         if (self.spec_comptime_reads) |*reads| reads.deinit();
         if (self.frozen_static_data) |*data| data.deinit();
         self.runtime_value_schemas.deinit();
@@ -1476,6 +1519,7 @@ pub fn lowerCheckedModulesToLir(
     if (target.specialization_strategy == .lss) {
         return lowerPreparedMonotypeToLir(try prepareCheckedModulesMonotype(allocator, modules, roots, target));
     }
+    // Lowered outside a program session, nothing evaluated its literals.
     var prepared = try prepareBoxyCheckedModules(allocator, modules, roots, target);
     defer prepared.deinit();
     return prepared.lower(target);
@@ -2066,6 +2110,7 @@ fn finishLoweredOutput(
     var arc_roots = std.ArrayList(LIR.LirProcSpecId).empty;
     defer arc_roots.deinit(allocator);
     try arc_roots.appendSlice(allocator, lowered.lir_result.root_procs.items);
+    try arc_roots.appendSlice(allocator, lowered.lir_result.exported_procs.items);
     if (frozen.*) |data| {
         var seen = try allocator.alloc(bool, lowered.lir_result.store.procSpecCount());
         defer allocator.free(seen);
@@ -2081,6 +2126,7 @@ fn finishLoweredOutput(
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = arc_roots.items,
         .specialize = target.specialize_arc_modes,
+        .prove_uniqueness = target.prove_uniqueness,
         .consume_dead_boxes = target.consume_dead_boxes,
         .thread_confined_rc = target.thread_confined_rc,
         .post_check_executor = if (target.post_check_executor) |*executor| executor else null,
@@ -2089,7 +2135,7 @@ fn finishLoweredOutput(
     if (target.timing) |timing| timing.addArcParallel(arc_metrics.?.*);
     arc_timing_scope.end();
 
-    try TailDrive.run(allocator, &lowered.lir_result.store, &.{ arc_roots.items, lowered.lir_result.boxy_worker_procs.items });
+    try TailDrive.run(allocator, &lowered.lir_result.store, &.{arc_roots.items});
 
     // ARC settled every read that named a fresh form, so a fresh-form
     // procedure no read chose is now unreferenced.
@@ -2138,54 +2184,64 @@ fn finishLoweredOutput(
     };
 }
 
-/// Boxy's target-independent plan is shared by host literal evaluation and
-/// target lowering. This ownership boundary is used only by Boxy consumers.
+/// The values compile-time evaluation converted a `.boxy` program's
+/// instance-dependent literals to (design.md "Literal Tables").
+/// The checked inputs of one `.boxy` lowering, validated once before any
+/// lowering begins (design.md "`.boxy` Runtime Lowering").
 pub const PreparedBoxy = struct {
     allocator: Allocator,
     modules: CheckedModuleSet,
     roots: RootRequestSet,
     layout_requests: []const checked.CheckedTypeId,
     static_data_requests: []const postcheck.Common.StaticDataRequest,
-    plan: postcheck.Boxy.Plan.ProgramPlan,
 
     pub fn deinit(self: *PreparedBoxy) void {
-        self.plan.deinit();
         self.allocator.free(self.layout_requests);
         self.allocator.free(self.static_data_requests);
         self.* = undefined;
     }
 
-    pub fn hasLiteralRoots(self: *const PreparedBoxy) bool {
-        return if (self.plan.literal_evidence) |*evidence| evidence.initializers.items.len != 0 else false;
-    }
-
     pub fn lower(self: *const PreparedBoxy, target: TargetConfig) LowerResourceError!LoweredProgram {
         std.debug.assert(target.specialization_strategy == .boxy);
-        var scope = PipelineStageScope.begin(target.timing, .boxy_lower);
-        defer scope.end();
-        var lowered = try postcheck.Boxy.Lower.run(
-            self.allocator,
-            checkedModules(self.modules),
-            rootRequests(self.roots, self.layout_requests, self.static_data_requests),
-            &self.plan,
-            .{
-                .target_usize = target.target_usize,
-                .list_in_place_map = target.list_in_place_map,
-                .proc_debug_names = target.proc_debug_names,
-                .host_boundary_digests = target.host_boundary_digests,
-                .observe_expects = self.roots.test_plan_metadata.len != 0,
+        const allocator = self.allocator;
+        var boxy_timing_scope = PipelineStageScope.begin(target.timing, .boxy_lowering);
+        var output = try postcheck.Boxy.run(allocator, .{
+            .modules = checkedModules(self.modules),
+            .roots = rootRequests(self.roots, self.layout_requests, self.static_data_requests),
+            .target_usize = target.target_usize,
+            .inline_expects = switch (target.inline_expects) {
+                .run => .run,
+                .omit => .omit,
             },
-        );
-        errdefer lowered.deinit();
-        lowered.lir_result.erased_capture_prefix = target.erased_capture_prefix;
-        scope.end();
-        var frozen: ?LirProgram.FrozenStaticData = null;
-        return finishLoweredOutput(self.allocator, self.roots.requests.len, target, &lowered, &frozen);
+            .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
+            .list_in_place_map = target.list_in_place_map,
+            .host_boundary_digests = target.host_boundary_digests,
+            .compile_time = target.boxy_compile_time,
+            .stored_functions = target.boxy_stored_functions,
+            .unit = if (target.boxy_unit) |unit| .{ .module = unit } else .program,
+        });
+        boxy_timing_scope.end();
+        try LirDump.run(&output.lir_result);
+        var lowered: struct {
+            lir_result: LirProgram.Result,
+            runtime_schemas: postcheck.SolvedLirLower.RuntimeSchemaStore,
+        } = .{
+            .lir_result = output.lir_result,
+            .runtime_schemas = postcheck.SolvedLirLower.RuntimeSchemaStore.init(allocator),
+        };
+        defer lowered.runtime_schemas.deinit();
+        var frozen: ?LirProgram.FrozenStaticData = .{ .allocator = allocator, .exports = output.static_data };
+        const retained = output.retained;
+        errdefer if (retained) |kept| kept.deinit();
+        output = undefined;
+        var program = try finishLoweredOutput(allocator, self.roots.requests.len, target, &lowered, &frozen);
+        program.boxy_functions = retained;
+        return program;
     }
 };
 
-/// Validate the checked boundary for a Boxy build and plan the Boxy program
-/// for these roots, before any lowering.
+/// Validate the checked boundary for a `.boxy` build and collect its requests,
+/// before any lowering.
 pub fn prepareBoxyCheckedModules(
     allocator: Allocator,
     modules: CheckedModuleSet,
@@ -2199,23 +2255,12 @@ pub fn prepareBoxyCheckedModules(
     errdefer allocator.free(layout_requests);
     const static_data_requests = try collectStaticDataRequests(allocator, modules.root.module, roots.static_data_requests, roots.include_provided_data_exports);
     errdefer allocator.free(static_data_requests);
-    var scope = PipelineStageScope.begin(target.timing, .boxy_plan);
-    defer scope.end();
-    const plan = try postcheck.Boxy.Plan.analyzeProgram(allocator, .{
-        .root_module = modules.root,
-        .imports = modules.imports,
-        .roots = roots.requests,
-        .source_modules = roots.source_modules,
-        .layout_requests = layout_requests,
-        .static_data_requests = static_data_requests,
-    }, .{});
     return .{
         .allocator = allocator,
         .modules = modules,
         .roots = roots,
         .layout_requests = layout_requests,
         .static_data_requests = static_data_requests,
-        .plan = plan,
     };
 }
 

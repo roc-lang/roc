@@ -30,6 +30,7 @@ const TaskExecutor = base.post_check_task_executor;
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
+const DynOps = core.DynOps;
 const GuardedList = collections.GuardedList;
 const Allocator = std.mem.Allocator;
 
@@ -77,45 +78,6 @@ pub fn encodeProjection(op: LIR.RefOp) ?Projection {
         .tag_payload_struct => .{ .kind = .tag_payload_struct, .first = op.variant_index, .second = 0 },
         .local, .discriminant, .list_reinterpret, .nominal => null,
     };
-}
-
-/// Cycle-safe check for whether a layout may hold descriptor-driven dynamic
-/// (`erased_box`) content. Recursive tag unions reference themselves through
-/// their layout indices, so the walk tracks visited indices; `visited` and
-/// `stack` are caller-owned scratch reused across queries.
-pub fn layoutMayContainBoxyDynamic(
-    allocator: Allocator,
-    layouts: *const layout_mod.Store,
-    layout_idx: layout_mod.Idx,
-    visited: *collections.DenseMap(layout_mod.Idx, void),
-    stack: *std.ArrayList(layout_mod.Idx),
-) Error!bool {
-    visited.clearRetainingCapacity();
-    stack.clearRetainingCapacity();
-    try stack.append(allocator, layout_idx);
-    while (stack.pop()) |idx| {
-        if ((try visited.getOrPut(idx)).found_existing) continue;
-        const layout_val = layouts.getLayout(idx);
-        switch (layout_val.tag) {
-            .erased_box => return true,
-            .box, .list => try stack.append(allocator, layout_val.getIdx()),
-            .list_of_zst, .box_of_zst, .zst, .hole, .scalar, .erased_callable, .ptr => {},
-            .struct_ => {
-                const info = layouts.getStructInfo(layout_val);
-                for (0..info.fields.len) |index| {
-                    try stack.append(allocator, info.fields.get(@intCast(index)).layout);
-                }
-            },
-            .tag_union => {
-                const info = layouts.getTagUnionInfo(layout_val);
-                for (0..info.variants.len) |index| {
-                    try stack.append(allocator, info.variants.get(@intCast(index)).payload_layout);
-                }
-            },
-            .closure => try stack.append(allocator, layout_val.getClosure().captures_layout_idx),
-        }
-    }
-    return false;
 }
 
 fn structFieldBySemanticIndex(layouts: *const layout_mod.Store, struct_layout: layout_mod.Layout, field_idx: u32) ?layout_mod.StructField {
@@ -582,11 +544,6 @@ const Analysis = struct {
     /// so the take dataflow rejects takes such a mention could follow.
     mention_heads: []u32,
     mention_edges: std.ArrayList(MentionEdge) = .empty,
-    /// Per-layout answers of `layoutMayContainBoxyDynamic` for field layouts
-    /// the gate has asked about, and the scratch that answers them.
-    boxy_dynamic_layouts: collections.DenseMap(layout_mod.Idx, bool),
-    layout_visited: collections.DenseMap(layout_mod.Idx, void),
-    layout_stack: std.ArrayList(layout_mod.Idx) = .empty,
 
     fn deinit(self: *Analysis) void {
         var it = self.candidates.valueIterator();
@@ -615,13 +572,10 @@ const Analysis = struct {
         self.gpa.free(self.mention_heads);
         self.mention_edges.deinit(self.gpa);
         self.gpa.free(self.state);
-        self.boxy_dynamic_layouts.deinit();
-        self.layout_visited.deinit();
-        self.layout_stack.deinit(self.gpa);
     }
 
     /// Whether the local's layout and binding shape could ever benefit from
-    /// dismantling. Cheap: layout answers are memoized per field layout, and the
+    /// dismantling. Cheap: it reads only the field layouts, and the
     /// full per-candidate work only happens for locals that pass.
     fn passesGate(self: *Analysis, local: LIR.LocalId) Error!bool {
         const local_index = @backingInt(local);
@@ -634,25 +588,11 @@ const Analysis = struct {
         if (self.solution.maybeUninitializedCondition(local) != null) return false;
 
         const info = self.layouts.getStructInfo(local_layout);
-        var any_rc = false;
         for (0..info.fields.len) |i| {
             const field = info.fields.get(@intCast(i));
-            if (self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) {
-                any_rc = true;
-                // A residual field is released through its layout's RC
-                // helper. Descriptor-driven (`erased_box`) content has no
-                // layout helper; its container is released whole instead.
-                if (try self.fieldLayoutIsBoxyDynamic(field.layout)) return false;
-            }
+            if (self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) return true;
         }
-        return any_rc;
-    }
-
-    fn fieldLayoutIsBoxyDynamic(self: *Analysis, layout_idx: layout_mod.Idx) Error!bool {
-        if (self.boxy_dynamic_layouts.get(layout_idx)) |known| return known;
-        const answer = try layoutMayContainBoxyDynamic(self.gpa, self.layouts, layout_idx, &self.layout_visited, &self.layout_stack);
-        try self.boxy_dynamic_layouts.put(layout_idx, answer);
-        return answer;
+        return false;
     }
 
     fn entryOf(self: *Analysis, local: LIR.LocalId) Error!?*Candidate {
@@ -1110,19 +1050,6 @@ const FutureFields = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -1143,6 +1070,7 @@ const FutureFields = struct {
                 .str_match_set,
                 .ret,
                 .crash,
+                .dyn,
                 => for (self.stack.items[reached..]) |next| try self.addPredecessor(gpa, cursor, next, .plain, 0),
             }
         }
@@ -1296,19 +1224,6 @@ fn fieldObservedAfter(
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -1329,6 +1244,7 @@ fn fieldObservedAfter(
             .str_match_set,
             .ret,
             .crash,
+            .dyn,
             => try body_clone.appendSuccessors(store, &work, cursor, gpa),
         }
     }
@@ -1855,7 +1771,7 @@ const ComponentDominance = struct {
         defer stmts.deinit(gpa);
         const procs = self.component_procs[self.component_offsets[component]..self.component_offsets[component + 1]];
         for (procs) |proc| {
-            for (self.solution.procStatements(store, @fromBackingInt(@intCast(proc)))) |stmt_id| {
+            for (self.solution.procStatements(@fromBackingInt(@intCast(proc)))) |stmt_id| {
                 const dense = &self.dense[@backingInt(stmt_id)];
                 if (dense.* != no_index) continue;
                 dense.* = @intCast(stmts.items.len);
@@ -1951,7 +1867,7 @@ test "component dominance agrees with whole-store dominance across shared proced
     const rc = try gpa.alloc(bool, store.localCount());
     defer gpa.free(rc);
     @memset(rc, false);
-    var solution = try arc_solve.solve(gpa, &store, &layouts, rc, .{}, &.{}, true);
+    var solution = try arc_solve.solve(gpa, &store, &layouts, rc, &.{}, true);
     defer solution.deinit();
 
     const stmt_first_proc = try gpa.alloc(u32, store.cfStmtCount());
@@ -1965,7 +1881,7 @@ test "component dominance agrees with whole-store dominance across shared proced
     defer successors.deinit(gpa);
     for (0..store.procSpecCount()) |proc_index| {
         const proc: u32 = @intCast(proc_index);
-        for (solution.procStatements(&store, @fromBackingInt(proc))) |stmt_id| {
+        for (solution.procStatements(@fromBackingInt(proc))) |stmt_id| {
             const index = @backingInt(stmt_id);
             if (stmt_first_proc[index] != no_index) {
                 components.unite(stmt_first_proc[index], proc);
@@ -2124,83 +2040,6 @@ fn classifyStatement(
             if (stmt.reuse) |reuse| try analysis.useWhole(current, reuse);
             try analysis.noteDef(inline_stmt.target, current);
         },
-        .assign_boxy_desc_ref => |inline_stmt| {
-            const stmt = store.stmtRow(inline_stmt.data);
-            if (stmt.desc.localOrNull()) |local| try analysis.useWhole(current, local);
-            if (stmt.tag_residual_for) |desc| if (desc.localOrNull()) |local| try analysis.useWhole(current, local);
-            const captures = store.getLocalSpan(stmt.captures);
-            for (0..GuardedList.borrowLen(captures)) |i| try analysis.useWhole(current, GuardedList.at(captures, i));
-            try analysis.noteDef(inline_stmt.target, current);
-            analysis.disqualify(inline_stmt.target);
-        },
-        .assign_boxy_dict_ref => |stmt| {
-            if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
-            const captures = store.getLocalSpan(stmt.captures);
-            for (0..GuardedList.borrowLen(captures)) |i| try analysis.useWhole(current, GuardedList.at(captures, i));
-            try analysis.noteDef(stmt.target, current);
-            analysis.disqualify(stmt.target);
-        },
-        .assign_boxy_box => |inline_stmt| {
-            const stmt = store.stmtRow(inline_stmt.data);
-            try analysis.useWhole(current, stmt.payload);
-            try analysis.noteDef(inline_stmt.target, current);
-            analysis.disqualify(inline_stmt.target);
-        },
-        .assign_boxy_record_update => |inline_stmt| {
-            const stmt = store.stmtRow(inline_stmt.data);
-            try analysis.useWhole(current, stmt.base);
-            try analysis.useWhole(current, stmt.fields);
-            try analysis.noteDef(inline_stmt.target, current);
-            analysis.disqualify(inline_stmt.target);
-        },
-        inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect => |stmt_stmt| {
-            const stmt = store.stmtRow(stmt_stmt.data);
-            try analysis.useWhole(current, stmt.source);
-            try analysis.noteDef(stmt_stmt.target, current);
-            analysis.disqualify(stmt_stmt.target);
-        },
-        .assign_boxy_eq => |inline_stmt| {
-            const stmt = store.stmtRow(inline_stmt.data);
-            try analysis.useWhole(current, stmt.lhs);
-            try analysis.useWhole(current, stmt.rhs);
-            try analysis.noteDef(inline_stmt.target, current);
-            analysis.disqualify(inline_stmt.target);
-        },
-        .assign_boxy_hash => |inline_stmt| {
-            const stmt = store.stmtRow(inline_stmt.data);
-            try analysis.useWhole(current, stmt.value);
-            try analysis.useWhole(current, stmt.hasher);
-            try analysis.noteDef(inline_stmt.target, current);
-            analysis.disqualify(inline_stmt.target);
-        },
-        .assign_boxy_tag => |inline_stmt| {
-            const stmt = store.stmtRow(inline_stmt.data);
-            if (stmt.payload) |payload| try analysis.useWhole(current, payload);
-            try analysis.noteDef(inline_stmt.target, current);
-            analysis.disqualify(inline_stmt.target);
-        },
-        .assign_boxy_tag_payload => |inline_stmt| {
-            const stmt = store.stmtRow(inline_stmt.data);
-            try analysis.useWhole(current, stmt.source);
-            try analysis.noteDef(inline_stmt.target, current);
-            analysis.disqualify(inline_stmt.target);
-            if (stmt.target_desc) |target_desc| {
-                try analysis.noteDef(target_desc, current);
-                analysis.disqualify(target_desc);
-            }
-        },
-        .assign_call_dict => |inline_stmt| {
-            const stmt = store.stmtRow(inline_stmt.data);
-            if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
-            const args = store.getLocalSpan(stmt.args);
-            for (0..GuardedList.borrowLen(args)) |i| try analysis.useWhole(current, GuardedList.at(args, i));
-            const arg_descs = store.getLocalSpan(stmt.arg_descs);
-            for (0..GuardedList.borrowLen(arg_descs)) |i| try analysis.useWhole(current, GuardedList.at(arg_descs, i));
-            const hidden_args = store.getLocalSpan(stmt.hidden_args);
-            for (0..GuardedList.borrowLen(hidden_args)) |i| try analysis.useWhole(current, GuardedList.at(hidden_args, i));
-            try analysis.noteDef(inline_stmt.target, current);
-            analysis.disqualify(inline_stmt.target);
-        },
         .assign_low_level => |stmt| {
             const args = store.getLocalSpan(stmt.args);
             for (0..GuardedList.borrowLen(args)) |i| {
@@ -2289,14 +2128,26 @@ fn classifyStatement(
                 }
             }
         },
-        .boxy_tag_match => |stmt| {
-            try analysis.useWhole(current, stmt.source);
-        },
         // Join parameters are excluded by the gate; the condition locals
         // are scalar presence words.
         .join => {},
         .ret => |stmt| try analysis.useWholeAt(stmt.value, current),
         .crash => |stmt| if (stmt.msg.localId()) |message| try analysis.useWholeAt(message, current),
+        // A dynamic value is opaque: every operand of a `dyn` statement is a
+        // whole use, so no container it touches dismantles.
+        .dyn => |stmt| {
+            const Use = struct {
+                analysis: *Analysis,
+                current: LIR.CFStmtId,
+
+                fn visit(self: *const @This(), operand: LIR.LocalId) Error!void {
+                    try self.analysis.useWhole(self.current, operand);
+                }
+            };
+            const use: Use = .{ .analysis = analysis, .current = current };
+            try DynOps.Operands.of(store.stmtRow(stmt.data)).each(store, &use, Use.visit);
+            if (stmt.target) |target| try analysis.noteDef(target, current);
+        },
     }
 }
 
@@ -2318,6 +2169,7 @@ const OperandUse = struct {
 fn operandSiteUse(
     store: *const LirStore,
     solution: *const arc_solve.Solution,
+    owner: LIR.LirProcSpecId,
     param_benefits: []const arc_sig.ParamMask,
     rc_local: []const bool,
     forest_mark: []const bool,
@@ -2336,9 +2188,12 @@ fn operandSiteUse(
                 if (found != null or position >= arc_sig.tracked_param_count or !rc_local[@backingInt(arg)]) return null;
                 if (@backingInt(solution.unitLocalOf(arg)) != root) return null;
                 const bit = arc_sig.paramBit(position).?;
+                // A borrowed position takes a field only through the
+                // callee's owned variant, which only a call within the
+                // callee's emission unit may demand.
                 const consumes = switch (sig.paramMode(position)) {
                     .owned => true,
-                    .borrowed => !solution.isPinnedProc(stmt.proc) and (param_benefits[@backingInt(stmt.proc)] & bit) != 0,
+                    .borrowed => !solution.isPinnedProc(stmt.proc) and arc_solve.sharesEmissionUnit(store, owner, stmt.proc) and (param_benefits[@backingInt(stmt.proc)] & bit) != 0,
                 };
                 if (!consumes) return null;
                 found = .{ .position = @intCast(position), .next = stmt.next };
@@ -2370,20 +2225,8 @@ fn operandSiteUse(
         .assign_literal,
         .assign_call_erased,
         .assign_packed_erased_fn,
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_record_update,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_boxy_eq,
-        .assign_boxy_hash,
-        .assign_boxy_tag,
-        .assign_boxy_tag_payload,
-        .boxy_tag_match,
-        .assign_call_dict,
         .assign_list,
+        .dyn,
         .assign_struct,
         .assign_tag,
         .store_struct,
@@ -2451,6 +2294,7 @@ fn collectBorrowForest(
 fn forestHasOperandSite(
     store: *const LirStore,
     solution: *const arc_solve.Solution,
+    owner: LIR.LirProcSpecId,
     analysis: *const Analysis,
     param_benefits: []const arc_sig.ParamMask,
     rc_local: []const bool,
@@ -2464,7 +2308,7 @@ fn forestHasOperandSite(
             const edge = analysis.mention_edges.items[mention];
             mention = edge.next;
             const stmt: LIR.CFStmtId = @fromBackingInt(@intCast(edge.stmt));
-            if (operandSiteUse(store, solution, param_benefits, rc_local, forest_mark, root, stmt) != null) return true;
+            if (operandSiteUse(store, solution, owner, param_benefits, rc_local, forest_mark, root, stmt) != null) return true;
         }
     }
     return false;
@@ -2602,19 +2446,6 @@ const StatementFacts = struct {
                 .assign_literal,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -2638,6 +2469,7 @@ const StatementFacts = struct {
                 .jump,
                 .ret,
                 .crash,
+                .dyn,
                 => {},
             }
         }
@@ -2852,7 +2684,7 @@ pub fn compute(
     defer dominance.deinit(gpa);
     for (0..store.procSpecCount()) |proc_index| {
         const proc: u32 = @intCast(proc_index);
-        for (solution.procStatements(store, @fromBackingInt(proc))) |stmt_id| {
+        for (solution.procStatements(@fromBackingInt(proc))) |stmt_id| {
             const stmt_index = @backingInt(stmt_id);
             reachable.set(stmt_index);
             const owner = stmt_proc[stmt_index];
@@ -2990,8 +2822,6 @@ pub fn compute(
         .projected_container = projected_container,
         .explicit_init_join = explicit_init_join,
         .mention_heads = try gpa.alloc(u32, store.localCount()),
-        .boxy_dynamic_layouts = collections.DenseMap(layout_mod.Idx, bool).init(gpa),
-        .layout_visited = collections.DenseMap(layout_mod.Idx, void).init(gpa),
     };
     defer analysis.deinit();
     @memset(analysis.state, .unknown);
@@ -3016,7 +2846,7 @@ pub fn compute(
         proc_cursor -= 1;
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_cursor))));
         const proc_params = store.getLocalSpan(store.getProcSpecImmediate(proc_id).args);
-        for (solution.procStatements(store, proc_id)) |current| {
+        for (solution.procStatements(proc_id)) |current| {
             const stmt_index = @backingInt(current);
             if (visited.isSet(stmt_index)) continue;
             visited.set(stmt_index);
@@ -3084,14 +2914,13 @@ pub fn compute(
     defer gpa.free(straight_next);
     for (straight_next, 0..) |*next, stmt_index| {
         next.* = switch (store.getCFStmtImmediate(@fromBackingInt(@intCast(stmt_index))).*) {
-            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |stmt| @backingInt(stmt.next),
+            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .dyn => |stmt| @backingInt(stmt.next),
             .set_local,
             .join,
             .switch_stmt,
             .jump,
             .switch_initialized_payload,
             .str_match,
-            .boxy_tag_match,
             .str_match_set,
             .ret,
             .crash,
@@ -3471,20 +3300,8 @@ pub fn compute(
                             analysis.projected_root[@backingInt(local)] != no_index or
                             (stmt.op.kind == .local and !solution.isBorrowed(local))) stmt.next else continue :candidates,
                         .set_local => continue :candidates,
+                        .dyn => |stmt| if (solution.isBorrowed(local)) continue :candidates else stmt.next,
                         .init_uninitialized,
-                        .assign_boxy_desc_ref,
-                        .assign_boxy_dict_ref,
-                        .assign_boxy_box,
-                        .assign_boxy_record_update,
-                        .assign_boxy_unbox,
-                        .assign_boxy_adapt,
-                        .assign_boxy_inspect,
-                        .assign_boxy_eq,
-                        .assign_boxy_hash,
-                        .assign_boxy_tag,
-                        .assign_boxy_tag_payload,
-                        .boxy_tag_match,
-                        .assign_call_dict,
                         .store_struct,
                         .store_tag,
                         .debug,
@@ -3510,11 +3327,6 @@ pub fn compute(
                     ((param_bodies.get(local) orelse continue :candidates) orelse continue :candidates)
                 else
                     continue :candidates;
-
-                // A container released through its Boxy descriptor has fields whose
-                // release needs that descriptor too, so they cannot be released one
-                // at a time from their layouts.
-                if (store.getLocal(local).boxy_desc != null) continue :candidates;
 
                 // Only refcounted fields carry stored units worth taking; a
                 // container with no refcounted take keeps its ordinary whole
@@ -3557,7 +3369,7 @@ pub fn compute(
                 if (owner == no_index or shared_stmts.isSet(first_read)) continue;
                 if (!joins_ready[owner]) {
                     joins_ready[owner] = true;
-                    try collectProcJoinBodies(store, solution.procStatements(store, @fromBackingInt(@intCast(owner))), &proc_joins[owner]);
+                    try collectProcJoinBodies(store, solution.procStatements(@fromBackingInt(@intCast(owner))), &proc_joins[owner]);
                     const proc_body = store.getProcSpec(@fromBackingInt(@intCast(owner))).body.?;
                     proc_graphs[owner] = try future_fields.buildProcGraph(gpa, store, &.{proc_body}, &proc_joins[owner]);
                 }
@@ -3579,7 +3391,7 @@ pub fn compute(
                     var demanded = false;
                     if (read.view and solution.isBorrowed(read.target)) {
                         try collectBorrowForest(gpa, store, &analysis, borrow_child_heads, borrow_child_edges.items, &borrow_stack, &forest, forest_mark, @backingInt(read.target));
-                        demanded = forestHasOperandSite(store, solution, &analysis, operand_benefits, rc_local, forest.items, forest_mark, @backingInt(read.target));
+                        demanded = forestHasOperandSite(store, solution, @fromBackingInt(@intCast(owner)), &analysis, operand_benefits, rc_local, forest.items, forest_mark, @backingInt(read.target));
                         for (forest.items) |borrower| forest_mark[borrower] = false;
                     }
                     try view_demand.append(gpa, demanded);
@@ -3688,7 +3500,7 @@ pub fn compute(
                                 const edge = analysis.mention_edges.items[mention];
                                 mention = edge.next;
                                 const stmt: LIR.CFStmtId = @fromBackingInt(@intCast(edge.stmt));
-                                const site_use = operandSiteUse(store, solution, operand_benefits, rc_local, forest_mark, target_index, stmt);
+                                const site_use = operandSiteUse(store, solution, @fromBackingInt(@intCast(owner)), operand_benefits, rc_local, forest_mark, target_index, stmt);
                                 const slot = try read_kinds.getOrPut(stmt);
                                 if (site_use) |use| {
                                     if (!slot.found_existing) {
@@ -3802,7 +3614,7 @@ pub fn compute(
                                     continue :chain;
                                 }
                                 switch (store.getCFStmtImmediate(cursor).*) {
-                                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+                                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .dyn => |stmt| cursor = stmt.next,
                                     .set_local => |stmt| {
                                         // The value operand above still observes the old
                                         // definition. Only the explicit write starts a fresh
@@ -3853,7 +3665,7 @@ pub fn compute(
                                         try flow_frames.append(gpa, .{ .cursor = stmt.initialized_branch, .state = state });
                                         cursor = stmt.uninitialized_branch;
                                     },
-                                    inline .str_match, .boxy_tag_match => |stmt| {
+                                    .str_match => |stmt| {
                                         try flow_frames.append(gpa, .{ .cursor = stmt.on_match, .state = state });
                                         cursor = stmt.on_miss;
                                     },

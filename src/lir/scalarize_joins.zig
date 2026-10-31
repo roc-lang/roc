@@ -16,9 +16,6 @@
 //! literal builds are deleted or replaced, and field reads become local
 //! aliases. Refcounted state then flows through pure alias chains that borrow
 //! inference turns into moves, and the wrapper disappears entirely.
-//! Descriptor-bearing wrappers remain aggregate because their field values are
-//! coupled to projections of the root descriptor; scalarizing them requires
-//! explicit per-field descriptor parameters as well as value parameters.
 //!
 //! A join's remainder (its run-once entry path) may enter the join without an
 //! `initialize_join_param` write for a parameter—a plain tail-call
@@ -43,6 +40,7 @@ const body_clone = @import("body_clone.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
+const DynOps = core.DynOps;
 const GuardedList = collections.GuardedList;
 const Allocator = std.mem.Allocator;
 
@@ -515,14 +513,6 @@ const Pass = struct {
         }
     }
 
-    fn noteDescUse(self: *Pass, desc: LIR.BoxyDescRef) ScalarizeError!void {
-        if (desc.localOrNull()) |local| try self.noteUse(local);
-    }
-
-    fn noteDictUse(self: *Pass, dict: LIR.BoxyDictRef) ScalarizeError!void {
-        if (dict.localOrNull()) |local| try self.noteUse(local);
-    }
-
     fn noteFieldRead(self: *Pass, source: LIR.LocalId, stmt: LIR.CFStmtId) ScalarizeError!void {
         try self.field_reads.note(source, stmt);
         if (self.struct_builds.getPtr(source)) |build| build.uses += 1;
@@ -553,7 +543,6 @@ const Pass = struct {
     fn isSameStruct(self: *const Pass, lhs: LIR.LocalId, rhs: LIR.LocalId) bool {
         const lhs_data = self.store.getLocal(lhs);
         const rhs_data = self.store.getLocal(rhs);
-        if (lhs_data.boxy_desc != null or rhs_data.boxy_desc != null) return false;
         if (lhs_data.layout_idx != rhs_data.layout_idx) return false;
         return self.layouts.getLayout(lhs_data.layout_idx).tag == .struct_;
     }
@@ -762,19 +751,6 @@ const Pass = struct {
                     .assign_call,
                     .assign_call_erased,
                     .assign_packed_erased_fn,
-                    .assign_boxy_desc_ref,
-                    .assign_boxy_dict_ref,
-                    .assign_boxy_box,
-                    .assign_boxy_record_update,
-                    .assign_boxy_unbox,
-                    .assign_boxy_adapt,
-                    .assign_boxy_inspect,
-                    .assign_boxy_eq,
-                    .assign_boxy_hash,
-                    .assign_boxy_tag,
-                    .assign_boxy_tag_payload,
-                    .boxy_tag_match,
-                    .assign_call_dict,
                     .assign_low_level,
                     .assign_list,
                     .assign_struct,
@@ -782,6 +758,7 @@ const Pass = struct {
                     .store_struct,
                     .store_tag,
                     .set_local,
+                    .dyn,
                     .debug,
                     .expect,
                     .expect_err,
@@ -957,7 +934,6 @@ const Pass = struct {
 
     fn singleVariantPayloadLayout(self: *const Pass, local: LIR.LocalId) ?layout_mod.Idx {
         const local_data = self.store.getLocal(local);
-        if (local_data.boxy_desc != null) return null;
         const local_layout = self.layouts.getLayout(local_data.layout_idx);
         if (local_layout.tag != .tag_union) return null;
         const info = self.layouts.getTagUnionInfo(local_layout);
@@ -1179,7 +1155,7 @@ const Pass = struct {
         const payload = site.payload orelse return false;
         if (site.variant_index != 0 or site.discriminant != 0) return false;
         const assign = self.store.getCFStmtImmediate(site.stmt).assign_tag;
-        if (assign.target_desc != .none or self.store.getLocal(payload).layout_idx != payload_layout) return false;
+        if (self.store.getLocal(payload).layout_idx != payload_layout) return false;
 
         var closure = try self.aliasClosureOf(local);
         defer closure.deinit(self.allocator);
@@ -1306,8 +1282,7 @@ const Pass = struct {
         for (direct_builds) |site| {
             const payload = site.payload orelse return false;
             if (site.variant_index != 0 or site.discriminant != 0) return false;
-            const assign = self.store.getCFStmtImmediate(site.stmt).assign_tag;
-            if (assign.target_desc != .none or self.store.getLocal(payload).layout_idx != payload_layout) return false;
+            if (self.store.getLocal(payload).layout_idx != payload_layout) return false;
         }
 
         var claimed = collections.DenseMap(LIR.CFStmtId, void).init(self.allocator);
@@ -1477,7 +1452,6 @@ const Pass = struct {
         const param_local = self.store.getLocal(param);
         const param_layout = self.layouts.getLayout(param_local.layout_idx);
         if (param_layout.tag != .struct_) return false;
-        if (param_local.boxy_desc != null) return false;
 
         const info = self.layouts.getStructInfo(param_layout);
         var field_count: usize = 0;
@@ -1918,19 +1892,6 @@ const Pass = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -1938,6 +1899,7 @@ const Pass = struct {
                 .store_struct,
                 .store_tag,
                 .set_local,
+                .dyn,
                 .debug,
                 .expect,
                 .expect_err,
@@ -2004,24 +1966,12 @@ const Pass = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .store_struct,
                 .store_tag,
                 .set_local,
+                .dyn,
                 .debug,
                 .expect,
                 .expect_err,
@@ -2099,9 +2049,6 @@ const Pass = struct {
                 .assign_literal => |assign| try self.noteWrite(assign.target),
                 .init_uninitialized => |initialize| try self.noteWrite(initialize.target),
                 .assign_call => |assign| {
-                    if (self.store.stmtRowOrDefault(assign.extra).result_desc) |result_desc| {
-                        if (result_desc.localOrNull()) |local| try self.noteUse(local);
-                    }
                     const args = self.store.getLocalSpan(assign.args);
                     for (0..args.len) |index| try self.noteUse(GuardedList.at(args, index));
                     try self.noteWrite(assign.target);
@@ -2109,113 +2056,15 @@ const Pass = struct {
                 .assign_call_erased => |assign_stmt| {
                     const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.closure);
-                    if (assign.result_desc) |result_desc| {
-                        if (result_desc.localOrNull()) |local| try self.noteUse(local);
-                    }
                     if (assign.reuse_source) |reuse_source| try self.noteUse(reuse_source);
                     const args = self.store.getLocalSpan(assign.args);
                     for (0..args.len) |index| try self.noteUse(GuardedList.at(args, index));
                     try self.noteWrite(assign_stmt.target);
-                    if (assign.out_desc) |out_desc| try self.noteWrite(out_desc);
                 },
                 .assign_packed_erased_fn => |assign_stmt| {
                     const assign = self.store.stmtRow(assign_stmt.data);
                     if (assign.capture) |capture| try self.noteUse(capture);
-                    if (assign.result_desc) |result_desc| {
-                        if (result_desc.localOrNull()) |local| try self.noteUse(local);
-                    }
                     if (assign.reuse) |reuse| try self.noteUse(reuse);
-                    try self.noteWrite(assign_stmt.target);
-                },
-                .assign_boxy_desc_ref => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteDescUse(assign.desc);
-                    if (assign.tag_residual_for) |desc| try self.noteDescUse(desc);
-                    const captures = self.store.getLocalSpan(assign.captures);
-                    for (0..GuardedList.borrowLen(captures)) |index| try self.noteUse(GuardedList.at(captures, index));
-                    try self.noteWrite(assign_stmt.target);
-                },
-                .assign_boxy_dict_ref => |assign| {
-                    try self.noteDictUse(assign.dict);
-                    const captures = self.store.getLocalSpan(assign.captures);
-                    for (0..GuardedList.borrowLen(captures)) |index| try self.noteUse(GuardedList.at(captures, index));
-                    try self.noteWrite(assign.target);
-                },
-                .assign_boxy_box => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteUse(assign.payload);
-                    if (assign.payload_desc) |desc| try self.noteDescUse(desc);
-                    try self.noteWrite(assign_stmt.target);
-                },
-                .assign_boxy_record_update => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteUse(assign.base);
-                    try self.noteUse(assign.fields);
-                    try self.noteDescUse(assign.base_desc);
-                    try self.noteDescUse(assign.fields_desc);
-                    try self.noteWrite(assign_stmt.target);
-                },
-                .assign_boxy_unbox => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteUse(assign.source);
-                    try self.noteDescUse(assign.source_desc);
-                    if (assign.target_desc) |desc| try self.noteDescUse(desc);
-                    try self.noteWrite(assign_stmt.target);
-                },
-                .assign_boxy_adapt => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteUse(assign.source);
-                    if (assign.source_desc) |desc| try self.noteDescUse(desc);
-                    if (assign.target_desc) |desc| try self.noteDescUse(desc);
-                    try self.noteWrite(assign_stmt.target);
-                },
-                .assign_boxy_inspect => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteUse(assign.source);
-                    try self.noteDescUse(assign.source_desc);
-                    try self.noteWrite(assign_stmt.target);
-                },
-                .assign_boxy_eq => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteUse(assign.lhs);
-                    try self.noteUse(assign.rhs);
-                    try self.noteDescUse(assign.desc);
-                    try self.noteWrite(assign_stmt.target);
-                },
-                .assign_boxy_hash => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteUse(assign.value);
-                    try self.noteUse(assign.hasher);
-                    try self.noteDescUse(assign.desc);
-                    try self.noteWrite(assign_stmt.target);
-                },
-                .assign_boxy_tag => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteDescUse(assign.target_desc);
-                    if (assign.payload) |payload| try self.noteUse(payload);
-                    if (assign.payload_desc) |desc| try self.noteDescUse(desc);
-                    try self.noteWrite(assign_stmt.target);
-                },
-                .assign_boxy_tag_payload => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteUse(assign.source);
-                    try self.noteDescUse(assign.source_desc);
-                    try self.noteWrite(assign_stmt.target);
-                    if (assign.target_desc) |target_desc| try self.noteWrite(target_desc);
-                },
-                .boxy_tag_match => |s| {
-                    try self.noteUse(s.source);
-                    try self.noteDescUse(self.store.stmtRow(s.source_desc));
-                },
-                .assign_call_dict => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteDictUse(assign.dict);
-                    const args = self.store.getLocalSpan(assign.args);
-                    for (0..GuardedList.borrowLen(args)) |index| try self.noteUse(GuardedList.at(args, index));
-                    const arg_descs = self.store.getLocalSpan(assign.arg_descs);
-                    for (0..GuardedList.borrowLen(arg_descs)) |index| try self.noteUse(GuardedList.at(arg_descs, index));
-                    const hidden_args = self.store.getLocalSpan(assign.hidden_args);
-                    for (0..GuardedList.borrowLen(hidden_args)) |index| try self.noteUse(GuardedList.at(hidden_args, index));
                     try self.noteWrite(assign_stmt.target);
                 },
                 .assign_low_level => |assign| {
@@ -2237,7 +2086,6 @@ const Pass = struct {
                     }
                 },
                 .assign_tag => |assign| {
-                    if (self.store.optionalStmtRow(assign.target_desc)) |target_desc| try self.noteDescUse(target_desc);
                     if (assign.payload) |payload| {
                         try self.noteUse(payload);
                         if (self.tag_builds.getPtr(payload)) |build| build.payload_uses += 1;
@@ -2251,6 +2099,10 @@ const Pass = struct {
                 .store_tag => |assign| {
                     try self.noteUse(assign.dest);
                     if (assign.payload) |payload| try self.noteUse(payload);
+                },
+                .dyn => |assign| {
+                    if (assign.target) |target| try self.noteWrite(target);
+                    try DynOps.Operands.of(self.store.stmtRow(assign.data)).each(self.store, self, noteUse);
                 },
                 .set_local => |assign| {
                     if (assign.mode == .initialize_join_param) {
@@ -2476,78 +2328,6 @@ fn testLiteralInitializedStruct(procedure_local: bool) (Allocator.Error || error
     // The text literal now flows straight to the first snapshot.
     const new_text_assign = store.getCFStmtImmediate(text_assign).assign_literal;
     try testing.expectEqual(set_state, new_text_assign.next);
-}
-
-test "scalarize keeps descriptor-bearing struct join parameters" {
-    var f = try ScalarizeTest.init(testing.allocator);
-    defer f.deinit();
-    f.store.runtime_contract = .boxy;
-    const store = &f.store;
-
-    const state = try store.addLocal(.{ .layout_idx = f.pair });
-    const state_desc = try store.addLocal(.{ .layout_idx = .opaque_ptr });
-    try store.setLocalBoxyDesc(state, .{ .local = state_desc });
-    const num = try store.addLocal(.{ .layout_idx = .i64 });
-    const text = try store.addLocal(.{ .layout_idx = .str });
-    const wrapper = try store.addLocal(.{ .layout_idx = f.pair });
-    const n = try store.addLocal(.{ .layout_idx = .i64 });
-    const s = try store.addLocal(.{ .layout_idx = .str });
-    const join_id = f.freshJoinPointId();
-
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = n } }, .test_fixture);
-    const read_s = try store.addCFStmt(.{ .assign_ref = .{
-        .target = s,
-        .op = .field(state, 1),
-        .next = ret,
-    } }, .test_fixture);
-    const read_n = try store.addCFStmt(.{ .assign_ref = .{
-        .target = n,
-        .op = .field(state, 0),
-        .next = read_s,
-    } }, .test_fixture);
-    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
-    const set_state = try store.addCFStmt(.{ .set_local = .{
-        .target = state,
-        .value = wrapper,
-        .mode = .initialize_join_param,
-        .next = jump,
-    } }, .test_fixture);
-    const build = try store.addCFStmt(.{ .assign_struct = .{
-        .target = wrapper,
-        .fields = try store.addLocalSpan(&.{ num, text }),
-        .next = set_state,
-    } }, .test_fixture);
-    const text_assign = try store.addCFStmt(.{ .assign_literal = .{
-        .target = text,
-        .value = .{ .str_literal = try store.insertStringView("x", 0, 1) },
-        .next = build,
-    } }, .test_fixture);
-    const num_assign = try store.addCFStmt(.{ .assign_literal = .{
-        .target = num,
-        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } },
-        .next = text_assign,
-    } }, .test_fixture);
-    const join = try store.addCFStmt(.{ .join = .{
-        .id = join_id,
-        .params = try store.addLocalSpan(&.{state}),
-        .body = read_n,
-        .remainder = num_assign,
-    } }, .test_fixture);
-    _ = try store.addProcSpec(.{
-        .name = store.freshSyntheticSymbol(),
-        .identity = LIR.ProcIdentity.forTest(11),
-        .args = try store.addLocalSpan(&.{state_desc}),
-        .body = join,
-        .ret_layout = .i64,
-    }, .none);
-
-    try run(store, &f.layouts);
-
-    const params = store.getLocalSpan(store.getCFStmtImmediate(join).join.params);
-    try testing.expectEqual(@as(usize, 1), params.len);
-    try testing.expectEqual(state, GuardedList.at(params, 0));
-    try testing.expectEqual(state, store.getCFStmtImmediate(read_n).assign_ref.op.source);
-    try testing.expectEqual(state, store.getCFStmtImmediate(read_s).assign_ref.op.source);
 }
 
 test "scalarize keeps parameters with whole-value uses" {

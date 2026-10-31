@@ -1,8 +1,8 @@
 //! Anonymous page mapping for the objects linked into standalone Roc programs.
 //!
-//! The default-platform runtimes and the boxy runtime both need read-write
-//! pages straight from the kernel, and both are linked into executables that
-//! carry no Zig standard library. On the systems whose default platform owns
+//! The default-platform runtimes need read-write pages straight from the
+//! kernel, and are linked into executables that carry no Zig standard
+//! library. On the systems whose default platform owns
 //! the process entrypoint (Linux and the BSDs) those executables link with
 //! `-nostdlib`, so `std.heap.page_allocator` is unavailable: its posix path
 //! reaches `mmap` through libc and pulls in the errno accessor. Those systems
@@ -11,9 +11,9 @@
 //! on macOS—and every executable on those systems already links the library
 //! that provides them, so they call it.
 //!
-//! Both mappings are shared rather than restated per consumer because a NetBSD
-//! program links the default-platform runtime and the boxy runtime together,
-//! and the assembly thunk NetBSD's `mmap` ABI needs may only be defined once.
+//! The mapping is shared rather than restated per consumer because the
+//! assembly thunk NetBSD's `mmap` ABI needs may only be defined once in a
+//! program.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -201,8 +201,8 @@ fn netBsdMmap(len: usize, fd: usize) usize {
 }
 
 comptime {
-    // Weak so that a program linking both the default-platform runtime and the
-    // boxy runtime—each carrying its own copy—resolves to one definition.
+    // Weak so that a program linking several objects that each carry a copy
+    // resolves to one definition.
     if (os == .netbsd) asm (
         \\.text
         \\.weak roc_raw_pages_netbsd_mmap

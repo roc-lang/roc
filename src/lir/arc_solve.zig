@@ -11,8 +11,7 @@
 //!
 //! - its single defining statement is borrow-capable: a payload read
 //!   (`assign_ref` with `.field`/`.tag_payload`/`.tag_payload_struct`), a
-//!   local alias (`.local`, `.list_reinterpret`, `.nominal`) whose source and
-//!   target use the same explicit Boxy RC descriptor, a low-level op
+//!   local alias (`.local`, `.list_reinterpret`, `.nominal`), a low-level op
 //!   whose `RcEffect.result_borrows_args` names exactly one refcounted
 //!   argument, or a call whose return borrows exactly one refcounted argument
 //! - no occurrence of the binding demands ownership: it is never an owned
@@ -59,6 +58,7 @@ const task_executor = @import("base").post_check_task_executor;
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
+const DynOps = core.DynOps;
 const GuardedList = collections.GuardedList;
 const Allocator = std.mem.Allocator;
 
@@ -101,6 +101,10 @@ pub const UniquenessMetrics = struct {
 
 /// A null executor uses the identical component solver on the calling thread.
 pub const UniquenessOptions = struct {
+    /// Settle the uniqueness analysis. Off, no local is proven unique and no
+    /// candidate read takes its fresh form, so every mutation keeps its
+    /// runtime check and every read stays the static datum.
+    prove: bool = true,
     executor: ?*const task_executor.Executor = null,
     metrics: ?*UniquenessMetrics = null,
 };
@@ -269,8 +273,12 @@ pub const Solution = struct {
     /// program's, so code compiled with the same body may still call its
     /// outcome variant (`outcomeSpanForCall`).
     stability_pinned: std.bit_set.DynamicBitSetUnmanaged = .{},
+    /// Every statement reachable from each proc, in the structural
+    /// depth-first order of `collectProcStatements`.
+    proc_statements: FrozenProcRows(LIR.CFStmtId) = .{},
     /// Store-shaped settlement inputs built by the first uniqueness
-    /// settlement and reused by every later one on this solution.
+    /// settlement and reused by every later one on this solution. Null when
+    /// the solve does not prove uniqueness.
     uniqueness_structure: ?*UniquenessStructure = null,
 
     pub fn deinit(self: *Solution) void {
@@ -283,6 +291,8 @@ pub const Solution = struct {
         self.allocator.free(self.sigs);
         self.allocator.free(self.outcomes);
         self.allocator.free(self.ret_conditions);
+        self.allocator.free(self.proc_statements.starts);
+        self.allocator.free(self.proc_statements.items);
         self.allocator.free(self.available_outcome_spans);
         self.allocator.free(self.restitution_params_by_stmt);
         self.allocator.free(self.unique_seed_masks);
@@ -382,17 +392,9 @@ pub const Solution = struct {
     }
 
     /// Every statement reachable from `proc`'s body, in the structural
-    /// depth-first order of `collectProcStatements`. The uniqueness structure
-    /// built by the solve owns these lists; the store must not have gained or
-    /// lost statements, locals, or procedures since.
-    pub fn procStatements(self: *const Solution, store: *const LirStore, proc: LIR.LirProcSpecId) []const LIR.CFStmtId {
-        const structure = self.uniqueness_structure orelse solveInvariant("ARC solution has no uniqueness structure");
-        if (structure.store != store or structure.stmt_count != store.cfStmtCount() or
-            structure.local_count != store.localCount() or structure.proc_count != store.procSpecCount())
-        {
-            solveInvariant("ARC procedure statements were read for a different store");
-        }
-        return structure.proc_stmts.of(@backingInt(proc));
+    /// depth-first order of `collectProcStatements`.
+    pub fn procStatements(self: *const Solution, proc: LIR.LirProcSpecId) []const LIR.CFStmtId {
+        return self.proc_statements.of(@backingInt(proc));
     }
 
     pub fn leaderOf(self: *const Solution, local: LIR.LocalId) LIR.LocalId {
@@ -512,6 +514,7 @@ pub const Solution = struct {
     pub fn outcomeSpanForCall(self: *const Solution, store: *const LirStore, caller: LIR.LirProcSpecId, callee: LIR.LirProcSpecId) arc_sig.OutcomeSpan {
         const index = @backingInt(callee);
         if (index < self.stability_pinned.capacity() and self.stability_pinned.isSet(index) and store.getProcSpec(caller).code_key == null) return .empty;
+        if (!sharesEmissionUnit(store, caller, callee)) return .empty;
         return self.availableOutcomeSpanOf(callee);
     }
 
@@ -612,12 +615,10 @@ const DefKind = union(enum) {
     borrow_capable: u32,
 };
 
-/// Classify committed representations once, in local order. Descriptors select
-/// dynamic RC behavior; their presence does not imply an ownership resource.
-/// Constructors and aliases preserve the RC shape already committed in layouts,
-/// including nested erased boxes, so classification requires no value-flow solve.
-/// Capture views participate here as borrow anchors; emission excludes them in
-/// its separate table. Certification independently classifies the final store.
+/// Classify committed representations once, in local order. Constructors and
+/// aliases preserve the RC shape already committed in layouts, so
+/// classification requires no value-flow solve. Certification independently
+/// classifies the final store.
 pub fn computeLocalContainsRefcounted(
     allocator: Allocator,
     store: *const LirStore,
@@ -842,7 +843,6 @@ const Solver = struct {
     allocator: Allocator,
     store: *const LirStore,
     rc_local: []const bool,
-    boxy_rc_descs: LirStore.LocalDescSnapshot,
     consume_dead_boxes: bool,
     /// Run the host-visibility analysis. Off, every local is visible.
     thread_confined_rc: bool,
@@ -913,11 +913,10 @@ pub fn solve(
     store: *const LirStore,
     layouts: *const layout_mod.Store,
     rc_local: []const bool,
-    boxy_rc_descs: LirStore.LocalDescSnapshot,
     roots: []const LIR.LirProcSpecId,
     consume_dead_boxes: bool,
 ) SolveError!Solution {
-    return solveWithOptions(allocator, store, layouts, rc_local, boxy_rc_descs, roots, consume_dead_boxes, true, .{});
+    return solveWithOptions(allocator, store, layouts, rc_local, roots, consume_dead_boxes, true, .{});
 }
 
 /// Solves ARC with optional component-parallel uniqueness execution.
@@ -926,7 +925,6 @@ pub fn solveWithOptions(
     store: *const LirStore,
     layouts: *const layout_mod.Store,
     rc_local: []const bool,
-    boxy_rc_descs: LirStore.LocalDescSnapshot,
     roots: []const LIR.LirProcSpecId,
     consume_dead_boxes: bool,
     thread_confined_rc: bool,
@@ -934,9 +932,6 @@ pub fn solveWithOptions(
 ) SolveError!Solution {
     const local_count = store.localCount();
     const proc_count = store.procSpecCount();
-    if (!boxy_rc_descs.isEmpty() and boxy_rc_descs.localCount() != local_count) {
-        solveInvariant("ARC Boxy descriptor table did not cover every local");
-    }
     var domain = try ArcLocalDomain.init(allocator, rc_local);
     defer domain.deinit(allocator);
     const arc_local_count = domain.arc_to_local.len;
@@ -945,7 +940,6 @@ pub fn solveWithOptions(
         .allocator = allocator,
         .store = store,
         .rc_local = rc_local,
-        .boxy_rc_descs = boxy_rc_descs,
         .consume_dead_boxes = consume_dead_boxes,
         .thread_confined_rc = thread_confined_rc,
         .domain = &domain,
@@ -1301,8 +1295,13 @@ pub fn solveWithOptions(
     solver.switch_index_by_stmt = &.{};
     errdefer solution.deinit();
 
-    solution.uniqueness_structure = try UniquenessStructure.build(allocator, store, rc_local, &solver.proc_stmts, &solver.proc_returns, options.executor, options.metrics);
-    try settleUniquenessWithOptions(allocator, store, layouts, rc_local, &solution, .none, consume_dead_boxes, options);
+    const statement_starts = try allocator.dupe(u32, solver.proc_stmts.starts.items);
+    solution.proc_statements.starts = statement_starts;
+    solution.proc_statements.items = try allocator.dupe(LIR.CFStmtId, solver.proc_stmts.items.items);
+    if (options.prove) {
+        solution.uniqueness_structure = try UniquenessStructure.build(allocator, store, rc_local, solution.proc_statements, &solver.proc_returns, options.executor, options.metrics);
+        try settleUniquenessWithOptions(allocator, store, layouts, rc_local, &solution, .none, consume_dead_boxes, options);
+    }
     try computeOutcomeRestitution(allocator, store, layouts, rc_local, consume_dead_boxes, &solution, &solver.proc_stmts);
 
     return solution;
@@ -1425,18 +1424,6 @@ pub fn findOutcomeRefinement(
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -1456,10 +1443,10 @@ pub fn findOutcomeRefinement(
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .boxy_tag_match,
             .jump,
             .ret,
             .crash,
+            .dyn,
             => return null,
         }
     }
@@ -1513,19 +1500,6 @@ fn consumeOutcomeSpan(
         if (!consumeOutcomeLocal(solution, param, present, GuardedList.at(locals, index))) return false;
     }
     return true;
-}
-
-fn consumeOutcomeTransfer(
-    solution: *const Solution,
-    param: LIR.LocalId,
-    present: *bool,
-    local: LIR.LocalId,
-    mode: LIR.BoxyTransferMode,
-) bool {
-    return switch (mode) {
-        .borrow, .copy => true,
-        .move => consumeOutcomeLocal(solution, param, present, local),
-    };
 }
 
 /// Derive the initial closed outcome-conditioned calling convention declared
@@ -1698,7 +1672,7 @@ fn computeOutcomeRestitution(
                         }
                         if (!valid) break;
                     },
-                    .assign_call_erased, .assign_call_dict => {
+                    .assign_call_erased => {
                         valid = false;
                         break;
                     },
@@ -1712,56 +1686,6 @@ fn computeOutcomeRestitution(
                         }
                         if (assign.reuse) |reuse| {
                             if (!consumeOutcomeLocal(solution, active_param, &next_state.present, reuse)) {
-                                valid = false;
-                                break;
-                            }
-                        }
-                    },
-                    .assign_boxy_box => |assign_stmt| {
-                        const assign = store.stmtRow(assign_stmt.data);
-                        if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.payload, assign.payload_mode)) {
-                            valid = false;
-                            break;
-                        }
-                    },
-                    .assign_boxy_record_update => |assign_stmt| {
-                        const assign = store.stmtRow(assign_stmt.data);
-                        if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.base, .borrow) or
-                            !consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.fields, .move))
-                        {
-                            valid = false;
-                            break;
-                        }
-                    },
-                    inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag_payload => |assign_stmt| {
-                        const assign = store.stmtRow(assign_stmt.data);
-                        if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.source, assign.source_mode)) {
-                            valid = false;
-                            break;
-                        }
-                    },
-                    .assign_boxy_eq => |assign_stmt| {
-                        const assign = store.stmtRow(assign_stmt.data);
-                        if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.lhs, .borrow) or
-                            !consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.rhs, .borrow))
-                        {
-                            valid = false;
-                            break;
-                        }
-                    },
-                    .assign_boxy_hash => |assign_stmt| {
-                        const assign = store.stmtRow(assign_stmt.data);
-                        if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.value, .borrow) or
-                            !consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.hasher, .borrow))
-                        {
-                            valid = false;
-                            break;
-                        }
-                    },
-                    .assign_boxy_tag => |assign_stmt| {
-                        const assign = store.stmtRow(assign_stmt.data);
-                        if (assign.payload) |payload| {
-                            if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, payload, assign.payload_mode)) {
                                 valid = false;
                                 break;
                             }
@@ -1840,6 +1764,40 @@ fn computeOutcomeRestitution(
                         valid = false;
                         break;
                     },
+                    .dyn => |dyn_stmt| {
+                        if (dyn_stmt.target == active_param) {
+                            valid = false;
+                            break;
+                        }
+                        const op = store.stmtRow(dyn_stmt.data);
+                        switch (DynOps.ownership(op)) {
+                            .none, .borrow_component, .alias, .borrow_operands => {},
+                            // Constructed operands move their entry unit into
+                            // the result, which cannot promise restitution.
+                            .construct => {
+                                const Consume = struct {
+                                    solution: *Solution,
+                                    active_param: LIR.LocalId,
+                                    present: *bool,
+                                    valid: bool = true,
+
+                                    fn visit(self: *@This(), value: LIR.LocalId) error{}!void {
+                                        if (!consumeOutcomeLocal(self.solution, self.active_param, self.present, value)) self.valid = false;
+                                    }
+                                };
+                                var consume: Consume = .{ .solution = solution, .active_param = active_param, .present = &next_state.present };
+                                DynOps.Operands.of(op).each(store, &consume, Consume.visit) catch |err| switch (err) {};
+                                if (!consume.valid) {
+                                    valid = false;
+                                    break;
+                                }
+                            },
+                            .call_erased => {
+                                valid = false;
+                                break;
+                            },
+                        }
+                    },
                     .jump => |jump_stmt| {
                         const target = joins.get(jump_stmt.target) orelse {
                             valid = false;
@@ -1893,7 +1851,7 @@ fn computeOutcomeRestitution(
                             bit_escape_present[stmt_index] = false;
                         }
                     },
-                    .assign_literal, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .debug, .expect, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .join, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .crash => {},
+                    .assign_literal, .debug, .expect, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .crash => {},
                 }
                 if (!valid) break;
                 // Every other statement continues along its flow edges with
@@ -2354,19 +2312,6 @@ fn liftProcStmtFacts(
         .assign_low_level,
         .assign_call_erased,
         .assign_packed_erased_fn,
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_record_update,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_boxy_eq,
-        .assign_boxy_hash,
-        .assign_boxy_tag,
-        .assign_boxy_tag_payload,
-        .boxy_tag_match,
-        .assign_call_dict,
         .assign_list,
         .assign_struct,
         .assign_tag,
@@ -2386,6 +2331,7 @@ fn liftProcStmtFacts(
         .str_match,
         .str_match_set,
         .crash,
+        .dyn,
         => {},
     }
 }
@@ -2866,23 +2812,6 @@ fn liftVisibilitySeed(solver: *Solver, local: LIR.LocalId) SolveError!void {
     try solver.visibility_facts.append(solver.allocator, .{ .seed = local });
 }
 
-fn liftBoxyDescRead(solver: *Solver, desc: LIR.BoxyDescRef) SolveError!void {
-    const local = desc.localOrNull() orelse return;
-    try solver.binding_facts.append(solver.allocator, .{ .demand = local });
-    try solver.unique_facts.append(solver.allocator, .{ .read = local });
-}
-
-fn liftBoxyTransfer(solver: *Solver, local: LIR.LocalId, mode: LIR.BoxyTransferMode, stmt: LIR.CFStmtId) SolveError!void {
-    switch (mode) {
-        .borrow => try solver.unique_facts.append(solver.allocator, .{ .read = local }),
-        .copy => try solver.unique_facts.append(solver.allocator, .{ .destroy = local }),
-        .move => {
-            try solver.binding_facts.append(solver.allocator, .{ .demand = local });
-            try solver.unique_facts.append(solver.allocator, .{ .consume = .{ .local = local, .stmt = stmt } });
-        },
-    }
-}
-
 fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
     const store = solver.store;
     const allocator = solver.allocator;
@@ -2893,9 +2822,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                     if (assign.target != assign.op.source) {
                         try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = assign.op.source } });
                         try solver.binding_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = assign.op.source } });
-                        if (!aliasPreservesBoxyRcDescriptor(solver, assign.target, assign.op.source)) {
-                            try solver.binding_facts.append(allocator, .{ .demand = assign.target });
-                        }
                     } else {
                         try solver.binding_facts.append(allocator, .{ .multi = assign.target });
                     }
@@ -2907,9 +2833,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 inline .list_reinterpret, .nominal => {
                     try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = assign.op.source } });
                     try solver.binding_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = assign.op.source } });
-                    if (!aliasPreservesBoxyRcDescriptor(solver, assign.target, assign.op.source)) {
-                        try solver.binding_facts.append(allocator, .{ .demand = assign.target });
-                    }
                 },
             }
             switch (assign.op.kind) {
@@ -2946,8 +2869,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 .f64_literal,
                 .f32_literal,
                 .dec_literal,
-                .boxy_dynamic_num_literal,
-                .boxy_dynamic_frac_literal,
                 .proc_ref,
                 => try solver.unique_facts.append(allocator, .{ .birth = assign.target }),
             }
@@ -2961,16 +2882,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 .stmt = current,
             });
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            const extra = store.stmtRowOrDefault(assign.extra);
-            if (extra.result_desc) |desc| {
-                try liftBoxyDescRead(solver, desc);
-                if (desc.localOrNull()) |local| try liftVisibilitySeed(solver, local);
-            }
-            if (extra.out_desc) |out_desc| {
-                try solver.binding_facts.append(allocator, .{ .fresh = out_desc });
-                try solver.unique_facts.append(allocator, .{ .foreign = out_desc });
-                try liftVisibilitySeed(solver, out_desc);
-            }
             const args = store.getLocalSpan(assign.args);
             const callee = store.getProcSpec(assign.proc);
             if (callee.body == null) {
@@ -2992,15 +2903,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 solveInvariant("erased call reuse flag and ownership source disagreed");
             }
             try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
-            if (assign.result_desc) |desc| {
-                try liftBoxyDescRead(solver, desc);
-                if (desc.localOrNull()) |local| try liftVisibilitySeed(solver, local);
-            }
-            if (assign.out_desc) |out_desc| {
-                try solver.binding_facts.append(allocator, .{ .fresh = out_desc });
-                try solver.unique_facts.append(allocator, .{ .foreign = out_desc });
-                try liftVisibilitySeed(solver, out_desc);
-            }
             if (assign.reuse_source) |reuse_source| {
                 try solver.binding_facts.append(allocator, .{ .demand = reuse_source });
             } else {
@@ -3011,13 +2913,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 const arg = GuardedList.at(args, index);
                 try solver.binding_facts.append(allocator, .{ .demand = arg });
                 try liftVisibilitySeed(solver, arg);
-            }
-            const arg_descs = store.getLocalSpan(assign.arg_descs);
-            for (0..GuardedList.borrowLen(arg_descs)) |index| {
-                const arg_desc = GuardedList.at(arg_descs, index);
-                try solver.binding_facts.append(allocator, .{ .demand = arg_desc });
-                try solver.unique_facts.append(allocator, .{ .read = arg_desc });
-                try liftVisibilitySeed(solver, arg_desc);
             }
             try liftVisibilitySeed(solver, assign.closure);
             try liftVisibilitySeed(solver, assign_stmt.target);
@@ -3038,156 +2933,9 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             if (assign.capture) |capture| try solver.binding_facts.append(allocator, .{ .demand = capture });
             if (assign.reuse) |reuse| try solver.binding_facts.append(allocator, .{ .demand = reuse });
             if (assign.capture) |capture| try liftVisibilityLink(solver, assign_stmt.target, capture);
-            if (assign.result_desc) |desc| try liftBoxyDescRead(solver, desc);
             try solver.unique_facts.append(allocator, .{ .birth = assign_stmt.target });
             if (assign.capture) |capture| try solver.unique_facts.append(allocator, .{ .destroy = capture });
             if (assign.reuse) |reuse| try solver.unique_facts.append(allocator, .{ .consume = .{ .local = reuse, .stmt = current } });
-        },
-        .assign_boxy_desc_ref => |assign_stmt| {
-            const assign = store.stmtRow(assign_stmt.data);
-            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
-            try solver.unique_facts.append(allocator, .{ .foreign = assign_stmt.target });
-            try liftBoxyDescRead(solver, assign.desc);
-            if (assign.tag_residual_for) |desc| try liftBoxyDescRead(solver, desc);
-            const captures = store.getLocalSpan(assign.captures);
-            for (0..GuardedList.borrowLen(captures)) |index| {
-                const local = GuardedList.at(captures, index);
-                try solver.binding_facts.append(allocator, .{ .demand = local });
-                try solver.unique_facts.append(allocator, .{ .read = local });
-            }
-        },
-        .assign_boxy_dict_ref => |assign| {
-            try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
-            if (assign.dict.localOrNull()) |local| {
-                try solver.binding_facts.append(allocator, .{ .demand = local });
-                try solver.unique_facts.append(allocator, .{ .read = local });
-            }
-            const captures = store.getLocalSpan(assign.captures);
-            for (0..GuardedList.borrowLen(captures)) |index| {
-                const local = GuardedList.at(captures, index);
-                try solver.binding_facts.append(allocator, .{ .demand = local });
-                try solver.unique_facts.append(allocator, .{ .read = local });
-            }
-        },
-        .assign_boxy_box => |assign_stmt| {
-            const assign = store.stmtRow(assign_stmt.data);
-            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
-            try solver.unique_facts.append(allocator, .{ .birth = assign_stmt.target });
-            try liftBoxyTransfer(solver, assign.payload, assign.payload_mode, current);
-            if (assign.source_desc) |desc| try liftBoxyDescRead(solver, desc);
-            if (assign.payload_desc) |desc| try liftBoxyDescRead(solver, desc);
-            try liftVisibilityLink(solver, assign_stmt.target, assign.payload);
-        },
-        .assign_boxy_record_update => |assign_stmt| {
-            const assign = store.stmtRow(assign_stmt.data);
-            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
-            try solver.unique_facts.append(allocator, .{ .birth = assign_stmt.target });
-            try liftBoxyTransfer(solver, assign.base, .borrow, current);
-            try liftBoxyTransfer(solver, assign.fields, .move, current);
-            try liftBoxyDescRead(solver, assign.base_desc);
-            try liftBoxyDescRead(solver, assign.fields_desc);
-            try liftVisibilityLink(solver, assign_stmt.target, assign.base);
-            try liftVisibilityLink(solver, assign_stmt.target, assign.fields);
-        },
-        .assign_boxy_unbox => |assign_stmt| {
-            const assign = store.stmtRow(assign_stmt.data);
-            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
-            try solver.unique_facts.append(allocator, .{ .foreign = assign_stmt.target });
-            try liftBoxyTransfer(solver, assign.source, assign.source_mode, current);
-            try liftBoxyDescRead(solver, assign.source_desc);
-            if (assign.target_desc) |desc| try liftBoxyDescRead(solver, desc);
-            try liftVisibilityLink(solver, assign_stmt.target, assign.source);
-        },
-        .assign_boxy_adapt => |assign_stmt| {
-            const assign = store.stmtRow(assign_stmt.data);
-            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
-            try solver.unique_facts.append(allocator, .{ .foreign = assign_stmt.target });
-            try liftBoxyTransfer(solver, assign.source, assign.source_mode, current);
-            if (assign.source_desc) |desc| try liftBoxyDescRead(solver, desc);
-            if (assign.target_desc) |desc| try liftBoxyDescRead(solver, desc);
-            try liftVisibilityLink(solver, assign_stmt.target, assign.source);
-        },
-        .assign_boxy_inspect => |assign_stmt| {
-            const assign = store.stmtRow(assign_stmt.data);
-            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
-            try solver.unique_facts.append(allocator, .{ .birth = assign_stmt.target });
-            try liftBoxyTransfer(solver, assign.source, assign.source_mode, current);
-            try liftBoxyDescRead(solver, assign.source_desc);
-        },
-        .assign_boxy_eq => |assign_stmt| {
-            const assign = store.stmtRow(assign_stmt.data);
-            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
-            try solver.unique_facts.append(allocator, .{ .birth = assign_stmt.target });
-            try liftBoxyTransfer(solver, assign.lhs, .borrow, current);
-            try liftBoxyTransfer(solver, assign.rhs, .borrow, current);
-            try liftBoxyDescRead(solver, assign.desc);
-        },
-        .assign_boxy_hash => |assign_stmt| {
-            const assign = store.stmtRow(assign_stmt.data);
-            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
-            try solver.unique_facts.append(allocator, .{ .birth = assign_stmt.target });
-            try liftBoxyTransfer(solver, assign.value, .borrow, current);
-            try liftBoxyTransfer(solver, assign.hasher, .borrow, current);
-            try liftBoxyDescRead(solver, assign.desc);
-        },
-        .assign_boxy_tag => |assign_stmt| {
-            const assign = store.stmtRow(assign_stmt.data);
-            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
-            try solver.unique_facts.append(allocator, .{ .birth = assign_stmt.target });
-            try liftBoxyDescRead(solver, assign.target_desc);
-            if (assign.payload) |payload| {
-                try liftBoxyTransfer(solver, payload, assign.payload_mode, current);
-                try liftVisibilityLink(solver, assign_stmt.target, payload);
-            }
-            if (assign.payload_desc) |desc| try liftBoxyDescRead(solver, desc);
-        },
-        .assign_boxy_tag_payload => |assign_stmt| {
-            const assign = store.stmtRow(assign_stmt.data);
-            switch (assign.source_mode) {
-                .borrow => try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign_stmt.target, .source = assign.source } }),
-                .copy, .move => try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target }),
-            }
-            try solver.unique_facts.append(allocator, .{ .foreign = assign_stmt.target });
-            if (assign.target_desc) |target_desc| {
-                try solver.binding_facts.append(allocator, .{ .fresh = target_desc });
-                try solver.unique_facts.append(allocator, .{ .foreign = target_desc });
-            }
-            try liftBoxyTransfer(solver, assign.source, assign.source_mode, current);
-            try liftBoxyDescRead(solver, assign.source_desc);
-            try liftVisibilityLink(solver, assign_stmt.target, assign.source);
-        },
-        .assign_call_dict => |assign_stmt| {
-            const assign = store.stmtRow(assign_stmt.data);
-            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
-            try solver.unique_facts.append(allocator, .{ .foreign = assign_stmt.target });
-            if (assign.dict.localOrNull()) |local| {
-                try solver.binding_facts.append(allocator, .{ .demand = local });
-                try solver.unique_facts.append(allocator, .{ .read = local });
-            }
-            if (assign.result_desc) |desc| try liftBoxyDescRead(solver, desc);
-            const args = store.getLocalSpan(assign.args);
-            for (0..GuardedList.borrowLen(args)) |index| {
-                const arg = GuardedList.at(args, index);
-                try solver.binding_facts.append(allocator, .{ .demand = arg });
-                try solver.unique_facts.append(allocator, .{ .destroy = arg });
-                try liftVisibilitySeed(solver, arg);
-            }
-            const arg_descs = store.getLocalSpan(assign.arg_descs);
-            for (0..GuardedList.borrowLen(arg_descs)) |index| {
-                const arg_desc = GuardedList.at(arg_descs, index);
-                try solver.binding_facts.append(allocator, .{ .demand = arg_desc });
-                try solver.unique_facts.append(allocator, .{ .read = arg_desc });
-                try liftVisibilitySeed(solver, arg_desc);
-            }
-            const hidden_args = store.getLocalSpan(assign.hidden_args);
-            for (0..GuardedList.borrowLen(hidden_args)) |index| {
-                const arg = GuardedList.at(hidden_args, index);
-                try solver.binding_facts.append(allocator, .{ .demand = arg });
-                try solver.unique_facts.append(allocator, .{ .destroy = arg });
-                try liftVisibilitySeed(solver, arg);
-            }
-            try liftVisibilitySeed(solver, assign_stmt.target);
         },
         .assign_low_level => |assign| {
             const rc_effect = inferenceRcEffect(solver, assign.op, store.stmtRow(assign.rc_effect));
@@ -3282,10 +3030,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
         .assign_struct => |assign| {
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
             try solver.unique_facts.append(allocator, .{ .birth = assign.target });
-            if (store.optionalStmtRow(assign.contents_desc)) |desc| {
-                try liftBoxyDescRead(solver, desc);
-                if (desc.localOrNull()) |local| try liftVisibilityLink(solver, assign.target, local);
-            }
             const fields = store.getLocalSpan(assign.fields);
             for (0..GuardedList.borrowLen(fields)) |index| {
                 const field = GuardedList.at(fields, index);
@@ -3297,10 +3041,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
         .assign_tag => |assign| {
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
             try solver.unique_facts.append(allocator, .{ .birth = assign.target });
-            if (store.optionalStmtRow(assign.target_desc)) |desc| {
-                try liftBoxyDescRead(solver, desc);
-                if (desc.localOrNull()) |local| try liftVisibilityLink(solver, assign.target, local);
-            }
             if (assign.payload) |payload| {
                 try solver.binding_facts.append(allocator, .{ .demand = payload });
                 try liftVisibilityLink(solver, assign.target, payload);
@@ -3376,10 +3116,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 }
             }
         },
-        .boxy_tag_match => |tag_match| {
-            try solver.unique_facts.append(allocator, .{ .read = tag_match.source });
-            try liftBoxyDescRead(solver, store.stmtRow(tag_match.source_desc));
-        },
         .str_match_set => |str_match_set| {
             try solver.unique_facts.append(allocator, .{ .read = str_match_set.source });
             const arms = store.getStrMatchArms(str_match_set.arms);
@@ -3432,19 +3168,102 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
         },
         .jump => {},
         .runtime_error, .comptime_exhaustiveness_failed => {},
+        .dyn => |dyn_stmt| try liftDynStmtFacts(solver, current, dyn_stmt.target, store.stmtRow(dyn_stmt.data)),
     }
 }
 
-fn aliasPreservesBoxyRcDescriptor(
-    solver: *const Solver,
-    target: LIR.LocalId,
-    source: LIR.LocalId,
-) bool {
-    if (solver.boxy_rc_descs.isEmpty()) return true;
-    return std.meta.eql(
-        solver.boxy_rc_descs.get(target),
-        solver.boxy_rc_descs.get(source),
-    );
+/// Lifts the facts of one `dyn` statement from `DynOps.ownership`. Every
+/// operand outside the ARC domain (descriptors, names, dictionaries, scalars)
+/// carries no ownership, so a statement's refcounted operands are exactly its
+/// value operands. A component read borrows from its base as a payload
+/// `assign_ref` does, and a component of a base outside the domain (a
+/// dictionary's method) is an immortal value, owned as a static literal is.
+/// `copy` is a pure alias as `assign_ref .local` is; a construction consumes
+/// its values into a fresh owned target as `assign_struct` does; an
+/// operand-borrowing operation reads its values and defines a fresh target;
+/// `call_erased` borrows the callable, consumes the argument record, and
+/// defines a fresh foreign result.
+fn liftDynStmtFacts(solver: *Solver, current: LIR.CFStmtId, target: ?LIR.LocalId, op: LIR.DynOp) SolveError!void {
+    const allocator = solver.allocator;
+    const Lift = struct {
+        solver: *Solver,
+        target: LIR.LocalId,
+
+        fn consumed(self: *const @This(), value: LIR.LocalId) SolveError!void {
+            if (self.solver.domain.indexOf(value) == null) return;
+            try self.solver.binding_facts.append(self.solver.allocator, .{ .demand = value });
+            try liftVisibilityLink(self.solver, self.target, value);
+            try self.solver.unique_facts.append(self.solver.allocator, .{ .destroy = value });
+        }
+
+        fn borrowed(self: *const @This(), value: LIR.LocalId) SolveError!void {
+            if (self.solver.domain.indexOf(value) == null) return;
+            try liftVisibilityLink(self.solver, self.target, value);
+            try self.solver.unique_facts.append(self.solver.allocator, .{ .read = value });
+        }
+    };
+    switch (DynOps.ownership(op)) {
+        .none => if (target) |defined| try solver.binding_facts.append(allocator, .{ .fresh = defined }),
+        .borrow_component => |base| {
+            const defined = target orelse solveInvariant("ARC dyn component read had no target");
+            if (solver.domain.indexOf(base) == null) {
+                try solver.binding_facts.append(allocator, .{ .fresh = defined });
+                try solver.unique_facts.append(allocator, .{ .foreign = defined });
+                return;
+            }
+            try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = defined, .source = base } });
+            try liftVisibilityLink(solver, defined, base);
+            try solver.unique_facts.append(allocator, .{ .foreign = defined });
+            try solver.unique_facts.append(allocator, .{ .read = base });
+        },
+        .alias => |source| {
+            const defined = target orelse solveInvariant("ARC dyn copy had no target");
+            // A copy of a value with no reference-counted content (a closed
+            // value stored into a dynamic local) holds none either: it is a
+            // fresh value.
+            if (solver.domain.indexOf(source) == null) {
+                try solver.binding_facts.append(allocator, .{ .fresh = defined });
+                try solver.unique_facts.append(allocator, .{ .birth = defined });
+                return;
+            }
+            if (defined != source) {
+                try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = defined, .source = source } });
+                try solver.binding_facts.append(allocator, .{ .alias = .{ .target = defined, .source = source } });
+            } else {
+                try solver.binding_facts.append(allocator, .{ .multi = defined });
+            }
+            try liftVisibilityLink(solver, defined, source);
+            try solver.unique_facts.append(allocator, .{ .alias = .{ .target = defined, .source = source, .stmt = current } });
+        },
+        .construct => {
+            const defined = target orelse solveInvariant("ARC dyn construction had no target");
+            try solver.binding_facts.append(allocator, .{ .fresh = defined });
+            try solver.unique_facts.append(allocator, .{ .birth = defined });
+            const lift: Lift = .{ .solver = solver, .target = defined };
+            try DynOps.Operands.of(op).each(solver.store, &lift, Lift.consumed);
+        },
+        .borrow_operands => {
+            const defined = target orelse solveInvariant("ARC dyn operand read had no target");
+            try solver.binding_facts.append(allocator, .{ .fresh = defined });
+            try solver.unique_facts.append(allocator, .{ .foreign = defined });
+            const lift: Lift = .{ .solver = solver, .target = defined };
+            try DynOps.Operands.of(op).each(solver.store, &lift, Lift.borrowed);
+        },
+        .call_erased => {
+            const defined = target orelse solveInvariant("ARC dyn erased call had no target");
+            const call = op.call_erased;
+            try solver.binding_facts.append(allocator, .{ .fresh = defined });
+            if (call.args) |args| {
+                try solver.binding_facts.append(allocator, .{ .demand = args });
+                try liftVisibilitySeed(solver, args);
+            }
+            try liftVisibilitySeed(solver, call.closure);
+            try liftVisibilitySeed(solver, defined);
+            try solver.unique_facts.append(allocator, .{ .foreign = defined });
+            try solver.unique_facts.append(allocator, .{ .destroy = call.closure });
+            if (call.args) |args| try solver.unique_facts.append(allocator, .{ .destroy = args });
+        },
+    }
 }
 
 /// Returns the single refcounted argument a borrowed-return call result may
@@ -3543,7 +3362,12 @@ fn fillPinnedProcContracts(
 }
 
 fn pinnedByAbi(proc: *const LIR.LirProcSpec) bool {
-    return proc.arcBody() == null or proc.hosted != null or proc.abi == .erased_callable;
+    return proc.arcBody() == null or proc.hosted != null or switch (proc.abi) {
+        .roc => false,
+        // The uniform erased-callable ABI, in either form, fixes an
+        // all-owned convention: the argument record and result are owned.
+        .erased_callable, .erased_record => true,
+    };
 }
 
 /// The procedures pinned only because they are stable: no root and no ABI
@@ -3685,19 +3509,6 @@ fn computeVisibilityFromLift(
                     .assign_call,
                     .assign_call_erased,
                     .assign_packed_erased_fn,
-                    .assign_boxy_desc_ref,
-                    .assign_boxy_dict_ref,
-                    .assign_boxy_box,
-                    .assign_boxy_record_update,
-                    .assign_boxy_unbox,
-                    .assign_boxy_adapt,
-                    .assign_boxy_inspect,
-                    .assign_boxy_eq,
-                    .assign_boxy_hash,
-                    .assign_boxy_tag,
-                    .assign_boxy_tag_payload,
-                    .boxy_tag_match,
-                    .assign_call_dict,
                     .assign_low_level,
                     .assign_list,
                     .assign_struct,
@@ -3721,6 +3532,7 @@ fn computeVisibilityFromLift(
                     .join,
                     .jump,
                     .crash,
+                    .dyn,
                     => {},
                 }
                 try body_clone.appendSuccessorsInOrder(store, &stack, current, allocator, .{ .switch_edges = .arms_first });
@@ -3782,11 +3594,6 @@ fn computeVisibilityFromLift(
                 }
             },
             .assign_struct => |assign| {
-                if (store.optionalStmtRow(assign.contents_desc)) |contents_desc| {
-                    if (contents_desc.localOrNull()) |local| {
-                        addEdge(&sets, rc_local, @backingInt(assign.target), @backingInt(local));
-                    }
-                }
                 const fields = store.getLocalSpan(assign.fields);
                 for (0..GuardedList.borrowLen(fields)) |index| {
                     const field = GuardedList.at(fields, index);
@@ -3801,9 +3608,6 @@ fn computeVisibilityFromLift(
                 }
             },
             .assign_tag => |assign| {
-                if (store.optionalStmtRow(assign.target_desc)) |target_desc| if (target_desc.localOrNull()) |local| {
-                    addEdge(&sets, rc_local, @backingInt(assign.target), @backingInt(local));
-                };
                 if (assign.payload) |payload| {
                     addEdge(&sets, rc_local, @backingInt(assign.target), @backingInt(payload));
                 }
@@ -3814,45 +3618,6 @@ fn computeVisibilityFromLift(
                 if (assign.capture) |capture| {
                     addEdge(&sets, rc_local, @backingInt(assign_stmt.target), @backingInt(capture));
                 }
-            },
-            .assign_boxy_box => |assign_stmt| {
-                const assign = store.stmtRow(assign_stmt.data);
-                addEdge(&sets, rc_local, @backingInt(assign_stmt.target), @backingInt(assign.payload));
-            },
-            .assign_boxy_record_update => |assign_stmt| {
-                const assign = store.stmtRow(assign_stmt.data);
-                addEdge(&sets, rc_local, @backingInt(assign_stmt.target), @backingInt(assign.base));
-                addEdge(&sets, rc_local, @backingInt(assign_stmt.target), @backingInt(assign.fields));
-            },
-            inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_tag_payload => |assign_stmt| {
-                const assign = store.stmtRow(assign_stmt.data);
-                addEdge(&sets, rc_local, @backingInt(assign_stmt.target), @backingInt(assign.source));
-            },
-            .assign_boxy_tag => |assign_stmt| {
-                const assign = store.stmtRow(assign_stmt.data);
-                if (assign.payload) |payload| {
-                    addEdge(&sets, rc_local, @backingInt(assign_stmt.target), @backingInt(payload));
-                }
-            },
-            .assign_call_dict => |assign_stmt| {
-                const assign = store.stmtRow(assign_stmt.data);
-                if (assign.dict.localOrNull()) |local| seedLocal(&visible, rc_local, @backingInt(local));
-                if (assign.result_desc) |desc| if (desc.localOrNull()) |local| {
-                    seedLocal(&visible, rc_local, @backingInt(local));
-                };
-                const args = store.getLocalSpan(assign.args);
-                for (0..GuardedList.borrowLen(args)) |index| {
-                    seedLocal(&visible, rc_local, @backingInt(GuardedList.at(args, index)));
-                }
-                const arg_descs = store.getLocalSpan(assign.arg_descs);
-                for (0..GuardedList.borrowLen(arg_descs)) |index| {
-                    seedLocal(&visible, rc_local, @backingInt(GuardedList.at(arg_descs, index)));
-                }
-                const hidden_args = store.getLocalSpan(assign.hidden_args);
-                for (0..GuardedList.borrowLen(hidden_args)) |index| {
-                    seedLocal(&visible, rc_local, @backingInt(GuardedList.at(hidden_args, index)));
-                }
-                seedLocal(&visible, rc_local, @backingInt(assign_stmt.target));
             },
             .str_match => |str_match_stmt| {
                 const str_match = store.stmtRow(str_match_stmt.data);
@@ -3885,12 +3650,6 @@ fn computeVisibilityFromLift(
             .assign_call => |assign| {
                 const callee = store.getProcSpecImmediate(assign.proc);
                 const args = store.getLocalSpan(assign.args);
-                if (store.stmtRowOrDefault(assign.extra).result_desc) |result_desc| {
-                    if (result_desc.localOrNull()) |local| {
-                        seedLocal(&visible, rc_local, @backingInt(local));
-                    }
-                }
-                if (store.stmtRowOrDefault(assign.extra).out_desc) |out_desc| seedLocal(&visible, rc_local, @backingInt(out_desc));
                 if (callee.body == null) {
                     // No body to flow through: everything at the boundary is
                     // host-visible.
@@ -3917,18 +3676,10 @@ fn computeVisibilityFromLift(
                 // pinned signature.
                 seedLocal(&visible, rc_local, @backingInt(assign.closure));
                 if (assign.reuse_source) |reuse_source| seedLocal(&visible, rc_local, @backingInt(reuse_source));
-                if (assign.result_desc) |desc| if (desc.localOrNull()) |local| {
-                    seedLocal(&visible, rc_local, @backingInt(local));
-                };
-                if (assign.out_desc) |out_desc| seedLocal(&visible, rc_local, @backingInt(out_desc));
                 const args = store.getLocalSpan(assign.args);
                 for (0..GuardedList.borrowLen(args)) |arg_index| {
                     const arg = GuardedList.at(args, arg_index);
                     seedLocal(&visible, rc_local, @backingInt(arg));
-                }
-                const arg_descs = store.getLocalSpan(assign.arg_descs);
-                for (0..GuardedList.borrowLen(arg_descs)) |arg_index| {
-                    seedLocal(&visible, rc_local, @backingInt(GuardedList.at(arg_descs, arg_index)));
                 }
                 seedLocal(&visible, rc_local, @backingInt(assign_stmt.target));
             },
@@ -3966,14 +3717,37 @@ fn computeVisibilityFromLift(
                     }
                 }
             },
+            .dyn => |dyn_stmt| {
+                const op = store.stmtRow(dyn_stmt.data);
+                const Link = struct {
+                    sets: *collections.DisjointSets,
+                    rc: []const bool,
+                    target: u32,
+
+                    fn visit(self: *const @This(), value: LIR.LocalId) error{}!void {
+                        addEdge(self.sets, self.rc, self.target, @backingInt(value));
+                    }
+                };
+                switch (DynOps.ownership(op)) {
+                    .none => {},
+                    .borrow_component => |base| addEdge(&sets, rc_local, @backingInt(dyn_stmt.target.?), @backingInt(base)),
+                    .alias => |source| addEdge(&sets, rc_local, @backingInt(dyn_stmt.target.?), @backingInt(source)),
+                    .construct, .borrow_operands => {
+                        const link: Link = .{ .sets = &sets, .rc = rc_local, .target = @backingInt(dyn_stmt.target.?) };
+                        DynOps.Operands.of(op).each(store, &link, Link.visit) catch |err| switch (err) {};
+                    },
+                    .call_erased => {
+                        // The callee is unknown; the boundary is treated
+                        // like a pinned signature.
+                        const call = op.call_erased;
+                        seedLocal(&visible, rc_local, @backingInt(call.closure));
+                        if (call.args) |args| seedLocal(&visible, rc_local, @backingInt(args));
+                        seedLocal(&visible, rc_local, @backingInt(dyn_stmt.target.?));
+                    },
+                }
+            },
             .init_uninitialized,
             .assign_literal,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .boxy_tag_match,
             .debug,
             .expect,
             .expect_err,
@@ -4889,7 +4663,7 @@ const UniquenessStructure = struct {
         allocator: Allocator,
         store: *const LirStore,
         rc_local: []const bool,
-        lifted_stmts: *const ProcRows(LIR.CFStmtId),
+        proc_stmts: FrozenProcRows(LIR.CFStmtId),
         lifted_returns: *const ProcRows(u32),
         executor: ?*const task_executor.Executor,
         metrics: ?*UniquenessMetrics,
@@ -4920,13 +4694,9 @@ const UniquenessStructure = struct {
         // structure keeps its own copy for the reuse check.
         self.rc_local = try arena.dupe(bool, rc_local);
         const proc_count = store.procSpecCount();
-        if (lifted_stmts.procCount() != proc_count or lifted_returns.procCount() != proc_count) {
+        if (proc_stmts.starts.len != proc_count + 1 or lifted_returns.procCount() != proc_count) {
             solveInvariant("uniqueness structure received a lift for a different procedure count");
         }
-        const proc_stmts: FrozenProcRows(LIR.CFStmtId) = .{
-            .starts = try arena.dupe(u32, lifted_stmts.starts.items),
-            .items = try arena.dupe(LIR.CFStmtId, lifted_stmts.items.items),
-        };
         const return_locals = try arena.alloc(LIR.LocalId, lifted_returns.items.items.len);
         for (return_locals, lifted_returns.items.items) |*local, raw| local.* = @fromBackingInt(raw);
         const returns: FrozenProcRows(LIR.LocalId) = .{
@@ -5968,22 +5738,6 @@ fn computeUniquenessDetailed(
             const index = self.indexOf(local) orelse return;
             try list.append(alloc, .{ .index = index, .stmt = stmt });
         }
-
-        fn transfer(
-            self: @This(),
-            alloc: Allocator,
-            list: *std.ArrayList(ConsumeAt),
-            dead: *std.bit_set.DynamicBitSetUnmanaged,
-            local: LIR.LocalId,
-            mode: LIR.BoxyTransferMode,
-            stmt: u32,
-        ) SolveError!void {
-            switch (mode) {
-                .move => try self.consumeAt(alloc, list, local, stmt),
-                .copy => self.destroy(dead, local),
-                .borrow => {},
-            }
-        }
     };
     const marks = Marks{ .rc = rc_local, .domain = proc_domain, .defs = def_counts, .births = birth_counts };
 
@@ -6130,18 +5884,12 @@ fn computeUniquenessDetailed(
                     .f64_literal,
                     .f32_literal,
                     .dec_literal,
-                    .boxy_dynamic_num_literal,
-                    .boxy_dynamic_frac_literal,
                     .proc_ref,
                     => marks.noteBirth(&born, assign.target),
                 }
             },
             .assign_call => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
-                if (store.stmtRowOrDefault(assign.extra).out_desc) |out_desc| {
-                    marks.trackDef(&has_def, &multi_def, out_desc);
-                    marks.destroy(&foreign_def, out_desc);
-                }
                 const callee_sig = sigs.get(assign.proc);
                 const rows = sigs.retConditionsOf(callee_sig);
                 var whole_conditional = false;
@@ -6215,10 +5963,6 @@ fn computeUniquenessDetailed(
                 const assign = store.stmtRow(assign_stmt.data);
                 marks.trackDef(&has_def, &multi_def, assign_stmt.target);
                 marks.destroy(&foreign_def, assign_stmt.target);
-                if (assign.out_desc) |out_desc| {
-                    marks.trackDef(&has_def, &multi_def, out_desc);
-                    marks.destroy(&foreign_def, out_desc);
-                }
                 if (assign.reuse_source) |reuse_source| {
                     try marks.consumeAt(allocator, &consumes, reuse_source, @intCast(stmt_index));
                 } else {
@@ -6236,81 +5980,6 @@ fn computeUniquenessDetailed(
                 marks.noteBirth(&born, assign_stmt.target);
                 if (assign.capture) |capture| marks.destroy(&destroyed, capture);
                 if (assign.reuse) |reuse| try marks.consumeAt(allocator, &consumes, reuse, @intCast(stmt_index));
-            },
-            inline .assign_boxy_desc_ref, .assign_boxy_dict_ref => |assign| {
-                marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.destroy(&foreign_def, assign.target);
-            },
-            .assign_boxy_box => |assign_stmt| {
-                const assign = store.stmtRow(assign_stmt.data);
-                marks.trackDef(&has_def, &multi_def, assign_stmt.target);
-                marks.noteBirth(&born, assign_stmt.target);
-                try marks.transfer(allocator, &consumes, &destroyed, assign.payload, assign.payload_mode, @intCast(stmt_index));
-            },
-            .assign_boxy_record_update => |assign_stmt| {
-                const assign = store.stmtRow(assign_stmt.data);
-                marks.trackDef(&has_def, &multi_def, assign_stmt.target);
-                marks.noteBirth(&born, assign_stmt.target);
-                try marks.transfer(allocator, &consumes, &destroyed, assign.base, .borrow, @intCast(stmt_index));
-                try marks.transfer(allocator, &consumes, &destroyed, assign.fields, .move, @intCast(stmt_index));
-            },
-            inline .assign_boxy_unbox, .assign_boxy_adapt => |assign_stmt| {
-                const assign = store.stmtRow(assign_stmt.data);
-                marks.trackDef(&has_def, &multi_def, assign_stmt.target);
-                marks.destroy(&foreign_def, assign_stmt.target);
-                try marks.transfer(allocator, &consumes, &destroyed, assign.source, assign.source_mode, @intCast(stmt_index));
-            },
-            .assign_boxy_inspect => |assign_stmt| {
-                const assign = store.stmtRow(assign_stmt.data);
-                marks.trackDef(&has_def, &multi_def, assign_stmt.target);
-                marks.noteBirth(&born, assign_stmt.target);
-                try marks.transfer(allocator, &consumes, &destroyed, assign.source, assign.source_mode, @intCast(stmt_index));
-            },
-            .assign_boxy_eq => |assign_stmt| {
-                const assign = store.stmtRow(assign_stmt.data);
-                marks.trackDef(&has_def, &multi_def, assign_stmt.target);
-                marks.noteBirth(&born, assign_stmt.target);
-                try marks.transfer(allocator, &consumes, &destroyed, assign.lhs, .borrow, @intCast(stmt_index));
-                try marks.transfer(allocator, &consumes, &destroyed, assign.rhs, .borrow, @intCast(stmt_index));
-            },
-            .assign_boxy_hash => |assign_stmt| {
-                const assign = store.stmtRow(assign_stmt.data);
-                marks.trackDef(&has_def, &multi_def, assign_stmt.target);
-                marks.noteBirth(&born, assign_stmt.target);
-                try marks.transfer(allocator, &consumes, &destroyed, assign.value, .borrow, @intCast(stmt_index));
-                try marks.transfer(allocator, &consumes, &destroyed, assign.hasher, .borrow, @intCast(stmt_index));
-            },
-            .assign_boxy_tag => |assign_stmt| {
-                const assign = store.stmtRow(assign_stmt.data);
-                marks.trackDef(&has_def, &multi_def, assign_stmt.target);
-                marks.noteBirth(&born, assign_stmt.target);
-                if (assign.payload) |payload| try marks.transfer(allocator, &consumes, &destroyed, payload, assign.payload_mode, @intCast(stmt_index));
-            },
-            .assign_boxy_tag_payload => |assign_stmt| {
-                const assign = store.stmtRow(assign_stmt.data);
-                marks.trackDef(&has_def, &multi_def, assign_stmt.target);
-                marks.destroy(&foreign_def, assign_stmt.target);
-                if (assign.target_desc) |local| {
-                    marks.trackDef(&has_def, &multi_def, local);
-                    marks.destroy(&foreign_def, local);
-                }
-                try marks.transfer(allocator, &consumes, &destroyed, assign.source, assign.source_mode, @intCast(stmt_index));
-            },
-            .boxy_tag_match => {},
-            .assign_call_dict => |assign_stmt| {
-                const assign = store.stmtRow(assign_stmt.data);
-                marks.trackDef(&has_def, &multi_def, assign_stmt.target);
-                marks.destroy(&foreign_def, assign_stmt.target);
-                const args = store.getLocalSpan(assign.args);
-                for (0..GuardedList.borrowLen(args)) |index| {
-                    const arg = GuardedList.at(args, index);
-                    marks.destroy(&destroyed, arg);
-                }
-                const hidden_args = store.getLocalSpan(assign.hidden_args);
-                for (0..GuardedList.borrowLen(hidden_args)) |index| {
-                    const arg = GuardedList.at(hidden_args, index);
-                    marks.destroy(&destroyed, arg);
-                }
             },
             .str_match => |str_match_stmt| {
                 const str_match = store.stmtRow(str_match_stmt.data);
@@ -6499,6 +6168,53 @@ fn computeUniquenessDetailed(
             .ret => |ret_stmt| try marks.consumeAt(allocator, &consumes, ret_stmt.value, @intCast(stmt_index)),
             .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| {
                 try marks.consumeAt(allocator, &consumes, message, @intCast(stmt_index));
+            },
+            // A `dyn` statement reads as its `DynOps.ownership` analogue:
+            // a component read as a payload read, `copy` as a pure alias, a
+            // construction as a fresh aggregate whose operands lose their
+            // uniqueness (its opaque contents are never taken back), and an
+            // erased call as a foreign boundary.
+            .dyn => |dyn_stmt| {
+                const op = store.stmtRow(dyn_stmt.data);
+                if (dyn_stmt.target) |target| marks.trackDef(&has_def, &multi_def, target);
+                switch (DynOps.ownership(op)) {
+                    .none => {},
+                    .borrow_component, .borrow_operands => marks.destroy(&foreign_def, dyn_stmt.target.?),
+                    .alias => |source| {
+                        const target = dyn_stmt.target.?;
+                        const is_view = borrowed != null and borrowed.?.isSet(@backingInt(target));
+                        if (is_view) {
+                            marks.destroy(&foreign_def, target);
+                            if (marks.indexOf(target)) |target_index| if (marks.indexOf(source)) |source_index| {
+                                if (source_index != target_index) {
+                                    view_source[target_index] = source_index;
+                                    try view_defs.append(allocator, .{ .target = target_index, .source = source_index, .stmt = @intCast(stmt_index) });
+                                }
+                            };
+                        } else {
+                            try Alias.record(marks, allocator, &alias_defs, &foreign_def, &consumes, target, source, @intCast(stmt_index));
+                        }
+                    },
+                    .construct => {
+                        marks.noteBirth(&born, dyn_stmt.target.?);
+                        const Destroy = struct {
+                            marks: @TypeOf(marks),
+                            destroyed: *std.bit_set.DynamicBitSetUnmanaged,
+
+                            fn visit(self: *const @This(), value: LIR.LocalId) error{}!void {
+                                self.marks.destroy(self.destroyed, value);
+                            }
+                        };
+                        const destroy: Destroy = .{ .marks = marks, .destroyed = &destroyed };
+                        DynOps.Operands.of(op).each(store, &destroy, Destroy.visit) catch |err| switch (err) {};
+                    },
+                    .call_erased => {
+                        const call = op.call_erased;
+                        marks.destroy(&foreign_def, dyn_stmt.target.?);
+                        marks.destroy(&destroyed, call.closure);
+                        if (call.args) |args| marks.destroy(&destroyed, args);
+                    },
+                }
             },
             .debug => {},
             // The failure report is the message's consuming use.
@@ -6955,19 +6671,6 @@ fn computeUniquenessDetailed(
                 .assign_literal,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_list,
                 .assign_struct,
                 .assign_tag,
@@ -6991,6 +6694,7 @@ fn computeUniquenessDetailed(
                 .jump,
                 .ret,
                 .crash,
+                .dyn,
                 => {},
             }
         }
@@ -7131,7 +6835,7 @@ test "ARC public solve cleans up every coordinator allocation failure" {
 
     const Probe = struct {
         fn run(allocator: Allocator, fixture: *const UniquenessTest, rc: []const bool, root: LIR.LirProcSpecId) SolveError!void {
-            var solution = try solve(allocator, &fixture.store, &fixture.layouts, rc, .{}, &.{root}, true);
+            var solution = try solve(allocator, &fixture.store, &fixture.layouts, rc, &.{root}, true);
             defer solution.deinit();
         }
     };
@@ -7437,7 +7141,7 @@ test "uniqueness fixed point propagates fresh returns through a call diamond and
     @memset(rc, true);
     const builds_before = @import("use_order.zig").topology_builds;
     const rounds_before = uniqueness_analysis_rounds;
-    var solution = try solve(allocator, &f.store, &f.layouts, rc, .{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, rc, &.{}, true);
     defer solution.deinit();
     try testing.expectEqual(@as(usize, 1), @import("use_order.zig").topology_builds - builds_before);
     try testing.expect(uniqueness_analysis_rounds - rounds_before > 8);
@@ -7551,7 +7255,7 @@ test "component uniqueness preserves shared RC definitions shared statements and
     // parameter scan; component formation must not reorder these definitions.
     _ = try f.proc(&.{shared}, null, f.list);
     const rc = [_]bool{ true, true, false };
-    var solution = try solve(allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, true);
     defer solution.deinit();
     UniquenessOracleState.resetCapabilities(&solution);
     var metrics: UniquenessMetrics = .{};
@@ -7608,7 +7312,7 @@ test "component uniqueness revisits only dirty callers along a long chain" {
         _ = try f.proc(&.{}, body, f.list);
     }
     const rc = @as([17]bool, @splat(true));
-    var solution = try solve(allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, true);
     defer solution.deinit();
     UniquenessOracleState.resetCapabilities(&solution);
     var metrics: UniquenessMetrics = .{};
@@ -7642,7 +7346,7 @@ test "component uniqueness ignores offset-only return condition changes" {
         f.store.setProcSpecBody(procs[caller], try f.call(result, procs[callee], &.{params[caller]}, try f.ret(result)));
     }
     const rc = @as([6]bool, @splat(true));
-    var solution = try solve(allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, true);
     defer solution.deinit();
     // Owned inputs transfer their unit into the conditional-return edge.
     for (solution.sigs) |*sig| {
@@ -7685,7 +7389,7 @@ test "component uniqueness read-only return refinement revives a borrowed-view l
     } }, .test_fixture);
     _ = try f.proc(&.{}, body, f.list);
     const rc = [_]bool{ true, true, false, true, false };
-    var solution = try solve(allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, true);
     defer solution.deinit();
     try std.testing.expect(solution.borrowed.isSet(@backingInt(view)));
     UniquenessOracleState.resetCapabilities(&solution);
@@ -7730,7 +7434,7 @@ test "component uniqueness recursive conditional fields restart after committed 
     } }, .test_fixture);
     const field_proc = try f.proc(&.{field_param}, field_body, f.pair);
     const rc = [_]bool{ true, true, true, true, false, true, true };
-    var solution = try solve(allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, true);
     defer solution.deinit();
     for (solution.sigs) |*sig| {
         sig.borrowed_params = 0;
@@ -7796,7 +7500,7 @@ test "component uniqueness inventories join parameters incoming transfers and no
     } }, .test_fixture);
     const proc = try f.proc(&.{param}, body, f.list);
     const rc = @as([3]bool, @splat(true));
-    var solution = try solve(allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, true);
     defer solution.deinit();
     UniquenessOracleState.resetCapabilities(&solution);
     var metrics: UniquenessMetrics = .{};
@@ -7834,7 +7538,7 @@ test "uniqueness seed masks compose through direct calls" {
     const rc = try allocator.alloc(bool, f.store.localCount());
     defer allocator.free(rc);
     @memset(rc, true);
-    var solution = try solve(allocator, &f.store, &f.layouts, rc, .{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, rc, &.{}, true);
     defer solution.deinit();
     try std.testing.expectEqual(@as(arc_sig.ParamMask, 0b01), solution.unique_seed_masks[@backingInt(leaf)]);
     try std.testing.expectEqual(@as(arc_sig.ParamMask, 0b10), solution.unique_seed_masks[@backingInt(middle)]);
@@ -7924,7 +7628,7 @@ test "uniqueness carries a candidate read's origin through a returned record fie
     const rc = try allocator.alloc(bool, f.store.localCount());
     defer allocator.free(rc);
     @memset(rc, true);
-    var solution = try solve(allocator, &f.store, &f.layouts, rc, .{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, rc, &.{}, true);
     defer solution.deinit();
     try settleUniquenessWithOptions(allocator, &f.store, &f.layouts, rc, &solution, .stamped, true, .{});
     try std.testing.expect(solution.fresh_reads.isSet(@backingInt(read)));
@@ -8013,7 +7717,7 @@ test "uniqueness vetoes a join cell's field that a call definition does not vouc
     defer allocator.free(rc);
     @memset(rc, true);
     for ([_]LIR.LocalId{ callee_index, caller_index, flag }) |scalar| rc[@backingInt(scalar)] = false;
-    var solution = try solve(allocator, &f.store, &f.layouts, rc, .{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, rc, &.{}, true);
     defer solution.deinit();
     try settleUniquenessWithOptions(allocator, &f.store, &f.layouts, rc, &solution, .stamped, true, .{});
     try std.testing.expect(solution.sigOf(callee).ret_unique);
@@ -8079,7 +7783,7 @@ test "uniqueness gives a tail loop parameter no field origins from its back edge
     } }, .test_fixture);
     _ = try f.proc(&.{ param, flag }, loop, f.list);
     const rc = [_]bool{ true, false, true, true, true, true };
-    var solution = try solve(allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, true);
     defer solution.deinit();
     UniquenessOracleState.resetCapabilities(&solution);
     var takes = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, f.store.cfStmtCount());
@@ -8119,4 +7823,12 @@ test "ARC shared predicates have one definition across the ARC stage" {
             try std.testing.expectEqual(expected, std.mem.count(u8, module.source, decl));
         }
     }
+}
+
+/// Whether a direct call from `caller` to `callee` may demand an ownership
+/// variant of `callee`: the two share an emission unit (design.md "Mode
+/// Specialization", emission units). A call across units adapts to the
+/// callee's solved base signature.
+pub fn sharesEmissionUnit(store: *const LirStore, caller: LIR.LirProcSpecId, callee: LIR.LirProcSpecId) bool {
+    return LIR.EmissionUnit.shares(store.getProcSpec(caller).emission_unit, store.getProcSpec(callee).emission_unit);
 }

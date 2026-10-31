@@ -73,10 +73,14 @@ pub const erased_call_abi = @import("erased_call_abi.zig");
 /// Digest of the binary contract a platform entrypoint shares with its host.
 pub const host_boundary_digest = @import("host_boundary_digest.zig");
 
+// The std-only shape arithmetic (alignment classes, struct and tag union
+// measuring) the layout store and the Boxy runtime share.
+pub const shape = @import("layout_shape");
+
 // Record field ordering used by the layout store when committing record
 // layouts. `roc glue` consumes the committed order rather than reordering
 // fields itself, so both describe the same memory layout.
-pub const field_order = @import("field_order.zig");
+pub const field_order = shape.field_order;
 
 // The byte layout of an entrypoint's argument buffer, shared by the code that
 // writes it and the code that reads it.
@@ -146,7 +150,6 @@ test "layout tests" {
     std.testing.refAllDecls(@import("erased_call_abi.zig"));
     std.testing.refAllDecls(@import("host_boundary_digest.zig"));
     std.testing.refAllDecls(@import("store.zig"));
-    std.testing.refAllDecls(@import("field_order.zig"));
     std.testing.refAllDecls(@import("entrypoint_args.zig"));
     std.testing.refAllDecls(@import("abi/mod.zig"));
     std.testing.refAllDecls(@import("abi/aarch64.zig"));

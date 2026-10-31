@@ -129,7 +129,7 @@ pub fn populateForRelocs(module: *const WasmModule) WasmModule.SymbolLookupError
 /// Any other shape (a by-value aggregate, a >64-bit integer, a non-pointer
 /// optional) is a compile error, so a newly added wrapper cannot silently bypass
 /// verification.
-fn wasmValTypeOf(comptime T: type) ValType {
+pub fn wasmValTypeOf(comptime T: type) ValType {
     // On wasm32 `usize`/`isize` are 32-bit even though the verifier itself is
     // compiled for a 64-bit host (`usize` and `u64` are distinct types, so this
     // check does not also catch genuine `u64` params).

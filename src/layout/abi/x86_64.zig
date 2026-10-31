@@ -98,7 +98,7 @@ pub fn classifyWindows(store: *const Store, start: Idx) Class {
                 .vector => return .win_i128,
             }
         },
-        .box, .box_of_zst, .erased_box, .ptr => return .integer, // single pointer
+        .box, .box_of_zst, .ptr, .dynamic => return .integer, // single pointer
         .list, .list_of_zst => return .memory, // 24-byte aggregate
         .struct_, .tag_union, .closure, .erased_callable => {},
         .zst, .hole => unreachable, // the size assertion above holds: callers never pass zero-sized values across the C ABI
@@ -140,7 +140,7 @@ pub fn classifySystemV(allocator: std.mem.Allocator, store: *const Store, idx: I
         // exactly like a box. Classifying it as an aggregate would recurse
         // forever: classifyAggregateSysV has no case for it and would route
         // it right back here.
-        .box, .box_of_zst, .erased_box, .ptr, .erased_callable => return Class.one_integer,
+        .box, .box_of_zst, .ptr, .dynamic, .erased_callable => return Class.one_integer,
         .list, .list_of_zst => return integerAggregateSysV(size),
         .struct_, .tag_union, .closure => {
             if (size > 64) return Class.stack;
@@ -216,11 +216,11 @@ fn classifyAggregateSysV(allocator: std.mem.Allocator, store: *const Store, resu
             .scalar,
             .box,
             .box_of_zst,
-            .erased_box,
             .list,
             .list_of_zst,
             .erased_callable,
             .ptr,
+            .dynamic,
             => {
                 const classes = try classifySystemV(allocator, store, member.idx, .other);
                 var j: usize = 0;

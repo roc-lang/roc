@@ -51,6 +51,7 @@ const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
 
 const eval_mod = @import("eval");
+const BoxyInProcessState = @import("boxy_runtime").compiled.InProcessState;
 
 /// Backend used to execute the glue spec.
 pub const GlueOpt = enum {
@@ -599,7 +600,7 @@ fn runGlueSpecPlugin(
 
     var lib = blk: {
         const first = plugin.?;
-        break :blk loadVerifiedGluePlugin(gpa, stderr, first, &stamp, lowered.lir_result.store.runtime_contract, args.no_cache) catch |err| {
+        break :blk loadVerifiedGluePlugin(gpa, stderr, first, &stamp, !cachesGluePlugin(args)) catch |err| {
             switch (err) {
                 error.GluePluginUnavailable, error.GluePluginStampMismatch => {},
                 error.BuildEnvInit,
@@ -618,14 +619,14 @@ fn runGlueSpecPlugin(
             }
             // An installed plugin is a managed artifact: never rebuild past a
             // failure to load it; the remedy is reinstalling the shorthand.
-            if (args.no_cache or args.installed_plugin_path != null or first.cache_root == null) return err;
+            if (!cachesGluePlugin(args) or args.installed_plugin_path != null or first.cache_root == null) return err;
 
             deleteGluePluginCacheEntry(first, std_io);
             first.deinit(gpa);
             plugin = null;
 
             plugin = try getOrBuildGluePlugin(gpa, lowered, glue_proc, arg_layouts, executable_identity, stamp, args, roc_ctx, std_io);
-            break :blk try loadVerifiedGluePlugin(gpa, stderr, plugin.?, &stamp, lowered.lir_result.store.runtime_contract, true);
+            break :blk try loadVerifiedGluePlugin(gpa, stderr, plugin.?, &stamp, true);
         };
     };
     defer lib.deinit();
@@ -634,28 +635,13 @@ fn runGlueSpecPlugin(
     const entry = lib.lookup(GlueEntryFn, builtins.shim_symbols.roc_make_glue) orelse return error.GluePluginUnavailable;
 
     runtime_env.resetObservation();
+    const composition = if (lowered.lir_result.store.runtime_contract == .boxy) try BoxyInProcessState.create(gpa) else null;
+    defer if (composition) |owned| owned.destroy();
+    const composing = if (composition) |owned| owned.enter() else null;
+    defer if (composing) |entered| BoxyInProcessState.leave(entered);
     var crash_boundary = runtime_env.enterCrashBoundary();
     defer crash_boundary.deinit();
 
-    const boxy_tables = eval_mod.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result);
-    const boxy_runtime = if (eval_mod.boxy_runtime.storeNeedsRuntime(&lowered.lir_result.store))
-        try eval_mod.boxy_abi.createRuntimeFromStores(
-            gpa,
-            &lowered.lir_result.store,
-            &lowered.lir_result.layouts,
-            boxy_tables,
-            runtime_env.get_ops(),
-        )
-    else
-        null;
-    defer if (boxy_runtime) |runtime| eval_mod.boxy_abi.deinitRuntime(runtime);
-    const previous_boxy_runtime = if (boxy_runtime) |runtime|
-        eval_mod.boxy_abi.swapActiveRuntime(runtime)
-    else
-        null;
-    defer if (boxy_runtime != null) {
-        _ = eval_mod.boxy_abi.swapActiveRuntime(previous_boxy_runtime);
-    };
     const entered = builtins.in_process_host.enter(runtime_env.get_ops(), null);
     defer builtins.in_process_host.leave(entered);
 
@@ -676,6 +662,17 @@ fn runGlueSpecPlugin(
     }
 }
 
+/// Whether the compiled plugin is read from and filed in the cache. The
+/// plugin is post-check work, so a `.boxy` glue run neither reads nor files
+/// it (design.md "Caching Under `.boxy`").
+fn cachesGluePlugin(args: GlueArgs) bool {
+    if (args.no_cache) return false;
+    return switch (args.specialization_strategy) {
+        .lss => true,
+        .boxy => false,
+    };
+}
+
 fn getOrBuildGluePlugin(
     gpa: Allocator,
     lowered: *lir.CheckedPipeline.LoweredProgram,
@@ -692,7 +689,7 @@ fn getOrBuildGluePlugin(
         return .{ .bytes = bytes, .cache_root = null };
     }
 
-    if (args.no_cache) {
+    if (!cachesGluePlugin(args)) {
         return .{ .bytes = try buildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args.opt, std_io), .cache_root = null };
     }
 
@@ -737,13 +734,7 @@ fn buildGluePlugin(
         .ret_layout = proc.ret_layout,
     }};
     var bitcode = generate: {
-        var codegen = llvm_compile.MonoLlvmCodeGen.init(
-            gpa,
-            &lowered.lir_result.store,
-            lowered.lir_result.boxy_erased_arg_desc_offsets.items,
-            lowered.lir_result.boxy_erased_arg_desc_params.items,
-            lowered.lir_result.boxy_worker_procs.items,
-        );
+        var codegen = llvm_compile.MonoLlvmCodeGen.init(gpa, &lowered.lir_result.store);
         codegen.layout_store = &lowered.lir_result.layouts;
         codegen.plugin_stamp_bytes = std.mem.asBytes(&stamp);
         codegen.plugin_stamp_alignment = @alignOf(GluePluginStampV1);
@@ -778,10 +769,9 @@ fn loadVerifiedGluePlugin(
     stderr: *std.Io.Writer,
     plugin: BuiltGluePlugin,
     expected: *const GluePluginStampV1,
-    runtime_contract: lir.LIR.RuntimeContract,
     report_errors: bool,
 ) GlueError!eval_mod.object_image.Image {
-    var image = eval_mod.object_image.load(gpa, plugin.bytes, runtime_contract) catch |err| switch (err) {
+    var image = eval_mod.object_image.load(gpa, plugin.bytes) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.UnsupportedObject,
         error.MalformedObject,
@@ -2467,13 +2457,13 @@ const TypeTable = struct {
             const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable; // the loop above lowered every root's artifact
             const layout_idx = lowering.root_layouts.get(root.checked_type) orelse
                 glueInvariant("compiler emitted no layout for requested glue root checked type {d}", .{@backingInt(root.checked_type)});
-            try self.boxRootInPlace(&lowering.abi_layouts.layouts, entry_idx, layout_idx);
+            try self.boxRootInPlace(lowering.abi_layouts.layouts(), entry_idx, layout_idx);
         }
 
         for (self.roots.keys(), self.roots.values()) |entry_idx, root| {
             const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable; // the first loop lowered every root's artifact
             const layout_idx = lowering.root_layouts.get(root.checked_type) orelse unreachable; // the previous loop checked every root's layout exists
-            try self.attachEntryLayout(&lowering.abi_layouts.layouts, entry_idx, layout_idx);
+            try self.attachEntryLayout(lowering.abi_layouts.layouts(), entry_idx, layout_idx);
         }
 
         for (self.entries.items, 0..) |entry, idx| {
@@ -2683,7 +2673,7 @@ const TypeTable = struct {
                     .list => layout_val.getIdx(),
                     .hole => unreachable, // glue reads only host-boundary layouts, and a hole appears only in a demand-shaped specialization's parameters
                     .list_of_zst => .zst,
-                    .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .erased_box => glueInvariant("list glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)}),
+                    .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .dynamic => glueInvariant("list glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)}),
                 };
                 const slot = try self.childSlotFor(store, list_repr.elem_id, elem_layout);
                 self.entries.items[@intCast(entry_idx)].repr.list.elem_id = slot.entry;
@@ -2715,7 +2705,7 @@ const TypeTable = struct {
                 const inner_layout: layout.Idx = switch (layout_val.tag) {
                     .box => layout_val.getIdx(),
                     .box_of_zst => .zst,
-                    .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .hole, .tag_union, .ptr, .erased_box, .erased_callable => glueInvariant("box glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)}),
+                    .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .hole, .tag_union, .ptr, .dynamic, .erased_callable => glueInvariant("box glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)}),
                 };
                 const slot = try self.childSlotFor(store, box_repr.inner_id, inner_layout);
                 self.entries.items[@intCast(entry_idx)].repr.box.inner_id = slot.entry;
@@ -3652,7 +3642,7 @@ const GlueRocValueWriter = struct {
             .list => list_layout.getIdx(),
             .hole => unreachable, // glue reads only host-boundary layouts, and a hole appears only in a demand-shaped specialization's parameters
             .list_of_zst => .zst,
-            .scalar, .box, .box_of_zst, .erased_box, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => glueInvariant("glue expected list layout, got {s}", .{@tagName(list_layout.tag)}),
+            .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .dynamic => glueInvariant("glue expected list layout, got {s}", .{@tagName(list_layout.tag)}),
         };
     }
 

@@ -61,7 +61,6 @@ pub const SpliceClosure = struct {
     allocator: Allocator,
     set: *const backend.dev.CodeExcerpt.Set,
     procs: std.AutoHashMap(lir.ProcIdentity, CodeExcerpts),
-    thunks: std.AutoHashMap(lir.ProcIdentity, u32),
     helpers: std.StringHashMap(u32),
     /// Artifacts the current query reached; exactly the indices in `order`.
     seen: std.DynamicBitSetUnmanaged,
@@ -79,7 +78,6 @@ pub const SpliceClosure = struct {
             .allocator = allocator,
             .set = set,
             .procs = std.AutoHashMap(lir.ProcIdentity, CodeExcerpts).init(allocator),
-            .thunks = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator),
             .helpers = std.StringHashMap(u32).init(allocator),
             .seen = .{},
         };
@@ -92,7 +90,6 @@ pub const SpliceClosure = struct {
                     if (!entry.found_existing) entry.value_ptr.first = @intCast(index);
                     entry.value_ptr.last = @intCast(index);
                 },
-                .boxy_thunk => |identity| _ = try self.thunks.getOrPutValue(identity, @intCast(index)),
                 .rc_helper => |name| _ = try self.helpers.getOrPutValue(name, @intCast(index)),
                 .entrypoint, .message_pool_run, .branch_island => {},
             }
@@ -110,7 +107,6 @@ pub const SpliceClosure = struct {
         self.order.deinit(self.allocator);
         self.seen.deinit(self.allocator);
         self.helpers.deinit();
-        self.thunks.deinit();
         self.procs.deinit();
     }
 
@@ -159,7 +155,6 @@ pub const SpliceClosure = struct {
             .absent => null,
             .unresolved => switch (ref.target) {
                 .proc => |identity| if (self.procs.get(identity)) |artifacts| artifacts.first else null,
-                .boxy_thunk => |identity| self.thunks.get(identity),
                 .rc_helper => |name| self.helpers.get(name),
             },
         };
@@ -340,7 +335,7 @@ pub fn decodeComponent(a: Allocator, bytes: []const u8) Error!Component {
     // Edge order is canonical and every positional reference has one endpoint.
     var edge_cursor: usize = 0;
     for (pack.set.excerpts, 0..) |artifact, i| {
-        if (artifact.code.len != 0 or artifact.runtime_numbers.len != 0) return error.MalformedPack;
+        if (artifact.code.len != 0) return error.MalformedPack;
         for (artifact.data) |item| if (item.bytes.len != 0) return error.MalformedPack;
         for (artifact.symbolic_refs) |ref| if (ref.binding != .absent) return error.MalformedPack;
         for (artifact.refs, 0..) |_, r| {
@@ -452,8 +447,7 @@ pub fn reusableComponent(set: *const PA.Set, graph: *const ComponentGraph, closu
         if (!std.mem.eql(u8, &payload_hashes[index], &old_payload.digest)) return null;
         if (!equal(PA.Kind, current.kind, old.kind) or current.entry != old.entry or !equal(?PA.Frame, current.frame, old.frame) or
             !equal([]const PA.FailureSite, current.failure_sites, old.failure_sites) or
-            !equal([]const PA.NamedRelocation, current.relocations, old.relocations) or
-            !equal([]const PA.RuntimeNumberLoad, current.runtime_numbers, old.runtime_numbers)) return null;
+            !equal([]const PA.NamedRelocation, current.relocations, old.relocations)) return null;
         if (!sameLoc(current.loc, set.source_files, old.loc, origin.source.source_files) or current.lines.len != old.lines.len) return null;
         for (current.lines, old.lines) |x, y| {
             if (x.offset != y.offset or !equal(base.Region, x.region, y.region) or !sameLoc(x.loc, set.source_files, y.loc, origin.source.source_files)) return null;

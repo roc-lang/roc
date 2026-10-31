@@ -61,7 +61,6 @@ const Spec = struct {
             .scalar,
             .box,
             .box_of_zst,
-            .erased_box,
             .list,
             .list_of_zst,
             .closure,
@@ -69,6 +68,7 @@ const Spec = struct {
             .zst,
             .hole,
             .ptr,
+            .dynamic,
             => false,
         };
     }

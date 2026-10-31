@@ -100,6 +100,16 @@ const Inventory = struct {
                     const packed_fn = self.store.stmtRow(stmt.assign_packed_erased_fn.data);
                     self.escapes[@backingInt(packed_fn.proc)] = true;
                     try self.markReachable(packed_fn.proc);
+                } else if (stmt == .dyn) {
+                    const escaping: ?LIR.LirProcSpecId = switch (self.store.stmtRow(stmt.dyn.data)) {
+                        .dict_compose => |dict| dict.worker,
+                        .closure => |closure| closure.proc,
+                        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .view, .adapt => null,
+                    };
+                    if (escaping) |proc| {
+                        self.escapes[@backingInt(proc)] = true;
+                        try self.markReachable(proc);
+                    }
                 } else if (stmt == .assign_literal and stmt.assign_literal.value == .proc_ref) {
                     const proc = stmt.assign_literal.value.proc_ref;
                     self.escapes[@backingInt(proc)] = true;
@@ -149,16 +159,13 @@ fn eligibleCall(
     call: @FieldType(LIR.CFStmt, "assign_call"),
 ) bool {
     const extra = store.stmtRowOrDefault(call.extra);
-    if (extra.is_cold or extra.result_desc != null or extra.out_desc != null) return false;
+    if (extra.is_cold) return false;
     const callee = store.getProcSpecImmediate(call.proc);
     return callee.body != null and
         callee.hosted == null and
         callee.abi == .roc and
         callee.erased_reuse_arg == null and
         callee.erased_call_args == null and
-        callee.ret_desc == null and
-        callee.runtime_ret_desc == null and
-        !callee.boxy_runtime_entry and
         !callee.is_static_initializer and
         ownershipNeutralFrame(store, layouts, callee.frame_locals);
 }

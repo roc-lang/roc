@@ -18,9 +18,9 @@
 //! therefore the highest `LocalId` any procedure binds, and the per-procedure
 //! work on top of that is the locals that procedure emits.
 //!
-//! Nested helper compilation (RC helpers, capture-drop helpers, dictionary
-//! thunks, host adapters) takes a fresh stamp, so a helper that binds the same
-//! `LocalId` as its caller neither sees the caller's binding nor destroys it.
+//! Nested helper compilation (RC helpers, host adapters) takes a fresh stamp,
+//! so a helper that binds the same `LocalId` as its caller neither sees the
+//! caller's binding nor destroys it.
 //! Specialized procedures likewise share `LocalId`s without sharing wasm slots.
 
 const std = @import("std");

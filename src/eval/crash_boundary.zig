@@ -16,7 +16,7 @@ pub const setjmp = sljmp.setjmp;
 pub const longjmp = sljmp.longjmp;
 
 /// The message recorded when Roc code overflows its stack.
-pub const STACK_OVERFLOW_MESSAGE = "This Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.";
+pub const STACK_OVERFLOW_MESSAGE = base.stack_overflow.program_message;
 
 /// A boundary over `Env`, which must hold `jmp_buf: JmpBuf` and
 /// `active_jmp_buf: ?*JmpBuf`. With `catches_stack_overflow`, the boundary

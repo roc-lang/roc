@@ -41,8 +41,6 @@ pub const LiteralValues = @import("literal_values.zig");
 pub const CompilerHost = @import("compiler_host.zig");
 /// Dev-backend RocOps environment for native compile-time evaluation
 pub const CompileTimeHost = @import("compile_time_host.zig");
-/// The compile-time producers each compile-time root's evaluation reads.
-pub const CompileTimeRootGraph = @import("compile_time_root_graph.zig");
 /// Stores compile-time interpreter results in ConstStore
 pub const ConstStoreWriter = @import("const_store_writer.zig");
 pub const NativeRootExport = @import("native_root_export.zig");
@@ -105,11 +103,6 @@ pub const wasm_runner = if (builtin.target.os.tag == .freestanding) struct {
 pub const Inspected = @import("inspected.zig");
 /// Compatibility name retained for evaluator tests.
 pub const test_helpers = Inspected;
-/// Descriptor-guided boxy value operations shared by the interpreter and
-/// machine-code backends.
-pub const boxy_runtime = @import("boxy_runtime.zig");
-/// C-ABI wrappers over the boxy runtime for machine-code backends.
-pub const boxy_abi = @import("boxy_abi.zig");
 /// Debug-only conformance check between `RcEffect` rows and builtin behavior.
 pub const rc_conformance = @import("rc_conformance.zig");
 
@@ -127,7 +120,6 @@ test "eval tests" {
     std.testing.refAllDecls(@import("literal_values.zig"));
     std.testing.refAllDecls(@import("compiler_host.zig"));
     std.testing.refAllDecls(@import("compile_time_host.zig"));
-    std.testing.refAllDecls(@import("compile_time_root_graph.zig"));
     std.testing.refAllDecls(@import("const_store_writer.zig"));
     std.testing.refAllDecls(@import("native_root_export.zig"));
     std.testing.refAllDecls(@import("frozen_root_transcode.zig"));
@@ -137,4 +129,5 @@ test "eval tests" {
     std.testing.refAllDecls(@import("inspected.zig"));
     std.testing.refAllDecls(@import("test/host_trampoline_assembly_test.zig"));
     std.testing.refAllDecls(@import("runtime_host.zig"));
+    std.testing.refAllDecls(@import("test/boxy_dyn_lir_test.zig"));
 }

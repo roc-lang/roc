@@ -309,14 +309,6 @@ pub fn runBorrowed(
     lowerer.keepLoweredSpecProcs();
     try lowerer.writeRuntimeSchemas();
     lowerer.result.finishExpectSites();
-
-    // This boundary checks producer-owned columns, never scans the program.
-    inline for (@typeInfo(LirProgram.Result).@"struct".field_names) |field_name| {
-        if (comptime std.mem.startsWith(u8, field_name, "boxy_") and !std.mem.eql(u8, field_name, "boxy_frozen_method_origins")) {
-            if (@field(lowerer.result, field_name).items.len != 0) Common.invariant("LSS constructed a Boxy side table");
-        }
-    }
-    if (lowerer.result.boxy_frozen_method_origins.count() != 0) Common.invariant("LSS constructed Boxy frozen callable metadata");
     return lowerer.finish();
 }
 
@@ -4928,6 +4920,7 @@ const Lowerer = struct {
                 .site = root.site,
                 .proc = try self.markReachableFn(root.fn_id),
                 .ret_layout = ret_layout,
+                .ret_type = try self.constTypeOfType(entry.ret),
                 .plan = try self.constPlanOfType(entry.ret),
                 .value_slot = try self.comptimeValueSlot(.{ .module = root.module, .root = .{ .literal = id }, .const_locator = null }, entry.ret, ret_layout),
             });
@@ -10686,7 +10679,7 @@ const Lowerer = struct {
             .hole,
             .tag_union,
             .ptr,
-            .erased_box,
+            .dynamic,
             => Common.invariant("recursive Monotype let statement must bind a boxed runtime layout"),
         };
         return .{
@@ -11149,41 +11142,9 @@ const Lowerer = struct {
         if (output_layout) |out| out.* = out_elem_idx;
 
         return layout.WidthValues(bool).both(
-            self.listMapInterchangeableAtWidth(in_elem_idx, out_elem_idx, .u32),
-            self.listMapInterchangeableAtWidth(in_elem_idx, out_elem_idx, .u64),
+            self.result.layouts.listItemsInterchangeableAt(in_elem_idx, out_elem_idx, .u32),
+            self.result.layouts.listItemsInterchangeableAt(in_elem_idx, out_elem_idx, .u64),
         );
-    }
-
-    /// Whether the input and output element layouts share one allocation at the
-    /// given pointer width. See `listMapLayoutsInterchangeable`.
-    fn listMapInterchangeableAtWidth(
-        self: *Lowerer,
-        in_elem_idx: layout.Idx,
-        out_elem_idx: layout.Idx,
-        target_usize: base.target.TargetUsize,
-    ) bool {
-        const layouts = &self.result.layouts;
-        const in_elem = layouts.getLayout(in_elem_idx);
-        // A list of zero-sized elements has no allocation to reuse.
-        const in_size = layouts.sizeAt(in_elem, target_usize);
-        if (in_size == 0) return false;
-
-        const out_elem = layouts.getLayout(out_elem_idx);
-        if (layouts.sizeAt(out_elem, target_usize) != in_size) return false;
-
-        // The allocation's hidden header and the alignment passed to the
-        // allocator both derive from max(ptr_width, element alignment) and
-        // from whether elements are refcounted (which reserves an extra
-        // element-count slot for seamless slices). Both must agree or a
-        // later free would compute the wrong allocation pointer.
-        const ptr_width = target_usize.size();
-        const in_alignment: u32 = @intCast(in_elem.alignment(target_usize).toByteUnits());
-        const out_alignment: u32 = @intCast(out_elem.alignment(target_usize).toByteUnits());
-        if (@max(ptr_width, in_alignment) != @max(ptr_width, out_alignment)) return false;
-
-        if (layouts.layoutContainsRefcounted(in_elem) != layouts.layoutContainsRefcounted(out_elem)) return false;
-
-        return true;
     }
 
     /// Feed `value` (of `value_ty`) into `hasher`, writing the resulting Hasher
@@ -14407,8 +14368,8 @@ const Lowerer = struct {
                 => return .{ .value = lhs.eql(rhs) },
                 .zst,
                 .hole,
+                .dynamic,
                 .box_of_zst,
-                .erased_box,
                 .list_of_zst,
                 => return .{ .value = true },
                 .box,
@@ -15886,7 +15847,7 @@ const Lowerer = struct {
             },
             .box => unreachable, // the loop above unwraps every box layout
             .box_of_zst, .zst, .scalar => .zst,
-            .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr, .hole => Common.invariant("tag payload operation expected tag-union layout"),
+            .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr, .hole, .dynamic => Common.invariant("tag payload operation expected tag-union layout"),
         };
     }
 
@@ -15907,7 +15868,7 @@ const Lowerer = struct {
         return switch (list_layout.tag) {
             .list => list_layout.getIdx(),
             .list_of_zst => .zst,
-            .scalar, .box, .box_of_zst, .erased_box, .struct_, .closure, .erased_callable, .zst, .hole, .tag_union, .ptr => Common.invariant("list expression target was not a list layout"),
+            .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .tag_union, .ptr, .dynamic => Common.invariant("list expression target was not a list layout"),
         };
     }
 

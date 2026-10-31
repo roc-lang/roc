@@ -139,12 +139,12 @@ fn reusable(previous: *const Previous, root: checked.CompileTimeRoot) bool {
 }
 
 /// A value reusable under semantic dependency identities must hold no module
-/// version references, including references in its recorded demand. This is
-/// stricter than transplantation across edits of its own module: imported
+/// version references. Its recorded demand is separately validated and
+/// rebound through producer-authored read identities. This is stricter than
+/// transplantation across edits of its own module: imported
 /// artifacts may have changed too. Version-bearing values retain the ordinary
 /// artifact-key contract until their producer supplies explicit rebinding data.
 fn reusableAcrossImports(previous: *const Previous, root: checked.CompileTimeRoot) Allocator.Error!bool {
-    if (previous.reads.readsOf(root.id).len != 0) return false;
     switch (root.payload) {
         .const_node => |node| {
             if (!try previous.const_store.valuePortable(node, null)) return false;
@@ -155,7 +155,7 @@ fn reusableAcrossImports(previous: *const Previous, root: checked.CompileTimeRoo
                     null,
                     null,
                 ),
-                .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion => true,
+                .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .literal_argument => true,
                 .expect, .repl_expr => false,
             };
         },
@@ -164,8 +164,44 @@ fn reusableAcrossImports(previous: *const Previous, root: checked.CompileTimeRoo
     }
 }
 
+/// Resolve a committed read to the current producer at its explicit source
+/// placement, admitting it only when its checked value identity still matches.
+pub const ReadInputs = struct {
+    allocator: Allocator,
+    roots: std.AutoHashMapUnmanaged([64]u8, Entry) = .empty,
+
+    const Entry = struct { value: [32]u8, ref: checked.CompileTimeRootReadTable.Ref };
+
+    pub fn deinit(self: *ReadInputs) void {
+        self.roots.deinit(self.allocator);
+    }
+
+    pub fn addModule(self: *ReadInputs, placement: [32]u8, module: *const checked.CheckedModuleArtifact) Allocator.Error!void {
+        if (module.compile_time_root_identities.test_rows.len == 0) return;
+        for (module.compile_time_root_identities.test_rows, module.compile_time_roots.roots) |identity, root| {
+            try self.roots.put(self.allocator, key(placement, identity.site), .{
+                .value = identity.value,
+                .ref = .{ .module = module.key.bytes, .root = root.id },
+            });
+        }
+    }
+
+    fn key(placement: [32]u8, site: [32]u8) [64]u8 {
+        var bytes: [64]u8 = undefined;
+        @memcpy(bytes[0..32], &placement);
+        @memcpy(bytes[32..], &site);
+        return bytes;
+    }
+
+    fn resolve(self: *const ReadInputs, read: checked.CompileTimeRootReadTable.Identity) ?checked.CompileTimeRootReadTable.Ref {
+        const entry = self.roots.get(key(read.placement, read.root.site)) orelse return null;
+        if (!std.meta.eql(entry.value, read.root.value)) return null;
+        return entry.ref;
+    }
+};
+
 /// Find the previous root each pending root of `module` copies.
-pub fn plan(allocator: Allocator, module: *const checked.CheckedModuleArtifact, previous: *const Previous) Allocator.Error!Transplant {
+pub fn plan(allocator: Allocator, module: *const checked.CheckedModuleArtifact, previous: *const Previous, inputs: *const ReadInputs) Allocator.Error!Transplant {
     var transplant = Transplant{ .allocator = allocator, .type_occurrences = .init(allocator) };
     errdefer transplant.deinit();
     const identities = module.compile_time_root_identities.rows;
@@ -203,7 +239,7 @@ pub fn plan(allocator: Allocator, module: *const checked.CheckedModuleArtifact, 
                     &previous.own_identity,
                     &transplant.type_occurrences,
                 )) continue,
-                .numeral_conversion, .quote_conversion, .hoisted_validation => {},
+                .numeral_conversion, .quote_conversion, .hoisted_validation, .literal_argument => {},
                 .callable_binding, .expect, .repl_expr => continue,
             }
         }
@@ -227,14 +263,28 @@ pub fn plan(allocator: Allocator, module: *const checked.CheckedModuleArtifact, 
         if (!entry.found_existing) entry.value_ptr.* = root.id;
     }
 
-    for (module.compile_time_roots.roots) |root| {
+    roots: for (module.compile_time_roots.roots) |root| {
         if (root.payload != .pending or root.kind == .repl_expr) continue;
         transplant.pending_roots += 1;
         const identity = identities[@backingInt(root.id)];
         const semantic_source = if (has_semantics) by_semantics.get(semantic_rows[@backingInt(root.id)].value) else null;
-        const source = by_identity_and_site.get(identityKey(identity)) orelse by_identity.get(identity.value) orelse semantic_source orelse continue;
+        const exact_source = by_identity_and_site.get(identityKey(identity)) orelse by_identity.get(identity.value);
+        const source = exact_source orelse semantic_source orelse continue;
         const reads_start = transplant.reads.items.len;
-        for (previous.reads.readsOf(source)) |read| {
+        const reads = previous.reads.readsOf(source);
+        if (exact_source == null and reads.len != 0) {
+            // Admission uses only the producer's committed read identities.
+            // Missing optional cache metadata is a miss, never an old root id.
+            if (previous.reads.identities.len == 0) continue;
+            const row = previous.reads.rows[@backingInt(source)];
+            for (previous.reads.identities[row.start..][0..row.len]) |read| {
+                const translated = inputs.resolve(read) orelse {
+                    transplant.reads.shrinkRetainingCapacity(reads_start);
+                    continue :roots;
+                };
+                try transplant.reads.append(allocator, translated);
+            }
+        } else for (reads) |read| {
             if (!std.meta.eql(read.module, previous.key.bytes)) {
                 try transplant.reads.append(allocator, read);
                 continue;
@@ -288,7 +338,7 @@ fn copyRoot(module: *checked.CheckedModuleArtifact, previous: *const Previous, m
                     &module.canonical_names,
                     storedRootType(previous, match.previous),
                 ),
-                .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .repl_expr => null,
+                .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => null,
             },
         },
         .discarded => .{ .payload = .discarded, .root_type = null },
@@ -422,7 +472,7 @@ fn verifyNamedTypeOccurrences(module: *const checked.CheckedModuleArtifact, prev
                 const entry = try seen.getOrPut(node);
                 if (entry.found_existing) continue;
                 switch (store.get(node)) {
-                    .pending, .fn_value => base.invariant("a transplanted value held a pending node or a function value", .{}),
+                    .pending, .fn_value, .boxy_fn => base.invariant("a transplanted value held a pending node or a function value", .{}),
                     .zst, .scalar, .str, .crash, .checked_error => {},
                     .box => |payload| try pending.append(allocator, payload),
                     .nominal => |nominal| {
@@ -585,7 +635,7 @@ fn constRefForRoot(module: *const checked.CheckedModuleArtifact, root: checked.C
         },
         .hoisted_constant => (module.hoisted_constants.lookupByRoot(root.id) orelse
             base.invariant("hoisted constant root had no hoisted const entry", .{})).const_ref,
-        .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .repl_expr => base.invariant("compile-time root kind has no constant template", .{}),
+        .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => base.invariant("compile-time root kind has no constant template", .{}),
     };
 }
 
@@ -618,7 +668,7 @@ pub fn publishPortability(module: *checked.CheckedModuleArtifact) Allocator.Erro
             .pending, .unevaluated, .fn_value, .expect, .runtime => false,
             .const_node => |node| switch (root.kind) {
                 .repl_expr, .callable_binding, .expect => false,
-                .numeral_conversion, .quote_conversion, .hoisted_validation => try module.const_store.valuePortable(node, own),
+                .numeral_conversion, .quote_conversion, .hoisted_validation, .literal_argument => try module.const_store.valuePortable(node, own),
                 .constant, .hoisted_constant => try module.const_store.valuePortable(node, own) and
                     try module.const_store.type_store.typePortable(&module.canonical_names, storedTemplateType(module, root), own, own_identity),
             },

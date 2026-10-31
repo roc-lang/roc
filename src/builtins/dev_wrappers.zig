@@ -1474,15 +1474,8 @@ pub fn roc_builtins_hot_reload_erased_callable_drop(capture_ptr: ?[*]u8, _: *Roc
     const roc_ops = in_process_host.ops();
     const header = erased_callable.hotReloadCaptureHeader(capture_ptr) orelse return;
     const root = @import("root");
-    const previous_runtime = if (comptime @hasDecl(root, "roc_hot_reload_activate_retained"))
-        root.roc_hot_reload_activate_retained(header.code_ref)
-    else
-        null;
     if (header.original_on_drop) |original_on_drop| {
         original_on_drop(erased_callable.hotReloadAdjustedCapturePtr(capture_ptr), roc_ops);
-    }
-    if (comptime @hasDecl(root, "roc_hot_reload_deactivate_retained")) {
-        root.roc_hot_reload_deactivate_retained(previous_runtime);
     }
     if (comptime @hasDecl(root, "roc_hot_reload_release_retained")) {
         root.roc_hot_reload_release_retained(header.code_ref);

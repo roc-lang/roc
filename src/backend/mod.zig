@@ -11,8 +11,6 @@ const roc_target = @import("roc_target");
 
 pub const dev = @import("dev/mod.zig");
 pub const wasm = @import("wasm/mod.zig");
-/// Backend-neutral operand plans for Boxy runtime wrapper calls.
-pub const boxy_call_plan = @import("boxy_call_plan.zig");
 
 comptime {
     if (@import("builtin").is_test) {
@@ -43,6 +41,18 @@ pub const collectReferencedProcs = dev.collectReferencedProcs;
 pub const ObjectFileCompiler = dev.ObjectFileCompiler;
 pub const CompilationError = dev.CompilationError;
 pub const writeFileWindowsAvSafe = dev.writeFileWindowsAvSafe;
+
+/// The Boxy runtime entry points generated code calls (`roc_desc_*`), by
+/// symbol name.
+pub const boxy_runtime_symbols: []const []const u8 = blk: {
+    const exports = @import("boxy_runtime").exports;
+    const prefix = "roc_desc_";
+    var names: []const []const u8 = &.{};
+    for (@typeInfo(exports).@"struct".decl_names) |name| {
+        if (name.len > prefix.len and @import("std").mem.eql(u8, name[0..prefix.len], prefix)) names = names ++ .{name};
+    }
+    break :blk names;
+};
 
 test "backend tests" {
     const std = @import("std");
@@ -187,7 +197,7 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
     const u32x3_body = try helpers.addStructBody(&store, u32x3_layout, .u32, &.{ 0x01020304, 0x05060708, 0x090A0B0C });
     const u32x3_proc = try helpers.addErasedProc(&store, &layout_store, u32x3_body, u32x3_layout);
 
-    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, roc_target.host_cpu.level());
+    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, .{}, roc_target.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
 
@@ -269,7 +279,7 @@ test "x86_64 Windows hosted U128 return stores all 16 bytes from XMM0" {
     }, .none);
 
     const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(.x64win);
-    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, .default);
     defer codegen.deinit();
     codegen.generation_mode = .object_file;
 
@@ -318,7 +328,7 @@ test "x86_64 Windows U128 entrypoint return loads all 16 bytes into XMM0" {
     }, .none);
 
     const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(.x64win);
-    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, .default);
     defer codegen.deinit();
     codegen.generation_mode = .object_file;
 

@@ -348,7 +348,8 @@ pub const Constants = struct {
     /// 163: producer-owned declaration slots and stored checking diagnostics.
     /// 164: sorted array builders serialize zeroed entry padding and an
     ///      integer offset that the cache validator checks.
-    pub const CACHE_VERSION = 164;
+    /// 165: compile-time reads persist placement and semantic root identity.
+    pub const CACHE_VERSION = 166;
 };
 
 /// Configuration for the Roc cache system.

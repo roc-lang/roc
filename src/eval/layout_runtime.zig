@@ -18,7 +18,7 @@ const Allocator = std.mem.Allocator;
 const debugPrint = if (builtin.os.tag == .freestanding) struct {
     fn print(comptime _: []const u8, _: anytype) void {}
 }.print else std.debug.print;
-/// The error set shared by the Boxy runtime and the LIR interpreter.
+/// The error set of the LIR interpreter.
 pub const Error = error{
     OutOfMemory,
     RuntimeError,
@@ -142,7 +142,6 @@ pub const LayoutRuntime = struct {
             },
             .hole => base.invariant("a demand hole reached concrete value execution", .{}),
             .box_of_zst => if (expected_layout == .zst) return Value.zst,
-            .erased_box,
             .scalar,
             .list,
             .list_of_zst,
@@ -152,6 +151,7 @@ pub const LayoutRuntime = struct {
             .zst,
             .tag_union,
             .ptr,
+            .dynamic,
             => {},
         }
 
@@ -232,7 +232,6 @@ pub const LayoutRuntime = struct {
             },
             .scalar,
             .box_of_zst,
-            .erased_box,
             .list,
             .list_of_zst,
             .struct_,
@@ -241,6 +240,7 @@ pub const LayoutRuntime = struct {
             .zst,
             .hole,
             .ptr,
+            .dynamic,
             => .zst,
         };
     }
@@ -287,10 +287,6 @@ pub const LayoutRuntime = struct {
                 },
                 .vector => a.read(u128) == b.read(u128),
             },
-            .erased_box => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: equality on erased box layout {d} survived lowering",
-                .{@backingInt(layout_idx)},
-            ),
             .box => blk: {
                 const a_ptr = self.readBoxedDataPointer(a);
                 const b_ptr = self.readBoxedDataPointer(b);
@@ -301,7 +297,7 @@ pub const LayoutRuntime = struct {
                 "LIR/interpreter invariant violated: equality on erased callable layout {d} survived lowering",
                 .{@backingInt(layout_idx)},
             ),
-            .ptr => return self.invariantFailedError(
+            .ptr, .dynamic => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: equality on compiler-internal ptr layout {d}",
                 .{@backingInt(layout_idx)},
             ),
@@ -638,7 +634,6 @@ pub const LayoutRuntime = struct {
                 .elem_alignment = 1,
                 .contains_rc = false,
             },
-            .erased_box,
             .scalar,
             .list,
             .list_of_zst,
@@ -648,6 +643,7 @@ pub const LayoutRuntime = struct {
             .zst,
             .tag_union,
             .ptr,
+            .dynamic,
             => self.invariantFailed(
                 "LIR/interpreter invariant violated: expected box layout, got {s}",
                 .{@tagName(box_layout.tag)},
@@ -719,10 +715,6 @@ pub const LayoutRuntime = struct {
                 return boxed;
             },
             .box_of_zst => return try self.allocBoxOfZstValue(hooks, ret_layout),
-            .erased_box => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: converting a RocList to erased box layout {d} requires a payload descriptor",
-                .{@backingInt(ret_layout)},
-            ),
             .hole => base.invariant("a demand hole reached concrete value execution", .{}),
             .scalar,
             .list,
@@ -733,6 +725,7 @@ pub const LayoutRuntime = struct {
             .zst,
             .tag_union,
             .ptr,
+            .dynamic,
             => {
                 const val = try hooks.allocValue(ret_layout);
                 @memcpy(val.ptr[0..@sizeOf(RocList)], std.mem.asBytes(&rl));
@@ -745,10 +738,6 @@ pub const LayoutRuntime = struct {
         const ret_layout_val = self.layout_store.getLayout(ret_layout);
         switch (ret_layout_val.tag) {
             .box_of_zst => return try self.allocBoxOfZstValue(hooks, ret_layout),
-            .erased_box => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: boxing into erased box layout {d} requires a payload descriptor",
-                .{@backingInt(ret_layout)},
-            ),
             .box => {
                 const box_info = self.boxAllocInfo(hooks, ret_layout_val);
                 const elem_size = box_info.elem_size;
@@ -776,6 +765,7 @@ pub const LayoutRuntime = struct {
             .zst,
             .tag_union,
             .ptr,
+            .dynamic,
             => return error.RuntimeError,
         }
     }
@@ -795,8 +785,8 @@ pub const LayoutRuntime = struct {
 
         const actual_layout_val = self.layout_store.getLayout(actual_layout);
         const expected_layout_val = self.layout_store.getLayout(expected_layout);
-        const actual_is_box = actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst or actual_layout_val.tag == .erased_box;
-        const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst or expected_layout_val.tag == .erased_box;
+        const actual_is_box = actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst;
+        const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst;
         if (actual_is_box or expected_is_box) {
             return try self.coerceExplicitNominalValueToLayout(hooks, value, actual_layout, expected_layout);
         }
@@ -872,8 +862,8 @@ pub const LayoutRuntime = struct {
             // a boxed value expected concretely is read back out of it.
             const actual_val = self.layout_store.getLayout(actual_layout);
             const expected_val = self.layout_store.getLayout(expected_layout);
-            const actual_is_box = actual_val.tag == .box or actual_val.tag == .box_of_zst or actual_val.tag == .erased_box;
-            const expected_is_box = expected_val.tag == .box or expected_val.tag == .erased_box;
+            const actual_is_box = actual_val.tag == .box or actual_val.tag == .box_of_zst;
+            const expected_is_box = expected_val.tag == .box;
             const actual_is_erased_ptr = actual_val.tag == .scalar and actual_val.getScalar().tag == .opaque_ptr;
             const expected_is_erased_ptr = expected_val.tag == .scalar and expected_val.getScalar().tag == .opaque_ptr;
             if (expected_is_box and !actual_is_box and !actual_is_erased_ptr) {
@@ -905,8 +895,8 @@ pub const LayoutRuntime = struct {
             }
         }
         if (builtin.mode == .debug) {
-            const actual_is_box = actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst or actual_layout_val.tag == .erased_box;
-            const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst or expected_layout_val.tag == .erased_box;
+            const actual_is_box = actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst;
+            const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst;
             const actual_is_erased_ptr = actual_layout_val.tag == .scalar and actual_layout_val.getScalar().tag == .opaque_ptr;
             const expected_is_erased_ptr = expected_layout_val.tag == .scalar and expected_layout_val.getScalar().tag == .opaque_ptr;
             const actual_is_list = actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst;

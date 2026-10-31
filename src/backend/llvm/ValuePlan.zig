@@ -755,8 +755,9 @@ pub fn clear(self: *Self) void {
 /// (how the prologue binds parameter `index`), `callAccess(call, operand)`
 /// (how a direct call passes argument `operand.arg` or receives its result),
 /// `isShared(stmt)` (the emitter enters `stmt` through a shared block),
-/// `borrowParam(index)` (the ABI supplies stable parameter storage), and
-/// `memoryView(assign)` (the committed byte range of an aggregate alias).
+/// `borrowParam(index)` (the ABI supplies stable parameter storage),
+/// `memoryView(assign)` (the committed byte range of an aggregate alias), and
+/// `returnAccess()` (how a `ret` reads its value).
 pub fn plan(
     self: *Self,
     store: *const LirStore,
@@ -1077,19 +1078,21 @@ fn noteAddressedOperands(self: *Self, store: *const LirStore, stmt: lir.LIR.CFSt
         },
         .assign_literal => |assign| switch (assign.value) {
             .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal => {},
-            .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => self.markAddressed(assign.target),
+            .str_literal, .static_data, .bytes_literal, .proc_ref => self.markAddressed(assign.target),
         },
         .assign_call => |call| {
             const extra = store.stmtRowOrDefault(call.extra);
-            if (extra.out_desc) |out_desc| self.markAddressed(out_desc);
-            if (extra.result_desc) |desc| if (desc.localOrNull()) |local| self.markAddressed(local);
             // A pending drive writes the result through its address.
             if (extra.drive.canDriveHere()) self.markAddressed(call.target);
             if (!extra.replaces_frame) self.noteAccess(call.target, ops.callAccess(call, .result));
             const args = store.getLocalSpan(call.args);
             for (0..args.len) |i| self.noteAccess(GuardedList.at(args, i), ops.callAccess(call, .{ .arg = i }));
         },
-        .assign_low_level => |assign| {
+        // A list operation over an element descriptor reaches every
+        // operand through its address.
+        .assign_low_level => |assign| if (store.stmtRowOrDefault(assign.extra).dyn_elem_desc) {
+            self.noteAllAddressed(store, stmt);
+        } else {
             const access = lowLevelAccess(assign.op);
             self.noteAccess(assign.target, access.target());
             const args = store.getLocalSpan(assign.args);
@@ -1097,35 +1100,25 @@ fn noteAddressedOperands(self: *Self, store: *const LirStore, stmt: lir.LIR.CFSt
         },
         // The aggregate is built in memory from field values.
         inline .assign_list, .assign_struct => |assign| self.markAddressed(assign.target),
-        .assign_tag => |assign| {
-            self.markAddressed(assign.target);
-            if (store.optionalStmtRow(assign.target_desc)) |desc| if (desc.localOrNull()) |local| self.markAddressed(local);
-        },
+        .assign_tag => |assign| self.markAddressed(assign.target),
         .store_struct => |assign| self.markAddressed(assign.dest),
         .store_tag => |assign| self.markAddressed(assign.dest),
-        // A copy reads and writes values in either representation.
-        .set_local => {},
+        // A copy reads and writes values in either representation, except
+        // a copy to or from a dynamic local, which copies the bytes at the
+        // two addresses.
+        .set_local => |assign| if (store.getLocal(assign.target).dyn != null or store.getLocal(assign.value).dyn != null) {
+            self.markAddressed(assign.target);
+            self.markAddressed(assign.value);
+        },
         .expect => {},
         .switch_stmt => {},
         .switch_initialized_payload => |sw| self.markAddressed(sw.payload),
         .decref_if_initialized => |dec| self.markAddressed(dec.value),
-        .ret => {},
+        .ret => |ret| self.noteAccess(ret.value, ops.returnAccess()),
         .join, .jump, .runtime_error, .comptime_exhaustiveness_failed => {},
         .assign_call_erased,
         .assign_packed_erased_fn,
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_record_update,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_boxy_eq,
-        .assign_boxy_hash,
-        .assign_boxy_tag,
-        .assign_boxy_tag_payload,
-        .boxy_tag_match,
-        .assign_call_dict,
+        .dyn,
         .debug,
         .expect_err,
         .crash,
@@ -1168,6 +1161,10 @@ const TestOps = struct {
 
     pub fn isShared(_: TestOps, _: CFStmtId) bool {
         return false;
+    }
+
+    pub fn returnAccess(_: TestOps) Access {
+        return .value;
     }
 };
 
@@ -1347,6 +1344,9 @@ test "a local live into a shared continuation from two arms merges there" {
         }
         pub fn isShared(self: @This(), stmt: CFStmtId) bool {
             return stmt == self.shared;
+        }
+        pub fn returnAccess(self: @This()) Access {
+            return self.inner.returnAccess();
         }
     };
     var value_plan = Self.init(gpa);

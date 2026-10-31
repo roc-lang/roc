@@ -38,6 +38,15 @@ pub const ErasedCallableResolution = struct {
 };
 
 /// Resolves erased-callable runtime data for the active evaluator.
+/// How a `.boxy` program's function values are read.
+pub const BoxyFunctions = struct {
+    retained: *lir.CheckedPipeline.BoxyStoredFunctions,
+    /// The program's result, which reading a value extends.
+    result: *LirProgram.Result,
+    composition: *@import("boxy_runtime").compiled.InProcessState,
+};
+
+/// Resolves erased-callable runtime data for the active evaluator.
 pub const ErasedCallableResolver = struct {
     context: ?*anyopaque = null,
     resolve: *const fn (?*anyopaque, [*]u8) error{RuntimeError}!ErasedCallableResolution = interpreterErasedCallable,
@@ -65,6 +74,7 @@ pub const Writer = struct {
     visited_str_values: std.AutoHashMap(RuntimeValueAddress, void),
     str_backings: std.AutoHashMap(usize, StrBacking),
     erased_callable_resolver: ErasedCallableResolver,
+    boxy_functions: ?BoxyFunctions = null,
     product_plans: std.AutoHashMap(ProductPlanKey, ?lir.PackedData.Plan),
     product_eligibility: collections.DenseMap(LirProgram.ConstPlanId, bool),
     /// Composites being stored, innermost last, and the shared stacks their
@@ -109,6 +119,48 @@ pub const Writer = struct {
         self.erased_callable_resolver = resolver;
     }
 
+    /// Store this `.boxy` program's function values, reading them through
+    /// `functions` (`postcheck.Boxy.StoredFn`).
+    pub fn setBoxyFunctions(self: *Writer, functions: BoxyFunctions) void {
+        self.boxy_functions = functions;
+    }
+
+    /// Whether a value of plan `id` holds a function value a `.boxy`
+    /// compile-time program stores anywhere.
+    pub fn planHoldsBoxyFunction(self: *Writer, id: LirProgram.ConstPlanId) Allocator.Error!bool {
+        var seen = collections.DenseMap(LirProgram.ConstPlanId, void).init(self.allocator);
+        defer seen.deinit();
+        var pending = std.ArrayList(LirProgram.ConstPlanId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, id);
+        while (pending.pop()) |plan_id| {
+            if (seen.contains(plan_id)) continue;
+            try seen.put(plan_id, {});
+            switch (self.constPlan(plan_id)) {
+                .boxy_fn => return true,
+                .pending, .layout_only, .zst, .scalar, .str, .fn_value, .erased_fn => {},
+                .list, .box => |child| try pending.append(self.allocator, child),
+                .tuple, .record => |children| try pending.appendSlice(self.allocator, children),
+                .tag_union => |variants| for (variants) |variant| try pending.appendSlice(self.allocator, variant.payloads),
+                .named => |named| try pending.append(self.allocator, named.backing),
+            }
+        }
+        return false;
+    }
+
+    fn pushBoxyFn(self: *Writer, node: checked.ConstNodeId, value: Value) Error!void {
+        const functions = self.boxy_functions orelse writerInvariant("a function value reached a program that stores none");
+        const data_ptr = self.readErasedCallablePointer(value);
+        const resolved = try self.erased_callable_resolver.resolve(self.erased_callable_resolver.context, data_ptr);
+        const described = try functions.retained.describe(self.allocator, functions.result, resolved.proc, resolved.capture_ptr, functions.composition);
+        defer self.allocator.free(described.captures);
+        const requests_start = self.store_requests.items.len;
+        for (described.captures) |capture| {
+            try self.store_requests.append(self.allocator, .{ .plan = capture.plan, .layout_idx = capture.layout_idx, .value = .{ .ptr = capture.ptr } });
+        }
+        try self.pushStoreFrame(.{ .boxy_fn = .{ .node = node, .recipe = described.recipe } }, requests_start, &.{});
+    }
+
     pub fn deinit(self: *Writer) void {
         self.store_capture_types.deinit(self.allocator);
         self.store_nodes.deinit(self.allocator);
@@ -142,8 +194,8 @@ pub const Writer = struct {
             .compile_time_callable => switch (plan) {
                 .fn_value => |set| .{ .fn_value = try self.storeFnValue(set, root.ret_layout, value) },
                 .erased_fn => |set| .{ .fn_value = try self.storeErasedFn(set, value) },
+                .boxy_fn => .{ .const_node = try self.storeValue(root.plan, root.ret_layout, value) },
                 .pending,
-                .boxy_box,
                 .layout_only,
                 .zst,
                 .scalar,
@@ -198,6 +250,19 @@ pub const Writer = struct {
         );
     }
 
+    /// Preserve the concrete type a literal root converted its literal at.
+    pub fn storeLiteralType(
+        self: *Writer,
+        root: LirProgram.LiteralRootPlan,
+    ) Error!const_store.ConstTypeId {
+        return self.store.type_store.cloneTypeFromTranslated(
+            &self.program.const_types,
+            &self.program.const_type_names,
+            self.typeNames(),
+            root.ret_type,
+        );
+    }
+
     /// One value to store or scan.
     const ValueRequest = struct {
         plan: LirProgram.ConstPlanId,
@@ -216,6 +281,8 @@ pub const Writer = struct {
         /// A function value; `node` is null for a callable root, whose
         /// function id is the store's result.
         fn_value: struct { node: ?checked.ConstNodeId, template: LirProgram.FnTemplate },
+        /// A `.boxy` function value; `recipe` is the writer's to free.
+        boxy_fn: struct { node: checked.ConstNodeId, recipe: []const u8 },
     };
 
     /// A composite value whose components are stored in order, each
@@ -342,7 +409,6 @@ pub const Writer = struct {
         const requests_start = self.store_requests.items.len;
         const children = &self.store_requests;
         const finish: StoreFinish = switch (self.constPlan(request.plan)) {
-            .boxy_box => writerInvariant("Boxy-only box reached ConstStore writer"),
             .pending => writerInvariant("pending const plan reached ConstStore writer"),
             .layout_only => writerInvariant("layout-only const plan reached ConstStore writer"),
             .zst => return self.store.fill(node, .zst),
@@ -378,6 +444,7 @@ pub const Writer = struct {
             },
             .fn_value => |set| return self.pushFnValue(node, set, layout_idx, value),
             .erased_fn => |set| return self.pushErasedFn(node, set, value),
+            .boxy_fn => return self.pushBoxyFn(node, value),
         };
         try self.pushStoreFrame(finish, requests_start, &.{});
     }
@@ -430,7 +497,7 @@ pub const Writer = struct {
         const entry = try self.resolveErasedEntry(set_id, value);
         const requests_start = self.store_requests.items.len;
         try self.appendCaptureRequests(&self.store_requests, entry.entry.captures, entry.entry.capture_layout, .{ .ptr = entry.capture_ptr });
-        const template = entry.entry.template orelse writerInvariant("Boxy frozen environment has no ConstStore provenance");
+        const template = entry.entry.template orelse writerInvariant("erased callable entry has no ConstStore template");
         try self.pushStoreFrame(.{ .fn_value = .{ .node = node, .template = template } }, requests_start, entry.entry.captures);
     }
 
@@ -471,6 +538,10 @@ pub const Writer = struct {
                     .tag_name = tag_name,
                     .payloads = nodes,
                 } });
+            },
+            .boxy_fn => |function| {
+                defer self.allocator.free(function.recipe);
+                self.store.fill(function.node, .{ .boxy_fn = .{ .recipe = try self.storeBytes(function.recipe), .captures = nodes } });
             },
             .fn_value => |fn_value| {
                 const captures = try self.store.allocator.alloc(const_store.ConstCapture, frame.slots.len);
@@ -564,6 +635,7 @@ pub const Writer = struct {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         try out.append(self.allocator, switch (layout_value.tag) {
             .hole => writerInvariant("a demand hole reached a compile-time value"),
+            .dynamic => writerInvariant("a dynamic value reached a compile-time value"),
             .box_of_zst => .{ .plan = elem_plan, .layout_idx = .zst, .value = Value.zst },
             .box => .{
                 .plan = elem_plan,
@@ -572,7 +644,6 @@ pub const Writer = struct {
             },
             .erased_callable => .{ .plan = elem_plan, .layout_idx = layout_idx, .value = value },
             .scalar,
-            .erased_box,
             .list,
             .list_of_zst,
             .struct_,
@@ -740,6 +811,10 @@ pub const Writer = struct {
         } };
     }
 
+    fn storeBytes(self: *Writer, bytes: []const u8) Allocator.Error!const_store.ConstStr {
+        return .{ .data = try self.store.addBlobData(bytes), .offset = 0, .len = @intCast(bytes.len) };
+    }
+
     fn planIsProduct(self: *Writer, root: LirProgram.ConstPlanId) Allocator.Error!bool {
         const Frame = struct {
             id: LirProgram.ConstPlanId,
@@ -783,7 +858,7 @@ pub const Writer = struct {
             .named => |*named| (&named.backing)[0..1],
             .record, .tuple => |children| children,
             .pending, .layout_only => writerInvariant("product eligibility reached an unfinished const plan"),
-            .str, .list, .box, .boxy_box, .tag_union, .fn_value, .erased_fn => return false,
+            .str, .list, .box, .tag_union, .fn_value, .erased_fn, .boxy_fn => return false,
         };
         try frames.append(self.allocator, .{ .id = id, .children = children });
         return null;
@@ -831,7 +906,6 @@ pub const Writer = struct {
                 continue;
             },
             .pending,
-            .boxy_box,
             .layout_only,
             .zst,
             .str,
@@ -842,6 +916,7 @@ pub const Writer = struct {
             .tag_union,
             .fn_value,
             .erased_fn,
+            .boxy_fn,
             => false,
         };
     }
@@ -964,11 +1039,11 @@ pub const Writer = struct {
         }
 
         switch (self.constPlan(request.plan)) {
-            .boxy_box => writerInvariant("Boxy-only box reached ConstStore writer"),
             .pending => writerInvariant("pending const plan reached string backing collection"),
             .layout_only => writerInvariant("layout-only const plan reached string backing collection"),
             .zst,
             .scalar,
+            .boxy_fn,
             => {},
             .str => try self.collectStrValue(value),
             .list => |elem_plan| {
@@ -1055,12 +1130,12 @@ pub const Writer = struct {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         return switch (layout_value.tag) {
             .hole => writerInvariant("a demand hole reached a compile-time value"),
+            .dynamic => writerInvariant("a dynamic value reached a compile-time value"),
             .zst => 0,
             .tag_union => self.program.layouts.getTagUnionData(layout_value.getTagUnion().idx).readDiscriminant(value.ptr, self.program.layouts.targetUsize()),
             .scalar,
             .box,
             .box_of_zst,
-            .erased_box,
             .list,
             .list_of_zst,
             .struct_,
@@ -1092,6 +1167,7 @@ pub const Writer = struct {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         return switch (layout_value.tag) {
             .hole => writerInvariant("a demand hole reached a compile-time value"),
+            .dynamic => writerInvariant("a dynamic value reached a compile-time value"),
             .zst, .tag_union => .{
                 .value = value,
                 .layout_idx = layout_idx,
@@ -1104,7 +1180,6 @@ pub const Writer = struct {
             },
             .scalar,
             .box_of_zst,
-            .erased_box,
             .list,
             .list_of_zst,
             .struct_,
@@ -1147,8 +1222,8 @@ pub const Writer = struct {
                 break :blk @intFromPtr(roc_str.asSlice().ptr);
             } else null,
             .hole => writerInvariant("a demand hole reached a compile-time value"),
+            .dynamic => writerInvariant("a dynamic value reached a compile-time value"),
             .box_of_zst,
-            .erased_box,
             .list_of_zst,
             .struct_,
             .closure,
@@ -1170,9 +1245,9 @@ pub const Writer = struct {
                     break :blk roc_str.len();
                 } else 0,
                 .hole => writerInvariant("a demand hole reached a compile-time value"),
+                .dynamic => writerInvariant("a dynamic value reached a compile-time value"),
                 .box,
                 .box_of_zst,
-                .erased_box,
                 .list_of_zst,
                 .struct_,
                 .closure,

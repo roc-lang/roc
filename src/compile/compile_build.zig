@@ -76,6 +76,7 @@ const watch_inputs = @import("watch_inputs.zig");
 const module_discovery = @import("module_discovery.zig");
 
 // Actor model components
+const boxy_interface = @import("boxy_interface.zig");
 const coordinator_mod = @import("coordinator.zig");
 const Coordinator = coordinator_mod.Coordinator;
 const DiscoveredParse = @import("messages.zig").DiscoveredParse;
@@ -238,17 +239,26 @@ pub const BuildEnv = struct {
     // Actor model coordinator (owns all mutable compilation state)
     coordinator: ?*Coordinator = null,
     runtime_lowering: ?RuntimeLoweringConfig = null,
+    /// The strategy whose compile-time evaluator completes every module's
+    /// compile-time roots (`Coordinator.specialization_strategy`).
+    specialization_strategy: base.SpecializationStrategy = .lss,
     runtime_output_probe: ?RuntimeOutputProbe = null,
     debug_observer: ?eval.CompileTimeFinalization.DebugObserver = null,
     /// Instrumentation only; never participates in checked or object identity.
     detailed_monotype_diagnostics: bool = false,
     /// See `eval.CompileTimeFinalization.CompileTimeObjectCache`.
     compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
+    /// The lowering of the module objects a `.boxy` compile-time evaluation
+    /// links against.
+    boxy_object_lowering: ?@import("coordinator.zig").BoxyObjectLowering = null,
     compile_time_object_cache_owner: ?CompileTimeObjectCacheOwner = null,
     /// Let a caller declare a test plan from prepared artifacts before CTFE.
     defer_post_check: bool = false,
     // Cache manager for compiled modules
     cache_manager: ?*CacheManager = null,
+    /// See `recordBoxyObjects`.
+    boxy_objects_restored: u32 = 0,
+    boxy_objects_built: u32 = 0,
     // I/O abstraction for all OS operations (filesystem, stdio, env vars, etc.)
     filesystem: CoreCtx,
     // Explicit working directory for resolving relative paths
@@ -1077,6 +1087,7 @@ pub const BuildEnv = struct {
             self.cache_manager,
             self.filesystem,
         );
+        coord.specialization_strategy = self.specialization_strategy;
         coord.source_pin_version = self.source_pin_version;
         if (self.staged_entry_user_path) |user_path| {
             if (self.discovered_root_abs) |staged_path| coord.staged_entry = .{ .staged_path = staged_path, .user_path = user_path };
@@ -1092,6 +1103,7 @@ pub const BuildEnv = struct {
         coord.debug_observer = self.debug_observer;
         coord.setDetailedLoweringTiming(self.detailed_lowering_timing);
         coord.compile_time_object_cache = self.compile_time_object_cache;
+        coord.boxy_object_lowering = self.boxy_object_lowering;
         if (self.detailed_monotype_diagnostics) coord.ctfe_timing.lowering.enableDetailedMonotypeBody();
         self.coordinator = coord;
     }
@@ -1130,6 +1142,13 @@ pub const BuildEnv = struct {
         if (self.recorded_completion != null) return true;
         const coordinator = self.coordinator orelse return false;
         return coordinator.compilation_result == .recorded;
+    }
+
+    /// Set the strategy whose compile-time evaluator completes every
+    /// module's compile-time roots, before any module is checked.
+    pub fn setSpecializationStrategy(self: *BuildEnv, strategy: base.SpecializationStrategy) void {
+        if (self.coordinator) |coordinator| coordinator.specialization_strategy = strategy;
+        self.specialization_strategy = strategy;
     }
 
     pub fn setRuntimeLowering(self: *BuildEnv, config: RuntimeLoweringConfig) void {
@@ -2700,6 +2719,11 @@ pub const BuildEnv = struct {
         /// Canonicalized-module cache entries this build wrote.
         canonicalized_cache_stores: u32 = 0,
 
+        /// Objects of a `.boxy` build restored from the per-module Boxy
+        /// object cache, and lowered and compiled by this build.
+        boxy_objects_restored: u32 = 0,
+        boxy_objects_built: u32 = 0,
+
         /// Number of modules that were compiled (not cached)
         modules_compiled: u32 = 0,
         /// Hits that restored inference and published current implementation artifacts.
@@ -2720,10 +2744,44 @@ pub const BuildEnv = struct {
 
     /// Get build statistics from the coordinator
     pub fn getBuildStats(self: *BuildEnv) BuildStats {
-        if (self.coordinator) |coord| {
-            return coord.getBuildStats();
-        }
-        return .{};
+        var stats: BuildStats = if (self.coordinator) |coord| coord.getBuildStats() else .{};
+        stats.boxy_objects_restored = self.boxy_objects_restored;
+        stats.boxy_objects_built = self.boxy_objects_built;
+        return stats;
+    }
+
+    /// `artifact`'s object with the cache key `key`, when this compilation's
+    /// compile-time evaluation built or restored it: its bytes, its hosted
+    /// symbols, and whether it was restored.
+    pub fn boxyObjectWithKey(self: *BuildEnv, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, key: @import("boxy_object_cache.zig").Key) ?BoxyKnownObject {
+        const coordinator = self.coordinator orelse return null;
+        const objects = &(coordinator.boxy_objects orelse return null);
+        const known = objects.objectWithKey(artifact, key) orelse return null;
+        return .{ .object = known.object.?.object, .hosted_symbols = known.object.?.hosted_symbols, .restored = known.restored, .path = known.path };
+    }
+
+    /// Record in `digests` the exports of `artifact`'s object, which this
+    /// compilation's compile-time evaluation built or restored.
+    pub fn boxyAdoptExports(self: *BuildEnv, digests: *boxy_interface.Digests, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!void {
+        const coordinator = self.coordinator orelse return;
+        const objects = &(coordinator.boxy_objects orelse return);
+        try digests.adoptExports(&objects.digests, artifact);
+    }
+
+    pub const BoxyKnownObject = struct {
+        object: []const u8,
+        hosted_symbols: []const []const u8,
+        restored: bool,
+        /// The object as the link reads it, when the link kept it as it was
+        /// built or restored.
+        path: ?[]const u8,
+    };
+
+    /// Count the objects a `.boxy` build restored from and filed in the
+    /// per-module Boxy object cache (`BuildStats`).
+    pub fn recordBoxyObjects(self: *BuildEnv, restored: u32, built: u32) void {
+        self.boxy_objects_restored += restored;
+        self.boxy_objects_built += built;
     }
 
     pub fn freeWatchInputStates(self: *BuildEnv, inputs: []const watch_inputs.Input) void {
@@ -3632,6 +3690,11 @@ pub const BuildEnv = struct {
             try artifacts.append(allocator, artifact);
         }
         return artifacts.toOwnedSlice(allocator);
+    }
+
+    /// The digests of every checked module of this build, its link.
+    pub fn boxyLinkDigests(self: *BuildEnv) Allocator.Error!boxy_interface.Digests {
+        return self.builtCoordinator().boxyLinkDigests();
     }
 
     /// Collect published checked artifacts available to post-check lowering.

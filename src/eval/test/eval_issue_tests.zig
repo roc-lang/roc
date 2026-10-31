@@ -2082,6 +2082,53 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "[\"failed: Nope2\"]" },
     },
     .{
+        // The interpolation's literal requirement travels around a cycle of
+        // two schemes, returning to each at the variables it left with.
+        .name = "issue 11060: literal requirement of a mutually recursive accumulator",
+        .source_kind = .module,
+        .source =
+        \\make = |start, file|
+        \\    match start(file) {
+        \\        Ok(handle) => Good(handle)
+        \\        Err(e) => Bad("failed: ${Str.inspect(e)}")
+        \\    }
+        \\
+        \\ping = |start, remaining, acc|
+        \\    match remaining {
+        \\        [] => acc
+        \\        [file, .. as rest] => pong(start, rest, acc.append(make(start, file)))
+        \\    }
+        \\
+        \\pong = |start, remaining, acc|
+        \\    match remaining {
+        \\        [] => acc
+        \\        [file, .. as rest] => ping(start, rest, acc.append(make(start, file)))
+        \\    }
+        \\
+        \\main = ping(|_file| Err(Nope2), ["x", "y"], []).len()
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        // Two annotated schemes calling each other each have variables of
+        // their own, so the cycle renames them on every step.
+        .name = "issue 11060: literal requirements of mutually recursive annotated schemes",
+        .source_kind = .module,
+        .source =
+        \\ping : a, U64 -> a where [a.plus : a, a -> a]
+        \\ping = |x, n| if n == 0 x.plus(x) else pong(x, n - 1)
+        \\
+        \\pong : b, U64 -> b where [b.plus : b, b -> b]
+        \\pong = |y, n| if n == 0 y.plus(y.plus(y)) else ping(y, n - 1)
+        \\
+        \\label = |s, n| if n == 0 "ping ${s}" else label2(s, n - 1)
+        \\label2 = |s, n| if n == 0 "pong ${s}" else label(s, n - 1)
+        \\
+        \\main = (ping(5.U64, 3), ping(5.U64, 2), label("x", 3))
+        ,
+        .expected = .{ .inspect_str = "(15, 10, \"pong x\")" },
+    },
+    .{
         // https://github.com/roc-lang/roc/issues/11063
         //
         // `Opt` brings its own `parser_for`, and the record `Opt` wraps has a

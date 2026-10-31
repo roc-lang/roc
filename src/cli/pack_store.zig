@@ -95,7 +95,7 @@ pub const Store = struct {
         var hash = base.Sha256.init(.{});
         hash.update(switch (family) {
             .local_pack, .package_pack, .local_discovery, .package_discovery => self.procedure_root,
-            .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .optimized_pack, .program_output, .scratch => self.root,
+            .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .optimized_pack, .program_output, .scratch, .boxy_object => self.root,
         });
         hash.update(&module);
         hash.final(&result.group);
@@ -1564,7 +1564,6 @@ pub const LoadedPacks = struct {
                 const kind = target_set.excerpts[edge.target.index].kind;
                 const matches = switch (target) {
                     .proc => |id| kind == .proc and std.meta.eql(id, kind.proc),
-                    .boxy_thunk => |id| kind == .boxy_thunk and std.meta.eql(id, kind.boxy_thunk),
                     .rc_helper => |name| kind == .rc_helper and std.mem.eql(u8, name, kind.rc_helper),
                 };
                 if (!matches) return error.MalformedPack;
@@ -2102,7 +2101,7 @@ pub const LoadedPacks = struct {
         const root = pack.set.excerpts[spec.excerpt];
         const identity = switch (root.kind) {
             .proc => |identity| identity,
-            .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => return error.MalformedPack,
+            .rc_helper, .entrypoint, .message_pool_run, .branch_island => return error.MalformedPack,
         };
         if (self.specs.contains(spec.key)) return;
         try self.excerpts.ensureUnusedCapacity(1);

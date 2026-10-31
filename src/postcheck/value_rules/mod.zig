@@ -1,12 +1,11 @@
-//! Value rules shared by both runtime lowering strategies.
+//! Value rules shared by every runtime lowering strategy.
 //!
 //! `Str.inspect` rendering, structural equality, structural hashing, and the
 //! selection of a `to_inspect` override depend on a value's shape, not on how
-//! a lowering strategy reached its type. Monotype lowering (`.lss`), Boxy
-//! lowering (`.boxy`), and the Boxy runtime each read their own type
+//! a lowering strategy reached its type. A consumer reads its own type
 //! representation through a comptime context, and the walkers here decide
 //! what the value means. This module depends on nothing else in the
-//! compiler, so the standalone Boxy runtime object can import it too.
+//! compiler.
 
 pub const shape = @import("shape.zig");
 pub const inspect = @import("inspect.zig");

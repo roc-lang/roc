@@ -12,6 +12,7 @@ const builtins = @import("builtins");
 const CIR = @import("can").CIR;
 
 pub const store = @import("store.zig");
+const shape = @import("layout_shape");
 
 const target = base.target;
 
@@ -30,12 +31,17 @@ pub const LayoutTag = enum(u4) {
     // Introduced by the TRMC pass (see src/lir/trmc.zig); never a struct field,
     // tag payload, or list element. The pass author must uphold those invariants.
     ptr, // Compiler-internal pointer to a value of the element layout; never refcounted.
-    erased_box, // Descriptor-backed refcounted box whose payload layout is known only at runtime.
     // A demand-shaped procedure's stand-in for a list or box element type its
     // body never reads, moves, or refcounts (design.md "Specialization By
     // Demand"). Zero-sized and never refcounted; only ever a list or box
     // element, never a value, struct field, or tag payload of its own.
     hole,
+    // A `.boxy` procedure's local whose checked type mentions a type variable
+    // in scope (design.md "Dynamic Values In LIR"). The local holds the
+    // address of bytes that the runtime type descriptor it names describes;
+    // to everything but the operations on its value it is one pointer-sized
+    // word. Never a struct field, tag payload, list element, or box payload.
+    dynamic,
 };
 
 /// The Layout untagged union should take up this many bits in memory.
@@ -453,14 +459,7 @@ pub const TagUnionData = struct {
     /// Get the alignment requirement for a given discriminant size.
     /// Can be called before a TagUnionData is created.
     pub fn alignmentForDiscriminantSize(size: u8) std.mem.Alignment {
-        return switch (size) {
-            0 => .@"1",
-            1 => .@"1",
-            2 => .@"2",
-            4 => .@"4",
-            8 => .@"8",
-            else => unreachable, // discriminant_size is 0, 1, 2, 4, or 8
-        };
+        return shape.alignmentForDiscriminantSize(size);
     }
 
     /// Compute the discriminant size in bytes from a variant count.
@@ -471,7 +470,7 @@ pub const TagUnionData = struct {
     /// This is the width committed into `TagUnionData.discriminant_size`, so
     /// it is the width every backend and glue read back for the layout.
     pub fn discriminantSize(variant_count: usize) u8 {
-        return if (variant_count <= 1) 0 else if (variant_count <= 256) 1 else if (variant_count <= 65536) 2 else if (variant_count <= (1 << 32)) 4 else 8;
+        return shape.discriminantSize(variant_count);
     }
 };
 
@@ -503,60 +502,8 @@ pub const RocAlignment = enum(u3) {
     }
 };
 
-/// Target-independent key for ordering aggregate fields by alignment.
-///
-/// This is the target-independent alignment class of a value: it both orders
-/// fields and (given a target) yields the actual alignment in bytes. A pointer
-/// is its own class, sorting strictly between 4-byte and 8-byte alignment—
-/// because a pointer is the only type whose real alignment varies by target
-/// (4 bytes on a 32-bit target, 8 on a 64-bit one), its fixed slot between
-/// `align_4` and `align_8` makes a record/tuple's field order identical on both
-/// targets and lets the alignment be stored target-independently and resolved to
-/// bytes only when a target is known (see `alignment`). This is the foundation
-/// for caching layout across pointer widths.
-pub const SortKey = enum(u3) {
-    align_1 = 0,
-    align_2 = 1,
-    align_4 = 2,
-    pointer = 3,
-    align_8 = 4,
-    align_16 = 5,
-
-    /// Sort key for a fixed (non-pointer) power-of-two alignment in bytes.
-    pub fn fromAlignBytes(bytes: u64) SortKey {
-        return switch (bytes) {
-            1 => .align_1,
-            2 => .align_2,
-            4 => .align_4,
-            8 => .align_8,
-            16 => .align_16,
-            else => unreachable, // alignments are powers of two up to 16
-        };
-    }
-
-    /// The actual alignment in bytes for a given target. A `.pointer` resolves to
-    /// the target's pointer alignment; every other class is target-independent.
-    pub fn alignment(self: SortKey, target_usize: target.TargetUsize) std.mem.Alignment {
-        return switch (self) {
-            .align_1 => .@"1",
-            .align_2 => .@"2",
-            .align_4 => .@"4",
-            .pointer => target_usize.alignment(),
-            .align_8 => .@"8",
-            .align_16 => .@"16",
-        };
-    }
-
-    /// The greater of two sort keys (used to fold an aggregate's children).
-    pub fn max(a: SortKey, b: SortKey) SortKey {
-        return if (@backingInt(a) >= @backingInt(b)) a else b;
-    }
-
-    /// Whether `a` sorts before `b` in the field order (higher key first).
-    pub fn sortsBefore(a: SortKey, b: SortKey) bool {
-        return @backingInt(a) > @backingInt(b);
-    }
-};
+/// Target-independent alignment class of a value (see `shape.SortKey`).
+pub const SortKey = shape.SortKey;
 
 /// Size and alignment information
 pub const SizeAlign = packed struct(u32) {
@@ -693,8 +640,6 @@ pub const ScalarInfo = struct {
 /// (Exception: List({}) and Box({}) get special layouts `.list_of_zst` and
 /// `.box_of_zst` because the stack-allocated container can be used at runtime
 /// even if individual elements cannot be accessed.)
-/// Boxy dynamic storage uses the separate pointer-sized `.erased_box` layout;
-/// unlike `.box_of_zst`, it denotes descriptor-governed refcounted ownership.
 ///
 /// Once a type has been converted to a Layout, there is no longer any
 /// distinction between nominal and structural types, there's just memory.
@@ -745,9 +690,9 @@ pub const Layout = packed struct {
                 .str, .opaque_ptr => target_usize.alignment(),
                 .vector => .@"16",
             },
-            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .erased_callable, .closure, .ptr => target_usize.alignment(),
-            .struct_ => self.getStruct().sort_key.alignment(target_usize),
-            .tag_union => self.getTagUnion().sort_key.alignment(target_usize),
+            .box, .box_of_zst, .list, .list_of_zst, .erased_callable, .closure, .ptr, .dynamic => target_usize.alignment(),
+            .struct_ => self.getStruct().sort_key.alignment(target_usize.alignment()),
+            .tag_union => self.getTagUnion().sort_key.alignment(target_usize.alignment()),
             .zst, .hole => std.mem.Alignment.@"1",
         };
     }
@@ -764,7 +709,7 @@ pub const Layout = packed struct {
                 .str, .opaque_ptr => .pointer,
                 .vector => .align_16,
             },
-            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .erased_callable, .ptr, .closure => .pointer,
+            .box, .box_of_zst, .list, .list_of_zst, .erased_callable, .ptr, .closure, .dynamic => .pointer,
             .zst, .hole => .align_1,
             .struct_ => self.getStruct().sort_key,
             .tag_union => self.getTagUnion().sort_key,
@@ -821,11 +766,6 @@ pub const Layout = packed struct {
         return .{ .data = 0, .tag = .box_of_zst };
     }
 
-    /// Descriptor-backed box whose allocation stores a runtime-known payload.
-    pub fn erasedBox() Layout {
-        return .{ .data = 0, .tag = .erased_box };
-    }
-
     /// compiler-internal pointer layout with the given element layout
     pub fn ptr(elem_idx: Idx) Layout {
         return .{ .data = @backingInt(elem_idx), .tag = .ptr };
@@ -873,6 +813,12 @@ pub const Layout = packed struct {
         return .{ .data = 0, .tag = .hole };
     }
 
+    /// The layout of a `.boxy` dynamic local: the address of bytes a runtime
+    /// type descriptor describes.
+    pub fn dynamic() Layout {
+        return .{ .data = 0, .tag = .dynamic };
+    }
+
     /// tag union layout with the given alignment class and tag union metadata
     pub fn tagUnion(tu_sort_key: SortKey, tu_idx: TagUnionIdx) Layout {
         return .{ .data = packData(TagUnionLayout{ .sort_key = tu_sort_key, .idx = tu_idx }), .tag = .tag_union };
@@ -892,13 +838,13 @@ pub const Layout = packed struct {
                 .vector => self.getScalar().getVector() == other.getScalar().getVector(),
             },
             .box, .list, .ptr => self.getIdx() == other.getIdx(),
-            .box_of_zst, .erased_box => true, // No additional data
+            .box_of_zst => true, // No additional data
             .list_of_zst => true, // No additional data
             .struct_ => self.getStruct().sort_key == other.getStruct().sort_key and
                 self.getStruct().idx.int_idx == other.getStruct().idx.int_idx,
             .closure => self.getClosure().captures_layout_idx == other.getClosure().captures_layout_idx,
             .erased_callable => true,
-            .zst, .hole => true, // No additional data
+            .zst, .hole, .dynamic => true, // No additional data
             .tag_union => self.getTagUnion().sort_key == other.getTagUnion().sort_key and
                 self.getTagUnion().idx.int_idx == other.getTagUnion().idx.int_idx,
         };

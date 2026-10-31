@@ -5284,6 +5284,7 @@ fn constStringBackingLength(view: ModuleView, str: check.ConstStore.ConstStr) u6
 fn constStaticDataStorage(view: ModuleView, node: checked.ConstNodeId) Common.StaticDataStorage {
     var current = node;
     while (true) switch (view.const_store.get(current)) {
+        .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
         .str => |str| return .{ .string_backing = constStringBackingLength(view, str) },
         .nominal => |nominal| current = nominal.backing,
         .pending => Common.invariant("pending const reached static storage metadata production"),
@@ -7672,10 +7673,34 @@ const Builder = struct {
 
     /// Procedure-use runs are the only isolated roots without an ordered
     /// coordinator dependency; every other root kind remains a serial barrier.
-    fn lowerIsolatedRoots(self: *Builder, all_requests: []const checked.RootRequest, all_source_modules: []const checked.ModuleId, discovery_start: ?usize) Allocator.Error!void {
-        if (all_source_modules.len != 0 and all_source_modules.len != all_requests.len) {
+    fn lowerIsolatedRoots(self: *Builder, unfiltered_requests: []const checked.RootRequest, unfiltered_source_modules: []const checked.ModuleId, unfiltered_discovery_start: ?usize) Allocator.Error!void {
+        if (unfiltered_source_modules.len != 0 and unfiltered_source_modules.len != unfiltered_requests.len) {
             Common.invariant("root source module count differs from explicit request count");
         }
+        // A literal argument root is the `.boxy` evaluator's: a Solved
+        // program neither declares nor lowers it (design.md "Literal
+        // Arguments").
+        var solved_requests = std.ArrayList(checked.RootRequest).empty;
+        defer solved_requests.deinit(self.allocator);
+        var solved_source_modules = std.ArrayList(checked.ModuleId).empty;
+        defer solved_source_modules.deinit(self.allocator);
+        var discovery_start = unfiltered_discovery_start;
+        for (unfiltered_requests, 0..) |request, i| {
+            const literal_argument = if (request.compile_time_root) |root_id|
+                self.moduleForId(self.rootSourceModule(unfiltered_source_modules, i)).compile_time_roots.root(root_id).kind == .literal_argument
+            else
+                false;
+            if (literal_argument) {
+                if (unfiltered_discovery_start) |start| if (i < start) {
+                    discovery_start.? -= 1;
+                };
+                continue;
+            }
+            try solved_requests.append(self.allocator, request);
+            if (unfiltered_source_modules.len != 0) try solved_source_modules.append(self.allocator, unfiltered_source_modules[i]);
+        }
+        const all_requests: []const checked.RootRequest = solved_requests.items;
+        const all_source_modules: []const checked.ModuleId = solved_source_modules.items;
         var demanded_later_requests = std.ArrayList(checked.RootRequest).empty;
         defer demanded_later_requests.deinit(self.allocator);
         var demanded_later_sources = std.ArrayList(checked.ModuleId).empty;
@@ -8428,7 +8453,6 @@ const Builder = struct {
                     EdgeEvidence{ .subst = &.{}, .vector = &.{} };
                 const selected = try ctx.draftFnSlotForProcedureUseAtNode(
                     procedure,
-                    request.checked_type,
                     procedure.source_fn_ty_template,
                     root_node,
                     edge,
@@ -8803,7 +8827,6 @@ const Builder = struct {
         } else &.{};
         return try self.lowerTemplateWithMono(
             template_ref,
-            source_fn_ty,
             source_ty_view.types.rootKey(source_fn_ty),
             fn_ty,
             evidence,
@@ -9087,7 +9110,6 @@ const Builder = struct {
     fn lowerTemplateWithMono(
         self: *Builder,
         template_ref: names.ProcTemplate,
-        source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         fn_ty: Type.TypeId,
         evidence: []const SpecEvidence,
@@ -9111,6 +9133,9 @@ const Builder = struct {
         const lower_fn_ty = fn_ty;
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
+        // The template's own type, whichever module requests it first: a
+        // request names the type through its own module's checked types.
+        const source_fn_ty = template.checked_fn_root;
         if (evidence.len > template.evidence_params.len) {
             Common.invariant("procedure specialization received more evidence than its checked requirements");
         }
@@ -11339,7 +11364,6 @@ const Builder = struct {
         self: *Builder,
         source_ctx: *BodyContext,
         template_ref: names.ProcTemplate,
-        source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         raw_request_fn_node: NodeId,
         partial_edge: EdgeEvidence,
@@ -11356,6 +11380,9 @@ const Builder = struct {
         };
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
+        // The template's own type, whichever module requests it first: a
+        // request names the type through its own module's checked types.
+        const source_fn_ty = template.checked_fn_root;
         if (partial_edge.vector.len > template.evidence_params.len) {
             Common.invariant("draft procedure specialization received more evidence than its checked requirements");
         }
@@ -13348,9 +13375,8 @@ const Builder = struct {
     }
 
     /// The declared fields of a nominal/opaque record backing, from explicit
-    /// checked metadata, or null when it has none. Boxy uses the lowered span
-    /// for aggregate descriptor planning; LSS consumes it as layout order only
-    /// when it contains padding. The lowered backing row remains lexicographic.
+    /// checked metadata, or null when it has none. LSS consumes it as layout
+    /// order only when it contains padding. The lowered backing row remains lexicographic.
     fn declaredOrderOps(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) Allocator.Error!?[]DeclaredOrderOp {
         if (nominal.declared_fields.len != 0) {
             return try self.checkedDeclaredOrderOps(view, nominal.declared_fields, view, nominal.padding_field_types);
@@ -13537,6 +13563,7 @@ const Builder = struct {
             const address = ConstNodeAddress{ .module = self.view.key, .node = node };
             if (self.memo().get(address)) |holds| return .{ .value = holds };
             const leaf: ?bool = switch (self.view.const_store.get(node)) {
+                .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
                 .pending => Common.invariant("pending ConstStore node reached a stored value property"),
                 .fn_value => |fn_id| switch (self.property) {
                     // Static data emits an erased callable as one allocation
@@ -13616,6 +13643,7 @@ const Builder = struct {
     /// are data alone (`constNodeIsStoredData`); null for any other value.
     fn storedListShape(self: *Builder, view: ModuleView, node: checked.ConstNodeId) Allocator.Error!?StoredListShape {
         const items = switch (view.const_store.get(node)) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .list => |list| switch (list) {
                 .nodes => |items| items,
                 .empty, .packed_bytes => return null,
@@ -13659,6 +13687,7 @@ const Builder = struct {
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, root);
         while (pending.pop()) |node| switch (view.const_store.get(node)) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .pending => Common.invariant("pending ConstStore node reached stored list selection"),
             .zst, .scalar => {},
             .str => |str| if (str.len != 0) return false,
@@ -13688,6 +13717,7 @@ const Builder = struct {
             const right = view.const_store.get(pair.right);
             if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
             switch (left) {
+                .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
                 .pending => Common.invariant("pending ConstStore node reached stored list selection"),
                 .zst => {},
                 .scalar => |scalar| if (!std.meta.eql(scalar, right.scalar)) return false,
@@ -13704,6 +13734,7 @@ const Builder = struct {
                 },
                 .tuple, .record => |children| {
                     const others = switch (right) {
+                        .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
                         .tuple, .record => |items| items,
                         .pending, .zst, .scalar, .str, .list, .box, .crash, .checked_error, .tag, .nominal, .fn_value => unreachable, // the active tags matched above
                     };
@@ -13725,6 +13756,7 @@ const Builder = struct {
         var value = value_in;
         var bare_fn = bare_fn_in;
         while (true) switch (value) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .pending => Common.invariant("pending ConstStore node reached static data selection"),
             .zst,
             .scalar,
@@ -14120,7 +14152,6 @@ const Builder = struct {
         // not even match). Neither states the claim this checks.
         const def = try self.lowerTemplateWithMono(
             template_ref,
-            fn_template.source_fn_ty,
             fn_template.source_fn_key,
             fn_template.mono_fn_ty,
             evidence,
@@ -14219,7 +14250,6 @@ const Builder = struct {
                 // call-target site above.
                 const def = try self.lowerTemplateWithMono(
                     template_ref,
-                    fn_template.source_fn_ty,
                     fn_template.source_fn_key,
                     fn_template.mono_fn_ty,
                     retained.vector,
@@ -15794,7 +15824,6 @@ const Builder = struct {
         const resolved_slot: Ast.FnSlot = blk: {
             const def = try self.lowerTemplateWithMono(
                 spec.template_ref,
-                spec.source_fn_ty,
                 spec.source_fn_key,
                 request_fn_ty,
                 evidence,
@@ -17487,6 +17516,7 @@ const Builder = struct {
 
         const value = store_view.const_store.get(node);
         switch (value) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .fn_value => |fn_id| {
                 const expr = try self.restoreConstFnExpr(store_view, fn_id, ty, static_data_const_locator);
                 if (static_data_const_locator == null) try self.const_expr_cache.put(address, expr);
@@ -29540,11 +29570,16 @@ const BodyContext = struct {
             .numeral_conversion,
             .quote_conversion,
             .repl_expr,
+            .literal_argument,
             => saved_source_region_override,
         };
         const body = if (root.literalConversionKind() != null)
             try self.lowerLiteralConversionRootBody(wrapper.body_expr, ret_cell)
         else switch (root.kind) {
+            // A literal argument root is the `.boxy` evaluator's: its value
+            // is passed at runtime by address, so it is never a Solved
+            // program's root (design.md "Literal Arguments").
+            .literal_argument => Common.invariant("a literal argument root reached Monotype"),
             .constant,
             .hoisted_constant,
             .hoisted_validation,
@@ -34338,6 +34373,7 @@ const BodyContext = struct {
     const DivergentTask = struct {
         expr: checked.CheckedExprId,
         form: DivergentForm,
+        saved: ?SavedSourceLocation = null,
         finish: union(enum) {
             passthrough,
             /// Wrap the child's data as an expression of this type.
@@ -34366,7 +34402,16 @@ const BodyContext = struct {
         return requestLowerTask(ctx, .{ .divergent = .{ .expr = expr, .form = form } });
     }
 
+    /// Lower a divergent expression at its own source location, so a failure
+    /// in it is reported there and not at the construct around it.
     fn stepDivergent(self: *BodyContext, frame: *LowerFrame, task: *DivergentTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        if (frame.cursor == 0) task.saved = try self.saveSourceLocation(self.view.bodies.expr(task.expr));
+        const step = try self.stepDivergentExpr(frame, task, input);
+        if (step == .ret) self.restoreSourceLocation(&task.saved);
+        return step;
+    }
+
+    fn stepDivergentExpr(self: *BodyContext, frame: *LowerFrame, task: *DivergentTask, input: ?LowerResult) Allocator.Error!LowerStep {
         if (frame.cursor != 0) {
             const child = input.?;
             return switch (task.finish) {
@@ -37300,7 +37345,6 @@ const BodyContext = struct {
             const created = try self.builder.lowerDraftTemplateFromContext(
                 self,
                 procedure.template,
-                source_fn_ty,
                 lookup.view.types.rootKey(source_fn_ty),
                 callable_node,
                 edge,
@@ -46213,7 +46257,6 @@ const BodyContext = struct {
             else
                 try self.draftFnSlotForProcedureUseAtNode(
                     proc,
-                    source_fn_ty,
                     source_fn_key,
                     request_fn_node,
                     try self.evidenceForProcedureUseAtNode(proc, record.expr, null, request_fn_node, .body_lowering),
@@ -46224,7 +46267,6 @@ const BodyContext = struct {
             else
                 try self.draftFnSlotForProcedureUseAtNode(
                     proc.procedure,
-                    source_fn_ty,
                     source_fn_key,
                     request_fn_node,
                     try self.evidenceForProcedureUseAtNode(proc.procedure, record.expr, proc.root_evidence, request_fn_node, .body_lowering),
@@ -46385,7 +46427,6 @@ const BodyContext = struct {
     fn draftFnSlotForProcedureUseAtNode(
         self: *BodyContext,
         proc: checked.ProcedureUseTemplate,
-        source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         request_fn_node: NodeId,
         edge: EdgeEvidence,
@@ -46395,7 +46436,6 @@ const BodyContext = struct {
         return try self.builder.lowerDraftTemplateFromContext(
             self,
             template_ref,
-            source_fn_ty,
             source_fn_key,
             request_fn_node,
             edge,
@@ -47488,11 +47528,10 @@ const BodyContext = struct {
             );
         }
         const edge = try self.evidenceForProcedureUseAtNode(proc, site_expr, root_evidence, request_fn_node, .body_lowering);
-        const source_fn_ty = proc.source_fn_ty_payload orelse
+        _ = proc.source_fn_ty_payload orelse
             Common.invariant("checked procedure value reached Monotype without a requested function type");
         const slot = try self.draftFnSlotForProcedureUseAtNode(
             proc,
-            source_fn_ty,
             proc.source_fn_ty_template,
             request_fn_node,
             edge,
@@ -48039,6 +48078,7 @@ const BodyContext = struct {
         if (try self.materializedConstNodeExpr(store_view, node, representation, cell, static_data_const_locator)) |existing| return .{ .done = existing };
 
         switch (value) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .fn_value => {},
             .tag, .record, .tuple => if (nominalConstructionLayer(self.typeStore(), ty)) |layer| {
                 return .{ .layer = .{ .child = node, .backing = layer.backing, .named = layer.named } };
@@ -48053,6 +48093,7 @@ const BodyContext = struct {
 
         try self.reserveConstNodeBinding(store_view, node, representation, cell);
         switch (value) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .fn_value => |fn_id| {
                 const part_root = self.static_data_part_root;
                 self.static_data_part_root = null;
@@ -48218,6 +48259,7 @@ const BodyContext = struct {
         checked_type_module: checked.ModuleId,
     ) ?StaticDataPartRoot {
         return switch (store_view.const_store.get(node)) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .tuple, .record, .tag, .nominal => .{
                 .module = store_view.key,
                 .node = node,
@@ -48237,6 +48279,7 @@ const BodyContext = struct {
         const root = self.static_data_part_root orelse return false;
         if (node == root.node or !moduleBytesEqual(root.module.bytes, store_view.key.bytes)) return false;
         return switch (store_view.const_store.get(node)) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .list => |list| switch (list) {
                 .nodes => |items| items.len != 0,
                 .empty, .packed_bytes => false,
@@ -48414,6 +48457,7 @@ const BodyContext = struct {
                 const index = frame.lowered.items.len;
                 const child = frame.single_child orelse frame.children[index];
                 const child_node = switch (frame.value) {
+                    .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
                     .tag => try self.graph.tagConstructionPayloadNode(frame.request_node, frame.tag_name, index),
                     .box, .nominal => frame.single_child_node,
                     .pending, .zst, .scalar, .str, .crash, .checked_error, .list, .tuple, .record, .fn_value => frame.child_nodes[index],
@@ -48450,6 +48494,7 @@ const BodyContext = struct {
         var frame_owned = true;
         errdefer if (frame_owned) frame.deinit(self.allocator);
         switch (value) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .fn_value => |fn_id| {
                 const part_root = self.static_data_part_root;
                 self.static_data_part_root = null;
@@ -48475,6 +48520,7 @@ const BodyContext = struct {
             .pending, .zst, .scalar, .str, .list, .box, .crash, .checked_error => {},
         }
         switch (value) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .list => |list| switch (list) {
                 .nodes => |items| {
                     const element_node = try self.graph.listElementNode(request_node);
@@ -48557,6 +48603,7 @@ const BodyContext = struct {
             ),
             .constructor, .data => blk: {
                 const data: BodyExprData = switch (frame.value) {
+                    .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
                     .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
                     .zst => .unit,
                     .scalar => |scalar| restoreScalar(BodyExprData, scalar),
@@ -49095,7 +49142,6 @@ const BodyContext = struct {
                 break :blk try self.requireLocalDraftSlot(try self.builder.lowerDraftTemplateFromContext(
                     self,
                     template_ref,
-                    source_fn_ty,
                     source_fn_key,
                     request_fn_node,
                     .{ .subst = subst, .vector = retained_evidence.vector },
@@ -50276,7 +50322,7 @@ const BodyContext = struct {
             self.in_default_expr = true;
             // The default is a closed expression: it binds nothing from the
             // consuming body, so it gets fresh binder state even in its own
-            // module (the same rule boxy's `stepModuleExpr` applies).
+            // module.
             // Without this, a second materialization of the same default in
             // one body would capture the first's (or the consuming body's)
             // lexical binder entries into its local-procedure declaration
@@ -51040,8 +51086,7 @@ const BodyContext = struct {
         // below—but every unset label must still name an OPTIONAL field in
         // the row, the same validation the update arm above applies. Without
         // it, an unset of a defaulted field would silently take the
-        // defaulted arm and materialize the default, diverging from boxy
-        // lowering (which panics on the same input).
+        // defaulted arm and materialize the default.
         for (record.unsets) |label| {
             const name = try recordFieldName(self.nameStoreMut(), self.view, label);
             if (self.monotypeFieldKindTag(self.recordField(ty, name)) != .optional) {
@@ -56010,7 +56055,6 @@ const BodyContext = struct {
                 break :blk try self.builder.lowerDraftTemplateFromContext(
                     self,
                     procedure.template,
-                    source_fn_ty,
                     source_fn_key,
                     request_fn_node,
                     edge,
@@ -56181,7 +56225,6 @@ const BodyContext = struct {
                 break :blk try self.builder.lowerDraftTemplateFromContext(
                     self,
                     procedure.template,
-                    source_fn_ty,
                     source_fn_key,
                     request_fn_node,
                     edge,
@@ -69356,9 +69399,9 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
     frame_view.names = &frame_names;
     frame_view.types = checked_types.view();
     const params = [_]static_dispatch.EvidenceParamRecord{
-        .{ .method = frame_encode, .dispatcher_ty = receiver_ty, .callable_ty = encode_ty, .slot = 0, .runtime_dictionary = true },
-        .{ .method = frame_decode, .dispatcher_ty = other_receiver_ty, .callable_ty = other_decode_ty, .slot = 1, .runtime_dictionary = true },
-        .{ .method = frame_decode, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = 0, .runtime_dictionary = true },
+        .{ .method = frame_encode, .dispatcher_ty = receiver_ty, .callable_ty = encode_ty, .slot = 0 },
+        .{ .method = frame_decode, .dispatcher_ty = other_receiver_ty, .callable_ty = other_decode_ty, .slot = 1 },
+        .{ .method = frame_decode, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = 0 },
     };
     const frame: EvidenceChain = .{
         .scope = undefined,
@@ -69400,7 +69443,7 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
             .view = inner_view,
             .root = null,
             .scheme_vars = &.{receiver_ty},
-            .params = &.{.{ .method = inner_method, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = 0, .runtime_dictionary = true }},
+            .params = &.{.{ .method = inner_method, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = 0 }},
             .params_start = 0,
         },
         .subst = &.{.{ .node = receiver }},
@@ -70064,6 +70107,7 @@ fn beginConstRestoreNode(
     };
     var frame: ConstRestoreFrame(@TypeOf(restorer.*).ConstExprId) = .{ .node = node, .ty = ty, .value = value };
     switch (value) {
+        .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
         .box => |payload| frame.single_child = payload,
         .list => |list| switch (list) {
             .nodes => |items| frame.children = items,
@@ -70096,6 +70140,7 @@ fn beginConstRestoreNode(
 /// The type child `index` of a restoring node is restored at.
 fn constRestoreChildType(restorer: anytype, frame: anytype, index: usize) Type.TypeId {
     return switch (frame.value) {
+        .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
         .box => boxPayloadType(restorer.constTypeStore(), frame.ty),
         .list => listElemType(restorer.constTypeStore(), frame.ty),
         .tuple => GuardedList.at(tupleItemTypes(restorer.constTypeStore(), frame.ty), index),
@@ -70115,6 +70160,7 @@ fn constRestoreData(
     const emit = restorer.constEmit();
     const lowered = frame.lowered.items;
     return switch (frame.value) {
+        .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
         .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
         .zst => .unit,
         .scalar => |scalar| restoreScalar(@TypeOf(restorer.*).ConstExprData, scalar),
@@ -70445,6 +70491,7 @@ fn monotypeBackingAuthority(authority: check.ConstStore.TypeBackingAuthority) Ty
 
 fn constStrNodeByteLen(view: ModuleView, node: checked.ConstNodeId) u32 {
     return switch (view.const_store.get(node)) {
+        .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
         .str => |str| str.len,
         .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => Common.invariant("stored parser renamed field capture was not a Str constant"),
     };
@@ -70452,6 +70499,7 @@ fn constStrNodeByteLen(view: ModuleView, node: checked.ConstNodeId) u32 {
 
 fn constStrNodeBytes(view: ModuleView, node: checked.ConstNodeId) []const u8 {
     return switch (view.const_store.get(node)) {
+        .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
         .str => |str| view.const_store.strBytes(str),
         .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => Common.invariant("stored parser renamed field capture was not a Str constant"),
     };
@@ -74720,6 +74768,7 @@ const CompletedConstPaths = struct {
         while (index < self.entries.items.len) : (index += 1) {
             const value = store.get(self.entries.items[index].node);
             switch (value) {
+                .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
                 .box => |child| try self.add(child, index, .{ .kind = .box }),
                 .nominal => |nominal| try self.add(nominal.backing, index, .{ .kind = .nominal }),
                 .tuple => |children| for (children, 0..) |child, i| try self.add(child, index, .{ .kind = .tuple, .index = @intCast(i) }),

@@ -32,8 +32,7 @@ pub const LambdaSolved = struct {
 pub const LambdaMono = struct {
     pub const Type = @import("lambda_mono/type.zig");
 };
-/// Decision-tree match compiler shared by both LIR lowerers: the direct
-/// solved-to-LIR lowering and Boxy lowering.
+/// Decision-tree match compiler for the direct solved-to-LIR lowering.
 pub const MatchTree = @import("match_tree.zig");
 pub const SolvedInline = @import("solved_inline.zig");
 pub const SolvedLirLower = @import("solved_lir_lower.zig");
@@ -44,7 +43,7 @@ pub const CompletedErasedMembers = @import("completed_erased_members.zig").Compl
 pub const ComptimeRootGraph = @import("comptime_root_graph.zig");
 /// Discovery summaries of a lowered program (design.md "Discovery Summaries").
 pub const DiscoverySummary = @import("discovery_summary.zig");
-/// Boxy checked-to-LIR planning and lowering components.
+/// `.boxy` runtime lowering (design.md "`.boxy` Runtime Lowering").
 pub const Boxy = @import("boxy/mod.zig");
 pub const StructuralTest = @import("structural_test.zig");
 

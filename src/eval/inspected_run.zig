@@ -13,21 +13,17 @@ const collections = @import("collections");
 const lir = @import("lir");
 const layout = @import("layout");
 const roc_target = @import("roc_target");
-const wasm32_boxy_runtime = @import("wasm32_boxy_runtime");
 const wasm32_builtins = @import("wasm32_builtins");
-const wasm32v1_boxy_runtime = @import("wasm32v1_boxy_runtime");
 const wasm32v1_builtins = @import("wasm32v1_builtins");
 
 const Allocator = std.mem.Allocator;
 const object_image = @import("object_image.zig");
+const BoxyInProcessState = @import("boxy_runtime").compiled.InProcessState;
 const ExecutableMemory = backend.ExecutableMemory;
 const HostLirCodeGen = backend.HostLirCodeGen;
 const Interpreter = @import("interpreter.zig").Interpreter;
-const boxy_abi = @import("boxy_abi.zig");
-const boxy_runtime = @import("boxy_runtime.zig");
 const LayoutIdx = layout.Idx;
 const LayoutStore = layout.Store;
-const LirImage = lir.LirImage;
 const LirProcSpecId = lir.LirProcSpecId;
 const RocStr = builtins.str.RocStr;
 const RuntimeHostEnv = @import("runtime_host.zig");
@@ -65,12 +61,9 @@ pub const Backend = enum {
 pub const Program = struct {
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
-    boxy_tables: boxy_runtime.BoxyTables = .{},
     /// Bytes the program's erased callables reserve before their captures
     /// (`LirProgram.Result.erased_capture_prefix`).
     erased_capture_prefix: u32,
-    boxy_sidecar_blob: ?[]const u8 = null,
-    boxy_sidecar_desc: ?LirImage.BoxySidecar = null,
     main_proc: LirProcSpecId,
     static_data: []const backend.StaticDataExport = &.{},
     static_data_value_count: usize = 0,
@@ -302,11 +295,10 @@ fn runInterpreter(allocator: Allocator, program: Program, execution_host: Execut
     var static_strings = try Interpreter.buildStaticStrings(allocator, program.store);
     defer static_strings.deinit();
 
-    var interp = try Interpreter.initWithBoxyTablesAndHostedCallHandler(
+    var interp = try Interpreter.initWithHostedCallHandler(
         allocator,
         program.store,
         program.layouts,
-        program.boxy_tables,
         static_strings.view(),
         runtime_env.get_ops(),
         .{
@@ -366,21 +358,16 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
         };
         defer allocator.free(addresses);
 
-        var codegen = try HostLirCodeGen.initWithBoxyMetadata(
+        var codegen = try HostLirCodeGen.initWithCapturePrefix(
             allocator,
             program.store,
             program.layouts,
             static_strings.view(),
-            program.boxy_tables.erased_arg_desc_offsets,
-            program.boxy_tables.erased_arg_desc_params,
-            program.boxy_tables.worker_procs,
             program.erased_capture_prefix,
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
         codegen.setNativeStaticData(addresses);
-        var native_fns: ?boxy_abi.BoxyNativeFnTable = if (program.store.runtime_contract == .boxy) boxy_abi.nativeFnTable() else null;
-        codegen.boxy_native_fns = if (native_fns) |*table| table else null;
         try codegen.compileAllProcSpecs(program.store.getProcSpecs());
         const helpers = try backend.collectRequiredRcHelpers(allocator, program.static_data);
         defer allocator.free(helpers);
@@ -422,9 +409,6 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
         var runtime_env = RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
 
-        const boxy_installed = try installBoxyGlobal(allocator, program, runtime_env.get_ops());
-        defer if (boxy_installed) boxy_abi.deinitGlobal();
-
         const arg_buffer = try zeroedEntrypointArgBuffer(allocator, program.layouts, arg_layouts);
         defer if (arg_buffer) |buf| allocator.free(buf);
 
@@ -433,6 +417,11 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
         const ret_buf = try allocator.alignedAlloc(u8, collections.max_roc_alignment, @max(size_align.size, 1));
         defer allocator.free(ret_buf);
         @memset(ret_buf, 0);
+
+        const composition = if (program.store.runtime_contract == .boxy) try BoxyInProcessState.create(allocator) else null;
+        defer if (composition) |owned| owned.destroy();
+        const composing = if (composition) |owned| owned.enter() else null;
+        defer if (composing) |entered| BoxyInProcessState.leave(entered);
 
         var crash_boundary = runtime_env.enterCrashBoundary();
         defer crash_boundary.deinit();
@@ -463,8 +452,8 @@ fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
     return runWasmAt(allocator, program, .default);
 }
 
-/// Run on the wasm backend for a CPU level, with builtins and the Boxy
-/// runtime built for that level.
+/// Run on the wasm backend for a CPU level, with builtins built for that
+/// level.
 pub fn runWasmAt(allocator: Allocator, program: Program, cpu_level: roc_target.CpuLevel) WasmError!Result {
     if (comptime builtin.target.os.tag == .freestanding) return error.WasmExecFailed;
 
@@ -487,16 +476,13 @@ pub fn runWasmAt(allocator: Allocator, program: Program, cpu_level: roc_target.C
     };
 }
 
-/// Generate the wasm module `runWasmAt` runs, with builtins and the Boxy
-/// runtime built for `cpu_level`. The caller owns the returned bytes.
+/// Generate the wasm module `runWasmAt` runs, with builtins built for
+/// `cpu_level`. The caller owns the returned bytes.
 pub fn generateWasmModule(allocator: Allocator, program: Program, cpu_level: roc_target.CpuLevel) WasmError!backend.wasm.WasmCodeGen.GenerateResult {
     var codegen = backend.wasm.WasmCodeGen.init(
         allocator,
         program.store,
         program.layouts,
-        program.boxy_tables.erased_arg_desc_offsets,
-        program.boxy_tables.erased_arg_desc_params,
-        program.boxy_tables.worker_procs,
         cpu_level,
     );
     defer codegen.deinit();
@@ -510,19 +496,15 @@ pub fn generateWasmModule(allocator: Allocator, program: Program, cpu_level: roc
     };
 
     const proc = program.store.getProcSpec(program.main_proc);
-    const runtime_input: ?backend.wasm.WasmCodeGen.BoxyRuntimeInput = if (boxy_runtime.storeNeedsRuntime(program.store)) .{
-        .runtime_object = switch (cpu_level) {
-            .default => wasm32_boxy_runtime.bytes[0..],
-            .v1 => wasm32v1_boxy_runtime.bytes[0..],
-        },
-        .sidecar_blob = program.boxy_sidecar_blob orelse return error.Internal,
-        .sidecar_desc = program.boxy_sidecar_desc orelse return error.Internal,
-    } else null;
     const builtins_object = switch (cpu_level) {
         .default => wasm32_builtins.bytes,
         .v1 => wasm32v1_builtins.bytes,
     };
-    return codegen.generateModule(program.main_proc, proc.ret_layout, builtins_object, runtime_input) catch |err| switch (err) {
+    const boxy_runtime_object = switch (cpu_level) {
+        .default => wasm32_builtins.boxy_runtime_bytes,
+        .v1 => wasm32v1_builtins.boxy_runtime_bytes,
+    };
+    return codegen.generateModule(program.main_proc, proc.ret_layout, builtins_object, boxy_runtime_object) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.HostedFunctionTypeMismatch => return error.Internal,
     };
@@ -598,13 +580,7 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
         .ret_layout = proc.ret_layout,
     }};
     const bitcode = generate: {
-        var codegen = llvm_compile.MonoLlvmCodeGen.init(
-            allocator,
-            program.store,
-            program.boxy_tables.erased_arg_desc_offsets,
-            program.boxy_tables.erased_arg_desc_params,
-            program.boxy_tables.worker_procs,
-        );
+        var codegen = llvm_compile.MonoLlvmCodeGen.init(allocator, program.store);
         codegen.layout_store = program.layouts;
         codegen.static_data_addresses = addresses;
         codegen.proc_symbol_mode = .lir_symbol;
@@ -630,7 +606,7 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
     );
     defer allocator.free(object_bytes);
 
-    var lib = object_image.load(allocator, object_bytes, program.store.runtime_contract) catch |err| switch (err) {
+    var lib = object_image.load(allocator, object_bytes) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.UnsupportedObject,
         error.MalformedObject,
@@ -675,9 +651,6 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
-    const boxy_installed = try installBoxyGlobal(allocator, program, runtime_env.get_ops());
-    defer if (boxy_installed) boxy_abi.deinitGlobal();
-
     const arg_buffer = try zeroedEntrypointArgBuffer(allocator, program.layouts, arg_layouts);
     defer if (arg_buffer) |buf| allocator.free(buf);
 
@@ -686,6 +659,11 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
     const ret_buf = try allocator.alignedAlloc(u8, collections.max_roc_alignment, @max(size_align.size, 1));
     defer allocator.free(ret_buf);
     @memset(ret_buf, 0);
+
+    const composition = if (program.store.runtime_contract == .boxy) try BoxyInProcessState.create(allocator) else null;
+    defer if (composition) |owned| owned.destroy();
+    const composing = if (composition) |owned| owned.enter() else null;
+    defer if (composing) |entered| BoxyInProcessState.leave(entered);
 
     var crash_boundary = runtime_env.enterCrashBoundary();
     defer crash_boundary.deinit();
@@ -709,29 +687,6 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
         ret_buf.ptr,
         runtime_env.get_ops(),
     ));
-}
-
-fn installBoxyGlobal(
-    allocator: Allocator,
-    program: Program,
-    roc_ops: *builtins.host_abi.RocOps,
-) Allocator.Error!bool {
-    if (!boxy_runtime.storeNeedsRuntime(program.store)) return false;
-
-    // A crash can longjmp past a previous teardown, so clear stale state
-    // before installing this program's explicit runtime inputs.
-    boxy_abi.deinitGlobal();
-    boxy_abi.initGlobal(
-        allocator,
-        program.store,
-        program.layouts,
-        program.boxy_tables,
-        roc_ops,
-    ) catch |err| switch (err) {
-        error.AlreadyInitialized => return false,
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-    return true;
 }
 
 /// Allocate a zeroed, alignment-sorted entrypoint argument buffer, or null if no args.
