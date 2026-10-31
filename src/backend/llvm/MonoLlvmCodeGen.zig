@@ -412,6 +412,9 @@ pub const MonoLlvmCodeGen = struct {
     /// The current procedure's slot lifetime markers.
     slot_lifetimes: SlotLifetimes,
     stmt_entry_blocks: collections.DenseMap(u32, LlvmBuilder.Function.Block.Index),
+    /// The join body being entered in its own block, which is also the entry
+    /// block of that statement when other paths arrive at it.
+    entering_join_body: ?CFStmtId = null,
     /// Store-indexed statement marks for one statement-graph walk at a time:
     /// a statement is visited when its mark equals `stmt_visit_epoch`.
     stmt_visit_marks: std.ArrayList(u32) = .empty,
@@ -3679,6 +3682,7 @@ pub const MonoLlvmCodeGen = struct {
                         wip.cursor = .{ .block = state.join_block };
                         self.rollbackValues(state.mark);
                         try self.enterMerge(state.body);
+                        self.entering_join_body = state.body;
                         try work.append(wa, .{ .join_after_body = state });
                         try work.append(wa, .{ .node = state.body });
                     } else {
@@ -4066,6 +4070,10 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn enterSharedStmtBlock(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) Error!bool {
+        if (self.entering_join_body == stmt_id) {
+            self.entering_join_body = null;
+            return false;
+        }
         const key = @backingInt(stmt_id);
         const count = self.stmt_incoming_counts.get(key) orelse 0;
         if (count <= 1) return false;
@@ -8655,7 +8663,7 @@ pub const MonoLlvmCodeGen = struct {
     fn emitJoin(self: *MonoLlvmCodeGen, join_stmt: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
         const key = @backingInt(join_stmt.id);
-        const join_block = wip.block(0, "join_body") catch return error.OutOfMemory;
+        const join_block = try self.joinBodyBlock(key, join_stmt.body);
         const after_block = wip.block(0, "join_after") catch return error.OutOfMemory;
         try self.join_points.put(key, .{ .block = join_block, .params = join_stmt.params, .body = join_stmt.body });
 
@@ -8667,6 +8675,24 @@ pub const MonoLlvmCodeGen = struct {
             .mark = self.valueMark(),
         } });
         try work.append(wa, .{ .node = join_stmt.remainder });
+    }
+
+    /// The block a join's jumps enter. A body other paths also arrive at
+    /// without a jump has one block for all of them, so that every edge reaches
+    /// the same merge. A body such a path already emitted is not emitted again.
+    fn joinBodyBlock(self: *MonoLlvmCodeGen, key: u32, body: CFStmtId) Error!LlvmBuilder.Function.Block.Index {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const body_key = @backingInt(body);
+        if ((self.stmt_incoming_counts.get(body_key) orelse 0) <= 1) {
+            return wip.block(0, "join_body") catch return error.OutOfMemory;
+        }
+        if (self.stmt_entry_blocks.get(body_key)) |block| {
+            try self.compiled_joins.put(key, {});
+            return block;
+        }
+        const block = wip.block(0, "join_body") catch return error.OutOfMemory;
+        try self.stmt_entry_blocks.put(body_key, block);
+        return block;
     }
 
     fn emitJump(self: *MonoLlvmCodeGen, jump_stmt: anytype) Error!void {

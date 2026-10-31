@@ -2194,7 +2194,6 @@ const ModuleEvaluation = struct {
 
     /// Whether the module's program runs against its imports' objects.
     fn links(self: *const ModuleEvaluation, shared: Shared) bool {
-        if (comptime compilerHostMustUseInterpreterForCtfe()) return false;
         return shared.options.boxy_objects != null and self.artifact(shared).platform_type_inputs.requirements.len == 0;
     }
 
@@ -2257,7 +2256,7 @@ const ModuleEvaluation = struct {
         var target = boxyCompileTimeTarget(shared.options);
         var run_options = shared.options;
         var linked = false;
-        if (self.links(shared)) {
+        if ((comptime !compilerHostMustUseInterpreterForCtfe()) and self.links(shared)) {
             const source = shared.options.boxy_objects.?;
             if (try source.objects(source.context, module)) |set| {
                 try shared.images.load(set.objects);
