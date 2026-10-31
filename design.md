@@ -3400,14 +3400,14 @@ builds produce no new diagnostic output.
 
 Every compilation evaluates every compile-time root it requests, whatever the
 command and whatever its strategy, and reports every failure. `roc build` is
-`roc check` plus an executable, so `roc check`, `roc run`, `roc build` and
+`roc check` plus a linked program, so `roc check`, `roc run`, `roc build` and
 `roc test` report the same failures for the same sources, including failures in
 roots nothing reads and in the modules of dependencies. A failure is an error
 in every command.
 
 This policy is chosen for these reasons:
 
-- `roc build` is meant to be `roc check` plus an executable. If evaluation
+- `roc build` is meant to be `roc check` plus a linked program. If evaluation
   followed demand, `roc check` would report errors a build of the same sources
   does not, which contradicts that meaning. Evaluating every root makes the
   commands agree without any rule about which command saw which root.
@@ -3673,12 +3673,12 @@ and its stored type to contain no named type, field default, callable or other
 module-version reference, and every recorded root read to retain its
 producer-authored value identity.
 When committing a checked module, the coordinator records each read's source
-placement, semantic root site and semantic value identity beside its exact
+placement, source root site and producer-authored value identity beside its exact
 module key and root id. Reuse resolves these placements and sites in the current
 checked program, checks every value identity, and installs the reads under the
 current module keys and root ids. This includes reads of roots in the same
 module, imported constants and transitive reads. Builtins and retained platform
-interface artifacts keep exact version keys in place of source placements.
+interfaces keep exact version keys in place of source placements.
 An absent producer, changed input or missing optional read identity makes the
 candidate a cache miss. These conditions are checked against the previous
 committed result, not guessed from source syntax. Debug observations are copied
@@ -15117,7 +15117,8 @@ strategy).
   local function's use or construction), recording the type after the edge's
   substitution, the edge, and the callee's literal requirement index. Literal requirements are
   computed to a fixpoint over the module's schemes and deduplicated by
-  literal and type, so a self-recursive call at the same types adds nothing.
+  literal, type key, and the type's variables, so a recursive call at the same
+  types adds nothing, however many roots its instantiations produce.
 - Each edge's *literal arguments* (`literalEdgeArgs`): for every literal requirement
   of the instantiated scheme, where the body gets the value from. An
   instantiation at a closed type is a `literal_argument` compile-time root
@@ -15276,10 +15277,10 @@ every call, so a cache hit is the hot path, and the compile-time workers of
 a build compose concurrently. The interning table is therefore read without
 its lock: a reader loads the current table and probes it from the key's
 hashed slot to the first empty one. That is sound because a table is only
-ever added to, never changed or compacted; an entry publishes its value
+ever added to, never changed or compacted; an entry stores its value
 last, after its key, so a reader that sees the value sees the key it was
 stored under, and one that sees an empty slot treats it as a miss; and
-growth builds a new table, copies every entry into it, and publishes it
+growth builds a new table, copies every entry into it, and installs it
 whole, leaving the replaced table alive for the readers still probing it.
 A reader that misses, whether the entry is absent or another thread is
 adding it, takes the lock, probes the current table again, and interns on a
@@ -15291,7 +15292,7 @@ cache in zero-initialized writable static data. The lowerer assigns its slot
 and stable worker/site identity; LIR cloning and compaction preserve that
 reference. Mutable slots are never content-deduplicated or pooled between
 program images. Dev run images place them on separate writable pages outside
-the executable and read-only data sections and outside the retained static pool.
+the code and read-only data sections and outside the retained static pool.
 Saved objects and LirImages carry the initial zero bytes, never runtime pointers.
 Each interpreter owns its own instances of these slots, with
 the lifetime of its composition arena.
@@ -15301,7 +15302,7 @@ snapshot of the last operand pointers and result. If every operand matches,
 they use that result without entering the runtime or probing the interner. The
 constructor, worker, arities and other non-local arguments are fixed by the
 site; the local operand sequence is its complete varying key. A miss composes
-normally, then release-stores a complete snapshot pointer. Atomic publication
+normally, then release-stores a complete snapshot pointer. An atomic store
 of one pointer means no reader can observe a partially replaced operand/result
 pair, even with several writers. Snapshots are themselves interned by result
 and operand sequence in the program's immortal table, so alternating previously
@@ -15317,8 +15318,8 @@ before each program runs (`BoxyLinkedImages.resetMutableData`), so a program
 finds the objects it shares holding no snapshot at all and publishes its own.
 
 A recursive-open operation can return a private, unfinished placeholder. It
-publishes no site snapshot until it returns a completed descriptor from the
-interner; recursive-close always finishes its placeholder before publishing.
+stores no site snapshot until it returns a completed descriptor from the
+interner; recursive-close always finishes its placeholder before storing one.
 Thus the site cache never exposes an unfinished recursive descriptor to another
 execution. Monomorphic sites take the inline path after their first completed
 composition, while polymorphic sites use the ordinary interner on a mismatch.
@@ -15532,8 +15533,8 @@ each other are built at the same time, and the evaluating thread runs each
 program as it is built, in the order the builds finish. The build of a program
 reads the checked modules and the loaded objects' symbols and writes nothing
 another thread reads; running it, which stores values and reports failures,
-stays on the evaluating thread, as do the roots the Solved evaluator owns. A
-module's evaluation thus waits only for the values its roots read and the
+stays on the evaluating thread, as do the programs of roots holding function
+values ("Stored Function Values"). A module's evaluation thus waits only for the values its roots read and the
 objects of its own import closure. The link waits for every unit and links the
 objects this compilation built or restored without restoring them again: a
 build that links the objects keeps each one for the link as the scheduler
@@ -15558,19 +15559,53 @@ only when something fails, so the code that succeeds carries nothing extra. A
 compilation with no cache has no objects, and runs as the whole program.
 
 A root whose value holds a function value (anywhere in its type, or a
-callable binding) is evaluated by the Solved evaluator under either strategy.
-A stored function value restores through the checked dispatch evidence its
-evaluation recorded (`ConstStore.FnDef`), which specialization has statically
-for every closure it creates; a `.boxy` function value carries runtime
-descriptors and dictionaries instead, which name neither the checked
-evidence nor a nominal's phantom arguments, so a `.boxy` evaluation has
-nothing to store such a value by. The `.boxy` evaluator specializes exactly
-those roots, with every pending root of their module they read (whose values
-the Solved program then stores before the module's `.boxy` program is
-lowered, which restores them), in one Solved program per module
-(`RootFilter`), before the module's `.boxy` program. A literal argument root
-("Literal Arguments") is the `.boxy` evaluator's whatever its value: one
-whose value holds a function is evaluated for its outcome and discarded.
+callable binding) has no compile-time value slot, so it is evaluated by the
+programs "Stored Function Values" describes rather than the module's program.
+A literal argument root ("Literal Arguments") is the module's program's
+whatever its value: one whose value holds a function is evaluated for its
+outcome and discarded.
+
+#### Stored Function Values
+
+A `.boxy` function value is an erased callable: a worker's code and what the
+worker captured, which is values, the descriptors of its scope's type
+variables, and dictionaries, themselves erased callables. Compile-time
+evaluation under `.boxy` stores exactly that (`ConstValue.boxy_fn`): a recipe
+naming the worker and the type each captured descriptor describes, with the
+captured values and dictionaries as nodes of the constant store. Restoring
+the value rebuilds the worker from the recipe and packs the same captures, so
+nothing is inferred about the value and no checked evidence is consulted.
+
+The recipe holds its own table of types rather than ids of stored types. A
+generated codec worker's signature is generic, so a recipe type can name
+variables, which no stored type does, and a table keeps a block-local nominal's
+outer arguments, which a stored type leaves to its reader's scope. Workers are
+named as their keys name them: templates and lambdas by checked id, codec
+pieces by their family's derivation, a compile-time slot by its root.
+
+Function types share one descriptor, so a descriptor cannot be read back into
+a type by its structure. A program that stores function values records, as it
+composes each descriptor, the type it was composed for and the descriptors of
+that type's variables (`LIR.DynOp.desc_note`). Every type with one descriptor
+is the same to generic code, so the lowest type id stands for them all, which
+keeps the choice independent of thread timing, and a function inside a
+recorded type stands for any function.
+
+Only compile-time programs record descriptors. The notes run in the compiling
+process and no runtime target accepts them.
+
+A function value has no slot for another root to read, so a module's roots
+holding one, with every pending root they read, run first in their own
+programs, in the order their checked reads give (`evaluateFunctionRoots`). A
+root reading a value that is not stored yet stays pending and runs again once
+it is; if a program completes no root, the rest run once more and fail as they
+read. The module's remaining roots then restore the stored values.
+
+The stored form lives in `CompileTimeRoot.boxy_value`, beside the payload the
+`.lss` evaluator fills, because a recipe means nothing to Monotype. The payload
+stays `.unevaluated`, so an `.lss` compilation of the same checked module
+evaluates the root itself and neither strategy reads the other's function
+values.
 
 A literal in a generic body converts at the first instantiation that fixes
 its type, under either strategy: as a literal root of the specialization

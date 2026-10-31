@@ -256,6 +256,9 @@ pub const ConstPlan = union(enum) {
     },
     fn_value: FnSetId,
     erased_fn: ErasedFnsId,
+    /// A function value of a `.boxy` compile-time program, stored by what
+    /// it captured (`postcheck.Boxy.StoredFn`).
+    boxy_fn,
 };
 
 /// Constant root metadata needed after LIR interpretation finishes.
@@ -585,6 +588,7 @@ pub fn deinitConstPlans(allocator: Allocator, plans: []const ConstPlan) void {
             .list,
             .box,
             .named,
+            .boxy_fn,
             => {},
             .fn_value,
             .erased_fn,

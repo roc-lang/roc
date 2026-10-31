@@ -1,5 +1,6 @@
 import A
 import Point
+import Adder
 
 B := {}.{
     run : Str -> Str
@@ -13,6 +14,12 @@ B := {}.{
 
     bumped : U64 -> U64
     bumped = |n| A.bump(n)
+
+    stored : U64 -> U64
+    stored = |n| Adder.bumper(n)
+
+    held : U64 -> U64
+    held = |n| (Adder.table.f)(n)
 
     point : U64 -> U64
     point = |n| {

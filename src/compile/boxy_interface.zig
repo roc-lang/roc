@@ -181,7 +181,7 @@ pub const Digests = struct {
             .top_level_binding => try self.hashConstTemplate(hasher, artifact, template),
             .hoisted_expr => {},
         };
-        try self.hashStoredValues(hasher, artifact, .callable_bindings);
+        try self.hashStoredValues(hasher, artifact, .read_by_importers);
     }
 
     /// The name of `ref`'s worker, and the hidden parameters a call to it
@@ -218,7 +218,10 @@ pub const Digests = struct {
         }
     }
 
-    const RootScope = enum { every_root, callable_bindings };
+    /// `read_by_importers` names the roots an importer restores whatever
+    /// their constant template says: callable bindings, and function values
+    /// a `.boxy` program stored (design.md "Stored Function Values").
+    const RootScope = enum { every_root, read_by_importers };
 
     /// The values of `artifact`'s compile-time roots in `scope`. A module's
     /// own object stores all of them.
@@ -226,7 +229,7 @@ pub const Digests = struct {
         for (artifact.compile_time_roots.roots) |root| {
             switch (scope) {
                 .every_root => {},
-                .callable_bindings => if (root.kind != .callable_binding) continue,
+                .read_by_importers => if (root.kind != .callable_binding and root.boxy_value == null) continue,
             }
             try self.hashRootValue(hasher, artifact, root);
         }
@@ -239,6 +242,10 @@ pub const Digests = struct {
             .const_node => |node| try artifact.const_store.hashGraph(node, hasher, context),
             .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
             .pending, .unevaluated, .discarded, .expect, .runtime => {},
+        }
+        if (root.boxy_value) |stored| {
+            hashTag(hasher, "boxy_value");
+            try artifact.const_store.hashGraph(stored.node, hasher, context);
         }
     }
 };

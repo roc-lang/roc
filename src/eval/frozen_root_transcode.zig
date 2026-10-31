@@ -149,6 +149,7 @@ const Builder = struct {
         if (try self.recursionBoxed(job, source_boxed, if (source_physical.tag == .box) source_physical.getIdx() else job.source_layout, target_boxed, if (physical.tag == .box) physical.getIdx() else job.layout_idx)) return;
         switch (plan) {
             .pending, .layout_only => invariant("incomplete paired const plan"),
+            .boxy_fn => invariant("a function value's root reached a frozen transcode"),
             .zst => {},
             .scalar => {
                 // CheckedPrimitive has only fixed-width numeric/vector types.
@@ -325,7 +326,7 @@ const Builder = struct {
 fn recursionBoxSite(plan: Program.ConstPlan) bool {
     return switch (plan) {
         .tuple, .record, .tag_union, .fn_value => true,
-        .pending, .layout_only, .zst, .scalar, .str, .list, .box, .named, .erased_fn => false,
+        .pending, .layout_only, .zst, .scalar, .str, .list, .box, .named, .erased_fn, .boxy_fn => false,
     };
 }
 
