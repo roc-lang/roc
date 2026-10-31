@@ -1706,6 +1706,17 @@ pub const BoxyObjectSet = struct {
 /// the executor session it builds the modules' compile-time programs on,
 /// alongside the objects' units. Every function runs on the evaluating
 /// thread.
+/// A compile-time program's build as a task of the object scheduler, which
+/// runs it on a worker of its own or, when it is the only task left and the
+/// workers are idle, on the thread driving the scheduler, with those workers
+/// lent to the build's parallel waves.
+pub const ProgramTask = struct {
+    task: base.post_check_task_executor.Task,
+    /// Lend `executor` to the build's lowering and code generation, before
+    /// `task` runs on the thread that owns the executor.
+    lend: *const fn (context: *anyopaque, executor: base.post_check_task_executor.Executor) void,
+};
+
 pub const BoxyObjectSource = struct {
     context: *anyopaque,
     /// Whether the object of every module of `module`'s import closure is
@@ -1719,8 +1730,8 @@ pub const BoxyObjectSource = struct {
     /// Every compile-time root of `module` is complete, so its object can
     /// be built: the evaluation of a module importing it may need it.
     completed: *const fn (context: *anyopaque, module: *const checked.CheckedModuleArtifact) FinalizeError!void,
-    /// Run `task` on the session, as soon as it has a worker for it.
-    submit: *const fn (context: *anyopaque, task: base.post_check_task_executor.Task) FinalizeError!void,
+    /// Build `program` on the session, as soon as it has a worker for it.
+    submit: *const fn (context: *anyopaque, program: ProgramTask) FinalizeError!void,
     /// A completion of a submitted task, if one has finished.
     takeCompletion: *const fn (context: *anyopaque) FinalizeError!?base.post_check_task_executor.Completion,
     /// Wait for the next task of the session, a unit or a submitted one, to
@@ -2286,11 +2297,15 @@ const ModuleEvaluation = struct {
             return self.run(shared, evaluations);
         };
         // A worker lowers and compiles the program by itself: the session's
-        // executor is this thread's.
+        // executor is this thread's. The scheduler lends the program the
+        // workers when it runs the program on this thread instead.
         build.build_options.post_check_executor = null;
         build.target.post_check_executor = null;
         self.state = .building;
-        try source.submit(source.context, .{ .id = @intFromPtr(build), .context = build, .run = ProgramBuild.run });
+        try source.submit(source.context, .{
+            .task = .{ .id = @intFromPtr(build), .context = build, .run = ProgramBuild.run },
+            .lend = ProgramBuild.lend,
+        });
     }
 
     /// Run the module's built program and store its roots' values.
@@ -2429,6 +2444,15 @@ const ProgramBuild = struct {
         const self: *ProgramBuild = @ptrCast(@alignCast(context));
         self.complete();
         return null;
+    }
+
+    /// Lend `executor` to the build's lowering and code generation: `run`
+    /// follows on the executor's own thread.
+    fn lend(context: *anyopaque, executor: base.post_check_task_executor.Executor) void {
+        const self: *ProgramBuild = @ptrCast(@alignCast(context));
+        std.debug.assert(self.outcome == .pending);
+        self.build_options.post_check_executor = executor;
+        self.target.post_check_executor = executor;
     }
 
     /// Lower and compile the program.
