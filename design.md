@@ -24627,6 +24627,18 @@ so it is `noalias`, `readonly`, and `nocapture`. The erased ABI's result,
 capture, and reuse pointers carry no `noalias`, since the result can be written
 into a reused allocation that the capture points into.
 
+## Dev Backend Instruction Sets
+
+The dev backend's shared driver (`LirCodeGen`, `FrameBuilder`,
+`CallingConvention`) serves every instruction set listed in
+`backend/dev/isa.zig`'s `Isa`. Each component computes its `Isa` once from the
+target with `isaOf`, and every instruction-set choice is an exhaustive
+`switch (isa)` that names each instruction set's answer. The driver never
+compares `isa` with `==` or `!=`, and never caches such a test in a `bool`:
+adding an instruction set must make every choice a compile error until it has
+an answer for the new one. Code that builds a backend for a specific target asks
+`isaOfOrNull`, so the list of instruction sets lives only in `isa.zig`.
+
 ## Dev Backend Register Lifetimes
 
 `LirCodeGen` is the sole authority for LIR local locations. Every assigned
