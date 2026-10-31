@@ -26867,10 +26867,7 @@ fn publishLiteralArgumentRoots(
             }
             formals.clearRetainingCapacity();
             for (callee.vars) |variable| try formals.append(allocator, if (projector) |p| try p.project(variable) else variable);
-            // A self-recursive use instantiates the scheme at its own
-            // variables, which changes no type.
-            const instantiates = edge.subst.len != 0 and !std.mem.eql(CheckedTypeId, formals.items, edge.subst);
-            var substitution: ?CheckedTypeSubstitution = if (instantiates) CheckedTypeSubstitution.init(allocator, names, store, formals.items, edge.subst) else null;
+            var substitution: ?CheckedTypeSubstitution = if (edge.subst.len != 0) CheckedTypeSubstitution.init(allocator, names, store, formals.items, edge.subst) else null;
             defer if (substitution) |*s| s.deinit();
             var j: u32 = @intCast(args.items.len);
             // A self-recursive edge appends to the list it instantiates.
