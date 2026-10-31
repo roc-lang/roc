@@ -1487,6 +1487,7 @@ const BoxyObjects = struct {
     fn objectSet(context: *anyopaque, module: *const Artifact) Error!?eval.CompileTimeFinalization.BoxyObjectSet {
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
         const arena = self.arena.allocator();
+        try self.buildClosure(module);
         var ordered = std.ArrayList(Object).empty;
         var visited = std.AutoHashMapUnmanaged([32]u8, *const Artifact).empty;
         defer visited.deinit(self.coordinator.gpa);
@@ -1564,17 +1565,43 @@ const BoxyObjects = struct {
 
     fn buildObject(self: *BoxyObjects, artifact: *const Artifact) Error!?Object {
         const gpa = self.coordinator.gpa;
-        // A platform module with requirements is lowered at its app's types,
-        // and a module with roots left to evaluate has no final object.
+        const prepared = (try self.prepare(artifact)) orelse return null;
+        defer prepared.deinit(gpa);
+        const built = try prepared.build();
+        return try self.record(artifact.key.bytes, built);
+    }
+
+    /// Everything a unit's build reads, gathered on the coordinating thread
+    /// so the build itself touches no state another build shares.
+    const Prepared = struct {
+        unit: boxy_unit.Unit,
+
+        fn deinit(self: Prepared, gpa: Allocator) void {
+            gpa.free(self.unit.views);
+        }
+
+        fn build(self: Prepared) Error!boxy_unit.Built {
+            return boxy_unit.restoreOrBuild(self.unit) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => Coordinator.coordinatorInvariant("a module's object failed to compile for compile-time evaluation: {s}", .{@errorName(err)}),
+            };
+        }
+    };
+
+    /// `artifact`'s unit, or null for a module with no object of its own: a
+    /// platform module with requirements is lowered at its app's types, and
+    /// a module with roots left to evaluate has no final object.
+    fn prepare(self: *BoxyObjects, artifact: *const Artifact) Error!?Prepared {
+        const gpa = self.coordinator.gpa;
         if (artifact.platform_type_inputs.requirements.len != 0 or artifact.hasUnevaluatedRequests(.boxy)) return null;
         const platform = self.platformOf(artifact);
         if (artifact.hosted_procs.procs.len != 0 and platform == null) return null;
-        const arena = self.arena.allocator();
-        const views = try self.viewsOf(artifact);
+        const views = try self.coordinator.collectImportedArtifactViews(gpa, artifact);
+        errdefer gpa.free(views);
         var config = self.lowering.config;
         config.boxy_unit = .{ .imports = &self.interfaces, .root = false };
         config.checked_module_state = if (artifact.evaluation_state == .finalized) .complete else .checking_finalization;
-        const built = boxy_unit.restoreOrBuild(.{
+        return .{ .unit = .{
             .gpa = gpa,
             .artifact = artifact,
             .platform = platform,
@@ -1584,14 +1611,147 @@ const BoxyObjects = struct {
             .interfaces = &self.interfaces,
             .cache_manager = self.manager,
             .key = try boxy_unit.objectKey(gpa, artifact, platform, self.lowering.opt, self.lowering.inline_expects, self.lowering.target, false),
-        }) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => Coordinator.coordinatorInvariant("a module's object failed to compile for compile-time evaluation: {s}", .{@errorName(err)}),
-        };
+        } };
+    }
+
+    /// Keep `built` as the object of the module with checked key `module`,
+    /// in the arena.
+    fn record(self: *BoxyObjects, module: [32]u8, built: boxy_unit.Built) Error!Object {
+        const gpa = self.coordinator.gpa;
+        const arena = self.arena.allocator();
         defer built.deinit(gpa);
         const symbols = try arena.alloc([]const u8, built.hosted_symbols.len);
         for (built.hosted_symbols, symbols) |symbol, *copy| copy.* = try arena.dupe(u8, symbol);
-        return .{ .module = artifact.key.bytes, .object = try arena.dupe(u8, built.object), .code_locations = try arena.dupe(u8, built.code_locations), .hosted_symbols = symbols };
+        return .{ .module = module, .object = try arena.dupe(u8, built.object), .code_locations = try arena.dupe(u8, built.code_locations), .hosted_symbols = symbols };
+    }
+
+    /// One unit's build as a post-check task; a module with no object of
+    /// its own has nothing prepared and nothing to run.
+    const UnitTask = struct {
+        prepared: ?Prepared,
+        outcome: union(enum) { pending, failed: Error, done: boxy_unit.Built } = .pending,
+
+        fn run(context: *anyopaque, _: post_check_executor.Worker) ?*anyopaque {
+            const self: *UnitTask = @ptrCast(@alignCast(context));
+            const prepared = self.prepared orelse Coordinator.coordinatorInvariant("a module with no object was scheduled to build one", .{});
+            self.outcome = if (prepared.build()) |built| .{ .done = built } else |err| .{ .failed = err };
+            return null;
+        }
+    };
+
+    /// Build the objects of `module`'s import closure that are not known
+    /// yet, each after its imports and the independent ones at once on the
+    /// post-check executor. A module's calls compile against its imports'
+    /// export interfaces, which their builds record, so a unit starts once
+    /// every import it has among the pending units is done.
+    fn buildClosure(self: *BoxyObjects, module: *const Artifact) Error!void {
+        const gpa = self.coordinator.gpa;
+        var pending = std.ArrayList(*const Artifact).empty;
+        defer pending.deinit(gpa);
+        var index_by_key = std.AutoHashMapUnmanaged([32]u8, u32).empty;
+        defer index_by_key.deinit(gpa);
+        try self.collectPending(&self.coordinator.builtin_modules.checked_artifact, &pending, &index_by_key);
+        for (module.direct_import_module_keys) |key| {
+            const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
+            try self.collectPending(imported, &pending, &index_by_key);
+        }
+        if (pending.items.len == 0) return;
+
+        const tasks = try gpa.alloc(UnitTask, pending.items.len);
+        var prepared_count: usize = 0;
+        defer {
+            for (tasks[0..prepared_count]) |*task| if (task.prepared) |prepared| prepared.deinit(gpa);
+            gpa.free(tasks);
+        }
+        // Modules without an object of their own are known at once; the
+        // rest wait for their imports among the pending units.
+        const remaining = try gpa.alloc(u32, pending.items.len);
+        defer gpa.free(remaining);
+        @memset(remaining, 0);
+        const dependents = try gpa.alloc(std.ArrayList(u32), pending.items.len);
+        defer {
+            for (dependents) |*list| list.deinit(gpa);
+            gpa.free(dependents);
+        }
+        for (dependents) |*list| list.* = .empty;
+        var ready = std.ArrayList(u32).empty;
+        defer ready.deinit(gpa);
+        for (pending.items, 0..) |artifact, index| {
+            tasks[index] = .{ .prepared = try self.prepare(artifact) };
+            prepared_count = index + 1;
+        }
+        for (pending.items, 0..) |artifact, index| {
+            for (artifact.direct_import_module_keys) |key| {
+                const imported = index_by_key.get(key.digest().bytes) orelse continue;
+                remaining[index] += 1;
+                try dependents[imported].append(gpa, @intCast(index));
+            }
+        }
+        for (remaining, 0..) |count, index| if (count == 0) try ready.append(gpa, @intCast(index));
+
+        const executor = self.coordinator.postCheckExecutor();
+        var session: ?post_check_executor.Session = if (executor.worker_count > 1) executor.begin() else null;
+        defer if (session) |*open| open.end();
+        var done: usize = 0;
+        var first_error: ?Error = null;
+        while (done < pending.items.len) {
+            var finished: ?u32 = null;
+            if (session) |*open| {
+                while (ready.items.len != 0 and open.canSubmit() and first_error == null) {
+                    const index = ready.pop().?;
+                    if (tasks[index].prepared == null) {
+                        finished = index;
+                        break;
+                    }
+                    try open.submit(.{ .id = index, .context = &tasks[index], .run = UnitTask.run });
+                }
+                if (finished == null) {
+                    if (open.outstanding != 0) {
+                        finished = @intCast(open.receive().id);
+                    } else if (first_error) |err| {
+                        return err;
+                    } else {
+                        Coordinator.coordinatorInvariant("a module's object waits for an import no unit builds", .{});
+                    }
+                }
+            } else {
+                if (first_error) |err| return err;
+                const index = ready.pop() orelse Coordinator.coordinatorInvariant("a module's object waits for an import no unit builds", .{});
+                if (tasks[index].prepared != null) _ = UnitTask.run(&tasks[index], .{ .id = 0, .allocator = gpa, .scratch = gpa, .lane_state = undefined });
+                finished = index;
+            }
+            const index = finished orelse continue;
+            done += 1;
+            const artifact = pending.items[index];
+            if (tasks[index].prepared == null) {
+                try self.objects.put(gpa, artifact.key.bytes, null);
+            } else switch (tasks[index].outcome) {
+                .pending => Coordinator.coordinatorInvariant("a module's object build completed without an outcome", .{}),
+                .failed => |err| {
+                    if (first_error == null) first_error = err;
+                    continue;
+                },
+                .done => |built| try self.objects.put(gpa, artifact.key.bytes, try self.record(artifact.key.bytes, built)),
+            }
+            for (dependents[index].items) |dependent| {
+                remaining[dependent] -= 1;
+                if (remaining[dependent] == 0) try ready.append(gpa, dependent);
+            }
+        }
+        if (first_error) |err| return err;
+    }
+
+    /// Append `artifact` and its imports whose objects are not known yet to
+    /// `pending`, imports first.
+    fn collectPending(self: *BoxyObjects, artifact: *const Artifact, pending: *std.ArrayList(*const Artifact), index_by_key: *std.AutoHashMapUnmanaged([32]u8, u32)) Error!void {
+        const gpa = self.coordinator.gpa;
+        if (self.objects.contains(artifact.key.bytes) or index_by_key.contains(artifact.key.bytes)) return;
+        for (artifact.direct_import_module_keys) |key| {
+            const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
+            try self.collectPending(imported, pending, index_by_key);
+        }
+        try index_by_key.put(gpa, artifact.key.bytes, @intCast(pending.items.len));
+        try pending.append(gpa, artifact);
     }
 };
 
@@ -3401,7 +3561,23 @@ pub const Coordinator = struct {
             for (transplants.items) |*pending| pending.deinit(self.gpa);
             transplants.deinit(self.gpa);
         }
-        for (entries.items) |entry| try self.transplantPreviousValues(entry.pkg, entry.mod, &transplants);
+        var read_inputs = eval.CompileTimeReuse.ReadInputs{ .allocator = self.gpa };
+        defer read_inputs.deinit();
+        if (self.cacheEnabled() and entries.items.len != 0) {
+            const builtin_artifact = &self.builtin_modules.checked_artifact;
+            try read_inputs.addModule(builtin_artifact.key.bytes, builtin_artifact);
+            var current = self.checked_artifact_index.valueIterator();
+            while (current.next()) |location| {
+                const mod = location.module();
+                const artifact = mod.checkedArtifact().?;
+                try read_inputs.addModule(checkedPlacement(location.pkg, mod), artifact);
+                try read_inputs.addModule(artifact.key.bytes, artifact);
+            }
+            for (self.retired_checked_artifacts.items) |retired| {
+                try read_inputs.addModule(retired.artifact.key.bytes, retired.artifact);
+            }
+        }
+        for (entries.items) |entry| try self.transplantPreviousValues(entry.pkg, entry.mod, &transplants, &read_inputs);
         const order = try self.gpa.alloc(usize, entries.items.len);
         defer self.gpa.free(order);
         try dependencyPostOrder(self.gpa, PreparedModuleGraph{ .entries = entries.items, .by_key = &indices }, order);
@@ -3651,6 +3827,29 @@ pub const Coordinator = struct {
         return self.checkedArtifactByKey(.{ .bytes = key });
     }
 
+    /// Persist the stable identities of the actual reads recorded by CTFE.
+    fn publishRootReadIdentities(self: *Coordinator, artifact: *CheckedArtifact.CheckedModuleArtifact) Allocator.Error!void {
+        const allocator = artifact.evaluationAllocator();
+        const table = &artifact.compile_time_root_reads;
+        const identities = try allocator.alloc(CheckedArtifact.CompileTimeRootReadTable.Identity, table.refs.len);
+        for (table.refs, identities) |read, *identity| {
+            const owner = self.checkedArtifactByKey(.{ .bytes = read.module }) orelse
+                coordinatorInvariant("a completed compile-time read has no checked module", .{});
+            // Builtins and retained platform interface artifacts have no
+            // current source placement: their inputs keep exact version keys.
+            const placement = if (self.checked_artifact_index.get(read.module)) |location|
+                checkedPlacement(location.pkg, location.module())
+            else
+                owner.key.bytes;
+            identity.* = .{
+                .placement = placement,
+                .root = owner.compile_time_root_identities.test_rows[@backingInt(read.root)],
+            };
+        }
+        if (artifact.freesReplacedEvaluationColumns()) allocator.free(table.identities);
+        table.identities = identities;
+    }
+
     fn cacheEnabled(self: *const Coordinator) bool {
         const manager = self.cache_manager orelse return false;
         return manager.config.enabled;
@@ -3667,6 +3866,7 @@ pub const Coordinator = struct {
         pkg: *const PackageState,
         mod: *ModuleState,
         pending: *std.ArrayList(PendingTransplant),
+        read_inputs: *const eval.CompileTimeReuse.ReadInputs,
     ) CoordinatorError!void {
         const manager = self.cache_manager orelse return;
         if (!manager.config.enabled or mod.reopened_unevaluated != null) return;
@@ -3688,7 +3888,7 @@ pub const Coordinator = struct {
         var previous = eval.CompileTimeReuse.Previous.fromSerialized(serialized, self.gpa);
         var previous_owned = true;
         defer if (previous_owned) previous.deinit();
-        var transplant = try eval.CompileTimeReuse.plan(self.gpa, artifact, &previous);
+        var transplant = try eval.CompileTimeReuse.plan(self.gpa, artifact, &previous, read_inputs);
         var transplant_owned = true;
         defer if (transplant_owned) transplant.deinit();
 
@@ -4010,7 +4210,10 @@ pub const Coordinator = struct {
         mod.reopened_unevaluated = null;
         if (mod.hasOnlyPreCheckReports() and evaluated_more) {
             if (artifact.pairing_arena == null) {
-                if (self.cacheEnabled()) try eval.CompileTimeReuse.publishPortability(artifact);
+                if (self.cacheEnabled()) {
+                    try eval.CompileTimeReuse.publishPortability(artifact);
+                    try self.publishRootReadIdentities(artifact);
+                }
                 self.storeCheckedModuleInCache(mod, artifact);
                 if (artifact.compile_time_roots.roots.len != 0) {
                     if (self.cache_manager) |manager| manager.storePlacementPointer(checkedPlacement(pkg, mod), artifact.key.bytes);
@@ -8440,6 +8643,10 @@ fn compileForReuseVerifying(allocator: Allocator, cache_dir: []const u8, app_pat
 /// Compile the app, and, given a runtime target, build its runtime program
 /// from the evaluation's specialization.
 fn compileForReuseWith(allocator: Allocator, cache_dir: []const u8, app_path: []const u8, verify: bool, runtime: ?lir.CheckedPipeline.TargetConfig) CheckedModuleCacheRunError!ReuseRun {
+    return compileForReuseWithStrategy(allocator, cache_dir, app_path, verify, runtime, .lss);
+}
+
+fn compileForReuseWithStrategy(allocator: Allocator, cache_dir: []const u8, app_path: []const u8, verify: bool, runtime: ?lir.CheckedPipeline.TargetConfig, strategy: base.SpecializationStrategy) CheckedModuleCacheRunError!ReuseRun {
     var stderr_capture: StderrCapture = .{ .allocator = allocator };
     defer stderr_capture.bytes.deinit(allocator);
     var roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
@@ -8459,6 +8666,7 @@ fn compileForReuseWith(allocator: Allocator, cache_dir: []const u8, app_path: []
     defer coord.deinit();
     coord.enable_hosted_transform = true;
     coord.verify_transplants = verify;
+    coord.specialization_strategy = strategy;
     var arena_impl = base.SingleThreadArena.init(allocator);
     defer arena_impl.deinit();
     try coord.start();
@@ -13552,4 +13760,74 @@ test "initializer validation certificates defer values without losing errors obs
         try std.testing.expect(!result.errors);
         try std.testing.expect(result.observed);
     }
+}
+
+test "issue 12733: compile-time reads survive an import cascade" {
+    const allocator = std.testing.allocator;
+    // Exercise both actual restoration and independent evaluation of every
+    // admitted root. Separate caches ensure both paths start cold.
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| for ([_]bool{ false, true }) |verify| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const source =
+            \\app [answer] { pf: platform "./platform.roc" }
+            \\import Middle
+            \\local = Middle.value
+            \\answer = {
+            \\    dbg local
+            \\    local + 2.I64
+            \\}
+        ;
+        const dependency =
+            \\module [value, unrelated]
+            \\value = 40.I64
+            \\unrelated = |n| n + 1.I64
+        ;
+        try writeReuseFixture(&tmp, source);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Leaf.roc", .data = dependency });
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Middle.roc", .data =
+            \\module [value]
+            \\import Leaf
+            \\value = Leaf.value
+        });
+        const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+        defer allocator.free(cache);
+        const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+        defer allocator.free(app);
+        var first = try compileForReuseWithStrategy(allocator, cache, app, verify, null, strategy);
+        defer first.deinit(allocator);
+        try std.testing.expectEqual(@as(?i64, 42), first.value("answer"));
+        try std.testing.expectEqualStrings("[dbg] 40\n", first.stderr);
+
+        const edited = try std.mem.replaceOwned(u8, allocator, dependency, "n + 1.I64", "n + 2.I64");
+        defer allocator.free(edited);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Leaf.roc", .data = edited });
+        var warm = try compileForReuseWithStrategy(allocator, cache, app, verify, null, strategy);
+        defer warm.deinit(allocator);
+        try std.testing.expect(!std.meta.eql(first.module_key, warm.module_key));
+        try std.testing.expect(warm.stats.pending_roots >= 4);
+        try std.testing.expectEqual(warm.stats.pending_roots, warm.stats.transplanted_roots);
+        try std.testing.expectEqual(@as(?i64, 42), warm.value("answer"));
+        try std.testing.expectEqualStrings(first.stderr, warm.stderr);
+
+        // Adding an earlier root changes dense root ids. A second reuse must
+        // follow sites, including those in the entry installed by the first.
+        const renumbered = try std.mem.replaceOwned(u8, allocator, edited, "value = 40.I64", "extra = 9.I64\nvalue = 40.I64");
+        defer allocator.free(renumbered);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Leaf.roc", .data = renumbered });
+        var again = try compileForReuseWithStrategy(allocator, cache, app, verify, null, strategy);
+        defer again.deinit(allocator);
+        try std.testing.expectEqual(again.stats.pending_roots - 1, again.stats.transplanted_roots);
+        try std.testing.expectEqualStrings(first.stderr, again.stderr);
+
+        // Changing an actual input must recompute every reader in the chain.
+        const changed = try std.mem.replaceOwned(u8, allocator, edited, "40.I64", "50.I64");
+        defer allocator.free(changed);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Leaf.roc", .data = changed });
+        var invalidated = try compileForReuseWithStrategy(allocator, cache, app, verify, null, strategy);
+        defer invalidated.deinit(allocator);
+        try std.testing.expectEqual(@as(?i64, 52), invalidated.value("answer"));
+        try std.testing.expectEqualStrings("[dbg] 50\n", invalidated.stderr);
+        try std.testing.expect(invalidated.stats.transplanted_roots < invalidated.stats.pending_roots);
+    };
 }

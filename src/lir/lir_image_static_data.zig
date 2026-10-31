@@ -19,9 +19,9 @@ pub fn Schema(comptime Image: type) type {
             alignment: u32,
             is_global: u8,
             is_exported: u8,
-            /// The bytes alignment adds after `is_exported`, declared so that
-            /// every byte of a row is defined.
-            _padding: [2]u8 = @as([2]u8, @splat(0)),
+            is_mutable: u8,
+            /// Explicit trailing alignment byte.
+            _padding: [1]u8 = .{0},
         };
         pub const Relocation = extern struct {
             name: ArrayRef,
@@ -78,6 +78,7 @@ pub fn Schema(comptime Image: type) type {
                     .alignment = item.alignment,
                     .is_global = @intFromBool(item.is_global),
                     .is_exported = @intFromBool(item.is_exported),
+                    .is_mutable = @intFromBool(item.is_mutable),
                 };
             }
             return Image.arrayRef(base, capacity, rows);
@@ -96,15 +97,16 @@ pub fn Schema(comptime Image: type) type {
             @memset(values, false);
             for (rows, exports) |row, *item| {
                 const bytes = try Image.sliceFromRef(u8, base, size, row.bytes);
-                if (row.symbol_offset > bytes.len or row.alignment == 0 or !std.math.isPowerOfTwo(row.alignment) or row.is_global > 1 or row.is_exported > 1) return error.InvalidLirImage;
+                if (row.symbol_offset > bytes.len or row.alignment == 0 or !std.math.isPowerOfTwo(row.alignment) or row.is_global > 1 or row.is_exported > 1 or row.is_mutable > 1) return error.InvalidLirImage;
                 if (row.value_id != missing) {
                     if (row.value_id >= value_count or values[row.value_id]) return error.InvalidLirImage;
                     values[row.value_id] = true;
                 }
                 const relocs = try Image.sliceFromRef(Relocation, base, size, row.relocations);
+                if (row.is_mutable != 0 and (relocs.len != 0 or !std.mem.allEqual(u8, bytes, 0))) return error.InvalidLirImage;
                 const name = try Image.sliceFromRef(u8, base, size, row.name);
                 const decoded = try allocator.alloc(Program.StaticDataRelocation, relocs.len);
-                item.* = .{ .symbol_name = name, .bytes = bytes, .value_id = if (row.value_id == missing) null else @fromBackingInt(@intCast(row.value_id)), .symbol_offset = row.symbol_offset, .alignment = row.alignment, .is_global = row.is_global != 0, .is_exported = row.is_exported != 0, .relocations = decoded };
+                item.* = .{ .symbol_name = name, .bytes = bytes, .value_id = if (row.value_id == missing) null else @fromBackingInt(@intCast(row.value_id)), .symbol_offset = row.symbol_offset, .alignment = row.alignment, .is_global = row.is_global != 0, .is_exported = row.is_exported != 0, .is_mutable = row.is_mutable != 0, .relocations = decoded };
                 initialized += 1;
                 for (relocs, decoded) |reloc, *out| {
                     if (reloc.offset > bytes.len or pointer_bytes > bytes.len - reloc.offset or reloc.function_pointer > 1 or (reloc.data_symbol != missing and reloc.data_symbol >= rows.len) or (reloc.procedure != missing and reloc.procedure >= proc_count) or ((reloc.rc_layout == missing) != (reloc.rc_op == missing))) return error.InvalidLirImage;

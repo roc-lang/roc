@@ -151,19 +151,81 @@ pub const VariantInput = extern struct {
 /// `compiled.InProcessState` instead.
 pub var process_cache: Cache = .{};
 
+/// One composition site's last complete operand/result snapshot. Publishing a
+/// single pointer makes the entire variable-sized entry atomic. Snapshots are
+/// interned and immortal, so replacement never invalidates a reader's entry.
+pub const CompositionSite = extern struct {
+    entry: ?*const CompositionEntry = null,
+
+    pub fn load(self: *const CompositionSite) ?*const CompositionEntry {
+        return @atomicLoad(?*const CompositionEntry, &self.entry, .acquire);
+    }
+
+    pub fn publish(self: *CompositionSite, cache: *Cache, ops: *RocOps, operands: []const usize, result: usize) void {
+        var scratch: Scratch(u64, 16) = .{};
+        defer scratch.deinit(ops);
+        const key = scratch.get(2 + operands.len, ops);
+        key[0] = @backingInt(KeyTag.composition_site);
+        key[1] = result;
+        for (operands, key[2..]) |operand, *word| word.* = operand;
+        const entry: *const CompositionEntry = if (cache.lookup(key)) |existing|
+            @ptrCast(existing)
+        else blk: {
+            const bytes = immortalBytes(ops, @sizeOf(CompositionEntry) + operands.len * @sizeOf(usize), @max(@alignOf(TypeDesc), @alignOf(CompositionEntry)));
+            const fresh: *CompositionEntry = @ptrCast(@alignCast(bytes));
+            fresh.* = .{ .result = result };
+            @memcpy(@constCast(fresh.operands(operands.len)), operands);
+            break :blk @ptrCast(cache.intern(key, @ptrCast(@alignCast(fresh)), ops));
+        };
+        @atomicStore(?*const CompositionEntry, &self.entry, entry, .release);
+    }
+};
+
+/// ABI shared with the generated inline comparisons. The operand count belongs
+/// to the site, whose constructor and non-local inputs never change.
+pub const CompositionEntry = extern struct {
+    result: usize,
+
+    pub fn operands(self: *const CompositionEntry, count: usize) []const usize {
+        const words: [*]const usize = @ptrCast(self);
+        return words[1..][0..count];
+    }
+};
+
+/// An open recursive placeholder must stay private until recursiveClose fills
+/// it. An open site's first evaluation therefore cannot publish its result.
+pub fn recursiveIsOpen(desc: *const TypeDesc) bool {
+    return desc.size == open_size;
+}
+
 /// An immortal interning table from constructor keys to descriptors.
+///
+/// A composition's inputs are immortal descriptors, so its key is a few
+/// words of pointers and tags, and a hit is the common case: a generic body
+/// composes the same descriptors on every call. Readers therefore probe the
+/// current table without taking the lock. A table is only ever added to,
+/// each entry's `value` is published last, and a table that growth replaced
+/// stays alive (immortal, like everything here), so a reader holding it sees
+/// a consistent, possibly stale, table and a miss there retries under the
+/// lock against the current one. Only insertion and growth take the lock.
 pub const Cache = struct {
     lock: std.atomic.Value(u32) = .init(0),
-    entries: ?[*]Entry = null,
-    /// A power of two, or 0 before the first insertion.
-    capacity: u32 = 0,
+    table: std.atomic.Value(?*const Table) = .init(null),
     len: u32 = 0,
+
+    const Table = struct {
+        /// A power of two.
+        capacity: u32,
+        entries: [*]Entry,
+    };
 
     const Entry = struct {
         hash: u64,
         key: [*]const u64,
         key_len: u32,
-        value: ?*const TypeDesc,
+        /// Written last with release ordering: a reader that sees it sees
+        /// the key words it was stored under.
+        value: std.atomic.Value(?*const TypeDesc),
     };
 
     fn acquire(self: *Cache) void {
@@ -176,22 +238,19 @@ pub const Cache = struct {
         self.lock.store(0, .release);
     }
 
-    fn find(self: *const Cache, hash: u64, key: []const u64) ?*const TypeDesc {
-        const entries = self.entries orelse return null;
-        const mask = self.capacity - 1;
+    fn find(table: *const Table, hash: u64, key: []const u64) ?*const TypeDesc {
+        const mask = table.capacity - 1;
         var index: u32 = @truncate(hash & mask);
         while (true) : (index = (index + 1) & mask) {
-            const entry = &entries[index];
-            const value = entry.value orelse return null;
+            const entry = &table.entries[index];
+            const value = entry.value.load(.acquire) orelse return null;
             if (entry.hash == hash and entry.key_len == key.len and keysEqual(entry.key[0..entry.key_len], key)) return value;
         }
     }
 
     pub fn lookup(self: *Cache, key: []const u64) ?*const TypeDesc {
-        const hash = keyHash(key);
-        self.acquire();
-        defer self.release();
-        return self.find(hash, key);
+        const table = self.table.load(.acquire) orelse return null;
+        return find(table, keyHash(key), key);
     }
 
     /// Intern `value` under `key`, or return the descriptor another thread
@@ -200,38 +259,48 @@ pub const Cache = struct {
         const hash = keyHash(key);
         self.acquire();
         defer self.release();
-        if (self.find(hash, key)) |existing| return existing;
-        if ((self.len + 1) * 4 > self.capacity * 3) self.grow(ops);
+        if (self.table.load(.monotonic)) |table| {
+            if (find(table, hash, key)) |existing| return existing;
+            if ((self.len + 1) * 4 > table.capacity * 3) self.grow(ops);
+        } else self.grow(ops);
+        const table = self.table.load(.monotonic).?;
         const stored = immortal(u64, key.len, ops);
         @memcpy(stored[0..key.len], key);
-        self.place(.{ .hash = hash, .key = stored, .key_len = @intCast(key.len), .value = value });
+        place(table, hash, stored, @intCast(key.len), value);
         self.len += 1;
         return value;
     }
 
-    fn place(self: *Cache, entry: Entry) void {
-        const entries = self.entries.?;
-        const mask = self.capacity - 1;
-        var index: u32 = @truncate(entry.hash & mask);
-        while (entries[index].value != null) index = (index + 1) & mask;
-        entries[index] = entry;
+    /// Store an entry in `table`'s first free slot on its probe path,
+    /// publishing its value last.
+    fn place(table: *const Table, hash: u64, key: [*]const u64, key_len: u32, value: *const TypeDesc) void {
+        const mask = table.capacity - 1;
+        var index: u32 = @truncate(hash & mask);
+        while (table.entries[index].value.load(.monotonic) != null) index = (index + 1) & mask;
+        const entry = &table.entries[index];
+        entry.hash = hash;
+        entry.key = key;
+        entry.key_len = key_len;
+        entry.value.store(value, .release);
     }
 
+    /// Publish a table twice the size holding every entry of the current
+    /// one, which stays alive for the readers still probing it.
     fn grow(self: *Cache, ops: *RocOps) void {
-        const old_entries = self.entries;
-        const old_capacity = self.capacity;
+        const old = self.table.load(.monotonic);
+        const old_capacity: u32 = if (old) |table| table.capacity else 0;
         const new_capacity: u32 = if (old_capacity == 0) 64 else old_capacity * 2;
-        const bytes = @as(usize, new_capacity) * @sizeOf(Entry);
-        const fresh: [*]Entry = @ptrCast(@alignCast(immortalBytes(ops, bytes, @alignOf(Entry))));
-        for (fresh[0..new_capacity]) |*entry| entry.value = null;
-        self.entries = fresh;
-        self.capacity = new_capacity;
-        if (old_entries) |old| {
-            for (old[0..old_capacity]) |entry| {
-                if (entry.value != null) self.place(entry);
+        const fresh: *Table = @ptrCast(@alignCast(immortalBytes(ops, @sizeOf(Table), @alignOf(Table))));
+        const entries: [*]Entry = @ptrCast(@alignCast(immortalBytes(ops, @as(usize, new_capacity) * @sizeOf(Entry), @alignOf(Entry))));
+        for (entries[0..new_capacity]) |*entry| entry.value = .init(null);
+        fresh.* = .{ .capacity = new_capacity, .entries = entries };
+        if (old) |table| {
+            for (table.entries[0..table.capacity]) |*entry| {
+                const value = entry.value.load(.monotonic) orelse continue;
+                place(fresh, entry.hash, entry.key, entry.key_len, value);
             }
-            releaseImmortal(ops, @ptrCast(old), @alignOf(Entry));
         }
+        self.table.store(fresh, .release);
     }
 };
 
@@ -242,8 +311,15 @@ fn keysEqual(a: []const u64, b: []const u64) bool {
     return true;
 }
 
+/// A mix of the key's words: keys are a handful of tags and pointers, so
+/// each word is folded in with a multiply and a shift.
 fn keyHash(key: []const u64) u64 {
-    return std.hash.Wyhash.hash(0x5bd1_e995_9e37_79b9, std.mem.sliceAsBytes(key));
+    var hash: u64 = 0x9e37_79b9_7f4a_7c15;
+    for (key) |word| {
+        hash = (hash ^ word) *% 0xbf58_476d_1ce4_e5b9;
+        hash ^= hash >> 31;
+    }
+    return hash;
 }
 
 fn immortal(comptime T: type, count: usize, ops: *RocOps) [*]T {
@@ -258,13 +334,6 @@ fn immortal(comptime T: type, count: usize, ops: *RocOps) [*]T {
 pub fn immortalBytes(ops: *RocOps, size: usize, alignment: usize) [*]u8 {
     if (comptime builtins.host_abi.host_role == .platform) return PlatformImmortals.alloc(ops, size, alignment);
     return @ptrCast(ops.allocRaw(size, alignment));
-}
-
-/// Release immortal bytes a composition replaced (a grown cache's old
-/// table). Process-lifetime pages are never released.
-fn releaseImmortal(ops: *RocOps, ptr: *anyopaque, alignment: usize) void {
-    if (comptime builtins.host_abi.host_role == .platform) return;
-    ops.dealloc(ptr, alignment);
 }
 
 /// Process-lifetime pages carved front to back. Nothing here is ever freed,
@@ -332,6 +401,7 @@ const KeyTag = enum(u64) {
     nominal,
     presence_slot,
     recursive,
+    composition_site,
 };
 
 /// The key words of a name: its content id (design.md "Name Identity"), so

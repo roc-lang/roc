@@ -1641,7 +1641,7 @@ pub fn mergeIdenticalNodes(allocator: Allocator, exports: []StaticDataExport) Al
 /// Whether a symbol is a node the merge may drop: not a root, whose slot
 /// addresses it, and not host-visible, whose name is part of the ABI.
 fn isMergeableNode(item: StaticDataExport) bool {
-    return item.value_id == null and !item.is_exported;
+    return item.value_id == null and !item.is_exported and !item.is_mutable;
 }
 
 fn resolveCanonical(canonical: []const u32, index: u32) u32 {

@@ -9118,7 +9118,7 @@ pub const MonoLlvmCodeGen = struct {
                     variable.ptrConst(builder).global.setLinkage(.weak_odr, builder);
                     variable.setComdat(try self.packComdat(builder, variable.ptrConst(builder).global.name(builder)), builder);
                 }
-                variable.setMutability(.constant, builder);
+                variable.setMutability(if (data_export.is_mutable) .global else .constant, builder);
                 variable.setAlignment(LlvmBuilder.Alignment.fromByteUnits(@max(data_export.alignment, 1)), builder);
                 if (shared) |entry| entry.value_ptr.* = variable;
                 break :declare variable;

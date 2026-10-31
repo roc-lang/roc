@@ -176,7 +176,7 @@ pub const Retained = struct {
             };
         }
         const dictionary_ty = try program.anyFunction();
-        for (captures[shape.values.len..], offsets[shape.values.len + shape.descs..]) |*slot, offset| {
+        for (captures[shape.values.len..], offsets[shape.values.len + shape.descs ..]) |*slot, offset| {
             slot.* = .{
                 .plan = try const_schema.constPlanOf(program, dictionary_ty),
                 .layout_idx = try program.result.layouts.insertErasedCallable(),
@@ -298,7 +298,7 @@ const Encoder = struct {
     }
 
     fn tag(self: *Encoder, value: Tag) Allocator.Error!void {
-        try self.bytes.append(self.allocator, @intFromEnum(value));
+        try self.bytes.append(self.allocator, @backingInt(value));
     }
 
     fn module(self: *Encoder, index: types.ModuleIndex) Allocator.Error!void {
@@ -363,9 +363,9 @@ const Encoder = struct {
     fn tableEntry(self: *Encoder, ty: TypeId) Allocator.Error!void {
         const store = &self.program.store;
         const node = store.get(ty);
-        try self.table.append(self.allocator, @intFromEnum(std.meta.activeTag(node)));
+        try self.table.append(self.allocator, @backingInt(std.meta.activeTag(node)));
         switch (node) {
-            .primitive => |primitive| try self.table.append(self.allocator, @intFromEnum(primitive)),
+            .primitive => |primitive| try self.table.append(self.allocator, @backingInt(primitive)),
             .empty_record => {},
             .record => |record| {
                 const fields = store.fieldSpan(record.fields);
@@ -373,7 +373,7 @@ const Encoder = struct {
                 for (fields) |field| {
                     try self.tableName(field.name);
                     try self.tableType(field.ty);
-                    try self.table.append(self.allocator, @intFromEnum(field.kind));
+                    try self.table.append(self.allocator, @backingInt(field.kind));
                 }
                 try self.tableExt(record.ext);
             },
@@ -394,7 +394,7 @@ const Encoder = struct {
                 try self.tableTypes(store.nominalArgs(nominal));
                 try self.tableName(nominal.name);
                 try self.table.append(self.allocator, @intFromBool(nominal.is_opaque));
-                try self.table.append(self.allocator, if (nominal.builtin) |builtin| @intFromEnum(builtin) + 1 else 0);
+                try self.table.append(self.allocator, if (nominal.builtin) |builtin| @backingInt(builtin) + 1 else 0);
                 try self.table.append(self.allocator, @intFromBool(nominal.has_backing));
             },
             .function => |function| {
@@ -474,7 +474,7 @@ const Encoder = struct {
             .structural => |method| {
                 try self.tag(.structural);
                 try self.module(record.module);
-                try self.bytes.append(self.allocator, @intFromEnum(method));
+                try self.bytes.append(self.allocator, @backingInt(method));
             },
             .structural_map => |map| {
                 try self.tag(.structural_map);
@@ -487,13 +487,13 @@ const Encoder = struct {
             .crash_dictionary => |kind| {
                 try self.tag(.crash_dictionary);
                 try self.module(record.module);
-                try self.bytes.append(self.allocator, @intFromEnum(kind));
+                try self.bytes.append(self.allocator, @backingInt(kind));
             },
             .codec => |index| {
                 try self.tag(.codec);
                 try self.module(record.module);
                 const piece = program.codec.pieces.items[index];
-                try self.bytes.append(self.allocator, @intFromEnum(piece.kind));
+                try self.bytes.append(self.allocator, @backingInt(piece.kind));
                 try self.word(Codec.pieceFamilyRoot(program, piece));
                 switch (Codec.pieceOperands(piece.kind)) {
                     .none => {},
@@ -567,9 +567,9 @@ const Decoder = struct {
         const program = self.b.program;
         const allocator = self.b.allocator;
         const store = &program.store;
-        const node_tag: std.meta.Tag(types.Node) = @enumFromInt(self.byte());
+        const node_tag: std.meta.Tag(types.Node) = @fromBackingInt(@intCast(self.byte()));
         return switch (node_tag) {
-            .primitive => try store.intern(.{ .primitive = @enumFromInt(self.byte()) }),
+            .primitive => try store.intern(.{ .primitive = @fromBackingInt(@intCast(self.byte())) }),
             .empty_record => try store.intern(.empty_record),
             .record => blk: {
                 const fields = try allocator.alloc(types.Field, self.word());
@@ -577,7 +577,7 @@ const Decoder = struct {
                 for (fields) |*field| {
                     const field_name = try self.name();
                     const ty = self.typeOf();
-                    field.* = .{ .name = field_name, .ty = ty, .kind = @enumFromInt(self.byte()) };
+                    field.* = .{ .name = field_name, .ty = ty, .kind = @fromBackingInt(@intCast(self.byte())) };
                 }
                 break :blk try store.intern(.{ .record = .{ .fields = fields, .ext = self.ext() } });
             },
@@ -608,7 +608,7 @@ const Decoder = struct {
                     .args = args,
                     .name = nominal_name,
                     .is_opaque = is_opaque,
-                    .builtin = if (builtin == 0) null else @enumFromInt(builtin - 1),
+                    .builtin = if (builtin == 0) null else @fromBackingInt(@intCast(builtin - 1)),
                     .has_backing = self.byte() != 0,
                 } });
             },
@@ -629,7 +629,7 @@ const Decoder = struct {
     fn worker(self: *Decoder) Allocator.Error!WorkerId {
         const b = self.b;
         const program = b.program;
-        const tag: Tag = @enumFromInt(self.byte());
+        const tag: Tag = @fromBackingInt(@intCast(self.byte()));
         switch (tag) {
             .template => {
                 const module_index = self.module();
@@ -671,7 +671,7 @@ const Decoder = struct {
             },
             .structural => {
                 const module_index = self.module();
-                return try program.structuralWorker(module_index, @enumFromInt(self.byte()));
+                return try program.structuralWorker(module_index, @fromBackingInt(@intCast(self.byte())));
             },
             .structural_map => {
                 const module_index = self.module();
@@ -682,11 +682,11 @@ const Decoder = struct {
             },
             .crash_dictionary => {
                 const module_index = self.module();
-                return try program.crashDictionaryWorker(module_index, @enumFromInt(self.byte()));
+                return try program.crashDictionaryWorker(module_index, @fromBackingInt(@intCast(self.byte())));
             },
             .codec => {
                 const module_index = self.module();
-                const kind: Codec.PieceKind = @enumFromInt(self.byte());
+                const kind: Codec.PieceKind = @fromBackingInt(@intCast(self.byte()));
                 const root = self.word();
                 var a: u32 = 0;
                 var b_operand: u32 = 0;

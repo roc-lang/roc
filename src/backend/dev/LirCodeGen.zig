@@ -17187,6 +17187,73 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(reg);
         }
 
+        /// Inline the site's acquire-load and operand comparisons. Only a miss
+        /// builds the runtime arguments, probes the interner, and publishes.
+        fn generateCachedComposition(self: *Self, dst: LocalId, op: LIR.DynOp, cache: LIR.StaticDataId) Allocator.Error!void {
+            try self.spillAllVectorLocals();
+            var operands: std.ArrayList(LocalId) = .empty;
+            defer operands.deinit(self.allocator);
+            try lir.DynOps.Operands.of(op).appendAll(self.store, self.allocator, &operands);
+            var misses: std.ArrayList(usize) = .empty;
+            defer misses.deinit(self.allocator);
+            const result_slot = self.codegen.allocStackSlot(8);
+            const site_slot = self.codegen.allocStackSlot(8);
+            {
+                const entry, const current, const expected = try self.allocTempGenerals(3);
+                defer self.freeGenerals(.{ entry, current, expected });
+                switch (self.generation_mode) {
+                    .native_execution => try self.codegen.emitLoadImm(entry, @bitCast(@as(u64, self.nativeStaticDataAddress(cache)))),
+                    .shim_execution, .object_file => try self.emitStaticDataAddress(entry, cache),
+                }
+                try self.emitStore(.w64, frame_ptr, site_slot, entry);
+                if (comptime target.toCpuArch() == .aarch64)
+                    try self.codegen.emit.ldarRegMem(entry, entry)
+                else
+                    // Aligned x86 loads have acquire ordering.
+                    try self.emitLoad(.w64, entry, entry, 0);
+                try self.emitCmpImm(entry, 0);
+                try misses.append(self.allocator, try self.codegen.emitCondJump(condCode(.equal)));
+                for (operands.items, 0..) |operand, i| {
+                    try self.emitLoad(.w64, current, frame_ptr, self.localSlot(operand));
+                    try self.emitLoad(.w64, expected, entry, @intCast((i + 1) * 8));
+                    try self.emitCmpReg(current, expected);
+                    try misses.append(self.allocator, try self.codegen.emitCondJump(condCode(.not_equal)));
+                }
+                try self.emitLoad(.w64, current, entry, @offsetOf(boxy_runtime.compose.CompositionEntry, "result"));
+                try self.emitStore(.w64, frame_ptr, result_slot, current);
+            }
+            const hit = try self.codegen.emitJump();
+            for (misses.items) |miss| try self.codegen.patchJump(miss, self.codegen.currentOffset());
+            try self.generateDyn(dst, op);
+            const words = self.codegen.allocStackSlot(@intCast(@max(operands.items.len, 1) * 8));
+            var open: ?usize = null;
+            {
+                const reg = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(reg);
+                try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(dst));
+                try self.emitStore(.w64, frame_ptr, result_slot, reg);
+                if (op == .desc_recursive_open) {
+                    try self.emitLoad(.w32, reg, reg, @offsetOf(boxy_runtime.TypeDesc, "size"));
+                    try self.emitCmpImm(reg, std.math.maxInt(u32));
+                    open = try self.codegen.emitCondJump(condCode(.equal));
+                }
+                for (operands.items, 0..) |operand, i| {
+                    try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(operand));
+                    try self.emitStore(.w64, frame_ptr, words + @as(i32, @intCast(i * 8)), reg);
+                }
+            }
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
+            try builder.addMemArg(frame_ptr, site_slot);
+            try builder.addImmArg(@intCast(operands.items.len));
+            try builder.addLeaArg(frame_ptr, words);
+            try builder.addMemArg(frame_ptr, result_slot);
+            try self.callBoxyRuntime(&builder, "roc_desc_site_publish");
+            if (open) |jump| try self.codegen.patchJump(jump, self.codegen.currentOffset());
+            try self.codegen.patchJump(hit, self.codegen.currentOffset());
+            try self.bindAssignedLocal(dst, self.stackLocationForLayout(self.localLayout(dst), result_slot));
+        }
+
         fn generateDyn(self: *Self, target_or_null: ?LocalId, op: LIR.DynOp) Allocator.Error!void {
             try self.spillAllVectorLocals();
             if (op == .frame_alloc) return self.generateDynFrameAlloc();
@@ -20100,7 +20167,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const stmt = self.store.getCFStmt(stmt_id);
                     switch (stmt) {
                         .dyn => |dyn_stmt| {
-                            try self.generateDyn(dyn_stmt.target, self.store.stmtRow(dyn_stmt.data));
+                            const op = self.store.stmtRow(dyn_stmt.data);
+                            if (dyn_stmt.composition_cache) |cache|
+                                try self.generateCachedComposition(dyn_stmt.target.?, op, cache)
+                            else
+                                try self.generateDyn(dyn_stmt.target, op);
                             try work.append(wa, .{ .node = dyn_stmt.next });
                         },
                         .assign_ref => |assign| {
