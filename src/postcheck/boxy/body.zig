@@ -259,6 +259,7 @@ const AliasStep = struct {
 
 /// Lowers one worker's checked body to LIR.
 pub const Builder = struct {
+    composition_site_count: u32 = 0,
     program: *Program,
     allocator: Allocator,
     worker_id: WorkerId,
@@ -498,8 +499,15 @@ pub const Builder = struct {
 
     /// Replace `hole` with `stmt`.
     pub fn fill(self: *Builder, hole: CFStmtId, stmt: LIR.CFStmt, kind: LIR.OriginKind) Allocator.Error!void {
-        try self.store.replaceCFStmt(hole, stmt, self.origin(kind));
-        self.store.noteStmtShapes(stmt);
+        var emitted = stmt;
+        if (emitted == .dyn and lir_core.DynOps.isComposition(self.store.stmtRow(emitted.dyn.data))) {
+            std.debug.assert(emitted.dyn.composition_cache == null);
+            const site = self.composition_site_count;
+            self.composition_site_count = std.math.add(u32, site, 1) catch return error.OutOfMemory;
+            emitted.dyn.composition_cache = try self.program.static_descs.compositionSlot(self.store.getProcSpec(self.currentWorker().proc).identity, site);
+        }
+        try self.store.replaceCFStmt(hole, emitted, self.origin(kind));
+        self.store.noteStmtShapes(emitted);
     }
 
     /// The hole the next statement goes into. Code after a diverging

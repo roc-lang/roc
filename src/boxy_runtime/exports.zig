@@ -47,6 +47,11 @@ fn valuePtr(ptr: ?[*]u8) [*]u8 {
     return ptr orelse walk.zeroSizedPtr();
 }
 
+/// Publish a completed composition after the generated site's comparisons miss.
+pub fn roc_desc_site_publish(site: *compose.CompositionSite, count: u32, operands: ?[*]const usize, result: usize) callconv(.c) void {
+    site.publish(cache(), composeOps(), items(usize, count, operands), result);
+}
+
 /// The C-ABI form of `compose.list`.
 pub fn roc_desc_list(elem: *const TypeDesc) callconv(.c) *const TypeDesc {
     return compose.list(cache(), composeOps(), elem);

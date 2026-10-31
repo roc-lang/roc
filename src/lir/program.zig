@@ -34,6 +34,9 @@ pub const StaticDataExport = struct {
     is_global: bool = true,
     /// Whether this symbol is part of the host-visible ABI.
     is_exported: bool = true,
+    /// Zero-initialized program-owned state, never pooled or named by content.
+    /// Its producer supplies a stable site identity in `symbol_name`.
+    is_mutable: bool = false,
     /// Pointer relocations from this symbol's bytes to other symbols.
     relocations: []const StaticDataRelocation = &.{},
     /// The capacities the empty lists inside this value were evaluated

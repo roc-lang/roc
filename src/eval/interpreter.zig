@@ -430,6 +430,10 @@ pub const Interpreter = struct {
     /// The descriptors and dictionaries `.boxy` dynamic operations compose,
     /// created on first use.
     boxy_immortals: ?*BoxyImmortals = null,
+    /// Interpreter-owned instances of the program's static composition slots.
+    /// Their snapshots must not outlive this interpreter's immortal arena.
+    composition_sites: collections.DenseMapUnmanaged(LIR.StaticDataId, boxy.compose.CompositionSite) = .empty,
+    composition_operands: std.ArrayList(usize) = .empty,
     /// The result storage a call passes to a callee whose result is dynamic,
     /// between the call and the callee's activation binding it.
     pending_dyn_result: ?[*]u8 = null,
@@ -916,6 +920,8 @@ pub const Interpreter = struct {
     }
 
     pub fn deinit(self: *LirInterpreter) void {
+        self.composition_sites.deinit(self.allocator);
+        self.composition_operands.deinit(self.allocator);
         if (self.boxy_immortals) |immortals| immortals.destroy(self.allocator);
         self.failed_call_stack.deinit(self.allocator);
         self.call_stack.deinit(self.allocator);
@@ -8592,6 +8598,35 @@ pub const Interpreter = struct {
     }
 
     fn execDyn(self: *LirInterpreter, frame: *Frame, stmt_id: CFStmtId, target_or_null: ?LocalId, op: LIR.DynOp) Error!void {
+        const slot = self.store.getCFStmt(stmt_id).dyn.composition_cache orelse
+            return self.execDynUncached(frame, stmt_id, target_or_null, op);
+        const target = try self.requireDynTarget(target_or_null, op);
+        const site = try self.composition_sites.getOrPutValue(self.allocator, slot, .{});
+        const operands = @import("lir").DynOps.Operands.of(op);
+        self.composition_operands.clearRetainingCapacity();
+        for (operands.singles[0..operands.single_count]) |local| {
+            try self.composition_operands.append(self.allocator, @intCast(try self.localWord(frame, local)));
+        }
+        for (operands.spans[0..operands.span_count]) |span| {
+            const locals = self.store.getLocalSpan(span);
+            for (0..locals.len) |i| {
+                try self.composition_operands.append(self.allocator, @intCast(try self.localWord(frame, GuardedList.at(locals, i))));
+            }
+        }
+        const words = self.composition_operands.items;
+        if (site.value_ptr.load()) |entry| {
+            if (std.mem.eql(usize, words, entry.operands(words.len))) {
+                return self.setWordTarget(frame, stmt_id, target, entry.result);
+            }
+        }
+        try self.execDynUncached(frame, stmt_id, target, op);
+        const result: usize = @intCast(try self.localWord(frame, target));
+        if (op == .desc_recursive_open and boxy.compose.recursiveIsOpen(@ptrFromInt(result))) return;
+        const immortals = try self.boxyImmortals();
+        site.value_ptr.publish(immortals.composeCache(), &immortals.ops, words, result);
+    }
+
+    fn execDynUncached(self: *LirInterpreter, frame: *Frame, stmt_id: CFStmtId, target_or_null: ?LocalId, op: LIR.DynOp) Error!void {
         if (op == .frame_alloc) return self.dynFrameAlloc(frame);
         const target = try self.requireDynTarget(target_or_null, op);
         switch (op) {

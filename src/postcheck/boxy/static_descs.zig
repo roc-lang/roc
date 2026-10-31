@@ -131,6 +131,16 @@ pub const StaticDescs = struct {
 
     const recursion_key_mark: u32 = 0x5245_4359;
 
+    /// A fresh program-owned composition slot, named by worker and site rather
+    /// than by its initial zero bytes. No two sites share mutable state.
+    pub fn compositionSlot(self: *StaticDescs, identity: LIR.ProcIdentity, site: u32) Allocator.Error!LIR.StaticDataId {
+        const slot = try self.addSlot();
+        const name = try std.fmt.allocPrint(self.allocator, "roc__boxy_site_{s}_{d}", .{ &std.fmt.bytesToHex(identity.bytes, .lower), site });
+        const node = try self.addExport(name, self.ptrSize(), self.ptrSize(), slot);
+        self.exports.items[node].is_mutable = true;
+        return slot;
+    }
+
     /// The static-data slot holding a null pointer.
     pub fn nullWordSlot(self: *StaticDescs) Allocator.Error!LIR.StaticDataId {
         if (self.null_word) |slot| return slot;

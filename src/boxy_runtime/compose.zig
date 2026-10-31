@@ -151,6 +151,53 @@ pub const VariantInput = extern struct {
 /// `compiled.InProcessState` instead.
 pub var process_cache: Cache = .{};
 
+/// One composition site's last complete operand/result snapshot. Publishing a
+/// single pointer makes the entire variable-sized entry atomic. Snapshots are
+/// interned and immortal, so replacement never invalidates a reader's entry.
+pub const CompositionSite = extern struct {
+    entry: ?*const CompositionEntry = null,
+
+    pub fn load(self: *const CompositionSite) ?*const CompositionEntry {
+        return @atomicLoad(?*const CompositionEntry, &self.entry, .acquire);
+    }
+
+    pub fn publish(self: *CompositionSite, cache: *Cache, ops: *RocOps, operands: []const usize, result: usize) void {
+        var scratch: Scratch(u64, 16) = .{};
+        defer scratch.deinit(ops);
+        const key = scratch.get(2 + operands.len, ops);
+        key[0] = @backingInt(KeyTag.composition_site);
+        key[1] = result;
+        for (operands, key[2..]) |operand, *word| word.* = operand;
+        const entry: *const CompositionEntry = if (cache.lookup(key)) |existing|
+            @ptrCast(existing)
+        else blk: {
+            const bytes = immortalBytes(ops, @sizeOf(CompositionEntry) + operands.len * @sizeOf(usize), @max(@alignOf(TypeDesc), @alignOf(CompositionEntry)));
+            const fresh: *CompositionEntry = @ptrCast(@alignCast(bytes));
+            fresh.* = .{ .result = result };
+            @memcpy(@constCast(fresh.operands(operands.len)), operands);
+            break :blk @ptrCast(cache.intern(key, @ptrCast(@alignCast(fresh)), ops));
+        };
+        @atomicStore(?*const CompositionEntry, &self.entry, entry, .release);
+    }
+};
+
+/// ABI shared with the generated inline comparisons. The operand count belongs
+/// to the site, whose constructor and non-local inputs never change.
+pub const CompositionEntry = extern struct {
+    result: usize,
+
+    pub fn operands(self: *const CompositionEntry, count: usize) []const usize {
+        const words: [*]const usize = @ptrCast(self);
+        return words[1..][0..count];
+    }
+};
+
+/// An open recursive placeholder must stay private until recursiveClose fills
+/// it. An open site's first evaluation therefore cannot publish its result.
+pub fn recursiveIsOpen(desc: *const TypeDesc) bool {
+    return desc.size == open_size;
+}
+
 /// An immortal interning table from constructor keys to descriptors.
 ///
 /// A composition's inputs are immortal descriptors, so its key is a few
@@ -354,6 +401,7 @@ const KeyTag = enum(u64) {
     nominal,
     presence_slot,
     recursive,
+    composition_site,
 };
 
 /// The key words of a name: its content id (design.md "Name Identity"), so
