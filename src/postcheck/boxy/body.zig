@@ -5311,6 +5311,10 @@ pub const Builder = struct {
     /// arguments from the checked edge `edge` of this body's module
     /// (design.md "Literal Arguments").
     pub fn callInstanceBound(self: *Builder, callee: WorkerId, bound: []const TypeId, evidence: []const static_dispatch.CheckedEvidence, edge: checked.LiteralEdge) Allocator.Error!CallInstance {
+        // Only this instance's frame reads as it goes, not the instances its
+        // dictionaries are built from.
+        const defer_literals = self.defer_edge_literals;
+        self.defer_edge_literals = false;
         const target = self.program.worker(callee).*;
         const hidden = try self.allocator.alloc(LocalId, bound.len + target.dictionary_params.len + target.literal_params);
         errdefer self.allocator.free(hidden);
@@ -5326,7 +5330,7 @@ pub const Builder = struct {
             }
         }
         const literals = hidden[bound.len + target.dictionary_params.len ..];
-        if (self.defer_edge_literals and edge != .literal) {
+        if (defer_literals and edge != .literal) {
             // A literal chain frame reads these as it needs them.
         } else if (edge == .literal) {
             // A call checking recorded no edge for (a platform requirement's

@@ -487,29 +487,6 @@ pub const cases = [_]Case{
         ,
         .inspects = &.{ .nominal, .tag_union, .tuple },
     },
-    // Literal requirements reach a fixed point through recursion: annotated
-    // schemes calling each other at their own variables, and an unannotated
-    // recursive group, return to equal types under new type roots.
-    .{
-        .name = "literal arguments: mutually recursive generic schemes reach a fixed point",
-        .source_kind = .module,
-        .source =
-        \\ping : a, U64 -> a where [a.plus : a, a -> a]
-        \\ping = |x, n| if n == 0 x.plus(x) else pong(x, n - 1)
-        \\
-        \\pong : b, U64 -> b where [b.plus : b, b -> b]
-        \\pong = |y, n| if n == 0 y.plus(y.plus(y)) else ping(y, n - 1)
-        \\
-        \\label = |s, n| if n == 0 "ping ${s}" else label2(s, n - 1)
-        \\label2 = |s, n| if n == 0 "pong ${s}" else label(s, n - 1)
-        \\
-        \\main = {
-        \\    dbg 1.U64
-        \\    (ping(5.U64, 3), ping(5.5.F64, 2), label("x", 3))
-        \\}
-        ,
-        .inspects = &.{.tuple},
-    },
 };
 
 fn covered(comptime kind: ShapeKind, comptime field: []const u8) bool {

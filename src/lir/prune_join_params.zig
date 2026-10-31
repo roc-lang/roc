@@ -25,8 +25,9 @@
 //! definition is deleted too, and so on back through its operands: a write's
 //! value is often a fresh read of the variable's current value, and that read,
 //! left after a consuming call, would keep the call's argument shared just as
-//! the write did. A written value that is itself a join parameter is left to
-//! the next round, so the pass repeats until no parameter qualifies.
+//! the write did. A written value that is itself a join parameter qualifies in
+//! the same round, so a chain of nested joins is pruned in one walk of the
+//! body; the pass repeats only until a round changes nothing.
 //!
 //! A parameter is never removed when anything reads it outside an operand
 //! position: a join's retained or maybe-uninitialized lists. A procedure argument that is also a join parameter is defined by
@@ -45,6 +46,10 @@ const CFStmtId = LIR.CFStmtId;
 const LocalId = LIR.LocalId;
 
 const LocalSet = collections.DenseMap(LocalId, void);
+
+/// One `set_local`, chained to the next write of its target.
+const Write = struct { stmt: CFStmtId, next: u32 };
+const no_write = std.math.maxInt(u32);
 
 /// Prune one procedure with task-local scratch; rewritten LIR stays in the store.
 pub fn runProc(store: *LirStore, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator) Allocator.Error!void {
@@ -75,6 +80,12 @@ const Pass = struct {
     orphans: std.ArrayList(LocalId) = .empty,
     /// Parameters this round removes.
     pruned: LocalSet,
+    /// Parameters that qualify and whose writes are not deleted yet.
+    qualified: std.ArrayList(LocalId) = .empty,
+    /// The first of each parameter's writes in `writes`.
+    first_write: collections.DenseMap(LocalId, u32),
+    /// Every reachable `set_local` of a parameter, chained by target.
+    writes: std.ArrayList(Write) = .empty,
     /// Writes this round deletes, mapped to their successor.
     deleted: collections.DenseMap(CFStmtId, CFStmtId),
 
@@ -89,6 +100,7 @@ const Pass = struct {
             .observed = LocalSet.init(allocator),
             .defs = collections.DenseMap(LocalId, ?CFStmtId).init(allocator),
             .pruned = LocalSet.init(allocator),
+            .first_write = collections.DenseMap(LocalId, u32).init(allocator),
             .deleted = collections.DenseMap(CFStmtId, CFStmtId).init(allocator),
         };
     }
@@ -103,6 +115,9 @@ const Pass = struct {
         self.orphans.deinit(self.allocator);
         self.dead.deinit(self.allocator);
         self.pruned.deinit();
+        self.qualified.deinit(self.allocator);
+        self.first_write.deinit();
+        self.writes.deinit(self.allocator);
         self.deleted.deinit();
     }
 
@@ -118,6 +133,9 @@ const Pass = struct {
         self.orphans.clearRetainingCapacity();
         self.dead.clearRetainingCapacity();
         self.pruned.clearRetainingCapacity();
+        self.qualified.clearRetainingCapacity();
+        self.first_write.clearRetainingCapacity();
+        self.writes.clearRetainingCapacity();
         self.deleted.clearRetainingCapacity();
 
         const store = self.store;
@@ -186,25 +204,26 @@ const Pass = struct {
         }
         try self.markDeadDefs();
 
+        for (self.stmts.items) |stmt_id| {
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt != .set_local) continue;
+            const first = try self.first_write.getOrPut(stmt.set_local.target);
+            try self.writes.append(self.allocator, .{ .stmt = stmt_id, .next = if (first.found_existing) first.value_ptr.* else no_write });
+            first.value_ptr.* = @intCast(self.writes.items.len - 1);
+        }
+
         var params = self.params.iterator();
         while (params.next()) |entry| {
-            const param = entry.key_ptr.*;
-            if (self.pinned.contains(param)) continue;
-            if ((self.reads.get(param) orelse 0) != 0) continue;
-            try self.pruned.put(param, {});
+            if ((self.reads.get(entry.key_ptr.*) orelse 0) == 0) try self.qualify(entry.key_ptr.*);
         }
-        if (self.pruned.count() == 0 and self.dead.items.len == 0) return false;
+        if (self.qualified.items.len == 0 and self.dead.items.len == 0) return false;
 
         for (self.dead.items) |def_id| try self.deleted.put(def_id, pureNext(store.getCFStmt(def_id)).?);
+        try self.pruneQualified();
         for (self.stmts.items) |stmt_id| {
             const stmt = store.getCFStmt(stmt_id);
             if (stmt == .join) try self.pruneJoinParams(stmt_id, stmt.join.params);
-            if (stmt == .set_local and self.pruned.contains(stmt.set_local.target)) {
-                try self.deleted.put(stmt_id, stmt.set_local.next);
-                try self.orphans.append(self.allocator, stmt.set_local.value);
-            }
         }
-        try self.deleteOrphanedDefs();
 
         for (self.stmts.items) |stmt_id| {
             if (self.deleted.contains(stmt_id)) continue;
@@ -235,14 +254,39 @@ const Pass = struct {
         try BodyClone.tryForEachStmtRead(self.store, self.store.getCFStmt(def_id), self, Pass.noteOrphan);
     }
 
-    /// Delete each pure definition whose last read was a deleted statement,
-    /// following the deleted definitions' own operands.
-    fn deleteOrphanedDefs(self: *Pass) Allocator.Error!void {
+    /// Record `param` for removal unless a read outside an operand position
+    /// or a definition other than a write keeps it.
+    fn qualify(self: *Pass, param: LocalId) Allocator.Error!void {
+        if (self.pinned.contains(param)) return;
+        if ((try self.pruned.getOrPut(param)).found_existing) return;
+        try self.qualified.append(self.allocator, param);
+    }
+
+    /// Delete the writes of every qualified parameter, and whatever that
+    /// leaves unread: a pure definition, followed through its own operands,
+    /// or a parameter, whose writes go the same way.
+    fn pruneQualified(self: *Pass) Allocator.Error!void {
         const store = self.store;
-        while (self.orphans.pop()) |local| {
+        while (true) {
+            if (self.qualified.pop()) |param| {
+                var cursor = self.first_write.get(param) orelse no_write;
+                while (cursor != no_write) : (cursor = self.writes.items[cursor].next) {
+                    const write = self.writes.items[cursor].stmt;
+                    const stmt = store.getCFStmt(write).set_local;
+                    try self.deleted.put(write, stmt.next);
+                    try self.orphans.append(self.allocator, stmt.value);
+                }
+                continue;
+            }
+            const local = self.orphans.pop() orelse return;
             const reads = self.reads.getPtr(local).?;
             reads.* -= 1;
-            if (reads.* != 0 or self.observed.contains(local) or self.params.contains(local)) continue;
+            if (reads.* != 0) continue;
+            if (self.params.contains(local)) {
+                try self.qualify(local);
+                continue;
+            }
+            if (self.observed.contains(local)) continue;
             const def_id = (self.defs.get(local) orelse continue) orelse continue;
             const def = store.getCFStmt(def_id);
             try self.deleted.put(def_id, pureNext(def).?);
