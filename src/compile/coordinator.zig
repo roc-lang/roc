@@ -1732,6 +1732,9 @@ const BoxyObjects = struct {
         }
 
         fn build(self: Prepared) Error!boxy_unit.Built {
+            if (comptime eval.CompileTimeFinalization.compilerHostMustUseInterpreterForCtfe()) {
+                Coordinator.coordinatorInvariant("a host that interprets compile-time evaluation built a Boxy object", .{});
+            }
             return boxy_unit.restoreOrBuild(self.unit) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => Coordinator.coordinatorInvariant("a module's object failed to compile for compile-time evaluation: {s}", .{@errorName(err)}),
