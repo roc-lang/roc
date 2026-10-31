@@ -3003,7 +3003,8 @@ const RequestDeterminedResultRow = union(enum) {
 /// result holds there (design.md "Closed Result Rows At Template
 /// Boundaries"). The type reaches the variable only through the chain of
 /// links from the result down to it; any other path—an argument, a payload,
-/// a link shared with another position—makes the variable an input the
+/// a link shared with another position, the signature of a where-clause
+/// constraint on a variable the type reaches—makes the variable an input the
 /// request does not determine.
 fn requestDeterminedResultRowVariable(
     allocator: Allocator,
@@ -3068,7 +3069,8 @@ fn requestDeterminedResultRowVariable(
         try visited.put(ty, {});
         switch (checkedPayload(view, ty)) {
             .pending => Common.invariant("pending checked type reached Monotype result row scan"),
-            .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+            .err, .empty_record, .empty_tag_union => {},
+            .flex, .rigid => |other_variable| for (other_variable.constraints) |constraint| try others.append(allocator, constraint.fn_ty),
             .alias => |alias| {
                 try others.appendSlice(allocator, alias.args);
                 try others.append(allocator, alias.backing);

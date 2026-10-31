@@ -102,7 +102,7 @@ This is equivalent to writing `.._` but is more concise.
 
 ### Closed Tag Unions
 
-It's very rare, but occasionally useful to restrict a tag union's ability to be extended. (Note: the `..[]` syntax shown here has not been implemented yet.)
+⚠️ The `..[]` syntax shown in this section has not been implemented yet. It is intended to restrict a tag union's ability to be extended, which is very rare but occasionally useful.
 
 ```roc
 to_color : Str -> [Red, Green, Blue, Other, ..[]]

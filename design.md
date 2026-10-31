@@ -10297,6 +10297,17 @@ or `continue` for an enclosing loop retains the typed join, because moving that
 body beneath a different loop would retarget the transfer. Otherwise its body
 is cloned directly at the site against the site's full symbolic values.
 
+Case-of-case distribution follows the same rule by counting, before it clones
+anything, how many inner leaves select each outer arm from the arm values
+recorded for the scrutinee. An arm one leaf selects is cloned at that leaf,
+where its value stays recorded for an enclosing distribution. An arm several
+leaves select becomes a join each of those leaves jumps to, unless its body
+only builds a value out of locals and constants: such a body holds no
+continuation code, so copying it adds no branch for a later distribution to
+multiply, and keeps the value known at each leaf. A source arm reused unchanged
+has no recorded value until it is cloned, so it counts as reaching every outer
+arm more than once.
+
 Call-pattern specialization may also expose a tail-recursive worker whose
 entire specialized ABI is scalar even though its only external call remains in
 the function that initiated specialization. When such a generated worker has
@@ -11814,8 +11825,9 @@ position—the `Err` payload and the `Try` argument—at the request's row rathe
 than by rewriting the node.
 
 When the closed row ends in a variable the template QUANTIFIES, and nothing
-else in the template's type reaches that variable—no argument, payload or
-other position—the variable is determined by the result alone
+else in the template's type reaches that variable—no argument, payload,
+other position, or signature of a where-clause constraint on a variable the
+type reaches—the variable is determined by the result alone
 (`requestDeterminedResultRowVariable`). The specialization's substitution
 gives that slot a fresh cell instead of the variable the use site recorded
 (`requestDeterminedSubstitution`), so relating the template's root to the
@@ -18708,8 +18720,12 @@ body that consumes those parameters, and a remainder that enters the shared
 control region. The id is in scope in both body and remainder; the parameters
 are in scope only in the body. A jump names an in-scope id and supplies exactly
 one argument of the declared type for every parameter. The join body and
-remainder both produce the enclosing expression's result type. These forms
-express shared control only; they do not choose layouts or ownership.
+remainder both produce the enclosing expression's result type. Lowering gives
+both the same consumer statement, so a value-position join's body, any join
+declared inside its remainder for the same result, and a direct arrival may all
+enter one LIR statement: LIR consumers treat such a statement as a merge of
+every edge into it, not as a body entered only through one join's jumps. These
+forms express shared control only; they do not choose layouts or ownership.
 
 Case-of-case and let-of-case rewrites use these forms to thread branch results
 to one continuation. They never clone that continuation into each branch. Join

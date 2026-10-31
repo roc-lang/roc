@@ -93,8 +93,6 @@ for Ok(amount_to_add) in items {
 
 If you can't write an exhaustive pattern-match, you can name the entire iterator item and then use [`match`](pattern-matching#match) on it inside the loop body.
 
-(Note: the dedicated exhaustiveness error is not implemented yet for `for` patterns, even though it is for [assignments](statements#assignment). Currently, a non-exhaustive tag pattern like this one is reported as a type mismatch instead, and non-exhaustive patterns that the type checker can't rule out—such as a number literal pattern—are not caught at compile time and crash at runtime.)
-
 ## Looping over Streams with `for!`
 
 A `for!` loop goes through a [`Stream`](iterators#effectful-iteration): a sequence whose items
@@ -191,7 +189,7 @@ the loop body, rather than at the beginning.
 If nothing ever exits the loop, it will run forever. For example, a server might have a loop
 that waits for a request, handles it, and then goes back to waiting for the next request.
 
-A loop that runs forever during [compile-time evaluation](compile-time) will currently hang the compiler, as
+⚠️ A loop that runs forever during [compile-time evaluation](compile-time) will currently hang the compiler, as
 noted in [Pure Functions](functions#pure-functions).
 
 ## Performance
