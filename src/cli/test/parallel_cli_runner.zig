@@ -11563,17 +11563,17 @@ fn customBoxyModuleObjectCache(
     const Build = struct { name: []const u8, no_cache: bool, objects: []const u8, identical: bool };
     // The program's units are Builtin, Combinator, Tree, Main, and the
     // default platform's module; the root unit's object makes six. An edit
-    // of the app rebuilds Main's unit and the root unit; an edit of Tree
-    // rebuilds Tree's unit and, since Main imports it, both again. The
-    // builds of unedited sources produce the same bytes whatever the cache
-    // held; an edited module's symbols carry its new content identity, so
-    // an edit's executable is only required to run.
+    // of the app rebuilds Main's unit and the root unit; an edit of Tree that
+    // leaves its interface alone rebuilds Tree's unit alone, since its
+    // importers compile against its interface. The builds of unedited
+    // sources produce the same bytes whatever the cache held; an edit's
+    // executable is only required to run.
     const builds = [_]Build{
         .{ .name = "cold", .no_cache = false, .objects = "Boxy objects: 0 cached, 6 built", .identical = true },
         .{ .name = "warm", .no_cache = false, .objects = "Boxy objects: 6 cached, 0 built", .identical = true },
         .{ .name = "nocache", .no_cache = true, .objects = "", .identical = true },
         .{ .name = "app_edit", .no_cache = false, .objects = "Boxy objects: 4 cached, 2 built", .identical = false },
-        .{ .name = "lib_edit", .no_cache = false, .objects = "Boxy objects: 3 cached, 3 built", .identical = false },
+        .{ .name = "lib_edit", .no_cache = false, .objects = "Boxy objects: 5 cached, 1 built", .identical = false },
     };
     var first_bytes: ?[]const u8 = null;
     for (builds) |build| {

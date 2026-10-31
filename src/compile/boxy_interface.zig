@@ -6,7 +6,7 @@
 //!
 //! An interface has two halves. `Digests.interfaceOf` covers what a module's
 //! checked data tells an importer's lowering; it is known once the module's
-//! compile-time values are. `Digests.exportsOf` covers the ownership
+//! compile-time values are. `Digests.recordExports` covers the ownership
 //! signatures the module's own object solved, known once that object exists.
 //! Each folds in the same half of the module's imports, because lowering
 //! reads through an import to the modules behind it.
@@ -22,6 +22,7 @@ const Sha256 = base.Sha256;
 const CheckedArtifact = check.CheckedArtifact;
 const Artifact = CheckedArtifact.CheckedModuleArtifact;
 const ConstStore = check.ConstStore;
+const canonical = check.CanonicalNames;
 const ModuleNames = eval.CompileTimeFinalization.ModuleNames;
 
 const Key = [32]u8;
@@ -126,25 +127,28 @@ pub const Digests = struct {
     /// they name, and the stored values they restore.
     fn hashPublicSurface(self: *Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
         hasher.update(&artifact.moduleEnvConst().checking_dependency.digest);
-        const templates = &artifact.checked_procedure_templates;
         for (artifact.exported_procedure_templates.templates) |exported| {
-            hashTemplateSignature(hasher, templates, exported.template.template);
+            self.hashTemplateRef(hasher, artifact, exported.template);
         }
         for (artifact.exported_procedure_bindings.bindings) |binding| {
-            hasher.update(@tagName(std.meta.activeTag(binding.body)));
-            hasher.update(&[_]u8{0});
+            hashTag(hasher, @tagName(std.meta.activeTag(binding.body)));
+            switch (binding.body) {
+                .direct_template => |direct| switch (direct.template) {
+                    .checked => |ref| self.hashTemplateRef(hasher, artifact, ref),
+                    .lifted, .synthetic => hasher.update(&artifact.key.bytes),
+                },
+                .callable_eval_template, .checked_error => {},
+            }
         }
         for (artifact.method_registry.entries) |entry| {
             const target = entry.target orelse {
-                hasher.update("rejected");
+                hashTag(hasher, "rejected");
                 continue;
             };
+            hashTag(hasher, @tagName(std.meta.activeTag(target.kind)));
             switch (target.kind) {
-                .procedure => |procedure| {
-                    hasher.update(&self.names.of(procedure.template.artifact.bytes));
-                    hashTemplateSignature(hasher, templates, procedure.template.template);
-                },
-                .local_proc, .structural => hasher.update(@tagName(std.meta.activeTag(target.kind))),
+                .procedure => |procedure| self.hashTemplateRef(hasher, artifact, procedure.template),
+                .local_proc, .structural => {},
             }
         }
         hasher.update(std.mem.asBytes(&@as(u32, @intCast(artifact.checked_bodies.view().default_exprs.len))));
@@ -152,30 +156,70 @@ pub const Digests = struct {
         for (checked_types.nominal_declarations) |declaration| {
             hashBytes(hasher, artifact.canonical_names.typeNameText(checked_types.nominalDeclarationName(declaration)));
         }
-        try self.hashStoredValues(hasher, artifact, .importable_roots);
+        const exported_consts = artifact.exported_const_templates.templates;
+        for (exported_consts) |exported| try self.hashConstTemplate(hasher, artifact, exported.template);
+        for (artifact.const_templates.templates.items) |template| switch (template.owner) {
+            .top_level_binding => try self.hashConstTemplate(hasher, artifact, template),
+            .hoisted_expr => {},
+        };
+        try self.hashStoredValues(hasher, artifact, .callable_bindings);
     }
 
-    const RootScope = enum { every_root, importable_roots };
+    /// The name of `ref`'s worker, and the hidden parameters a call to it
+    /// passes when `artifact` declares it. An imported template's are part of
+    /// its own module's interface.
+    fn hashTemplateRef(self: *const Digests, hasher: *Sha256, artifact: *const Artifact, ref: canonical.ProcedureTemplateRef) void {
+        hasher.update(&self.names.of(ref.artifact.bytes));
+        hasher.update(std.mem.asBytes(&@as(u32, @backingInt(ref.template))));
+        if (!std.mem.eql(u8, &ref.artifact.bytes, &artifact.key.bytes)) return;
+        const templates = &artifact.checked_procedure_templates;
+        const template = templates.templates.items[@backingInt(ref.template)];
+        hasher.update(std.mem.asBytes(&template.scheme_vars.len));
+        for (templates.evidence_params_pool[template.evidence_params.start..][0..template.evidence_params.len]) |param| {
+            hashBytes(hasher, artifact.canonical_names.methodNameText(param.method));
+            hasher.update(std.mem.asBytes(&(param.slot orelse @as(u32, std.math.maxInt(u32)))));
+        }
+        hasher.update(std.mem.asBytes(&@as(u32, @intCast(templates.templateLiteralRequirements(&template).len))));
+    }
 
-    /// The values of `artifact`'s compile-time roots. An importer reads a
-    /// module's top-level values; the module's own object stores them all.
+    /// How an importer reads a constant: the value stored for it, or the
+    /// entry procedure of one compile-time evaluation did not store.
+    fn hashConstTemplate(self: *Digests, hasher: *Sha256, artifact: *const Artifact, template: CheckedArtifact.ConstTemplate) Allocator.Error!void {
+        hashTag(hasher, @tagName(std.meta.activeTag(template.state)));
+        switch (template.state) {
+            .eval_template => |eval_template| self.hashTemplateRef(hasher, artifact, eval_template.entry_template),
+            .stored_const => {
+                const root = switch (template.owner) {
+                    .hoisted_expr => |hoisted| (artifact.hoisted_constants.lookupByExpr(hoisted.expr) orelse return).root,
+                    .top_level_binding => |top_level| artifact.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse return,
+                };
+                try self.hashRootValue(hasher, artifact, artifact.compile_time_roots.root(root));
+            },
+            .reserved, .unimplemented => {},
+        }
+    }
+
+    const RootScope = enum { every_root, callable_bindings };
+
+    /// The values of `artifact`'s compile-time roots in `scope`. A module's
+    /// own object stores all of them.
     fn hashStoredValues(self: *Digests, hasher: *Sha256, artifact: *const Artifact, scope: RootScope) Allocator.Error!void {
-        const context: ValueContext = .{ .digests = self, .artifact = artifact };
         for (artifact.compile_time_roots.roots) |root| {
             switch (scope) {
                 .every_root => {},
-                .importable_roots => switch (root.kind) {
-                    .constant, .callable_binding => {},
-                    .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument, .expect, .repl_expr => continue,
-                },
+                .callable_bindings => if (root.kind != .callable_binding) continue,
             }
-            hasher.update(@tagName(std.meta.activeTag(root.payload)));
-            hasher.update(&[_]u8{0});
-            switch (root.payload) {
-                .const_node => |node| try artifact.const_store.hashGraph(node, hasher, context),
-                .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
-                .pending, .unevaluated, .discarded, .expect, .runtime => {},
-            }
+            try self.hashRootValue(hasher, artifact, root);
+        }
+    }
+
+    fn hashRootValue(self: *Digests, hasher: *Sha256, artifact: *const Artifact, root: CheckedArtifact.CompileTimeRoot) Allocator.Error!void {
+        const context: ValueContext = .{ .digests = self, .artifact = artifact };
+        hashTag(hasher, @tagName(std.meta.activeTag(root.payload)));
+        switch (root.payload) {
+            .const_node => |node| try artifact.const_store.hashGraph(node, hasher, context),
+            .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
+            .pending, .unevaluated, .discarded, .expect, .runtime => {},
         }
     }
 };
@@ -197,13 +241,9 @@ const ValueContext = struct {
     }
 };
 
-/// The hidden parameters a call to `template` passes.
-fn hashTemplateSignature(hasher: *Sha256, templates: *const CheckedArtifact.CheckedProcedureTemplateTable, id: anytype) void {
-    hasher.update(std.mem.asBytes(&@as(u32, @backingInt(id))));
-    const template = templates.templates.items[@backingInt(id)];
-    hasher.update(std.mem.asBytes(&@as(u32, template.scheme_vars.len)));
-    hasher.update(std.mem.asBytes(&@as(u32, template.evidence_params.len)));
-    hasher.update(std.mem.asBytes(&@as(u32, @intCast(templates.templateLiteralRequirements(&template).len))));
+fn hashTag(hasher: *Sha256, tag: []const u8) void {
+    hasher.update(tag);
+    hasher.update(&[_]u8{0});
 }
 
 fn hashBytes(hasher: *Sha256, bytes: []const u8) void {
