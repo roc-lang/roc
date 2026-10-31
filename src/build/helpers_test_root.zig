@@ -8,6 +8,7 @@ const std = @import("std");
 test {
     std.testing.refAllDecls(@import("test_harness.zig"));
     std.testing.refAllDecls(@import("stack_probe.zig"));
+    std.testing.refAllDecls(@import("build_path_check.zig"));
     std.testing.refAllDecls(@import("nix_path.zig"));
     std.testing.refAllDecls(@import("compiler_identity.zig"));
     std.testing.refAllDecls(@import("unreachable_rationale.zig"));
