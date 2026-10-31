@@ -4992,7 +4992,7 @@ pub const Builder = struct {
         const owner = self.program.worker(owner_worker).*;
         const owner_view = self.program.module(owner.module);
         const expr = owner_view.bodies().expr(lambda_expr);
-        const captures = self.program.siteCaptures(owner.module, lambda_expr);
+        const captures = try self.program.siteCaptures(owner.module, lambda_expr);
         const own: ?lower.LocalScheme = if (self.program.local_scopes.get(.{ .module = owner.module, .expr = lambda_expr })) |scope_id| blk: {
             var scheme = try self.localSchemeIn(owner_view, scope_id);
             if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) break :blk null;
