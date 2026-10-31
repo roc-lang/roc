@@ -669,6 +669,13 @@ pub const ConstValue = union(enum) {
         backing: ConstNodeId,
     },
     fn_value: ConstFnId,
+    /// A function value a `.boxy` compile-time program evaluated to: its
+    /// worker and descriptors' types (`recipe`, which `postcheck.Boxy.StoredFn`
+    /// reads) and its captured values and dictionaries.
+    boxy_fn: struct {
+        recipe: ConstStr,
+        captures: []const ConstNodeId,
+    },
 };
 
 /// Internal, relocation-invariant (POD) form of `ConstValue`: variant slices are
@@ -692,6 +699,7 @@ const StoredValue = union(enum) {
     tag: struct { tag_name: ConstRange, payloads: ConstRange },
     nominal: struct { named_type: NamedType, backing: ConstNodeId },
     fn_value: ConstFnId,
+    boxy_fn: struct { recipe: ConstStr, captures: ConstRange },
 };
 
 /// POD form of `ConstFn`: captures slice → range into `capture_pool`.
@@ -1445,6 +1453,7 @@ pub const ConstStore = struct {
             .box => |n| .{ .box = n },
             .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
             .fn_value => |f| .{ .fn_value = f },
+            .boxy_fn => |function| .{ .boxy_fn = .{ .recipe = function.recipe, .captures = try self.appendNodes(function.captures) } },
             .list => |list| .{ .list = switch (list) {
                 .nodes => |items| .{ .nodes = try self.appendNodes(items) },
                 .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
@@ -1679,6 +1688,7 @@ pub const ConstStore = struct {
             .box => |n| .{ .box = n },
             .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
             .fn_value => |f| .{ .fn_value = f },
+            .boxy_fn => |function| .{ .boxy_fn = .{ .recipe = function.recipe, .captures = self.nodeSlice(function.captures) } },
             .list => |list| .{ .list = switch (list) {
                 .nodes => |r| .{ .nodes = self.nodeSlice(r) },
                 .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
@@ -1788,7 +1798,7 @@ pub const ConstStore = struct {
             children.clearRetainingCapacity();
             const copied: ConstValue = switch (value) {
                 .pending => constStoreInvariant("a pending node reached a value copy"),
-                .fn_value => constStoreInvariant("a function value reached a value copy"),
+                .fn_value, .boxy_fn => constStoreInvariant("a function value reached a value copy"),
                 .zst => .zst,
                 .scalar => |scalar| .{ .scalar = scalar },
                 .str => |str| .{ .str = try self.copyBlob(source, str) },
@@ -1833,7 +1843,7 @@ pub const ConstStore = struct {
     /// Push the nodes a value refers to directly.
     fn appendValueChildren(value: ConstValue, out: *std.ArrayList(ConstNodeId), allocator: Allocator) Allocator.Error!void {
         switch (value) {
-            .pending, .zst, .scalar, .str, .crash, .checked_error, .fn_value => {},
+            .pending, .zst, .scalar, .str, .crash, .checked_error, .fn_value, .boxy_fn => {},
             .box => |payload| try out.append(allocator, payload),
             .nominal => |nominal| try out.append(allocator, nominal.backing),
             .list => |list| switch (list) {
@@ -1867,7 +1877,7 @@ pub const ConstStore = struct {
             const value = self.get(node);
             switch (value) {
                 .pending => constStoreInvariant("a pending node reached a portability walk"),
-                .fn_value => return false,
+                .fn_value, .boxy_fn => return false,
                 .nominal => |nominal| {
                     const module = own orelse return false;
                     if (std.meta.eql(nominal.named_type.module.bytes, module.bytes)) return false;
@@ -1896,7 +1906,7 @@ pub const ConstStore = struct {
             if (seen.isSet(raw)) continue;
             seen.set(raw);
             switch (self.values.items[raw]) {
-                .pending, .fn_value => return false,
+                .pending, .fn_value, .boxy_fn => return false,
                 .zst, .scalar => {},
                 .str, .crash, .checked_error => |str| if (!self.validBlob(str)) return false,
                 .box => |payload| try pending.append(self.allocator, @backingInt(payload)),
@@ -1951,7 +1961,7 @@ pub const ConstStore = struct {
             const right = other.get(pair.right);
             if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
             switch (left) {
-                .pending, .fn_value => return false,
+                .pending, .fn_value, .boxy_fn => return false,
                 .zst => {},
                 .scalar => |scalar| if (!std.meta.eql(scalar, right.scalar)) return false,
                 .str => |str| if (!sameBytes(self.blobBytes(str), other.blobBytes(right.str))) return false,
@@ -2116,6 +2126,10 @@ pub const ConstStore = struct {
                             }
                         },
                         .empty => {},
+                    },
+                    .boxy_fn => |function| {
+                        _ = self.strBytes(function.recipe);
+                        for (function.captures) |child| try pending.append(self.allocator, .{ .value = .{ .id = child, .delayed_depth = node.delayed_depth } });
                     },
                     .tuple,
                     .record,

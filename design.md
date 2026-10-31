@@ -15406,19 +15406,53 @@ that succeeds carries nothing extra. A compilation with no cache has no objects,
 runs as the whole program.
 
 A root whose value holds a function value (anywhere in its type, or a
-callable binding) is evaluated by the Solved evaluator under either strategy.
-A stored function value restores through the checked dispatch evidence its
-evaluation recorded (`ConstStore.FnDef`), which specialization has statically
-for every closure it creates; a `.boxy` function value carries runtime
-descriptors and dictionaries instead, which name neither the checked
-evidence nor a nominal's phantom arguments, so a `.boxy` evaluation has
-nothing to store such a value by. The `.boxy` evaluator specializes exactly
-those roots, with every pending root of their module they read (whose values
-the Solved program then stores before the module's `.boxy` program is
-lowered, which restores them), in one Solved program per module
-(`RootFilter`), before the module's `.boxy` program. A literal argument root
-("Literal Arguments") is the `.boxy` evaluator's whatever its value: one
-whose value holds a function is evaluated for its outcome and discarded.
+callable binding) has no compile-time value slot, so it is evaluated by the
+programs "Stored Function Values" describes rather than the module's program.
+A literal argument root ("Literal Arguments") is the module's program's
+whatever its value: one whose value holds a function is evaluated for its
+outcome and discarded.
+
+#### Stored Function Values
+
+A `.boxy` function value is an erased callable: a worker's code and what the
+worker captured, which is values, the descriptors of its scope's type
+variables, and dictionaries, themselves erased callables. Compile-time
+evaluation under `.boxy` stores exactly that (`ConstValue.boxy_fn`): a recipe
+naming the worker and the type each captured descriptor describes, with the
+captured values and dictionaries as nodes of the constant store. Restoring
+the value rebuilds the worker from the recipe and packs the same captures, so
+nothing is inferred about the value and no checked evidence is consulted.
+
+The recipe holds its own table of types rather than ids of stored types. A
+generated codec worker's signature is generic, so a recipe type can name
+variables, which no stored type does, and a table keeps a block-local nominal's
+outer arguments, which a stored type leaves to its reader's scope. Workers are
+named as their keys name them: templates and lambdas by checked id, codec
+pieces by their family's derivation, a compile-time slot by its root.
+
+Function types share one descriptor, so a descriptor cannot be read back into
+a type by its structure. A program that stores function values records, as it
+composes each descriptor, the type it was composed for and the descriptors of
+that type's variables (`LIR.DynOp.desc_note`). Every type with one descriptor
+is the same to generic code, so the lowest type id stands for them all, which
+keeps the choice independent of thread timing, and a function inside a
+recorded type stands for any function.
+
+Only compile-time programs record descriptors. The notes run in the compiling
+process and no runtime target accepts them.
+
+A function value has no slot for another root to read, so a module's roots
+holding one, with every pending root they read, run first in their own
+programs, in the order their checked reads give (`evaluateFunctionRoots`). A
+root reading a value that is not stored yet stays pending and runs again once
+it is; if a program completes no root, the rest run once more and fail as they
+read. The module's remaining roots then restore the stored values.
+
+The stored form lives in `CompileTimeRoot.boxy_value`, beside the payload the
+`.lss` evaluator fills, because a recipe means nothing to Monotype. The payload
+stays `.unevaluated`, so an `.lss` compilation of the same checked module
+evaluates the root itself and neither strategy reads the other's function
+values.
 
 A literal in a generic body converts at the first instantiation that fixes
 its type, under either strategy: as a literal root of the specialization

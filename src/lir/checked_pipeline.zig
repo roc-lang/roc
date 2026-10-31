@@ -89,6 +89,7 @@ pub fn resolveCheckedAbiLayouts(
 
 /// The export interfaces a `.boxy` module unit compiles its calls against.
 pub const BoxyExportInterfaces = postcheck.Boxy.Lower.ExportInterfaces;
+pub const BoxyStoredFunctions = postcheck.Boxy.StoredFn.Retained;
 
 /// Resource failure while lowering checked modules to LIR, plus the one
 /// checked input this entrance rejects outright: see
@@ -191,6 +192,9 @@ pub const TargetConfig = struct {
     /// A `.boxy` lowering of a compile-time evaluator's roots
     /// (`postcheck.Boxy.Lower.Input.compile_time`).
     boxy_compile_time: bool = false,
+    /// With `boxy_compile_time`, the roots hold function values
+    /// (`postcheck.Boxy.Lower.Input.stored_functions`).
+    boxy_stored_functions: bool = false,
     /// The compilation session evaluates the program's literal roots.
     literal_roots: bool = false,
     /// With `literal_roots`, the literal values an earlier compilation of the
@@ -1349,8 +1353,11 @@ pub const LoweredProgram = struct {
     frozen_static_data: ?LirProgram.FrozenStaticData = null,
     /// See `TargetConfig.spec_comptime_reads`.
     spec_comptime_reads: ?SpecComptimeReads = null,
+    /// See `TargetConfig.boxy_stored_functions`.
+    boxy_functions: ?*postcheck.Boxy.StoredFn.Retained = null,
 
     pub fn deinit(self: *LoweredProgram) void {
+        if (self.boxy_functions) |retained| retained.deinit();
         if (self.spec_comptime_reads) |*reads| reads.deinit();
         if (self.frozen_static_data) |*data| data.deinit();
         self.runtime_value_schemas.deinit();
@@ -2201,6 +2208,7 @@ pub const PreparedBoxy = struct {
             .list_in_place_map = target.list_in_place_map,
             .host_boundary_digests = target.host_boundary_digests,
             .compile_time = target.boxy_compile_time,
+            .stored_functions = target.boxy_stored_functions,
             .unit = if (target.boxy_unit) |unit| .{ .module = unit } else .program,
         });
         boxy_timing_scope.end();
@@ -2214,8 +2222,12 @@ pub const PreparedBoxy = struct {
         };
         defer lowered.runtime_schemas.deinit();
         var frozen: ?LirProgram.FrozenStaticData = .{ .allocator = allocator, .exports = output.static_data };
+        const retained = output.retained;
+        errdefer if (retained) |kept| kept.deinit();
         output = undefined;
-        return finishLoweredOutput(allocator, self.roots.requests.len, target, &lowered, &frozen);
+        var program = try finishLoweredOutput(allocator, self.roots.requests.len, target, &lowered, &frozen);
+        program.boxy_functions = retained;
+        return program;
     }
 };
 

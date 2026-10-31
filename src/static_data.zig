@@ -502,7 +502,7 @@ const StaticInitializerMachine = struct {
         const plans = self.lowered.lir_result.const_plans.items;
         switch (store_.get(request.node)) {
             .pending => staticDataInvariant("stored static data reached a pending ConstStore node"),
-            .fn_value, .crash, .checked_error => staticDataInvariant("stored static data reached a node that is not data"),
+            .fn_value, .boxy_fn, .crash, .checked_error => staticDataInvariant("stored static data reached a node that is not data"),
             .nominal => unreachable, // unwrapStoredNominal stepped past every nominal layer
             .zst => return try self.rememberStored(key, try self.newValue(request.layout_idx)),
             .scalar => |scalar| return try self.rememberStored(key, try self.storedScalar(scalar, request.layout_idx)),
@@ -510,7 +510,7 @@ const StaticInitializerMachine = struct {
             .list => |list| {
                 const elem_plan = switch (plans[@backingInt(request.plan)]) {
                     .list => |elem| elem,
-                    .pending, .layout_only, .zst, .scalar, .str, .box, .tuple, .record, .tag_union, .named, .fn_value, .erased_fn => staticDataInvariant("stored list had a non-list const plan"),
+                    .pending, .layout_only, .zst, .scalar, .str, .box, .tuple, .record, .tag_union, .named, .fn_value, .erased_fn, .boxy_fn => staticDataInvariant("stored list had a non-list const plan"),
                 };
                 switch (list) {
                     .empty => return try self.rememberStored(key, try self.storedListValue(request.layout_idx, 0, null)),
@@ -527,7 +527,7 @@ const StaticInitializerMachine = struct {
             .box => |payload| {
                 const payload_plan = switch (plans[@backingInt(request.plan)]) {
                     .box => |boxed| boxed,
-                    .pending, .layout_only, .zst, .scalar, .str, .list, .tuple, .record, .tag_union, .named, .fn_value, .erased_fn => staticDataInvariant("stored box had a non-box const plan"),
+                    .pending, .layout_only, .zst, .scalar, .str, .list, .tuple, .record, .tag_union, .named, .fn_value, .erased_fn, .boxy_fn => staticDataInvariant("stored box had a non-box const plan"),
                 };
                 if (self.layoutValue(request.layout_idx).tag == .box_of_zst) return try self.rememberStored(key, try self.newValue(request.layout_idx));
                 const abi = self.layouts().builtinBoxAbi(request.layout_idx);
@@ -539,7 +539,7 @@ const StaticInitializerMachine = struct {
             .tuple, .record => |items| {
                 const item_plans = switch (plans[@backingInt(request.plan)]) {
                     .tuple, .record => |item_plans| item_plans,
-                    .pending, .layout_only, .zst, .scalar, .str, .list, .box, .tag_union, .named, .fn_value, .erased_fn => staticDataInvariant("stored product had a non-product const plan"),
+                    .pending, .layout_only, .zst, .scalar, .str, .list, .box, .tag_union, .named, .fn_value, .erased_fn, .boxy_fn => staticDataInvariant("stored product had a non-product const plan"),
                 };
                 if (item_plans.len != items.len) staticDataInvariant("stored product arity differed from its const plan");
                 const base_layout = self.aggregateBaseLayout(request.layout_idx);
@@ -554,7 +554,7 @@ const StaticInitializerMachine = struct {
             .tag => |tag| {
                 const variants = switch (plans[@backingInt(request.plan)]) {
                     .tag_union => |variants| variants,
-                    .pending, .layout_only, .zst, .scalar, .str, .list, .box, .tuple, .record, .named, .fn_value, .erased_fn => staticDataInvariant("stored tag had a non-tag-union const plan"),
+                    .pending, .layout_only, .zst, .scalar, .str, .list, .box, .tuple, .record, .named, .fn_value, .erased_fn, .boxy_fn => staticDataInvariant("stored tag had a non-tag-union const plan"),
                 };
                 const variant = for (variants) |candidate| {
                     if (std.mem.eql(u8, candidate.name, tag.tag_name)) break candidate;
@@ -591,14 +591,14 @@ const StaticInitializerMachine = struct {
                     request.node = nominal.backing;
                     changed = true;
                 },
-                .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .fn_value => {},
+                .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .fn_value, .boxy_fn => {},
             }
             switch (self.lowered.lir_result.const_plans.items[@backingInt(request.plan)]) {
                 .named => |named| {
                     request.plan = named.backing;
                     changed = true;
                 },
-                .pending, .layout_only, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag_union, .fn_value, .erased_fn => {},
+                .pending, .layout_only, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag_union, .fn_value, .erased_fn, .boxy_fn => {},
             }
             if (!changed) return request;
         }

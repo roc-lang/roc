@@ -3947,7 +3947,7 @@ pub const MonoLlvmCodeGen = struct {
                     // its composition takes.
                     .dyn => |dyn_stmt| switch (self.store.stmtRow(dyn_stmt.data)) {
                         .dict_compose => |compose| needs[@backingInt(compose.worker)] = true,
-                        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => {},
+                        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => {},
                     },
                     .init_uninitialized, .assign_ref, .assign_call_erased, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
                 }
@@ -11764,6 +11764,7 @@ pub const MonoLlvmCodeGen = struct {
                 const vars = try self.dynLocalArray(d.vars, .words);
                 try self.bindWord(target, try self.callBoxyRuntime("roc_desc_recursive_close", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, .i32, ptr_ty }, &.{ try self.wordValue(d.shell), try self.wordValue(d.desc), try self.wordValue(d.key), try self.intValue(.i32, d.vars.len), vars }));
             },
+            .desc_note => invariant("a compile-time descriptor note reached LLVM code generation", .{}),
             .desc_presence_slot => |d| try self.bindWord(target, try self.callBoxyRuntime("roc_desc_presence_slot", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty }, &.{ try self.wordValue(d.missing), try self.wordValue(d.present), try self.wordValue(d.payload) })),
             .desc_record => |d| {
                 const names = self.store.getLocalSpan(d.names);

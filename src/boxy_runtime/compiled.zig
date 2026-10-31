@@ -739,6 +739,12 @@ fn dictionaryCache() *compose.Cache {
 /// the program: whoever runs the program creates one, makes it current on
 /// every thread that runs the program's code (`enter`), and destroys it
 /// after the program. Threads running the program's code at once share it.
+/// Record where `desc` came from in the compile-time program composing it
+/// (`LIR.DynOp.desc_note`).
+pub fn noteDesc(desc: *const TypeDesc, ty: u32, vars: []const *const TypeDesc) void {
+    InProcessState.current().note(desc, ty, vars);
+}
+
 pub const InProcessState = struct {
     allocator: std.mem.Allocator,
     lock: std.atomic.Mutex = .unlocked,
@@ -748,8 +754,20 @@ pub const InProcessState = struct {
     ops: RocOps,
     descriptors: compose.Cache = .{},
     dictionaries: compose.Cache = .{},
+    /// Where each descriptor a compile-time program noted came from
+    /// (`noteDesc`), by address.
+    origins: std.AutoHashMapUnmanaged(*const TypeDesc, DescOrigin) = .empty,
 
     threadlocal var current_state: ?*InProcessState = null;
+
+    /// The program type a descriptor describes, and the descriptors of that
+    /// type's variables. Types with one descriptor are the same to the code
+    /// reading it, so the lowest id stands for them all, whichever thread
+    /// noted it first.
+    pub const DescOrigin = struct {
+        ty: u32,
+        vars: []const *const TypeDesc,
+    };
 
     /// What `enter` displaced; `leave` restores it.
     pub const Entered = struct {
@@ -776,10 +794,29 @@ pub const InProcessState = struct {
         return self;
     }
 
+    fn note(self: *InProcessState, desc: *const TypeDesc, ty: u32, vars: []const *const TypeDesc) void {
+        while (!self.lock.tryLock()) std.atomic.spinLoopHint();
+        defer self.lock.unlock();
+        const entry = self.origins.getOrPut(self.allocator, desc) catch crashOutOfMemory(self);
+        if (entry.found_existing and entry.value_ptr.ty <= ty) return;
+        const owned = self.arena.allocator().dupe(*const TypeDesc, vars) catch crashOutOfMemory(self);
+        entry.value_ptr.* = .{ .ty = ty, .vars = owned };
+    }
+
+    fn crashOutOfMemory(self: *InProcessState) noreturn {
+        self.ops.crash("out of memory recording a descriptor's type");
+    }
+
+    /// Where `desc` came from, when the program noted it.
+    pub fn origin(self: *InProcessState, desc: *const TypeDesc) ?DescOrigin {
+        return self.origins.get(desc);
+    }
+
     /// Release everything the program composed. Nothing of the program may
     /// run afterwards.
     pub fn destroy(self: *InProcessState) void {
         const allocator = self.allocator;
+        self.origins.deinit(allocator);
         self.arena.deinit();
         allocator.destroy(self);
     }

@@ -422,7 +422,7 @@ fn verifyNamedTypeOccurrences(module: *const checked.CheckedModuleArtifact, prev
                 const entry = try seen.getOrPut(node);
                 if (entry.found_existing) continue;
                 switch (store.get(node)) {
-                    .pending, .fn_value => base.invariant("a transplanted value held a pending node or a function value", .{}),
+                    .pending, .fn_value, .boxy_fn => base.invariant("a transplanted value held a pending node or a function value", .{}),
                     .zst, .scalar, .str, .crash, .checked_error => {},
                     .box => |payload| try pending.append(allocator, payload),
                     .nominal => |nominal| {

@@ -238,6 +238,16 @@ pub fn roc_desc_slot_store(desc: *const TypeDesc, slot: *const usize, value: ?[*
     compiled.storeSlot(desc, slot, valuePtr(value), dst);
 }
 
+/// The C-ABI form of `compiled.noteDesc`.
+pub fn roc_desc_note(desc: *const TypeDesc, ty: u32, count: u32, vars: ?[*]const *const TypeDesc) callconv(.c) *const TypeDesc {
+    if (comptime builtins.host_abi.host_role == .platform) {
+        compose.invariant(ops(), "a compile-time descriptor note reached a program");
+    } else {
+        compiled.noteDesc(desc, ty, items(*const TypeDesc, count, vars));
+        return desc;
+    }
+}
+
 /// A dictionary callable of the erased-record entry `callable_fn` capturing
 /// `captures` after `capture_prefix` reserved bytes.
 pub fn roc_desc_dict_compose(callable_fn: builtins.erased_callable.CallableFnPtr, capture_prefix: u32, count: u32, captures: ?[*]const usize) callconv(.c) [*]u8 {

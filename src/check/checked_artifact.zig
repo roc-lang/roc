@@ -29374,6 +29374,10 @@ pub const CompileTimeRoot = struct {
     guarded: bool = false,
     /// For a `literal_argument` root: what it converts.
     literal_argument: ?LiteralArgumentRoot = null,
+    /// The value a `.boxy` compilation stored for a root holding a function
+    /// value (design.md "Stored Function Values"). Only `.boxy` programs read
+    /// it: to a `.lss` compilation the root stays `unevaluated`.
+    boxy_value: ?StoredConstTemplate = null,
 
     pub fn literalConversionKind(self: CompileTimeRoot) ?CompileTimeLiteralConversionKind {
         return switch (self.kind) {
@@ -29577,6 +29581,15 @@ pub const CompileTimeRootTable = struct {
 
     pub fn root(self: *const CompileTimeRootTable, id: ComptimeRootId) CompileTimeRoot {
         return self.roots[@backingInt(id)];
+    }
+
+    /// Record the value a `.boxy` evaluation stored for root `id`.
+    pub fn fillBoxyValue(self: *CompileTimeRootTable, id: ComptimeRootId, value: StoredConstTemplate) void {
+        const index = @backingInt(id);
+        if (index >= self.roots.len) {
+            checkedArtifactInvariant("compile-time root id is out of range", .{});
+        }
+        self.roots[index].boxy_value = value;
     }
 
     pub fn fillPayload(
@@ -35269,6 +35282,7 @@ pub const CheckedModuleArtifact = struct {
             const root = request.compile_time_root orelse continue;
             if (self.compile_time_roots.root(root).payload != .unevaluated) continue;
             if (strategy == .lss and self.compile_time_roots.root(root).kind == .literal_argument) continue;
+            if (strategy == .boxy and self.compile_time_roots.root(root).boxy_value != null) continue;
             return true;
         }
         return false;

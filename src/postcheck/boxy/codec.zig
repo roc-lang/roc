@@ -138,6 +138,36 @@ pub const Piece = struct { family: u32, kind: PieceKind, a: u32 = 0, b: u32 = 0 
 
 const no_family = std.math.maxInt(u32);
 
+/// What a piece's `a` and `b` hold, for a stored function naming it.
+pub const PieceOperands = enum { none, types, type_and_name, type_and_word };
+
+pub fn pieceOperands(kind: PieceKind) PieceOperands {
+    return switch (kind) {
+        .constructor, .runtime => .none,
+        .encode_helper, .parse_helper, .value_thunk, .key_thunk, .tag_spec => .types,
+        .tag_body => .type_and_name,
+        .record_body, .tuple_body, .list_body, .dict_body, .field_names_step => .type_and_word,
+    };
+}
+
+/// The derivation of `piece`'s family, by which a stored function names the
+/// family, or `no_family` for a piece of none.
+pub fn pieceFamilyRoot(program: *const Program, piece: Piece) u32 {
+    if (piece.family == no_family) return no_family;
+    return @backingInt(program.codec.families.items[piece.family].root);
+}
+
+/// The worker of a piece a stored function names: `root` is its family's
+/// derivation in `module`'s plans (`pieceFamilyRoot`).
+pub fn restorePiece(program: *Program, module: ModuleIndex, root: u32, kind: PieceKind, a: u32, b: u32, params: []const TypeId, ret: TypeId, captures: []const TypeId) Allocator.Error!WorkerId {
+    const family = if (root == no_family) no_family else try familyFor(program, module, @fromBackingInt(root));
+    const erased = switch (kind) {
+        .encode_helper, .parse_helper => false,
+        .constructor, .runtime, .record_body, .tuple_body, .list_body, .dict_body, .tag_body, .value_thunk, .key_thunk, .tag_spec, .field_names_step => true,
+    };
+    return try pieceWorker(program, module, .{ .family = family, .kind = kind, .a = a, .b = b }, params, ret, captures, erased);
+}
+
 /// The program's generated codec families and workers.
 pub const State = struct {
     families: std.ArrayList(Family) = .empty,

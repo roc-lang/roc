@@ -8703,6 +8703,7 @@ pub const Interpreter = struct {
                 const desc = boxy.compose.recursiveClose(immortals.composeCache(), &immortals.ops, try self.descAt(frame, d.shell), try self.descAt(frame, d.desc), key, vars);
                 try self.setWordTarget(frame, stmt_id, target, @intFromPtr(desc));
             },
+            .desc_note => |d| try self.setWordTarget(frame, stmt_id, target, try self.localWord(frame, d.desc)),
             .dict_compose => |d| {
                 const captures = self.store.getLocalSpan(d.captures);
                 const key = try self.evalAllocator().alloc(u64, 2 + captures.len);

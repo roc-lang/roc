@@ -219,7 +219,7 @@ fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
     return 0;
 }
 
-const checked_module_cache_magic = "roc-mod-cache-v11";
+const checked_module_cache_magic = "roc-mod-cache-v12";
 
 // Header: magic, entry-version hash (32), artifact key (32), env-blob length
 // (u64), artifact-blob length (u64), pin-validation stamp (32), and zero bytes
@@ -3864,6 +3864,7 @@ pub const Coordinator = struct {
         for (artifact.root_requests.compile_time_requests) |request| {
             const root = request.compile_time_root orelse continue;
             if (strategy == .lss and artifact.compile_time_roots.root(root).kind == .literal_argument) continue;
+            if (strategy == .boxy and artifact.compile_time_roots.root(root).boxy_value != null) continue;
             if (artifact.compile_time_roots.root(root).payload == .unevaluated or
                 artifact.compile_time_roots.root(root).payload == .pending) count += 1;
         }

@@ -24,6 +24,7 @@ const lir_core = @import("lir_core");
 const types = @import("types.zig");
 const lower = @import("lower.zig");
 const Codec = @import("codec.zig");
+const StoredFn = @import("stored_fn.zig");
 const Match = @import("match.zig");
 
 const Allocator = std.mem.Allocator;
@@ -145,6 +146,8 @@ pub const Task = union(enum) {
     /// Pop a restored closure's capture values and build it.
     /// `worker_ty` is the closure's type as its worker stores it, and `ty`
     /// the restored value's.
+    /// Pop a stored function's captures and pack them (`stored_fn.zig`).
+    finish_stored_fn: struct { worker: WorkerId, shape: StoredFn.CaptureShape, descs: []const LocalId, capture_types: []const TypeId },
     finish_restore_closure: struct { worker: WorkerId, count: u32, descs: []const LocalId, dicts: []const LocalId, capture_types: []const TypeId, worker_ty: TypeId, ty: TypeId },
     finish_restore_struct: struct { ty: TypeId, count: u32 },
     finish_restore_tag: struct { ty: TypeId, name: types.NameId, count: u32 },
@@ -299,6 +302,8 @@ pub const Builder = struct {
     /// start in `alias_scopes`. Its lookup reaches no scope outside them.
     foreign_scopes: ?usize = null,
     type_descs: collections.DenseMapUnmanaged(TypeId, LocalId) = .empty,
+    /// Each type's descriptor once noted (`Input.stored_functions`).
+    noted_descs: collections.DenseMapUnmanaged(TypeId, LocalId) = .empty,
     /// The locals the entry chain defines, which every statement of the
     /// body can read.
     entry_locals: collections.DenseMapUnmanaged(LocalId, void) = .empty,
@@ -373,6 +378,7 @@ pub const Builder = struct {
         self.declared_captures.deinit(self.allocator);
         self.root_thunks.deinit(self.allocator);
         self.type_descs.deinit(self.allocator);
+        self.noted_descs.deinit(self.allocator);
         self.entry_locals.deinit(self.allocator);
         self.opened_components.deinit(self.allocator);
         self.open_members.deinit(self.allocator);
@@ -764,6 +770,37 @@ pub const Builder = struct {
     /// opened as placeholders first, and each is closed once its own
     /// components are composed.
     pub fn descOf(self: *Builder, root: TypeId) Allocator.Error!LocalId {
+        const local = try self.composedDescOf(root);
+        if (!self.program.input.stored_functions) return local;
+        if (self.program.store.get(root) == .variable) return local;
+        if (self.noted_descs.get(root)) |noted| return noted;
+        const noted = try self.closedLocal(.opaque_ptr);
+        const vars = try self.notedVariables(root);
+        defer self.allocator.free(vars);
+        try self.emitEntry(.{ .dyn = .{ .target = noted, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_note = .{
+            .desc = local,
+            .ty = @backingInt(root),
+            .vars = try self.store.addLocalSpan(vars),
+        } }), .next = undefined } });
+        try self.noted_descs.put(self.allocator, root, noted);
+        return noted;
+    }
+
+    /// The descriptors of `ty`'s variables, by variable index. Composing
+    /// `ty` read each variable it mentions; this body may not have the
+    /// others yet, and an index nothing mentions repeats one it has.
+    fn notedVariables(self: *Builder, ty: TypeId) Allocator.Error![]const LocalId {
+        const mentioned = try self.program.representationVariables(self.allocator, ty);
+        defer self.allocator.free(mentioned);
+        if (mentioned.len == 0) return try self.allocator.alloc(LocalId, 0);
+        const count = std.mem.max(u32, mentioned) + 1;
+        const vars = try self.allocator.alloc(LocalId, count);
+        @memset(vars, self.var_descs[mentioned[0]]);
+        for (mentioned) |index| vars[index] = self.var_descs[index];
+        return vars;
+    }
+
+    fn composedDescOf(self: *Builder, root: TypeId) Allocator.Error!LocalId {
         if (self.type_descs.get(root)) |existing| return existing;
         const Step = enum { fresh, expanded, close_fresh, close_expanded };
         var pending: std.ArrayList(struct { ty: TypeId, step: Step }) = .empty;
@@ -1205,7 +1242,9 @@ pub const Builder = struct {
                 if (params.len != 0) invariant("an entry wrapper has parameters");
                 self.own_root = wrapper.root;
                 try self.tasks.append(self.allocator, .ret);
-                switch (root.kind) {
+                if (root.boxy_value) |stored| {
+                    try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = stored.node, .ty = self.currentWorker().ret } });
+                } else switch (root.kind) {
                     .expect, .repl_expr, .callable_binding, .constant, .hoisted_constant, .numeral_conversion, .quote_conversion, .hoisted_validation => switch (root.payload) {
                         // In a module's object, an evaluated root's wrapper
                         // produces the stored value: the object defines it
@@ -2025,7 +2064,8 @@ pub const Builder = struct {
         self.hole = body_start;
         const owner = self.program.moduleByKey(checked.constModuleId(request.const_locator));
         try self.tasks.append(self.allocator, .ret);
-        switch (owner.view.const_templates.get(request.const_locator).state) {
+        const boxy_value = if (rootOfConstRef(owner, request.const_locator)) |root_id| owner.view.compile_time_roots.root(root_id).boxy_value else null;
+        if (boxy_value) |stored| try self.tasks.append(self.allocator, .{ .restore = .{ .source = .{ .module = owner.index }, .node = stored.node, .ty = worker.ret } }) else switch (owner.view.const_templates.get(request.const_locator).state) {
             .stored_const => |stored| try self.tasks.append(self.allocator, .{ .restore = .{ .source = .{ .module = owner.index }, .node = request.node orelse stored.node, .ty = worker.ret } }),
             .unimplemented => |unimplemented| {
                 self.region = unimplemented.region;
@@ -2529,6 +2569,7 @@ pub const Builder = struct {
                 const owner = self.program.module(eval.module);
                 const template = owner.view.callable_eval_templates.templates[@backingInt(eval.template)];
                 const root = owner.view.compile_time_roots.root(template.root);
+                if (root.boxy_value) |stored| return try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = stored.node, .ty = eval.ty } });
                 switch (root.payload) {
                     .fn_value => |fn_id| try self.restoreFn(.{ .module = eval.module }, fn_id, eval.ty),
                     // Evaluation stored a value that is not a function: the
@@ -2552,6 +2593,21 @@ pub const Builder = struct {
                         try self.finishCall(callee, hidden, 0, try self.program.substitute(self.allocator, callee_worker.ret, bound), eval.ty);
                     },
                     .discarded, .expect => invariant("a callable-eval binding's root holds a value, which no expect or discarded root does"),
+                }
+            },
+            .finish_stored_fn => |stored| {
+                const captured = try self.popValues(@intCast(stored.shape.values.len + stored.shape.dicts));
+                defer self.allocator.free(captured);
+                const values = captured[0..stored.shape.values.len];
+                const dicts = captured[stored.shape.values.len..];
+                if (stored.shape.composed) {
+                    const all = try std.mem.concat(self.allocator, LocalId, &.{ values, stored.descs, dicts });
+                    defer self.allocator.free(all);
+                    try self.pushValue(try self.composeDictionary(stored.worker, all));
+                } else if (try self.allClosed(stored.shape.values)) {
+                    try self.pushValue(try self.packClosure(stored.worker, values, stored.shape.values, stored.descs, dicts));
+                } else {
+                    try self.pushValue(try self.packDynamicClosure(stored.worker, values, stored.capture_types, stored.descs, dicts));
                 }
             },
             .finish_restore_closure => |closure| {
@@ -2695,6 +2751,7 @@ pub const Builder = struct {
         const entry = self.view.view.hoisted_constants.lookupByExpr(expr_id) orelse return null;
         if (self.own_root) |own| if (own == entry.root) return null;
         const root = self.view.view.compile_time_roots.root(entry.root);
+        if (root.boxy_value) |stored| return .{ .stored = stored };
         if (root.payload == .runtime) return null;
         if (entry.pattern != null and root.guarded) return null;
         return switch (self.view.view.const_templates.get(entry.const_ref).state) {
@@ -3997,6 +4054,13 @@ pub const Builder = struct {
         // instantiation gives them.
         const related = try self.relateVariablesPartial(&.{.{ generic_fn, use_ty }}, vars.len);
         defer self.allocator.free(related);
+        // A variable the use's type does not reach, like the type of a
+        // numeral only the body's methods fix, takes the type those methods
+        // give it.
+        for (related[0..outer_count], self.env.bound[0..outer_count]) |*slot, ty| {
+            if (slot.* == null) slot.* = ty;
+        }
+        try self.program.relateThroughRequirements(self.module, vars, scheme.params, related);
         scheme.per_call = false;
         const callee = try self.program.lambdaWorker(scope_worker, lambda_expr, per_call_worker.captures, per_call_worker.capture_types, generic_fn, scheme);
         const values = try self.allocator.alloc(LocalId, per_call_worker.captures.len);
@@ -4450,6 +4514,9 @@ pub const Builder = struct {
     pub fn restoreConstUse(self: *Builder, expr_id: CheckedExprId, use: checked.ConstUseTemplate, ty: TypeId) Allocator.Error!void {
         const owner = self.program.moduleByKey(use.const_ref.artifact);
         const template = owner.view.const_templates.get(use.const_ref);
+        if (rootOfConstRef(owner, use.const_ref)) |root_id| if (owner.view.compile_time_roots.root(root_id).boxy_value) |stored| {
+            return try self.pushStoredRestore(.{ .module = owner.index }, stored, ty, root_id);
+        };
         switch (template.state) {
             .stored_const => |stored| try self.pushStoredRestore(.{ .module = owner.index }, stored, ty, rootOfConstRef(owner, use.const_ref)),
             // A constant this compile-time program evaluates is read from
@@ -4533,6 +4600,7 @@ pub const Builder = struct {
                 try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal }, .checked_error = true } });
                 try self.pushValue(try self.localOf(raw_ty, .frame));
             },
+            .boxy_fn => |function| try self.restoreStoredFn(source, const_store.strBytes(function.recipe), function.captures),
             .nominal => |nominal| try self.push(.{ .restore = .{ .source = source, .node = nominal.backing, .ty = ty } }),
             .box => |child| {
                 const payload = switch (store.get(ty)) {
@@ -4820,6 +4888,57 @@ pub const Builder = struct {
             },
             inline .parser_runtime, .encoder_for_runtime => |runtime| try Codec.restoreRuntime(self, source, fn_id, runtime.owner, runtime.expr, fn_ty),
         }
+    }
+
+    /// Restore a function value a `.boxy` evaluation stored: its worker,
+    /// packing what it captured.
+    pub fn restoreStoredFn(self: *Builder, source: lower.ConstSource, recipe: []const u8, captures: []const checked.ConstNodeId) Allocator.Error!void {
+        const decoded = try StoredFn.decode(self, recipe);
+        const shape = StoredFn.captureShape(self.program, decoded.worker);
+        const arena = self.program.arena.allocator();
+        const descs = try arena.alloc(LocalId, decoded.bound.len);
+        for (decoded.bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
+        const capture_types = try arena.alloc(TypeId, shape.values.len);
+        for (shape.values, capture_types) |generic, *concrete| concrete.* = try self.program.substitute(self.allocator, generic, decoded.bound);
+        if (captures.len != shape.values.len + shape.dicts) invariant("a stored function's captures differ from its worker's");
+        try self.push(.{ .finish_stored_fn = .{ .worker = decoded.worker, .shape = shape, .descs = descs, .capture_types = capture_types } });
+        const function = try self.program.anyFunction();
+        var index = captures.len;
+        while (index > 0) {
+            index -= 1;
+            const ty = if (index < capture_types.len) capture_types[index] else function;
+            try self.push(.{ .restore = .{ .source = source, .node = captures[index], .ty = ty } });
+        }
+    }
+
+    /// The lambda worker of expression `lambda_expr` of the worker
+    /// `owner_worker`, as a stored function names it: the closure's scheme
+    /// and capture types in its owner's variables, which every construction
+    /// of it shares.
+    pub fn storedLambdaWorker(self: *Builder, owner_worker: WorkerId, lambda_expr: CheckedExprId, captured_scheme: bool) Allocator.Error!WorkerId {
+        const owner = self.program.worker(owner_worker).*;
+        const owner_view = self.program.module(owner.module);
+        const expr = owner_view.bodies().expr(lambda_expr);
+        const captures = self.program.siteCaptures(owner.module, lambda_expr);
+        const own: ?lower.LocalScheme = if (self.program.local_scopes.get(.{ .module = owner.module, .expr = lambda_expr })) |scope_id| blk: {
+            var scheme = try self.localSchemeIn(owner_view, scope_id);
+            if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) break :blk null;
+            if (captured_scheme) scheme.per_call = false;
+            break :blk scheme;
+        } else null;
+        const scope_vars = if (own) |scheme| try std.mem.concat(self.allocator, checked.CheckedTypeId, &.{ owner.scheme_vars, scheme.scheme_vars }) else try self.allocator.dupe(checked.CheckedTypeId, owner.scheme_vars);
+        defer self.allocator.free(scope_vars);
+        const variables = try self.allocator.alloc(TypeId, scope_vars.len);
+        defer self.allocator.free(variables);
+        for (variables, 0..) |*variable, index| variable.* = try self.program.store.variable(@intCast(index));
+        const generic: types.Env = .{ .module = owner.module, .vars = scope_vars, .bound = variables };
+        const generic_fn = try self.program.converter().convert(owner.module, expr.ty, generic);
+        const capture_types = try self.allocator.alloc(TypeId, captures.len);
+        defer self.allocator.free(capture_types);
+        for (captures, capture_types) |capture, *capture_ty| {
+            capture_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().pattern(capture.pattern).ty, generic);
+        }
+        return try self.program.lambdaWorker(owner_worker, lambda_expr, captures, capture_types, generic_fn, own);
     }
 
     /// The dictionaries a stored function value's procedure was
