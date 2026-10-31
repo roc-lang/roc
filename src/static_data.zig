@@ -1368,6 +1368,11 @@ const StaticInitializerMachine = struct {
         target_layout: layout.Idx,
     ) MaterializationError!*SymbolicValue {
         const args = self.store().getLocalSpan(args_span);
+        // A restored empty list is `list_with_capacity(n)` (`constEmptyListData`).
+        // Static data is immortal, so no write ever goes in place and the
+        // capacity buys nothing: it freezes as the empty list, as a stored
+        // `.empty` node does in `enterStored`.
+        if (op == .list_with_capacity) return self.storedListValue(target_layout, 0, null);
         if (op != .box_box) {
             staticDataInvariant("non-construction low-level operation reached static initializer materialization");
         }
