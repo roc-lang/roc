@@ -197,7 +197,7 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     }
     if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache miss for {s} key {s}\n", .{ module_name, &std.fmt.bytesToHex(unit.key.bytes[0..8], .lower) });
     const trace_clock: ?std.Io = if (dev_diagnostics.isSet(.trace_boxy_work)) (if (unit.config.timing) |timing| timing.std_io else null) else null;
-    const build_started_ns: i64 = if (trace_clock) |io| std.Io.Timestamp.now(io, .awake).nanoseconds else 0;
+    const build_started_ns: i96 = if (trace_clock) |io| std.Io.Timestamp.now(io, .awake).nanoseconds else 0;
 
     var views: std.ArrayList(ImportedView) = .empty;
     defer views.deinit(gpa);
