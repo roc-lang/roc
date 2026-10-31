@@ -26179,6 +26179,26 @@ fn publishLiteralConversionRoots(
     }
 }
 
+/// What makes two literal requirements of one literal the same: the type's
+/// key, which names its variables only up to renaming, and the variables
+/// themselves. Instantiating an open type gives a new root every time, even
+/// around a recursive cycle that maps each variable back to itself.
+fn literalRequirementTypeIdentity(
+    store: *const CheckedTypeStore,
+    orderer: *CheckedIdentityOrderer,
+    ty: CheckedTypeId,
+) Allocator.Error![32]u8 {
+    const key = store.view().rootKey(ty);
+    if (!store.rootContainsIdentityVariables(ty)) return key.bytes;
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(&key.bytes);
+    for (try orderer.identityRoots(ty)) |variable| {
+        const origin: u32 = @backingInt(store.identityOrigin(variable));
+        hasher.update(std.mem.asBytes(&origin));
+    }
+    return hasher.finalResult();
+}
+
 /// Publish each scheme's literal requirements, the literal arguments of every
 /// edge, and the `literal_argument` roots this module's instantiations fix
 /// (design.md "Literal Arguments").
@@ -26217,12 +26237,14 @@ fn publishLiteralArgumentRoots(
     // generalized local scope's. A scope inside a defaulted field
     // expression has no template.
     const ScopeKey = struct { template: ?u32, scope: ?u32 };
-    const ObligationKey = struct { site: LiteralSite, ty: CheckedTypeId };
+    const ObligationKey = struct { site: LiteralSite, ty: [32]u8 };
     const ScopeState = struct {
         list: std.ArrayListUnmanaged(LiteralRequirement) = .empty,
         index: std.AutoHashMapUnmanaged(ObligationKey, u32) = .empty,
     };
     var scope_states = std.AutoHashMapUnmanaged(ScopeKey, ScopeState).empty;
+    var identity_orderer = CheckedIdentityOrderer.init(allocator, names, store);
+    defer identity_orderer.deinit();
     defer {
         var it = scope_states.valueIterator();
         while (it.next()) |state| {
@@ -26292,7 +26314,7 @@ fn publishLiteralArgumentRoots(
                 .numeral, .str_from_quote => literal_expr.ty,
                 .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => checkedArtifactInvariant("a literal conversion plan's expression is not a literal", .{}),
             };
-            const slot = try entry.value_ptr.index.getOrPut(allocator, .{ .site = site, .ty = ty });
+            const slot = try entry.value_ptr.index.getOrPut(allocator, .{ .site = site, .ty = try literalRequirementTypeIdentity(store, &identity_orderer, ty) });
             if (slot.found_existing) continue;
             slot.value_ptr.* = @intCast(entry.value_ptr.list.items.len);
             try entry.value_ptr.list.append(allocator, .{ .site = site, .ty = ty, .edge = .literal, .callee_requirement = 0 });
@@ -26829,7 +26851,7 @@ fn publishLiteralArgumentRoots(
                 const obligation = liveObligations(callee, &scope_states)[j];
                 const projected = if (projector) |p| try p.project(obligation.ty) else obligation.ty;
                 const ty = if (substitution) |*s| try store.cloneCheckedTypeRootSubstituting(allocator, projected, s) else projected;
-                const key: ObligationKey = .{ .site = obligation.site, .ty = ty };
+                const key: ObligationKey = .{ .site = obligation.site, .ty = try literalRequirementTypeIdentity(store, &identity_orderer, ty) };
                 if (!store.rootContainsIdentityVariables(ty)) {
                     const slot = try root_index.getOrPut(allocator, key);
                     if (!slot.found_existing) {
