@@ -11697,6 +11697,16 @@ fn customBoxyInterfaceEdits(
         if (after - objects != edit.objects) return customFailure(allocator, timer, "editing {s} filed {d} objects, expected {d}", .{ edit.name, after - objects, edit.objects });
         objects = after;
     }
+    // A build links the objects compile-time evaluation built or restored,
+    // and those of imports only a body reaches, which `B` calls in `Point`.
+    const output = std.fmt.allocPrint(allocator, "--output={s}/boxy_interface_edits_app", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the output path: {}", .{err});
+    for (0..2) |_| {
+        const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "interface edit test timed out");
+        const built = runRocInEnv(io, allocator, &isolated, &.{ "build", "--opt=dev", "--specialize=no", output }, main_path, .absolute, &.{}, null, remaining) catch |err|
+            return customInfraFailure(allocator, timer, "build: {}", .{err});
+        if (!processSucceeded(built.term)) return failureFromRun(allocator, timer, built, "the app did not build");
+    }
 
     const packages = "test/cli/boxy_same_interface_packages/main.roc";
     const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "interface edit test timed out");
@@ -11704,6 +11714,14 @@ fn customBoxyInterfaceEdits(
         return customInfraFailure(allocator, timer, "run: {}", .{err});
     if (!processSucceeded(ran.term)) return failureFromRun(allocator, timer, ran, "the two-package app did not run");
     if (std.mem.find(u8, ran.stdout, "left 3") == null or std.mem.find(u8, ran.stdout, "right 3") == null) return customFailure(allocator, timer, "a module ran the other package's body: `{s}`", .{ran.stdout});
+    // A build names both `Shared` modules by content only once checking has
+    // seen the two of them, after their objects have started.
+    const packages_output = std.fmt.allocPrint(allocator, "--output={s}/boxy_same_interface_app", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the output path: {}", .{err});
+    const build_remaining = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "interface edit test timed out");
+    const packages_built = runRocInEnv(io, allocator, &isolated, &.{ "build", "--opt=dev", "--specialize=no", packages_output }, packages, .relative, &.{}, null, build_remaining) catch |err|
+        return customInfraFailure(allocator, timer, "build: {}", .{err});
+    if (!processSucceeded(packages_built.term)) return failureFromRun(allocator, timer, packages_built, "the two-package app did not build");
     return null;
 }
 

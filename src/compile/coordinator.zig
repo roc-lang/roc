@@ -1661,7 +1661,7 @@ const BoxyObjects = struct {
     /// importers' evaluations may need it.
     fn moduleCompleted(context: *anyopaque, module: *const Artifact) Error!void {
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
-        if (self.waiting.contains(module.key.bytes) or self.coordinator.rootSees(module)) try self.offer(module);
+        if (self.waiting.contains(module.key.bytes) or self.linkNeeds(module)) try self.offer(module);
     }
 
     fn viewsOf(self: *BoxyObjects, module: *const Artifact) Allocator.Error![]const CheckedArtifact.ImportedModuleView {
@@ -1888,6 +1888,13 @@ const BoxyObjects = struct {
         }
     }
 
+    /// Whether this compilation links `artifact`'s object as the scheduler
+    /// builds it. A run links nothing, and a build of another target links
+    /// objects of its own.
+    fn linkNeeds(self: *const BoxyObjects, artifact: *const Artifact) bool {
+        return self.lowering.materializer != null and self.coordinator.rootSees(artifact);
+    }
+
     /// Fix the link's module names now that checking has named every module
     /// of it. Units started during checking name each module by what the
     /// module alone says; when two modules turn out to share that name, those
@@ -1925,7 +1932,7 @@ const BoxyObjects = struct {
         while (locations.next()) |location| {
             const artifact = location.module().checkedArtifact().?;
             if (self.records.contains(artifact.key.bytes) or self.units.contains(artifact.key.bytes)) continue;
-            if (self.waiting.contains(artifact.key.bytes) or self.coordinator.rootSees(artifact)) try self.offer(artifact);
+            if (self.waiting.contains(artifact.key.bytes) or self.linkNeeds(artifact)) try self.offer(artifact);
         }
     }
 
@@ -6558,15 +6565,15 @@ pub const Coordinator = struct {
 
         try self.completeModuleSuccessfully(pkg, result.module_id);
 
-        // A compilation that links its program builds each module's object
-        // as soon as the module can have one, while checking continues.
+        // A compilation that links the objects it builds builds each one as
+        // soon as the module can have one, while checking continues.
         // Only a module the program's roots can reach is built this early:
         // the root's exact visibility is known once the root is checked. A
         // root module waits for that too, since the program's own root links
         // no library object.
         if (self.runtime_lowering != null) if (try self.boxyObjects()) |objects| {
             if (self.moduleIsPlatformRoot(mod)) try objects.offerUnboundHosted();
-            if (!self.moduleIsRoot(mod) and try self.reachableFromRoots(mod)) try objects.offer(artifact_ptr);
+            if (objects.lowering.materializer != null and !self.moduleIsRoot(mod) and try self.reachableFromRoots(mod)) try objects.offer(artifact_ptr);
         };
     }
 

@@ -11356,9 +11356,9 @@ fn buildBoxyLibraryObjects(
         if (artifact.platform_type_inputs.requirements.len != 0) continue;
         try units.append(ctx.gpa, artifact);
     }
-    const linked_units = units.items.len;
-    // An import only `expect`s read is no part of the program, but a unit
-    // importing it is keyed on its exports, so its unit runs too, unlinked.
+    // A module's body calls imports its root never sees, and a unit is keyed
+    // on its imports' exports, so every import has a unit in the link. The
+    // link drops the code nothing reaches.
     var seen_units = std.AutoHashMap([32]u8, void).init(ctx.gpa);
     defer seen_units.deinit();
     for (units.items) |artifact| try seen_units.put(artifact.key.bytes, {});
@@ -11430,7 +11430,7 @@ fn buildBoxyLibraryObjects(
 
     // The units' objects in unit order, whatever order they finish in, so
     // the link's inputs (and so the executable) are the same every build.
-    const objects = try ctx.arena.alloc(?[]const u8, linked_units);
+    const objects = try ctx.arena.alloc(?[]const u8, units.items.len);
     @memset(objects, null);
     var hosted_symbols: std.ArrayList([]const u8) = .empty;
     var seen_hosted = std.StringHashMap(void).init(ctx.arena);
@@ -11503,13 +11503,11 @@ fn buildBoxyLibraryObjects(
                 if (first_error != null) continue;
                 if (result.restored) restored += 1 else built += 1;
                 try digests.recordExports(task.artifact, result.exports);
-                if (index < linked_units) {
-                    objects[index] = link_objects.materialize(result.object) catch return error.NativeCompilationFailed;
-                    for (result.hosted_symbols) |symbol| {
-                        const owned = try ctx.arena.dupe(u8, symbol);
-                        if ((try seen_hosted.getOrPut(owned)).found_existing) continue;
-                        try hosted_symbols.append(ctx.arena, owned);
-                    }
+                objects[index] = link_objects.materialize(result.object) catch return error.NativeCompilationFailed;
+                for (result.hosted_symbols) |symbol| {
+                    const owned = try ctx.arena.dupe(u8, symbol);
+                    if ((try seen_hosted.getOrPut(owned)).found_existing) continue;
+                    try hosted_symbols.append(ctx.arena, owned);
                 }
                 for (dependents[index].items) |dependent| {
                     remaining[dependent] -= 1;
@@ -11522,7 +11520,7 @@ fn buildBoxyLibraryObjects(
     // The summary counts cache work; a build without a cache does none.
     if (!args.no_cache) build_env.recordBoxyObjects(restored, built);
     reporter.end();
-    const ordered = try ctx.arena.alloc([]const u8, linked_units);
+    const ordered = try ctx.arena.alloc([]const u8, units.items.len);
     for (objects, ordered) |object, *slot| slot.* = object orelse base.invariant("roc build invariant violated: a .boxy unit completed without an object", .{});
     var paired_platforms: std.ArrayList([32]u8) = .empty;
     if (platform) |view| try paired_platforms.append(ctx.arena, view.key.bytes);
