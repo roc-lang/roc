@@ -1680,6 +1680,14 @@ fn lowerCheckedRootWithViews(
     const shm_allocator = shm.allocator();
     const image_header = try shm_allocator.create(LirImage.Header);
 
+    // Publication evaluates under `.lss`, which leaves the literal argument
+    // roots to a `.boxy` compilation: one reopens the artifact to evaluate
+    // them, as the coordinator does (design.md "Literal Arguments").
+    const reopened = options.specialization_strategy == .boxy and
+        root_module.evaluation_state == .finalized and
+        root_module.hasUnevaluatedRequests(.boxy);
+    if (reopened) try root_module.reopenForEvaluation(allocator);
+
     const modules: lir.CheckedPipeline.CheckedModuleSet = .{
         .root = check.CheckedArtifact.loweringView(root_module),
         .imports = import_views,
@@ -1691,8 +1699,9 @@ fn lowerCheckedRootWithViews(
         // A `.boxy` runtime program reads the values compile-time evaluation
         // converts its literals to, as a compilation's runtime consumer does.
         .boxy => blk: {
-            var session = try CompileTimeFinalization.finalizeProgram(allocator, &.{.{ .module = root_module, .problem_store = null }}, modules, roots, roots, target, .{});
+            var session = try CompileTimeFinalization.finalizeProgram(allocator, &.{.{ .module = root_module, .problem_store = null }}, modules, roots, roots, target, .{ .strategy = .boxy });
             defer session.deinit();
+            if (reopened) root_module.evaluation_state = .finalized;
             break :blk try session.takeRuntime(allocator, roots, target);
         },
     };
