@@ -35306,6 +35306,15 @@ pub const CheckedModuleArtifact = struct {
         return false;
     }
 
+    /// Whether a root of this module still awaits this compilation's
+    /// evaluation, so its stored values are not final.
+    pub fn hasPendingRoots(self: *const CheckedModuleArtifact) bool {
+        for (self.compile_time_roots.roots) |root| {
+            if (root.payload == .pending) return true;
+        }
+        return false;
+    }
+
     /// Reopen a finalized artifact so this compilation can evaluate the roots
     /// earlier compilations did not demand (design.md "Demand-Driven
     /// Compile-Time Evaluation"). The evaluation columns move into storage

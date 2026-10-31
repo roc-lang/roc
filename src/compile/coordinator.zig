@@ -1597,7 +1597,7 @@ const BoxyObjects = struct {
     /// a module with roots left to evaluate has no final object.
     fn prepare(self: *BoxyObjects, artifact: *const Artifact) Error!?Prepared {
         const gpa = self.coordinator.gpa;
-        if (artifact.platform_type_inputs.requirements.len != 0 or artifact.hasUnevaluatedRequests(.boxy)) return null;
+        if (artifact.platform_type_inputs.requirements.len != 0 or artifact.hasUnevaluatedRequests(.boxy) or artifact.hasPendingRoots()) return null;
         const platform = self.platformOf(artifact);
         if (artifact.hosted_procs.procs.len != 0 and platform == null) return null;
         const views = try self.coordinator.collectImportedArtifactViews(gpa, artifact);
@@ -1778,7 +1778,7 @@ const BoxyObjects = struct {
     fn collectPending(self: *BoxyObjects, artifact: *const Artifact, pending: *std.ArrayList(*const Artifact), index_by_key: *std.AutoHashMapUnmanaged([32]u8, u32)) Error!void {
         const gpa = self.coordinator.gpa;
         if (self.objects.contains(artifact.key.bytes) or index_by_key.contains(artifact.key.bytes)) return;
-        if (artifact.platform_type_inputs.requirements.len != 0 or artifact.hasUnevaluatedRequests(.boxy)) return;
+        if (artifact.platform_type_inputs.requirements.len != 0 or artifact.hasUnevaluatedRequests(.boxy) or artifact.hasPendingRoots()) return;
         for (artifact.direct_import_module_keys) |key| {
             const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
             try self.collectPending(imported, pending, index_by_key);
