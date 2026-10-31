@@ -1586,12 +1586,28 @@ pub const Program = struct {
     /// captures: the binders of enclosing bodies whose values it needs,
     /// which are its own captures and those of the local procedures its
     /// body uses (`NestedProcSite.runtime_captures`).
-    pub fn siteCaptures(self: *const Program, module_index: ModuleIndex, expr: checked.CheckedExprId) []const checked.CheckedCapture {
+    pub fn siteCaptures(self: *Program, module_index: ModuleIndex, expr: checked.CheckedExprId) Allocator.Error![]const checked.CheckedCapture {
         const site_index = self.sites_by_expr.get(.{ .module = module_index, .expr = expr }) orelse
             invariant("a lambda or closure has no nested procedure site");
-        const table = self.module(module_index).view.nested_proc_sites;
+        return try self.runtimeCaptures(self.module(module_index), site_index);
+    }
+
+    /// The runtime captures of nested procedure site `site_index` of `view`.
+    /// A scheme alias owns no value: each of its uses lowers the callable it
+    /// names, whose own captures the site lists, so it takes no capture.
+    pub fn runtimeCaptures(self: *Program, view: *const types.ModuleView, site_index: anytype) Allocator.Error![]const checked.CheckedCapture {
+        const table = view.view.nested_proc_sites;
         const span = table.sites[site_index].runtime_captures;
-        return table.runtime_captures[span.start..][0..span.len];
+        const listed = table.runtime_captures[span.start..][0..span.len];
+        const bodies = view.bodies();
+        var kept: std.ArrayList(checked.CheckedCapture) = .empty;
+        for (listed) |capture| {
+            const binder = bodies.pattern_binder_by_pattern[@backingInt(capture.pattern)].get() orelse
+                invariant("a closure capture named a pattern without a binder");
+            if (bodies.patternBinder(binder).is_scheme_alias) continue;
+            try kept.append(self.arena.allocator(), capture);
+        }
+        return kept.items;
     }
 
     /// The worker evaluating default expression `expr` of `module_index`.

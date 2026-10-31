@@ -503,7 +503,10 @@ pub const cases = [_]Case{
         \\label = |s, n| if n == 0 "ping ${s}" else label2(s, n - 1)
         \\label2 = |s, n| if n == 0 "pong ${s}" else label(s, n - 1)
         \\
-        \\main = (ping(5.U64, 3), ping(5.5.F64, 2), label("x", 3))
+        \\main = {
+        \\    dbg 1.U64
+        \\    (ping(5.U64, 3), ping(5.5.F64, 2), label("x", 3))
+        \\}
         ,
         .inspects = &.{.tuple},
     },

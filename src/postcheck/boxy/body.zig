@@ -228,10 +228,28 @@ const AliasScope = struct {
     params: []const u32,
     dicts: []const LocalId,
     /// The scope's literal arguments, one per literal requirement (design.md
-    /// "Literal Arguments").
+    /// "Literal Arguments"), unless `deferred` says where they come from.
     literals: []const LocalId = &.{},
     literal_requirements: []const checked.LiteralRequirement = &.{},
+    /// A literal chain's frame reads few of a scheme's literal arguments, so
+    /// composing them all would make the chains of a scheme with n literals
+    /// n squared: each read composes the one it names.
+    deferred: ?DeferredLiterals = null,
     saved_env: types.Env,
+};
+
+/// Where a literal chain frame's literal arguments come from.
+const DeferredLiterals = union(enum) {
+    /// The arguments of an edge, resolved in the frames below this one, in
+    /// the scope that holds the edge.
+    edge: struct {
+        args: []const checked.LiteralArgSource,
+        module: ModuleIndex,
+        view: *const types.ModuleView,
+        env: types.Env,
+    },
+    /// The thunks of `owner`'s literal requirements at the types `bound`.
+    thunks: struct { owner: WorkerId, bound: []const TypeId },
 };
 
 /// A `literal_argument` root of a module, whose thunk a body composes once.
@@ -278,6 +296,9 @@ pub const Builder = struct {
     /// value (design.md "Literal Arguments").
     literal_locals: []LocalId = &.{},
     /// The thunk composed for each `literal_argument` root this body reads.
+    /// Set while `enterEdge` builds a frame's call instance, whose literal
+    /// arguments the frame resolves as it reads them.
+    defer_edge_literals: bool = false,
     root_thunks: std.AutoHashMapUnmanaged(RootThunkKey, LocalId) = .empty,
     /// While lowering a literal thunk's or literal argument root's chain:
     /// where its frames start in `alias_scopes`. An edge argument or
@@ -2878,8 +2899,8 @@ pub const Builder = struct {
                     .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => try self.push(.{ .expr = nominal.backing_expr }),
                 }
             },
-            .lambda => try self.lowerClosure(expr_id, expr_id, self.program.siteCaptures(self.module, expr_id)),
-            .closure => |closure| try self.lowerClosure(expr_id, closure.lambda, self.program.siteCaptures(self.module, expr_id)),
+            .lambda => try self.lowerClosure(expr_id, expr_id, try self.program.siteCaptures(self.module, expr_id)),
+            .closure => |closure| try self.lowerClosure(expr_id, closure.lambda, try self.program.siteCaptures(self.module, expr_id)),
             .row_coerce => |coerce| {
                 // The coerced value is built straight at its destination's
                 // row (design.md "Row Coercion Primitive").
@@ -3292,16 +3313,10 @@ pub const Builder = struct {
                 if (self.thunk_frames != null) return try self.unreachableWord();
                 invariant("an exact procedure alias's lookup names a literal argument outside the alias's scope");
             }
-            const scope = scopes[scopes.len - 1 - index.depth];
-            if (index.index >= scope.literals.len) invariant("an edge named a literal argument its scope does not have");
-            return scope.literals[index.index];
+            return try self.frameLiteral(first + scopes.len - 1 - index.depth, index.index);
         }
         const aliases = self.alias_scopes.items;
-        if (index.depth < aliases.len) {
-            const scope = aliases[aliases.len - 1 - index.depth];
-            if (index.index >= scope.literals.len) invariant("an edge named a literal argument its scope does not have");
-            return scope.literals[index.index];
-        }
+        if (index.depth < aliases.len) return try self.frameLiteral(aliases.len - 1 - index.depth, index.index);
         const depth = index.depth - aliases.len;
         const scopes = self.currentWorker().literal_scopes;
         if (depth >= scopes.len) invariant("an edge named a literal argument outside its worker's scopes");
@@ -3309,6 +3324,42 @@ pub const Builder = struct {
         for (scopes[0..depth]) |scope| offset += scope.len;
         if (index.index >= scopes[depth].len) invariant("an edge named a literal argument its scope does not have");
         return self.literal_locals[offset + index.index];
+    }
+
+    /// Literal argument `index` of the frame at `position` of `alias_scopes`.
+    /// A deferred argument is composed at each read: a read can sit in one
+    /// branch of a conversion, which another branch's read must not reuse.
+    fn frameLiteral(self: *Builder, position: usize, index: u32) Allocator.Error!LocalId {
+        const scope = self.alias_scopes.items[position];
+        const deferred = scope.deferred orelse {
+            if (index >= scope.literals.len) invariant("an edge named a literal argument its scope does not have");
+            return scope.literals[index];
+        };
+        if (index >= scope.literal_requirements.len) invariant("an edge named a literal argument its scope does not have");
+        switch (deferred) {
+            .thunks => |thunks| return try self.composeDictionary(try self.program.literalThunkWorker(thunks.owner, thunks.bound, index), &.{}),
+            .edge => |edge| {
+                const saved_module = self.module;
+                const saved_view = self.view;
+                const saved_env = self.env;
+                const saved_scopes = self.alias_scopes.items.len;
+                defer {
+                    self.module = saved_module;
+                    self.view = saved_view;
+                    self.env = saved_env;
+                    self.alias_scopes.items.len = saved_scopes;
+                }
+                self.module = edge.module;
+                self.view = edge.view;
+                self.env = edge.env;
+                // The edge's forwarded arguments name the frames below it.
+                self.alias_scopes.items.len = position;
+                return switch (edge.args[index]) {
+                    .root => |root| try self.composeRootThunk(root),
+                    .forwarded => |forwarded| try self.scopeLiteral(.{ .depth = 0, .index = forwarded }),
+                };
+            },
+        }
     }
 
     /// The word an edge argument the current body never reads takes: a
@@ -3364,6 +3415,13 @@ pub const Builder = struct {
     pub fn rootThunk(self: *Builder, root: checked.ComptimeRootId) Allocator.Error!LocalId {
         const key: RootThunkKey = .{ .module = self.module, .root = root };
         if (self.root_thunks.get(key)) |existing| return existing;
+        const thunk = try self.composeRootThunk(root);
+        try self.root_thunks.put(self.allocator, key, thunk);
+        return thunk;
+    }
+
+    /// `rootThunk`'s callable, composed here.
+    fn composeRootThunk(self: *Builder, root: checked.ComptimeRootId) Allocator.Error!LocalId {
         const compile_time_root = self.view.view.compile_time_roots.root(root);
         const argument = compile_time_root.literal_argument orelse invariant("a literal argument root records no literal argument");
         // In the compile-time program evaluating the root, a reader reads
@@ -3378,9 +3436,7 @@ pub const Builder = struct {
                 invariant("a literal argument root has no entry wrapper");
             break :blk try self.program.methodEntryWorker(try self.program.templateRefWorker(wrapper));
         };
-        const thunk = try self.composeDictionary(entry, &.{});
-        try self.root_thunks.put(self.allocator, key, thunk);
-        return thunk;
+        return try self.composeDictionary(entry, &.{});
     }
 
     /// The literal arguments of `worker` whose scheme takes `bound`, for an
@@ -3580,16 +3636,22 @@ pub const Builder = struct {
                 };
                 const callee = try self.program.templateRefWorker(procedure.template);
                 const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
+                var deferred = false;
                 const instance = switch (node.instantiation) {
                     .alias => try self.aliasTargetInstance(node, callee, edge),
                     .monomorphic, .callable, .derived_from_callable => switch (node.nested) {
-                        .resolved => try self.callInstanceAt(callee, subst, table.nestedEvidence(node), try self.instantiationCallable(node.instantiation), edge),
+                        .resolved => blk: {
+                            self.defer_edge_literals = true;
+                            defer self.defer_edge_literals = false;
+                            deferred = true;
+                            break :blk try self.callInstanceAt(callee, subst, table.nestedEvidence(node), try self.instantiationCallable(node.instantiation), edge);
+                        },
                         .from_callable => try self.callableDerivedInstance(callee, subst, try self.instantiationCallable(node.instantiation)),
                         .through_alias => invariant("alias-scope evidence accompanies only an alias instantiation"),
                     },
                 };
                 defer self.allocator.free(instance.hidden);
-                return try self.enterWorkerFrame(callee, instance);
+                return try self.enterWorkerFrame(callee, instance, if (deferred) edge else null);
             },
             .use => |expr| {
                 if (self.view.view.resolved_value_refs.by_checked_expr[@backingInt(expr)].get()) |ref_id| {
@@ -3606,9 +3668,11 @@ pub const Builder = struct {
                                 .callable_eval => invariant("a literal argument's edge uses a computed callable"),
                             };
                             const use_ty = try self.convert(self.bodies().expr(expr).ty);
+                            self.defer_edge_literals = true;
+                            defer self.defer_edge_literals = false;
                             const instance = try self.callInstanceAt(callee, self.siteSubstitution(expr), self.view.view.static_dispatch_plans.siteEvidence(expr) orelse &.{}, use_ty, edge);
                             defer self.allocator.free(instance.hidden);
-                            return try self.enterWorkerFrame(callee, instance);
+                            return try self.enterWorkerFrame(callee, instance, edge);
                         },
                         .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_const, .platform_required_declaration, .platform_required_checked_error => invariant("a literal argument's edge uses no procedure"),
                     }
@@ -3625,21 +3689,27 @@ pub const Builder = struct {
 
     /// Enter the frame of the template worker `callee` called with
     /// `instance`.
-    fn enterWorkerFrame(self: *Builder, callee: WorkerId, instance: CallInstance) Allocator.Error![]const checked.LiteralRequirement {
+    fn enterWorkerFrame(self: *Builder, callee: WorkerId, instance: CallInstance, deferred_edge: ?checked.LiteralEdge) Allocator.Error![]const checked.LiteralRequirement {
         const target = self.program.worker(callee).*;
         const arena = self.program.arena.allocator();
         const dicts = instance.hidden[instance.bound.len..][0..target.dictionary_params.len];
         const literals = instance.hidden[instance.bound.len + target.dictionary_params.len ..];
         if (literals.len != target.literal_params) invariant("a call instance's literal arguments differ from its target's literal_requirements");
         const literal_requirements: []const checked.LiteralRequirement = if (target.literal_scopes.len == 0) &.{} else target.literal_scopes[0];
+        const deferred: ?DeferredLiterals = if (deferred_edge) |edge| blk: {
+            const args = self.view.view.checked_procedure_templates.literalEdgeArgs(edge);
+            if (args.len != literals.len) invariant("an edge's literal arguments do not cover its callee's literal requirements");
+            break :blk .{ .edge = .{ .args = args, .module = self.module, .view = self.view, .env = self.env } };
+        } else null;
         self.module = target.module;
         self.view = self.program.module(target.module);
         self.env = .{ .module = target.module, .vars = target.scheme_vars, .bound = instance.bound };
         try self.alias_scopes.append(self.allocator, .{
             .params = target.dictionary_params,
             .dicts = try arena.dupe(LocalId, dicts),
-            .literals = try arena.dupe(LocalId, literals),
+            .literals = if (deferred == null) try arena.dupe(LocalId, literals) else &.{},
             .literal_requirements = literal_requirements,
+            .deferred = deferred,
             .saved_env = self.env,
         });
         return literal_requirements;
@@ -3665,16 +3735,15 @@ pub const Builder = struct {
         for (scheme.dictionaries, dicts) |param_index, *dict| {
             dict.* = if (param_index < evidence.len) try self.paramDictionary(evidence, param_index, context) else try self.derivedParamDictionary(param_index, context);
         }
-        const literals = try arena.alloc(LocalId, scheme.literal_requirements.len);
         const args = self.view.view.checked_procedure_templates.literalEdgeArgs(.{ .use = site });
-        if (args.len != literals.len) invariant("a local scope's site has no literal arguments for its literal_requirements");
-        for (args, literals) |source, *word| word.* = try self.literalArg(source);
+        if (args.len != scheme.literal_requirements.len) invariant("a local scope's site has no literal arguments for its literal_requirements");
+        const deferred: DeferredLiterals = .{ .edge = .{ .args = args, .module = self.module, .view = self.view, .env = self.env } };
         self.env = context.env;
         try self.alias_scopes.append(self.allocator, .{
             .params = scheme.dictionaries,
             .dicts = dicts,
-            .literals = literals,
             .literal_requirements = scheme.literal_requirements,
+            .deferred = deferred,
             .saved_env = self.env,
         });
         return scheme.literal_requirements;
@@ -3712,15 +3781,11 @@ pub const Builder = struct {
                 .structural, .crash, .scope_variable, .target => try self.dictionaryFromType(requirement),
             };
         }
-        const literals = try arena.alloc(LocalId, literal_requirements.len);
-        for (literals, 0..) |*word, literal_requirement| {
-            word.* = try self.composeDictionary(try self.program.literalThunkWorker(owner, bound, @intCast(literal_requirement)), &.{});
-        }
         try self.alias_scopes.append(self.allocator, .{
             .params = params,
             .dicts = dicts,
-            .literals = literals,
             .literal_requirements = literal_requirements,
+            .deferred = .{ .thunks = .{ .owner = owner, .bound = bound } },
             .saved_env = self.env,
         });
     }
@@ -4104,7 +4169,7 @@ pub const Builder = struct {
             .closure => |closure| closure.lambda,
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         };
-        const captures = self.program.siteCaptures(self.module, local.expr);
+        const captures = try self.program.siteCaptures(self.module, local.expr);
         var scope_worker = self.worker_id;
         while (true) {
             if (self.program.worker_ids.get(.{ .lambda = .{ .module = self.module, .expr = lambda_expr, .outer = scope_worker } })) |id| return .{ scope_worker, id };
@@ -4683,7 +4748,7 @@ pub const Builder = struct {
                     .closure => |closure| closure.lambda,
                     .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a stored closure's site is not a lambda or closure"),
                 };
-                const captures = owner_view.view.nested_proc_sites.runtime_captures[site.runtime_captures.start..][0..site.runtime_captures.len];
+                const captures = try self.program.runtimeCaptures(owner_view, @backingInt(nested.site));
                 // The closure in its owner's scope (and, for a generalized
                 // lambda, its own scheme's), whose variables the stored
                 // value's type instantiates; the value captures them all.
@@ -5261,7 +5326,9 @@ pub const Builder = struct {
             }
         }
         const literals = hidden[bound.len + target.dictionary_params.len ..];
-        if (edge == .literal) {
+        if (self.defer_edge_literals and edge != .literal) {
+            // A literal chain frame reads these as it needs them.
+        } else if (edge == .literal) {
             // A call checking recorded no edge for (a platform requirement's
             // call of the app's binding) derives its literal arguments from
             // its instantiation, as it does its dictionaries.
