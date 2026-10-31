@@ -196,6 +196,8 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
         };
     }
     if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache miss for {s} key {s}\n", .{ module_name, &std.fmt.bytesToHex(unit.key.bytes[0..8], .lower) });
+    const trace_clock: ?std.Io = if (dev_diagnostics.isSet(.trace_boxy_work)) (if (unit.config.timing) |timing| timing.std_io else null) else null;
+    const build_started_ns: i64 = if (trace_clock) |io| std.Io.Timestamp.now(io, .awake).nanoseconds else 0;
 
     var views: std.ArrayList(ImportedView) = .empty;
     defer views.deinit(gpa);
@@ -212,7 +214,7 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     };
     var lowered = try eval.CompileTimeFinalization.lowerBoxyRuntime(gpa, modules, .{}, unit.config);
     defer lowered.deinit();
-    if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: lowered {s} ({d} procs)\n", .{ module_name, lowered.lir_result.store.procSpecCount() });
+    if (trace_clock) |io| std.debug.print("boxy-work: lowered {s} ({d} procs, {d} ms)\n", .{ module_name, lowered.lir_result.store.procSpecCount(), @divTrunc(std.Io.Timestamp.now(io, .awake).nanoseconds - build_started_ns, std.time.ns_per_ms) }) else if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: lowered {s} ({d} procs)\n", .{ module_name, lowered.lir_result.store.procSpecCount() });
 
     const static_data = try static_data_exports.buildStaticData(gpa, .{ .root = modules.root, .imports = views.items }, &lowered, unit.target, .{});
     defer static_data_exports.deinitStaticData(gpa, static_data);
@@ -245,6 +247,7 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     defer hosted_arena.deinit();
     const hosted = try hostedSymbols(hosted_arena.allocator(), &lowered.lir_result.store);
     try store(gpa, unit.cache_manager, unit.key, .{ .exports = records, .hosted_symbols = hosted, .code_locations = written.code_locations, .object = written.object_bytes });
+    if (trace_clock) |io| std.debug.print("boxy-work: built {s} in {d} ms\n", .{ module_name, @divTrunc(std.Io.Timestamp.now(io, .awake).nanoseconds - build_started_ns, std.time.ns_per_ms) });
     return .{
         .restored = false,
         .object = try gpa.dupe(u8, written.object_bytes),
