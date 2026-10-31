@@ -11365,6 +11365,22 @@ fn buildBoxyLibraryObjects(
         if (artifact.platform_type_inputs.requirements.len != 0) continue;
         try units.append(ctx.gpa, artifact);
     }
+    const linked_units = units.items.len;
+    // An import only `expect`s read is no part of the program, but a unit
+    // importing it is keyed on its exports, so its unit runs too, unlinked.
+    var seen_units = std.AutoHashMap([32]u8, void).init(ctx.gpa);
+    defer seen_units.deinit();
+    for (units.items) |artifact| try seen_units.put(artifact.key.bytes, {});
+    var next_unit: usize = 0;
+    while (next_unit < units.items.len) : (next_unit += 1) {
+        const importer = units.items[next_unit];
+        for (importer.direct_import_module_keys) |key| {
+            const imported = digests.artifacts.get(key.bytes) orelse continue;
+            if (imported.platform_type_inputs.requirements.len != 0) continue;
+            if ((try seen_units.getOrPut(key.bytes)).found_existing) continue;
+            try units.append(ctx.gpa, imported);
+        }
+    }
     const platform = try boxyPlatformView(ctx, build_env, root_artifact, visible);
     if (dev_diagnostics.isSet(.trace_boxy_work)) {
         std.debug.print("boxy-work: root {s} key {s} codegen {s} identity {s}\n", .{ root_artifact.canonical_names.moduleNameText(root_artifact.module_identity.module_name), &std.fmt.bytesToHex(root_artifact.key.bytes[0..8], .lower), &std.fmt.bytesToHex(root_artifact.codeGenerationKey().bytes[0..8], .lower), &std.fmt.bytesToHex(root_artifact.module_identity.stable_hash[0..8], .lower) });
@@ -11426,7 +11442,7 @@ fn buildBoxyLibraryObjects(
     for (remaining, 0..) |count, index| if (count == 0) try ready.append(ctx.gpa, @intCast(index));
     // The units' objects in unit order, whatever order they finish in, so
     // the link's inputs (and so the executable) are the same every build.
-    const objects = try ctx.arena.alloc(?[]const u8, units.items.len);
+    const objects = try ctx.arena.alloc(?[]const u8, linked_units);
     @memset(objects, null);
     var hosted_symbols: std.ArrayList([]const u8) = .empty;
     var seen_hosted = std.StringHashMap(void).init(ctx.arena);
@@ -11469,11 +11485,13 @@ fn buildBoxyLibraryObjects(
                 if (first_error != null) continue;
                 if (result.restored) restored += 1 else built += 1;
                 try digests.recordExports(task.artifact, result.exports);
-                objects[index] = link_objects.materialize(result.object) catch return error.NativeCompilationFailed;
-                for (result.hosted_symbols) |symbol| {
-                    const owned = try ctx.arena.dupe(u8, symbol);
-                    if ((try seen_hosted.getOrPut(owned)).found_existing) continue;
-                    try hosted_symbols.append(ctx.arena, owned);
+                if (index < linked_units) {
+                    objects[index] = link_objects.materialize(result.object) catch return error.NativeCompilationFailed;
+                    for (result.hosted_symbols) |symbol| {
+                        const owned = try ctx.arena.dupe(u8, symbol);
+                        if ((try seen_hosted.getOrPut(owned)).found_existing) continue;
+                        try hosted_symbols.append(ctx.arena, owned);
+                    }
                 }
                 for (dependents[index].items) |dependent| {
                     remaining[dependent] -= 1;
@@ -11486,7 +11504,7 @@ fn buildBoxyLibraryObjects(
     // The summary counts cache work; a build without a cache does none.
     if (!args.no_cache) build_env.recordBoxyObjects(restored, built);
     reporter.end();
-    const ordered = try ctx.arena.alloc([]const u8, units.items.len);
+    const ordered = try ctx.arena.alloc([]const u8, linked_units);
     for (objects, ordered) |object, *slot| slot.* = object orelse base.invariant("roc build invariant violated: a .boxy unit completed without an object", .{});
     var paired_platforms: std.ArrayList([32]u8) = .empty;
     if (platform) |view| try paired_platforms.append(ctx.arena, view.key.bytes);
