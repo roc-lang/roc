@@ -4715,9 +4715,9 @@ pub const Coordinator = struct {
         const state: *PostCheckSessionState = @ptrCast(@alignCast(context));
         const self = state.coordinator;
         std.debug.assert(state.active);
-        // Every submitted task has a stash slot reserved, so filing its
+        // Every outstanding task has a stash slot reserved, so filing its
         // completion cannot fail.
-        try state.stash.ensureUnusedCapacity(self.gpa, 1);
+        try state.stash.ensureTotalCapacity(self.gpa, state.outstanding + 1);
         if (!self.hasWorkers()) {
             const allocator = self.inline_worker_allocs.taskAllocators().module;
             defer self.inline_worker_allocs.resetArena();
