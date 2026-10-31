@@ -10102,6 +10102,7 @@ fn writeSealedWasmObject(
         return err;
     };
     defer sealed_module.deinit();
+    sealed_public_definitions = try std.mem.concat(ctx.arena, []const u8, &.{ sealed_public_definitions, &.{shim_symbols.roc_hot_reload_generation} });
     try sealed_module.sealRocObject(sealed_public_definitions, allowed_undefined_functions);
     try sealed_module.verifyNoLinkObjectContract();
     try sealed_module.patchRelocatableSymbolFlags(composed_bytes);
@@ -10779,9 +10780,9 @@ fn appendUniqueSharedLibraryExport(
     try symbols.append(symbol);
 }
 
-/// Symbols a shared-library link must export: app-provided symbols plus host
-/// input exports, so the final library exposes its explicit public ABI on every
-/// target. Empty for non-shared output.
+/// Symbols a shared-library link must export: app-provided symbols,
+/// `roc_hot_reload_generation`, and host input exports, so the final library
+/// exposes its explicit public ABI on every target. Empty for non-shared output.
 fn sharedLibraryExports(
     ctx: *CliCtx,
     link_type: roc_target.OutputKind,
@@ -10794,12 +10795,13 @@ fn sharedLibraryExports(
     var seen = std.StringHashMap(void).init(ctx.arena);
     var symbols = try std.array_list.Managed([]const u8).initCapacity(
         ctx.arena,
-        app_export_symbols.len + host_export_symbols.len,
+        app_export_symbols.len + host_export_symbols.len + 1,
     );
 
     for (app_export_symbols) |symbol| {
         try appendUniqueSharedLibraryExport(&seen, &symbols, symbol);
     }
+    try appendUniqueSharedLibraryExport(&seen, &symbols, shim_symbols.roc_hot_reload_generation);
     for (host_export_symbols) |symbol| {
         try appendUniqueSharedLibraryExport(&seen, &symbols, symbol);
     }
@@ -10991,6 +10993,7 @@ fn compileLlvmAppObject(
         codegen.enable_default_platform_diagnostics = enable_default_platform_hosted_calls and emit_debug_info;
         codegen.stack_checks = stack_checks;
         codegen.debug_producer = "roc " ++ @import("compiler_version").compiler_version;
+        codegen.emit_hot_reload_generation_stub = true;
         defer codegen.deinit();
 
         const static_rc_helpers = try backend.collectRequiredRcHelpers(ctx.gpa, static_data_exports);

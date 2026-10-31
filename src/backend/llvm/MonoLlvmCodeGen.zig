@@ -290,6 +290,10 @@ pub const MonoLlvmCodeGen = struct {
     /// Optional compiler-plugin stamp bytes exported by generated shared libs.
     plugin_stamp_bytes: ?[]const u8 = null,
     plugin_stamp_alignment: u32 = 1,
+    /// Define the `roc_hot_reload_generation` stub that returns 0. Only the app
+    /// object of an LLVM `roc build` link sets it: an object linked beside a
+    /// shim or another Roc object must not define the symbol a second time.
+    emit_hot_reload_generation_stub: bool = false,
 
     builder: ?*LlvmBuilder = null,
     wip: ?*LlvmBuilder.WipFunction = null,
@@ -1125,6 +1129,7 @@ pub const MonoLlvmCodeGen = struct {
         }
 
         try self.emitPluginStampFunction();
+        if (self.emit_hot_reload_generation_stub) try self.emitHotReloadGenerationStub();
 
         if (self.enable_default_platform_runtime) {
             try self.emitDefaultPlatformBacktraceTable();
@@ -3401,6 +3406,32 @@ pub const MonoLlvmCodeGen = struct {
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
         _ = wip.ret(stamp_var.toValue(builder)) catch return error.OutOfMemory;
+        try self.finishCurrentWipFunction();
+    }
+
+    fn emitHotReloadGenerationStub(self: *MonoLlvmCodeGen) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const fn_ty = builder.fnType(.i64, &.{}, .normal) catch return error.OutOfMemory;
+        const fn_name = try self.exportedFunctionName(builder, shim_symbols.roc_hot_reload_generation);
+        const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
+        func.setLinkage(.external, builder);
+        self.configureExportCallConv(func, builder);
+
+        const outer_wip = self.wip;
+        const outer_rc_scratch = self.rc_arg_scratch;
+        defer {
+            self.wip = outer_wip;
+            self.rc_arg_scratch = outer_rc_scratch;
+        }
+
+        var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = func, .strip = builder.strip }) catch return error.OutOfMemory;
+        defer wip.deinit();
+        self.wip = &wip;
+        self.rc_arg_scratch = null;
+
+        const entry = wip.block(0, "entry") catch return error.OutOfMemory;
+        wip.cursor = .{ .block = entry };
+        _ = wip.ret(builder.intValue(.i64, 0) catch return error.OutOfMemory) catch return error.OutOfMemory;
         try self.finishCurrentWipFunction();
     }
 

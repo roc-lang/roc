@@ -31,6 +31,7 @@ caf = "caf" # Part of the word "café"
 clos = "clos" # Closure
 flate = "flate" # Zig std module name for DEFLATE, as in std.compress.flate
 ful = "ful" # Suffix, as in "effectful"
+lasr = "lasr" # ARM EABI arithmetic right shift helper (__aeabi_lasr)
 Paeth = "Paeth" # PNG filter named for Alan W. Paeth
 rela = "rela" # Relative
 SEH = "SEH" # Structured Exception Handling

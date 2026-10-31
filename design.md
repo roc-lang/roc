@@ -26392,9 +26392,9 @@ or uninspectable archives fail the build. This check is unconditional across
 optimization modes and runs only in Roc's build graph: neither the released
 compiler nor user executables contain or execute the verifier. The focused
 archive test cross-builds all shipped native architectures and object formats.
-Compiler-private cache synchronization and stack probing are local to the
-shim; exported builtins payloads and the interpreter's assembly trampoline
-are not machine-code run-shim inputs.
+Compiler-private cache synchronization, stack probing, wide integer shifts, and
+ARM EABI integer/float conversion helpers are local to the shim; exported builtins payloads and the
+interpreter's assembly trampoline are not machine-code run-shim inputs.
 Compiler profiling is not a machine-code run-shim dependency either: the shim
 root disables Tracy instrumentation and its build never attaches the Tracy
 client, including when the compiler itself is built with profiling enabled.
@@ -26829,6 +26829,21 @@ The payload's final-drop callback first runs the original capture-drop callback
 with the adjusted capture pointer, then releases the payload's retained image
 reference. That retained reference keeps an old image alive while a host stores
 a boxed Roc closure and later calls it after one or more hot reloads.
+
+Every build that Roc links defines exactly one C-ABI function
+`u64 roc_hot_reload_generation(void)`. In a build that links the machine-code
+dev shim, the function returns the latest generation that the shim read
+coherently from the hot-load control block. In every other build, it returns 0.
+The value increases. It can skip
+numbers. It does not prove that the shim accepted the image. The value is 0
+until the first entrypoint call creates the shim's runtime state, also inside a
+hot-reload session. A host reads its baseline after its first entrypoint call.
+A nonzero baseline means that a hot-reload session exists. A host that retains
+boxed Roc closures polls the value without calling an entrypoint. When the value
+changes, the host calls a provided entrypoint. The shim swaps in the new image
+at that entrypoint boundary, so the entrypoint rebuilds the closures from the
+new image. Hosts declare the function with a plain `extern`, because every build
+defines it.
 
 Because every generated erased-callable procedure skips the prefix, every
 erased callable value of a native dev program reserves it, including the ones

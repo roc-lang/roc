@@ -313,10 +313,15 @@ comptime {
     @export(&shimGetOps, .{ .name = shim_symbols.roc_shim_get_ops });
     @export(&shimEntrypoint, .{ .name = shim_symbols.roc_entrypoint });
     @export(&shimEntrypointFromImage, .{ .name = shim_symbols.roc_entrypoint_from_image });
+    @export(&shimHotReloadGeneration, .{ .name = shim_symbols.roc_hot_reload_generation });
 }
 
 fn shimGetOps() callconv(.c) *anyopaque {
     return shim_host_abi.getOpsOpaque();
+}
+
+fn shimHotReloadGeneration() callconv(.c) u64 {
+    return 0;
 }
 
 fn shimEntrypoint(

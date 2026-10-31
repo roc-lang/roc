@@ -5,3 +5,4 @@ int compiler_private_helper(void) { return compiler_private_constant; }
 void *roc_shim_get_ops(void) { return (void *)&compiler_private_helper; }
 void roc_entrypoint(void) {}
 void roc_shim_default_main(void) {}
+unsigned long long roc_hot_reload_generation(void) { return 0; }

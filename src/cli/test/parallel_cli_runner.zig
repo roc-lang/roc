@@ -6838,6 +6838,7 @@ const hot_reload_model_host_c_source =
     \\extern unsigned char *roc_init_model(uint64_t);
     \\extern unsigned char *roc_update_model(unsigned char *, uint64_t);
     \\extern uint64_t roc_model_value(unsigned char *);
+    \\extern uint64_t roc_hot_reload_generation(void);
     \\
     \\void *roc_alloc(size_t length, size_t alignment) {
     \\    if (alignment < sizeof(void *)) alignment = sizeof(void *);
@@ -6959,6 +6960,15 @@ const hot_reload_model_host_c_source =
     \\    return 1;
     \\}
     \\
+    \\static int wait_for_generation_after(uint64_t previous) {
+    \\    for (int i = 0; i < 120; i += 1) {
+    \\        if (roc_hot_reload_generation() > previous) return 0;
+    \\        usleep(100000);
+    \\    }
+    \\    fprintf(stderr, "timed out waiting for generation after %llu\n", (unsigned long long)previous);
+    \\    return 1;
+    \\}
+    \\
     \\int main(int argc, char **argv) {
     \\    if (argc < 2) {
     \\        fprintf(stderr, "expected app path\n");
@@ -6966,9 +6976,22 @@ const hot_reload_model_host_c_source =
     \\    }
     \\
     \\    const char *app_path = argv[1];
+    \\    printf("generation-before-first-call:%llu\n", (unsigned long long)roc_hot_reload_generation());
     \\    if (wait_for_model_value("model-initial", 12)) return 1;
+    \\    uint64_t initial_generation = roc_hot_reload_generation();
+    \\    if (initial_generation == 0) {
+    \\        fprintf(stderr, "initial generation is 0\n");
+    \\        return 1;
+    \\    }
     \\    if (write_app(app_path, app_updated)) return 1;
-    \\    if (wait_for_model_value("model-reload", 30)) return 1;
+    \\    if (wait_for_generation_after(initial_generation)) return 1;
+    \\    puts("generation-advanced");
+    \\    uint64_t after_reload = run_model_pipeline(10, 2);
+    \\    printf("model-reload:%llu\n", (unsigned long long)after_reload);
+    \\    fflush(stdout);
+    \\    if (after_reload != 30) return 1;
+    \\
+    \\    uint64_t reload_generation = roc_hot_reload_generation();
     \\
     \\    if (write_app(app_path, app_incompatible_same_layout)) return 1;
     \\    usleep(2000000);
@@ -6976,6 +6999,11 @@ const hot_reload_model_host_c_source =
     \\    printf("model-same-layout-rejected:%llu\n", (unsigned long long)after_same_layout);
     \\    fflush(stdout);
     \\    if (after_same_layout != 30) return 1;
+    \\    if (roc_hot_reload_generation() != reload_generation) {
+    \\        fprintf(stderr, "generation changed after same-layout rejection\n");
+    \\        return 1;
+    \\    }
+    \\    puts("generation-unchanged-same-layout");
     \\
     \\    if (write_app(app_path, app_incompatible_larger)) return 1;
     \\    usleep(2000000);
@@ -6983,6 +7011,11 @@ const hot_reload_model_host_c_source =
     \\    printf("model-larger-rejected:%llu\n", (unsigned long long)after_larger);
     \\    fflush(stdout);
     \\    if (after_larger != 30) return 1;
+    \\    if (roc_hot_reload_generation() != reload_generation) {
+    \\        fprintf(stderr, "generation changed after larger-Model rejection\n");
+    \\        return 1;
+    \\    }
+    \\    puts("generation-unchanged-larger");
     \\
     \\    puts("model-done");
     \\    fflush(stdout);
@@ -7073,10 +7106,14 @@ fn customHotReloadModelBoundary(
         .args = &.{"--watch"},
         .exit = .success,
         .contains = &.{
+            .{ .stream = .stdout, .text = "generation-before-first-call:0\n" },
             .{ .stream = .stdout, .text = "model-initial:12\n" },
+            .{ .stream = .stdout, .text = "generation-advanced\n" },
             .{ .stream = .stdout, .text = "model-reload:30\n" },
             .{ .stream = .stdout, .text = "model-same-layout-rejected:30\n" },
+            .{ .stream = .stdout, .text = "generation-unchanged-same-layout\n" },
             .{ .stream = .stdout, .text = "model-larger-rejected:30\n" },
+            .{ .stream = .stdout, .text = "generation-unchanged-larger\n" },
             .{ .stream = .stdout, .text = "model-done\n" },
             .{ .stream = .stderr, .text = "hot reload generation" },
             .{ .stream = .stderr, .text = "accepted by host" },

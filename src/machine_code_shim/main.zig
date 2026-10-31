@@ -971,10 +971,19 @@ comptime {
     @export(&shimGetOps, .{ .name = shim_symbols.roc_shim_get_ops });
     @export(&shimEntrypoint, .{ .name = shim_symbols.roc_entrypoint });
     @export(&shimDefaultMain, .{ .name = shim_symbols.roc_shim_default_main });
+    @export(&shimHotReloadGeneration, .{ .name = shim_symbols.roc_hot_reload_generation });
 }
 
 fn shimGetOps() callconv(.c) *anyopaque {
     return shim_host_abi.getOpsOpaque();
+}
+
+var last_coherent_generation: base_mod.ConcurrentU64 = .init(0);
+
+fn shimHotReloadGeneration() callconv(.c) u64 {
+    if (!runtime_state_initialized.load(.acquire)) return 0;
+    const control = runtime_state.control orelse return 0;
+    return hot_reload.latestCoherentGeneration(control, &last_coherent_generation);
 }
 
 fn shimEntrypoint(
@@ -988,8 +997,10 @@ fn shimEntrypoint(
 
 fn shimDefaultMain(argc: usize, argv: [*][*:0]const u8) callconv(.c) usize {
     stack_probe.retain();
-    if (!builtin.is_test and builtin.os.tag == .linux and
-        (builtin.cpu.arch == .x86 or builtin.cpu.arch.isArm()))
+    // Wide shift libcalls are an LLVM dependency; the self-hosted 64-bit
+    // backend emits native shifts and does not support assembler aliases.
+    if (!builtin.is_test and (builtin.os.tag == .linux or builtin.os.tag == .macos) and
+        (builtin.zig_backend == .stage2_llvm or @bitSizeOf(usize) == 32))
         @import("private_compiler_rt").retain();
     const ops = shim_host_abi.getOps();
     const app_args = if (argc > 1) argv[1..argc] else argv[0..0];
@@ -1002,6 +1013,10 @@ fn shimDefaultMain(argc: usize, argv: [*][*:0]const u8) callconv(.c) usize {
     evaluateEntrypoint(0, ops, &result, &cli_args_list);
     if (result == 0 and shim_host_abi.takeInlineExpectFailed()) return 1;
     return result;
+}
+
+test {
+    _ = @import("float_int_conversion.zig");
 }
 
 test "loaded dev program borrows direct shared image metadata" {

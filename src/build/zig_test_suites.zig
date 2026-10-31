@@ -27,6 +27,7 @@ pub const suites = [_]Suite{
     .{ .suffix = "builtin-doc", .coverage = .minici },
     .{ .suffix = "cli-main", .coverage = .minici },
     .{ .suffix = "machine-code-shim", .coverage = .minici },
+    .{ .suffix = "machine-code-shim-runtime", .coverage = .minici },
     .{ .suffix = "watch-cli", .coverage = .minici },
     .{ .suffix = "minici", .coverage = .minici },
     .{ .suffix = "fx-platform", .coverage = .minici },
