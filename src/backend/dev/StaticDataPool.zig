@@ -85,9 +85,9 @@ pub const Pool = struct {
 
 /// Where one static data export lives in an image.
 pub const Placement = union(enum) {
-    /// Written into this image's data section at `data_offset`. A `listed`
+    /// Written into this image's readonly or mutable section at `data_offset`. A `listed`
     /// entry is recorded in the image's chunk so later images can reuse it.
-    local: struct { data_offset: usize, listed: bool },
+    local: struct { data_offset: usize, listed: bool, mutable: bool = false },
     /// Reused from the pool: the mapping offset of the entry's first byte.
     pooled: usize,
 };
@@ -117,6 +117,8 @@ pub const Plan = struct {
     /// Whether any export's static data names generated code.
     static_code_references: bool,
     local_data_len: usize = 0,
+    mutable_data_len: usize = 0,
+    max_mutable_alignment: usize = 1,
     max_local_alignment: usize = 1,
     local_relocation_count: usize = 0,
     listed_count: usize = 0,
@@ -206,7 +208,7 @@ pub const Plan = struct {
         plan.order = try postOrder(allocator, exports.len, plan.targets, plan.target_starts);
 
         for (plan.order) |i| {
-            var poolable = true;
+            var poolable = !exports[i].is_mutable;
             for (plan.targets[plan.target_starts[i]..plan.target_starts[i + 1]]) |target| {
                 if (target == none or !plan.poolable[target]) poolable = false;
             }
@@ -257,6 +259,8 @@ pub const Plan = struct {
 
     fn layOutLocals(self: *Plan, exports: []const StaticDataExport) Error!void {
         self.local_data_len = 0;
+        self.mutable_data_len = 0;
+        self.max_mutable_alignment = 1;
         self.max_local_alignment = 1;
         self.local_relocation_count = 0;
         self.listed_count = 0;
@@ -265,6 +269,14 @@ pub const Plan = struct {
             if (placement.* == .pooled) continue;
             const alignment = exportAlignment(data_export);
             if (!std.math.isPowerOfTwo(alignment)) return error.InvalidStaticDataAlignment;
+            if (data_export.is_mutable) {
+                std.debug.assert(data_export.relocations.len == 0 and std.mem.allEqual(u8, data_export.bytes, 0));
+                self.max_mutable_alignment = @max(self.max_mutable_alignment, alignment);
+                const offset = std.mem.alignForward(usize, self.mutable_data_len, alignment);
+                self.mutable_data_len = offset + data_export.bytes.len;
+                placement.* = .{ .local = .{ .data_offset = offset, .listed = false, .mutable = true } };
+                continue;
+            }
             self.max_local_alignment = @max(self.max_local_alignment, alignment);
             const data_offset = std.mem.alignForward(usize, self.local_data_len, alignment);
             self.local_data_len = data_offset + data_export.bytes.len;
@@ -486,4 +498,17 @@ fn mappedSlice(comptime T: type, mapping: []const u8, offset: u64, count: u64) E
     if (start > mapping.len or byte_len > mapping.len - start) return error.InvalidStaticPool;
     const ptr: [*]align(1) const T = @ptrCast(mapping.ptr + start);
     return ptr[0..len];
+}
+
+test "boxy composition slots and their parents are never pooled between images" {
+    const exports = [_]StaticDataExport{
+        .{ .symbol_name = "constant", .bytes = &@as([8]u8, @splat(0)), .alignment = 8 },
+        .{ .symbol_name = "site", .bytes = &@as([8]u8, @splat(0)), .alignment = 8, .is_mutable = true },
+        .{ .symbol_name = "parent", .bytes = &@as([8]u8, @splat(0)), .alignment = 8, .relocations = &.{.{ .offset = 0, .target_symbol_name = "site", .target = .{ .data_symbol = @fromBackingInt(1) } }} },
+    };
+    var plan = try Plan.init(std.testing.allocator, &exports, true);
+    defer plan.deinit();
+    try std.testing.expectEqualSlices(bool, &.{ true, false, false }, plan.poolable);
+    try std.testing.expect(!plan.placements[1].local.listed);
+    try std.testing.expect(!plan.placements[2].local.listed);
 }

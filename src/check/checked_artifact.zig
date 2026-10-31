@@ -34980,12 +34980,18 @@ pub const CompileTimeRootReadTable = struct {
     pub const Ref = extern struct { module: [32]u8, root: ComptimeRootId };
     pub const Row = extern struct { start: u32 = 0, len: u32 = 0 };
     pub const Input = struct { root: ComptimeRootId, reads: []const Ref };
+    /// A read's placement and producer-authored identity, independent of the
+    /// checked module version and dense root numbering. Builtins and retained
+    /// interface artifacts use their exact key as placement. Published at commit.
+    pub const Identity = extern struct { placement: [32]u8, root: CompileTimeRootIdentity };
+    identities: []const Identity = &.{},
     rows: []const Row = &.{},
     refs: []const Ref = &.{},
 
     pub const Serialized = extern struct {
         rows: SerializedSlice(Row) = .{},
         refs: SerializedSlice(Ref) = .{},
+        identities: SerializedSlice(Identity) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CompileTimeRootReadTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -35034,6 +35040,7 @@ pub const CompileTimeRootReadTable = struct {
     }
 
     pub fn validate(self: CompileTimeRootReadTable, root_count: usize) error{CorruptArtifact}!void {
+        if (self.identities.len != 0 and self.identities.len != self.refs.len) return error.CorruptArtifact;
         if (self.rows.len != 0 and self.rows.len != root_count) return error.CorruptArtifact;
         for (self.rows) |row| {
             if (row.start > self.refs.len or row.len > self.refs.len - row.start) return error.CorruptArtifact;
@@ -35041,6 +35048,7 @@ pub const CompileTimeRootReadTable = struct {
     }
 
     pub fn deinit(self: *CompileTimeRootReadTable, allocator: Allocator) void {
+        allocator.free(self.identities);
         allocator.free(self.rows);
         allocator.free(self.refs);
         self.* = .{};
@@ -35455,14 +35463,14 @@ pub const CheckedModuleArtifact = struct {
             // plans add one, and state merge plans one more. Promoted local
             // procedure templates and callable contract types add one each,
             // and the single-source-call template list one more. Nested procedure runtime captures add one. The
-            // compile-time root read table adds its rows and refs, the root
+            // compile-time root read table adds its rows, refs and read identities, the root
             // identity table its rows, value context, exports and method and
             // export requirements, and the portability column one more. Stored
             // function evidence keeps its target and structural payloads in
             // two pools of their own. Template demand vectors add one. Test outcome
             // identities add roots, context, definition summaries, report sites and declaration identities.
             // Literal arguments add the literal requirement pool, the demand pool, and the root lookup table.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 255);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 256);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -41775,8 +41783,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xA7, 0x9A, 0x77, 0x17, 0x9B, 0x0C, 0x10, 0x39, 0xED, 0xCA, 0xF3, 0x50, 0x64, 0xB3, 0x81, 0xD8,
-        0x80, 0x97, 0x6B, 0x07, 0xF7, 0x69, 0x63, 0xF9, 0x5C, 0xD5, 0x50, 0xDC, 0xBD, 0x6D, 0x4F, 0xF1,
+        0xE8, 0x80, 0xEC, 0x51, 0x64, 0x0B, 0x28, 0x1C, 0x2C, 0x0F, 0xD3, 0x86, 0x52, 0xFC, 0xD6, 0x68,
+        0x0F, 0x98, 0xAB, 0x27, 0x6B, 0xF7, 0x8E, 0x79, 0x20, 0x62, 0x4D, 0xA6, 0x24, 0xAE, 0x9F, 0x13,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

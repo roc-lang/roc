@@ -965,3 +965,65 @@ test "boxy wasm: a frame-replacing call moves a dynamic argument out of the repl
     try expectWasmInt(&b, program.int_proc, .i64, 77);
     try expectWasmStr(&b, program.str_proc, "a string long enough to live on the heap, moved by a tail call");
 }
+
+test "boxy composition site hits bypass the interner and operand changes replace the entry" {
+    if (comptime !backend.host_lir_codegen_available) return error.SkipZigTest;
+    var b = try Builder.init(.native);
+    defer b.deinit();
+    const elem = try b.local(.opaque_ptr);
+    const result = try b.local(.opaque_ptr);
+    var site: boxy.compose.CompositionSite = .{};
+    const site_id: LIR.StaticDataId = @fromBackingInt(@intCast(b.statics.items.len));
+    try b.statics.append(allocator, @intFromPtr(&site));
+    const compose_stmt = try b.store.addCFStmt(.{ .dyn = .{
+        .target = result,
+        .data = try b.store.addStmtRow(DynOp, .{ .desc_list = .{ .elem = elem } }),
+        .composition_cache = site_id,
+        .next = try b.ret(result),
+    } }, .test_fixture);
+    const body = try b.static(elem, .{ .desc = boxy.compose.scalarDesc(.i64) }, compose_stmt);
+    const root = try b.proc(&.{}, body, .opaque_ptr, .{});
+    const state = try boxy.compiled.InProcessState.create(allocator);
+    defer state.destroy();
+    const entered = state.enter();
+    defer boxy.compiled.InProcessState.leave(entered);
+    var run: Run = undefined;
+    try run.init(&b);
+    defer run.deinit();
+
+    const cold = try run.runDev(root, .opaque_ptr);
+    defer allocator.free(cold);
+    const first = std.mem.readInt(usize, cold[0..@sizeOf(usize)], .little);
+    try std.testing.expectEqual(first, site.load().?.result);
+    // A runtime probe could no longer find the original descriptor. A hit
+    // must still return exactly that descriptor, without growing the table.
+    const table = state.descriptors.table.swap(null, .acq_rel);
+    const before = state.descriptors.len;
+    const hot = try run.runDev(root, .opaque_ptr);
+    defer allocator.free(hot);
+    try std.testing.expectEqual(first, std.mem.readInt(usize, hot[0..@sizeOf(usize)], .little));
+    try std.testing.expectEqual(before, state.descriptors.len);
+    state.descriptors.table.store(table, .release);
+
+    b.cells.items[0].* = @intFromPtr(boxy.compose.strDesc());
+    const changed = try run.runDev(root, .opaque_ptr);
+    defer allocator.free(changed);
+    const second = std.mem.readInt(usize, changed[0..@sizeOf(usize)], .little);
+    try std.testing.expect(first != second);
+    try std.testing.expectEqual(boxy.compose.strDesc(), @as(*const TypeDesc, @ptrFromInt(second)).child.?);
+    b.cells.items[0].* = @intFromPtr(boxy.compose.scalarDesc(.i64));
+    const again = try run.runDev(root, .opaque_ptr);
+    defer allocator.free(again);
+    try std.testing.expectEqual(first, std.mem.readInt(usize, again[0..@sizeOf(usize)], .little));
+
+    // The interpreter owns a separate slot even when it runs this same LIR.
+    const interpreted = (try run.interpreter.eval(.{ .proc_id = root, .ret_layout = .opaque_ptr })).value.read(usize);
+    const interpreter_cache = boxy.compiled.descriptorCache();
+    const interpreted_table = interpreter_cache.table.swap(null, .acq_rel);
+    const interpreted_count = interpreter_cache.len;
+    const interpreted_hot = (try run.interpreter.eval(.{ .proc_id = root, .ret_layout = .opaque_ptr })).value.read(usize);
+    try std.testing.expectEqual(interpreted, interpreted_hot);
+    try std.testing.expectEqual(interpreted_count, interpreter_cache.len);
+    interpreter_cache.table.store(interpreted_table, .release);
+    try run.env.checkForLeaks();
+}

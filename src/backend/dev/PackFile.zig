@@ -23,7 +23,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 20;
+pub const format_version: u32 = 21;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// excerpt holding its procedure, and the ownership signature and
@@ -250,6 +250,7 @@ pub fn writeWithNames(allocator: Allocator, set: *const CodeExcerpt.Set, specs: 
             try writer.str(item.bytes);
             try writer.word(item.alignment);
             try writer.word(item.symbol_offset);
+            try writer.byte(@intFromBool(item.is_mutable));
             try writer.word(@intCast(item.relocations.len));
             for (item.relocations) |relocation| {
                 try writer.word(relocation.offset);
@@ -438,6 +439,11 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
             const item_bytes = try reader.str();
             const alignment = try reader.word();
             const symbol_offset = try reader.word();
+            const is_mutable = switch (try reader.byte()) {
+                0 => false,
+                1 => true,
+                else => return error.MalformedPack,
+            };
             const data_relocations = try arena_allocator.alloc(CodeExcerpt.DataRelocation, try reader.word());
             for (data_relocations) |*relocation| {
                 const offset = try reader.word();
@@ -460,11 +466,13 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
                     .external = external,
                 };
             }
+            if (is_mutable and (data_relocations.len != 0 or !std.mem.allEqual(u8, item_bytes, 0))) return error.MalformedPack;
             item.* = .{
                 .name = name,
                 .bytes = item_bytes,
                 .alignment = alignment,
                 .symbol_offset = symbol_offset,
+                .is_mutable = is_mutable,
                 .relocations = data_relocations,
             };
         }

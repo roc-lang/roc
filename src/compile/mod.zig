@@ -218,6 +218,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_12631_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12624_test.zig"));
     std.testing.refAllDecls(@import("test/boxy_dictionary_evidence_order_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12734_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12617_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12682_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11292_test.zig"));
