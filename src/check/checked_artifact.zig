@@ -35288,7 +35288,8 @@ pub const CheckedModuleArtifact = struct {
     pub fn hasUnevaluatedRequests(self: *const CheckedModuleArtifact, strategy: base.SpecializationStrategy) bool {
         for (self.root_requests.compile_time_requests) |request| {
             const root = request.compile_time_root orelse continue;
-            if (self.compile_time_roots.root(root).payload != .unevaluated) continue;
+            const payload = self.compile_time_roots.root(root).payload;
+            if (payload != .unevaluated and payload != .pending) continue;
             if (strategy == .lss and self.compile_time_roots.root(root).kind == .literal_argument) continue;
             if (strategy == .boxy and self.compile_time_roots.root(root).boxy_value != null) continue;
             return true;
