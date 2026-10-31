@@ -11413,9 +11413,6 @@ fn buildBoxyLibraryObjects(
         };
     }
 
-    var ready: std.ArrayList(u32) = .empty;
-    defer ready.deinit(ctx.gpa);
-    for (remaining, 0..) |count, index| if (count == 0) try ready.append(ctx.gpa, @intCast(index));
     // The units' objects in unit order, whatever order they finish in, so
     // the link's inputs (and so the executable) are the same every build.
     const objects = try ctx.arena.alloc(?[]const u8, units.items.len);
@@ -11425,6 +11422,27 @@ fn buildBoxyLibraryObjects(
     var restored: u32 = 0;
     var built: u32 = 0;
     var done: usize = 0;
+    // An object compile-time evaluation built or restored under this
+    // build's key is linked as it is; its exports are in `interfaces`.
+    for (tasks, 0..) |*task, index| {
+        const key = try boxyObjectKey(ctx.gpa, task.artifact, task.platform, args, target, false);
+        const known = build_env.boxyObjectWithKey(task.artifact, key) orelse continue;
+        if (known.restored) restored += 1 else built += 1;
+        objects[index] = link_objects.materialize(known.object) catch return error.NativeCompilationFailed;
+        for (known.hosted_symbols) |symbol| {
+            const owned = try ctx.arena.dupe(u8, symbol);
+            if ((try seen_hosted.getOrPut(owned)).found_existing) continue;
+            try hosted_symbols.append(ctx.arena, owned);
+        }
+        done += 1;
+        for (dependents[index].items) |dependent| remaining[dependent] -= 1;
+        // A known unit's importers wait on it no longer; its own import
+        // counts are irrelevant, since it is never submitted.
+        remaining[index] = std.math.maxInt(u32);
+    }
+    var ready: std.ArrayList(u32) = .empty;
+    defer ready.deinit(ctx.gpa);
+    for (remaining, 0..) |count, index| if (count == 0) try ready.append(ctx.gpa, @intCast(index));
     var first_error: ?CliMainError = null;
     var executor_session: ?base.post_check_task_executor.Session = if (build_env.postCheckExecutor()) |executor| executor.begin() else null;
     defer if (executor_session) |*open| open.end();
@@ -12045,6 +12063,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     defer if (boxy_interfaces) |*interfaces| interfaces.deinit();
     const boxy_root_unit: ?postcheck.Boxy.Lower.ModuleUnit = if (boxy_interfaces) |*interfaces| .{ .imports = interfaces, .root = true } else null;
     runtime_lowering.target.boxy_unit = boxy_root_unit;
+    // A build of the host target at dev opt links the objects compile-time
+    // evaluation builds, so their exports go in the link's table.
+    if (boxy_interfaces) |*interfaces| if (build_env.boxy_object_lowering) |*lowering| {
+        if (lowering.target == target) lowering.interfaces = interfaces;
+    };
     build_env.setRuntimeLowering(runtime_lowering);
     // A build of a program whose runtime output is recorded links that output
     // and lowers no runtime program. Debug pack emission reads the lowering.

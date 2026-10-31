@@ -56,6 +56,7 @@ const compile_build = @import("compile_build.zig");
 const module_discovery = @import("module_discovery.zig");
 const cache_manager_mod = @import("cache_manager.zig");
 const boxy_unit = @import("boxy_unit.zig");
+const boxy_object_cache = @import("boxy_object_cache.zig");
 const cache_versioning = @import("cache_versioning.zig");
 const discovery_roots = @import("discovery_roots.zig");
 const cache_key_mod = @import("cache_key.zig");
@@ -1449,45 +1450,150 @@ test "dependency post-order of a deep dependency chain runs on a small stack" {
     for (order, 0..) |node, position| try std.testing.expectEqual(depth - 1 - position, node);
 }
 
+/// One post-check session's state on the coordinator
+/// (`messages.PostCheckSession`).
+const PostCheckSessionState = struct {
+    coordinator: *Coordinator = undefined,
+    session: messages.PostCheckSession = .general,
+    active: bool = false,
+    /// Tasks submitted and not yet received by the session, the ones in
+    /// `stash` included.
+    outstanding: usize = 0,
+    /// Completions taken off the result channel, or run inline, and not yet
+    /// received by the session. A slot is reserved per submitted task.
+    stash: std.ArrayList(post_check_executor.Completion) = .empty,
+    /// The work the session's owner was doing when it began, if it recorded
+    /// any, for the crash context of the workers running its tasks.
+    frame: ?base.ice_context.Frame = null,
+
+    fn deinit(self: *PostCheckSessionState, gpa: Allocator) void {
+        self.stash.deinit(gpa);
+    }
+};
+
 /// The lowering of the module objects compile-time evaluation links against.
 pub const BoxyObjectLowering = struct {
     target: roc_target.RocTarget,
     config: lir.CheckedPipeline.TargetConfig,
     opt: []const u8,
     inline_expects: bool,
+    /// The export interface table the units record their exports in, when
+    /// the build's link lowers its root unit against the same table; the
+    /// scheduler owns one otherwise.
+    interfaces: ?*eval.CompileTimeFinalization.ExportInterfaces = null,
 };
 
-/// The module objects of one `.boxy` evaluation: restored from the
-/// per-module cache, or compiled whole and filed there the first time a
-/// module's importer needs it (design.md "Caching Under `.boxy`").
+/// The module objects of a `.boxy` compilation, each restored from the
+/// per-module cache or compiled whole and filed there as soon as the module
+/// can have one (design.md "Caching Under `.boxy`"). A module can have an
+/// object once every compile-time root of its own is complete: the object
+/// restores their stored values, which the other objects of a link read
+/// through it. Its unit lowers once its imports' units are done, since its
+/// calls compile against their export interfaces. The units run on the
+/// post-check executor in their own session, alongside checking, the
+/// compile-time evaluations, and one another; a module's evaluation waits
+/// only for the objects of its import closure, and `roc build` links the
+/// objects this compilation built or restored without restoring them again.
 const BoxyObjects = struct {
     coordinator: *Coordinator,
     lowering: BoxyObjectLowering,
     manager: *CacheManager,
-    interfaces: eval.CompileTimeFinalization.ExportInterfaces,
+    interfaces: *eval.CompileTimeFinalization.ExportInterfaces,
+    owned_interfaces: ?eval.CompileTimeFinalization.ExportInterfaces,
     arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator),
-    /// Each module's object, once it has been asked for; null for a module
-    /// with none of its own.
-    objects: std.AutoHashMapUnmanaged([32]u8, ?eval.CompileTimeFinalization.BoxyObject) = .empty,
+    /// Each module whose object is known, by checked key.
+    records: std.AutoHashMapUnmanaged([32]u8, Record) = .empty,
+    /// The units offered and not yet known, by module.
+    units: std.AutoHashMapUnmanaged([32]u8, *UnitTask) = .empty,
+    /// The units waiting for each module's object: its importers among the
+    /// units whose imports are not all known.
+    waiting: std.AutoHashMapUnmanaged([32]u8, std.ArrayList(*UnitTask)) = .empty,
+    /// Units whose imports are all known, not submitted yet.
+    ready: std.ArrayList(*UnitTask) = .empty,
+    /// Modules declaring hosted functions, offered while no checked platform
+    /// module bound them. They are offered again when one is checked.
+    unbound_hosted: std.ArrayList(*const Artifact) = .empty,
+    session: post_check_executor.Session,
+    first_error: ?Error = null,
 
     const Object = eval.CompileTimeFinalization.BoxyObject;
     const Artifact = CheckedArtifact.CheckedModuleArtifact;
     const Error = eval.CompileTimeFinalization.FinalizeError;
 
+    /// A module's object, once known: null for a module with none of its
+    /// own.
+    const Record = struct {
+        object: ?Object,
+        /// The object's key in the per-module cache.
+        key: boxy_object_cache.Key = undefined,
+        /// Whether the object was restored from the cache rather than built.
+        restored: bool = false,
+    };
+
+    fn init(coordinator: *Coordinator, lowering: BoxyObjectLowering, manager: *CacheManager) Error!BoxyObjects {
+        // The module objects are built during compile-time evaluation, so
+        // their lowering, code generation, and cache writes count toward it.
+        var unit_lowering = lowering;
+        unit_lowering.config.timing = &coordinator.ctfe_timing.lowering;
+        var self: BoxyObjects = .{
+            .coordinator = coordinator,
+            .lowering = unit_lowering,
+            .manager = manager,
+            .interfaces = undefined,
+            .owned_interfaces = if (lowering.interfaces == null) .init(coordinator.gpa, coordinator.roc_ctx.std_io) else null,
+            .session = coordinator.postCheckExecutorFor(.boxy_objects).begin(),
+        };
+        self.interfaces = lowering.interfaces orelse &self.owned_interfaces.?;
+        return self;
+    }
+
+    /// Point the borrowed table at this scheduler's own, once it has its
+    /// final address.
+    fn bindOwnedInterfaces(self: *BoxyObjects) void {
+        if (self.owned_interfaces) |*owned| self.interfaces = owned;
+    }
+
     fn deinit(self: *BoxyObjects) void {
-        self.objects.deinit(self.coordinator.gpa);
-        self.interfaces.deinit();
+        const gpa = self.coordinator.gpa;
+        // A session that still has tasks out is torn down with the
+        // coordinator, whose workers have stopped.
+        if (self.session.outstanding == 0) self.session.end();
+        var units = self.units.valueIterator();
+        while (units.next()) |task| task.*.destroy(gpa);
+        self.units.deinit(gpa);
+        var lists = self.waiting.valueIterator();
+        while (lists.next()) |list| list.deinit(gpa);
+        self.waiting.deinit(gpa);
+        self.ready.deinit(gpa);
+        self.unbound_hosted.deinit(gpa);
+        self.records.deinit(gpa);
+        if (self.owned_interfaces) |*owned| owned.deinit();
         self.arena.deinit();
     }
 
     fn source(self: *BoxyObjects) eval.CompileTimeFinalization.BoxyObjectSource {
-        return .{ .context = self, .objects = objectSet, .interfaces = &self.interfaces, .target = self.lowering.config };
+        return .{ .context = self, .objects = objectSet, .completed = moduleCompleted, .interfaces = self.interfaces, .target = self.lowering.config };
     }
 
+    /// `artifact`'s object with the cache key `key`, when this compilation
+    /// built or restored it.
+    pub fn objectWithKey(self: *const BoxyObjects, artifact: *const Artifact, key: boxy_object_cache.Key) ?Record {
+        const known = self.records.get(artifact.key.bytes) orelse return null;
+        if (known.object == null or !std.mem.eql(u8, &known.key.bytes, &key.bytes)) return null;
+        return known;
+    }
+
+    /// The objects of `module`'s import closure, imports first, for the
+    /// compile-time program evaluating `module`'s roots: every one offered
+    /// and waited for, with every other object the program's root sees that
+    /// can be built now.
     fn objectSet(context: *anyopaque, module: *const Artifact) Error!?eval.CompileTimeFinalization.BoxyObjectSet {
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
         const arena = self.arena.allocator();
-        try self.buildClosure(module);
+        try self.offerClosure(module);
+        if (self.coordinator.checked_program) try self.offerPending();
+        if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: objects for {s}: {d} known, {d} units in progress, {d} ready\n", .{ module.moduleEnvConst().module_name, self.records.count(), self.units.count(), self.ready.items.len });
+        try self.waitUntil(module, closureKnown);
         var ordered = std.ArrayList(Object).empty;
         var visited = std.AutoHashMapUnmanaged([32]u8, *const Artifact).empty;
         defer visited.deinit(self.coordinator.gpa);
@@ -1501,6 +1607,13 @@ const BoxyObjects = struct {
             .objects = try arena.dupe(Object, ordered.items),
             .views = try self.withEveryObjectsModule(try self.viewsOf(module), visited),
         };
+    }
+
+    /// `module`'s roots are complete: its object can be built, and its
+    /// importers' evaluations may need it.
+    fn moduleCompleted(context: *anyopaque, module: *const Artifact) Error!void {
+        const self: *BoxyObjects = @ptrCast(@alignCast(context));
+        if (self.waiting.contains(module.key.bytes) or self.coordinator.rootSees(module)) try self.offer(module);
     }
 
     fn viewsOf(self: *BoxyObjects, module: *const Artifact) Allocator.Error![]const CheckedArtifact.ImportedModuleView {
@@ -1526,8 +1639,8 @@ const BoxyObjects = struct {
         return all.items;
     }
 
-    /// Append the objects of `artifact` and its imports to `ordered`, imports
-    /// first. False when one has no object of its own.
+    /// Append the known objects of `artifact` and its imports to `ordered`,
+    /// imports first. False when one has no object of its own.
     fn visit(self: *BoxyObjects, artifact: *const Artifact, visited: *std.AutoHashMapUnmanaged([32]u8, *const Artifact), ordered: *std.ArrayList(Object)) Error!bool {
         const gpa = self.coordinator.gpa;
         const entry = try visited.getOrPut(gpa, artifact.key.bytes);
@@ -1537,17 +1650,22 @@ const BoxyObjects = struct {
             const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse return false;
             if (!try self.visit(imported, visited, ordered)) return false;
         }
-        const object = (try self.objectOf(artifact)) orelse return false;
+        const known = self.records.get(artifact.key.bytes) orelse Coordinator.coordinatorInvariant("a compile-time program's import closure was not known when its objects were gathered", .{});
+        const object = known.object orelse return false;
         try ordered.append(self.arena.allocator(), object);
         return true;
     }
 
-    fn objectOf(self: *BoxyObjects, artifact: *const Artifact) Error!?Object {
-        const gpa = self.coordinator.gpa;
-        if (self.objects.get(artifact.key.bytes)) |known| return known;
-        const object = try self.buildObject(artifact);
-        try self.objects.put(gpa, artifact.key.bytes, object);
-        return object;
+    /// Whether every module of `module`'s import closure, the compiler's
+    /// Builtin module included, has a known object or is known to have none.
+    fn closureKnown(self: *BoxyObjects, module: *const Artifact) bool {
+        if (!self.records.contains(self.coordinator.builtin_modules.checked_artifact.key.bytes)) return false;
+        for (module.direct_import_module_keys) |key| {
+            const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
+            if (!self.records.contains(imported.key.bytes)) return false;
+            if (!self.closureKnown(imported)) return false;
+        }
+        return true;
     }
 
     /// The module whose hosted section binds `artifact`'s hosted functions.
@@ -1561,14 +1679,6 @@ const BoxyObjects = struct {
             }
         }
         return null;
-    }
-
-    fn buildObject(self: *BoxyObjects, artifact: *const Artifact) Error!?Object {
-        const gpa = self.coordinator.gpa;
-        const prepared = (try self.prepare(artifact)) orelse return null;
-        defer prepared.deinit(gpa);
-        const built = try prepared.build();
-        return try self.record(artifact.key.bytes, built);
     }
 
     /// Everything a unit's build reads, gathered on the coordinating thread
@@ -1588,18 +1698,27 @@ const BoxyObjects = struct {
         }
     };
 
-    /// `artifact`'s unit, or null for a module with no object of its own: a
-    /// platform module with requirements is lowered at its app's types, and
-    /// a module with roots left to evaluate has no final object.
-    fn prepare(self: *BoxyObjects, artifact: *const Artifact) Error!?Prepared {
+    /// Whether `artifact` can have an object: never (a platform module with
+    /// requirements is lowered at its app's types), not yet (a root of its
+    /// own still to evaluate, or hosted functions no checked platform module
+    /// binds while checking continues), or now.
+    fn eligibility(self: *BoxyObjects, artifact: *const Artifact) enum { never, later, now } {
+        if (artifact.platform_type_inputs.requirements.len != 0) return .never;
+        if (Coordinator.unevaluatedRequestCount(artifact, .boxy) != 0) return .later;
+        if (artifact.hosted_procs.procs.len != 0 and self.platformOf(artifact) == null) {
+            return if (self.coordinator.frontend_complete) .never else .later;
+        }
+        return .now;
+    }
+
+    /// `artifact`'s unit, which `eligibility` admitted.
+    fn prepare(self: *BoxyObjects, artifact: *const Artifact) Error!Prepared {
         const gpa = self.coordinator.gpa;
-        if (artifact.platform_type_inputs.requirements.len != 0 or artifact.hasUnevaluatedRequests(.boxy)) return null;
         const platform = self.platformOf(artifact);
-        if (artifact.hosted_procs.procs.len != 0 and platform == null) return null;
         const views = try self.coordinator.collectImportedArtifactViews(gpa, artifact);
         errdefer gpa.free(views);
         var config = self.lowering.config;
-        config.boxy_unit = .{ .imports = &self.interfaces, .root = false };
+        config.boxy_unit = .{ .imports = self.interfaces, .root = false };
         config.checked_module_state = if (artifact.evaluation_state == .finalized) .complete else .checking_finalization;
         return .{ .unit = .{
             .gpa = gpa,
@@ -1608,7 +1727,7 @@ const BoxyObjects = struct {
             .views = views,
             .target = self.lowering.target,
             .config = config,
-            .interfaces = &self.interfaces,
+            .interfaces = self.interfaces,
             .cache_manager = self.manager,
             .key = try boxy_unit.objectKey(gpa, artifact, platform, self.lowering.opt, self.lowering.inline_expects, self.lowering.target, false),
         } };
@@ -1625,133 +1744,176 @@ const BoxyObjects = struct {
         return .{ .module = module, .object = try arena.dupe(u8, built.object), .code_locations = try arena.dupe(u8, built.code_locations), .hosted_symbols = symbols };
     }
 
-    /// One unit's build as a post-check task; a module with no object of
-    /// its own has nothing prepared and nothing to run.
+    /// One unit's build as a post-check task.
     const UnitTask = struct {
-        prepared: ?Prepared,
+        artifact: *const Artifact,
+        prepared: Prepared,
+        /// The imports whose objects are not known yet.
+        remaining: u32,
         outcome: union(enum) { pending, failed: Error, done: boxy_unit.Built } = .pending,
 
         fn run(context: *anyopaque, _: post_check_executor.Worker) ?*anyopaque {
             const self: *UnitTask = @ptrCast(@alignCast(context));
-            const prepared = self.prepared orelse Coordinator.coordinatorInvariant("a module with no object was scheduled to build one", .{});
-            self.outcome = if (prepared.build()) |built| .{ .done = built } else |err| .{ .failed = err };
+            self.outcome = if (self.prepared.build()) |built| .{ .done = built } else |err| .{ .failed = err };
             return null;
+        }
+
+        fn destroy(self: *UnitTask, gpa: Allocator) void {
+            switch (self.outcome) {
+                .pending, .failed => {},
+                .done => |built| built.deinit(gpa),
+            }
+            self.prepared.deinit(gpa);
+            gpa.destroy(self);
         }
     };
 
-    /// Build the objects of `module`'s import closure that are not known
-    /// yet, each after its imports and the independent ones at once on the
-    /// post-check executor. A module's calls compile against its imports'
-    /// export interfaces, which their builds record, so a unit starts once
-    /// every import it has among the pending units is done.
-    fn buildClosure(self: *BoxyObjects, module: *const Artifact) Error!void {
+    /// Build `artifact`'s object once its imports' are known, if it can have
+    /// one now. A module that cannot have one yet is offered again when it
+    /// can; one that never can is known to have none.
+    fn offer(self: *BoxyObjects, artifact: *const Artifact) Error!void {
         const gpa = self.coordinator.gpa;
-        var pending = std.ArrayList(*const Artifact).empty;
-        defer pending.deinit(gpa);
-        var index_by_key = std.AutoHashMapUnmanaged([32]u8, u32).empty;
-        defer index_by_key.deinit(gpa);
-        try self.collectPending(&self.coordinator.builtin_modules.checked_artifact, &pending, &index_by_key);
-        for (module.direct_import_module_keys) |key| {
-            const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
-            try self.collectPending(imported, &pending, &index_by_key);
+        if (self.records.contains(artifact.key.bytes) or self.units.contains(artifact.key.bytes)) return;
+        switch (self.eligibility(artifact)) {
+            .never => {
+                try self.records.put(gpa, artifact.key.bytes, .{ .object = null });
+                try self.release(artifact.key.bytes);
+                return;
+            },
+            .later => {
+                if (artifact.hosted_procs.procs.len != 0) try self.unbound_hosted.append(gpa, artifact);
+                return;
+            },
+            .now => {},
         }
-        if (pending.items.len == 0) return;
-
-        const tasks = try gpa.alloc(UnitTask, pending.items.len);
-        var prepared_count: usize = 0;
-        defer {
-            for (tasks[0..prepared_count]) |*task| if (task.prepared) |prepared| prepared.deinit(gpa);
-            gpa.free(tasks);
-        }
-        // Modules without an object of their own are known at once; the
-        // rest wait for their imports among the pending units.
-        const remaining = try gpa.alloc(u32, pending.items.len);
-        defer gpa.free(remaining);
-        @memset(remaining, 0);
-        const dependents = try gpa.alloc(std.ArrayList(u32), pending.items.len);
-        defer {
-            for (dependents) |*list| list.deinit(gpa);
-            gpa.free(dependents);
-        }
-        for (dependents) |*list| list.* = .empty;
-        var ready = std.ArrayList(u32).empty;
-        defer ready.deinit(gpa);
-        for (pending.items, 0..) |artifact, index| {
-            tasks[index] = .{ .prepared = try self.prepare(artifact) };
-            prepared_count = index + 1;
-        }
-        for (pending.items, 0..) |artifact, index| {
-            for (artifact.direct_import_module_keys) |key| {
-                const imported = index_by_key.get(key.digest().bytes) orelse continue;
-                remaining[index] += 1;
-                try dependents[imported].append(gpa, @intCast(index));
-            }
-        }
-        for (remaining, 0..) |count, index| if (count == 0) try ready.append(gpa, @intCast(index));
-
-        const executor = self.coordinator.postCheckExecutor();
-        var session: ?post_check_executor.Session = if (executor.worker_count > 1) executor.begin() else null;
-        defer if (session) |*open| open.end();
-        var done: usize = 0;
-        var first_error: ?Error = null;
-        while (done < pending.items.len) {
-            var finished: ?u32 = null;
-            if (session) |*open| {
-                while (ready.items.len != 0 and open.canSubmit() and first_error == null) {
-                    const index = ready.pop().?;
-                    if (tasks[index].prepared == null) {
-                        finished = index;
-                        break;
-                    }
-                    try open.submit(.{ .id = index, .context = &tasks[index], .run = UnitTask.run });
-                }
-                if (finished == null) {
-                    if (open.outstanding != 0) {
-                        finished = @intCast(open.receive().id);
-                    } else if (first_error) |err| {
-                        return err;
-                    } else {
-                        Coordinator.coordinatorInvariant("a module's object waits for an import no unit builds", .{});
-                    }
-                }
-            } else {
-                if (first_error) |err| return err;
-                const index = ready.pop() orelse Coordinator.coordinatorInvariant("a module's object waits for an import no unit builds", .{});
-                if (tasks[index].prepared != null) _ = UnitTask.run(&tasks[index], .{ .id = 0, .allocator = gpa, .scratch = gpa, .lane_state = undefined });
-                finished = index;
-            }
-            const index = finished orelse continue;
-            done += 1;
-            const artifact = pending.items[index];
-            if (tasks[index].prepared == null) {
-                try self.objects.put(gpa, artifact.key.bytes, null);
-            } else switch (tasks[index].outcome) {
-                .pending => Coordinator.coordinatorInvariant("a module's object build completed without an outcome", .{}),
-                .failed => |err| {
-                    if (first_error == null) first_error = err;
-                    continue;
-                },
-                .done => |built| try self.objects.put(gpa, artifact.key.bytes, try self.record(artifact.key.bytes, built)),
-            }
-            for (dependents[index].items) |dependent| {
-                remaining[dependent] -= 1;
-                if (remaining[dependent] == 0) try ready.append(gpa, dependent);
-            }
-        }
-        if (first_error) |err| return err;
-    }
-
-    /// Append `artifact` and its imports whose objects are not known yet to
-    /// `pending`, imports first.
-    fn collectPending(self: *BoxyObjects, artifact: *const Artifact, pending: *std.ArrayList(*const Artifact), index_by_key: *std.AutoHashMapUnmanaged([32]u8, u32)) Error!void {
-        const gpa = self.coordinator.gpa;
-        if (self.objects.contains(artifact.key.bytes) or index_by_key.contains(artifact.key.bytes)) return;
+        const task = try gpa.create(UnitTask);
+        errdefer gpa.destroy(task);
+        task.* = .{ .artifact = artifact, .prepared = try self.prepare(artifact), .remaining = 0 };
+        errdefer task.prepared.deinit(gpa);
+        try self.units.put(gpa, artifact.key.bytes, task);
+        errdefer _ = self.units.remove(artifact.key.bytes);
         for (artifact.direct_import_module_keys) |key| {
             const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
-            try self.collectPending(imported, pending, index_by_key);
+            try self.offer(imported);
+            if (self.records.contains(imported.key.bytes)) continue;
+            // The import's unit is in progress, or the import is offered
+            // again once it can have an object; either way, knowing its
+            // object releases this unit.
+            const waiting = try self.waiting.getOrPut(gpa, imported.key.bytes);
+            if (!waiting.found_existing) waiting.value_ptr.* = .empty;
+            try waiting.value_ptr.append(gpa, task);
+            task.remaining += 1;
         }
-        try index_by_key.put(gpa, artifact.key.bytes, @intCast(pending.items.len));
-        try pending.append(gpa, artifact);
+        if (task.remaining == 0) try self.ready.append(gpa, task);
+        try self.submitReady();
+    }
+
+    /// Offer the import closure of `module`, which the compile-time program
+    /// evaluating its roots runs against.
+    fn offerClosure(self: *BoxyObjects, module: *const Artifact) Error!void {
+        try self.offer(&self.coordinator.builtin_modules.checked_artifact);
+        for (module.direct_import_module_keys) |key| {
+            const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
+            try self.offer(imported);
+        }
+    }
+
+    /// Offer every checked module the program's root sees, and every one a
+    /// unit waits for, that is not known or in progress yet.
+    fn offerPending(self: *BoxyObjects) Error!void {
+        var locations = self.coordinator.checked_artifact_index.valueIterator();
+        while (locations.next()) |location| {
+            const artifact = location.module().checkedArtifact().?;
+            if (self.records.contains(artifact.key.bytes) or self.units.contains(artifact.key.bytes)) continue;
+            if (self.waiting.contains(artifact.key.bytes) or self.coordinator.rootSees(artifact)) try self.offer(artifact);
+        }
+    }
+
+    /// Offer again the modules whose hosted functions no checked platform
+    /// module bound when they were offered.
+    fn offerUnboundHosted(self: *BoxyObjects) Error!void {
+        const gpa = self.coordinator.gpa;
+        var unbound = self.unbound_hosted;
+        self.unbound_hosted = .empty;
+        defer unbound.deinit(gpa);
+        for (unbound.items) |artifact| try self.offer(artifact);
+    }
+
+    /// Submit ready units, as many as the executor takes. While checking
+    /// continues, one worker is left to it.
+    fn submitReady(self: *BoxyObjects) Error!void {
+        const workers = self.session.executor.worker_count;
+        const limit = if (self.coordinator.frontend_complete) workers else @max(1, workers - 1);
+        while (self.ready.items.len != 0 and self.first_error == null and self.session.canSubmit() and self.session.outstanding < limit) {
+            const task = self.ready.pop().?;
+            if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: building {s} ({d} units in progress)\n", .{ task.artifact.moduleEnvConst().module_name, self.session.outstanding + 1 });
+            self.session.submit(.{ .id = @intFromPtr(task), .context = task, .run = UnitTask.run }) catch |err| {
+                self.ready.appendAssumeCapacity(task);
+                return err;
+            };
+        }
+    }
+
+    /// Record the completions filed with the scheduler's session.
+    fn drain(self: *BoxyObjects) Error!void {
+        const state = self.coordinator.post_check_sessions.getPtr(.boxy_objects);
+        while (state.stash.items.len != 0) try self.complete(self.session.receive());
+    }
+
+    fn complete(self: *BoxyObjects, completion: post_check_executor.Completion) Error!void {
+        const gpa = self.coordinator.gpa;
+        const task: *UnitTask = @ptrFromInt(completion.id);
+        defer task.destroy(gpa);
+        const artifact = task.artifact;
+        if (!self.units.remove(artifact.key.bytes)) Coordinator.coordinatorInvariant("a module's object build completed for a module with no unit", .{});
+        switch (task.outcome) {
+            .pending => Coordinator.coordinatorInvariant("a module's object build completed without an outcome", .{}),
+            .failed => |err| {
+                if (self.first_error == null) self.first_error = err;
+                return;
+            },
+            .done => |built| {
+                task.outcome = .pending;
+                const object = try self.record(artifact.key.bytes, built);
+                try self.records.put(gpa, artifact.key.bytes, .{ .object = object, .key = task.prepared.unit.key, .restored = built.restored });
+            },
+        }
+        try self.release(artifact.key.bytes);
+        try self.submitReady();
+    }
+
+    /// Ready the units waiting for the object of the module with checked key
+    /// `module`, now known.
+    fn release(self: *BoxyObjects, module: [32]u8) Allocator.Error!void {
+        const gpa = self.coordinator.gpa;
+        const entry = self.waiting.fetchRemove(module) orelse return;
+        var list = entry.value;
+        defer list.deinit(gpa);
+        for (list.items) |dependent| {
+            dependent.remaining -= 1;
+            if (dependent.remaining == 0) try self.ready.append(gpa, dependent);
+        }
+    }
+
+    /// Record completions until `done` holds of `context`, taking each
+    /// next completion off the worker channel as it arrives.
+    fn waitUntil(self: *BoxyObjects, context: anytype, comptime done: fn (*BoxyObjects, @TypeOf(context)) bool) Error!void {
+        while (true) {
+            try self.drain();
+            if (self.first_error) |err| return err;
+            if (done(self, context)) return;
+            if (self.session.outstanding == 0) Coordinator.coordinatorInvariant("a module's object waits for an import no unit builds", .{});
+            self.coordinator.pumpPostCheckResult();
+        }
+    }
+
+    fn nothingInProgress(self: *BoxyObjects, _: void) bool {
+        return self.units.count() == 0;
+    }
+
+    /// Wait for every unit offered so far.
+    pub fn waitAll(self: *BoxyObjects) Error!void {
+        try self.waitUntil({}, nothingInProgress);
     }
 };
 
@@ -1776,10 +1938,9 @@ pub const Coordinator = struct {
     /// Persistent lane used when the executor runs inline. Keeping it on the
     /// coordinator gives lane-local state the same lifetime in both modes.
     inline_worker_allocs: WorkerAllocators,
-    /// Inline sessions have capacity one, so one coordinator-owned slot is enough.
-    inline_post_check_completion: ?post_check_executor.Completion,
 
-    /// Number of tasks currently being processed by workers (atomic for thread safety)
+    /// Number of tasks queued or being processed by workers, frontend and
+    /// post-check tasks alike (atomic for thread safety)
     inflight: std.atomic.Value(usize),
 
     /// Set by shutdown() to tell workers to stop promptly instead of draining
@@ -1793,16 +1954,15 @@ pub const Coordinator = struct {
     /// `error.OutOfMemory` instead of hanging or silently dropping the failure.
     worker_oom: std.atomic.Value(bool),
 
-    /// Prevents nested or concurrent use of the shared worker result channel.
-    post_check_session_active: std.atomic.Value(bool),
-    /// The work the active post-check session's submitter was doing when the
-    /// session began, if it recorded any. Workers record it while running the
-    /// session's tasks, so a crash on a worker names the stage it was working
-    /// for. Written before any task is sent, so the task channel orders it
-    /// before worker reads.
-    post_check_session_frame: ?base.ice_context.Frame = null,
-    /// Set only after the frontend coordinator loop has drained every task and
-    /// result. Post-check work shares those channels and cannot start earlier.
+    /// The post-check sessions the worker channels serve
+    /// (`messages.PostCheckSession`). Every completion names its session,
+    /// and whichever consumer takes it off the result channel files it with
+    /// that session, so the Boxy unit scheduler's session stays open while
+    /// the general session is borrowed and released around it, and while
+    /// the frontend loop still consumes its own results.
+    post_check_sessions: std.EnumArray(messages.PostCheckSession, PostCheckSessionState),
+    /// Set only after the frontend coordinator loop has drained every
+    /// frontend task and result.
     frontend_complete: bool,
     /// Set by checked-program finalization: whether it published a program,
     /// which requires a checked app root.
@@ -1817,6 +1977,8 @@ pub const Coordinator = struct {
     /// The lowering of the module objects a `.boxy` compile-time evaluation
     /// links against, and the host target they are compiled for.
     boxy_object_lowering: ?BoxyObjectLowering = null,
+    /// The compilation's module objects, once it has one to build.
+    boxy_objects: ?BoxyObjects = null,
     /// A completed result owns the semantic outcome independently of checked
     /// modules, which can remain prepared when no live finalization is needed.
     compilation_result: union(enum) { live, recorded: *const completed.Outcome } = .live,
@@ -2014,12 +2176,10 @@ pub const Coordinator = struct {
             .task_channel = try Channel(WorkerTask).init(channel_allocator, initial_task_capacity, roc_ctx.std_io),
             .workers = std.ArrayList(Thread).empty,
             .inline_worker_allocs = WorkerAllocators.init(worker_allocator),
-            .inline_post_check_completion = null,
             .inflight = std.atomic.Value(usize).init(0),
             .shutting_down = std.atomic.Value(bool).init(false),
             .worker_oom = std.atomic.Value(bool).init(false),
-            .post_check_session_active = std.atomic.Value(bool).init(false),
-            .post_check_session_frame = null,
+            .post_check_sessions = .initFill(.{}),
             .frontend_complete = false,
             .total_remaining = 0,
             .app_package_name = null,
@@ -2068,9 +2228,11 @@ pub const Coordinator = struct {
             std.debug.print("[COORD DEINIT] shutdown done, freeing packages...\n", .{});
         }
 
-        // A successful frontend consumed every task/result. Only aborted
-        // compilations need to drain channels; the normal path takes no locks.
-        if (!self.frontend_complete) {
+        // A successful frontend consumed every frontend task/result, and a
+        // unit scheduler that ran to the end received every completion.
+        // Only aborted compilations need to drain channels; the normal path
+        // takes no locks.
+        if (!self.frontend_complete or self.postCheckTasksInChannels() != 0) {
             const payload_alloc = self.getWorkerAllocator();
             while (self.task_channel.tryRecv()) |task| {
                 switch (task) {
@@ -2097,6 +2259,9 @@ pub const Coordinator = struct {
                 discarded.discard(payload_alloc);
             }
         }
+        if (self.boxy_objects) |*objects| objects.deinit();
+        self.boxy_objects = null;
+        for (&self.post_check_sessions.values) |*state| state.deinit(self.gpa);
 
         if (self.completion_arena) |arena| {
             self.completion_demand.deinit(self.gpa);
@@ -3259,7 +3424,9 @@ pub const Coordinator = struct {
     /// pick up additional queued work.
     pub fn shutdown(self: *Coordinator) void {
         if (!threads_available) return;
-        if (self.post_check_session_active.load(.acquire)) {
+        // The unit scheduler's session is torn down with the coordinator;
+        // a borrowed general session is released before shutdown.
+        if (self.post_check_sessions.get(.general).active) {
             base.invariant("{s}", .{"compiler coordinator shut down during a post-check session"});
         }
 
@@ -3408,14 +3575,14 @@ pub const Coordinator = struct {
             if (!made_progress) {
                 if (try self.tryUnblockAllWaiting()) {
                     made_progress = true;
-                } else if (self.inflight.load(.acquire) == 0 and self.task_channel.isEmpty()) {
+                } else if (self.frontendInflight() == 0 and (self.hasWorkers() or self.task_channel.isEmpty())) {
                     if (try self.resolveImportCycles()) made_progress = true;
                 }
             }
 
             if (made_progress) {
                 iterations_without_progress = 0;
-            } else if (self.inflight.load(.acquire) > 0) {
+            } else if (self.frontendInflight() > 0) {
                 // A worker is still processing a task or has one queued.
                 // `inflight` is incremented in enqueueTask before the task is
                 // sent to the channel, so it covers both "queued" and
@@ -3691,18 +3858,12 @@ pub const Coordinator = struct {
         var options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, &self.ctfe_timing);
         options.strategy = self.specialization_strategy;
         options.post_check_executor = self.postCheckExecutor();
-        var boxy_objects: ?BoxyObjects = null;
-        defer if (boxy_objects) |*objects| objects.deinit();
-        // A host that interprets its compile-time programs links no objects.
-        if (comptime !eval.CompileTimeFinalization.compilerHostMustUseInterpreterForCtfe()) {
-            if (self.specialization_strategy == .boxy) if (self.boxy_object_lowering) |lowering| if (self.cache_manager) |manager| if (manager.config.enabled) {
-                // The module objects are built within this evaluation, so their
-                // lowering, code generation, and cache writes count toward it.
-                var unit_lowering = lowering;
-                unit_lowering.config.timing = &self.ctfe_timing.lowering;
-                boxy_objects = .{ .coordinator = self, .lowering = unit_lowering, .manager = manager, .interfaces = .init(self.gpa, self.roc_ctx.std_io) };
-            };
-            if (boxy_objects) |*objects| options.boxy_objects = objects.source();
+        if (try self.boxyObjects()) |objects| {
+            options.boxy_objects = objects.source();
+            // Every module the root sees whose roots are complete already
+            // (restored from the cache, or copied from its previous entry)
+            // can have its object built now.
+            if (self.checked_program) try objects.offerPending();
         }
         options.cancel_request = self.cancel_request;
         options.object_cache = self.compile_time_object_cache;
@@ -3792,6 +3953,10 @@ pub const Coordinator = struct {
             runtime_target,
             options,
         );
+        // The objects are read by the link and filed by this evaluation;
+        // installing copied values and committing the modules below write
+        // what the units read.
+        if (self.boxy_objects) |*objects| try objects.waitAll();
         const checked_modules: eval.CompileTimeReuse.CheckedModules = .{ .context = self, .find = findCheckedModule };
         for (transplants.items) |*pending| try eval.CompileTimeReuse.verifyAndInstall(pending.module, &pending.previous, &pending.transplant, checked_modules);
         if (literal_values) |entry| try self.storeProgramLiteralValues(entry, literal_records_before);
@@ -4458,7 +4623,9 @@ pub const Coordinator = struct {
     /// inflight is 0 while work is still pending. The `isEmpty` check is therefore
     /// redundant but kept as a defensive invariant.
     pub fn isComplete(self: *Coordinator) bool {
-        return self.total_remaining == 0 and self.inflight.load(.acquire) == 0 and self.task_channel.isEmpty();
+        // Post-check tasks run alongside the frontend; a frontend task in
+        // the channel counts as in flight, and the inline path counts none.
+        return self.total_remaining == 0 and self.frontendInflight() == 0 and (self.hasWorkers() or self.task_channel.isEmpty());
     }
 
     /// An entry module compiled from a staged copy of the user's file.
@@ -4497,21 +4664,26 @@ pub const Coordinator = struct {
         }
     }
 
-    /// A stage-independent view over the persistent compilation workers.
+    /// A stage-independent view over the persistent compilation workers:
+    /// the general post-check session, which post-check stages borrow one
+    /// at a time.
     ///
-    /// Call this only after `coordinatorLoop` has completed and before shutdown.
-    /// The returned executor is owned by the coordinator thread and must not be
-    /// used concurrently with coordinator lifecycle methods.
+    /// The returned executor is owned by the coordinator thread and must not
+    /// be used concurrently with coordinator lifecycle methods.
     pub fn postCheckExecutor(self: *Coordinator) post_check_executor.Executor {
-        if (!self.frontend_complete or self.shutting_down.load(.acquire)) {
-            base.invariant("{s}", .{"post-check executor requested outside the completed frontend lifetime"});
+        return self.postCheckExecutorFor(.general);
+    }
+
+    fn postCheckExecutorFor(self: *Coordinator, session: messages.PostCheckSession) post_check_executor.Executor {
+        if (self.shutting_down.load(.acquire)) {
+            base.invariant("{s}", .{"post-check executor requested after the coordinator shut down"});
         }
+        const state = self.post_check_sessions.getPtr(session);
+        state.coordinator = self;
+        state.session = session;
         return .{
-            .context = self,
-            .worker_count = if (threads_available and self.mode == .multi_threaded and self.workers.items.len > 0)
-                self.workers.items.len
-            else
-                1,
+            .context = state,
+            .worker_count = if (self.hasWorkers()) self.workers.items.len else 1,
             .beginFn = beginPostCheckSession,
             .submitFn = submitPostCheckTask,
             .receiveFn = receivePostCheckCompletion,
@@ -4519,25 +4691,38 @@ pub const Coordinator = struct {
         };
     }
 
+    /// Whether worker threads run the tasks the coordinator enqueues; the
+    /// coordinator thread runs them itself otherwise.
+    fn hasWorkers(self: *const Coordinator) bool {
+        return threads_available and self.mode == .multi_threaded and self.workers.items.len > 0;
+    }
+
     fn beginPostCheckSession(context: *anyopaque) void {
-        const self: *Coordinator = @ptrCast(@alignCast(context));
-        if (!self.frontend_complete or self.shutting_down.load(.acquire)) {
-            base.invariant("{s}", .{"post-check session started outside the completed frontend lifetime"});
+        const state: *PostCheckSessionState = @ptrCast(@alignCast(context));
+        const self = state.coordinator;
+        if (self.shutting_down.load(.acquire)) {
+            base.invariant("{s}", .{"post-check session started after the coordinator shut down"});
         }
-        if (self.post_check_session_active.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) {
+        if (state.active) {
             base.invariant("{s}", .{"compiler coordinator started overlapping post-check sessions"});
         }
-        std.debug.assert(self.inline_post_check_completion == null);
-        self.post_check_session_frame = base.ice_context.innermost();
+        std.debug.assert(state.outstanding == 0 and state.stash.items.len == 0);
+        state.active = true;
+        state.frame = base.ice_context.innermost();
     }
 
     fn submitPostCheckTask(context: *anyopaque, task: post_check_executor.Task) Allocator.Error!void {
-        const self: *Coordinator = @ptrCast(@alignCast(context));
-        if (!threads_available or self.mode == .single_threaded or self.workers.items.len == 0) {
-            std.debug.assert(self.inline_post_check_completion == null);
+        const state: *PostCheckSessionState = @ptrCast(@alignCast(context));
+        const self = state.coordinator;
+        std.debug.assert(state.active);
+        // Every outstanding task has a stash slot reserved, so filing its
+        // completion cannot fail.
+        try state.stash.ensureTotalCapacity(self.gpa, state.outstanding + 1);
+        if (!self.hasWorkers()) {
             const allocator = self.inline_worker_allocs.taskAllocators().module;
             defer self.inline_worker_allocs.resetArena();
-            self.inline_post_check_completion = .{
+            state.outstanding += 1;
+            state.stash.appendAssumeCapacity(.{
                 .id = task.id,
                 .worker_id = 0,
                 .value = task.run(task.context, .{
@@ -4546,27 +4731,35 @@ pub const Coordinator = struct {
                     .scratch = self.inline_worker_allocs.taskAllocators().scratch,
                     .lane_state = &self.inline_worker_allocs.post_check_lane_state,
                 }),
-            };
+            });
             return;
         }
         // enqueueTask increments inflight before sending and rolls it back if
         // channel growth fails, so a failed submit accepts no work.
-        try self.enqueueTask(.{ .post_check = task });
+        state.outstanding += 1;
+        errdefer state.outstanding -= 1;
+        try self.enqueueTask(.{ .post_check = .{ .session = state.session, .frame = state.frame, .task = task } });
     }
 
     fn receivePostCheckCompletion(context: *anyopaque) post_check_executor.Completion {
-        const self: *Coordinator = @ptrCast(@alignCast(context));
-        if (!threads_available or self.mode == .single_threaded or self.workers.items.len == 0) {
-            const completion = self.inline_post_check_completion orelse
-                base.invariant("{s}", .{"inline post-check receive without a submitted task"});
-            self.inline_post_check_completion = null;
-            return completion;
-        }
+        const state: *PostCheckSessionState = @ptrCast(@alignCast(context));
+        const self = state.coordinator;
+        std.debug.assert(state.active and state.outstanding > 0);
+        while (state.stash.items.len == 0) self.pumpPostCheckResult();
+        state.outstanding -= 1;
+        return state.stash.pop().?;
+    }
+
+    /// Take the next result off the worker channel and file it with its
+    /// post-check session. Only post-check completions arrive here: the
+    /// frontend loop is the sole consumer while frontend tasks run.
+    fn pumpPostCheckResult(self: *Coordinator) void {
+        if (!self.hasWorkers()) base.invariant("{s}", .{"inline post-check receive without a submitted task"});
         const result = self.result_channel.recv() orelse
             base.invariant("{s}", .{"post-check result channel closed while a session was active"});
         _ = self.inflight.fetchSub(1, .monotonic);
-        return switch (result) {
-            .post_check => |completion| completion,
+        switch (result) {
+            .post_check => |completion| self.filePostCheckCompletion(completion),
             .parsed,
             .canonicalized,
             .canonicalized_cached,
@@ -4574,15 +4767,38 @@ pub const Coordinator = struct {
             .operation_failed,
             .worker_oom,
             => coordinatorInvariant("post-check session received a {t} result", .{std.meta.activeTag(result)}),
-        };
+        }
+    }
+
+    /// File a completion with the session that submitted its task.
+    fn filePostCheckCompletion(self: *Coordinator, completion: messages.PostCheckCompletion) void {
+        const state = self.post_check_sessions.getPtr(completion.session);
+        std.debug.assert(state.active and state.outstanding > state.stash.items.len);
+        state.stash.appendAssumeCapacity(completion.completion);
     }
 
     fn endPostCheckSession(context: *anyopaque) void {
-        const self: *Coordinator = @ptrCast(@alignCast(context));
-        std.debug.assert(self.inline_post_check_completion == null);
-        std.debug.assert(self.inflight.load(.acquire) == 0);
-        std.debug.assert(self.task_channel.isEmpty());
-        self.post_check_session_active.store(false, .release);
+        const state: *PostCheckSessionState = @ptrCast(@alignCast(context));
+        std.debug.assert(state.active and state.outstanding == 0 and state.stash.items.len == 0);
+        state.active = false;
+        state.frame = null;
+    }
+
+    /// The post-check tasks still in the worker channels: submitted to a
+    /// session and not yet taken off the result channel.
+    fn postCheckTasksInChannels(self: *const Coordinator) usize {
+        var count: usize = 0;
+        for (self.post_check_sessions.values) |state| count += state.outstanding - state.stash.items.len;
+        return count;
+    }
+
+    /// The frontend tasks queued or running.
+    fn frontendInflight(self: *const Coordinator) usize {
+        const total = self.inflight.load(.acquire);
+        if (!self.hasWorkers()) return total;
+        const post_check = self.postCheckTasksInChannels();
+        std.debug.assert(post_check <= total);
+        return total - post_check;
     }
 
     fn createOwnedSemanticResult(
@@ -5361,7 +5577,12 @@ pub const Coordinator = struct {
             .type_checked => |*r| try self.handleTypeChecked(r),
             .operation_failed => |r| return self.handleOperationFailed(r),
             .worker_oom => return error.OutOfMemory,
-            .post_check => coordinatorInvariant("post-check completions are received by the post-check session, never handleResult", .{}),
+            // Only the unit scheduler submits work while frontend tasks run.
+            .post_check => |completion| {
+                if (completion.session != .boxy_objects) coordinatorInvariant("the frontend loop received a {t} post-check completion", .{completion.session});
+                self.filePostCheckCompletion(completion);
+                try self.boxy_objects.?.drain();
+            },
         }
     }
 
@@ -6088,7 +6309,7 @@ pub const Coordinator = struct {
     }
 
     /// Handle a successful type-check result
-    fn handleTypeChecked(self: *Coordinator, result: *TypeCheckedResult) Allocator.Error!void {
+    fn handleTypeChecked(self: *Coordinator, result: *TypeCheckedResult) CoordinatorError!void {
         if (comptime trace_build) {
             std.debug.print("[COORD] TYPE_CHECKED: pkg={s} module={s} result_reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
@@ -6170,6 +6391,69 @@ pub const Coordinator = struct {
         }
 
         try self.completeModuleSuccessfully(pkg, result.module_id);
+
+        // A compilation that links its program builds each module's object
+        // as soon as the module can have one, while checking continues.
+        // Only a module the program's roots can reach is built this early:
+        // the root's exact visibility is known once the root is checked.
+        if (self.runtime_lowering != null) if (try self.boxyObjects()) |objects| {
+            if (self.moduleIsPlatformRoot(mod)) try objects.offerUnboundHosted();
+            if (try self.reachableFromRoots(mod)) try objects.offer(artifact_ptr);
+        };
+    }
+
+    /// The compilation's Boxy unit scheduler: with `--specialize=no`, a
+    /// cache to file the objects in, and a host that runs native code.
+    fn boxyObjects(self: *Coordinator) CoordinatorError!?*BoxyObjects {
+        if (self.boxy_objects) |*objects| return objects;
+        if (comptime eval.CompileTimeFinalization.compilerHostMustUseInterpreterForCtfe()) return null;
+        if (self.specialization_strategy != .boxy) return null;
+        const lowering = self.boxy_object_lowering orelse return null;
+        const manager = self.cache_manager orelse return null;
+        if (!manager.config.enabled) return null;
+        self.boxy_objects = try BoxyObjects.init(self, lowering, manager);
+        self.boxy_objects.?.bindOwnedInterfaces();
+        return &self.boxy_objects.?;
+    }
+
+    /// Whether the program's root sees `artifact` (its lowering
+    /// visibility), which is what its link needs the object of.
+    fn rootSees(self: *Coordinator, artifact: *const CheckedArtifact.CheckedModuleArtifact) bool {
+        if (!self.checked_program) return false;
+        const root = self.executableRootCheckedArtifact();
+        if (root == artifact) return true;
+        for (root.lowering_visibility.module_ids) |key| {
+            if (std.mem.eql(u8, &key.bytes, &artifact.key.bytes)) return true;
+        }
+        return false;
+    }
+
+    /// Whether `target` is reachable through import edges from the root
+    /// package's root module or the platform root: every module the
+    /// program's root will see is, and the edges are known as modules are
+    /// canonicalized, before the root is checked.
+    fn reachableFromRoots(self: *Coordinator, target: *const ModuleState) Allocator.Error!bool {
+        var visited = std.AutoHashMapUnmanaged(*const ModuleState, void).empty;
+        defer visited.deinit(self.gpa);
+        var work = std.ArrayList(ModuleRef).empty;
+        defer work.deinit(self.gpa);
+        const root_package_name = self.root_package_name orelse return false;
+        if (self.packages.get(root_package_name)) |pkg| if (pkg.root_module_id) |root_id| try work.append(self.gpa, .{ .pkg = pkg, .module_id = root_id });
+        if (self.platformRootCandidate()) |platform| {
+            const platform_id = platform.pkg.root_module_id orelse coordinatorInvariant("platform root package has no root module", .{});
+            try work.append(self.gpa, .{ .pkg = platform.pkg, .module_id = platform_id });
+        }
+        while (work.pop()) |ref| {
+            const mod = ref.module();
+            if (mod == target) return true;
+            if ((try visited.getOrPut(self.gpa, mod)).found_existing) continue;
+            for (mod.imports.items) |edge| try work.append(self.gpa, .{ .pkg = ref.pkg, .module_id = edge.module_id });
+            for (mod.external_imports.items) |edge| {
+                const resolved = edge.target orelse continue;
+                try work.append(self.gpa, resolved.module);
+            }
+        }
+        return false;
     }
 
     /// Preserve the operational failure for reporting and watch mode, then
@@ -7549,10 +7833,10 @@ pub const Coordinator = struct {
             const t = self.task_channel.recv() orelse break;
 
             if (t == .post_check) {
-                const task = t.post_check;
-                const ice = if (self.post_check_session_frame) |frame| base.ice_context.enter(frame) else null;
+                const task = t.post_check.task;
+                const ice = if (t.post_check.frame) |frame| base.ice_context.enter(frame) else null;
                 defer if (ice) |guard| guard.leave();
-                const completion: WorkerResult = .{ .post_check = .{
+                const completion: WorkerResult = .{ .post_check = .{ .session = t.post_check.session, .completion = .{
                     .id = task.id,
                     .worker_id = worker_id,
                     .value = task.run(task.context, .{
@@ -7561,7 +7845,7 @@ pub const Coordinator = struct {
                         .scratch = worker_allocs.taskAllocators().scratch,
                         .lane_state = &worker_allocs.post_check_lane_state,
                     }),
-                } };
+                } } };
                 worker_allocs.resetArena();
                 self.result_channel.send(completion) catch break;
                 continue;

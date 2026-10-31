@@ -11,7 +11,8 @@ const can = @import("can");
 const check = @import("check");
 const parse = @import("parse");
 const reporting = @import("reporting");
-const post_check_executor = @import("base").post_check_task_executor;
+const base = @import("base");
+const post_check_executor = base.post_check_task_executor;
 const watch_inputs = @import("watch_inputs.zig");
 
 const ModuleEnv = can.ModuleEnv;
@@ -235,7 +236,31 @@ pub const WorkerTask = union(enum) {
     /// Type-check a canonicalized module
     type_check: TypeCheckTask,
     /// Type-erased post-check work whose context owns all persistent task state.
-    post_check: post_check_executor.Task,
+    post_check: PostCheckTask,
+};
+
+/// The post-check sessions the coordinator's workers serve. Each session is
+/// one consumer of its own completions, so two can be open at once: the
+/// general session every post-check stage borrows in turn, and the Boxy unit
+/// scheduler's, open across checking and compile-time evaluation.
+pub const PostCheckSession = enum(u8) {
+    general,
+    boxy_objects,
+};
+
+/// A post-check task and the session that receives its completion.
+pub const PostCheckTask = struct {
+    session: PostCheckSession,
+    /// The work the session's owner was doing when the session began, if it
+    /// recorded any: a crash on a worker names the stage it was working for.
+    frame: ?base.ice_context.Frame,
+    task: post_check_executor.Task,
+};
+
+/// A post-check completion, for the session that submitted its task.
+pub const PostCheckCompletion = struct {
+    session: PostCheckSession,
+    completion: post_check_executor.Completion,
 };
 
 /// Result of successfully parsing a module
@@ -437,7 +462,7 @@ pub const WorkerResult = union(enum) {
     /// A worker stage ran out of memory
     worker_oom: WorkerOom,
     /// Returned in worker arrival order; `Completion.id` identifies the task.
-    post_check: post_check_executor.Completion,
+    post_check: PostCheckCompletion,
 
     /// Release a result that shutdown prevented the coordinator from accepting.
     /// Parsed environments have no coordinator owner yet; later stages borrow
