@@ -1709,6 +1709,9 @@ pub const BoxyObjectSource = struct {
     /// or built and filed there. Null when an import has no object of its
     /// own: a platform module with requirements belongs to its app's program.
     objects: *const fn (context: *anyopaque, module: *const checked.CheckedModuleArtifact) FinalizeError!?BoxyObjectSet,
+    /// Every compile-time root of `module` is complete, so its object can
+    /// be built: the evaluation of a module importing it may need it.
+    completed: *const fn (context: *anyopaque, module: *const checked.CheckedModuleArtifact) FinalizeError!void,
     interfaces: *ExportInterfaces,
     /// The lowering the objects were compiled under, which a program calling
     /// into them shares.
@@ -1989,9 +1992,11 @@ fn evaluateRootsBoxy(
         for (roots, 0..) |root, ordinal| {
             if (root.module == module_index) try members.append(allocator, @intCast(ordinal));
         }
-        if (members.items.len == 0) continue;
-        try options.checkCancelRequest();
-        try evaluateModuleRootsBoxy(allocator, modules, lowering_modules, states, roots, &graph, specialized, members.items, evaluation_options, debug_events, &images);
+        if (members.items.len != 0) {
+            try options.checkCancelRequest();
+            try evaluateModuleRootsBoxy(allocator, modules, lowering_modules, states, roots, &graph, specialized, members.items, evaluation_options, debug_events, &images);
+        }
+        if (options.boxy_objects) |source| try source.completed(source.context, modules[module_index].module);
     }
 }
 
