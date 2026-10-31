@@ -39,3 +39,19 @@ pub fn stdinRawModeActive() bool {
     const termios = std.posix.tcgetattr(std.Io.File.stdin().handle) catch return false;
     return !termios.lflag.ICANON;
 }
+
+pub const WaitInputError = std.posix.PollError;
+
+/// Waits until stdin has input (or a hangup) to report, or `timeout_ms`
+/// elapses. Returns whether input is available.
+pub fn waitInputReady(timeout_ms: u32) WaitInputError!bool {
+    comptime std.debug.assert(@import("builtin").os.tag != .windows);
+    const stdin_handle = std.Io.File.stdin().handle;
+    var fds = [_]std.posix.pollfd{.{
+        .fd = stdin_handle,
+        .events = std.posix.POLL.IN,
+        .revents = 0,
+    }};
+    const clamped: i32 = @intCast(@min(timeout_ms, std.math.maxInt(i32)));
+    return try std.posix.poll(&fds, clamped) != 0;
+}

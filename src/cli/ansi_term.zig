@@ -67,7 +67,7 @@ pub fn clearEntireScreen(out: *std.Io.Writer) error{WriteFailed}!void {
 
 /// Computes the terminal-cell width of a UTF-8 string, skipping ANSI CSI escape
 /// sequences (e.g. color codes) since they occupy no columns.
-pub fn computeDisplayWidth(prompt: []const u8) (Allocator.Error || error{InvalidUtf8})!usize {
+pub fn computeDisplayWidth(prompt: []const u8, model: unicode.WidthModel) (Allocator.Error || error{InvalidUtf8})!usize {
     if (!std.unicode.utf8ValidateSlice(prompt)) return error.InvalidUtf8;
 
     var width: usize = 0;
@@ -79,7 +79,7 @@ pub fn computeDisplayWidth(prompt: []const u8) (Allocator.Error || error{Invalid
             continue;
         }
 
-        width += try unicode.displayWidth(prompt[text_start..index], width);
+        width += try unicode.displayWidth(prompt[text_start..index], width, model);
         index += 1;
 
         // Skip a CSI sequence: ESC '[' params... final-byte (0x40-0x7E).
@@ -95,28 +95,40 @@ pub fn computeDisplayWidth(prompt: []const u8) (Allocator.Error || error{Invalid
         text_start = index;
     }
 
-    width += try unicode.displayWidth(prompt[text_start..], width);
+    width += try unicode.displayWidth(prompt[text_start..], width, model);
     return width;
 }
 
 const testing = std.testing;
 
+const separate_widths = unicode.WidthModel{};
+
 test "computeDisplayWidth: plain ascii" {
-    try testing.expectEqual(@as(usize, 2), try computeDisplayWidth("» "));
+    try testing.expectEqual(@as(usize, 2), try computeDisplayWidth("» ", separate_widths));
 }
 
 test "computeDisplayWidth: skips ANSI color codes" {
     // The cyan REPL prompt: ESC[1;36m » ESC[0m space—visible width is 2.
-    try testing.expectEqual(@as(usize, 2), try computeDisplayWidth("\x1b[1;36m»\x1b[0m "));
-    try testing.expectEqual(@as(usize, 2), try computeDisplayWidth("\x1b[1;36m…\x1b[0m "));
+    try testing.expectEqual(@as(usize, 2), try computeDisplayWidth("\x1b[1;36m»\x1b[0m ", separate_widths));
+    try testing.expectEqual(@as(usize, 2), try computeDisplayWidth("\x1b[1;36m…\x1b[0m ", separate_widths));
 }
 
 test "computeDisplayWidth: lone ESC not followed by bracket counts following codepoint" {
-    try testing.expectEqual(@as(usize, 1), try computeDisplayWidth("\x1bx"));
+    try testing.expectEqual(@as(usize, 1), try computeDisplayWidth("\x1bx", separate_widths));
 }
 
 test "computeDisplayWidth: uses graphemes and terminal cells" {
-    try testing.expectEqual(@as(usize, 1), try computeDisplayWidth("e\u{301}"));
-    try testing.expectEqual(@as(usize, 2), try computeDisplayWidth("界"));
-    try testing.expectEqual(@as(usize, 2), try computeDisplayWidth("👩‍👩‍👦‍👦"));
+    try testing.expectEqual(@as(usize, 1), try computeDisplayWidth("e\u{301}", separate_widths));
+    try testing.expectEqual(@as(usize, 2), try computeDisplayWidth("界", separate_widths));
+    try testing.expectEqual(@as(usize, 2), try computeDisplayWidth("😀", separate_widths));
+}
+
+test "computeDisplayWidth: follows the terminal's glyph merging model" {
+    const merged = unicode.WidthModel{
+        .zwj_sequence_is_one_glyph = true,
+        .variation_selector_is_wide = true,
+    };
+    const family = "👩‍👩‍👦‍👦";
+    try testing.expectEqual(@as(usize, 8), try computeDisplayWidth(family, separate_widths));
+    try testing.expectEqual(@as(usize, 2), try computeDisplayWidth(family, merged));
 }

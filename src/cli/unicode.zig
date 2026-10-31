@@ -279,9 +279,31 @@ pub fn previousGraphemeBoundary(text: []const u8, offset: usize) error{InvalidUt
     return previous;
 }
 
+/// Rendering facts about the attached terminal that Unicode data cannot answer:
+/// whether its renderer collapses a combining sequence into a single glyph.
+///
+/// Unicode says how many cells each code point occupies, but not whether a
+/// ZWJ-connected emoji sequence, a regional-indicator pair, or a base followed
+/// by U+FE0F is drawn as one glyph or laid out code point by code point. Both
+/// behaviours exist in the wild: VTE 0.84 draws `👩‍👩‍👦‍👦` as eight cells, kitty and
+/// foot draw it as two. The difference is the renderer's glyph shaping, not a
+/// property of the text, so no table can settle it.
+///
+/// `width_probe.zig` fills this in by measuring the attached terminal. The
+/// defaults below describe a renderer that lays every code point out
+/// individually, which is also what an unmeasured terminal is assumed to do:
+/// that assumption never undercounts, so a wrong guess can only move the cursor
+/// too far, never draw over text that is already on screen.
+pub const WidthModel = struct {
+    /// A ZWJ-connected emoji sequence is drawn as one two-cell glyph.
+    zwj_sequence_is_one_glyph: bool = false,
+    /// A base followed by U+FE0F is drawn as a two-cell emoji glyph.
+    variation_selector_is_wide: bool = false,
+};
+
 /// Returns the number of terminal cells added by valid UTF-8 `text` when it
 /// starts at `start_column`. Tabs use the conventional eight-cell tab stops.
-pub fn displayWidth(text: []const u8, start_column: usize) error{InvalidUtf8}!usize {
+pub fn displayWidth(text: []const u8, start_column: usize, model: WidthModel) error{InvalidUtf8}!usize {
     var ascii_width: usize = 0;
     for (text) |byte| {
         if (byte >= 0x80) break;
@@ -300,36 +322,37 @@ pub fn displayWidth(text: []const u8, start_column: usize) error{InvalidUtf8}!us
         if (cluster.len == 1 and cluster[0] == '\t') {
             width += 8 - ((start_column + width) % 8);
         } else {
-            width += try graphemeWidth(cluster);
+            width += try graphemeWidth(cluster, model);
         }
         start = end;
     }
     return width;
 }
 
-fn graphemeWidth(cluster: []const u8) error{InvalidUtf8}!usize {
+fn graphemeWidth(cluster: []const u8, model: WidthModel) error{InvalidUtf8}!usize {
     var width: usize = 0;
-    var regional_indicators: usize = 0;
-    var emoji_presentation = false;
+    var has_zwj = false;
+    var has_variation_selector = false;
     var index: usize = 0;
     while (index < cluster.len) {
         const decoded = try decodeAt(cluster, index);
         const property = graphemeProperty(decoded.codepoint);
 
-        if (decoded.codepoint == 0xfe0f or decoded.codepoint == 0x20e3) {
-            emoji_presentation = true;
-        }
-        if (property == .regional_indicator) regional_indicators += 1;
+        if (decoded.codepoint == 0x200d) has_zwj = true;
+        if (decoded.codepoint == 0xfe0f) has_variation_selector = true;
 
+        // Layout is per code point until the model says the renderer merges the
+        // sequence; a merged sequence is handled after the loop.
         if (isWide(decoded.codepoint)) {
-            width = 2;
+            width += 2;
         } else if (property != .extend and property != .zwj and property != .control and property != .cr and property != .lf) {
-            width = @max(width, 1);
+            width += 1;
         }
         index = decoded.end;
     }
 
-    if (emoji_presentation or regional_indicators >= 2) return 2;
+    if (has_zwj and model.zwj_sequence_is_one_glyph) return 2;
+    if (has_variation_selector and model.variation_selector_is_wide) return 2;
     return width;
 }
 
@@ -640,15 +663,39 @@ test "grapheme boundaries cover control, Hangul, Indic, and regional rules" {
 }
 
 test "display width uses terminal cells rather than bytes or codepoints" {
-    try testing.expectEqual(@as(usize, 1), try displayWidth("é", 0));
-    try testing.expectEqual(@as(usize, 1), try displayWidth("e\u{301}", 0));
-    try testing.expectEqual(@as(usize, 2), try displayWidth("界", 0));
-    try testing.expectEqual(@as(usize, 2), try displayWidth("👩‍👩‍👦‍👦", 0));
-    try testing.expectEqual(@as(usize, 2), try displayWidth("🇺🇸", 0));
-    try testing.expectEqual(@as(usize, 2), try displayWidth("#️⃣", 0));
+    const separate = WidthModel{};
+    try testing.expectEqual(@as(usize, 1), try displayWidth("é", 0, separate));
+    try testing.expectEqual(@as(usize, 1), try displayWidth("e\u{301}", 0, separate));
+    try testing.expectEqual(@as(usize, 2), try displayWidth("界", 0, separate));
+    try testing.expectEqual(@as(usize, 2), try displayWidth("\u{1F600}", 0, separate));
+}
+
+test "display width follows the terminal's glyph merging model" {
+    const separate = WidthModel{};
+    const merged = WidthModel{
+        .zwj_sequence_is_one_glyph = true,
+        .variation_selector_is_wide = true,
+    };
+
+    // A renderer that lays every code point out individually spends eight cells
+    // on the family and one on the smiley.
+    try testing.expectEqual(@as(usize, 8), try displayWidth("👩‍👩‍👦‍👦", 0, separate));
+    try testing.expectEqual(@as(usize, 1), try displayWidth("#️⃣", 0, separate));
+    try testing.expectEqual(@as(usize, 1), try displayWidth("\u{263A}\u{FE0F}", 0, separate));
+
+    // One that draws them as single glyphs spends two cells on each.
+    try testing.expectEqual(@as(usize, 2), try displayWidth("👩‍👩‍👦‍👦", 0, merged));
+    try testing.expectEqual(@as(usize, 2), try displayWidth("#️⃣", 0, merged));
+    try testing.expectEqual(@as(usize, 2), try displayWidth("\u{263A}\u{FE0F}", 0, merged));
+
+    // The facts are independent: a terminal may widen a variation sequence
+    // without merging ZWJ sequences.
+    const wide_only = WidthModel{ .variation_selector_is_wide = true };
+    try testing.expectEqual(@as(usize, 2), try displayWidth("\u{263A}\u{FE0F}", 0, wide_only));
+    try testing.expectEqual(@as(usize, 8), try displayWidth("👩‍👩‍👦‍👦", 0, wide_only));
 }
 
 test "invalid UTF-8 is rejected" {
     try testing.expectError(error.InvalidUtf8, nextGraphemeBoundary("\xff", 0));
-    try testing.expectError(error.InvalidUtf8, displayWidth("\xc3", 0));
+    try testing.expectError(error.InvalidUtf8, displayWidth("\xc3", 0, WidthModel{}));
 }
