@@ -1955,6 +1955,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .dyn => |s| .{ .dyn = .{
                     .target = try self.mapMaybeLocal(s.target),
                     .data = try self.store.addStmtRow(LIR.DynOp, try DynOps.remapOperands(self.store, self.store.stmtRow(s.data), self, Self.mapLocal)),
+                    .composition_cache = s.composition_cache,
                     .next = s.next,
                 } },
                 .switch_stmt,

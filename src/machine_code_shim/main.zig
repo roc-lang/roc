@@ -398,6 +398,16 @@ fn validateDirectImageLayout(view: *const RunImage.ProgramView) RunImage.ImageEr
     if (!rangeContains(view.executable, view.code)) return error.InvalidDevRunImage;
     if (!rangeContains(view.executable, view.function_stubs)) return error.InvalidDevRunImage;
     if (view.data.len > 0 and @intFromPtr(view.data.ptr) % view.page_size != 0) return error.InvalidDevRunImage;
+    if (view.mutable_data.len != 0) {
+        if (@intFromPtr(view.mutable_data.ptr) % view.page_size != 0) return error.InvalidDevRunImage;
+        for ([_][]const u8{ view.executable, view.data }) |readonly| {
+            if (readonly.len == 0) continue;
+            const mutable_start = @intFromPtr(view.mutable_data.ptr);
+            const readonly_start = @intFromPtr(readonly.ptr);
+            if (mutable_start < readonly_start + std.mem.alignForward(usize, readonly.len, view.page_size) and
+                readonly_start < mutable_start + std.mem.alignForward(usize, view.mutable_data.len, view.page_size)) return error.InvalidDevRunImage;
+        }
+    }
     for (view.code_symbols) |symbol| {
         if (symbol.code_offset >= view.code.len) return error.InvalidDevRunImage;
         _ = try view.codeSymbolName(symbol);
@@ -417,6 +427,9 @@ fn rangeContains(outer: []const u8, inner: []const u8) bool {
 fn prepareDirectImageForRelocation(view: *const RunImage.ProgramView) ipc.platform.MemoryProtectError!void {
     try ipc.platform.protectMappedMemory(view.executable.ptr, view.executable.len, .read_write);
     try protectDataPages(view, .read_write);
+    if (view.mutable_data.len != 0) {
+        try ipc.platform.protectMappedMemory(view.mutable_data.ptr, std.mem.alignForward(usize, view.mutable_data.len, view.page_size), .read_write);
+    }
 }
 
 fn finishDirectImageRelocation(view: *const RunImage.ProgramView) (ipc.platform.MemoryProtectError || instruction_cache.Error)!void {

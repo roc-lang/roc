@@ -3670,10 +3670,19 @@ producer's checked dependency identity (`test_rows`) when an imported entry
 changes. This identity includes the referenced implementations, checked type
 contexts, checking policy, and file inputs. Admission requires both the value
 and its stored type to contain no named type, field default, callable or other
-module-version reference, and its recorded root-read set to be empty. These
-conditions are checked against the previous committed result, not guessed from
-source syntax. Debug observations are copied and replayed in the ordinary root
-order. Values carrying version-specific references keep their entry-key
+module-version reference, and every recorded root read to retain its
+producer-authored value identity.
+When committing a checked module, the coordinator records each read's source
+placement, semantic root site and semantic value identity beside its exact
+module key and root id. Reuse resolves these placements and sites in the current
+checked program, checks every value identity, and installs the reads under the
+current module keys and root ids. This includes reads of roots in the same
+module, imported constants and transitive reads. Builtins and retained platform
+interface artifacts keep exact version keys in place of source placements.
+An absent producer, changed input or missing optional read identity makes the
+candidate a cache miss. These conditions are checked against the previous
+committed result, not guessed from source syntax. Debug observations are copied
+and replayed in the ordinary root order. Values carrying version-specific references keep their entry-key
 identity contract; checked equality alone does not authorize retaining an old
 checked-type occurrence or root id. Verification builds independently evaluate
 and compare these transplants just like other compile-time value reuse.
@@ -15265,6 +15274,43 @@ adding it, takes the lock, probes the current table again, and interns on a
 true miss. Only insertion and growth hold the lock. Keys are a few words of
 constructor tags and operand addresses, hashed by mixing each word.
 
+Each descriptor or dictionary composition statement also owns a one-entry site
+cache in zero-initialized writable static data. The lowerer assigns its slot
+and stable worker/site identity; LIR cloning and compaction preserve that
+reference. Mutable slots are never content-deduplicated or pooled between
+program images. Dev run images place them on separate writable pages outside
+the executable and read-only data sections and outside the retained static pool.
+Saved objects and LirImages carry the initial zero bytes, never runtime pointers.
+Each interpreter owns its own instances of these slots, with
+the lifetime of its composition arena.
+
+The dev backend and interpreter acquire-load a site's pointer to an immutable
+snapshot of the last operand pointers and result. If every operand matches,
+they use that result without entering the runtime or probing the interner. The
+constructor, worker, arities and other non-local arguments are fixed by the
+site; the local operand sequence is its complete varying key. A miss composes
+normally, then release-stores a complete snapshot pointer. Atomic publication
+of one pointer means no reader can observe a partially replaced operand/result
+pair, even with several writers. Snapshots are themselves interned by result
+and operand sequence in the program's immortal table, so alternating previously
+seen instantiations does not allocate on each replacement. A replaced snapshot
+stays alive for racing readers until the program is destroyed.
+
+A snapshot belongs to the program whose immortal table interned it. A cached
+module object is loaded once per compile-time evaluation and shared by every
+program of that evaluation, so its sites would otherwise hand a later program
+snapshots of a state that died with an earlier one. The evaluation therefore
+returns every loaded object's zero-filled data, where its sites live, to zero
+before each program runs (`BoxyLinkedImages.resetMutableData`), so a program
+finds the objects it shares holding no snapshot at all and publishes its own.
+
+A recursive-open operation can return a private, unfinished placeholder. It
+publishes no site snapshot until it returns a completed descriptor from the
+interner; recursive-close always finishes its placeholder before publishing.
+Thus the site cache never exposes an unfinished recursive descriptor to another
+execution. Monomorphic sites take the inline path after their first completed
+composition, while polymorphic sites use the ordinary interner on a mismatch.
+
 #### Lowering Implementation Constraints
 
 - The lowerer runs one worklist over reachable workers, seeded from the
@@ -15450,7 +15496,13 @@ the compiler's process and calling the imports' objects, loaded once per
 evaluation (`BoxyLinkedImages`), by symbol. A module with no object yet is
 compiled whole and filed the first time an importer needs it, whichever
 command that is; the root module's own constant code is compiled for the
-evaluation and discarded. A platform module with requirements has no object of
+evaluation and discarded. The first such need builds not one object but
+every one it can: the importer's closure and, in a program's build, every
+other module the root sees whose roots are complete, since each is needed by
+a later program or by the link. Those units build on the post-check executor,
+each once its imports among them are done and the independent ones at once;
+modules are evaluated in dependency order, so building only what each program
+asks for would build one unit at a time. A platform module with requirements has no object of
 its own, so a module importing one runs as the whole program. Each object is
 filed with its `CodeLocations`: its line table, failure sites and source files
 (Compile-Time Failure Sites). A failure in an object's code is therefore found

@@ -6221,6 +6221,7 @@ fn writeDevRunImageToSharedMemory(
                     .bytes = item.bytes,
                     .symbol_offset = item.symbol_offset,
                     .alignment = item.alignment,
+                    .is_mutable = item.is_mutable,
                     .is_global = false,
                     .is_exported = false,
                     .relocations = relocations,
