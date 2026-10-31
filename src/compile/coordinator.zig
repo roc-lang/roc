@@ -1639,11 +1639,16 @@ const BoxyObjects = struct {
         }
     };
 
-    /// Build the objects of `module`'s import closure that are not known
-    /// yet, each after its imports and the independent ones at once on the
-    /// post-check executor. A module's calls compile against its imports'
-    /// export interfaces, which their builds record, so a unit starts once
-    /// every import it has among the pending units is done.
+    /// Build the objects not known yet of `module`'s import closure and, in
+    /// a program's build, of every other module the root sees whose roots
+    /// are complete, each after its imports and the independent ones at once
+    /// on the post-check executor. Modules are evaluated in dependency
+    /// order, so the closure alone would be the one or two imports finalized
+    /// last; every visible complete module's object is needed by a later
+    /// program or by the link, and building them together is what lets the
+    /// builds overlap. A module's calls compile against its
+    /// imports' export interfaces, which their builds record, so a unit
+    /// starts once every import it has among the pending units is done.
     fn buildClosure(self: *BoxyObjects, module: *const Artifact) Error!void {
         const gpa = self.coordinator.gpa;
         var pending = std.ArrayList(*const Artifact).empty;
@@ -1654,6 +1659,16 @@ const BoxyObjects = struct {
         for (module.direct_import_module_keys) |key| {
             const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
             try self.collectPending(imported, &pending, &index_by_key);
+        }
+        if (self.coordinator.checked_program) {
+            // The program's link needs the object of every module the root
+            // sees, and no other: a platform module nothing imports has no
+            // object to build.
+            const root = self.coordinator.executableRootCheckedArtifact();
+            for (root.lowering_visibility.module_ids) |key| {
+                const artifact = self.coordinator.checkedArtifactByKey(key) orelse continue;
+                try self.collectPending(artifact, &pending, &index_by_key);
+            }
         }
         if (pending.items.len == 0) return;
 
@@ -1690,6 +1705,7 @@ const BoxyObjects = struct {
         for (remaining, 0..) |count, index| if (count == 0) try ready.append(gpa, @intCast(index));
 
         const executor = self.coordinator.postCheckExecutor();
+        if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: building {d} module objects for {s} on {d} workers\n", .{ pending.items.len, module.moduleEnvConst().module_name, executor.worker_count });
         var session: ?post_check_executor.Session = if (executor.worker_count > 1) executor.begin() else null;
         defer if (session) |*open| open.end();
         var done: usize = 0;
@@ -1742,10 +1758,12 @@ const BoxyObjects = struct {
     }
 
     /// Append `artifact` and its imports whose objects are not known yet to
-    /// `pending`, imports first.
+    /// `pending`, imports first. A module with roots still to evaluate, or
+    /// lowered at its app's types, has no object to build yet.
     fn collectPending(self: *BoxyObjects, artifact: *const Artifact, pending: *std.ArrayList(*const Artifact), index_by_key: *std.AutoHashMapUnmanaged([32]u8, u32)) Error!void {
         const gpa = self.coordinator.gpa;
         if (self.objects.contains(artifact.key.bytes) or index_by_key.contains(artifact.key.bytes)) return;
+        if (artifact.platform_type_inputs.requirements.len != 0 or artifact.hasUnevaluatedRequests(.boxy)) return;
         for (artifact.direct_import_module_keys) |key| {
             const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
             try self.collectPending(imported, pending, index_by_key);

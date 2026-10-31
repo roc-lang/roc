@@ -15296,6 +15296,14 @@ and operand sequence in the program's immortal table, so alternating previously
 seen instantiations does not allocate on each replacement. A replaced snapshot
 stays alive for racing readers until the program is destroyed.
 
+A snapshot belongs to the program whose immortal table interned it. A cached
+module object is loaded once per compile-time evaluation and shared by every
+program of that evaluation, so its sites would otherwise hand a later program
+snapshots of a state that died with an earlier one. The evaluation therefore
+returns every loaded object's zero-filled data, where its sites live, to zero
+before each program runs (`BoxyLinkedImages.resetMutableData`), so a program
+finds the objects it shares holding no snapshot at all and publishes its own.
+
 A recursive-open operation can return a private, unfinished placeholder. It
 stores no site snapshot until it returns a completed descriptor from the
 interner; recursive-close always finishes its placeholder before storing one.
@@ -15449,7 +15457,13 @@ the compiler's process and calling the imports' objects, loaded once per
 evaluation (`BoxyLinkedImages`), by symbol. A module with no object yet is
 compiled whole and filed the first time an importer needs it, whichever
 command that is; the root module's own constant code is compiled for the
-evaluation and discarded. A platform module with requirements has no object of
+evaluation and discarded. The first such need builds not one object but
+every one it can: the importer's closure and, in a program's build, every
+other module the root sees whose roots are complete, since each is needed by
+a later program or by the link. Those units build on the post-check executor,
+each once its imports among them are done and the independent ones at once;
+modules are evaluated in dependency order, so building only what each program
+asks for would build one unit at a time. A platform module with requirements has no object of
 its own, so a module importing one runs as the whole program. Each object is
 filed with its `CodeLocations`: its line table, failure sites and source files
 (Compile-Time Failure Sites). A failure in an object's code is therefore found

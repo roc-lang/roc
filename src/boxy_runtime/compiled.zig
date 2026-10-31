@@ -745,6 +745,7 @@ pub fn noteDesc(desc: *const TypeDesc, ty: u32, vars: []const *const TypeDesc) v
     InProcessState.current().note(desc, ty, vars);
 }
 
+/// The compositions of one compile-time program running in this process.
 pub const InProcessState = struct {
     allocator: std.mem.Allocator,
     lock: std.atomic.Mutex = .unlocked,
