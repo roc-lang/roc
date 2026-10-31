@@ -309,7 +309,7 @@ fn hashLengthPrefixed(hasher: *base.Sha256, bytes: []const u8) void {
 }
 
 fn testInput() KeyInput {
-    return .{ .checked_key = @splat(7), .target = "x64glibc", .opt = "dev", .inline_expects = false };
+    return .{ .object_input = @splat(7), .target = "x64glibc", .opt = "dev", .inline_expects = false };
 }
 
 test "a Boxy object key is a function of exactly its declared inputs" {
@@ -317,7 +317,7 @@ test "a Boxy object key is a function of exactly its declared inputs" {
     try std.testing.expectEqual(baseline.bytes, key(testInput()).bytes);
 
     var changed_module = testInput();
-    changed_module.checked_key = @splat(8);
+    changed_module.object_input = @splat(8);
     try std.testing.expect(!std.mem.eql(u8, &baseline.bytes, &key(changed_module).bytes));
 
     var with_platform = testInput();

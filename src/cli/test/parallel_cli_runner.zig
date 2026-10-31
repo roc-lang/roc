@@ -11611,7 +11611,7 @@ fn customBoxyModuleObjectCache(
 fn replaceInFile(io: std.Io, allocator: Allocator, path: []const u8, from: []const u8, to: []const u8) (std.Io.Dir.ReadFileAllocError || std.Io.Dir.WriteFileError || Allocator.Error || error{EditNotFound})!void {
     const existing = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024));
     const at = std.mem.find(u8, existing, from) orelse return error.EditNotFound;
-    const edited = try std.mem.concat(allocator, u8, &.{ existing[0..at], to, existing[at + from.len..] });
+    const edited = try std.mem.concat(allocator, u8, &.{ existing[0..at], to, existing[at + from.len ..] });
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = edited });
 }
 

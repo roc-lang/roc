@@ -2537,7 +2537,7 @@ fn hashScalar(hasher: *base.Sha256, scalar: ConstScalar) void {
     hasher.update(@tagName(std.meta.activeTag(scalar)));
     hasher.update(&[_]u8{0});
     switch (scalar) {
-        inline else => |value| hasher.update(std.mem.asBytes(&value)),
+        inline .i8, .i16, .i32, .i64, .i128, .u8, .u16, .u32, .u64, .u128, .f32_bits, .f64_bits, .dec_bits => |value| hasher.update(std.mem.asBytes(&value)),
     }
 }
 
