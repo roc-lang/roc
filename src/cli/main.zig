@@ -11528,9 +11528,9 @@ fn buildBoxyLibraryObjects(
     const ordered = try ctx.arena.alloc([]const u8, units.items.len);
     for (objects, ordered) |object, *slot| slot.* = object orelse base.invariant("roc build invariant violated: a .boxy unit completed without an object", .{});
     var paired_platforms: std.ArrayList([32]u8) = .empty;
-    if (platform) |view| try paired_platforms.append(ctx.arena, view.key.bytes);
+    if (platform) |view| try paired_platforms.append(ctx.arena, (view.code_generation_key orelse view.key).bytes);
     for (visible) |artifact| {
-        if (artifact.platform_type_inputs.requirements.len != 0) try paired_platforms.append(ctx.arena, artifact.key.bytes);
+        if (artifact.platform_type_inputs.requirements.len != 0) try paired_platforms.append(ctx.arena, artifact.codeGenerationKey().bytes);
     }
     return .{ .objects = ordered, .hosted_symbols = hosted_symbols.items, .platform = platform, .paired_platforms = paired_platforms.items };
 }

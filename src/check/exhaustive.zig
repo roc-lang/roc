@@ -2178,6 +2178,10 @@ pub fn collectAbsentCtorPayloadBlockersForConstructedTags(
         const arg_types = try getCtorArgTypes(type_store, builtin_idents, target_var, alt.tag_id);
         for (0..arg_types.len()) |offset| {
             const arg_type = arg_types.get(type_store, offset);
+            // Template-owned blockers cannot be returned to the solver. The
+            // declaration's substitution summary proves when every reachable
+            // variable is owned, so no inhabitedness graph is needed.
+            if (!try type_store.hasSourceDependencies(arg_type)) continue;
             if (!try isKnownAbsentCtorPayloadTypeInhabited(allocator, type_store, builtin_idents, arg_type)) {
                 try collectKnownAbsentCtorPayloadBlockers(allocator, type_store, builtin_idents, arg_type, analysis_out);
             }

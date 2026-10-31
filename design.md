@@ -1548,6 +1548,18 @@ variables, whose template value checking still writes through them; a
 declaration copied from another module is final once its copy returns. No
 other graph outlives its reader.
 
+The same graph separately records structural substitution dependencies,
+without the application-ownership dependencies of template-private unknowns.
+Following these dependencies through a view's actual arguments proves when
+no mutable source variable can be exported by blocker collection. In that
+case, known-absent constructor analysis returns no blockers without building
+an inhabitedness graph. This proof applies to the whole structural dependency
+graph, including recursive edges, aliases' hidden arguments, field presence,
+and row extensions; it is not inferred from arity or constructor shape. Only
+the final declaration's dependency summary persists across reads. Actual
+source variables still receive ordinary analysis in each mutation-free read;
+no inhabitedness or blocker answer about mutable types is shared.
+
 An inhabitedness memo stores complete query answers, not provisional answers
 obtained by cutting an active recursive path. Its key includes the resolved
 root and the exact sorted, deduplicated known-empty assumptions; its lifetime is one
@@ -15460,8 +15472,10 @@ and Per-Module Output is the invariant that makes it possible:
   among the declarations sharing its name. A lambda's worker is named by its
   expression, which only a function value stored in a constant reaches across
   modules, and a stored function value's digest is its module's checked key.
-- The root program's key adds the checked keys of its platform modules, since
-  the root unit lowers their implementations at the app's types.
+- The root program's key adds the code-generation keys of its platform modules,
+  including their exact app binding environments: the root unit lowers their
+  implementations at the app's types and calls the supplied app workers. The
+  immutable platform's checked key alone does not identify this executable code.
 - The FILE is deterministically byte-identical for its key: a cold build and
   a warm build, and two machines, write the same bytes. It holds everything
   lowered for the module, through the object's machine code, and the few
@@ -15554,8 +15568,13 @@ reads the checked modules and the loaded objects' symbols and writes nothing
 another thread reads; running it, which stores values and reports failures,
 stays on the evaluating thread, as do the programs of roots holding function
 values ("Stored Function Values"). A module's evaluation thus waits only for the values its roots read and the
-objects of its own import closure. The link waits for every unit and links the
-objects this compilation built or restored without restoring them again: a
+objects of its own import closure. The link waits for every unit after program
+evaluation. Platform-only evaluation before pairing
+joins running object tasks before publishing its values, but retains queued
+app units: their imports can still have roots that program evaluation must
+complete. This publication barrier requires no active readers, not completion
+of units whose inputs belong to the later evaluation.
+The link uses the objects this compilation built or restored without restoring them again: a
 build that links the objects keeps each one for the link as the scheduler
 completes it (`BoxyObjectLowering.Materializer`), so the link reads them back
 without writing them again. While checking continues, a compilation that links
