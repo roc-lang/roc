@@ -725,6 +725,11 @@ pub const ModuleState = struct {
     source_dir_override: ?[]const u8 = null,
     /// Raw source file state observed by the parse worker before normalization.
     source_file_state: ?watch_inputs.State = null,
+    /// Registered parse tasks can remain unconsumed when another task aborts
+    /// the build. Only installed read results contribute consumed watch inputs.
+    source_input_consumption: enum { pending, consumed } = .pending,
+    /// Whether this build installed a canonicalized-cache hit for this module.
+    canonicalized_cache_hit: bool = false,
     /// Compiler role assigned during package discovery for this module.
     module_role: ModuleEnv.ModuleRole = .user,
     /// Top-level names that package metadata requires as compile-time roots.
@@ -5003,6 +5008,7 @@ pub const Coordinator = struct {
         }
 
         // Take ownership of module env and AST
+        mod.source_input_consumption = .consumed;
         mod.source_file_state = result.source_file_state;
         mod.replaceModuleEnv(result.module_env);
         mod.cached_ast = result.cached_ast;
@@ -5430,11 +5436,13 @@ pub const Coordinator = struct {
         const mod = registeredModule(pkg, result.package_name, result.module_id, result.module_name, "for cached canonicalized result");
 
         self.canonicalized_cache_hits += 1;
+        mod.canonicalized_cache_hit = true;
         mod.has_source_version_pin = result.has_source_version_pin;
 
         // The parse stage's reports come first, exactly as they do when the
         // module is parsed, and the invalid-import reports the registration
         // below appends follow them.
+        mod.source_input_consumption = .consumed;
         mod.source_file_state = result.source_file_state;
         mod.replaceModuleEnv(result.module_env);
         for (result.parse_reports.items) |rep| {
@@ -5804,7 +5812,13 @@ pub const Coordinator = struct {
             coordinatorInvariant("operational failure named missing package '{s}'", .{failure.package_name});
         const mod = pkg.getModule(failure.module_id) orelse
             coordinatorInvariant("operational failure named missing module {d}", .{failure.module_id});
-        if (failure.source_file_state) |state| mod.source_file_state = state;
+        switch (failure.cause) {
+            .read_source => {
+                mod.source_input_consumption = .consumed;
+                mod.source_file_state = failure.source_file_state;
+            },
+            .type_check => {},
+        }
         const operation_error: messages.WorkerOperationError = switch (failure.cause) {
             .read_source => |err| err,
             .type_check => |err| err,

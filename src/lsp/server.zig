@@ -10,8 +10,26 @@ const makeTransport = @import("transport.zig").Transport;
 const DocumentStore = @import("document_store.zig").DocumentStore;
 const DebugFlags = @import("debug.zig").DebugFlags;
 const Diagnostics = @import("diagnostics.zig");
+const Contributions = @import("diagnostic_contributions.zig").Contributions;
 const uri_util = @import("uri.zig");
+const compile = @import("compile");
+const watch = @import("watch");
 const inbox_mod = @import("inbox.zig");
+
+/// Optional deterministic observation and failure controls for live-server tests.
+pub const TestHooks = struct {
+    pub const Boundary = enum { after_check, before_registration, after_registration, drained };
+    context: ?*anyopaque = null,
+    boundary: ?*const fn (?*anyopaque, Boundary) void = null,
+    reconcile_requested: std.atomic.Value(usize) = .init(0),
+    reconcile_acknowledged: std.atomic.Value(usize) = .init(0),
+    checks: std.atomic.Value(usize) = .init(0),
+    publications: std.atomic.Value(usize) = .init(0),
+    fail_startup: std.atomic.Value(bool) = .init(false),
+    fail_replacement: std.atomic.Value(bool) = .init(false),
+    fail_runtime: std.atomic.Value(bool) = .init(false),
+    after_resolution: @FieldType(compile.BuildEnv, "after_resolution") = null,
+};
 
 /// TODO
 pub const DebugOptions = struct {
@@ -70,7 +88,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         /// Errors that terminate the server because input or output can no longer be processed reliably.
         pub const RunError = TransportType.ReadMessageError || PayloadError || std.Io.ConcurrentError;
         const InboxType = inbox_mod.Inbox(TransportType.ReadMessageError);
-        const RunSyntaxCheckError = SyntaxDriverType.CheckError || Allocator.Error || error{WriteFailed};
+        const RunSyntaxCheckError = SyntaxDriverType.CheckError || std.Io.Dir.RealPathFileAllocError || Allocator.Error || error{WriteFailed};
         const HandlerFn = fn (*Self, *protocol.JsonId, ?std.json.Value) HandlerError!void;
         const HandlerRegistration = struct {
             call: *const HandlerFn,
@@ -128,12 +146,39 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         state: State = .waiting_for_initialize,
         doc_store: DocumentStore,
         syntax_checker: SyntaxDriverType,
+        diagnostic_contributions: Contributions = .{},
+        root_inputs: std.StringHashMapUnmanaged(RootInputs) = .empty,
+        watcher: ?*watch.Watcher = null,
+        watch_failed: bool = false,
+        registration_count: usize = 0,
+        test_hooks: ?*TestHooks = null,
+        diagnostic_uris: std.StringHashMapUnmanaged(void) = .empty,
         inbox: InboxType,
         /// Open documents whose text changed since they were last checked, in
         /// the order they changed. Owns its keys.
         scheduled_checks: std.StringArrayHashMapUnmanaged(void) = .empty,
         log_file: ?std.Io.File = null,
         debug: DebugFlags,
+
+        const RootInputs = struct { path: [:0]const u8, inputs: []const compile.watch_inputs.Input };
+
+        pub fn wakeForTesting(self: *Self) void {
+            self.inbox.noteInputsChanged();
+        }
+
+        fn boundary(self: *Self, point: TestHooks.Boundary) void {
+            if (self.test_hooks) |hooks| if (hooks.boundary) |call| call(hooks.context, point);
+        }
+
+        fn freeRootInputs(self: *Self, root: RootInputs) void {
+            self.allocator.free(root.path);
+            compile.watch_inputs.deinit(self.allocator, root.inputs);
+        }
+
+        fn stopWatching(self: *Self) void {
+            if (self.watcher) |watcher| watcher.deinit();
+            self.watcher = null;
+        }
 
         pub const server_name = "roc-lsp";
         pub const version = "0.1";
@@ -160,12 +205,14 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
                 .syntax = debug_options.syntax,
                 .server = debug_options.server,
             };
+            var syntax_checker = SyntaxDriverType.init(allocator, std_io, flags, log_file);
+            if (@hasDecl(SyntaxDriverType, "setRootOwnedPublication")) syntax_checker.setRootOwnedPublication();
             return .{
                 .allocator = allocator,
                 .std_io = std_io,
                 .transport = TransportType.init(allocator, std_io, reader, writer, if (debug_options.transport) log_file else null),
                 .doc_store = DocumentStore.init(allocator),
-                .syntax_checker = SyntaxDriverType.init(allocator, std_io, flags, log_file),
+                .syntax_checker = syntax_checker,
                 .inbox = InboxType.init(allocator, std_io),
                 .log_file = log_file,
                 .debug = flags,
@@ -173,6 +220,17 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         }
 
         pub fn deinit(self: *Self) void {
+            self.stopWatching();
+            var roots = self.root_inputs.iterator();
+            while (roots.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                self.freeRootInputs(entry.value_ptr.*);
+            }
+            self.root_inputs.deinit(self.allocator);
+            self.diagnostic_contributions.deinit(self.allocator);
+            var uris = self.diagnostic_uris.keyIterator();
+            while (uris.next()) |uri| self.allocator.free(uri.*);
+            self.diagnostic_uris.deinit(self.allocator);
             self.client.deinit(self.allocator);
             self.transport.deinit();
             self.doc_store.deinit();
@@ -182,13 +240,148 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             self.scheduled_checks.deinit(self.allocator);
         }
 
+        fn watchCallback(context: ?*anyopaque, _: watch.WatchEvent) void {
+            const self: *Self = @ptrCast(@alignCast(context.?));
+            self.inbox.noteInputsChanged();
+        }
+
+        fn reportWatchFailure(self: *Self) (Allocator.Error || error{WriteFailed})!void {
+            self.stopWatching();
+            self.watch_failed = true;
+            try self.transport.sendJson(.{
+                .jsonrpc = "2.0",
+                .method = "window/showMessage",
+                .params = .{ .type = @as(u8, 1), .message = "Compiler-input watching failed; live diagnostics are unavailable. Ordinary document checking remains available." },
+            });
+        }
+
+        fn installCoverage(self: *Self) (Allocator.Error || error{WriteFailed})!void {
+            if (self.watch_failed or !self.client.trusted_workspace or self.state != .running) return;
+            var paths: std.StringHashMapUnmanaged(void) = .empty;
+            defer paths.deinit(self.allocator);
+            var roots = self.root_inputs.valueIterator();
+            while (roots.next()) |root| for (root.inputs) |input| {
+                if (!std.mem.eql(u8, input.path, root.path)) try paths.put(self.allocator, input.path, {});
+            };
+            const list = try self.allocator.alloc([]const u8, paths.count());
+            defer self.allocator.free(list);
+            var keys = paths.keyIterator();
+            var i: usize = 0;
+            while (keys.next()) |key| : (i += 1) list[i] = key.*;
+            if (list.len == 0) {
+                self.stopWatching();
+                self.inbox.noteInputsChanged();
+                return;
+            }
+            self.boundary(.before_registration);
+            if (self.test_hooks) |hooks| {
+                const fail = if (self.registration_count == 0) hooks.fail_startup.load(.seq_cst) else hooks.fail_replacement.load(.seq_cst);
+                if (fail) return self.reportWatchFailure();
+            }
+            self.registration_count += 1;
+            const replacement = watch.Watcher.initInputs(self.allocator, self.std_io, list, self, watchCallback) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return self.reportWatchFailure(),
+            };
+            replacement.start() catch |err| switch (err) {
+                error.OutOfMemory => {
+                    replacement.deinit();
+                    return error.OutOfMemory;
+                },
+                else => {
+                    replacement.deinit();
+                    return self.reportWatchFailure();
+                },
+            };
+            self.stopWatching();
+            self.watcher = replacement;
+            self.boundary(.after_registration);
+            // Compare every consumed state after registration, including repeated
+            // observations of the same path. No later native event is required.
+            self.inbox.noteInputsChanged();
+        }
+
+        fn inputChanged(self: *Self, input: compile.watch_inputs.Input) Allocator.Error!bool {
+            const bytes = std.Io.Dir.cwd().readFileAlloc(self.std_io, input.path, self.allocator, .unlimited) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.FileNotFound => {
+                    const current: compile.watch_inputs.State = .missing;
+                    return std.meta.activeTag(current) != std.meta.activeTag(input.state);
+                },
+                else => {
+                    const current: compile.watch_inputs.State = .unreadable;
+                    return std.meta.activeTag(current) != std.meta.activeTag(input.state);
+                },
+            };
+            defer self.allocator.free(bytes);
+            return switch (input.state) {
+                .hash => |hash| !std.mem.eql(u8, &hash, &compile.watch_inputs.hashBytes(bytes)),
+                .missing, .unreadable => true,
+            };
+        }
+
+        fn refreshInputs(self: *Self) (Allocator.Error || error{WriteFailed})!void {
+            if (self.state != .running or !self.client.trusted_workspace) {
+                self.stopWatching();
+                return;
+            }
+            if (!self.watch_failed) {
+                if (self.test_hooks) |hooks| if (hooks.fail_runtime.load(.seq_cst)) return self.reportWatchFailure();
+            }
+            // A request arriving during comparison needs a later pass. Never
+            // acknowledge a generation first observed after reading the inputs.
+            const reconcile_generation = if (self.test_hooks) |hooks| hooks.reconcile_requested.load(.seq_cst) else 0;
+            var coverage_changed = false;
+            if (self.watcher) |watcher| {
+                if (watcher.hasBackendFailed()) return self.reportWatchFailure();
+                coverage_changed = watcher.takeCoverageChange();
+                // Drain native dirty flags; consumed-state comparison below is the
+                // authority, not notification counts or path metadata.
+                for (watcher.paths, 0..) |_, index| _ = watcher.takeInputChange(index);
+            }
+            var changed: std.ArrayList([]const u8) = .empty;
+            defer {
+                for (changed.items) |uri| self.allocator.free(uri);
+                changed.deinit(self.allocator);
+            }
+            var roots = self.root_inputs.iterator();
+            while (roots.next()) |entry| {
+                for (entry.value_ptr.inputs) |input| {
+                    if (std.mem.eql(u8, input.path, entry.value_ptr.path)) continue;
+                    if (try self.inputChanged(input)) {
+                        try changed.append(self.allocator, try self.allocator.dupe(u8, entry.key_ptr.*));
+                        break;
+                    }
+                }
+            }
+            for (changed.items) |uri| {
+                const pending = try self.allocator.alloc(Diagnostics.PublishDiagnostics, 0);
+                errdefer self.allocator.free(pending);
+                try self.diagnostic_contributions.replace(self.allocator, uri, pending);
+            }
+            for (changed.items) |uri| {
+                if (self.doc_store.get(uri) == null) continue;
+                if (@hasDecl(SyntaxDriverType, "invalidateDocument")) try self.syntax_checker.invalidateDocument();
+                try self.onDocumentChanged(uri);
+            }
+            if (coverage_changed and changed.items.len == 0) try self.installCoverage();
+            if (changed.items.len == 0 and !coverage_changed and self.scheduled_checks.count() == 0 and !self.inbox.inputsChangePending()) {
+                if (self.test_hooks) |hooks| hooks.reconcile_acknowledged.store(reconcile_generation, .seq_cst);
+                self.boundary(.drained);
+            }
+        }
+
         /// Serve until the client exits or its input ends. A reader task
         /// receives messages while this task handles them and checks
         /// documents, so an edit that arrives during a check cancels that
         /// check when it makes the check stale.
         pub fn run(self: *Self) RunError!void {
             var reader = try std.Io.concurrent(self.std_io, readMessages, .{self});
-            defer reader.cancel(self.std_io);
+            defer {
+                if (comptime @hasDecl(ReaderType, "cancel")) self.transport.reader.cancel();
+                reader.cancel(self.std_io);
+                self.stopWatching();
+            }
 
             while (self.state != .exit_success and self.state != .exit_failure) {
                 switch (self.inbox.next(self.hasScheduledChecks())) {
@@ -196,7 +389,9 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
                         var owned = message;
                         defer owned.deinit(self.allocator);
                         try self.handleMessage(&owned);
+                        if (self.state == .shutdown) self.stopWatching();
                     },
+                    .inputs_changed => try self.refreshInputs(),
                     .idle => try self.runScheduledCheck(),
                     .ended => |maybe_err| {
                         if (maybe_err) |err| return err;
@@ -218,12 +413,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
                 if (!self.transport.hasBufferedInput()) self.inbox.noteWaiting();
                 const payload = self.transport.readMessage() catch |err| switch (err) {
                     error.EndOfStream => return self.inbox.finish(null),
-                    error.HeaderTooLong,
-                    error.InvalidHeader,
-                    error.MissingContentLength,
-                    error.OutOfMemory,
-                    error.PayloadTooLarge,
-                    => return self.inbox.finish(err),
+                    else => return self.inbox.finish(err),
                 };
                 var message = inbox_mod.Message.init(self.allocator, payload) catch |err| return self.inbox.finish(err);
                 self.inbox.push(message) catch |err| {
@@ -316,6 +506,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
                     try self.sendError(id, .request_failed, "Semantic features require initializationOptions.trustedWorkspace: true; restart the server after granting trust.");
                     return;
                 }
+                if (handler.requires_trust) try self.refreshInputs();
                 // A semantic request answers from the build of its document's
                 // current text, which a scheduled check of that document
                 // produces, so the check runs first and is not canceled.
@@ -355,7 +546,6 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             }
 
             if (std.mem.eql(u8, method, "initialized")) return;
-
             if (notification_handlers.get(method)) |handler| {
                 try handler(self, params);
                 return;
@@ -401,6 +591,21 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
                 .id = id.*,
                 .result = result,
             });
+        }
+
+        pub fn onDocumentClosed(self: *Self, uri: []const u8) (Allocator.Error || error{WriteFailed})!void {
+            self.unscheduleCheck(uri);
+            self.doc_store.remove(uri);
+            self.syntax_checker.closeDocument(uri);
+            try self.syntax_checker.forget(uri);
+            if (self.root_inputs.fetchRemove(uri)) |entry| {
+                self.allocator.free(entry.key);
+                self.freeRootInputs(entry.value);
+                try self.installCoverage();
+            }
+            self.diagnostic_contributions.remove(self.allocator, uri);
+            if (@hasDecl(SyntaxDriverType, "invalidateDocument")) try self.syntax_checker.invalidateDocument();
+            try self.publishContributions();
         }
 
         /// The `textDocument.uri` a request names, if any.
@@ -469,6 +674,9 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
                 else => log.err("syntax check failed for {s}: {s}", .{ uri, @errorName(err) }),
             };
             self.unscheduleCheck(uri);
+            if (self.test_hooks) |hooks| {
+                if (hooks.reconcile_requested.load(.seq_cst) != hooks.reconcile_acknowledged.load(.seq_cst)) self.inbox.noteInputsChanged();
+            }
         }
 
         fn runSyntaxCheck(self: *Self, uri: []const u8, cancel_request: ?*const std.atomic.Value(bool)) RunSyntaxCheckError!void {
@@ -478,14 +686,74 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             else
                 null;
             defer if (root_path) |p| self.allocator.free(p);
-            const publish_sets = try self.syntax_checker.check(uri, if (doc) |d| d.text else null, root_path, cancel_request);
-            defer {
-                for (publish_sets) |*set| set.deinit(self.allocator);
-                self.allocator.free(publish_sets);
+            if (comptime @hasField(SyntaxDriverType, "after_resolution")) {
+                self.syntax_checker.after_resolution = if (self.test_hooks) |hooks| hooks.after_resolution else null;
             }
-
+            const publish_sets = try self.syntax_checker.check(uri, if (doc) |d| d.text else null, root_path, cancel_request);
+            if (self.test_hooks) |hooks| _ = hooks.checks.fetchAdd(1, .seq_cst);
+            self.boundary(.after_check);
+            var transferred = false;
+            defer if (!transferred) Contributions.freeSets(self.allocator, publish_sets);
+            // An empty list means the checker reused the previous result.
+            if (publish_sets.len == 0) return;
+            if (comptime @hasDecl(SyntaxDriverType, "takeWatchInputs")) {
+                const inputs = self.syntax_checker.takeWatchInputs();
+                errdefer compile.watch_inputs.deinit(self.allocator, inputs);
+                const path = try uri_util.uriToPath(self.allocator, uri);
+                defer self.allocator.free(path);
+                const absolute_path = std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, self.allocator) catch |err| switch (err) {
+                    // Open buffers may not have been saved to disk yet.
+                    error.FileNotFound, error.NotDir => try self.allocator.dupeSentinel(u8, path, 0),
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return err,
+                };
+                errdefer self.allocator.free(absolute_path);
+                const entry = try self.root_inputs.getOrPut(self.allocator, uri);
+                if (entry.found_existing) {
+                    self.freeRootInputs(entry.value_ptr.*);
+                } else {
+                    entry.key_ptr.* = self.allocator.dupe(u8, uri) catch |err| {
+                        self.root_inputs.removeByPtr(entry.key_ptr);
+                        return err;
+                    };
+                }
+                entry.value_ptr.* = .{ .path = absolute_path, .inputs = inputs };
+            }
+            if (comptime @hasDecl(SyntaxDriverType, "takeWatchInputs")) try self.installCoverage();
             for (publish_sets) |set| {
-                try self.publishDiagnostics(set);
+                if (!self.diagnostic_uris.contains(set.uri)) {
+                    const key = try self.allocator.dupe(u8, set.uri);
+                    errdefer self.allocator.free(key);
+                    try self.diagnostic_uris.put(self.allocator, key, {});
+                }
+            }
+            try self.diagnostic_contributions.replace(self.allocator, uri, publish_sets);
+            transferred = true;
+            try self.publishContributions();
+        }
+
+        fn publishContributions(self: *Self) (Allocator.Error || error{WriteFailed})!void {
+            var retired: std.ArrayList([]const u8) = .empty;
+            defer retired.deinit(self.allocator);
+            // Do not mutate the map while its iterator is live. Even if a later
+            // publication fails, retire URIs whose final clear already succeeded.
+            defer for (retired.items) |uri| {
+                const entry = self.diagnostic_uris.fetchRemove(uri).?;
+                self.allocator.free(entry.key);
+            };
+            try retired.ensureTotalCapacity(self.allocator, self.diagnostic_uris.count());
+            var uris = self.diagnostic_uris.keyIterator();
+            while (uris.next()) |uri| {
+                var publish = try self.diagnostic_contributions.collect(self.allocator, uri.*);
+                defer publish.deinit(self.allocator);
+                try self.publishDiagnostics(publish);
+                if (self.doc_store.get(uri.*) == null and
+                    !self.root_inputs.contains(uri.*) and
+                    !self.diagnostic_contributions.referencesUri(uri.*))
+                {
+                    std.debug.assert(publish.diagnostics.len == 0);
+                    retired.appendAssumeCapacity(uri.*);
+                }
             }
         }
 
@@ -500,6 +768,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             };
 
             self.logDebug("publishing {d} diagnostics for {s}", .{ publish.diagnostics.len, publish.uri });
+            if (self.test_hooks) |hooks| _ = hooks.publications.fetchAdd(1, .seq_cst);
 
             try self.transport.sendJson(Notification{
                 .params = .{ .uri = publish.uri, .diagnostics = publish.diagnostics },
@@ -588,6 +857,57 @@ fn createPrivateLog(std_io: std.Io, absolute_path: []const u8) std.Io.File.OpenE
         .exclusive = true,
         .permissions = if (builtin.os.tag == .windows) .default_file else .fromMode(0o600),
     });
+}
+
+test "diagnostic URIs retire after the last successful clear and are not republished" {
+    const a = std.testing.allocator;
+    const Writer = struct {
+        output: *std.ArrayList(u8),
+        fail: *bool,
+
+        pub fn writeAll(self: *@This(), bytes: []const u8) error{ OutOfMemory, WriteFailed }!void {
+            if (self.fail.*) return error.WriteFailed;
+            try self.output.appendSlice(std.testing.allocator, bytes);
+        }
+    };
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(a);
+    var fail = false;
+    const TestServer = ServerWithSyntaxDriver(void, Writer, struct {
+        pub fn init(_: Allocator, _: std.Io, _: DebugFlags, _: ?std.Io.File) @This() {
+            return .{};
+        }
+        pub fn deinit(_: *@This()) void {}
+    });
+    var server = try TestServer.init(a, std.testing.io, {}, .{ .output = &output, .fail = &fail }, null, .{});
+    defer server.deinit();
+    const uri = "file:///dependency.roc";
+    try server.diagnostic_uris.put(a, try a.dupe(u8, uri), {});
+    for ([_][]const u8{ "first", "second" }) |root| {
+        const sets = try a.alloc(Diagnostics.PublishDiagnostics, 1);
+        sets[0] = .{ .uri = try a.dupe(u8, uri), .diagnostics = try a.alloc(Diagnostics.Diagnostic, 0) };
+        try server.diagnostic_contributions.replace(a, root, sets);
+    }
+    server.diagnostic_contributions.remove(a, "first");
+    try server.publishContributions();
+    try std.testing.expect(server.diagnostic_uris.contains(uri));
+    server.diagnostic_contributions.remove(a, "second");
+    try server.doc_store.upsert(uri, 1, "");
+    try server.publishContributions();
+    try std.testing.expect(server.diagnostic_uris.contains(uri));
+    server.doc_store.remove(uri);
+    fail = true;
+    try std.testing.expectError(error.WriteFailed, server.publishContributions());
+    try std.testing.expect(server.diagnostic_uris.contains(uri));
+    fail = false;
+    output.clearRetainingCapacity();
+    try server.publishContributions();
+    try std.testing.expect(!server.diagnostic_uris.contains(uri));
+    try std.testing.expect(std.mem.find(u8, output.items, uri) != null);
+    try std.testing.expect(std.mem.find(u8, output.items, "\"diagnostics\":[]") != null);
+    output.clearRetainingCapacity();
+    try server.publishContributions();
+    try std.testing.expectEqual(@as(usize, 0), output.items.len);
 }
 
 test "debug log refuses existing files and symlinks and has private permissions" {

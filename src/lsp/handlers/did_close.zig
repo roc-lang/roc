@@ -22,10 +22,7 @@ pub fn handler(comptime ServerType: type) type {
             if (std.meta.activeTag(uri_value) != .string) return;
             const uri = uri_value.string;
 
-            self.unscheduleCheck(uri);
-            self.doc_store.remove(uri);
-            self.syntax_checker.closeDocument(uri);
-            try self.syntax_checker.forget(uri);
+            try self.onDocumentClosed(uri);
         }
     };
 }

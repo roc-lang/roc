@@ -431,7 +431,7 @@ pub const ModuleType = enum {
             },
             .lsp => .{
                 .root = "src/lsp/mod.zig",
-                .deps = &.{ .collections, .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
+                .deps = &.{ .collections, .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target, .watch },
                 .tests = .{ .unit = .{} },
                 .available = .native,
             },
