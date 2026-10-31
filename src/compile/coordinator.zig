@@ -1914,6 +1914,7 @@ const BoxyObjects = struct {
             return;
         }
         try self.waitUntil({}, nothingRunning);
+        if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: restarting under the link's names: {d} modules share a name, {d} objects and {d} units discarded\n", .{ settled.names.content_named.count(), self.records.count(), self.units.count() });
         const gpa = self.coordinator.gpa;
         self.digests.deinit();
         self.digests = settled;
