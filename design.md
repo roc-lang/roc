@@ -15459,24 +15459,35 @@ compiled whole and filed by the compilation that first needs it, whichever
 command that is; the root module's own constant code is compiled for the
 evaluation and discarded. A module can have an object only once every
 compile-time root of its own is complete: in its object, an evaluated root's
-entry wrapper restores the stored value, which the other objects of a link
-read through it, so an object lowered while a root was still pending would
-compute the root's body at every read instead. The coordinator's unit
-scheduler (`compile.coordinator.BoxyObjects`) therefore builds each module's
-object as soon as the module can have one, and no sooner: a module restored
-from the checked cache with its roots complete, or one with no roots, the
-moment it is type-checked, while checking continues; every other module the
-moment the evaluator completes its roots. Each unit lowers once its imports'
-units are done, since its calls compile against their export interfaces, and
-the units run on the post-check executor alongside checking, the other units,
-and the evaluations of other modules. A module's evaluation waits only for
-the objects of its own import closure; the link waits for every unit, and
-links the objects this compilation built or restored without restoring them
-again. While checking continues, a compilation that links its program builds
-only modules reachable through import edges from the root package's root and
-the platform root, which every module the root will see is, and leaves one
-worker to checking; after it, exactly the modules the root sees. A
-compilation that does not link its program (`roc check`) builds the modules
+entry wrapper restores the stored value, which the other objects of a link read
+through it, so an object lowered while a root was still pending would compute
+the root's body at every read instead. The coordinator's unit scheduler
+(`compile.coordinator.BoxyObjects`) therefore builds each module's object as
+soon as the module can have one, and no sooner: a module restored from the
+checked cache with its roots complete, or one with no roots, the moment it is
+type-checked, while checking continues; every other module the moment the
+evaluator completes its roots. Each unit lowers once its imports' units are
+done, since its calls compile against their export interfaces, and the units
+run on the post-check executor alongside checking, the other units, and the
+evaluations of other modules. The evaluations run the same way: a module's
+program is lowered and compiled as its own task of the scheduler's session once
+every value its roots read is complete and, where it links against its imports'
+objects, once those are known, so the programs of modules that read nothing of
+each other are built at the same time, and the evaluating thread runs each
+program as it is built, in the order the builds finish. The build of a program
+reads the checked modules and the loaded objects' symbols and writes nothing
+another thread reads; running it, which stores values and reports failures,
+stays on the evaluating thread, as do the programs of roots holding function
+values ("Stored Function Values"). A module's evaluation thus waits only for the values its roots read and the
+objects of its own import closure. The link waits for every unit and links the
+objects this compilation built or restored without restoring them again: a
+build that links the objects keeps each one for the link as the scheduler
+completes it (`BoxyObjectLowering.Materializer`), so the link reads them back
+without writing them again. While checking continues, a compilation that links
+its program builds only modules reachable through import edges from the root
+package's root and the platform root, which every module the root will see is,
+and leaves one worker to checking; after it, exactly the modules the root sees.
+A compilation that does not link its program (`roc check`) builds the modules
 each evaluation's program needs and, as a program's build does, every other
 module the root sees whose roots are complete. The scheduler's post-check
 session stays open across checking and evaluation while the general session

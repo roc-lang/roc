@@ -11424,7 +11424,7 @@ fn buildBoxyLibraryObjects(
         const key = try boxyObjectKey(ctx.gpa, task.artifact, task.platform, args, target, false);
         const known = build_env.boxyObjectWithKey(task.artifact, key) orelse continue;
         if (known.restored) restored += 1 else built += 1;
-        objects[index] = link_objects.materialize(known.object) catch return error.NativeCompilationFailed;
+        objects[index] = known.path orelse link_objects.materialize(known.object) catch return error.NativeCompilationFailed;
         for (known.hosted_symbols) |symbol| {
             const owned = try ctx.arena.dupe(u8, symbol);
             if ((try seen_hosted.getOrPut(owned)).found_existing) continue;
@@ -11492,6 +11492,16 @@ fn buildBoxyLibraryObjects(
     const ordered = try ctx.arena.alloc([]const u8, units.items.len);
     for (objects, ordered) |object, *slot| slot.* = object orelse base.invariant("roc build invariant violated: a .boxy unit completed without an object", .{});
     return .{ .objects = ordered, .hosted_symbols = hosted_symbols.items, .platform = platform };
+}
+
+/// Keep a Boxy module object compile-time evaluation built or restored for
+/// the link (`BoxyObjectLowering.Materializer`).
+fn materializeBoxyObject(context: *anyopaque, bytes: []const u8) Allocator.Error!?[]const u8 {
+    const objects: *link_artifacts.Objects = @ptrCast(@alignCast(context));
+    return objects.materialize(bytes) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => null,
+    };
 }
 
 /// The platform module whose hosted section binds every hosted function
@@ -12070,6 +12080,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     defer releaseScratchDir(ctx, build_scratch_dir);
     var link_objects = link_artifacts.Objects.init(ctx.coreCtx(), ctx.arena, if (object_store) |store| .{ .store = store.native, .identity = store.linkObjectIdentity(@splat(0)) } else null, build_scratch_dir) catch return error.NativeCompilationFailed;
     defer link_objects.deinit();
+    // The link keeps each of those objects as compile-time evaluation builds
+    // or restores it.
+    if (boxy_interfaces != null) if (build_env.boxy_object_lowering) |*lowering| {
+        if (lowering.target == target) lowering.materializer = .{ .context = &link_objects, .materialize = materializeBoxyObject };
+    };
     var program_probe: ?ProgramOutputProbe = null;
     if (object_store) |store| if (target_arch != .wasm32 and args.opt == .dev and runtime_lowering.target.specialization_strategy == .lss and !dev_diagnostics.isSet(.dev_pack_objects)) {
         program_probe = .{
