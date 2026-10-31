@@ -529,3 +529,61 @@ test "list element callbacks and C entry points reach the entered host" {
     exports.roc_desc_inspect(&rendered, compose.scalarDesc(.u8), @ptrCast(&byte));
     try testing.expectEqualStrings("7", rendered.asSlice());
 }
+
+test "boxy composition site retains complete snapshots and reuses alternating instantiations" {
+    var env = Env.init();
+    defer env.deinit();
+    var site: compose.CompositionSite = .{};
+    try testing.expectEqual(null, site.load());
+    const a = [_]usize{ @intFromPtr(compose.scalarDesc(.u64)), @intFromPtr(compose.strDesc()) };
+    const b = [_]usize{ a[1], a[0] };
+    const ra = @intFromPtr(recordAB(&env, compose.scalarDesc(.u64), compose.strDesc()));
+    const rb = @intFromPtr(recordAB(&env, compose.strDesc(), compose.scalarDesc(.u64)));
+    site.publish(&env.cache, env.ops(), &a, ra);
+    const old = site.load().?;
+    site.publish(&env.cache, env.ops(), &b, rb);
+    try testing.expectEqualSlices(usize, &a, old.operands(a.len));
+    try testing.expectEqual(ra, old.result);
+    try testing.expectEqualSlices(usize, &b, site.load().?.operands(b.len));
+    try testing.expectEqual(rb, site.load().?.result);
+    const allocations = env.allocations();
+    for (0..100) |_| {
+        site.publish(&env.cache, env.ops(), &a, ra);
+        try testing.expectEqual(old, site.load().?);
+        site.publish(&env.cache, env.ops(), &b, rb);
+    }
+    try testing.expectEqual(allocations, env.allocations());
+    // Zero-operand dictionaries have a valid entry too.
+    site.publish(&env.cache, env.ops(), &.{}, ra);
+    try testing.expectEqual(ra, site.load().?.result);
+    try testing.expectEqual(@as(usize, 0), site.load().?.operands(0).len);
+}
+
+test "boxy composition site concurrent writers publish whole operand result pairs" {
+    if (@import("builtin").single_threaded) return error.SkipZigTest;
+    const state = try compiled.InProcessState.create(testing.allocator);
+    defer state.destroy();
+    var site: compose.CompositionSite = .{};
+    const Worker = struct {
+        fn run(slot: *compose.CompositionSite, shared: *compiled.InProcessState, word: usize, failed: *std.atomic.Value(bool)) void {
+            const operands = [_]usize{ word, word + 1, word + 2 };
+            for (0..2000) |_| {
+                slot.publish(&shared.descriptors, &shared.ops, &operands, word + 3);
+                const entry = slot.load().?;
+                const words = entry.operands(3);
+                if (words[1] != words[0] + 1 or words[2] != words[0] + 2 or entry.result != words[0] + 3) failed.store(true, .monotonic);
+            }
+        }
+    };
+    var failed: std.atomic.Value(bool) = .init(false);
+    var threads: [4]std.Thread = undefined;
+    var started: usize = 0;
+    defer for (threads[0..started]) |thread| thread.join();
+    for (&threads, 0..) |*thread, i| {
+        thread.* = try std.Thread.spawn(.{}, Worker.run, .{ &site, state, 100 * (i + 1), &failed });
+        started += 1;
+    }
+    for (threads) |thread| thread.join();
+    started = 0;
+    try testing.expect(!failed.load(.monotonic));
+}

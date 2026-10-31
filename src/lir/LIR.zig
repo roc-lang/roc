@@ -1600,6 +1600,8 @@ pub const CFStmt = union(enum) {
     dyn: struct {
         target: ?LocalId,
         data: StmtRowId(DynOp),
+        /// Distinct zero-initialized writable static slot for this composition.
+        composition_cache: ?StaticDataId = null,
         next: CFStmtId,
     },
     /// Compiler-generated impossible execution path. This is terminal.

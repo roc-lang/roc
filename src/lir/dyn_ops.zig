@@ -10,6 +10,15 @@ const LocalId = LIR.LocalId;
 const LocalSpan = LIR.LocalSpan;
 const DynOp = LIR.DynOp;
 
+/// Whether this operation composes immortal metadata. Its local operands are
+/// the site cache key; all other inputs are fixed by the statement itself.
+pub fn isComposition(op: DynOp) bool {
+    return switch (op) {
+        .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_compose, .dict_record => true,
+        .frame_alloc, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => false,
+    };
+}
+
 /// How an operation treats the ownership of its target and value operands
 /// (see `LIR.DynOp`).
 pub const Ownership = union(enum) {
