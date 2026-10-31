@@ -15,7 +15,7 @@ const DynOp = LIR.DynOp;
 pub fn isComposition(op: DynOp) bool {
     return switch (op) {
         .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_compose, .dict_record => true,
-        else => false,
+        .frame_alloc, .desc_note, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .closure, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .view, .adapt => false,
     };
 }
 

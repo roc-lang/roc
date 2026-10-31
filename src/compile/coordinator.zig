@@ -8796,7 +8796,7 @@ fn storedNamedOccurrences(
         },
         .tuple, .record => |items| try nodes.appendSlice(allocator, items),
         .tag => |tag| try nodes.appendSlice(allocator, tag.payloads),
-        .pending, .zst, .scalar, .str, .crash, .checked_error, .fn_value => {},
+        .pending, .zst, .scalar, .str, .crash, .checked_error, .fn_value, .boxy_fn => {},
     };
     const def = switch (root.source) {
         .def => |def| def,

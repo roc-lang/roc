@@ -2165,10 +2165,8 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             const site_expr = site.checked_expr orelse continue;
             try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = site_expr }, @intCast(site_index));
             // A closure's site is also its lambda's, which names its worker.
-            switch (view.bodies().expr(site_expr).data) {
-                .closure => |closure| try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = closure.lambda }, @intCast(site_index)),
-                else => {},
-            }
+            const site_data = view.bodies().expr(site_expr).data;
+            if (site_data == .closure) try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = site_data.closure.lambda }, @intCast(site_index));
         }
         for (bodies.record_omitted_defaults) |omitted| {
             const name = try program.store.internName(view.nameStore().recordFieldLabelText(omitted.field_name));

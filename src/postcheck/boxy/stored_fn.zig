@@ -28,7 +28,6 @@ const body = @import("body.zig");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
-const const_store = check.ConstStore;
 const LIR = lir_core.LIR;
 const LirProgram = lir_core.Program;
 const TypeDesc = boxy_runtime.desc.TypeDesc;
@@ -140,8 +139,8 @@ pub const Retained = struct {
         defer allocator.free(offsets);
         if (open) {
             const record_desc: *const TypeDesc = @ptrCast(@alignCast(readWord(capture)));
-            for (0..word_count) |index| offsets[shape.values.len + index] = record_desc.fieldBySemanticIndex(@intCast(1 + index)).offset;
-            for (0..shape.values.len) |index| offsets[index] = record_desc.fieldBySemanticIndex(@intCast(1 + word_count + index)).offset;
+            for (0..word_count) |index| offsets[shape.values.len + index] = record_desc.fieldOffset(@intCast(1 + index));
+            for (0..shape.values.len) |index| offsets[index] = record_desc.fieldOffset(@intCast(1 + word_count + index));
         } else if (offsets.len != 0) {
             const record = try closedRecordLayout(program, shape);
             if (record != .zst) {

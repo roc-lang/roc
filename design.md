@@ -3400,14 +3400,14 @@ builds produce no new diagnostic output.
 
 Every compilation evaluates every compile-time root it requests, whatever the
 command and whatever its strategy, and reports every failure. `roc build` is
-`roc check` plus an executable, so `roc check`, `roc run`, `roc build` and
+`roc check` plus a linked program, so `roc check`, `roc run`, `roc build` and
 `roc test` report the same failures for the same sources, including failures in
 roots nothing reads and in the modules of dependencies. A failure is an error
 in every command.
 
 This policy is chosen for these reasons:
 
-- `roc build` is meant to be `roc check` plus an executable. If evaluation
+- `roc build` is meant to be `roc check` plus a linked program. If evaluation
   followed demand, `roc check` would report errors a build of the same sources
   does not, which contradicts that meaning. Evaluating every root makes the
   commands agree without any rule about which command saw which root.
@@ -3673,12 +3673,12 @@ and its stored type to contain no named type, field default, callable or other
 module-version reference, and every recorded root read to retain its
 producer-authored value identity.
 When committing a checked module, the coordinator records each read's source
-placement, semantic root site and semantic value identity beside its exact
+placement, source root site and producer-authored value identity beside its exact
 module key and root id. Reuse resolves these placements and sites in the current
 checked program, checks every value identity, and installs the reads under the
 current module keys and root ids. This includes reads of roots in the same
 module, imported constants and transitive reads. Builtins and retained platform
-interface artifacts keep exact version keys in place of source placements.
+interfaces keep exact version keys in place of source placements.
 An absent producer, changed input or missing optional read identity makes the
 candidate a cache miss. These conditions are checked against the previous
 committed result, not guessed from source syntax. Debug observations are copied
@@ -15264,10 +15264,10 @@ every call, so a cache hit is the hot path, and the compile-time workers of
 a build compose concurrently. The interning table is therefore read without
 its lock: a reader loads the current table and probes it from the key's
 hashed slot to the first empty one. That is sound because a table is only
-ever added to, never changed or compacted; an entry publishes its value
+ever added to, never changed or compacted; an entry stores its value
 last, after its key, so a reader that sees the value sees the key it was
 stored under, and one that sees an empty slot treats it as a miss; and
-growth builds a new table, copies every entry into it, and publishes it
+growth builds a new table, copies every entry into it, and installs it
 whole, leaving the replaced table alive for the readers still probing it.
 A reader that misses, whether the entry is absent or another thread is
 adding it, takes the lock, probes the current table again, and interns on a
@@ -15279,7 +15279,7 @@ cache in zero-initialized writable static data. The lowerer assigns its slot
 and stable worker/site identity; LIR cloning and compaction preserve that
 reference. Mutable slots are never content-deduplicated or pooled between
 program images. Dev run images place them on separate writable pages outside
-the executable and read-only data sections and outside the retained static pool.
+the code and read-only data sections and outside the retained static pool.
 Saved objects and LirImages carry the initial zero bytes, never runtime pointers.
 Each interpreter owns its own instances of these slots, with
 the lifetime of its composition arena.
@@ -15289,7 +15289,7 @@ snapshot of the last operand pointers and result. If every operand matches,
 they use that result without entering the runtime or probing the interner. The
 constructor, worker, arities and other non-local arguments are fixed by the
 site; the local operand sequence is its complete varying key. A miss composes
-normally, then release-stores a complete snapshot pointer. Atomic publication
+normally, then release-stores a complete snapshot pointer. An atomic store
 of one pointer means no reader can observe a partially replaced operand/result
 pair, even with several writers. Snapshots are themselves interned by result
 and operand sequence in the program's immortal table, so alternating previously
@@ -15297,8 +15297,8 @@ seen instantiations does not allocate on each replacement. A replaced snapshot
 stays alive for racing readers until the program is destroyed.
 
 A recursive-open operation can return a private, unfinished placeholder. It
-publishes no site snapshot until it returns a completed descriptor from the
-interner; recursive-close always finishes its placeholder before publishing.
+stores no site snapshot until it returns a completed descriptor from the
+interner; recursive-close always finishes its placeholder before storing one.
 Thus the site cache never exposes an unfinished recursive descriptor to another
 execution. Monomorphic sites take the inline path after their first completed
 composition, while polymorphic sites use the ordinary interner on a mismatch.

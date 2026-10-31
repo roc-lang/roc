@@ -2018,11 +2018,15 @@ fn evaluateFunctionRoots(
     try remaining.appendSlice(allocator, members);
     var ready = std.ArrayList(u32).empty;
     defer ready.deinit(allocator);
+    const is_remaining = try allocator.alloc(bool, roots.len);
+    defer allocator.free(is_remaining);
     while (remaining.items.len != 0) {
         ready.clearRetainingCapacity();
+        @memset(is_remaining, false);
+        for (remaining.items) |member| is_remaining[member] = true;
         for (remaining.items) |member| {
             const waits = for (graph.deps[member]) |dep| {
-                if (std.mem.indexOfScalar(u32, remaining.items, dep) != null) break true;
+                if (is_remaining[dep]) break true;
             } else false;
             if (!waits) try ready.append(allocator, member);
         }

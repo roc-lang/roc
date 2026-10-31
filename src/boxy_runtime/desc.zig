@@ -230,6 +230,11 @@ pub const TypeDesc = extern struct {
         return first[0..self.count];
     }
 
+    /// The offset of the record's field `field_index`.
+    pub fn fieldOffset(self: *const TypeDesc, field_index: u32) u32 {
+        return self.fieldBySemanticIndex(field_index).offset;
+    }
+
     /// The field whose semantic index is `field_index`.
     pub fn fieldBySemanticIndex(self: *const TypeDesc, field_index: u32) *const Field {
         const all = self.fields();

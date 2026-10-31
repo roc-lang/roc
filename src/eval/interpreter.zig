@@ -8615,9 +8615,10 @@ pub const Interpreter = struct {
         }
         const words = self.composition_operands.items;
         if (site.value_ptr.load()) |entry| {
-            if (std.mem.eql(usize, words, entry.operands(words.len))) {
-                return self.setWordTarget(frame, stmt_id, target, entry.result);
-            }
+            const same_operands = for (words, entry.operands(words.len)) |word, operand| {
+                if (word != operand) break false;
+            } else true;
+            if (same_operands) return self.setWordTarget(frame, stmt_id, target, entry.result);
         }
         try self.execDynUncached(frame, stmt_id, target, op);
         const result: usize = @intCast(try self.localWord(frame, target));
