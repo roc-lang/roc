@@ -2260,6 +2260,7 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
         if (!program.ownsModule(view.index)) continue;
         for (view.view.checked_procedure_templates.templates.items, 0..) |template, index| {
             if (!unitEmitsTemplate(view, template)) continue;
+            if (try templateRejected(program, view, template)) continue;
             const worker = try program.templateWorker(view.index, @fromBackingInt(@intCast(index)));
             _ = try program.methodEntryWorker(worker);
         }
@@ -2269,6 +2270,8 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
                 .procedure => |procedure| procedure.template,
                 .local_proc, .structural => continue,
             };
+            const owner = program.moduleByKey(.{ .bytes = template.artifact.bytes });
+            if (try templateRejected(program, owner, owner.view.checked_procedure_templates.get(template.template))) continue;
             const worker = try program.templateRefWorker(template);
             if (program.worker(worker).imported) continue;
             _ = try program.methodEntryWorker(worker);
@@ -2278,6 +2281,12 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
         }
     }
     try program.drain();
+}
+
+/// Whether checking rejected `template`'s signature: it has no type to lower
+/// at, and every use of it is a runtime error of its own.
+fn templateRejected(program: *Program, view: *const types.ModuleView, template: checked.CheckedProcedureTemplate) Allocator.Error!bool {
+    return try program.converter().hasError(view.index, template.checked_fn_root);
 }
 
 /// Whether a module unit emits `template` (design.md "Per-Module Output"):

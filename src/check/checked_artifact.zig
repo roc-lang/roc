@@ -26764,6 +26764,8 @@ fn publishLiteralArgumentRoots(
     }.get;
     var formals = std.ArrayListUnmanaged(CheckedTypeId).empty;
     defer formals.deinit(allocator);
+    var equality = CheckedTypeStoreView.EqualityScratch.init(allocator);
+    defer equality.deinit();
     while (true) {
         var changed = false;
         for (edges.items, edge_args.items) |edge, *args| {
@@ -26786,7 +26788,10 @@ fn publishLiteralArgumentRoots(
             }
             formals.clearRetainingCapacity();
             for (callee.vars) |variable| try formals.append(allocator, if (projector) |p| try p.project(variable) else variable);
-            var substitution: ?CheckedTypeSubstitution = if (edge.subst.len != 0) CheckedTypeSubstitution.init(allocator, names, store, formals.items, edge.subst) else null;
+            // A self-recursive use instantiates the scheme at its own
+            // variables, which changes no type.
+            const instantiates = edge.subst.len != 0 and !std.mem.eql(CheckedTypeId, formals.items, edge.subst);
+            var substitution: ?CheckedTypeSubstitution = if (instantiates) CheckedTypeSubstitution.init(allocator, names, store, formals.items, edge.subst) else null;
             defer if (substitution) |*s| s.deinit();
             var j: u32 = @intCast(args.items.len);
             // A self-recursive edge appends to the list it instantiates.
@@ -26823,8 +26828,14 @@ fn publishLiteralArgumentRoots(
                     if (!state.found_existing) state.value_ptr.* = .{};
                     const slot = try state.value_ptr.index.getOrPut(allocator, key);
                     if (!slot.found_existing) {
-                        slot.value_ptr.* = @intCast(state.value_ptr.list.items.len);
-                        try state.value_ptr.list.append(allocator, .{ .site = obligation.site, .ty = ty, .edge = edge.key, .callee_requirement = j });
+                        // Substitution gives an open type a root of its own, so
+                        // a cycle of schemes returns to an equal type under a
+                        // new id: the requirement is the one already listed.
+                        const equal: ?u32 = for (state.value_ptr.list.items, 0..) |existing, index| {
+                            if (existing.site.eql(obligation.site) and try store.view().rootExactEql(&equality, existing.ty, ty)) break @intCast(index);
+                        } else null;
+                        slot.value_ptr.* = equal orelse @intCast(state.value_ptr.list.items.len);
+                        if (equal == null) try state.value_ptr.list.append(allocator, .{ .site = obligation.site, .ty = ty, .edge = edge.key, .callee_requirement = j });
                     }
                     try args.append(allocator, .{ .forwarded = slot.value_ptr.* });
                 }

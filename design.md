@@ -15105,7 +15105,9 @@ strategy).
   local function's use or construction), recording the type after the edge's
   substitution, the edge, and the callee's literal requirement index. Literal requirements are
   computed to a fixpoint over the module's schemes and deduplicated by
-  literal and type, so a self-recursive call at the same types adds nothing.
+  literal and type equality (not type root, since substitution gives an open
+  type a root of its own), so a recursive call, or a cycle of calls, that
+  returns to the same types adds nothing.
 - Each edge's *literal arguments* (`literalEdgeArgs`): for every literal requirement
   of the instantiated scheme, where the body gets the value from. An
   instantiation at a closed type is a `literal_argument` compile-time root
