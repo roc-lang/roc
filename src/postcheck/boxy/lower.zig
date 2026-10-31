@@ -24,6 +24,7 @@ const StaticDescs = @import("static_descs.zig").StaticDescs;
 const Body = @import("body.zig");
 const Codec = @import("codec.zig");
 const const_schema = @import("const_schema.zig");
+const StoredFn = @import("stored_fn.zig");
 const ConstSchema = const_schema.ConstSchema;
 
 const Allocator = std.mem.Allocator;
@@ -62,6 +63,10 @@ pub const Input = struct {
     /// parameter is a dictionary (`Program.runtimeDictionary`) and each
     /// instance-dependent literal is converted where it is.
     compile_time: bool = false,
+    /// The program evaluates roots holding function values: it notes where
+    /// each descriptor came from (`LIR.DynOp.desc_note`), and the lowering
+    /// keeps the program for reading those values (`Output.retained`).
+    stored_functions: bool = false,
     /// What this lowering emits: one program, or one module's object.
     unit: Unit = .program,
 };
@@ -181,6 +186,8 @@ pub const ExportInterfaces = struct {
 pub const Output = struct {
     lir_result: LirProgram.Result,
     static_data: []LirProgram.StaticDataExport,
+    /// With `Input.stored_functions`, the program's types and workers.
+    retained: ?*StoredFn.Retained = null,
 };
 
 /// A worker's identity: what it lowers.
@@ -656,6 +663,36 @@ pub const Program = struct {
         return self.modules.get(index);
     }
 
+    /// Free everything but the program's `result`, which lowering hands on.
+    pub fn release(self: *Program) void {
+        self.static_descs.deinit();
+        self.layouts.deinit();
+        self.store.deinit();
+        self.modules.deinit();
+        self.workers.deinit(self.allocator);
+        self.worker_ids.deinit(self.allocator);
+        self.worklist.deinit(self.allocator);
+        self.by_module_idx.deinit(self.allocator);
+        self.exported_bindings.deinit(self.allocator);
+        self.callable_eval_by_pattern.deinit(self.allocator);
+        self.platform_identities.deinit(self.allocator);
+        self.root_value_slots.deinit(self.allocator);
+        self.requested_roots.deinit(self.allocator);
+        self.const_schema.deinit(self.allocator);
+        self.wrapper_by_root.deinit(self.allocator);
+        self.hosted.deinit(self.allocator);
+        self.local_scopes.deinit(self.allocator);
+        self.local_procs.deinit(self.allocator);
+        self.by_identity.deinit(self.allocator);
+        self.sites_by_expr.deinit(self.allocator);
+        self.nominal_overrides.deinit(self.allocator);
+        self.composed_in_body.deinit(self.allocator);
+        self.signature_slots.deinit(self.allocator);
+        self.omitted_defaults.deinit(self.allocator);
+        self.codec.deinit(self.allocator);
+        self.arena.deinit();
+    }
+
     /// The constant store of `source`.
     pub fn constStore(self: *const Program, source: ConstSource) *const check.ConstStore.ConstStore {
         return switch (source) {
@@ -1014,9 +1051,58 @@ pub const Program = struct {
         return found;
     }
 
+    /// The indices of the variables `root`'s representation reads. A function
+    /// type's variables are not among them: every function value is an erased
+    /// callable.
+    pub fn representationVariables(self: *Program, allocator: Allocator, root: TypeId) Allocator.Error![]const u32 {
+        var pending: std.ArrayList(TypeId) = .empty;
+        defer pending.deinit(allocator);
+        var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
+        defer seen.deinit(allocator);
+        var found: std.ArrayList(u32) = .empty;
+        errdefer found.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
+            switch (self.store.get(ty)) {
+                .variable => |index| try found.append(allocator, index),
+                .record => |record| {
+                    for (self.store.fieldSpan(record.fields)) |field| try pending.append(allocator, field.ty);
+                    if (record.ext) |ext| try pending.append(allocator, ext);
+                },
+                .tuple => |items| try pending.appendSlice(allocator, self.store.span(items)),
+                .tag_union => |tag_union| {
+                    for (self.store.tagSpan(tag_union.tags)) |tag| try pending.appendSlice(allocator, self.store.span(tag.payloads));
+                    if (tag_union.ext) |ext| try pending.append(allocator, ext);
+                },
+                .list => |elem| try pending.append(allocator, elem),
+                .box => |payload| try pending.append(allocator, payload),
+                .nominal => |nominal| try pending.appendSlice(allocator, self.store.nominalArgs(nominal)),
+                .primitive, .empty_record, .function => {},
+            }
+        }
+        return try found.toOwnedSlice(allocator);
+    }
+
     /// `ty` with each variable `i` replaced by `bound[i]`. A row whose
     /// remainder becomes a row takes that row's tags.
     pub fn substitute(self: *Program, allocator: Allocator, root: TypeId, bound: []const TypeId) Allocator.Error!TypeId {
+        return try self.rewriteType(allocator, root, bound, null);
+    }
+
+    /// `substitute` over `representationVariables`, for a type only its
+    /// representation matters for: each function type becomes `anyFunction`.
+    pub fn substituteRepresentation(self: *Program, allocator: Allocator, root: TypeId, bound: []const TypeId) Allocator.Error!TypeId {
+        return try self.rewriteType(allocator, root, bound, try self.anyFunction());
+    }
+
+    /// A function type, standing for any function value, which is an erased
+    /// callable whatever its type.
+    pub fn anyFunction(self: *Program) Allocator.Error!TypeId {
+        return try self.store.intern(.{ .function = .{ .args = &.{}, .ret = try self.store.emptyRecord(), .effectful = false } });
+    }
+
+    fn rewriteType(self: *Program, allocator: Allocator, root: TypeId, bound: []const TypeId, function_as: ?TypeId) Allocator.Error!TypeId {
         var done: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty;
         defer done.deinit(allocator);
         const Frame = struct { ty: TypeId, expanded: bool };
@@ -1041,7 +1127,7 @@ pub const Program = struct {
                     .list => |elem| try stack.append(allocator, .{ .ty = elem, .expanded = false }),
                     .box => |payload| try stack.append(allocator, .{ .ty = payload, .expanded = false }),
                     .nominal => |nominal| for (self.store.nominalArgs(nominal)) |arg| try stack.append(allocator, .{ .ty = arg, .expanded = false }),
-                    .function => |function| {
+                    .function => |function| if (function_as == null) {
                         for (self.store.span(function.args)) |arg| try stack.append(allocator, .{ .ty = arg, .expanded = false });
                         try stack.append(allocator, .{ .ty = function.ret, .expanded = false });
                     },
@@ -1060,7 +1146,7 @@ pub const Program = struct {
                     for (self.store.span(items), out) |item, *slot| slot.* = done.get(item).?;
                     break :blk try self.store.intern(.{ .tuple = out });
                 },
-                .function => |function| blk: {
+                .function => |function| function_as orelse blk: {
                     const args = try allocator.alloc(TypeId, function.args.len);
                     defer allocator.free(args);
                     for (self.store.span(function.args), args) |arg, *slot| slot.* = done.get(arg).?;
@@ -2048,7 +2134,12 @@ pub fn poolSlice(comptime T: type, pool: []const T, span: anytype) []const T {
 /// Lower the requested roots and everything they reach.
 pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     base.dev_diagnostics.traceBoxyWork("boxy lowering");
-    var program: Program = .{
+    var result = try LirProgram.Result.init(allocator, input.target_usize);
+    const program = allocator.create(Program) catch |err| {
+        result.deinit();
+        return err;
+    };
+    program.* = .{
         .allocator = allocator,
         .input = input,
         .modules = .{ .allocator = allocator, .link_names = switch (input.unit) {
@@ -2057,40 +2148,17 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         } },
         .store = types.Store.init(allocator),
         .layouts = undefined,
-        .result = try LirProgram.Result.init(allocator, input.target_usize),
+        .result = result,
         .static_descs = undefined,
         .observe_expects = input.roots.test_plan_metadata.len != 0,
         .list_in_place_map = input.list_in_place_map,
         .arena = std.heap.ArenaAllocator.init(allocator),
     };
-    defer {
-        program.static_descs.deinit();
-        program.layouts.deinit();
-        program.store.deinit();
-        program.modules.deinit();
-        program.workers.deinit(allocator);
-        program.worker_ids.deinit(allocator);
-        program.worklist.deinit(allocator);
-        program.by_module_idx.deinit(allocator);
-        program.exported_bindings.deinit(allocator);
-        program.callable_eval_by_pattern.deinit(allocator);
-        program.platform_identities.deinit(allocator);
-        program.root_value_slots.deinit(allocator);
-        program.requested_roots.deinit(allocator);
-        program.const_schema.deinit(allocator);
-        program.wrapper_by_root.deinit(allocator);
-        program.hosted.deinit(allocator);
-        program.local_scopes.deinit(allocator);
-        program.local_procs.deinit(allocator);
-        program.by_identity.deinit(allocator);
-        program.sites_by_expr.deinit(allocator);
-        program.nominal_overrides.deinit(allocator);
-        program.composed_in_body.deinit(allocator);
-        program.signature_slots.deinit(allocator);
-        program.omitted_defaults.deinit(allocator);
-        program.codec.deinit(allocator);
-        program.arena.deinit();
-    }
+    var retained = false;
+    defer if (!retained) {
+        program.release();
+        allocator.destroy(program);
+    };
     errdefer program.result.deinit();
     program.result.store.runtime_contract = .boxy;
     program.layouts = .{
@@ -2116,9 +2184,9 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             try program.wrapper_by_root.put(allocator, .{ .module = view.index, .root = wrapper.root }, wrapper.template);
         }
     }
-    try solvePlatformIdentities(&program);
-    try seedSourceFiles(&program);
-    try initHosted(&program);
+    try solvePlatformIdentities(program);
+    try seedSourceFiles(program);
+    try initHosted(program);
     for (program.modules.views.items) |*view| {
         const bodies = view.bodies();
         for (view.view.checked_procedure_templates.dispatch_scopes, 0..) |scope, index| {
@@ -2133,6 +2201,9 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         for (view.view.nested_proc_sites.sites, 0..) |site, site_index| {
             const site_expr = site.checked_expr orelse continue;
             try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = site_expr }, @intCast(site_index));
+            // A closure's site is also its lambda's, which names its worker.
+            const site_data = view.bodies().expr(site_expr).data;
+            if (site_data == .closure) try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = site_data.closure.lambda }, @intCast(site_index));
         }
         for (bodies.record_omitted_defaults) |omitted| {
             const name = try program.store.internName(view.nameStore().recordFieldLabelText(omitted.field_name));
@@ -2172,7 +2243,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     // workers other objects reach by symbol (design.md "Per-Module Output").
     // A compile-time program's unit lowers only what its roots reach: nothing
     // links against it.
-    if (program.moduleUnit() != null and !input.compile_time) try seedUnitWorkers(&program);
+    if (program.moduleUnit() != null and !input.compile_time) try seedUnitWorkers(program);
 
     const requests = input.roots.requests;
     for (requests, 0..) |request, index| {
@@ -2188,7 +2259,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             program.modules.views.items[0].index
         else
             program.moduleByKey(input.roots.source_modules[index]).index;
-        const worker_id = try lowerRoot(&program, request, @intCast(index), source_module);
+        const worker_id = try lowerRoot(program, request, @intCast(index), source_module);
         const proc = program.worker(worker_id).proc;
         try program.result.root_procs.append(allocator, proc);
         // A compile-time evaluator stores each root's value by the plan
@@ -2211,14 +2282,14 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                 .request = request,
                 .proc = proc,
                 .ret_layout = try program.layouts.layoutOf(ret),
-                .ret_type = try const_schema.constTypeOf(&program, stored_ty),
-                .plan = try const_schema.constPlanOf(&program, stored_ty),
+                .ret_type = try const_schema.constTypeOf(program, stored_ty),
+                .plan = try const_schema.constPlanOf(program, stored_ty),
             });
         }
         var metadata = RootMetadata.fromCheckedRoot(request);
         metadata.test_plan = Common.testPlanMetadataForRoot(input.roots, request, index);
         if (input.host_boundary_digests and request.abi == .platform) {
-            metadata.host_boundary_digest = try hostBoundaryDigest(&program, request, source_module);
+            metadata.host_boundary_digest = try hostBoundaryDigest(program, request, source_module);
         }
         try program.result.root_metadata.append(allocator, metadata);
     }
@@ -2281,9 +2352,13 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         }
     }
     program.result.finishExpectSites();
+    const static_data = try program.static_descs.takeExports();
+    const kept = if (input.stored_functions) try StoredFn.retain(allocator, program) else null;
+    retained = kept != null;
     return .{
         .lir_result = program.result,
-        .static_data = try program.static_descs.takeExports(),
+        .static_data = static_data,
+        .retained = kept,
     };
 }
 

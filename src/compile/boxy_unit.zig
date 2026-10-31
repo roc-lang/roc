@@ -248,9 +248,12 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     var codegen_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_codegen);
     defer codegen_scope.end();
     var object_compiler = backend.ObjectFileCompiler.init(gpa);
+    var backend_timing: ?backend.ObjectFileCompiler.Timing = if (trace_clock) |io| .init(io) else null;
+    if (backend_timing) |*timing| object_compiler.timing = timing;
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
     object_compiler.link_unit = true;
     object_compiler.capture_code_locations = true;
+    object_compiler.post_check_executor = unit.config.post_check_executor;
     var written = object_compiler.compileToObjectFile(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
@@ -264,6 +267,19 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     };
     defer written.deinit();
     codegen_scope.end();
+    if (backend_timing) |timing| {
+        const snapshot = timing.snapshot();
+        std.debug.print("boxy-work: compiled {s}: setup {d} ms, procedures {d} ms ({d} tasks, {d} in flight at most, {d} workers), symbols {d} ms, encoding {d} ms\n", .{
+            module_name,
+            snapshot.backend_setup_ns / std.time.ns_per_ms,
+            snapshot.procedure_instructions_ns / std.time.ns_per_ms,
+            snapshot.native_emission.tasks_submitted,
+            snapshot.native_emission.peak_inflight_fragments,
+            if (unit.config.post_check_executor) |executor| executor.worker_count else 0,
+            snapshot.symbol_relocations_ns / std.time.ns_per_ms,
+            snapshot.object_encoding_ns / std.time.ns_per_ms,
+        });
+    }
 
     const records = try exportRecords(gpa, &lowered, unit.interfaces);
     defer gpa.free(records);

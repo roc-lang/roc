@@ -29458,6 +29458,10 @@ pub const CompileTimeRoot = struct {
     guarded: bool = false,
     /// For a `literal_argument` root: what it converts.
     literal_argument: ?LiteralArgumentRoot = null,
+    /// The value a `.boxy` compilation stored for a root holding a function
+    /// value (design.md "Stored Function Values"). Only `.boxy` programs read
+    /// it: to a `.lss` compilation the root stays `unevaluated`.
+    boxy_value: ?StoredConstTemplate = null,
 
     pub fn literalConversionKind(self: CompileTimeRoot) ?CompileTimeLiteralConversionKind {
         return switch (self.kind) {
@@ -29661,6 +29665,15 @@ pub const CompileTimeRootTable = struct {
 
     pub fn root(self: *const CompileTimeRootTable, id: ComptimeRootId) CompileTimeRoot {
         return self.roots[@backingInt(id)];
+    }
+
+    /// Record the value a `.boxy` evaluation stored for root `id`.
+    pub fn fillBoxyValue(self: *CompileTimeRootTable, id: ComptimeRootId, value: StoredConstTemplate) void {
+        const index = @backingInt(id);
+        if (index >= self.roots.len) {
+            checkedArtifactInvariant("compile-time root id is out of range", .{});
+        }
+        self.roots[index].boxy_value = value;
     }
 
     pub fn fillPayload(
@@ -35359,8 +35372,10 @@ pub const CheckedModuleArtifact = struct {
     pub fn hasUnevaluatedRequests(self: *const CheckedModuleArtifact, strategy: base.SpecializationStrategy) bool {
         for (self.root_requests.compile_time_requests) |request| {
             const root = request.compile_time_root orelse continue;
-            if (self.compile_time_roots.root(root).payload != .unevaluated) continue;
+            const payload = self.compile_time_roots.root(root).payload;
+            if (payload != .unevaluated and payload != .pending) continue;
             if (strategy == .lss and self.compile_time_roots.root(root).kind == .literal_argument) continue;
+            if (strategy == .boxy and self.compile_time_roots.root(root).boxy_value != null) continue;
             return true;
         }
         return false;
@@ -41867,8 +41882,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xE8, 0x80, 0xEC, 0x51, 0x64, 0x0B, 0x28, 0x1C, 0x2C, 0x0F, 0xD3, 0x86, 0x52, 0xFC, 0xD6, 0x68,
-        0x0F, 0x98, 0xAB, 0x27, 0x6B, 0xF7, 0x8E, 0x79, 0x20, 0x62, 0x4D, 0xA6, 0x24, 0xAE, 0x9F, 0x13,
+        0x1F, 0xB5, 0x09, 0x61, 0x83, 0x5F, 0x8B, 0xD4, 0x40, 0xE3, 0x8D, 0xF7, 0x09, 0xBA, 0x7A, 0x50,
+        0xC4, 0x94, 0x5C, 0xE1, 0x3B, 0x6E, 0x89, 0x78, 0xF2, 0x9C, 0xD2, 0xFA, 0x5B, 0x94, 0x33, 0x68,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

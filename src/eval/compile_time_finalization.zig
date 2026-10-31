@@ -151,6 +151,9 @@ pub const Options = struct {
     boxy_objects: ?BoxyObjectSource = null,
     /// The loaded objects a native program links against.
     boxy_linked_images: ?*BoxyLinkedImages = null,
+    /// A program of `evaluateFunctionRoots`: a root reading a value not yet
+    /// complete stays pending for its next program.
+    function_roots: bool = false,
     /// Where a compile-time failure is reported when the source it names
     /// belongs to a checked module this finalization does not complete: a
     /// literal in a module whose checking finished in an earlier compilation,
@@ -1704,6 +1707,17 @@ pub const BoxyObjectSet = struct {
     views: []const checked.ImportedModuleView,
 };
 
+/// A compile-time program's build as a task of the object scheduler, which
+/// runs it on a worker of its own or, when it is the only task left and the
+/// workers are idle, on the thread driving the scheduler, with those workers
+/// lent to the build's parallel waves.
+pub const ProgramTask = struct {
+    task: base.post_check_task_executor.Task,
+    /// Lend `executor` to the build's lowering and code generation, before
+    /// `task` runs on the thread that owns the executor.
+    lend: *const fn (context: *anyopaque, executor: base.post_check_task_executor.Executor) void,
+};
+
 /// Where a `.boxy` evaluation gets the objects of a module's imports, and
 /// the executor session it builds the modules' compile-time programs on,
 /// alongside the objects' units. Every function runs on the evaluating
@@ -1721,8 +1735,8 @@ pub const BoxyObjectSource = struct {
     /// Every compile-time root of `module` is complete, so its object can
     /// be built: the evaluation of a module importing it may need it.
     completed: *const fn (context: *anyopaque, module: *const checked.CheckedModuleArtifact) FinalizeError!void,
-    /// Run `task` on the session, as soon as it has a worker for it.
-    submit: *const fn (context: *anyopaque, task: base.post_check_task_executor.Task) FinalizeError!void,
+    /// Build `program` on the session, as soon as it has a worker for it.
+    submit: *const fn (context: *anyopaque, program: ProgramTask) FinalizeError!void,
     /// A completion of a submitted task, if one has finished.
     takeCompletion: *const fn (context: *anyopaque) FinalizeError!?base.post_check_task_executor.Completion,
     /// Wait for the next task of the session, a unit or a submitted one, to
@@ -1923,6 +1937,12 @@ fn finalizeProgramBoxy(
         for (entry.module.root_requests.compile_time_requests) |request| {
             const root_id = compileTimeRootForRequest(entry.module, request);
             if (entry.module.compile_time_roots.root(root_id).payload != .pending) continue;
+            // Reopening the module for another root reopened this one, whose
+            // value a `.boxy` evaluation stored.
+            if (entry.module.compile_time_roots.root(root_id).boxy_value != null) {
+                entry.module.compile_time_roots.fillPayload(root_id, .unevaluated);
+                continue;
+            }
             try roots.append(allocator, .{ .module = @intCast(index), .root = root_id, .request = request });
         }
         if (base.dev_diagnostics.isSet(.ctfe_reuse_trace)) std.debug.print("ctfe-reuse pending {s}: {d} roots\n", .{ entry.module.moduleEnvConst().module_name, roots.items.len });
@@ -2042,7 +2062,6 @@ fn evaluateRootsBoxy(
         .graph = &graph,
         .specialized = specialized,
         .options = evaluation_options,
-        .debug_events = debug_events,
         .images = &images,
     };
     while (evaluations.remaining != 0) {
@@ -2151,11 +2170,9 @@ const ModuleEvaluations = struct {
 
 /// The pending roots of one module, through the steps of their
 /// evaluation. The roots whose values hold function values run first, with
-/// every pending root of the module they read, as one Solved program
-/// (`evaluateSpecializedRoots`): a `.boxy` program restores a stored
-/// function value by the evidence the Solved evaluator records, so it is
-/// lowered only once those values are stored. Every root still pending is
-/// then lowered as one `.boxy` program (`ProgramBuild`), whose roots read
+/// every pending root of the module they read, as programs that keep what
+/// storing a function value takes (`evaluateFunctionRoots`). Every root still
+/// pending is then lowered as one `.boxy` program (`ProgramBuild`), whose roots read
 /// each other through compile-time value slots (`Program.rootValueSlot`),
 /// and evaluated in the levels the values they read give them
 /// (`ProducerGroups`). A root that read a value not yet complete stays
@@ -2181,7 +2198,6 @@ const ModuleEvaluation = struct {
         graph: *const checked_root_graph.Graph,
         specialized: []const bool,
         options: Options,
-        debug_events: *DebugEvents,
         images: *BoxyLinkedImages,
     };
 
@@ -2243,14 +2259,14 @@ const ModuleEvaluation = struct {
         }
         if (solved.items.len != 0) {
             std.sort.pdq(u32, solved.items, {}, std.sort.asc(u32));
-            if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: specialized roots {any} of {s}\n", .{ solved.items, module.moduleEnvConst().module_name });
-            try evaluateSpecializedRoots(allocator, shared.modules, shared.lowering_modules, roots, solved.items, shared.options, shared.debug_events);
+            if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: function roots {any} of {s}\n", .{ solved.items, module.moduleEnvConst().module_name });
+            try self.evaluateFunctionRoots(allocator, shared, solved.items);
         }
 
         var pending = std.ArrayList(u32).empty;
         defer pending.deinit(allocator);
         for (self.members) |member| {
-            if (module.compile_time_roots.root(roots[member].root).payload != .pending) continue;
+            if (shared.states[roots[member].module].isDone(roots[member].root)) continue;
             try pending.append(allocator, member);
         }
         if (pending.items.len == 0) return self.finish(shared, evaluations);
@@ -2269,19 +2285,12 @@ const ModuleEvaluation = struct {
                 linked = true;
             }
         }
-        if (shared.options.timing) |timing| timing.specialization_passes.add(1);
-        if (base.dev_diagnostics.isSet(.trace_boxy_work)) {
-            std.debug.print("boxy-work: compile-time program of {s}: {d} roots\n", .{ module.moduleEnvConst().module_name, pending.items.len });
-            for (pending.items) |member| {
-                const compile_time_root = module.compile_time_roots.root(roots[member].root);
-                var label = try devRootLabel(allocator, module, compile_time_root);
-                defer label.deinit(allocator);
-                std.debug.print("boxy-work:   root {s} #{d}: {s}\n", .{ @tagName(compile_time_root.kind), @backingInt(roots[member].root), label.snippet });
-            }
-        }
+        try noteProgram(allocator, shared, pending.items);
         const pending_roots = try pending.toOwnedSlice(allocator);
-        errdefer allocator.free(pending_roots);
-        const build = try ProgramBuild.create(allocator, self, shared, pending_roots, lowering_modules, target, run_options, linked);
+        const build = build: {
+            errdefer allocator.free(pending_roots);
+            break :build try ProgramBuild.create(allocator, self, shared, pending_roots, lowering_modules, target, run_options, linked);
+        };
         self.build = build;
         const source = shared.options.boxy_objects orelse {
             // Without a scheduler the program is built and run here.
@@ -2289,21 +2298,106 @@ const ModuleEvaluation = struct {
             return self.run(shared, evaluations);
         };
         // A worker lowers and compiles the program by itself: the session's
-        // executor is this thread's.
+        // executor is this thread's. The scheduler lends the program the
+        // workers when it runs the program on this thread instead.
         build.build_options.post_check_executor = null;
         build.target.post_check_executor = null;
         self.state = .building;
-        try source.submit(source.context, .{ .id = @intFromPtr(build), .context = build, .run = ProgramBuild.run });
+        try source.submit(source.context, .{
+            .task = .{ .id = @intFromPtr(build), .context = build, .run = ProgramBuild.run },
+            .lend = ProgramBuild.lend,
+        });
+    }
+
+    /// Evaluate the roots `members` (positions in `roots`), which hold
+    /// function values or are read by roots that do, as `.boxy` programs that
+    /// keep what reading those values takes (design.md "Stored Function
+    /// Values"). A function value has no compile-time value slot, so a root
+    /// reading one waits for it to be stored and a later program restores it:
+    /// each program evaluates the roots whose checked reads are complete, and
+    /// a root whose read no checked reference names runs again in the next.
+    fn evaluateFunctionRoots(self: *const ModuleEvaluation, allocator: Allocator, shared: Shared, members: []const u32) FinalizeError!void {
+        const roots = shared.roots;
+        var target = boxyCompileTimeTarget(shared.options);
+        target.boxy_stored_functions = true;
+        var remaining = std.ArrayList(u32).empty;
+        defer remaining.deinit(allocator);
+        try remaining.appendSlice(allocator, members);
+        var ready = std.ArrayList(u32).empty;
+        defer ready.deinit(allocator);
+        const is_remaining = try allocator.alloc(bool, roots.len);
+        defer allocator.free(is_remaining);
+        while (remaining.items.len != 0) {
+            ready.clearRetainingCapacity();
+            @memset(is_remaining, false);
+            for (remaining.items) |member| is_remaining[member] = true;
+            for (remaining.items) |member| {
+                const waits = for (shared.graph.deps[member]) |dep| {
+                    if (is_remaining[dep]) break true;
+                } else false;
+                if (!waits) try ready.append(allocator, member);
+            }
+            if (ready.items.len == 0) try ready.appendSlice(allocator, remaining.items);
+            var stage_options = shared.options;
+            stage_options.function_roots = true;
+            try self.evaluateHere(allocator, shared, ready.items, target, stage_options);
+            var kept: usize = 0;
+            for (remaining.items) |member| {
+                const root = roots[member];
+                if (shared.states[root.module].isDone(root.root)) continue;
+                remaining.items[kept] = member;
+                kept += 1;
+            }
+            if (kept == remaining.items.len) {
+                // No root completed: the rest fail as they read.
+                stage_options.function_roots = false;
+                return self.evaluateHere(allocator, shared, remaining.items, target, stage_options);
+            }
+            remaining.shrinkRetainingCapacity(kept);
+        }
+    }
+
+    /// Lower, compile, and run `members` as one program on this thread,
+    /// against every module's source.
+    fn evaluateHere(self: *const ModuleEvaluation, allocator: Allocator, shared: Shared, members: []const u32, target: lir.CheckedPipeline.TargetConfig, options: Options) FinalizeError!void {
+        try noteProgram(allocator, shared, members);
+        const pending = try allocator.dupe(u32, members);
+        const build = build: {
+            errdefer allocator.free(pending);
+            break :build try ProgramBuild.create(allocator, self, shared, pending, shared.lowering_modules, target, options, false);
+        };
+        defer build.destroy();
+        build.complete();
+        try runBuilt(allocator, shared, build);
     }
 
     /// Run the module's built program and store its roots' values.
     fn run(self: *ModuleEvaluation, shared: Shared, evaluations: *ModuleEvaluations) FinalizeError!void {
-        const allocator = evaluations.allocator;
         const build = self.build.?;
         defer {
             build.destroy();
             self.build = null;
         }
+        try runBuilt(evaluations.allocator, shared, build);
+        try self.finish(shared, evaluations);
+    }
+
+    /// Count a program of `pending` for the timings and trace its roots.
+    fn noteProgram(allocator: Allocator, shared: Shared, pending: []const u32) Allocator.Error!void {
+        if (shared.options.timing) |timing| timing.specialization_passes.add(1);
+        if (!base.dev_diagnostics.isSet(.trace_boxy_work)) return;
+        const module = shared.modules[shared.roots[pending[0]].module].module;
+        std.debug.print("boxy-work: compile-time program of {s}: {d} roots\n", .{ module.moduleEnvConst().module_name, pending.len });
+        for (pending) |member| {
+            const compile_time_root = module.compile_time_roots.root(shared.roots[member].root);
+            var label = try devRootLabel(allocator, module, compile_time_root);
+            defer label.deinit(allocator);
+            std.debug.print("boxy-work:   root {s} #{d}: {s}\n", .{ @tagName(compile_time_root.kind), @backingInt(shared.roots[member].root), label.snippet });
+        }
+    }
+
+    /// Run the program `build` built and store its roots' values.
+    fn runBuilt(allocator: Allocator, shared: Shared, build: *ProgramBuild) FinalizeError!void {
         switch (build.outcome) {
             .pending => finalizationInvariant("a module's compile-time program was run before it was built"),
             .failed => return build.failure,
@@ -2334,7 +2428,7 @@ const ModuleEvaluation = struct {
             }
             std.sort.pdq(u32, batch.items, {}, std.sort.asc(u32));
             if (batch.items.len == 0) continue;
-            try collectUndoneKeys(allocator, shared.modules, states, roots, pending, &keys);
+            try collectUndoneKeys(allocator, shared.modules, states, roots, pending, &keys, options.function_roots);
             const retry = CycleRetry{ .pending = keys.items };
             try runBoxyBatch(allocator, shared.modules, states, roots, pending, batch.items, options, lowered, const_roots, owners, program, &retry);
         }
@@ -2342,13 +2436,13 @@ const ModuleEvaluation = struct {
         // that read a value not yet complete (a member of a group that reads
         // itself, or a method a dictionary selects at runtime, which no
         // checked reference names) stayed pending, and runs again now.
+        if (options.function_roots) return;
         batch.clearRetainingCapacity();
         for (pending, 0..) |member, local| {
             const root = roots[member];
             if (!states[root.module].isDone(root.root)) try batch.append(allocator, @intCast(local));
         }
         if (batch.items.len != 0) try runBoxyPasses(allocator, shared.modules, states, roots, pending, batch.items, options, lowered, const_roots, owners, program, &keys);
-        try self.finish(shared, evaluations);
     }
 
     /// Every root of the module is complete.
@@ -2434,6 +2528,15 @@ const ProgramBuild = struct {
         return null;
     }
 
+    /// Lend `executor` to the build's lowering and code generation: `run`
+    /// follows on the executor's own thread.
+    fn lend(context: *anyopaque, executor: base.post_check_task_executor.Executor) void {
+        const self: *ProgramBuild = @ptrCast(@alignCast(context));
+        std.debug.assert(self.outcome == .pending);
+        self.build_options.post_check_executor = executor;
+        self.target.post_check_executor = executor;
+    }
+
     /// Lower and compile the program.
     fn complete(self: *ProgramBuild) void {
         std.debug.assert(self.outcome == .pending);
@@ -2489,32 +2592,6 @@ const ProgramBuild = struct {
     }
 };
 
-/// Specialize and evaluate the roots `members` (positions in `roots`) as one
-/// Solved program, as the Solved evaluator does for every root; the values
-/// they read are stored, so nothing else is specialized.
-fn evaluateSpecializedRoots(
-    allocator: Allocator,
-    modules: []const ProgramModule,
-    lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
-    roots: []const checked_root_graph.Root,
-    members: []const u32,
-    options: Options,
-    debug_events: *DebugEvents,
-) FinalizeError!void {
-    var filter = RootFilter.empty;
-    defer filter.deinit(allocator);
-    for (members) |member| {
-        const root = roots[member];
-        try filter.put(allocator, .{ .module = modules[root.module].module.key.digest().bytes, .root = root.root }, {});
-    }
-    var specialized_options = options;
-    specialized_options.publish_shared_slots = true;
-    specialized_options.discovery_roots = .{};
-    specialized_options.validated_comptime_roots = null;
-    var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, .{}, null, specialized_options, debug_events, false, false, false, &filter);
-    specialized.deinit();
-}
-
 /// The roots of `pending` not yet complete, as a retry names them.
 fn collectUndoneKeys(
     allocator: Allocator,
@@ -2523,11 +2600,13 @@ fn collectUndoneKeys(
     roots: []const checked_root_graph.Root,
     pending: []const u32,
     keys: *std.ArrayList(StaticSlotEnvironment.ProducerOriginKey),
+    /// Name the complete roots too: their values have no slot to read.
+    include_done: bool,
 ) Allocator.Error!void {
     keys.clearRetainingCapacity();
     for (pending) |member| {
         const root = roots[member];
-        if (states[root.module].isDone(root.root)) continue;
+        if (!include_done and states[root.module].isDone(root.root)) continue;
         try keys.append(allocator, .{ .module = modules[root.module].module.key.digest().bytes, .producer = .{ .checked = root.root } });
     }
 }
@@ -2640,7 +2719,7 @@ fn runBoxyPasses(
     defer remaining.deinit(allocator);
     try remaining.appendSlice(allocator, remaining_roots);
     while (remaining.items.len != 0) {
-        try collectUndoneKeys(allocator, modules, states, roots, pending, keys);
+        try collectUndoneKeys(allocator, modules, states, roots, pending, keys, false);
         const retry = CycleRetry{ .pending = keys.items };
         try runBoxyBatch(allocator, modules, states, roots, pending, remaining.items, options, lowered, const_roots, owners, program, &retry);
         var kept: usize = 0;
@@ -6397,6 +6476,7 @@ fn evalDevProgramRoots(
         .context = @ptrCast(&resolver),
         .resolve = DevResolver.resolve,
     });
+    if (lowered.boxy_functions) |retained| writer.setBoxyFunctions(.{ .retained = retained, .result = &lowered.lir_result, .composition = native.composition.? });
 
     var had_problem = false;
     for (jobs[0..jobs_len]) |*job| {
@@ -6442,12 +6522,15 @@ fn evalDevProgramRoots(
             .crashed => job.host.crashMessage() orelse "Roc crashed",
             .pending, .host_oom => unreachable, // the payload switch above rejected or returned for these results
         };
-        if (options.publish_shared_slots and failure_message == null) try native.publishRoot(lowered, job.root.owner, .{ .checked = job.root_id }, job.root.shape(), .{ .ptr = job.ret_buf.ptr });
+        // A function value has no slot form: a reader of this root runs
+        // again once its value is stored (`evaluateFunctionRoots`).
+        const publishes = options.publish_shared_slots and (failure_message != null or !try writer.planHoldsBoxyFunction(job.root.plan));
+        if (publishes and failure_message == null) try native.publishRoot(lowered, job.root.owner, .{ .checked = job.root_id }, job.root.shape(), .{ .ptr = job.ret_buf.ptr });
         if (options.publish_shared_slots and failure_message != null) {
             const failed_at = native.failedAt(job.host.failure);
             try native.slots.publishFailureOrigin(job.root.owner, .{ .checked = job.root_id }, .{ .loc = failed_at.loc, .region = failed_at.region }, &lowered.lir_result);
         }
-        if (options.publish_shared_slots) try native.publishFailure(lowered, job.root.owner, .{ .checked = job.root_id }, if (failure_message) |message| .{ .message = message, .kind = RootFailure.ofPayload(module, payload) } else null);
+        if (publishes) try native.publishFailure(lowered, job.root.owner, .{ .checked = job.root_id }, if (failure_message) |message| .{ .message = message, .kind = RootFailure.ofPayload(module, payload) } else null);
 
         if (try reportDevHostEvents(allocator, options, problem_store, module, job.compile_time_root, native, &lowered.lir_result.store, job.host.events.items)) {
             had_problem = true;
@@ -7122,7 +7205,7 @@ const RootFailure = enum {
         return switch (payload) {
             .const_node => |node| switch (module.const_store.get(node)) {
                 .checked_error => .checked_error,
-                .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .nominal, .fn_value => .crash,
+                .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .nominal, .fn_value, .boxy_fn => .crash,
             },
             .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => .crash,
         };
@@ -7332,6 +7415,12 @@ fn completeRoot(
     compile_time_root: checked.CompileTimeRoot,
     payload: checked.CompileTimeRootPayload,
 ) ConstStoreWriter.Error!void {
+    if (payload == .const_node and try writer.planHoldsBoxyFunction(root.plan)) {
+        module.compile_time_roots.fillPayload(root_id, .unevaluated);
+        module.compile_time_roots.fillBoxyValue(root_id, .{ .node = payload.const_node, .root = root_id, .root_type = try writer.storeRootType(root) });
+        state.markDone(root_id);
+        return;
+    }
     module.compile_time_roots.fillPayload(root_id, payload);
     const stored_root_type = switch (compile_time_root.kind) {
         .constant, .hoisted_constant => try writer.storeRootType(root),

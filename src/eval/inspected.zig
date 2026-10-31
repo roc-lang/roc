@@ -1271,6 +1271,7 @@ pub fn finalizedComptimeReplStr(resources: *const ParsedResources) Error![]const
             switch (resources.checked_artifact.const_store.get(node)) {
                 .str => |str| return resources.checked_artifact.const_store.strBytes(str),
                 .nominal => |nominal| node = nominal.backing,
+                .boxy_fn,
                 .pending,
                 .zst,
                 .scalar,

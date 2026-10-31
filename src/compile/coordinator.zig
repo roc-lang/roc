@@ -221,7 +221,7 @@ fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
     return 0;
 }
 
-const checked_module_cache_magic = "roc-mod-cache-v11";
+const checked_module_cache_magic = "roc-mod-cache-v12";
 
 // Header: magic, entry-version hash (32), artifact key (32), env-blob length
 // (u64), artifact-blob length (u64), pin-validation stamp (32), and zero bytes
@@ -1526,7 +1526,7 @@ const BoxyObjects = struct {
     ready: std.ArrayList(*UnitTask) = .empty,
     /// The compile-time programs the evaluation asked to build, not
     /// submitted yet (`BoxyObjectSource.submit`).
-    programs: std.ArrayList(post_check_executor.Task) = .empty,
+    programs: std.ArrayList(eval.CompileTimeFinalization.ProgramTask) = .empty,
     /// The programs submitted and not yet finished, by task id.
     program_ids: std.AutoHashMapUnmanaged(usize, void) = .empty,
     /// The programs finished and not yet taken by the evaluation.
@@ -1770,6 +1770,9 @@ const BoxyObjects = struct {
         errdefer gpa.free(views);
         var config = self.lowering.config;
         config.boxy_unit = .{ .imports = self.interfaces, .root = false, .names = &self.digests.names };
+        // A unit on a worker lowers and compiles by itself; `runAlone` lends
+        // the workers to a unit it runs on the coordinating thread.
+        config.post_check_executor = null;
         config.checked_module_state = if (artifact.evaluation_state == .finalized) .complete else .checking_finalization;
         return .{ .unit = .{
             .gpa = gpa,
@@ -1911,6 +1914,7 @@ const BoxyObjects = struct {
             return;
         }
         try self.waitUntil({}, nothingRunning);
+        if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: restarting under the link's names: {d} modules share a name, {d} objects and {d} units discarded\n", .{ settled.names.content_named.count(), self.records.count(), self.units.count() });
         const gpa = self.coordinator.gpa;
         self.digests.deinit();
         self.digests = settled;
@@ -1946,14 +1950,14 @@ const BoxyObjects = struct {
         for (unbound.items) |artifact| try self.offer(artifact);
     }
 
-    /// Build the compile-time program `task` on the session, as soon as it
-    /// has a worker for it.
-    fn submitProgram(context: *anyopaque, task: post_check_executor.Task) Error!void {
+    /// Build the compile-time program `program` on the session, as soon as
+    /// it has a worker for it.
+    fn submitProgram(context: *anyopaque, program: eval.CompileTimeFinalization.ProgramTask) Error!void {
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
         const gpa = self.coordinator.gpa;
-        try self.program_ids.put(gpa, task.id, {});
-        errdefer _ = self.program_ids.remove(task.id);
-        try self.programs.append(gpa, task);
+        try self.program_ids.put(gpa, program.task.id, {});
+        errdefer _ = self.program_ids.remove(program.task.id);
+        try self.programs.append(gpa, program);
         try self.submitReady();
     }
 
@@ -1965,29 +1969,70 @@ const BoxyObjects = struct {
         return self.program_completions.pop();
     }
 
-    /// Wait for the next unit or program to finish. False when none is
-    /// running.
+    /// Wait for the next unit or program to finish, or run the one held
+    /// task with the workers lent to it. False when none is running or
+    /// held: nothing the evaluation waits for will happen.
     fn progress(context: *anyopaque) Error!bool {
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
         try self.drain();
         if (self.first_error) |err| return err;
-        if (self.session.outstanding == 0) return false;
+        if (self.session.outstanding == 0) return self.runAlone();
         self.coordinator.pumpPostCheckResult();
         try self.drain();
         return true;
     }
 
+    /// Whether the one queued task is held for `runAlone` rather than
+    /// submitted: checking is done, nothing is in flight, and the workers
+    /// would otherwise idle while one of them builds it.
+    fn holdsAlone(self: *const BoxyObjects) bool {
+        return self.coordinator.frontend_complete and self.coordinator.hasWorkers() and
+            self.session.outstanding == 0 and self.programs.items.len + self.ready.items.len == 1;
+    }
+
+    /// Run the held task on the coordinating thread, lending it the workers
+    /// for the parallel waves of its lowering and code generation, and
+    /// record its completion. False when no task is held.
+    fn runAlone(self: *BoxyObjects) Error!bool {
+        if (!self.holdsAlone()) return false;
+        const coordinator = self.coordinator;
+        const executor = coordinator.postCheckExecutor();
+        const task: post_check_executor.Task = if (self.programs.pop()) |program| blk: {
+            program.lend(program.task.context, executor);
+            if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: building a compile-time program alone, with {d} workers\n", .{executor.worker_count});
+            break :blk program.task;
+        } else blk: {
+            const unit = self.ready.pop().?;
+            try self.keyUnit(&unit.prepared);
+            unit.prepared.unit.config.post_check_executor = executor;
+            if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: building {s} key {s} alone, with {d} workers\n", .{ unit.artifact.moduleEnvConst().module_name, &std.fmt.bytesToHex(unit.artifact.key.bytes[0..8], .lower), executor.worker_count });
+            break :blk .{ .id = @intFromPtr(unit), .context = unit, .run = UnitTask.run };
+        };
+        const allocators = coordinator.inline_worker_allocs.taskAllocators();
+        defer coordinator.inline_worker_allocs.resetArena();
+        const value = task.run(task.context, .{
+            .id = 0,
+            .allocator = allocators.module,
+            .scratch = allocators.scratch,
+            .lane_state = &coordinator.inline_worker_allocs.post_check_lane_state,
+        });
+        try self.complete(.{ .id = task.id, .worker_id = 0, .value = value });
+        return true;
+    }
+
     /// Submit the programs the evaluation waits for, then ready units, as
     /// many as the executor takes. While checking continues, one worker is
-    /// left to it.
+    /// left to it. A task `holdsAlone` keeps is submitted to no worker: the
+    /// evaluation runs it through `progress` when it has nothing else to do.
     fn submitReady(self: *BoxyObjects) Error!void {
+        if (self.holdsAlone()) return;
         const workers = self.session.executor.worker_count;
         const limit = if (self.coordinator.frontend_complete) workers else @max(1, workers - 1);
         while (self.programs.items.len != 0 and self.first_error == null and self.session.canSubmit() and self.session.outstanding < limit) {
-            const task = self.programs.pop().?;
+            const program = self.programs.pop().?;
             if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: building a compile-time program ({d} tasks in progress)\n", .{self.session.outstanding + 1});
-            self.session.submit(task) catch |err| {
-                self.programs.appendAssumeCapacity(task);
+            self.session.submit(program.task) catch |err| {
+                self.programs.appendAssumeCapacity(program);
                 return err;
             };
         }
@@ -2056,7 +2101,10 @@ const BoxyObjects = struct {
             try self.drain();
             if (self.first_error) |err| return err;
             if (done(self, context)) return;
-            if (self.session.outstanding == 0) Coordinator.coordinatorInvariant("a module's object waits for an import no unit builds", .{});
+            if (self.session.outstanding == 0) {
+                if (!try self.runAlone()) Coordinator.coordinatorInvariant("a module's object waits for an import no unit builds", .{});
+                continue;
+            }
             self.coordinator.pumpPostCheckResult();
         }
     }
@@ -4388,6 +4436,7 @@ pub const Coordinator = struct {
         for (artifact.root_requests.compile_time_requests) |request| {
             const root = request.compile_time_root orelse continue;
             if (strategy == .lss and artifact.compile_time_roots.root(root).kind == .literal_argument) continue;
+            if (strategy == .boxy and artifact.compile_time_roots.root(root).boxy_value != null) continue;
             if (artifact.compile_time_roots.root(root).payload == .unevaluated or
                 artifact.compile_time_roots.root(root).payload == .pending) count += 1;
         }
@@ -9261,7 +9310,7 @@ fn storedNamedOccurrences(
         },
         .tuple, .record => |items| try nodes.appendSlice(allocator, items),
         .tag => |tag| try nodes.appendSlice(allocator, tag.payloads),
-        .pending, .zst, .scalar, .str, .crash, .checked_error, .fn_value => {},
+        .pending, .zst, .scalar, .str, .crash, .checked_error, .fn_value, .boxy_fn => {},
     };
     const def = switch (root.source) {
         .def => |def| def,
