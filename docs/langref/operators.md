@@ -256,7 +256,7 @@ optimized builds, which leave out inline `expect`s. (See
 
 ### `[…]` (subscript operator)
 
-(This has not been implemented yet.)
+⚠️ (This has not been implemented yet.)
 
 Writing `[` and `]` directly after an expression, with another expression in between them (for example, `list[index]`), will call the `subscript` method on the first expression, passing the second expression as its argument. In other words, `collection[key]` will desugar to `collection.subscript(key)`.
 
@@ -268,4 +268,4 @@ Several builtin types already have `subscript` methods, which you can call direc
 | `dict.subscript(key)` | [`Dict.get`](../Dict#get) | `Try(value, [KeyNotFound])` |
 | `set.subscript(item)` | [`Set.contains`](../Set#contains) | `Bool` |
 
-Since this uses [static dispatch](static-dispatch), any type can opt into subscript syntax by defining a `subscript` method.
+⚠️ Once subscript syntax is implemented, any type will be able to opt into it by defining a `subscript` method, using [static dispatch](static-dispatch).
