@@ -1,8 +1,9 @@
 //! The per-module Boxy object cache (design.md "Caching Under `.boxy`").
 //!
-//! One entry per module, keyed by the module's checked-module cache key
-//! extended with the target, the optimization level, whether expects are
-//! compiled in, and the compiler's compatibility identity. An entry holds
+//! One entry per module, keyed by what the module's object is a function of
+//! (`boxy_interface.Digests.objectInput`) extended with the target, the
+//! optimization level, whether expects are compiled in, and the compiler's
+//! compatibility identity. An entry holds
 //! everything a build needs of the module's object: the export interface
 //! each importing module compiles its calls against, the hosted symbols the
 //! object references, the object code itself, and where that code came from.
@@ -16,7 +17,7 @@ const CodeLocations = @import("backend").dev.CodeLocations;
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 2;
+pub const format_version: u32 = 3;
 
 const magic = "RBXO";
 
@@ -31,9 +32,9 @@ pub const Key = struct {
 /// Every input a module's object is a function of, and nothing else
 /// (design.md "Per-Module Output").
 pub const KeyInput = struct {
-    /// The module's checked-module cache key, which covers its content and
-    /// every upstream module's checked key transitively.
-    checked_key: [32]u8,
+    /// The module's own source and stored values and its imports' interfaces
+    /// (`boxy_interface.Digests.objectInput`).
+    object_input: [32]u8,
     /// For a module declaring hosted functions: a digest of the platform
     /// header's hosted section, which binds them to the host symbols the
     /// module's calls name (`hostedBindingsDigest`).
@@ -49,10 +50,10 @@ pub const KeyInput = struct {
 /// The key of a module's object for `input` under this compiler.
 pub fn key(input: KeyInput) Key {
     var hasher = base.Sha256.init(.{});
-    hasher.update("roc-boxy-object-key-v1");
+    hasher.update("roc-boxy-object-key-v2");
     hasher.update(&build_options.compiler_compatibility_hash);
     hashU32(&hasher, format_version);
-    hasher.update(&input.checked_key);
+    hasher.update(&input.object_input);
     if (input.hosted_bindings) |bindings| {
         hasher.update(&[_]u8{1});
         hasher.update(&bindings);
@@ -308,7 +309,7 @@ fn hashLengthPrefixed(hasher: *base.Sha256, bytes: []const u8) void {
 }
 
 fn testInput() KeyInput {
-    return .{ .checked_key = @splat(7), .target = "x64glibc", .opt = "dev", .inline_expects = false };
+    return .{ .object_input = @splat(7), .target = "x64glibc", .opt = "dev", .inline_expects = false };
 }
 
 test "a Boxy object key is a function of exactly its declared inputs" {
@@ -316,7 +317,7 @@ test "a Boxy object key is a function of exactly its declared inputs" {
     try std.testing.expectEqual(baseline.bytes, key(testInput()).bytes);
 
     var changed_module = testInput();
-    changed_module.checked_key = @splat(8);
+    changed_module.object_input = @splat(8);
     try std.testing.expect(!std.mem.eql(u8, &baseline.bytes, &key(changed_module).bytes));
 
     var with_platform = testInput();

@@ -287,21 +287,38 @@ fn computeStableModuleIdentityHash(module_env: *const ModuleEnv) [32]u8 {
 
 fn hashCheckingContextIdentity(identity: CheckingContextIdentity) [32]u8 {
     var hasher = base.Sha256.init(.{});
+    hashCheckingContextPolicy(&hasher, identity, true);
+    return hasher.finalResult();
+}
+
+/// The digest of the checking inputs of a module that its imports' and its
+/// app pairing's implementations do not reach: its imports' names, explicit
+/// root requests, validation mode and platform requirement context.
+pub fn checkingContextPolicyHash(identity: CheckingContextIdentity) [32]u8 {
+    var hasher = base.Sha256.init(.{});
+    hashCheckingContextPolicy(&hasher, identity, false);
+    return hasher.finalResult();
+}
+
+fn hashCheckingContextPolicy(hasher: *base.Sha256, identity: CheckingContextIdentity, include_keys: bool) void {
     if (identity.platform_requirement_context) |context| {
         hasher.update(&[_]u8{1});
         hasher.update(&context.bytes);
     } else {
         hasher.update(&[_]u8{0});
     }
-    if (identity.platform_app_relation) |relation| {
-        hasher.update(&[_]u8{1});
-        hasher.update(&relation.bytes);
-    } else {
-        hasher.update(&[_]u8{0});
+    if (include_keys) {
+        if (identity.platform_app_relation) |relation| {
+            hasher.update(&[_]u8{1});
+            hasher.update(&relation.bytes);
+        } else {
+            hasher.update(&[_]u8{0});
+        }
     }
-    hashU32(&hasher, @intCast(identity.imports.len));
+    hashU32(hasher, @intCast(identity.imports.len));
     for (identity.imports) |import_identity| {
         hasher.update(&import_identity.import_name_hash);
+        if (!include_keys) continue;
         if (import_identity.artifact_key) |key| {
             hasher.update(&[_]u8{1});
             hasher.update(&key.bytes);
@@ -309,12 +326,11 @@ fn hashCheckingContextIdentity(identity: CheckingContextIdentity) [32]u8 {
             hasher.update(&[_]u8{0});
         }
     }
-    hashU32(&hasher, @intCast(identity.explicit_roots.len));
+    hashU32(hasher, @intCast(identity.explicit_roots.len));
     for (identity.explicit_roots) |root| {
-        hashExplicitRootRequestInput(&hasher, root);
+        hashExplicitRootRequestInput(hasher, root);
     }
-    hashByteSlice(&hasher, @tagName(identity.validation));
-    return hasher.finalResult();
+    hashByteSlice(hasher, @tagName(identity.validation));
 }
 
 fn hashExplicitRootRequestInput(
@@ -3492,6 +3508,14 @@ pub const CheckedTypeStoreView = struct {
             if (canonicalNominalTypeKeyEql(declaration.nominal, nominal)) return declaration;
         }
         return null;
+    }
+
+    /// The name `declaration` declares.
+    pub fn nominalDeclarationName(self: CheckedTypeStoreView, declaration: CheckedNominalDeclaration) canonical.TypeNameId {
+        return switch (self.payload(declaration.declaration_root)) {
+            .nominal => |nominal| nominal.name,
+            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => base.invariant("a nominal declaration's root is no nominal type", .{}),
+        };
     }
 
     pub fn nominalDeclarationById(
