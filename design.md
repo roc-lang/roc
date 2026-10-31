@@ -15455,22 +15455,41 @@ run in a program linked against its imports' cached objects: a module unit
 (`TargetConfig.boxy_unit`) lowering only what those roots reach, compiled into
 the compiler's process and calling the imports' objects, loaded once per
 evaluation (`BoxyLinkedImages`), by symbol. A module with no object yet is
-compiled whole and filed the first time an importer needs it, whichever
+compiled whole and filed by the compilation that first needs it, whichever
 command that is; the root module's own constant code is compiled for the
-evaluation and discarded. The first such need builds not one object but
-every one it can: the importer's closure and, in a program's build, every
-other module the root sees whose roots are complete, since each is needed by
-a later program or by the link. Those units build on the post-check executor,
-each once its imports among them are done and the independent ones at once;
-modules are evaluated in dependency order, so building only what each program
-asks for would build one unit at a time. A platform module with requirements has no object of
-its own, so a module importing one runs as the whole program. Each object is
-filed with its `CodeLocations`: its line table, failure sites and source files
-(Compile-Time Failure Sites). A failure in an object's code is therefore found
-and reported exactly as one in a whole program's own code, and the two forms
-report identically. The table is read only when something fails, so the code
-that succeeds carries nothing extra. A compilation with no cache has no objects, and
-runs as the whole program.
+evaluation and discarded. A module can have an object only once every
+compile-time root of its own is complete: in its object, an evaluated root's
+entry wrapper restores the stored value, which the other objects of a link
+read through it, so an object lowered while a root was still pending would
+compute the root's body at every read instead. The coordinator's unit
+scheduler (`compile.coordinator.BoxyObjects`) therefore builds each module's
+object as soon as the module can have one, and no sooner: a module restored
+from the checked cache with its roots complete, or one with no roots, the
+moment it is type-checked, while checking continues; every other module the
+moment the evaluator completes its roots. Each unit lowers once its imports'
+units are done, since its calls compile against their export interfaces, and
+the units run on the post-check executor alongside checking, the other units,
+and the evaluations of other modules. A module's evaluation waits only for
+the objects of its own import closure; the link waits for every unit, and
+links the objects this compilation built or restored without restoring them
+again. While checking continues, a compilation that links its program builds
+only modules reachable through import edges from the root package's root and
+the platform root, which every module the root will see is, and leaves one
+worker to checking; after it, exactly the modules the root sees. A
+compilation that does not link its program (`roc check`) builds the modules
+each evaluation's program needs and, as a program's build does, every other
+module the root sees whose roots are complete. The scheduler's post-check
+session stays open across checking and evaluation while the general session
+every other post-check stage borrows opens and closes within it: every task
+names its session, and whichever consumer takes a completion off the worker
+channel files it with the session that submitted it. A platform module with
+requirements has no object of its own, so a module importing one runs as the
+whole program. Each object is filed with its `CodeLocations`: its line table,
+failure sites and source files (Compile-Time Failure Sites). A failure in an
+object's code is therefore found and reported exactly as one in a whole
+program's own code, and the two forms report identically. The table is read
+only when something fails, so the code that succeeds carries nothing extra. A
+compilation with no cache has no objects, and runs as the whole program.
 
 A root whose value holds a function value (anywhere in its type, or a
 callable binding) has no compile-time value slot, so it is evaluated by the

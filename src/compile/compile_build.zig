@@ -2749,6 +2749,22 @@ pub const BuildEnv = struct {
         return stats;
     }
 
+    /// `artifact`'s object with the cache key `key`, when this compilation's
+    /// compile-time evaluation built or restored it: its bytes, its hosted
+    /// symbols, and whether it was restored.
+    pub fn boxyObjectWithKey(self: *BuildEnv, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, key: @import("boxy_object_cache.zig").Key) ?BoxyKnownObject {
+        const coordinator = self.coordinator orelse return null;
+        const objects = &(coordinator.boxy_objects orelse return null);
+        const known = objects.objectWithKey(artifact, key) orelse return null;
+        return .{ .object = known.object.?.object, .hosted_symbols = known.object.?.hosted_symbols, .restored = known.restored };
+    }
+
+    pub const BoxyKnownObject = struct {
+        object: []const u8,
+        hosted_symbols: []const []const u8,
+        restored: bool,
+    };
+
     /// Count the objects a `.boxy` build restored from and filed in the
     /// per-module Boxy object cache (`BuildStats`).
     pub fn recordBoxyObjects(self: *BuildEnv, restored: u32, built: u32) void {
