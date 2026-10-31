@@ -52,7 +52,10 @@ other modules can flatten out the nesting using `import` with the [`as` keyword]
 
 ### Alias modules
 
-If you want to make these nested modules easier to import, you can make an "alias module" whose
+⚠️ (Note: alias modules have not been implemented yet. Currently, the compiler requires a type
+module's type to be nominal, and reports an error if it's a type alias.)
+
+The proposed design would let you make these nested modules easier to import by creating an "alias module" whose
 type is an alias of another type. For example, you could make `ParseErr.roc` and have its
 type be a type alias of `Url.ParseErr` like so:
 
@@ -69,9 +72,6 @@ though, because having it qualified as `Url.ParseErr` is useful; it tells you th
 specifically a URL parsing error, which is more informative than a generic name like `ParseErr`.
 
 Alias modules are more useful when exporting [mutually recursive types](#importing-mutually-recursive-types).
-
-(Note: alias modules have not been implemented yet. Currently, the compiler requires a type
-module's type to be nominal, and reports an error if it's a type alias.)
 
 ### "Void" modules
 
@@ -354,7 +354,7 @@ At this point you can `import FooBar` and then reference `FooBar.Foo` and `FooBa
 or you could `import FooBar.Foo` and `import FooBar.Bar` to bring `Foo` and `Bar` into
 scope unqualified.
 
-You could also make separate [alias modules](#alias-modules) for `Foo` and `Bar`:
+⚠️ Once [alias modules](#alias-modules) are implemented, you could also make separate modules for `Foo` and `Bar`:
 
 ```roc
 # Foo.roc

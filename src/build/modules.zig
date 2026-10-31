@@ -685,10 +685,8 @@ pub const RocModules = struct {
             self.addImports(self.getModule(module_type), module_type);
         }
 
-        // `embedded_lld` needs `collections` for the single-threaded arena and
-        // `build_options` for the Darwin sysroot path baked in at build time.
+        // `embedded_lld` needs `collections` for the single-threaded arena.
         self.embedded_lld.addImport("collections", self.collections);
-        self.embedded_lld.addImport("build_options", self.build_options);
         self.boxy_runtime.addImport("raw_pages", self.raw_pages);
 
         // The vendored Mach-O code-signing helpers use the build-time `tracy`

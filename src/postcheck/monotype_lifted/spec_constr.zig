@@ -10849,10 +10849,21 @@ const Cloner = struct {
     /// opaque. A scrutinee that is a source expression reused unchanged by
     /// this clone has no recorded values and is re-read as source, which is
     /// the same read that produced it.
+    ///
+    /// An outer arm that more than one inner leaf selects is continuation code
+    /// those leaves share, so it becomes a join and each leaf jumps to it. An
+    /// arm one leaf selects is cloned at that leaf, and an arm that only builds
+    /// a value is cloned at each of its leaves, where the value stays known.
     const CaseOfCaseTask = struct {
         ty: Type.TypeId,
         scrutinee_expr: Ast.ExprId,
         outer_branches: Ast.Span(Ast.Branch),
+        /// Whether an enclosing distribution already decided the arms' sharing
+        /// over every leaf of this scrutinee.
+        arms_planned: bool = false,
+        joins: []LetCaseJoin = &.{},
+        frame_index: usize = 0,
+        result: Ast.ExprId = undefined,
         recorded: ?[]const Value = null,
         match_branches: []const Ast.Branch = &.{},
         match_rewritten: []Ast.Branch = &.{},
@@ -10866,6 +10877,18 @@ const Cloner = struct {
 
     fn stepCaseOfCase(self: *Cloner, frame: *CloneFrame, task: *CaseOfCaseTask, input: ?CloneResult) Common.LowerError!CloneStep {
         const arena = self.arena.allocator();
+        // A finalized join.
+        if (frame.cursor == 2) {
+            if (input.?.get(.pieces)) |pieces| {
+                task.result = try self.addExpr(.{ .ty = task.ty, .data = .{ .join_point = .{
+                    .id = task.joins[frame.index].id,
+                    .params = pieces.params,
+                    .body = pieces.body,
+                    .remainder = task.result,
+                } } });
+            }
+            return self.nextCaseOfCaseJoin(frame, task);
+        }
         if (frame.cursor == 0) {
             // A row coercion of a branching value is the branching value with
             // each arm's result coerced, so distribution reads through it.
@@ -10892,6 +10915,7 @@ const Cloner = struct {
             task.recorded = self.arm_values.get(task.scrutinee_expr);
             if (task.recorded == null and @backingInt(task.scrutinee_expr) >= self.output_start) return .{ .ret = .{ .maybe_value = null } };
             if (self.case_of_case_growth.admit(@max(branch_work, 1)) != .admitted) return .{ .ret = .{ .maybe_value = null } };
+            if (!task.arms_planned and !try self.planCaseOfCaseArms(task)) return .{ .ret = .{ .maybe_value = null } };
 
             switch (scrutinee_data) {
                 .match_ => |inner_match| {
@@ -10908,7 +10932,10 @@ const Cloner = struct {
             }
             frame.cursor = 1;
         } else {
-            const arm = input.?.get(.maybe_arm) orelse return .{ .ret = .{ .maybe_value = null } };
+            const arm = input.?.get(.maybe_arm) orelse {
+                if (task.joins.len != 0) self.let_case_builds.shrinkRetainingCapacity(task.frame_index);
+                return .{ .ret = .{ .maybe_value = null } };
+            };
             const index = frame.index;
             switch (scrutinee_data) {
                 .match_ => {
@@ -10932,7 +10959,9 @@ const Cloner = struct {
                         .final_else = arm.body,
                     } } });
                     try self.recordArmValues(distributed, task.values);
-                    return .{ .ret = .{ .maybe_value = .{ .expr = distributed } } };
+                    task.result = distributed;
+                    frame.index = task.joins.len;
+                    return self.nextCaseOfCaseJoin(frame, task);
                 },
                 .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // the branch_work switch returned for every non-case scrutinee
             }
@@ -10960,7 +10989,9 @@ const Cloner = struct {
                     .comptime_site = inner_match.comptime_site,
                 } } });
                 try self.recordArmValues(distributed, task.values);
-                return .{ .ret = .{ .maybe_value = .{ .expr = distributed } } };
+                task.result = distributed;
+                frame.index = task.joins.len;
+                return self.nextCaseOfCaseJoin(frame, task);
             },
             .if_ => |inner_if| return .{ .call = .{ .distribute_arm = .{
                 .ty = task.ty,
@@ -10972,6 +11003,156 @@ const Cloner = struct {
             } } },
             .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // the branch_work switch returned for every non-case scrutinee
         }
+    }
+
+    /// Wrap a distributed case in its live joins, so every jump site sits
+    /// inside each join's remainder.
+    fn nextCaseOfCaseJoin(self: *Cloner, frame: *CloneFrame, task: *CaseOfCaseTask) CloneStep {
+        while (frame.index > 0) {
+            frame.index -= 1;
+            const join = &task.joins[frame.index];
+            if (join.sites.items.len == 0) continue;
+            frame.cursor = 2;
+            return .{ .call = .{ .finalize_let_case_join = .{ .join = join, .rest_ty = task.ty } } };
+        }
+        if (task.joins.len != 0) self.let_case_builds.shrinkRetainingCapacity(task.frame_index);
+        return .{ .ret = .{ .maybe_value = .{ .expr = task.result } } };
+    }
+
+    /// Count the inner leaves that select each outer arm, and turn every arm
+    /// those leaves would otherwise copy into a join: the arm's body is replaced
+    /// by a jump carrying its binders, which is what each leaf then clones.
+    /// Returns false when a leaf cannot select an arm, which declines the
+    /// distribution before it clones anything.
+    fn planCaseOfCaseArms(self: *Cloner, task: *CaseOfCaseTask) Common.LowerError!bool {
+        const arena = self.arena.allocator();
+        const branches = try walkRows(self.pass.program, arena, Ast.Branch, task.outer_branches);
+        const reach = try arena.alloc(u32, branches.len);
+        @memset(reach, 0);
+        if (!try self.countCaseOfCaseArmReach(task.scrutinee_expr, task.outer_branches, reach)) return false;
+
+        var joins: std.ArrayList(LetCaseJoin) = .empty;
+        const rewritten = try arena.dupe(Ast.Branch, branches);
+        const template_start = self.pass.program.exprCount();
+        for (branches, reach, rewritten) |branch, count, *planned| {
+            if (count < 2 or try self.caseArmOnlyBuildsValue(branch.body)) continue;
+            var binders: std.ArrayList(Ast.LocalId) = .empty;
+            if (!try self.collectPatBinders(branch.pat, arena, &binders)) return false;
+            const join_id = self.pass.freshJoinPoint();
+            const args = try arena.alloc(Ast.ExprId, binders.items.len);
+            for (binders.items, args) |binder, *arg| {
+                const binder_ty = self.pass.program.getLocal(binder).ty;
+                arg.* = try self.addExpr(.{ .ty = binder_ty, .data = .{ .local = binder } });
+            }
+            planned.body = try self.addExpr(.{ .ty = task.ty, .data = .{ .jump = .{
+                .target = join_id,
+                .args = try self.pass.program.addExprSpan(args),
+            } } });
+            try joins.append(arena, .{
+                .id = join_id,
+                .binding = .{ .locals = binders.items },
+                .body = branch.body,
+                .sites = .empty,
+            });
+        }
+        task.arms_planned = true;
+        if (joins.items.len == 0) return true;
+
+        try self.registerCloneTemplate(template_start);
+        task.outer_branches = try self.pass.program.addBranchSpan(rewritten);
+        task.joins = joins.items;
+        const build = try arena.create(LetCaseBuild);
+        build.* = .{ .joins = task.joins };
+        task.frame_index = self.let_case_builds.items.len;
+        try self.let_case_builds.append(self.pass.allocator, build);
+        return true;
+    }
+
+    /// Add to `reach` how many leaves of the case `root` select each branch,
+    /// reading the same recorded arm values distribution reads. A source arm
+    /// reused unchanged has no recorded value until it is cloned, so it counts
+    /// as reaching every branch more than once. Returns false when a leaf
+    /// selects no branch, where distribution would decline.
+    fn countCaseOfCaseArmReach(
+        self: *Cloner,
+        root: Ast.ExprId,
+        branches: Ast.Span(Ast.Branch),
+        reach: []u32,
+    ) Common.LowerError!bool {
+        const arena = self.arena.allocator();
+        var work: std.ArrayList(Ast.ExprId) = .empty;
+        defer work.deinit(self.pass.allocator);
+        try work.append(self.pass.allocator, root);
+        while (work.pop()) |popped| {
+            var case_expr = popped;
+            while (self.pass.program.getExpr(case_expr).data == .row_widen) {
+                case_expr = self.pass.program.getExpr(case_expr).data.row_widen.value;
+            }
+            var arms: std.ArrayList(Ast.ExprId) = .empty;
+            switch (self.pass.program.getExpr(case_expr).data) {
+                .match_ => |match| {
+                    const rows = try walkRows(self.pass.program, arena, Ast.Branch, match.branches);
+                    for (rows) |row| try arms.append(arena, row.body);
+                },
+                .if_ => |if_| {
+                    const rows = try walkRows(self.pass.program, arena, Ast.IfBranch, if_.branches);
+                    for (rows) |row| try arms.append(arena, row.body);
+                    try arms.append(arena, if_.final_else);
+                },
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
+            }
+            const recorded = self.arm_values.get(case_expr);
+            if (recorded == null and @backingInt(case_expr) >= self.output_start) return false;
+            for (arms.items, 0..) |arm, arm_index| {
+                const values = recorded orelse {
+                    for (reach) |*count| count.* +|= 2;
+                    continue;
+                };
+                const value = self.emittedArmStructure(arm, values[arm_index]);
+                if (value == .expr) {
+                    try work.append(self.pass.allocator, value.expr);
+                    continue;
+                }
+                const selected = (try self.selectedBranch(branches, value)) orelse return false;
+                reach[selected] +|= 1;
+            }
+        }
+        return true;
+    }
+
+    /// The branch `stepSelectKnownMatch` selects for a known value.
+    fn selectedBranch(self: *Cloner, branches: Ast.Span(Ast.Branch), value: Value) Common.LowerError!?usize {
+        for (0..branches.len) |index| {
+            const branch = self.pass.program.branchAt(branches, index);
+            const change_start = self.subst.watermark();
+            const verdict = try self.bindPatToValue(branch.pat, value);
+            self.subst.restore(change_start);
+            switch (verdict) {
+                .unknown, .unknown_budget_exhausted => return null,
+                .no_match => continue,
+                .match => return index,
+            }
+        }
+        return null;
+    }
+
+    /// Whether `body` only builds a value out of locals and constants, or
+    /// transfers control. Such an arm holds no continuation code: copying it
+    /// adds no branch for a later distribution to multiply, and keeps the
+    /// value it builds known at each leaf.
+    fn caseArmOnlyBuildsValue(self: *Cloner, body: Ast.ExprId) Allocator.Error!bool {
+        var work: std.ArrayList(Ast.ExprChild) = .empty;
+        defer work.deinit(self.pass.allocator);
+        try work.append(self.pass.allocator, .{ .expr = body });
+        while (work.pop()) |child| {
+            const expr_id = child.expr;
+            switch (self.pass.program.getExpr(expr_id).data) {
+                .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .jump => {},
+                .tag, .record, .tuple, .nominal, .typed_boundary, .row_widen => try Ast.appendChildren(self.pass.allocator, self.pass.program, expr_id, &work),
+                .@"unreachable", .static_data_candidate, .comptime_value, .list, .record_update, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
+            }
+        }
+        return true;
     }
 
     /// The pattern scope of a source match arm re-read during distribution.
@@ -11098,7 +11279,7 @@ const Cloner = struct {
         }
         if (input.?.get(.maybe_value)) |value| return .{ .ret = .{ .maybe_value = value } };
         return switch (task.inner_value) {
-            .expr => |expr| .{ .tail = .{ .case_of_case = .{ .ty = task.ty, .scrutinee_expr = expr, .outer_branches = task.outer_branches } } },
+            .expr => |expr| .{ .tail = .{ .case_of_case = .{ .ty = task.ty, .scrutinee_expr = expr, .outer_branches = task.outer_branches, .arms_planned = true } } },
             .runtime_anchor, .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => .{ .ret = .{ .maybe_value = null } },
         };
     }

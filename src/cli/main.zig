@@ -2910,17 +2910,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
         // Link the host.a with our shim to create the interpreter executable using our linker
         // Try LLD first, then clang if LLVM is not available.
-        var extra_args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 32) catch {
-            return error.OutOfMemory;
-        };
-
-        // Add system libraries for macOS
-        if (builtin.target.os.tag == .macos) {
-            extra_args.append("-lSystem") catch {
-                return error.OutOfMemory;
-            };
-        }
-
+        //
         // Build object files list from the link spec items
         // Items are linked in the order specified in the targets section
         var object_files = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 16) catch {
@@ -3025,7 +3015,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             .object_files = object_files.items,
             .platform_files_pre = empty_files,
             .platform_files_post = empty_files,
-            .extra_args = extra_args.items,
+            .extra_args = &.{},
             .can_exit_early = false,
             .disable_output = false,
             .platform_files_dir = platform_files_dir,
@@ -13142,11 +13132,6 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     if (link_type == .archive) {
         try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
     } else {
-        var extra_args = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
-        if (target.isMacOS()) {
-            try extra_args.append("-lSystem");
-        }
-
         const link_config = linker.LinkConfig{
             .target_format = linker.TargetFormat.detectFromOs(target_os),
             .target_abi = buildLinkAbi(target, args.synthetic_default_platform),
@@ -13157,7 +13142,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
             .object_files = object_files.items,
             .platform_files_pre = link_inputs.platform_files_pre,
             .platform_files_post = link_inputs.platform_files_post,
-            .extra_args = extra_args.items,
+            .extra_args = &.{},
             .export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs, entrypoint_names),
             .can_exit_early = false,
             .disable_output = false,
