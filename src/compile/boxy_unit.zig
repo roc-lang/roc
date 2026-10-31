@@ -63,8 +63,9 @@ pub const Built = struct {
 /// The key of `artifact`'s object. A module declaring hosted functions is
 /// lowered against the platform header's hosted section, which binds them to
 /// their host symbols, so its key covers a digest of that section too.
-/// `paired_platforms` are the checked keys of the root program's platform
-/// modules, whose implementations the root unit lowers at the app's types.
+/// `paired_platforms` are the code-generation keys of the root program's
+/// platform modules, including their exact app bindings: the root unit lowers
+/// their implementations at the app's types and calls its supplied workers.
 /// A library module's object is a function of the module and its imports'
 /// interfaces alone, whatever program pairs it.
 pub fn objectKey(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *const Artifact, platform: ?ImportedView, opt: []const u8, inline_expects: bool, target: roc_target.RocTarget, paired_platforms: []const [32]u8) Allocator.Error!object_cache.Key {

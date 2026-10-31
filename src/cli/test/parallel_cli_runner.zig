@@ -495,6 +495,8 @@ const CustomCase = enum {
     boxy_build_and_run_cache_what_check_caches,
     boxy_compile_time_objects,
     boxy_module_object_cache,
+    boxy_platform_evaluation,
+    boxy_platform_bindings,
     boxy_interface_edits,
     issue_11710_shared_object_cache,
     issue_12220_shared_object_cache_literals,
@@ -3341,6 +3343,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no caches nothing after checking", .timeout_ms = 600_000, .body = .{ .custom = .boxy_caches_nothing_after_checking } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no compile-time evaluation links cached module objects", .timeout_ms = 600_000, .body = .{ .custom = .boxy_compile_time_objects } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no build and run leave the cache check leaves", .timeout_ms = 600_000, .body = .{ .custom = .boxy_build_and_run_cache_what_check_caches } },
+    .{ .id = 0, .suite = .subcommands, .name = "--specialize=no platform object cache distinguishes app bindings", .timeout_ms = 180_000, .body = .{ .custom = .boxy_platform_bindings } },
+    .{ .id = 0, .suite = .subcommands, .name = "--specialize=no platform evaluation retains app units waiting for later roots", .timeout_ms = 120_000, .body = .{ .custom = .boxy_platform_evaluation } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no build files one object per module and rebuilds only edited modules", .timeout_ms = 600_000, .body = .{ .custom = .boxy_module_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no objects depend on their imports' interfaces, not their implementations", .timeout_ms = 900_000, .body = .{ .custom = .boxy_interface_edits } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11710: shared object cache serves a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_11710_shared_object_cache } },
@@ -5372,6 +5376,8 @@ fn runCustomCase(
         .boxy_caches_nothing_after_checking => customBoxyCachesNothingAfterChecking(io, allocator, &env, &timer, timeout_ms),
         .boxy_build_and_run_cache_what_check_caches => customBoxyBuildAndRunCacheWhatCheckCaches(io, allocator, &env, &timer, timeout_ms),
         .boxy_compile_time_objects => customBoxyCompileTimeObjects(io, allocator, &env, &timer, timeout_ms),
+        .boxy_platform_bindings => customBoxyPlatformBindings(io, allocator, &env, &timer, timeout_ms),
+        .boxy_platform_evaluation => customBoxyPlatformEvaluation(io, allocator, &env, &timer, timeout_ms),
         .boxy_module_object_cache => customBoxyModuleObjectCache(io, allocator, &env, &timer, timeout_ms),
         .boxy_interface_edits => customBoxyInterfaceEdits(io, allocator, &env, &timer, timeout_ms),
         .issue_11710_shared_object_cache => customIssue11710SharedObjectCache(io, allocator, &env, &timer, timeout_ms),
@@ -11529,6 +11535,76 @@ fn customBoxyCachesNothingAfterChecking(
 /// build with `--no-cache` produce byte-identical executables, and an edit
 /// rebuilds only the modules whose keys changed (design.md "Caching Under
 /// `.boxy`").
+/// A platform's immutable checked identity can be shared by apps, but its
+/// root object calls the worker supplied by this particular app binding.
+fn customBoxyPlatformBindings(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err| return customInfraFailure(allocator, timer, "clone environment: {}", .{err}) };
+    defer isolated.env_map.deinit();
+    const cache_root = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "platform_bindings_cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "cache path: {}", .{err});
+    for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+        isolated.env_map.put(key, cache_root) catch |err| return customInfraFailure(allocator, timer, "set cache: {}", .{err});
+    }
+    const output = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "platform_binding" }) catch |err|
+        return customInfraFailure(allocator, timer, "output path: {}", .{err});
+    const out_arg = outputArg(allocator, output) catch |err| return customInfraFailure(allocator, timer, "output argument: {}", .{err});
+    const App = struct { path: []const u8, expected: []const u8 };
+    const apps = [_]App{
+        .{ .path = "test/cli/boxy_platform_bindings/First.roc", .expected = "first\n" },
+        .{ .path = "test/cli/boxy_platform_bindings/Second.roc", .expected = "second\n" },
+    };
+    for (0..2) |_| for (apps) |app| {
+        const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "platform binding test timed out");
+        const run = runRocInEnv(io, allocator, &isolated, &.{ "build", "--opt=dev", "--specialize=no", "--jobs=1", "--no-color", out_arg }, app.path, .relative, &.{}, null, remaining) catch |err|
+            return customInfraFailure(allocator, timer, "build: {}", .{err});
+        if (!processSucceeded(run.term)) return failureFromRun(allocator, timer, run, "the app's build failed");
+        const exe = runnableOutputPath(io, allocator, output) catch |err| return customInfraFailure(allocator, timer, "executable: {}", .{err});
+        if (runRawAndCheck(io, allocator, &isolated, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{ .args = &.{}, .stdout_exact = app.expected, .stderr_exact = "" })) |failure| return failure;
+    };
+    return null;
+}
+
+/// Platform finalization must join active readers without waiting for app
+/// units whose imported compile-time roots run only after platform pairing.
+fn customBoxyPlatformEvaluation(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err| return customInfraFailure(allocator, timer, "clone environment: {}", .{err}) };
+    defer isolated.env_map.deinit();
+    for ([_][]const u8{ "1", "2" }) |jobs| {
+        const cache_root = std.fmt.allocPrint(allocator, "{s}/platform_evaluation_cache_{s}", .{ env.dirs.work_dir, jobs }) catch |err|
+            return customInfraFailure(allocator, timer, "cache path: {}", .{err});
+        for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+            isolated.env_map.put(key, cache_root) catch |err| return customInfraFailure(allocator, timer, "set cache: {}", .{err});
+        }
+        const output = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "platform_evaluation.a" }) catch |err|
+            return customInfraFailure(allocator, timer, "output path: {}", .{err});
+        const out_arg = outputArg(allocator, output) catch |err| return customInfraFailure(allocator, timer, "output argument: {}", .{err});
+        const jobs_arg = std.fmt.allocPrint(allocator, "--jobs={s}", .{jobs}) catch |err| return customInfraFailure(allocator, timer, "jobs argument: {}", .{err});
+        // Cold and warm builds both finish, with the same checked constants.
+        for (0..2) |_| {
+            const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "platform evaluation timed out");
+            const run = runRocInEnv(io, allocator, &isolated, &.{ "build", "--opt=dev", "--specialize=no", "--no-color", jobs_arg, out_arg }, "test/cli/boxy_platform_evaluation/Main.roc", .relative, &.{}, null, remaining) catch |err|
+                return customInfraFailure(allocator, timer, "build: {}", .{err});
+            if (!processSucceeded(run.term)) return failureFromRun(allocator, timer, run, "platform evaluation failed");
+            const bytes = std.Io.Dir.cwd().readFileAlloc(io, output, allocator, .limited(64 * 1024 * 1024)) catch |err|
+                return customInfraFailure(allocator, timer, "read archive: {}", .{err});
+            if (!std.mem.startsWith(u8, bytes, "!<arch>\n")) return customFailure(allocator, timer, "build did not produce an archive", .{});
+        }
+    }
+    return null;
+}
+
 fn customBoxyModuleObjectCache(
     io: std.Io,
     allocator: Allocator,

@@ -4171,7 +4171,17 @@ pub const Coordinator = struct {
         // The objects are read by the link and filed by this evaluation;
         // installing copied values and committing the modules below write
         // what the units read.
-        if (self.boxy_objects) |*objects| try objects.waitAll();
+        if (self.boxy_objects) |*objects| {
+            if (dependency_root != null) {
+                // Platform-only evaluation can leave app units waiting for
+                // roots evaluated after pairing. Join the readers currently
+                // running before publishing values; queued units resume in
+                // program evaluation, which joins every unit below.
+                try objects.waitUntil({}, BoxyObjects.nothingRunning);
+            } else {
+                try objects.waitAll();
+            }
+        }
         const checked_modules: eval.CompileTimeReuse.CheckedModules = .{ .context = self, .find = findCheckedModule };
         for (transplants.items) |*pending| try eval.CompileTimeReuse.verifyAndInstall(pending.module, &pending.previous, &pending.transplant, checked_modules);
         if (literal_values) |entry| try self.storeProgramLiteralValues(entry, literal_records_before);
