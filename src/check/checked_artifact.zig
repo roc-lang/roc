@@ -35306,11 +35306,13 @@ pub const CheckedModuleArtifact = struct {
         return false;
     }
 
-    /// Whether a root of this module still awaits this compilation's
-    /// evaluation, so its stored values are not final.
+    /// Whether a requested root of this module still awaits this
+    /// compilation's evaluation, so its stored values are not final. A root
+    /// nothing requests is never evaluated and stores no value.
     pub fn hasPendingRoots(self: *const CheckedModuleArtifact) bool {
-        for (self.compile_time_roots.roots) |root| {
-            if (root.payload == .pending) return true;
+        for (self.root_requests.compile_time_requests) |request| {
+            const root = request.compile_time_root orelse continue;
+            if (self.compile_time_roots.root(root).payload == .pending) return true;
         }
         return false;
     }
