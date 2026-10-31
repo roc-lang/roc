@@ -18856,6 +18856,9 @@ const EvidencePass = struct {
     /// a fresh var that settled onto an enclosing where-var forwards as
     /// `constraint(depth, k)`. Index 0 is the innermost generalized callable.
     current_chain: []const ChainLevel = &.{},
+    /// Whether the obligations being resolved are those of a template running
+    /// as a root (`rootDefaultObligation`).
+    at_template_root: bool = false,
 
     const EvidenceParam = dispatch_evidence.EvidenceParam;
     /// The generated-codec derivation each kind selected for one
@@ -19144,6 +19147,8 @@ const EvidencePass = struct {
             defer entries.deinit(self.allocator);
             try entries.ensureTotalCapacity(self.allocator, params.items.len);
             self.current_chain = &.{};
+            self.at_template_root = true;
+            defer self.at_template_root = false;
             for (params.items) |param| {
                 const evidence = (try self.evidenceForVar(
                     param,
@@ -20498,7 +20503,12 @@ const EvidencePass = struct {
                 // A presence variable is not a dispatch target and carries no
                 // obligations—treat it as inert like `.err`.
                 .err, .field_presence => return .{ .resolved = .checked_error },
-                .flex => return self.resolveVarObligation(resolved.var_, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
+                .flex => |flex| {
+                    if (self.at_template_root) {
+                        if (try self.rootDefaultObligation(flex.constraints, dispatcher_ty, method, structural_kind, constraint_fn_var)) |step| return step;
+                    }
+                    return self.resolveVarObligation(resolved.var_, method, structural_kind, constraint_fn_var, chain, commit_unpinned);
+                },
                 .rigid => return self.resolveVarObligation(resolved.var_, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
                 // A transparent alias dispatches exactly as its backing does
                 // (design.md "Type Alias Invariant"), including a backing that
@@ -20551,6 +20561,31 @@ const EvidencePass = struct {
     ) ?static_dispatch.GeneratedCodecDerivationId {
         const by_kind = self.generated_codec_by_source.getPtrConst(constraint_fn_var) orelse return null;
         return by_kind.get(expected_kind);
+    }
+
+    /// A template running as a root has no caller to pin the variables of its
+    /// scheme, so a dispatcher its literals constrain takes those literals'
+    /// default owner: Dec for numerals and defaultable arithmetic, Str for
+    /// quotes and interpolations.
+    fn rootDefaultObligation(
+        self: *EvidencePass,
+        constraints: types.StaticDispatchConstraint.SafeList.Range,
+        dispatcher_ty: CheckedTypeId,
+        method: canonical.MethodNameId,
+        structural_kind: ?static_dispatch.StructuralKind,
+        constraint_fn_var: ?Var,
+    ) Allocator.Error!?ObligationStep {
+        const owner: static_dispatch.MethodOwner = switch (numericDefaultPhaseForConstraints(self.module, constraints) orelse return null) {
+            .mono_specialization => .{ .builtin = .dec },
+            .mono_specialization_str => .{ .builtin = .str },
+            // `checking_finalized` is stamped only on vars checking already
+            // resolved; an unresolved one cannot carry it.
+            .checking_finalized => return .{ .resolved = .checked_error },
+        };
+        return switch (self.lookupMethodTargetAcrossViews(owner, method) orelse return null) {
+            .rejected => .{ .resolved = .checked_error },
+            .target => |target| try self.resolutionForMethodTarget(target, structural_kind, dispatcher_ty, constraint_fn_var, .publication),
+        };
     }
 
     fn resolveVarObligation(
