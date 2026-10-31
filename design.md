@@ -10297,6 +10297,17 @@ or `continue` for an enclosing loop retains the typed join, because moving that
 body beneath a different loop would retarget the transfer. Otherwise its body
 is cloned directly at the site against the site's full symbolic values.
 
+Case-of-case distribution follows the same rule by counting, before it clones
+anything, how many inner leaves select each outer arm from the arm values
+recorded for the scrutinee. An arm one leaf selects is cloned at that leaf,
+where its value stays recorded for an enclosing distribution. An arm several
+leaves select becomes a join each of those leaves jumps to, unless its body
+only builds a value out of locals and constants: such a body holds no
+continuation code, so copying it adds no branch for a later distribution to
+multiply, and keeps the value known at each leaf. A source arm reused unchanged
+has no recorded value until it is cloned, so it counts as reaching every outer
+arm more than once.
+
 Call-pattern specialization may also expose a tail-recursive worker whose
 entire specialized ABI is scalar even though its only external call remains in
 the function that initiated specialization. When such a generated worker has
@@ -11814,8 +11825,9 @@ position—the `Err` payload and the `Try` argument—at the request's row rathe
 than by rewriting the node.
 
 When the closed row ends in a variable the template QUANTIFIES, and nothing
-else in the template's type reaches that variable—no argument, payload or
-other position—the variable is determined by the result alone
+else in the template's type reaches that variable—no argument, payload,
+other position, or signature of a where-clause constraint on a variable the
+type reaches—the variable is determined by the result alone
 (`requestDeterminedResultRowVariable`). The specialization's substitution
 gives that slot a fresh cell instead of the variable the use site recorded
 (`requestDeterminedSubstitution`), so relating the template's root to the
@@ -15461,24 +15473,35 @@ compiled whole and filed by the compilation that first needs it, whichever
 command that is; the root module's own constant code is compiled for the
 evaluation and discarded. A module can have an object only once every
 compile-time root of its own is complete: in its object, an evaluated root's
-entry wrapper restores the stored value, which the other objects of a link
-read through it, so an object lowered while a root was still pending would
-compute the root's body at every read instead. The coordinator's unit
-scheduler (`compile.coordinator.BoxyObjects`) therefore builds each module's
-object as soon as the module can have one, and no sooner: a module restored
-from the checked cache with its roots complete, or one with no roots, the
-moment it is type-checked, while checking continues; every other module the
-moment the evaluator completes its roots. Each unit lowers once its imports'
-units are done, since its calls compile against their export interfaces, and
-the units run on the post-check executor alongside checking, the other units,
-and the evaluations of other modules. A module's evaluation waits only for
-the objects of its own import closure; the link waits for every unit, and
-links the objects this compilation built or restored without restoring them
-again. While checking continues, a compilation that links its program builds
-only modules reachable through import edges from the root package's root and
-the platform root, which every module the root will see is, and leaves one
-worker to checking; after it, exactly the modules the root sees. A
-compilation that does not link its program (`roc check`) builds the modules
+entry wrapper restores the stored value, which the other objects of a link read
+through it, so an object lowered while a root was still pending would compute
+the root's body at every read instead. The coordinator's unit scheduler
+(`compile.coordinator.BoxyObjects`) therefore builds each module's object as
+soon as the module can have one, and no sooner: a module restored from the
+checked cache with its roots complete, or one with no roots, the moment it is
+type-checked, while checking continues; every other module the moment the
+evaluator completes its roots. Each unit lowers once its imports' units are
+done, since its calls compile against their export interfaces, and the units
+run on the post-check executor alongside checking, the other units, and the
+evaluations of other modules. The evaluations run the same way: a module's
+program is lowered and compiled as its own task of the scheduler's session once
+every value its roots read is complete and, where it links against its imports'
+objects, once those are known, so the programs of modules that read nothing of
+each other are built at the same time, and the evaluating thread runs each
+program as it is built, in the order the builds finish. The build of a program
+reads the checked modules and the loaded objects' symbols and writes nothing
+another thread reads; running it, which stores values and reports failures,
+stays on the evaluating thread, as do the roots the Solved evaluator owns. A
+module's evaluation thus waits only for the values its roots read and the
+objects of its own import closure. The link waits for every unit and links the
+objects this compilation built or restored without restoring them again: a
+build that links the objects keeps each one for the link as the scheduler
+completes it (`BoxyObjectLowering.Materializer`), so the link reads them back
+without writing them again. While checking continues, a compilation that links
+its program builds only modules reachable through import edges from the root
+package's root and the platform root, which every module the root will see is,
+and leaves one worker to checking; after it, exactly the modules the root sees.
+A compilation that does not link its program (`roc check`) builds the modules
 each evaluation's program needs and, as a program's build does, every other
 module the root sees whose roots are complete. The scheduler's post-check
 session stays open across checking and evaluation while the general session
@@ -18665,8 +18688,12 @@ body that consumes those parameters, and a remainder that enters the shared
 control region. The id is in scope in both body and remainder; the parameters
 are in scope only in the body. A jump names an in-scope id and supplies exactly
 one argument of the declared type for every parameter. The join body and
-remainder both produce the enclosing expression's result type. These forms
-express shared control only; they do not choose layouts or ownership.
+remainder both produce the enclosing expression's result type. Lowering gives
+both the same consumer statement, so a value-position join's body, any join
+declared inside its remainder for the same result, and a direct arrival may all
+enter one LIR statement: LIR consumers treat such a statement as a merge of
+every edge into it, not as a body entered only through one join's jumps. These
+forms express shared control only; they do not choose layouts or ownership.
 
 Case-of-case and let-of-case rewrites use these forms to thread branch results
 to one continuation. They never clone that continuation into each branch. Join

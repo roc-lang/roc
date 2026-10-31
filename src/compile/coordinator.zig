@@ -1481,6 +1481,18 @@ pub const BoxyObjectLowering = struct {
     /// the build's link lowers its root unit against the same table; the
     /// scheduler owns one otherwise.
     interfaces: ?*eval.CompileTimeFinalization.ExportInterfaces = null,
+    /// Where the build's link keeps each object as it is built or restored,
+    /// when the link links these objects, so it reads each one back without
+    /// writing it again.
+    materializer: ?Materializer = null,
+
+    pub const Materializer = struct {
+        context: *anyopaque,
+        /// The path of the object `bytes` as the link reads it. Null when
+        /// the link could not keep it: the link materializes it again and
+        /// reports why.
+        materialize: *const fn (context: *anyopaque, bytes: []const u8) Allocator.Error!?[]const u8,
+    };
 };
 
 /// The module objects of a `.boxy` compilation, each restored from the
@@ -1510,6 +1522,13 @@ const BoxyObjects = struct {
     waiting: std.AutoHashMapUnmanaged([32]u8, std.ArrayList(*UnitTask)) = .empty,
     /// Units whose imports are all known, not submitted yet.
     ready: std.ArrayList(*UnitTask) = .empty,
+    /// The compile-time programs the evaluation asked to build, not
+    /// submitted yet (`BoxyObjectSource.submit`).
+    programs: std.ArrayList(post_check_executor.Task) = .empty,
+    /// The programs submitted and not yet finished, by task id.
+    program_ids: std.AutoHashMapUnmanaged(usize, void) = .empty,
+    /// The programs finished and not yet taken by the evaluation.
+    program_completions: std.ArrayList(post_check_executor.Completion) = .empty,
     /// Modules declaring hosted functions, offered while no checked platform
     /// module bound them. They are offered again when one is checked.
     unbound_hosted: std.ArrayList(*const Artifact) = .empty,
@@ -1528,6 +1547,8 @@ const BoxyObjects = struct {
         key: boxy_object_cache.Key = undefined,
         /// Whether the object was restored from the cache rather than built.
         restored: bool = false,
+        /// The object as the link reads it (`BoxyObjectLowering.Materializer`).
+        path: ?[]const u8 = null,
     };
 
     fn init(coordinator: *Coordinator, lowering: BoxyObjectLowering, manager: *CacheManager) Error!BoxyObjects {
@@ -1565,6 +1586,9 @@ const BoxyObjects = struct {
         while (lists.next()) |list| list.deinit(gpa);
         self.waiting.deinit(gpa);
         self.ready.deinit(gpa);
+        self.programs.deinit(gpa);
+        self.program_ids.deinit(gpa);
+        self.program_completions.deinit(gpa);
         self.unbound_hosted.deinit(gpa);
         self.records.deinit(gpa);
         if (self.owned_interfaces) |*owned| owned.deinit();
@@ -1572,7 +1596,17 @@ const BoxyObjects = struct {
     }
 
     fn source(self: *BoxyObjects) eval.CompileTimeFinalization.BoxyObjectSource {
-        return .{ .context = self, .objects = objectSet, .completed = moduleCompleted, .interfaces = self.interfaces, .target = self.lowering.config };
+        return .{
+            .context = self,
+            .ready = objectsReady,
+            .objects = objectSet,
+            .completed = moduleCompleted,
+            .submit = submitProgram,
+            .takeCompletion = takeProgramCompletion,
+            .progress = progress,
+            .interfaces = self.interfaces,
+            .target = self.lowering.config,
+        };
     }
 
     /// `artifact`'s object with the cache key `key`, when this compilation
@@ -1583,17 +1617,24 @@ const BoxyObjects = struct {
         return known;
     }
 
+    /// Whether the objects of `module`'s import closure are all known,
+    /// offering the ones not offered yet: the compile-time program
+    /// evaluating `module`'s roots links against them.
+    fn objectsReady(context: *anyopaque, module: *const Artifact) Error!bool {
+        const self: *BoxyObjects = @ptrCast(@alignCast(context));
+        try self.offerClosure(module);
+        if (self.first_error) |err| return err;
+        const known = self.closureKnown(module);
+        if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: objects for {s}: {s}, {d} known, {d} units in progress, {d} ready\n", .{ module.moduleEnvConst().module_name, if (known) "ready" else "waiting", self.records.count(), self.units.count(), self.ready.items.len });
+        return known;
+    }
+
     /// The objects of `module`'s import closure, imports first, for the
-    /// compile-time program evaluating `module`'s roots: every one offered
-    /// and waited for, with every other object the program's root sees that
-    /// can be built now.
+    /// compile-time program evaluating `module`'s roots, once `objectsReady`
+    /// found them known.
     fn objectSet(context: *anyopaque, module: *const Artifact) Error!?eval.CompileTimeFinalization.BoxyObjectSet {
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
         const arena = self.arena.allocator();
-        try self.offerClosure(module);
-        if (self.coordinator.checked_program) try self.offerPending();
-        if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: objects for {s}: {d} known, {d} units in progress, {d} ready\n", .{ module.moduleEnvConst().module_name, self.records.count(), self.units.count(), self.ready.items.len });
-        try self.waitUntil(module, closureKnown);
         var ordered = std.ArrayList(Object).empty;
         var visited = std.AutoHashMapUnmanaged([32]u8, *const Artifact).empty;
         defer visited.deinit(self.coordinator.gpa);
@@ -1842,11 +1883,51 @@ const BoxyObjects = struct {
         for (unbound.items) |artifact| try self.offer(artifact);
     }
 
-    /// Submit ready units, as many as the executor takes. While checking
-    /// continues, one worker is left to it.
+    /// Build the compile-time program `task` on the session, as soon as it
+    /// has a worker for it.
+    fn submitProgram(context: *anyopaque, task: post_check_executor.Task) Error!void {
+        const self: *BoxyObjects = @ptrCast(@alignCast(context));
+        const gpa = self.coordinator.gpa;
+        try self.program_ids.put(gpa, task.id, {});
+        errdefer _ = self.program_ids.remove(task.id);
+        try self.programs.append(gpa, task);
+        try self.submitReady();
+    }
+
+    /// A finished program's completion, if one is filed.
+    fn takeProgramCompletion(context: *anyopaque) Error!?post_check_executor.Completion {
+        const self: *BoxyObjects = @ptrCast(@alignCast(context));
+        try self.drain();
+        if (self.first_error) |err| return err;
+        return self.program_completions.pop();
+    }
+
+    /// Wait for the next unit or program to finish. False when none is
+    /// running.
+    fn progress(context: *anyopaque) Error!bool {
+        const self: *BoxyObjects = @ptrCast(@alignCast(context));
+        try self.drain();
+        if (self.first_error) |err| return err;
+        if (self.session.outstanding == 0) return false;
+        self.coordinator.pumpPostCheckResult();
+        try self.drain();
+        return true;
+    }
+
+    /// Submit the programs the evaluation waits for, then ready units, as
+    /// many as the executor takes. While checking continues, one worker is
+    /// left to it.
     fn submitReady(self: *BoxyObjects) Error!void {
         const workers = self.session.executor.worker_count;
         const limit = if (self.coordinator.frontend_complete) workers else @max(1, workers - 1);
+        while (self.programs.items.len != 0 and self.first_error == null and self.session.canSubmit() and self.session.outstanding < limit) {
+            const task = self.programs.pop().?;
+            if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: building a compile-time program ({d} tasks in progress)\n", .{self.session.outstanding + 1});
+            self.session.submit(task) catch |err| {
+                self.programs.appendAssumeCapacity(task);
+                return err;
+            };
+        }
         while (self.ready.items.len != 0 and self.first_error == null and self.session.canSubmit() and self.session.outstanding < limit) {
             const task = self.ready.pop().?;
             if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: building {s} ({d} units in progress)\n", .{ task.artifact.moduleEnvConst().module_name, self.session.outstanding + 1 });
@@ -1865,6 +1946,11 @@ const BoxyObjects = struct {
 
     fn complete(self: *BoxyObjects, completion: post_check_executor.Completion) Error!void {
         const gpa = self.coordinator.gpa;
+        if (self.program_ids.remove(completion.id)) {
+            try self.program_completions.append(gpa, completion);
+            try self.submitReady();
+            return;
+        }
         const task: *UnitTask = @ptrFromInt(completion.id);
         defer task.destroy(gpa);
         const artifact = task.artifact;
@@ -1878,7 +1964,8 @@ const BoxyObjects = struct {
             .done => |built| {
                 task.outcome = .pending;
                 const object = try self.record(artifact.key.bytes, built);
-                try self.records.put(gpa, artifact.key.bytes, .{ .object = object, .key = task.prepared.unit.key, .restored = built.restored });
+                const path = if (self.lowering.materializer) |materializer| try materializer.materialize(materializer.context, object.object) else null;
+                try self.records.put(gpa, artifact.key.bytes, .{ .object = object, .key = task.prepared.unit.key, .restored = built.restored, .path = path });
             },
         }
         try self.release(artifact.key.bytes);
@@ -1911,7 +1998,7 @@ const BoxyObjects = struct {
     }
 
     fn nothingInProgress(self: *BoxyObjects, _: void) bool {
-        return self.units.count() == 0;
+        return self.units.count() == 0 and self.program_ids.count() == 0;
     }
 
     /// Wait for every unit offered so far.

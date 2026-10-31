@@ -2910,17 +2910,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
         // Link the host.a with our shim to create the interpreter executable using our linker
         // Try LLD first, then clang if LLVM is not available.
-        var extra_args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 32) catch {
-            return error.OutOfMemory;
-        };
-
-        // Add system libraries for macOS
-        if (builtin.target.os.tag == .macos) {
-            extra_args.append("-lSystem") catch {
-                return error.OutOfMemory;
-            };
-        }
-
+        //
         // Build object files list from the link spec items
         // Items are linked in the order specified in the targets section
         var object_files = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 16) catch {
@@ -3025,7 +3015,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             .object_files = object_files.items,
             .platform_files_pre = empty_files,
             .platform_files_post = empty_files,
-            .extra_args = extra_args.items,
+            .extra_args = &.{},
             .can_exit_early = false,
             .disable_output = false,
             .platform_files_dir = platform_files_dir,
@@ -11428,7 +11418,7 @@ fn buildBoxyLibraryObjects(
         const key = try boxyObjectKey(ctx.gpa, task.artifact, task.platform, args, target, false);
         const known = build_env.boxyObjectWithKey(task.artifact, key) orelse continue;
         if (known.restored) restored += 1 else built += 1;
-        objects[index] = link_objects.materialize(known.object) catch return error.NativeCompilationFailed;
+        objects[index] = known.path orelse link_objects.materialize(known.object) catch return error.NativeCompilationFailed;
         for (known.hosted_symbols) |symbol| {
             const owned = try ctx.arena.dupe(u8, symbol);
             if ((try seen_hosted.getOrPut(owned)).found_existing) continue;
@@ -11497,6 +11487,16 @@ fn buildBoxyLibraryObjects(
     const ordered = try ctx.arena.alloc([]const u8, units.items.len);
     for (objects, ordered) |object, *slot| slot.* = object orelse base.invariant("roc build invariant violated: a .boxy unit completed without an object", .{});
     return .{ .objects = ordered, .hosted_symbols = hosted_symbols.items, .platform = platform };
+}
+
+/// Keep a Boxy module object compile-time evaluation built or restored for
+/// the link (`BoxyObjectLowering.Materializer`).
+fn materializeBoxyObject(context: *anyopaque, bytes: []const u8) Allocator.Error!?[]const u8 {
+    const objects: *link_artifacts.Objects = @ptrCast(@alignCast(context));
+    return objects.materialize(bytes) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => null,
+    };
 }
 
 /// The platform module whose hosted section binds every hosted function
@@ -12077,6 +12077,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     defer releaseScratchDir(ctx, build_scratch_dir);
     var link_objects = link_artifacts.Objects.init(ctx.coreCtx(), ctx.arena, if (object_store) |store| .{ .store = store.native, .identity = store.linkObjectIdentity(@splat(0)) } else null, build_scratch_dir) catch return error.NativeCompilationFailed;
     defer link_objects.deinit();
+    // The link keeps each of those objects as compile-time evaluation builds
+    // or restores it.
+    if (boxy_interfaces != null) if (build_env.boxy_object_lowering) |*lowering| {
+        if (lowering.target == target) lowering.materializer = .{ .context = &link_objects, .materialize = materializeBoxyObject };
+    };
     var program_probe: ?ProgramOutputProbe = null;
     if (object_store) |store| if (target_arch != .wasm32 and args.opt == .dev and runtime_lowering.target.specialization_strategy == .lss and !dev_diagnostics.isSet(.dev_pack_objects)) {
         program_probe = .{
@@ -13134,11 +13139,6 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     if (link_type == .archive) {
         try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
     } else {
-        var extra_args = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
-        if (target.isMacOS()) {
-            try extra_args.append("-lSystem");
-        }
-
         const link_config = linker.LinkConfig{
             .target_format = linker.TargetFormat.detectFromOs(target_os),
             .target_abi = buildLinkAbi(target, args.synthetic_default_platform),
@@ -13149,7 +13149,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
             .object_files = object_files.items,
             .platform_files_pre = link_inputs.platform_files_pre,
             .platform_files_post = link_inputs.platform_files_post,
-            .extra_args = extra_args.items,
+            .extra_args = &.{},
             .export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs, entrypoint_names),
             .can_exit_early = false,
             .disable_output = false,
