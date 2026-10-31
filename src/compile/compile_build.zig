@@ -2756,13 +2756,16 @@ pub const BuildEnv = struct {
         const coordinator = self.coordinator orelse return null;
         const objects = &(coordinator.boxy_objects orelse return null);
         const known = objects.objectWithKey(artifact, key) orelse return null;
-        return .{ .object = known.object.?.object, .hosted_symbols = known.object.?.hosted_symbols, .restored = known.restored };
+        return .{ .object = known.object.?.object, .hosted_symbols = known.object.?.hosted_symbols, .restored = known.restored, .path = known.path };
     }
 
     pub const BoxyKnownObject = struct {
         object: []const u8,
         hosted_symbols: []const []const u8,
         restored: bool,
+        /// The object as the link reads it, when the link kept it as it was
+        /// built or restored.
+        path: ?[]const u8,
     };
 
     /// Count the objects a `.boxy` build restored from and filed in the
