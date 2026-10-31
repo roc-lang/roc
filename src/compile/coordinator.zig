@@ -1639,13 +1639,14 @@ const BoxyObjects = struct {
         }
     };
 
-    /// Build the objects not known yet of `module`'s import closure and of
-    /// every other module whose roots are complete, each after its imports
-    /// and the independent ones at once on the post-check executor. Modules
-    /// are evaluated in dependency order, so the closure alone would be the
-    /// one or two imports finalized last; every complete module's object is
-    /// needed by a later program or by the link, and building them together
-    /// is what lets the builds overlap. A module's calls compile against its
+    /// Build the objects not known yet of `module`'s import closure and, in
+    /// a program's build, of every other module the root sees whose roots
+    /// are complete, each after its imports and the independent ones at once
+    /// on the post-check executor. Modules are evaluated in dependency
+    /// order, so the closure alone would be the one or two imports finalized
+    /// last; every visible complete module's object is needed by a later
+    /// program or by the link, and building them together is what lets the
+    /// builds overlap. A module's calls compile against its
     /// imports' export interfaces, which their builds record, so a unit
     /// starts once every import it has among the pending units is done.
     fn buildClosure(self: *BoxyObjects, module: *const Artifact) Error!void {
@@ -1659,10 +1660,13 @@ const BoxyObjects = struct {
             const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
             try self.collectPending(imported, &pending, &index_by_key);
         }
-        var packages = self.coordinator.packages.iterator();
-        while (packages.next()) |package| {
-            for (package.value_ptr.*.modules.items) |*mod| {
-                const artifact = mod.checkedArtifact() orelse continue;
+        if (self.coordinator.checked_program) {
+            // The program's link needs the object of every module the root
+            // sees, and no other: a platform module nothing imports has no
+            // object to build.
+            const root = self.coordinator.executableRootCheckedArtifact();
+            for (root.lowering_visibility.module_ids) |key| {
+                const artifact = self.coordinator.checkedArtifactByKey(key) orelse continue;
                 try self.collectPending(artifact, &pending, &index_by_key);
             }
         }

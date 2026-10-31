@@ -1740,6 +1740,16 @@ const BoxyLinkedImages = struct {
         self.hosted.deinit(self.allocator);
     }
 
+    /// Return every loaded object's mutable data to its loaded state. An
+    /// object's composition sites (design.md "Runtime") publish entries of
+    /// the composing program's state, which dies with that program, so a
+    /// program finds the objects it shares with earlier ones holding no
+    /// entry at all.
+    fn resetMutableData(self: *const BoxyLinkedImages) void {
+        if (comptime compilerHostMustUseInterpreterForCtfe()) return;
+        for (self.images.items) |*image| image.resetZeroFilled();
+    }
+
     fn load(self: *BoxyLinkedImages, objects: []const BoxyObject) FinalizeError!void {
         for (objects) |object| {
             if ((try self.loaded.getOrPut(self.allocator, object.module)).found_existing) continue;
@@ -2080,6 +2090,7 @@ fn evaluateModuleRootsBoxy(
     if (options.boxy_objects) |source| if (comptime !compilerHostMustUseInterpreterForCtfe()) {
         if (artifact.platform_type_inputs.requirements.len == 0) if (try source.objects(source.context, artifact)) |set| {
             try images.load(set.objects);
+            images.resetMutableData();
             var linked_options = options;
             linked_options.boxy_linked_images = images;
             const modules_of_unit: lir.CheckedPipeline.CheckedModuleSet = .{
