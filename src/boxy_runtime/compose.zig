@@ -186,6 +186,11 @@ pub const CompositionSite = extern struct {
 pub const CompositionEntry = extern struct {
     result: usize,
 
+    /// Whether this entry is the composition of `words`.
+    pub fn holds(self: *const CompositionEntry, words: []const usize) bool {
+        return std.mem.eql(usize, words, self.operands(words.len));
+    }
+
     pub fn operands(self: *const CompositionEntry, count: usize) []const usize {
         const words: [*]const usize = @ptrCast(self);
         return words[1..][0..count];
