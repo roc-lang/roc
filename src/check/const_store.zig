@@ -2002,8 +2002,9 @@ pub const ConstStore = struct {
         hasher: *base.Sha256,
         context: anytype,
     ) Allocator.Error!void {
-        var ordinals = std.AutoHashMap(ConstNodeId, u32).init(self.allocator);
+        var ordinals = collections.DenseMap(ConstNodeId, u32).init(self.allocator);
         defer ordinals.deinit();
+        var next_ordinal: u32 = 0;
         var pending = std.ArrayList(ConstNodeId).empty;
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, root);
@@ -2014,7 +2015,8 @@ pub const ConstStore = struct {
                 hasher.update(std.mem.asBytes(&entry.value_ptr.*));
                 continue;
             }
-            entry.value_ptr.* = ordinals.count() - 1;
+            entry.value_ptr.* = next_ordinal;
+            next_ordinal += 1;
             const value = self.get(node);
             hasher.update(@tagName(std.meta.activeTag(value)));
             hasher.update(&[_]u8{0});
