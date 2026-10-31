@@ -15499,20 +15499,25 @@ without writing them again. While checking continues, a compilation that links
 its program builds only modules reachable through import edges from the root
 package's root and the platform root, which every module the root will see is,
 and leaves one worker to checking; after it, exactly the modules the root sees.
-A compilation that does not link its program (`roc check`) builds the modules
-each evaluation's program needs and, as a program's build does, every other
-module the root sees whose roots are complete. The scheduler's post-check
-session stays open across checking and evaluation while the general session
-every other post-check stage borrows opens and closes within it: every task
-names its session, and whichever consumer takes a completion off the worker
-channel files it with the session that submitted it. A platform module with
-requirements has no object of its own, so a module importing one runs as the
-whole program. Each object is filed with its `CodeLocations`: its line table,
-failure sites and source files (Compile-Time Failure Sites). A failure in an
-object's code is therefore found and reported exactly as one in a whole
-program's own code, and the two forms report identically. The table is read
-only when something fails, so the code that succeeds carries nothing extra. A
-compilation with no cache has no objects, and runs as the whole program.
+After checking, a unit or program that is the only task queued while nothing is
+in flight is submitted to no worker: the evaluating thread runs it itself when
+it has nothing else to do, lending it the general executor, so the parallel
+waves of its ARC and native code generation run on the otherwise idle workers,
+as the root program's do, instead of on one of them. A compilation that does
+not link its program (`roc check`) builds the modules each evaluation's program
+needs and, as a program's build does, every other module the root sees whose
+roots are complete. The scheduler's post-check session stays open across
+checking and evaluation while the general session every other post-check stage
+borrows opens and closes within it: every task names its session, and whichever
+consumer takes a completion off the worker channel files it with the session
+that submitted it. A platform module with requirements has no object of its
+own, so a module importing one runs as the whole program. Each object is filed
+with its `CodeLocations`: its line table, failure sites and source files
+(Compile-Time Failure Sites). A failure in an object's code is therefore found
+and reported exactly as one in a whole program's own code, and the two forms
+report identically. The table is read only when something fails, so the code
+that succeeds carries nothing extra. A compilation with no cache has no
+objects, and runs as the whole program.
 
 A root whose value holds a function value (anywhere in its type, or a
 callable binding) is evaluated by the Solved evaluator under either strategy.
