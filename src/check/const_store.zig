@@ -669,6 +669,13 @@ pub const ConstValue = union(enum) {
         backing: ConstNodeId,
     },
     fn_value: ConstFnId,
+    /// A function value a `.boxy` compile-time program evaluated to: its
+    /// worker and descriptors' types (`recipe`, which `postcheck.Boxy.StoredFn`
+    /// reads) and its captured values and dictionaries.
+    boxy_fn: struct {
+        recipe: ConstStr,
+        captures: []const ConstNodeId,
+    },
 };
 
 /// Internal, relocation-invariant (POD) form of `ConstValue`: variant slices are
@@ -692,6 +699,7 @@ const StoredValue = union(enum) {
     tag: struct { tag_name: ConstRange, payloads: ConstRange },
     nominal: struct { named_type: NamedType, backing: ConstNodeId },
     fn_value: ConstFnId,
+    boxy_fn: struct { recipe: ConstStr, captures: ConstRange },
 };
 
 /// POD form of `ConstFn`: captures slice → range into `capture_pool`.
@@ -1445,6 +1453,7 @@ pub const ConstStore = struct {
             .box => |n| .{ .box = n },
             .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
             .fn_value => |f| .{ .fn_value = f },
+            .boxy_fn => |function| .{ .boxy_fn = .{ .recipe = function.recipe, .captures = try self.appendNodes(function.captures) } },
             .list => |list| .{ .list = switch (list) {
                 .nodes => |items| .{ .nodes = try self.appendNodes(items) },
                 .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
@@ -1679,6 +1688,7 @@ pub const ConstStore = struct {
             .box => |n| .{ .box = n },
             .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
             .fn_value => |f| .{ .fn_value = f },
+            .boxy_fn => |function| .{ .boxy_fn = .{ .recipe = function.recipe, .captures = self.nodeSlice(function.captures) } },
             .list => |list| .{ .list = switch (list) {
                 .nodes => |r| .{ .nodes = self.nodeSlice(r) },
                 .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
@@ -1788,7 +1798,7 @@ pub const ConstStore = struct {
             children.clearRetainingCapacity();
             const copied: ConstValue = switch (value) {
                 .pending => constStoreInvariant("a pending node reached a value copy"),
-                .fn_value => constStoreInvariant("a function value reached a value copy"),
+                .fn_value, .boxy_fn => constStoreInvariant("a function value reached a value copy"),
                 .zst => .zst,
                 .scalar => |scalar| .{ .scalar = scalar },
                 .str => |str| .{ .str = try self.copyBlob(source, str) },
@@ -1833,7 +1843,7 @@ pub const ConstStore = struct {
     /// Push the nodes a value refers to directly.
     fn appendValueChildren(value: ConstValue, out: *std.ArrayList(ConstNodeId), allocator: Allocator) Allocator.Error!void {
         switch (value) {
-            .pending, .zst, .scalar, .str, .crash, .checked_error, .fn_value => {},
+            .pending, .zst, .scalar, .str, .crash, .checked_error, .fn_value, .boxy_fn => {},
             .box => |payload| try out.append(allocator, payload),
             .nominal => |nominal| try out.append(allocator, nominal.backing),
             .list => |list| switch (list) {
@@ -1867,7 +1877,7 @@ pub const ConstStore = struct {
             const value = self.get(node);
             switch (value) {
                 .pending => constStoreInvariant("a pending node reached a portability walk"),
-                .fn_value => return false,
+                .fn_value, .boxy_fn => return false,
                 .nominal => |nominal| {
                     const module = own orelse return false;
                     if (std.meta.eql(nominal.named_type.module.bytes, module.bytes)) return false;
@@ -1896,7 +1906,7 @@ pub const ConstStore = struct {
             if (seen.isSet(raw)) continue;
             seen.set(raw);
             switch (self.values.items[raw]) {
-                .pending, .fn_value => return false,
+                .pending, .fn_value, .boxy_fn => return false,
                 .zst, .scalar => {},
                 .str, .crash, .checked_error => |str| if (!self.validBlob(str)) return false,
                 .box => |payload| try pending.append(self.allocator, @backingInt(payload)),
@@ -1951,7 +1961,7 @@ pub const ConstStore = struct {
             const right = other.get(pair.right);
             if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
             switch (left) {
-                .pending, .fn_value => return false,
+                .pending, .fn_value, .boxy_fn => return false,
                 .zst => {},
                 .scalar => |scalar| if (!std.meta.eql(scalar, right.scalar)) return false,
                 .str => |str| if (!sameBytes(self.blobBytes(str), other.blobBytes(right.str))) return false,
@@ -1990,6 +2000,75 @@ pub const ConstStore = struct {
             }
         }
         return true;
+    }
+
+    /// Feed `root`'s value into `hasher`, shared nodes once each. Equal
+    /// values built the same way feed equal bytes whatever their node ids.
+    /// `context.moduleDigest` gives the bytes naming a nominal type's module,
+    /// and `context.fnValueDigest` the bytes naming a stored function.
+    pub fn hashGraph(
+        self: *const ConstStore,
+        root: ConstNodeId,
+        hasher: *base.Sha256,
+        context: anytype,
+    ) Allocator.Error!void {
+        var ordinals = collections.DenseMap(ConstNodeId, u32).init(self.allocator);
+        defer ordinals.deinit();
+        var next_ordinal: u32 = 0;
+        var pending = std.ArrayList(ConstNodeId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |node| {
+            const entry = try ordinals.getOrPut(node);
+            if (entry.found_existing) {
+                hasher.update("seen");
+                hasher.update(std.mem.asBytes(&entry.value_ptr.*));
+                continue;
+            }
+            entry.value_ptr.* = next_ordinal;
+            next_ordinal += 1;
+            const value = self.get(node);
+            hasher.update(@tagName(std.meta.activeTag(value)));
+            hasher.update(&[_]u8{0});
+            switch (value) {
+                .pending, .zst => {},
+                .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
+                .scalar => |scalar| hashScalar(hasher, scalar),
+                inline .str, .crash, .checked_error => |str| hashBytes(hasher, self.blobBytes(str)),
+                .box => |payload| try pending.append(self.allocator, payload),
+                .nominal => |nominal| {
+                    hasher.update(&context.moduleDigest(nominal.named_type.module));
+                    try pending.append(self.allocator, nominal.backing);
+                },
+                .list => |list| switch (list) {
+                    .nodes => |items| {
+                        hasher.update(std.mem.asBytes(&@as(u32, @intCast(items.len))));
+                        try pending.appendSlice(self.allocator, items);
+                    },
+                    .packed_bytes => |packed_list| {
+                        hasher.update(std.mem.asBytes(&packed_list.len));
+                        hasher.update(std.mem.asBytes(&packed_list.product_width));
+                        hasher.update(if (packed_list.element) |element| @tagName(element) else "product");
+                        hashBytes(hasher, self.blobBytes(packed_list.bytes));
+                    },
+                    .empty => |capacity| hasher.update(std.mem.asBytes(&capacity)),
+                },
+                inline .tuple, .record => |items| {
+                    hasher.update(std.mem.asBytes(&@as(u32, @intCast(items.len))));
+                    try pending.appendSlice(self.allocator, items);
+                },
+                .boxy_fn => |function| {
+                    hashBytes(hasher, self.blobBytes(function.recipe));
+                    hasher.update(std.mem.asBytes(&@as(u32, @intCast(function.captures.len))));
+                    try pending.appendSlice(self.allocator, function.captures);
+                },
+                .tag => |tag| {
+                    hashBytes(hasher, tag.tag_name);
+                    hasher.update(std.mem.asBytes(&@as(u32, @intCast(tag.payloads.len))));
+                    try pending.appendSlice(self.allocator, tag.payloads);
+                },
+            }
+        }
     }
 
     pub fn verifyComplete(self: *const ConstStore) Allocator.Error!void {
@@ -2116,6 +2195,10 @@ pub const ConstStore = struct {
                             }
                         },
                         .empty => {},
+                    },
+                    .boxy_fn => |function| {
+                        _ = self.strBytes(function.recipe);
+                        for (function.captures) |child| try pending.append(self.allocator, .{ .value = .{ .id = child, .delayed_depth = node.delayed_depth } });
                     },
                     .tuple,
                     .record,
@@ -2466,6 +2549,19 @@ test "ConstStore.appendFn: no leak or double-free under allocation failure" {
 }
 
 /// Whether two byte strings stored in different stores hold the same bytes.
+fn hashBytes(hasher: *base.Sha256, bytes: []const u8) void {
+    hasher.update(std.mem.asBytes(&@as(u64, bytes.len)));
+    hasher.update(bytes);
+}
+
+fn hashScalar(hasher: *base.Sha256, scalar: ConstScalar) void {
+    hasher.update(@tagName(std.meta.activeTag(scalar)));
+    hasher.update(&[_]u8{0});
+    switch (scalar) {
+        inline .i8, .i16, .i32, .i64, .i128, .u8, .u16, .u32, .u64, .u128, .f32_bits, .f64_bits, .dec_bits => |value| hasher.update(std.mem.asBytes(&value)),
+    }
+}
+
 fn sameBytes(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) return false;
     for (a, b) |left, right| {

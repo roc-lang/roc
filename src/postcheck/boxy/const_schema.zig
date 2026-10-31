@@ -6,9 +6,8 @@
 //! nominal by its declaring module's content identity and declaration, a
 //! record field by its storage slot, a tag by its label.
 //!
-//! A function value has no schema here: a root whose value holds one is
-//! evaluated by the Solved program's evaluator, which records the evidence a
-//! stored function restores with (`ConstStore.FnDef`).
+//! A function value has no schema of its own: it is stored by what it
+//! captured (`stored_fn.zig`), whatever its type.
 
 const std = @import("std");
 const collections = @import("collections");
@@ -59,7 +58,8 @@ pub fn constPlanOf(program: *Program, ty: TypeId) Allocator.Error!LirProgram.Con
         // zero-sized type, which no checked type is.
         .empty_record => .{ .record = try allocator.alloc(LirProgram.ConstPlanId, 0) },
         .list => |elem| .{ .list = try constPlanOf(program, elem) },
-        .box => |payload| .{ .box = try constPlanOf(program, payload) },
+        // A box of a function is the function's erased callable.
+        .box => |payload| if (store.get(payload) == .function) .boxy_fn else .{ .box = try constPlanOf(program, payload) },
         .tuple => |items_span| blk: {
             const items = try allocator.dupe(TypeId, store.span(items_span));
             defer allocator.free(items);
@@ -117,7 +117,7 @@ pub fn constPlanOf(program: *Program, ty: TypeId) Allocator.Error!LirProgram.Con
                 .backing = try constPlanOf(program, try program.layouts.converter.backing(ty)),
             } };
         },
-        .function => invariant("a function value reached a constant plan; roots holding function values are evaluated specialized"),
+        .function => .boxy_fn,
         .variable => invariant("an open type reached a constant plan"),
     };
     program.result.const_plans.items[@backingInt(id)] = plan;
@@ -217,7 +217,14 @@ pub fn constTypeOf(program: *Program, ty: TypeId) Allocator.Error!const_store.Co
                 .backing = .{ .ty = backing, .use = if (nominal.is_opaque) .runtime_layout_only else .inspectable, .authority = .checked_public },
             } };
         },
-        .function => invariant("a function value reached a stored type; roots holding function values are evaluated specialized"),
+        .function => |function| blk: {
+            const args = try allocator.dupe(TypeId, store.span(function.args));
+            defer allocator.free(args);
+            const ids = try allocator.alloc(const_store.ConstTypeId, args.len);
+            defer allocator.free(ids);
+            for (args, ids) |arg, *slot| slot.* = try constTypeOf(program, arg);
+            break :blk .{ .func = .{ .args = try const_types.appendTypeSpan(ids), .ret = try constTypeOf(program, function.ret) } };
+        },
         .variable => invariant("an open type reached a stored type"),
     };
     try const_types.fill(id, stored);

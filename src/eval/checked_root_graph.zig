@@ -390,9 +390,9 @@ const Walker = struct {
 
 /// Whether a root's value holds a function value anywhere in its type: in
 /// a component, a list item, a box payload, a nominal's argument or
-/// backing. Such a root is evaluated specialized, which records the
-/// evidence a stored function value restores with; a `.boxy` program's
-/// function values carry none (design.md "Caching Under `.boxy`").
+/// backing. Such a root has no compile-time value slot, and a `.boxy`
+/// program storing it keeps what reading function values takes (design.md
+/// "Stored Function Values").
 pub fn rootHoldsFunction(
     allocator: Allocator,
     modules: []const *checked.CheckedModuleArtifact,

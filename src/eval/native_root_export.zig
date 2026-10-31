@@ -157,6 +157,7 @@ const Builder = struct {
         const plan = self.graph.program.const_plans.items[@backingInt(job.plan)];
         switch (plan) {
             .pending, .layout_only => invariant("incomplete const plan reached native root export"),
+            .boxy_fn => invariant("a function value's root was published to a slot"),
             .zst => {},
             .scalar => {
                 if (physical.tag != .scalar or physical.getScalar().tag == .opaque_ptr or physical.getScalar().tag == .str) invariant("scalar export plan did not name pointer-free scalar bytes");

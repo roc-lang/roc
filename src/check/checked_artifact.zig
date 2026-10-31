@@ -287,21 +287,38 @@ fn computeStableModuleIdentityHash(module_env: *const ModuleEnv) [32]u8 {
 
 fn hashCheckingContextIdentity(identity: CheckingContextIdentity) [32]u8 {
     var hasher = base.Sha256.init(.{});
+    hashCheckingContextPolicy(&hasher, identity, true);
+    return hasher.finalResult();
+}
+
+/// The digest of the checking inputs of a module that its imports' and its
+/// app pairing's implementations do not reach: its imports' names, explicit
+/// root requests, validation mode and platform requirement context.
+pub fn checkingContextPolicyHash(identity: CheckingContextIdentity) [32]u8 {
+    var hasher = base.Sha256.init(.{});
+    hashCheckingContextPolicy(&hasher, identity, false);
+    return hasher.finalResult();
+}
+
+fn hashCheckingContextPolicy(hasher: *base.Sha256, identity: CheckingContextIdentity, include_keys: bool) void {
     if (identity.platform_requirement_context) |context| {
         hasher.update(&[_]u8{1});
         hasher.update(&context.bytes);
     } else {
         hasher.update(&[_]u8{0});
     }
-    if (identity.platform_app_relation) |relation| {
-        hasher.update(&[_]u8{1});
-        hasher.update(&relation.bytes);
-    } else {
-        hasher.update(&[_]u8{0});
+    if (include_keys) {
+        if (identity.platform_app_relation) |relation| {
+            hasher.update(&[_]u8{1});
+            hasher.update(&relation.bytes);
+        } else {
+            hasher.update(&[_]u8{0});
+        }
     }
-    hashU32(&hasher, @intCast(identity.imports.len));
+    hashU32(hasher, @intCast(identity.imports.len));
     for (identity.imports) |import_identity| {
         hasher.update(&import_identity.import_name_hash);
+        if (!include_keys) continue;
         if (import_identity.artifact_key) |key| {
             hasher.update(&[_]u8{1});
             hasher.update(&key.bytes);
@@ -309,12 +326,11 @@ fn hashCheckingContextIdentity(identity: CheckingContextIdentity) [32]u8 {
             hasher.update(&[_]u8{0});
         }
     }
-    hashU32(&hasher, @intCast(identity.explicit_roots.len));
+    hashU32(hasher, @intCast(identity.explicit_roots.len));
     for (identity.explicit_roots) |root| {
-        hashExplicitRootRequestInput(&hasher, root);
+        hashExplicitRootRequestInput(hasher, root);
     }
-    hashByteSlice(&hasher, @tagName(identity.validation));
-    return hasher.finalResult();
+    hashByteSlice(hasher, @tagName(identity.validation));
 }
 
 fn hashExplicitRootRequestInput(
@@ -3492,6 +3508,14 @@ pub const CheckedTypeStoreView = struct {
             if (canonicalNominalTypeKeyEql(declaration.nominal, nominal)) return declaration;
         }
         return null;
+    }
+
+    /// The name `declaration` declares.
+    pub fn nominalDeclarationName(self: CheckedTypeStoreView, declaration: CheckedNominalDeclaration) canonical.TypeNameId {
+        return switch (self.payload(declaration.declaration_root)) {
+            .nominal => |nominal| nominal.name,
+            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => base.invariant("a nominal declaration's root is no nominal type", .{}),
+        };
     }
 
     pub fn nominalDeclarationById(
@@ -26179,6 +26203,26 @@ fn publishLiteralConversionRoots(
     }
 }
 
+/// What makes two literal requirements of one literal the same: the type's
+/// key, which names its variables only up to renaming, and the variables
+/// themselves. Instantiating an open type gives a new root every time, even
+/// around a recursive cycle that maps each variable back to itself.
+fn literalRequirementTypeIdentity(
+    store: *const CheckedTypeStore,
+    orderer: *CheckedIdentityOrderer,
+    ty: CheckedTypeId,
+) Allocator.Error![32]u8 {
+    const key = store.view().rootKey(ty);
+    if (!store.rootContainsIdentityVariables(ty)) return key.bytes;
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(&key.bytes);
+    for (try orderer.identityRoots(ty)) |variable| {
+        const origin: u32 = @backingInt(store.identityOrigin(variable));
+        hasher.update(std.mem.asBytes(&origin));
+    }
+    return hasher.finalResult();
+}
+
 /// Publish each scheme's literal requirements, the literal arguments of every
 /// edge, and the `literal_argument` roots this module's instantiations fix
 /// (design.md "Literal Arguments").
@@ -26217,12 +26261,14 @@ fn publishLiteralArgumentRoots(
     // generalized local scope's. A scope inside a defaulted field
     // expression has no template.
     const ScopeKey = struct { template: ?u32, scope: ?u32 };
-    const ObligationKey = struct { site: LiteralSite, ty: CheckedTypeId };
+    const ObligationKey = struct { site: LiteralSite, ty: [32]u8 };
     const ScopeState = struct {
         list: std.ArrayListUnmanaged(LiteralRequirement) = .empty,
         index: std.AutoHashMapUnmanaged(ObligationKey, u32) = .empty,
     };
     var scope_states = std.AutoHashMapUnmanaged(ScopeKey, ScopeState).empty;
+    var identity_orderer = CheckedIdentityOrderer.init(allocator, names, store);
+    defer identity_orderer.deinit();
     defer {
         var it = scope_states.valueIterator();
         while (it.next()) |state| {
@@ -26292,7 +26338,7 @@ fn publishLiteralArgumentRoots(
                 .numeral, .str_from_quote => literal_expr.ty,
                 .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => checkedArtifactInvariant("a literal conversion plan's expression is not a literal", .{}),
             };
-            const slot = try entry.value_ptr.index.getOrPut(allocator, .{ .site = site, .ty = ty });
+            const slot = try entry.value_ptr.index.getOrPut(allocator, .{ .site = site, .ty = try literalRequirementTypeIdentity(store, &identity_orderer, ty) });
             if (slot.found_existing) continue;
             slot.value_ptr.* = @intCast(entry.value_ptr.list.items.len);
             try entry.value_ptr.list.append(allocator, .{ .site = site, .ty = ty, .edge = .literal, .callee_requirement = 0 });
@@ -26829,7 +26875,7 @@ fn publishLiteralArgumentRoots(
                 const obligation = liveObligations(callee, &scope_states)[j];
                 const projected = if (projector) |p| try p.project(obligation.ty) else obligation.ty;
                 const ty = if (substitution) |*s| try store.cloneCheckedTypeRootSubstituting(allocator, projected, s) else projected;
-                const key: ObligationKey = .{ .site = obligation.site, .ty = ty };
+                const key: ObligationKey = .{ .site = obligation.site, .ty = try literalRequirementTypeIdentity(store, &identity_orderer, ty) };
                 if (!store.rootContainsIdentityVariables(ty)) {
                     const slot = try root_index.getOrPut(allocator, key);
                     if (!slot.found_existing) {
@@ -29409,6 +29455,10 @@ pub const CompileTimeRoot = struct {
     guarded: bool = false,
     /// For a `literal_argument` root: what it converts.
     literal_argument: ?LiteralArgumentRoot = null,
+    /// The value a `.boxy` compilation stored for a root holding a function
+    /// value (design.md "Stored Function Values"). Only `.boxy` programs read
+    /// it: to a `.lss` compilation the root stays `unevaluated`.
+    boxy_value: ?StoredConstTemplate = null,
 
     pub fn literalConversionKind(self: CompileTimeRoot) ?CompileTimeLiteralConversionKind {
         return switch (self.kind) {
@@ -29612,6 +29662,15 @@ pub const CompileTimeRootTable = struct {
 
     pub fn root(self: *const CompileTimeRootTable, id: ComptimeRootId) CompileTimeRoot {
         return self.roots[@backingInt(id)];
+    }
+
+    /// Record the value a `.boxy` evaluation stored for root `id`.
+    pub fn fillBoxyValue(self: *CompileTimeRootTable, id: ComptimeRootId, value: StoredConstTemplate) void {
+        const index = @backingInt(id);
+        if (index >= self.roots.len) {
+            checkedArtifactInvariant("compile-time root id is out of range", .{});
+        }
+        self.roots[index].boxy_value = value;
     }
 
     pub fn fillPayload(
@@ -35310,8 +35369,10 @@ pub const CheckedModuleArtifact = struct {
     pub fn hasUnevaluatedRequests(self: *const CheckedModuleArtifact, strategy: base.SpecializationStrategy) bool {
         for (self.root_requests.compile_time_requests) |request| {
             const root = request.compile_time_root orelse continue;
-            if (self.compile_time_roots.root(root).payload != .unevaluated) continue;
+            const payload = self.compile_time_roots.root(root).payload;
+            if (payload != .unevaluated and payload != .pending) continue;
             if (strategy == .lss and self.compile_time_roots.root(root).kind == .literal_argument) continue;
+            if (strategy == .boxy and self.compile_time_roots.root(root).boxy_value != null) continue;
             return true;
         }
         return false;
@@ -41818,8 +41879,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xE8, 0x80, 0xEC, 0x51, 0x64, 0x0B, 0x28, 0x1C, 0x2C, 0x0F, 0xD3, 0x86, 0x52, 0xFC, 0xD6, 0x68,
-        0x0F, 0x98, 0xAB, 0x27, 0x6B, 0xF7, 0x8E, 0x79, 0x20, 0x62, 0x4D, 0xA6, 0x24, 0xAE, 0x9F, 0x13,
+        0x1F, 0xB5, 0x09, 0x61, 0x83, 0x5F, 0x8B, 0xD4, 0x40, 0xE3, 0x8D, 0xF7, 0x09, 0xBA, 0x7A, 0x50,
+        0xC4, 0x94, 0x5C, 0xE1, 0x3B, 0x6E, 0x89, 0x78, 0xF2, 0x9C, 0xD2, 0xFA, 0x5B, 0x94, 0x33, 0x68,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

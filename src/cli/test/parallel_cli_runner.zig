@@ -495,6 +495,7 @@ const CustomCase = enum {
     boxy_build_and_run_cache_what_check_caches,
     boxy_compile_time_objects,
     boxy_module_object_cache,
+    boxy_interface_edits,
     issue_11710_shared_object_cache,
     issue_12220_shared_object_cache_literals,
     issue_12564_package_from_numeral_cache,
@@ -3341,6 +3342,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no compile-time evaluation links cached module objects", .timeout_ms = 600_000, .body = .{ .custom = .boxy_compile_time_objects } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no build and run leave the cache check leaves", .timeout_ms = 600_000, .body = .{ .custom = .boxy_build_and_run_cache_what_check_caches } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no build files one object per module and rebuilds only edited modules", .timeout_ms = 600_000, .body = .{ .custom = .boxy_module_object_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "--specialize=no objects depend on their imports' interfaces, not their implementations", .timeout_ms = 900_000, .body = .{ .custom = .boxy_interface_edits } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11710: shared object cache serves a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_11710_shared_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12220: shared object cache keeps each module's list literals in a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_12220_shared_object_cache_literals } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12564: a package from_numeral cached by one app's check converts another app's literal", .timeout_ms = 600_000, .body = .{ .custom = .issue_12564_package_from_numeral_cache } },
@@ -5371,6 +5373,7 @@ fn runCustomCase(
         .boxy_build_and_run_cache_what_check_caches => customBoxyBuildAndRunCacheWhatCheckCaches(io, allocator, &env, &timer, timeout_ms),
         .boxy_compile_time_objects => customBoxyCompileTimeObjects(io, allocator, &env, &timer, timeout_ms),
         .boxy_module_object_cache => customBoxyModuleObjectCache(io, allocator, &env, &timer, timeout_ms),
+        .boxy_interface_edits => customBoxyInterfaceEdits(io, allocator, &env, &timer, timeout_ms),
         .issue_11710_shared_object_cache => customIssue11710SharedObjectCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12220_shared_object_cache_literals => customIssue12220SharedObjectCacheLiterals(io, allocator, &env, &timer, timeout_ms),
         .issue_12564_package_from_numeral_cache => customIssue12564PackageFromNumeralCache(io, allocator, &env, &timer, timeout_ms),
@@ -11521,12 +11524,11 @@ fn customBoxyCachesNothingAfterChecking(
 /// design.md "Caching Under `.boxy`": `roc check`, `roc build`, and `roc run`
 /// with `--specialize=no` leave identical cache contents for the same
 /// sources, compile-time packs included.
-/// `roc build --specialize=no --opt=dev` files one object per module under
-/// the module's checked key and links cached objects on later builds: a cold
-/// build, a warm build, a build with `--no-cache`, and builds after editing
-/// the app or a library module all produce byte-identical executables, and
-/// an edit rebuilds only the modules whose checked keys changed (design.md
-/// "Caching Under `.boxy`").
+/// `roc build --specialize=no --opt=dev` files one object per module and
+/// links cached objects on later builds: a cold build, a warm build, and a
+/// build with `--no-cache` produce byte-identical executables, and an edit
+/// rebuilds only the modules whose keys changed (design.md "Caching Under
+/// `.boxy`").
 fn customBoxyModuleObjectCache(
     io: std.Io,
     allocator: Allocator,
@@ -11565,17 +11567,18 @@ fn customBoxyModuleObjectCache(
     const Build = struct { name: []const u8, no_cache: bool, objects: []const u8, identical: bool };
     // The program's units are Builtin, Combinator, Tree, Main, and the
     // default platform's module; the root unit's object makes six. An edit
-    // of the app rebuilds Main's unit and the root unit; an edit of Tree
-    // rebuilds Tree's unit and, since Main imports it, both again. The
-    // builds of unedited sources produce the same bytes whatever the cache
-    // held; an edited module's symbols carry its new content identity, so
-    // an edit's executable is only required to run.
+    // of the app rebuilds the root unit. An edit of Tree that leaves its
+    // interface alone rebuilds Tree's unit and no module compiled against
+    // that interface; the root unit follows only because the app stores a
+    // closure, whose digest is its module's checked key. The builds of
+    // unedited sources produce the same bytes whatever the cache held; an
+    // edit's executable is only required to run.
     const builds = [_]Build{
         .{ .name = "cold", .no_cache = false, .objects = "Boxy objects: 0 cached, 6 built", .identical = true },
         .{ .name = "warm", .no_cache = false, .objects = "Boxy objects: 6 cached, 0 built", .identical = true },
         .{ .name = "nocache", .no_cache = true, .objects = "", .identical = true },
-        .{ .name = "app_edit", .no_cache = false, .objects = "Boxy objects: 4 cached, 2 built", .identical = false },
-        .{ .name = "lib_edit", .no_cache = false, .objects = "Boxy objects: 3 cached, 3 built", .identical = false },
+        .{ .name = "app_edit", .no_cache = false, .objects = "Boxy objects: 5 cached, 1 built", .identical = false },
+        .{ .name = "lib_edit", .no_cache = false, .objects = "Boxy objects: 4 cached, 2 built", .identical = false },
     };
     var first_bytes: ?[]const u8 = null;
     for (builds) |build| {
@@ -11603,6 +11606,124 @@ fn customBoxyModuleObjectCache(
         } else first_bytes = bytes;
         if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{ .args = &.{}, .stdout_exact = "", .stderr_exact = "" })) |failure| return failure;
     }
+    return null;
+}
+
+/// Replace the only occurrence of `from` in the file at `path` with `to`.
+fn replaceInFile(io: std.Io, allocator: Allocator, path: []const u8, from: []const u8, to: []const u8) (std.Io.Dir.ReadFileAllocError || std.Io.Dir.WriteFileError || Allocator.Error || error{EditNotFound})!void {
+    const existing = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024));
+    const at = std.mem.find(u8, existing, from) orelse return error.EditNotFound;
+    const edited = try std.mem.concat(allocator, u8, &.{ existing[0..at], to, existing[at + from.len ..] });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = edited });
+}
+
+/// How many module objects the cache at `cache_root` holds.
+fn boxyObjectCount(io: std.Io, allocator: Allocator, cache_root: []const u8) CliRunnerError!usize {
+    var objects: usize = 0;
+    for (try cacheInventory(io, allocator, cache_root)) |entry| {
+        if (entry.family == .boxy_object) objects += 1;
+    }
+    return objects;
+}
+
+/// A module's object depends on its imports' interfaces, so an edit rebuilds
+/// exactly the modules that edit can reach (design.md "Caching Under
+/// `.boxy`"). Each run also rebuilds every object it restores and compares
+/// the bytes (`ROC_VERIFY_BOXY_OBJECT_REUSE`), so a key that misses an input
+/// fails here whichever edit exposes it. Two packages' modules with one
+/// interface and different bodies stay distinct modules.
+fn customBoxyInterfaceEdits(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err| return customInfraFailure(allocator, timer, "clone environment: {}", .{err}) };
+    defer isolated.env_map.deinit();
+    const cache_root = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "boxy_interface_edits_cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the cache root: {}", .{err});
+    for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+        isolated.env_map.put(key, cache_root) catch |err| return customInfraFailure(allocator, timer, "failed to set the cache root: {}", .{err});
+    }
+    isolated.env_map.put("ROC_VERIFY_BOXY_OBJECT_REUSE", "1") catch |err| return customInfraFailure(allocator, timer, "failed to enable verification: {}", .{err});
+
+    const source_dir = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "boxy_interface_edits" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the source dir: {}", .{err});
+    std.Io.Dir.cwd().createDirPath(io, source_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create the source dir: {}", .{err});
+    for ([_][]const u8{ "main.roc", "A.roc", "B.roc", "C.roc", "Point.roc", "Adder.roc" }) |name| {
+        const from = std.fs.path.join(allocator, &.{ "test/cli/boxy_interface_edits", name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate a fixture path: {}", .{err});
+        const contents = std.Io.Dir.cwd().readFileAlloc(io, from, allocator, .limited(1024 * 1024)) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read {s}: {}", .{ from, err });
+        const to = std.fs.path.join(allocator, &.{ source_dir, name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate a source path: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = to, .data = contents }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ to, err });
+    }
+    const main_path = std.fs.path.join(allocator, &.{ source_dir, "main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the app path: {}", .{err});
+
+    const Edit = struct { name: []const u8, file: []const u8, from: []const u8, to: []const u8, stdout: []const u8, objects: usize };
+    // `objects` counts the module objects the edit files. B calls A and
+    // stores a value read from it, and C calls B; the app's own unit is
+    // filed only by a build, so it counts for none of these.
+    const edits = [_]Edit{
+        .{ .name = "a body no importer's value reads", .file = "A.roc", .from = "other = |x| x + 1", .to = "other = |x| x + 2", .stdout = "3 b-alpha 2 1 5 1 10", .objects = 1 },
+        .{ .name = "a defaulted field", .file = "Point.roc", .from = "?? 5", .to = "?? 6", .stdout = "3 b-alpha 2 1 6 1 10", .objects = 1 },
+        .{ .name = "a value an importer stores", .file = "A.roc", .from = "alpha", .to = "beta", .stdout = "3 b-beta 2 1 6 1 10", .objects = 3 },
+        .{ .name = "a parameter's ownership", .file = "A.roc", .from = "keep = |s| s", .to = "keep = |s| Str.concat(s, \"!\")", .stdout = "4 b-beta 2 1 6 1 10", .objects = 3 },
+        .{ .name = "a generic body's literal", .file = "A.roc", .from = "bump = |x| x + 1", .to = "bump = |x| x + 3", .stdout = "4 b-beta 2 3 6 1 10", .objects = 3 },
+        .{ .name = "a function an importer stores", .file = "Adder.roc", .from = "add_to(1)", .to = "add_to(4)", .stdout = "4 b-beta 2 3 6 4 10", .objects = 3 },
+        .{ .name = "a function an importer stores inside a constant", .file = "Adder.roc", .from = "add_to(10)", .to = "add_to(20)", .stdout = "4 b-beta 2 3 6 4 20", .objects = 3 },
+    };
+    const run = struct {
+        fn app(run_io: std.Io, run_allocator: Allocator, run_env: *const CaseEnv, run_timer: *harness.Timer, run_timeout_ms: u64, path: []const u8, stdout: []const u8) ?TestResult {
+            const remaining = childCommandTimeoutMs(run_timer, run_timeout_ms) orelse return timeoutFailure(run_allocator, run_timer, .run, "interface edit test timed out");
+            const ran = runRocInEnv(run_io, run_allocator, run_env, &.{ "--opt=dev", "--specialize=no" }, path, .absolute, &.{}, null, remaining) catch |err|
+                return customInfraFailure(run_allocator, run_timer, "run: {}", .{err});
+            if (!processSucceeded(ran.term)) return failureFromRun(run_allocator, run_timer, ran, "the app did not run");
+            if (!std.mem.eql(u8, ran.stdout, stdout)) return customFailure(run_allocator, run_timer, "the app printed `{s}`, expected `{s}`", .{ ran.stdout, stdout });
+            return null;
+        }
+    }.app;
+    if (run(io, allocator, &isolated, timer, timeout_ms, main_path, "3 b-alpha 1 1 5 1 10")) |failure| return failure;
+    var objects = boxyObjectCount(io, allocator, cache_root) catch |err| return customInfraFailure(allocator, timer, "read the cache: {}", .{err});
+    for (edits) |edit| {
+        const path = std.fs.path.join(allocator, &.{ source_dir, edit.file }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate an edit path: {}", .{err});
+        replaceInFile(io, allocator, path, edit.from, edit.to) catch |err| return customInfraFailure(allocator, timer, "edit {s}: {}", .{ edit.name, err });
+        if (run(io, allocator, &isolated, timer, timeout_ms, main_path, edit.stdout)) |failure| return failure;
+        const after = boxyObjectCount(io, allocator, cache_root) catch |err| return customInfraFailure(allocator, timer, "read the cache: {}", .{err});
+        if (after - objects != edit.objects) return customFailure(allocator, timer, "editing {s} filed {d} objects, expected {d}", .{ edit.name, after - objects, edit.objects });
+        objects = after;
+    }
+    // A build links the objects compile-time evaluation built or restored,
+    // and those of imports only a body reaches, which `B` calls in `Point`.
+    const output = std.fmt.allocPrint(allocator, "--output={s}/boxy_interface_edits_app", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the output path: {}", .{err});
+    for (0..2) |_| {
+        const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "interface edit test timed out");
+        const built = runRocInEnv(io, allocator, &isolated, &.{ "build", "--opt=dev", "--specialize=no", output }, main_path, .absolute, &.{}, null, remaining) catch |err|
+            return customInfraFailure(allocator, timer, "build: {}", .{err});
+        if (!processSucceeded(built.term)) return failureFromRun(allocator, timer, built, "the app did not build");
+    }
+
+    const packages = "test/cli/boxy_same_interface_packages/main.roc";
+    const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "interface edit test timed out");
+    const ran = runRocInEnv(io, allocator, &isolated, &.{ "--opt=dev", "--specialize=no" }, packages, .relative, &.{}, "abc\n", remaining) catch |err|
+        return customInfraFailure(allocator, timer, "run: {}", .{err});
+    if (!processSucceeded(ran.term)) return failureFromRun(allocator, timer, ran, "the two-package app did not run");
+    if (std.mem.find(u8, ran.stdout, "left 3") == null or std.mem.find(u8, ran.stdout, "right 3") == null) return customFailure(allocator, timer, "a module ran the other package's body: `{s}`", .{ran.stdout});
+    // A build names both `Shared` modules by content only once checking has
+    // seen the two of them, after their objects have started.
+    const packages_output = std.fmt.allocPrint(allocator, "--output={s}/boxy_same_interface_app", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the output path: {}", .{err});
+    const build_remaining = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "interface edit test timed out");
+    const packages_built = runRocInEnv(io, allocator, &isolated, &.{ "build", "--opt=dev", "--specialize=no", packages_output }, packages, .relative, &.{}, null, build_remaining) catch |err|
+        return customInfraFailure(allocator, timer, "build: {}", .{err});
+    if (!processSucceeded(packages_built.term)) return failureFromRun(allocator, timer, packages_built, "the two-package app did not build");
     return null;
 }
 

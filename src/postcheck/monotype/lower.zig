@@ -5284,6 +5284,7 @@ fn constStringBackingLength(view: ModuleView, str: check.ConstStore.ConstStr) u6
 fn constStaticDataStorage(view: ModuleView, node: checked.ConstNodeId) Common.StaticDataStorage {
     var current = node;
     while (true) switch (view.const_store.get(current)) {
+        .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
         .str => |str| return .{ .string_backing = constStringBackingLength(view, str) },
         .nominal => |nominal| current = nominal.backing,
         .pending => Common.invariant("pending const reached static storage metadata production"),
@@ -13562,6 +13563,7 @@ const Builder = struct {
             const address = ConstNodeAddress{ .module = self.view.key, .node = node };
             if (self.memo().get(address)) |holds| return .{ .value = holds };
             const leaf: ?bool = switch (self.view.const_store.get(node)) {
+                .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
                 .pending => Common.invariant("pending ConstStore node reached a stored value property"),
                 .fn_value => |fn_id| switch (self.property) {
                     // Static data emits an erased callable as one allocation
@@ -13641,6 +13643,7 @@ const Builder = struct {
     /// are data alone (`constNodeIsStoredData`); null for any other value.
     fn storedListShape(self: *Builder, view: ModuleView, node: checked.ConstNodeId) Allocator.Error!?StoredListShape {
         const items = switch (view.const_store.get(node)) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .list => |list| switch (list) {
                 .nodes => |items| items,
                 .empty, .packed_bytes => return null,
@@ -13684,6 +13687,7 @@ const Builder = struct {
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, root);
         while (pending.pop()) |node| switch (view.const_store.get(node)) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .pending => Common.invariant("pending ConstStore node reached stored list selection"),
             .zst, .scalar => {},
             .str => |str| if (str.len != 0) return false,
@@ -13713,6 +13717,7 @@ const Builder = struct {
             const right = view.const_store.get(pair.right);
             if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
             switch (left) {
+                .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
                 .pending => Common.invariant("pending ConstStore node reached stored list selection"),
                 .zst => {},
                 .scalar => |scalar| if (!std.meta.eql(scalar, right.scalar)) return false,
@@ -13729,6 +13734,7 @@ const Builder = struct {
                 },
                 .tuple, .record => |children| {
                     const others = switch (right) {
+                        .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
                         .tuple, .record => |items| items,
                         .pending, .zst, .scalar, .str, .list, .box, .crash, .checked_error, .tag, .nominal, .fn_value => unreachable, // the active tags matched above
                     };
@@ -13750,6 +13756,7 @@ const Builder = struct {
         var value = value_in;
         var bare_fn = bare_fn_in;
         while (true) switch (value) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .pending => Common.invariant("pending ConstStore node reached static data selection"),
             .zst,
             .scalar,
@@ -17509,6 +17516,7 @@ const Builder = struct {
 
         const value = store_view.const_store.get(node);
         switch (value) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .fn_value => |fn_id| {
                 const expr = try self.restoreConstFnExpr(store_view, fn_id, ty, static_data_const_locator);
                 if (static_data_const_locator == null) try self.const_expr_cache.put(address, expr);
@@ -48070,6 +48078,7 @@ const BodyContext = struct {
         if (try self.materializedConstNodeExpr(store_view, node, representation, cell, static_data_const_locator)) |existing| return .{ .done = existing };
 
         switch (value) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .fn_value => {},
             .tag, .record, .tuple => if (nominalConstructionLayer(self.typeStore(), ty)) |layer| {
                 return .{ .layer = .{ .child = node, .backing = layer.backing, .named = layer.named } };
@@ -48084,6 +48093,7 @@ const BodyContext = struct {
 
         try self.reserveConstNodeBinding(store_view, node, representation, cell);
         switch (value) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .fn_value => |fn_id| {
                 const part_root = self.static_data_part_root;
                 self.static_data_part_root = null;
@@ -48249,6 +48259,7 @@ const BodyContext = struct {
         checked_type_module: checked.ModuleId,
     ) ?StaticDataPartRoot {
         return switch (store_view.const_store.get(node)) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .tuple, .record, .tag, .nominal => .{
                 .module = store_view.key,
                 .node = node,
@@ -48268,6 +48279,7 @@ const BodyContext = struct {
         const root = self.static_data_part_root orelse return false;
         if (node == root.node or !moduleBytesEqual(root.module.bytes, store_view.key.bytes)) return false;
         return switch (store_view.const_store.get(node)) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .list => |list| switch (list) {
                 .nodes => |items| items.len != 0,
                 .empty, .packed_bytes => false,
@@ -48445,6 +48457,7 @@ const BodyContext = struct {
                 const index = frame.lowered.items.len;
                 const child = frame.single_child orelse frame.children[index];
                 const child_node = switch (frame.value) {
+                    .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
                     .tag => try self.graph.tagConstructionPayloadNode(frame.request_node, frame.tag_name, index),
                     .box, .nominal => frame.single_child_node,
                     .pending, .zst, .scalar, .str, .crash, .checked_error, .list, .tuple, .record, .fn_value => frame.child_nodes[index],
@@ -48481,6 +48494,7 @@ const BodyContext = struct {
         var frame_owned = true;
         errdefer if (frame_owned) frame.deinit(self.allocator);
         switch (value) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .fn_value => |fn_id| {
                 const part_root = self.static_data_part_root;
                 self.static_data_part_root = null;
@@ -48506,6 +48520,7 @@ const BodyContext = struct {
             .pending, .zst, .scalar, .str, .list, .box, .crash, .checked_error => {},
         }
         switch (value) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .list => |list| switch (list) {
                 .nodes => |items| {
                     const element_node = try self.graph.listElementNode(request_node);
@@ -48588,6 +48603,7 @@ const BodyContext = struct {
             ),
             .constructor, .data => blk: {
                 const data: BodyExprData = switch (frame.value) {
+                    .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
                     .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
                     .zst => .unit,
                     .scalar => |scalar| restoreScalar(BodyExprData, scalar),
@@ -70091,6 +70107,7 @@ fn beginConstRestoreNode(
     };
     var frame: ConstRestoreFrame(@TypeOf(restorer.*).ConstExprId) = .{ .node = node, .ty = ty, .value = value };
     switch (value) {
+        .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
         .box => |payload| frame.single_child = payload,
         .list => |list| switch (list) {
             .nodes => |items| frame.children = items,
@@ -70123,6 +70140,7 @@ fn beginConstRestoreNode(
 /// The type child `index` of a restoring node is restored at.
 fn constRestoreChildType(restorer: anytype, frame: anytype, index: usize) Type.TypeId {
     return switch (frame.value) {
+        .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
         .box => boxPayloadType(restorer.constTypeStore(), frame.ty),
         .list => listElemType(restorer.constTypeStore(), frame.ty),
         .tuple => GuardedList.at(tupleItemTypes(restorer.constTypeStore(), frame.ty), index),
@@ -70142,6 +70160,7 @@ fn constRestoreData(
     const emit = restorer.constEmit();
     const lowered = frame.lowered.items;
     return switch (frame.value) {
+        .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
         .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
         .zst => .unit,
         .scalar => |scalar| restoreScalar(@TypeOf(restorer.*).ConstExprData, scalar),
@@ -70472,6 +70491,7 @@ fn monotypeBackingAuthority(authority: check.ConstStore.TypeBackingAuthority) Ty
 
 fn constStrNodeByteLen(view: ModuleView, node: checked.ConstNodeId) u32 {
     return switch (view.const_store.get(node)) {
+        .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
         .str => |str| str.len,
         .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => Common.invariant("stored parser renamed field capture was not a Str constant"),
     };
@@ -70479,6 +70499,7 @@ fn constStrNodeByteLen(view: ModuleView, node: checked.ConstNodeId) u32 {
 
 fn constStrNodeBytes(view: ModuleView, node: checked.ConstNodeId) []const u8 {
     return switch (view.const_store.get(node)) {
+        .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
         .str => |str| view.const_store.strBytes(str),
         .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => Common.invariant("stored parser renamed field capture was not a Str constant"),
     };
@@ -74747,6 +74768,7 @@ const CompletedConstPaths = struct {
         while (index < self.entries.items.len) : (index += 1) {
             const value = store.get(self.entries.items[index].node);
             switch (value) {
+                .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
                 .box => |child| try self.add(child, index, .{ .kind = .box }),
                 .nominal => |nominal| try self.add(nominal.backing, index, .{ .kind = .nominal }),
                 .tuple => |children| for (children, 0..) |child, i| try self.add(child, index, .{ .kind = .tuple, .index = @intCast(i) }),

@@ -142,9 +142,9 @@ pub fn nameIdDigest(id: NameId) [32]u8 {
 pub const label_name_domain = "roc.boxy.name.label.v1";
 
 /// The domain a nominal declaration's id is hashed under: the SHA-256 of
-/// this text, the declaring module's 32-byte content identity, the
-/// declaration's little-endian `u32` source declaration index, and the
-/// declaration's name text.
+/// this text, the declaring module's 32-byte link name, the declaration's
+/// little-endian `u32` position among the module's declarations sharing its
+/// name, and the declaration's name text.
 pub const nominal_name_domain = "roc.boxy.name.nominal.v1";
 
 /// The id of the label or tag `text` (design.md "Name Identity"). The
@@ -157,15 +157,14 @@ pub fn labelId(text: []const u8) NameId {
     return nameIdFromDigest(hasher.finalResult());
 }
 
-/// The id of the nominal declaration `source_decl` of the module whose
-/// content identity is `module_identity`, named `text` (design.md "Name
-/// Identity").
-pub fn nominalId(module_identity: [32]u8, source_decl: u32, text: []const u8) NameId {
+/// The id of the `same_name_ordinal`th nominal declaration named `text` of
+/// the module with link name `module_name` (design.md "Name Identity").
+pub fn nominalId(module_name: [32]u8, same_name_ordinal: u32, text: []const u8) NameId {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update(nominal_name_domain);
-    hasher.update(&module_identity);
+    hasher.update(&module_name);
     var index_bytes: [4]u8 = undefined;
-    std.mem.writeInt(u32, &index_bytes, source_decl, .little);
+    std.mem.writeInt(u32, &index_bytes, same_name_ordinal, .little);
     hasher.update(&index_bytes);
     hasher.update(text);
     return nameIdFromDigest(hasher.finalResult());
@@ -228,6 +227,11 @@ pub const TypeDesc = extern struct {
         if (self.count == 0) return &.{};
         const first: [*]const Variant = @ptrCast(@alignCast(self.entries.?));
         return first[0..self.count];
+    }
+
+    /// The offset of the record's field `field_index`.
+    pub fn fieldOffset(self: *const TypeDesc, field_index: u32) u32 {
+        return self.fieldBySemanticIndex(field_index).offset;
     }
 
     /// The field whose semantic index is `field_index`.

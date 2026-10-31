@@ -1380,6 +1380,12 @@ pub const DynOp = union(enum) {
     /// member's composed descriptor `desc` and intern it under `key` and
     /// `vars`, unless the open found it finished. Target: `shell`'s value.
     desc_recursive_close: struct { shell: LocalId, desc: LocalId, key: LocalId, vars: LocalSpan },
+    /// Record that `desc` describes the program's type `ty` with its type
+    /// variables described by `vars`, so that compile-time evaluation can
+    /// name the type of a descriptor a stored function value captured
+    /// (design.md "Stored Function Values"). Only a compile-time program
+    /// that stores function values has one. Target: `desc`'s value.
+    desc_note: struct { desc: LocalId, ty: u32, vars: LocalSpan },
 
     // -- Dictionaries (targets: `opaque_ptr`, except `dict_method`) --
 

@@ -8729,6 +8729,7 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             try self.emitBoxyRuntimeCall(.recursive_open);
             try self.bindReturnedScalar(dst, .i32);
         },
+        .desc_note => base.invariant("a compile-time descriptor note reached wasm code generation", .{}),
         .desc_recursive_close => |d| {
             const vars = try self.emitLocalArray(d.vars, .words);
             try self.emitProcLocal(d.shell);

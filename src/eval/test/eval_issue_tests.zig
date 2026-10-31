@@ -2082,6 +2082,34 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "[\"failed: Nope2\"]" },
     },
     .{
+        // The interpolation's literal requirement travels around a cycle of
+        // two schemes, returning to each at the variables it left with.
+        .name = "issue 11060: literal requirement of a mutually recursive accumulator",
+        .source_kind = .module,
+        .source =
+        \\make = |start, file|
+        \\    match start(file) {
+        \\        Ok(handle) => Good(handle)
+        \\        Err(e) => Bad("failed: ${Str.inspect(e)}")
+        \\    }
+        \\
+        \\ping = |start, remaining, acc|
+        \\    match remaining {
+        \\        [] => acc
+        \\        [file, .. as rest] => pong(start, rest, acc.append(make(start, file)))
+        \\    }
+        \\
+        \\pong = |start, remaining, acc|
+        \\    match remaining {
+        \\        [] => acc
+        \\        [file, .. as rest] => ping(start, rest, acc.append(make(start, file)))
+        \\    }
+        \\
+        \\main = ping(|_file| Err(Nope2), ["x", "y"], []).len()
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
         // https://github.com/roc-lang/roc/issues/11063
         //
         // `Opt` brings its own `parser_for`, and the record `Opt` wraps has a

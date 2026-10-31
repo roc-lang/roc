@@ -56,6 +56,7 @@ const compile_build = @import("compile_build.zig");
 const module_discovery = @import("module_discovery.zig");
 const cache_manager_mod = @import("cache_manager.zig");
 const boxy_unit = @import("boxy_unit.zig");
+const boxy_interface = @import("boxy_interface.zig");
 const boxy_object_cache = @import("boxy_object_cache.zig");
 const cache_versioning = @import("cache_versioning.zig");
 const discovery_roots = @import("discovery_roots.zig");
@@ -220,7 +221,7 @@ fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
     return 0;
 }
 
-const checked_module_cache_magic = "roc-mod-cache-v11";
+const checked_module_cache_magic = "roc-mod-cache-v12";
 
 // Header: magic, entry-version hash (32), artifact key (32), env-blob length
 // (u64), artifact-blob length (u64), pin-validation stamp (32), and zero bytes
@@ -1510,6 +1511,7 @@ const BoxyObjects = struct {
     coordinator: *Coordinator,
     lowering: BoxyObjectLowering,
     manager: *CacheManager,
+    digests: boxy_interface.Digests,
     interfaces: *eval.CompileTimeFinalization.ExportInterfaces,
     owned_interfaces: ?eval.CompileTimeFinalization.ExportInterfaces,
     arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator),
@@ -1534,6 +1536,8 @@ const BoxyObjects = struct {
     unbound_hosted: std.ArrayList(*const Artifact) = .empty,
     session: post_check_executor.Session,
     first_error: ?Error = null,
+    /// Whether `settleNames` ran.
+    names_settled: bool = false,
 
     const Object = eval.CompileTimeFinalization.BoxyObject;
     const Artifact = CheckedArtifact.CheckedModuleArtifact;
@@ -1560,6 +1564,7 @@ const BoxyObjects = struct {
             .coordinator = coordinator,
             .lowering = unit_lowering,
             .manager = manager,
+            .digests = .{ .gpa = coordinator.gpa, .names = .{} },
             .interfaces = undefined,
             .owned_interfaces = if (lowering.interfaces == null) .init(coordinator.gpa, coordinator.roc_ctx.std_io) else null,
             .session = coordinator.postCheckExecutorFor(.boxy_objects).begin(),
@@ -1592,6 +1597,7 @@ const BoxyObjects = struct {
         self.unbound_hosted.deinit(gpa);
         self.records.deinit(gpa);
         if (self.owned_interfaces) |*owned| owned.deinit();
+        self.digests.deinit();
         self.arena.deinit();
     }
 
@@ -1605,6 +1611,7 @@ const BoxyObjects = struct {
             .takeCompletion = takeProgramCompletion,
             .progress = progress,
             .interfaces = self.interfaces,
+            .names = &self.digests.names,
             .target = self.lowering.config,
         };
     }
@@ -1654,7 +1661,7 @@ const BoxyObjects = struct {
     /// importers' evaluations may need it.
     fn moduleCompleted(context: *anyopaque, module: *const Artifact) Error!void {
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
-        if (self.waiting.contains(module.key.bytes) or self.coordinator.rootSees(module)) try self.offer(module);
+        if (self.waiting.contains(module.key.bytes) or self.linkNeeds(module)) try self.offer(module);
     }
 
     fn viewsOf(self: *BoxyObjects, module: *const Artifact) Allocator.Error![]const CheckedArtifact.ImportedModuleView {
@@ -1762,7 +1769,7 @@ const BoxyObjects = struct {
         const views = try self.coordinator.collectImportedArtifactViews(gpa, artifact);
         errdefer gpa.free(views);
         var config = self.lowering.config;
-        config.boxy_unit = .{ .imports = self.interfaces, .root = false };
+        config.boxy_unit = .{ .imports = self.interfaces, .root = false, .names = &self.digests.names };
         // A unit on a worker lowers and compiles by itself; `runAlone` lends
         // the workers to a unit it runs on the coordinating thread.
         config.post_check_executor = null;
@@ -1776,19 +1783,38 @@ const BoxyObjects = struct {
             .config = config,
             .interfaces = self.interfaces,
             .cache_manager = self.manager,
-            .key = try boxy_unit.objectKey(gpa, artifact, platform, self.lowering.opt, self.lowering.inline_expects, self.lowering.target, false),
+            .key = undefined,
         } };
     }
 
-    /// Keep `built` as the object of the module with checked key `module`,
-    /// in the arena.
-    fn record(self: *BoxyObjects, module: [32]u8, built: boxy_unit.Built) Error!Object {
+    /// Key `prepared`'s unit. A key reads what the unit's imports recorded,
+    /// so this runs on the coordinating thread once they are done.
+    fn keyUnit(self: *BoxyObjects, prepared: *Prepared) Error!void {
+        const unit = &prepared.unit;
+        try self.addToDigests(&self.coordinator.builtin_modules.checked_artifact);
+        try self.addToDigests(unit.artifact);
+        unit.key = try boxy_unit.objectKey(self.coordinator.gpa, &self.digests, unit.artifact, unit.platform, self.lowering.opt, self.lowering.inline_expects, self.lowering.target, &.{});
+    }
+
+    /// Give the digests `artifact` and its import closure, which checking
+    /// finished before anything keys them.
+    fn addToDigests(self: *BoxyObjects, artifact: *const Artifact) Error!void {
+        if (!try self.digests.add(artifact)) return;
+        for (artifact.direct_import_module_keys) |key| {
+            const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
+            try self.addToDigests(imported);
+        }
+    }
+
+    /// Keep `built` as `artifact`'s object, in the arena.
+    fn record(self: *BoxyObjects, artifact: *const Artifact, built: boxy_unit.Built) Error!Object {
         const gpa = self.coordinator.gpa;
         const arena = self.arena.allocator();
         defer built.deinit(gpa);
+        try self.digests.recordExports(artifact, built.exports);
         const symbols = try arena.alloc([]const u8, built.hosted_symbols.len);
         for (built.hosted_symbols, symbols) |symbol, *copy| copy.* = try arena.dupe(u8, symbol);
-        return .{ .module = module, .object = try arena.dupe(u8, built.object), .code_locations = try arena.dupe(u8, built.code_locations), .hosted_symbols = symbols };
+        return .{ .module = artifact.key.bytes, .object = try arena.dupe(u8, built.object), .code_locations = try arena.dupe(u8, built.code_locations), .hosted_symbols = symbols };
     }
 
     /// One unit's build as a post-check task.
@@ -1865,6 +1891,43 @@ const BoxyObjects = struct {
         }
     }
 
+    /// Whether this compilation links `artifact`'s object as the scheduler
+    /// builds it. A run links nothing, and a build of another target links
+    /// objects of its own.
+    fn linkNeeds(self: *const BoxyObjects, artifact: *const Artifact) bool {
+        return self.lowering.materializer != null and self.coordinator.rootSees(artifact);
+    }
+
+    /// Fix the link's module names now that checking has named every module
+    /// of it. Units started during checking name each module by what the
+    /// module alone says; when two modules turn out to share that name, those
+    /// units named workers the link cannot tell apart, so everything starts
+    /// over under the link's names. A cache entry of the old names stays
+    /// valid under its own key.
+    fn settleNames(self: *BoxyObjects) Error!void {
+        if (self.names_settled) return;
+        self.names_settled = true;
+        var settled = try self.coordinator.boxyLinkDigests();
+        errdefer settled.deinit();
+        if (settled.names.content_named.count() == 0) {
+            settled.deinit();
+            return;
+        }
+        try self.waitUntil({}, nothingRunning);
+        const gpa = self.coordinator.gpa;
+        self.digests.deinit();
+        self.digests = settled;
+        var units = self.units.valueIterator();
+        while (units.next()) |task| task.*.destroy(gpa);
+        self.units.clearRetainingCapacity();
+        var lists = self.waiting.valueIterator();
+        while (lists.next()) |list| list.deinit(gpa);
+        self.waiting.clearRetainingCapacity();
+        self.ready.clearRetainingCapacity();
+        self.records.clearRetainingCapacity();
+        self.interfaces.clear();
+    }
+
     /// Offer every checked module the program's root sees, and every one a
     /// unit waits for, that is not known or in progress yet.
     fn offerPending(self: *BoxyObjects) Error!void {
@@ -1872,7 +1935,7 @@ const BoxyObjects = struct {
         while (locations.next()) |location| {
             const artifact = location.module().checkedArtifact().?;
             if (self.records.contains(artifact.key.bytes) or self.units.contains(artifact.key.bytes)) continue;
-            if (self.waiting.contains(artifact.key.bytes) or self.coordinator.rootSees(artifact)) try self.offer(artifact);
+            if (self.waiting.contains(artifact.key.bytes) or self.linkNeeds(artifact)) try self.offer(artifact);
         }
     }
 
@@ -1939,6 +2002,7 @@ const BoxyObjects = struct {
             break :blk program.task;
         } else blk: {
             const unit = self.ready.pop().?;
+            try self.keyUnit(&unit.prepared);
             unit.prepared.unit.config.post_check_executor = executor;
             if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: building {s} key {s} alone, with {d} workers\n", .{ unit.artifact.moduleEnvConst().module_name, &std.fmt.bytesToHex(unit.artifact.key.bytes[0..8], .lower), executor.worker_count });
             break :blk .{ .id = @intFromPtr(unit), .context = unit, .run = UnitTask.run };
@@ -1973,6 +2037,7 @@ const BoxyObjects = struct {
         }
         while (self.ready.items.len != 0 and self.first_error == null and self.session.canSubmit() and self.session.outstanding < limit) {
             const task = self.ready.pop().?;
+            try self.keyUnit(&task.prepared);
             if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: building {s} key {s} ({d} units in progress)\n", .{ task.artifact.moduleEnvConst().module_name, &std.fmt.bytesToHex(task.artifact.key.bytes[0..8], .lower), self.session.outstanding + 1 });
             self.session.submit(.{ .id = @intFromPtr(task), .context = task, .run = UnitTask.run }) catch |err| {
                 self.ready.appendAssumeCapacity(task);
@@ -2006,7 +2071,7 @@ const BoxyObjects = struct {
             },
             .done => |built| {
                 task.outcome = .pending;
-                const object = try self.record(artifact.key.bytes, built);
+                const object = try self.record(artifact, built);
                 const path = if (self.lowering.materializer) |materializer| try materializer.materialize(materializer.context, object.object) else null;
                 try self.records.put(gpa, artifact.key.bytes, .{ .object = object, .key = task.prepared.unit.key, .restored = built.restored, .path = path });
             },
@@ -2041,6 +2106,10 @@ const BoxyObjects = struct {
             }
             self.coordinator.pumpPostCheckResult();
         }
+    }
+
+    fn nothingRunning(self: *BoxyObjects, _: void) bool {
+        return self.session.outstanding == 0;
     }
 
     fn nothingInProgress(self: *BoxyObjects, _: void) bool {
@@ -3996,6 +4065,7 @@ pub const Coordinator = struct {
         options.post_check_executor = self.postCheckExecutor();
         if (try self.boxyObjects()) |objects| {
             options.boxy_objects = objects.source();
+            if (self.frontend_complete) try objects.settleNames();
             // Every module the root sees whose roots are complete already
             // (restored from the cache, or copied from its previous entry)
             // can have its object built now.
@@ -4365,6 +4435,7 @@ pub const Coordinator = struct {
         for (artifact.root_requests.compile_time_requests) |request| {
             const root = request.compile_time_root orelse continue;
             if (strategy == .lss and artifact.compile_time_roots.root(root).kind == .literal_argument) continue;
+            if (strategy == .boxy and artifact.compile_time_roots.root(root).boxy_value != null) continue;
             if (artifact.compile_time_roots.root(root).payload == .unevaluated or
                 artifact.compile_time_roots.root(root).payload == .pending) count += 1;
         }
@@ -5008,6 +5079,20 @@ pub const Coordinator = struct {
     ) Allocator.Error!void {
         const serialized = try writer.appendAlloc(arena_alloc, T.Serialized);
         try serialized.serialize(value, arena_alloc, writer);
+    }
+
+    /// The digests of every checked module of this compilation, its link.
+    pub fn boxyLinkDigests(self: *Coordinator) Allocator.Error!boxy_interface.Digests {
+        var artifacts = std.ArrayList(*const CheckedModuleArtifact).empty;
+        defer artifacts.deinit(self.gpa);
+        try artifacts.append(self.gpa, &self.builtin_modules.checked_artifact);
+        var packages = self.packages.iterator();
+        while (packages.next()) |package| {
+            for (package.value_ptr.*.modules.items) |*mod| {
+                if (mod.checkedArtifact()) |artifact| try artifacts.append(self.gpa, artifact);
+            }
+        }
+        return try boxy_interface.Digests.init(self.gpa, artifacts.items);
     }
 
     fn checkedModuleCacheKey(
@@ -6528,13 +6613,15 @@ pub const Coordinator = struct {
 
         try self.completeModuleSuccessfully(pkg, result.module_id);
 
-        // A compilation that links its program builds each module's object
-        // as soon as the module can have one, while checking continues.
+        // A compilation that links the objects it builds builds each one as
+        // soon as the module can have one, while checking continues.
         // Only a module the program's roots can reach is built this early:
-        // the root's exact visibility is known once the root is checked.
+        // the root's exact visibility is known once the root is checked. A
+        // root module waits for that too, since the program's own root links
+        // no library object.
         if (self.runtime_lowering != null) if (try self.boxyObjects()) |objects| {
             if (self.moduleIsPlatformRoot(mod)) try objects.offerUnboundHosted();
-            if (try self.reachableFromRoots(mod)) try objects.offer(artifact_ptr);
+            if (objects.lowering.materializer != null and !self.moduleIsRoot(mod) and try self.reachableFromRoots(mod)) try objects.offer(artifact_ptr);
         };
     }
 
@@ -6552,12 +6639,19 @@ pub const Coordinator = struct {
         return &self.boxy_objects.?;
     }
 
+    /// Whether `mod` is the root package's root module or the platform's.
+    fn moduleIsRoot(self: *Coordinator, mod: *ModuleState) bool {
+        if (self.moduleIsPlatformRoot(mod)) return true;
+        const pkg = self.packages.get(self.root_package_name orelse return false) orelse return false;
+        return pkg.getModule(pkg.root_module_id orelse return false) == mod;
+    }
+
     /// Whether the program's root sees `artifact` (its lowering
-    /// visibility), which is what its link needs the object of.
+    /// visibility), which is what its link needs the object of. The root
+    /// itself is the root unit, under its own key.
     fn rootSees(self: *Coordinator, artifact: *const CheckedArtifact.CheckedModuleArtifact) bool {
         if (!self.checked_program) return false;
         const root = self.executableRootCheckedArtifact();
-        if (root == artifact) return true;
         for (root.lowering_visibility.module_ids) |key| {
             if (std.mem.eql(u8, &key.bytes, &artifact.key.bytes)) return true;
         }
@@ -9215,7 +9309,7 @@ fn storedNamedOccurrences(
         },
         .tuple, .record => |items| try nodes.appendSlice(allocator, items),
         .tag => |tag| try nodes.appendSlice(allocator, tag.payloads),
-        .pending, .zst, .scalar, .str, .crash, .checked_error, .fn_value => {},
+        .pending, .zst, .scalar, .str, .crash, .checked_error, .fn_value, .boxy_fn => {},
     };
     const def = switch (root.source) {
         .def => |def| def,
