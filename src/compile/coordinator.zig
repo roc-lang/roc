@@ -1549,6 +1549,8 @@ const BoxyObjects = struct {
         const gpa = self.coordinator.gpa;
         if (self.objects.get(artifact.key.bytes)) |known| return known;
         const object = try self.buildObject(artifact);
+        // A module with roots still to evaluate has an object later.
+        if (object == null and artifact.hasPendingRoots()) return null;
         try self.objects.put(gpa, artifact.key.bytes, object);
         return object;
     }
