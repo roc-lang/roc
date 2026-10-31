@@ -3958,10 +3958,15 @@ pub const Coordinator = struct {
                 try read_inputs.addModule(retired.artifact.key.bytes, retired.artifact);
             }
         }
-        for (entries.items) |entry| try self.transplantPreviousValues(entry.pkg, entry.mod, &transplants, &read_inputs);
         const order = try self.gpa.alloc(usize, entries.items.len);
         defer self.gpa.free(order);
         try dependencyPostOrder(self.gpa, PreparedModuleGraph{ .entries = entries.items, .by_key = &indices }, order);
+        const checked_modules: eval.CompileTimeReuse.CheckedModules = .{ .context = self, .find = findCheckedModule };
+        // Imports first: a module's copied values name its imports' current
+        // versions through the successors recorded for them.
+        var relocations = eval.CompileTimeReuse.Relocations.init(self.gpa, checked_modules);
+        defer relocations.deinit();
+        for (order) |index| try self.transplantPreviousValues(entries.items[index].pkg, entries.items[index].mod, &transplants, &read_inputs, &relocations);
         var ordered_modules = std.ArrayList(eval.CompileTimeFinalization.ProgramModule).empty;
         defer ordered_modules.deinit(self.gpa);
         try ordered_modules.ensureTotalCapacity(self.gpa, order.len);
@@ -4172,8 +4177,7 @@ pub const Coordinator = struct {
         // installing copied values and committing the modules below write
         // what the units read.
         if (self.boxy_objects) |*objects| try objects.waitAll();
-        const checked_modules: eval.CompileTimeReuse.CheckedModules = .{ .context = self, .find = findCheckedModule };
-        for (transplants.items) |*pending| try eval.CompileTimeReuse.verifyAndInstall(pending.module, &pending.previous, &pending.transplant, checked_modules);
+        for (transplants.items) |*pending| try eval.CompileTimeReuse.verifyAndInstall(pending.module, &pending.previous, &pending.transplant, checked_modules, &relocations);
         if (literal_values) |entry| try self.storeProgramLiteralValues(entry, literal_records_before);
         for (entries.items) |entry| try self.commitPreparedModule(entry.pkg, entry.mod);
         try unfinalized.commit();
@@ -4247,12 +4251,12 @@ pub const Coordinator = struct {
         mod: *ModuleState,
         pending: *std.ArrayList(PendingTransplant),
         read_inputs: *const eval.CompileTimeReuse.ReadInputs,
+        relocations: *eval.CompileTimeReuse.Relocations,
     ) CoordinatorError!void {
         const manager = self.cache_manager orelse return;
         if (!manager.config.enabled or mod.reopened_unevaluated != null) return;
         const artifact = mod.checkedArtifact().?;
         if (artifact.evaluation_state != .prepared or artifact.pairing_arena != null) return;
-        if (artifact.compile_time_root_identities.rows.len == 0) return;
         const previous_key = manager.loadPlacementPointer(checkedPlacement(pkg, mod)) orelse return;
         if (std.mem.eql(u8, &previous_key, &artifact.key.bytes)) return;
         const data = manager.loadCheckedEntryUncounted(previous_key) orelse return;
@@ -4268,7 +4272,11 @@ pub const Coordinator = struct {
         var previous = eval.CompileTimeReuse.Previous.fromSerialized(serialized, self.gpa);
         var previous_owned = true;
         defer if (previous_owned) previous.deinit();
-        var transplant = try eval.CompileTimeReuse.plan(self.gpa, artifact, &previous, read_inputs);
+        // Importers' copied values name this module's types through the
+        // previous entry, whatever the module's own roots.
+        try relocations.add(artifact, &previous);
+        if (artifact.compile_time_root_identities.rows.len == 0) return;
+        var transplant = try eval.CompileTimeReuse.plan(self.gpa, artifact, &previous, read_inputs, relocations);
         var transplant_owned = true;
         defer if (transplant_owned) transplant.deinit();
 
@@ -4284,7 +4292,7 @@ pub const Coordinator = struct {
             transplant_owned = false;
             return;
         }
-        try eval.CompileTimeReuse.install(artifact, &previous, &transplant);
+        try eval.CompileTimeReuse.install(artifact, &previous, &transplant, relocations);
     }
 
     /// The literal values of the program `lowering` names, loaded from the
@@ -4410,11 +4418,21 @@ pub const Coordinator = struct {
         var out = std.Io.Writer.Allocating.init(self.gpa);
         defer out.deinit();
         const writer = &out.writer;
-        writer.print("ctfe-reuse {s}: {d} of {d} pending roots from previous entry {x}\n", .{
+        const identities = &artifact.compile_time_root_identities;
+        writer.print("ctfe-reuse {s}: {d} of {d} pending roots from previous entry {x} (value context {x} / semantic {x}; previous {x} / {x}; {d} without an identity match, {d} with unresolved reads; previous roots: {d} bound to their version, {d} holding a function, {d} naming a module version)\n", .{
             module_name,
             transplant.count(),
             transplant.pending_roots,
             previous_key[0..4],
+            if (identities.context.len != 0) identities.context[0][0..4] else "none",
+            if (identities.test_context.len != 0) identities.test_context[0][0..4] else "none",
+            if (transplant.previous_context) |context| context[0..4] else "none",
+            if (transplant.previous_semantic_context) |context| context[0..4] else "none",
+            transplant.misses.no_identity,
+            transplant.misses.unresolved_reads,
+            transplant.misses.previous_bound,
+            transplant.misses.previous_functions,
+            transplant.misses.previous_versioned,
         }) catch return;
         const env = artifact.moduleEnvConst();
         for (0..transplant.count()) |index| {

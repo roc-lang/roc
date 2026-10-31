@@ -2642,6 +2642,16 @@ pub const StaticDispatchPlanTable = struct {
         return if (lookupPlanKV(self.by_expr, @backingInt(expr))) |v| @fromBackingInt(@intCast(v)) else null;
     }
 
+    /// The `from_numeral` plan of the numeric literal at source node `node`.
+    pub fn lookupNumeralByNode(self: *const StaticDispatchPlanTable, node: u32) ?StaticDispatchPlanId {
+        return if (lookupPlanKV(self.numeral_by_node, node)) |v| @fromBackingInt(@intCast(v)) else null;
+    }
+
+    /// The `from_quote` plan of the string literal at source node `node`.
+    pub fn lookupQuoteByNode(self: *const StaticDispatchPlanTable, node: u32) ?StaticDispatchPlanId {
+        return if (lookupPlanKV(self.quote_by_node, node)) |v| @fromBackingInt(@intCast(v)) else null;
+    }
+
     pub fn evidenceNode(self: *const StaticDispatchPlanTable, id: EvidenceNodeId) EvidenceNode {
         return self.evidence_nodes[@backingInt(id)];
     }

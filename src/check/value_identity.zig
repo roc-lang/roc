@@ -19,6 +19,7 @@ const collections = @import("collections");
 
 const checked_artifact = @import("checked_artifact.zig");
 const canonical = @import("canonical_names.zig");
+const static_dispatch = @import("static_dispatch_registry.zig");
 
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
@@ -59,6 +60,12 @@ pub const Inputs = struct {
     roots: []const CompileTimeRoot,
     bodies: *const checked_artifact.CheckedBodyStore,
     top_level_values: *const checked_artifact.TopLevelValueTable,
+    /// The static dispatch plans of the module's checked bodies: the methods
+    /// a definition's or root's evaluation can select.
+    plans: *const static_dispatch.StaticDispatchPlanTable,
+    /// The module's index among the modules checking resolved, by which a
+    /// dispatch target names its module.
+    module_idx: u32,
     /// The checked artifact key's inputs outside the module's own source:
     /// the checking context and the direct imports' keys.
     context: ContextHashes,
@@ -233,10 +240,39 @@ const Owner = union(enum) {
     type_default: CIR.Statement.Idx,
 };
 
+/// The module's definitions and method bindings in strongly connected
+/// components of the graph whose edges are the definitions a body names and
+/// the methods its dispatch sites resolve to, dependencies before dependents.
+const Order = struct {
+    allocator: Allocator,
+    /// Each component's definitions.
+    components: [][]CIR.Def.Idx,
+    /// Each component's direct dependencies, as component indices.
+    dependencies: [][]u32,
+
+    const empty: Order = .{ .allocator = undefined, .components = &.{}, .dependencies = &.{} };
+
+    fn deinit(self: *Order) void {
+        for (self.components) |defs| self.allocator.free(defs);
+        self.allocator.free(self.components);
+        for (self.dependencies) |deps| self.allocator.free(deps);
+        self.allocator.free(self.dependencies);
+    }
+};
+
+/// The method names lowering looks up on a type by name rather than through
+/// a dispatch plan: a structural derivation uses a type's own override.
+fn isOverrideMethodName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "is_eq") or std.mem.eql(u8, name, "to_hash") or std.mem.eql(u8, name, "to_inspect");
+}
+
 const State = struct {
     allocator: Allocator,
     inputs: Inputs,
-    order: DependencyGraph.CheckOrder,
+    order: Order,
+    /// The definition graph's nodes: the module's definitions and method
+    /// bindings (`graphNodes`).
+    nodes: collections.DenseMap(CIR.Def.Idx, void),
     pattern_to_def: collections.DenseMap(CIR.Pattern.Idx, CIR.Def.Idx),
     definition: collections.DenseMap(CIR.Def.Idx, [32]u8),
     owners: collections.DenseMap(CIR.Expr.Idx, Owner),
@@ -248,12 +284,11 @@ const State = struct {
 
     fn init(allocator: Allocator, inputs: Inputs) Allocator.Error!State {
         const env = inputs.env;
-        var order = try DependencyGraph.computeCheckOrder(env, env.all_defs, allocator);
-        errdefer order.deinit();
         var state = State{
             .allocator = allocator,
             .inputs = inputs,
-            .order = order,
+            .order = .empty,
+            .nodes = collections.DenseMap(CIR.Def.Idx, void).init(allocator),
             .pattern_to_def = collections.DenseMap(CIR.Pattern.Idx, CIR.Def.Idx).init(allocator),
             .definition = collections.DenseMap(CIR.Def.Idx, [32]u8).init(allocator),
             .owners = collections.DenseMap(CIR.Expr.Idx, Owner).init(allocator),
@@ -272,10 +307,376 @@ const State = struct {
             for (binders.items) |binder| try state.pattern_to_def.put(binder, def_idx);
         }
         for (env.store.sliceStatements(env.all_statements)) |statement| try state.type_walk.top_level.put(statement, {});
+        state.order = try state.computeOrder();
         return state;
     }
 
+    /// The definitions and method bindings of the module, each once, in
+    /// source order with the method bindings outside the definitions last;
+    /// `nodes` holds the same set.
+    fn graphNodes(self: *State) Allocator.Error![]CIR.Def.Idx {
+        const env = self.inputs.env;
+        var nodes = std.ArrayList(CIR.Def.Idx).empty;
+        errdefer nodes.deinit(self.allocator);
+        for (env.store.sliceDefs(env.all_defs)) |def_idx| {
+            if ((try self.nodes.getOrPut(def_idx)).found_existing) continue;
+            try nodes.append(self.allocator, def_idx);
+        }
+        for (env.method_defs.entries.items) |entry| {
+            if ((try self.nodes.getOrPut(entry.value.def_idx)).found_existing) continue;
+            try nodes.append(self.allocator, entry.value.def_idx);
+        }
+        return nodes.toOwnedSlice(self.allocator);
+    }
+
+    /// Strongly connected components of the graph over `graphNodes` whose
+    /// edges are the definitions each body names and the methods its
+    /// dispatch sites resolve to, in an order that puts every component after
+    /// the components it depends on.
+    fn computeOrder(self: *State) Allocator.Error!Order {
+        const allocator = self.allocator;
+        const env = self.inputs.env;
+        const nodes = try self.graphNodes();
+        defer allocator.free(nodes);
+        var index_of = collections.DenseMap(CIR.Def.Idx, u32).init(allocator);
+        defer index_of.deinit();
+        for (nodes, 0..) |def_idx, index| try index_of.put(def_idx, @intCast(index));
+
+        const edge_starts = try allocator.alloc(u32, nodes.len + 1);
+        defer allocator.free(edge_starts);
+        var edges = std.ArrayList(u32).empty;
+        defer edges.deinit(allocator);
+        var reached = std.ArrayList(CIR.Def.Idx).empty;
+        defer reached.deinit(allocator);
+        for (nodes, 0..) |def_idx, index| {
+            edge_starts[index] = @intCast(edges.items.len);
+            reached.clearRetainingCapacity();
+            try self.collectReached(env.store.getDef(def_idx).expr, &reached, null);
+            for (reached.items) |target| {
+                const target_index = index_of.get(target) orelse
+                    base.invariant("compile-time value identity reached a definition outside the module's definitions and method bindings", .{});
+                try edges.append(allocator, target_index);
+            }
+        }
+        edge_starts[nodes.len] = @intCast(edges.items.len);
+
+        // Tarjan's algorithm with an explicit stack; components complete in
+        // dependency order, since a component finishes only after everything
+        // it reaches.
+        const unvisited = std.math.maxInt(u32);
+        const index = try allocator.alloc(u32, nodes.len);
+        defer allocator.free(index);
+        @memset(index, unvisited);
+        const lowlink = try allocator.alloc(u32, nodes.len);
+        defer allocator.free(lowlink);
+        const on_stack = try allocator.alloc(bool, nodes.len);
+        defer allocator.free(on_stack);
+        @memset(on_stack, false);
+        const component_of = try allocator.alloc(u32, nodes.len);
+        defer allocator.free(component_of);
+        var stack = std.ArrayList(u32).empty;
+        defer stack.deinit(allocator);
+        const Frame = struct { node: u32, next_edge: u32 };
+        var frames = std.ArrayList(Frame).empty;
+        defer frames.deinit(allocator);
+        var components = std.ArrayList([]CIR.Def.Idx).empty;
+        errdefer {
+            for (components.items) |defs| allocator.free(defs);
+            components.deinit(allocator);
+        }
+        var next_index: u32 = 0;
+        for (0..nodes.len) |root_node| {
+            if (index[root_node] != unvisited) continue;
+            try frames.append(allocator, .{ .node = @intCast(root_node), .next_edge = edge_starts[root_node] });
+            index[root_node] = next_index;
+            lowlink[root_node] = next_index;
+            next_index += 1;
+            try stack.append(allocator, @intCast(root_node));
+            on_stack[root_node] = true;
+            while (frames.items.len != 0) {
+                const frame = &frames.items[frames.items.len - 1];
+                const node = frame.node;
+                if (frame.next_edge < edge_starts[node + 1]) {
+                    const target = edges.items[frame.next_edge];
+                    frame.next_edge += 1;
+                    if (index[target] == unvisited) {
+                        index[target] = next_index;
+                        lowlink[target] = next_index;
+                        next_index += 1;
+                        try stack.append(allocator, target);
+                        on_stack[target] = true;
+                        try frames.append(allocator, .{ .node = target, .next_edge = edge_starts[target] });
+                    } else if (on_stack[target]) {
+                        lowlink[node] = @min(lowlink[node], index[target]);
+                    }
+                    continue;
+                }
+                if (lowlink[node] == index[node]) {
+                    var members = std.ArrayList(CIR.Def.Idx).empty;
+                    errdefer members.deinit(allocator);
+                    while (true) {
+                        const member = stack.pop().?;
+                        on_stack[member] = false;
+                        component_of[member] = @intCast(components.items.len);
+                        try members.append(allocator, nodes[member]);
+                        if (member == node) break;
+                    }
+                    try components.append(allocator, try members.toOwnedSlice(allocator));
+                }
+                frames.items.len -= 1;
+                if (frames.items.len != 0) {
+                    const parent = frames.items[frames.items.len - 1].node;
+                    lowlink[parent] = @min(lowlink[parent], lowlink[node]);
+                }
+            }
+        }
+
+        var dependencies = std.ArrayList([]u32).empty;
+        errdefer {
+            for (dependencies.items) |deps| allocator.free(deps);
+            dependencies.deinit(allocator);
+        }
+        var deps = std.ArrayList(u32).empty;
+        defer deps.deinit(allocator);
+        var seen_deps = std.AutoHashMapUnmanaged(u32, void).empty;
+        defer seen_deps.deinit(allocator);
+        for (components.items, 0..) |defs, component| {
+            deps.clearRetainingCapacity();
+            seen_deps.clearRetainingCapacity();
+            for (defs) |def_idx| {
+                const node = index_of.get(def_idx).?;
+                for (edges.items[edge_starts[node]..edge_starts[node + 1]]) |target| {
+                    const target_component = component_of[target];
+                    if (target_component == component) continue;
+                    if ((try seen_deps.getOrPut(allocator, target_component)).found_existing) continue;
+                    try deps.append(allocator, target_component);
+                }
+            }
+            std.mem.sort(u32, deps.items, {}, std.sort.asc(u32));
+            try dependencies.append(allocator, try allocator.dupe(u32, deps.items));
+        }
+        return .{
+            .allocator = allocator,
+            .components = try components.toOwnedSlice(allocator),
+            .dependencies = try dependencies.toOwnedSlice(allocator),
+        };
+    }
+
+    /// Append to `reached` the definitions of this module that `root` names
+    /// and that the dispatch sites in `root` resolve to, each once, and to
+    /// `imported` the identities of the dispatch targets in other modules.
+    fn collectReached(self: *State, root: CIR.Expr.Idx, reached: *std.ArrayList(CIR.Def.Idx), imported: ?*std.ArrayList([32]u8)) Allocator.Error!void {
+        self.refs.clearRetainingCapacity();
+        try DependencyGraph.collectNameReferences(self.inputs.env, &self.pattern_to_def, root, &self.refs, &self.expr_stack, &self.seen_defaults, self.allocator);
+        try self.collectDispatchTargets(root, &self.refs, imported);
+        var it = self.refs.keyIterator();
+        while (it.next()) |def_idx| try reached.append(self.allocator, def_idx.*);
+    }
+
+    /// Add to `own` the definitions of this module that the dispatch sites
+    /// in `root` resolve to, through every nested obligation each target's
+    /// instantiation resolves, and to `imported` the identities of the
+    /// targets in other modules.
+    fn collectDispatchTargets(self: *State, root: CIR.Expr.Idx, own: *collections.DenseMap(CIR.Def.Idx, void), imported: ?*std.ArrayList([32]u8)) Allocator.Error!void {
+        const env = self.inputs.env;
+        const plans = self.inputs.plans;
+        var stack = std.ArrayList(CIR.Expr.Idx).empty;
+        defer stack.deinit(self.allocator);
+        var seen = collections.DenseMap(CIR.Expr.Idx, void).init(self.allocator);
+        defer seen.deinit();
+        var seen_nodes = std.AutoHashMapUnmanaged(u32, void).empty;
+        defer seen_nodes.deinit(self.allocator);
+        try stack.append(self.allocator, root);
+        while (stack.pop()) |expr| {
+            const entry = try seen.getOrPut(expr);
+            if (entry.found_existing) continue;
+            const node = @backingInt(expr);
+            // A call's instantiation edge records the evidence of the
+            // callee's requirements.
+            if (self.inputs.bodies.checkedExprAtSourceNode(node)) |checked_expr| {
+                if (plans.siteEvidence(checked_expr)) |evidence_list| for (evidence_list) |evidence| switch (evidence.resolution) {
+                    .direct => |id| try self.collectEvidenceTargets(id, &seen_nodes, own, imported),
+                    .constraint, .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
+                };
+            }
+            for ([_]?static_dispatch.StaticDispatchPlanId{ plans.lookupByExpr(expr), plans.lookupNumeralByNode(node), plans.lookupQuoteByNode(node) }) |found| {
+                const plan_id = found orelse continue;
+                switch (plans.plans[@backingInt(plan_id)].resolution) {
+                    .direct_closed, .direct_parametric => |call| try self.collectEvidenceTargets(call.evidence, &seen_nodes, own, imported),
+                    .direct_pending => base.invariant("compile-time value identity read a dispatch plan whose target was still pending", .{}),
+                    // A site dispatching on a scheme variable takes its target
+                    // from the evidence of the instantiating call, which that
+                    // call's plan resolves; a structural derivation and a
+                    // rejected or unreachable site select no method.
+                    .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
+                }
+            }
+            try appendExprChildren(env, expr, &stack, self.allocator);
+        }
+    }
+
+    /// The identities of the methods the conversion of the literal at source
+    /// node `node` runs: its `from_numeral` or `from_quote` and the evidence
+    /// of that conversion's requirements, which the literal's plan resolves.
+    /// The literal may be a pattern, which no expression walk reaches.
+    fn literalTargetsDigest(self: *State, node: u32) Allocator.Error![32]u8 {
+        const plans = self.inputs.plans;
+        var own = collections.DenseMap(CIR.Def.Idx, void).init(self.allocator);
+        defer own.deinit();
+        var imported = std.ArrayList([32]u8).empty;
+        defer imported.deinit(self.allocator);
+        var seen_nodes = std.AutoHashMapUnmanaged(u32, void).empty;
+        defer seen_nodes.deinit(self.allocator);
+        for ([_]?static_dispatch.StaticDispatchPlanId{ plans.lookupNumeralByNode(node), plans.lookupQuoteByNode(node) }) |found| {
+            const plan_id = found orelse continue;
+            switch (plans.plans[@backingInt(plan_id)].resolution) {
+                .direct_closed, .direct_parametric => |call| try self.collectEvidenceTargets(call.evidence, &seen_nodes, &own, &imported),
+                .direct_pending => base.invariant("compile-time value identity read a literal plan whose target was still pending", .{}),
+                .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
+            }
+        }
+        var digests = std.ArrayList([32]u8).empty;
+        defer digests.deinit(self.allocator);
+        var it = own.keyIterator();
+        while (it.next()) |def_idx| try digests.append(self.allocator, self.definitionIdentity(def_idx.*));
+        try digests.appendSlice(self.allocator, imported.items);
+        sortDigests(digests.items);
+        var hasher = Sha256.init(.{});
+        hashTag(&hasher, "literal-targets");
+        hashDigests(&hasher, digests.items);
+        return hasher.finalResult();
+    }
+
+    /// The identities of every method of every nominal type `root` mentions,
+    /// sorted: a literal converted at that type runs its `from_numeral` or
+    /// `from_quote` with the type's methods as the evidence of the
+    /// conversion's requirements. An own type's methods are named by
+    /// identity, an imported type's by the identities its module published
+    /// in a module-independent identity and by the module's version
+    /// otherwise.
+    fn typeMethodsDigest(self: *State, root: CheckedTypeId) Allocator.Error![32]u8 {
+        const env = self.inputs.env;
+        var pending = std.ArrayList(CheckedTypeId).empty;
+        defer pending.deinit(self.allocator);
+        var seen = collections.DenseMap(CheckedTypeId, void).init(self.allocator);
+        defer seen.deinit();
+        var digests = std.ArrayList([32]u8).empty;
+        defer digests.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |ty| {
+            const entry = try seen.getOrPut(ty);
+            if (entry.found_existing) continue;
+            var scratch = Sha256.init(.{});
+            try self.type_walk.writeNode(&scratch, ty, &pending);
+            const nominal = switch (self.inputs.types.payload(ty)) {
+                .nominal => |nominal| nominal,
+                else => continue,
+            };
+            if (self.type_walk.isOwn(nominal.origin_module)) {
+                const statement: CIR.Statement.Idx = @fromBackingInt(nominal.source_decl);
+                for (env.method_defs.entries.items) |method| {
+                    if (method.key.owner != statement) continue;
+                    try digests.append(self.allocator, try self.methodIdentity(method.value.def_idx));
+                }
+                continue;
+            }
+            switch (nominal.representation) {
+                .imported_declaration => |ref| {
+                    if (!self.inputs.test_dependencies) {
+                        try digests.append(self.allocator, digestBytes("imported-type-version", &ref.artifact.bytes));
+                        continue;
+                    }
+                    const owner = self.type_walk.importedView(ref.artifact.bytes, true);
+                    const declaration = owner.checked_types.nominal_declarations[@backingInt(ref.declaration)];
+                    const statement: CIR.Statement.Idx = @fromBackingInt(declaration.source_statement);
+                    for (owner.module_env.method_defs.entries.items) |method| {
+                        if (method.key.owner != statement) continue;
+                        try digests.append(self.allocator, importedDefinition(owner, method.value.def_idx));
+                    }
+                },
+                .imported_box_payload_capability => |ref| try digests.append(self.allocator, digestBytes("imported-type-version", &ref.artifact.bytes)),
+                .builtin, .local_declaration, .local_box_payload_capability, .opaque_without_backing => {},
+            }
+        }
+        sortDigests(digests.items);
+        var hasher = Sha256.init(.{});
+        hashTag(&hasher, "type-methods");
+        hashDigests(&hasher, digests.items);
+        return hasher.finalResult();
+    }
+
+    /// Add the target of evidence node `id` and of every obligation nested
+    /// under it.
+    fn collectEvidenceTargets(self: *State, id: static_dispatch.EvidenceNodeId, seen_nodes: *std.AutoHashMapUnmanaged(u32, void), own: *collections.DenseMap(CIR.Def.Idx, void), imported: ?*std.ArrayList([32]u8)) Allocator.Error!void {
+        if ((try seen_nodes.getOrPut(self.allocator, @backingInt(id))).found_existing) return;
+        const plans = self.inputs.plans;
+        const node = plans.evidenceNode(id);
+        try self.collectTarget(node.target, own, imported);
+        switch (node.nested) {
+            .resolved => for (plans.nestedEvidence(node)) |evidence| switch (evidence.resolution) {
+                .direct => |nested| try self.collectEvidenceTargets(nested, seen_nodes, own, imported),
+                // A constraint names an obligation of the enclosing callable,
+                // which its own instantiating call resolves; a structural
+                // derivation selects no method; the rest supply no target.
+                .constraint, .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
+            },
+            // The targets of these obligations are derived from the concrete
+            // callable when the edge is lowered, so the identity covers every
+            // implementation the edge could select: the module's own, and its
+            // imports by version.
+            .from_callable, .through_alias => try self.collectEveryMethod(own, imported),
+        }
+    }
+
+    /// Add every method binding of the module, and the version of every
+    /// direct import, for an edge whose nested targets are derived at
+    /// lowering.
+    fn collectEveryMethod(self: *State, own: *collections.DenseMap(CIR.Def.Idx, void), imported: ?*std.ArrayList([32]u8)) Allocator.Error!void {
+        for (self.inputs.env.method_defs.entries.items) |entry| try own.put(entry.value.def_idx, {});
+        const list = imported orelse return;
+        for (self.inputs.imports) |entry| try list.append(self.allocator, digestBytes("imported-version", &entry.key.bytes));
+    }
+
+    /// Add `target`: this module's definition it reaches, or the identity of
+    /// an imported module's.
+    fn collectTarget(self: *State, target: static_dispatch.MethodTarget, own: *collections.DenseMap(CIR.Def.Idx, void), imported: ?*std.ArrayList([32]u8)) Allocator.Error!void {
+        switch (target.kind) {
+            .procedure => |procedure| {
+                if (target.module_idx == self.inputs.module_idx) {
+                    // A method of a block-local type is lexically inside a
+                    // definition of the graph, whose bytes cover it, and a
+                    // value of that type reaches other code only through
+                    // that definition.
+                    if (self.nodes.contains(target.def_idx)) try own.put(target.def_idx, {});
+                } else if (imported) |list| {
+                    try list.append(self.allocator, self.importedTargetIdentity(procedure.template, target.def_idx));
+                }
+            },
+            // A block-local procedure is lexically inside the code that
+            // reaches it, whose bytes the identity already covers.
+            .local_proc => {},
+            // A structural derivation selects no method of its own; a type's
+            // override it uses is in the type world.
+            .structural => {},
+        }
+    }
+
+    /// The identity of the definition `def` of the module `template` names,
+    /// or the module's version when the compilation published no identities
+    /// for it (the builtin module's never change within a compiler).
+    fn importedTargetIdentity(self: *const State, template: canonical.ProcedureTemplateRef, def: CIR.Def.Idx) [32]u8 {
+        for (self.inputs.imports) |entry| if (std.meta.eql(entry.key.bytes, template.artifact.bytes)) return importedDefinition(entry.view, def);
+        for (self.inputs.available) |view| if (std.meta.eql(view.key.bytes, template.artifact.bytes)) return importedDefinition(view, def);
+        for (self.inputs.relations) |view| if (std.meta.eql(view.key.bytes, template.artifact.bytes)) return importedDefinition(view, def);
+        var hash = Sha256.init(.{});
+        hashTag(&hash, "foreign-target");
+        hash.update(&template.artifact.bytes);
+        hashU32(&hash, @backingInt(def));
+        return hash.finalResult();
+    }
+
     fn deinitMaps(self: *State) void {
+        self.nodes.deinit();
         self.pattern_to_def.deinit();
         self.definition.deinit();
         self.owners.deinit();
@@ -339,27 +740,27 @@ const State = struct {
     /// dependency order: each folds its members' own contributions and the
     /// identities of the components they name.
     fn computeDefinitionIdentities(self: *State) Allocator.Error!void {
-        const group_identities = try self.allocator.alloc([32]u8, self.order.sccs.len);
+        const group_identities = try self.allocator.alloc([32]u8, self.order.components.len);
         defer self.allocator.free(group_identities);
         var locals = std.ArrayList([32]u8).empty;
         defer locals.deinit(self.allocator);
         var deps = std.ArrayList([32]u8).empty;
         defer deps.deinit(self.allocator);
-        for (self.order.sccs, 0..) |scc, group_index| {
+        for (self.order.components, 0..) |defs, group_index| {
             locals.clearRetainingCapacity();
-            for (scc.defs) |def_idx| try locals.append(self.allocator, try self.localDigest(def_idx));
+            for (defs) |def_idx| try locals.append(self.allocator, try self.localDigest(def_idx));
             const member_locals = try self.allocator.dupe([32]u8, locals.items);
             defer self.allocator.free(member_locals);
             sortDigests(locals.items);
             deps.clearRetainingCapacity();
-            for (self.order.dependenciesOf(@intCast(group_index))) |dependency| try deps.append(self.allocator, group_identities[dependency]);
+            for (self.order.dependencies[group_index]) |dependency| try deps.append(self.allocator, group_identities[dependency]);
             sortDigests(deps.items);
             var hasher = Sha256.init(.{});
             hashTag(&hasher, "component");
             hashDigests(&hasher, locals.items);
             hashDigests(&hasher, deps.items);
             group_identities[group_index] = hasher.finalResult();
-            for (scc.defs, member_locals) |def_idx, local| {
+            for (defs, member_locals) |def_idx, local| {
                 var member = Sha256.init(.{});
                 hashTag(&member, "definition");
                 member.update(&local);
@@ -374,26 +775,20 @@ const State = struct {
             base.invariant("compile-time value identity asked for a definition outside the module's definitions", .{});
     }
 
-    /// A method's or exported definition's identity. A definition the
-    /// module's definition graph does not contain (a compiler-created method
-    /// binding) has no component; its own contribution and the definitions
-    /// its body names identify it.
+    /// A method's or exported definition's identity: every method binding
+    /// is a node of the definition graph.
     fn methodIdentity(self: *State, def_idx: CIR.Def.Idx) Allocator.Error![32]u8 {
-        if (self.definition.get(def_idx)) |identity| return identity;
-        var hasher = Sha256.init(.{});
-        hashTag(&hasher, "method-outside-definitions");
-        hasher.update(&try self.localDigest(def_idx));
-        hashDigests(&hasher, try self.referencedIdentities(self.inputs.env.store.getDef(def_idx).expr));
-        return hasher.finalResult();
+        return self.definitionIdentity(def_idx);
     }
 
-    /// The sorted identities of the definitions `expr` names.
+    /// The sorted identities of the definitions `expr` names and of the
+    /// methods of this module its dispatch sites resolve to.
     fn referencedIdentities(self: *State, expr: CIR.Expr.Idx) Allocator.Error![]const [32]u8 {
-        self.refs.clearRetainingCapacity();
-        try DependencyGraph.collectNameReferences(self.inputs.env, &self.pattern_to_def, expr, &self.refs, &self.expr_stack, &self.seen_defaults, self.allocator);
+        var reached = std.ArrayList(CIR.Def.Idx).empty;
+        defer reached.deinit(self.allocator);
+        try self.collectReached(expr, &reached, null);
         self.digests.clearRetainingCapacity();
-        var it = self.refs.keyIterator();
-        while (it.next()) |def_idx| try self.digests.append(self.allocator, self.definitionIdentity(def_idx.*));
+        for (reached.items) |def_idx| try self.digests.append(self.allocator, self.definitionIdentity(def_idx));
         sortDigests(self.digests.items);
         return self.digests.items;
     }
@@ -612,6 +1007,9 @@ const State = struct {
         defer seen.deinit();
         var values = std.ArrayList([32]u8).empty;
         defer values.deinit(self.allocator);
+        var own_targets = collections.DenseMap(CIR.Def.Idx, void).init(self.allocator);
+        defer own_targets.deinit();
+        try self.collectDispatchTargets(root, &own_targets, &values);
         try stack.append(self.allocator, root);
         while (stack.pop()) |expr| {
             const entry = try seen.getOrPut(expr);
@@ -785,9 +1183,16 @@ const State = struct {
             }
         }
         sortDigests(texts.items);
+        // A dispatch site's targets are part of the identity of the code
+        // that reaches it; only the overrides a structural derivation looks
+        // up by name belong to the type world.
         var methods = std.ArrayList([32]u8).empty;
         defer methods.deinit(self.allocator);
-        for (env.method_defs.entries.items) |entry| try methods.append(self.allocator, try self.methodIdentity(entry.value.def_idx));
+        for (env.method_defs.entries.items) |entry| {
+            const ident: base.Ident.Idx = @bitCast(entry.key.method_ident_bits);
+            if (!isOverrideMethodName(env.getIdentText(ident))) continue;
+            try methods.append(self.allocator, try self.methodIdentity(entry.value.def_idx));
+        }
         sortDigests(methods.items);
         var hasher = Sha256.init(.{});
         hashTag(&hasher, "type-world");
@@ -1078,12 +1483,14 @@ const State = struct {
                     class.update(&type_digest);
                     const class_digest = class.finalResult();
                     value.update(&class_digest);
+                    value.update(&try self.typeMethodsDigest(root.checked_type));
                     site.update(&class_digest);
                     hashU32(&site, try self.nextOrdinal(ordinals, class_digest));
                 },
                 .numeral_conversion, .quote_conversion => {
                     const text = self.regionText(env.store.getExprRegion(expr));
                     hashBytes(&value, text);
+                    value.update(&try self.literalTargetsDigest(@backingInt(expr)));
                     var class = Sha256.init(.{});
                     hashTag(&class, "literal");
                     class.update(&self.ownerKey(self.owners.get(expr)));
