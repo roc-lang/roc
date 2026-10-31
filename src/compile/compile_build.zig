@@ -2750,6 +2750,33 @@ pub const BuildEnv = struct {
         return stats;
     }
 
+    /// `artifact`'s object with the cache key `key`, when this compilation's
+    /// compile-time evaluation built or restored it: its bytes, its hosted
+    /// symbols, and whether it was restored.
+    pub fn boxyObjectWithKey(self: *BuildEnv, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, key: @import("boxy_object_cache.zig").Key) ?BoxyKnownObject {
+        const coordinator = self.coordinator orelse return null;
+        const objects = &(coordinator.boxy_objects orelse return null);
+        const known = objects.objectWithKey(artifact, key) orelse return null;
+        return .{ .object = known.object.?.object, .hosted_symbols = known.object.?.hosted_symbols, .restored = known.restored, .path = known.path };
+    }
+
+    /// Record in `digests` the exports of `artifact`'s object, which this
+    /// compilation's compile-time evaluation built or restored.
+    pub fn boxyAdoptExports(self: *BuildEnv, digests: *boxy_interface.Digests, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!void {
+        const coordinator = self.coordinator orelse return;
+        const objects = &(coordinator.boxy_objects orelse return);
+        try digests.adoptExports(&objects.digests, artifact);
+    }
+
+    pub const BoxyKnownObject = struct {
+        object: []const u8,
+        hosted_symbols: []const []const u8,
+        restored: bool,
+        /// The object as the link reads it, when the link kept it as it was
+        /// built or restored.
+        path: ?[]const u8,
+    };
+
     /// Count the objects a `.boxy` build restored from and filed in the
     /// per-module Boxy object cache (`BuildStats`).
     pub fn recordBoxyObjects(self: *BuildEnv, restored: u32, built: u32) void {

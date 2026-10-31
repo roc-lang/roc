@@ -132,6 +132,12 @@ pub const ExportInterfaces = struct {
         self.arena.deinit();
     }
 
+    /// Forget every interface. No unit may be running.
+    pub fn clear(self: *ExportInterfaces) void {
+        self.map.clearRetainingCapacity();
+        _ = self.arena.reset(.retain_capacity);
+    }
+
     /// Record `interface` for `identity`, copying its condition rows.
     pub fn put(self: *ExportInterfaces, identity: LIR.ProcIdentity, interface: ExportInterface) Allocator.Error!void {
         self.mutex.lockUncancelable(self.io);

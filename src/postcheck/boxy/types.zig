@@ -35,6 +35,8 @@ pub const ModuleView = struct {
     index: ModuleIndex,
     key: checked.ModuleId,
     view: checked.ImportedModuleView,
+    /// What `Modules.linkName` returns.
+    link_name: [32]u8,
 
     pub fn types(self: *const ModuleView) checked.CheckedTypeStoreView {
         return self.view.checked_types;
@@ -50,25 +52,25 @@ pub const ModuleView = struct {
 };
 
 /// The name each module of one link gives its workers and nominal types
-/// (design.md "Caching Under `.boxy`"), by checked key: what lets a module's
-/// object survive an edit to another module's bodies.
+/// (design.md "Caching Under `.boxy`"): what lets a module's object survive an
+/// edit to another module's bodies. A module is named by its module name and
+/// checking interface, which a body edit leaves alone. Modules with different
+/// content can share those, as two versions of a package differing only in
+/// bodies do, and they are distinct modules: this holds them, and each is
+/// named by its content identity.
 pub const ModuleNames = struct {
-    by_key: std.AutoHashMapUnmanaged([32]u8, [32]u8) = .empty,
+    content_named: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
 
     pub fn deinit(self: *ModuleNames, allocator: Allocator) void {
-        self.by_key.deinit(allocator);
+        self.content_named.deinit(allocator);
     }
 
-    pub fn of(self: *const ModuleNames, key: [32]u8) [32]u8 {
-        return self.by_key.get(key) orelse
-            invariantFmt("a module of a link has no name ({s})", .{&std.fmt.bytesToHex(key[0..8], .lower)});
+    pub fn of(self: *const ModuleNames, view: checked.ImportedModuleView) [32]u8 {
+        if (self.content_named.contains(view.key.bytes)) return view.module_identity.stable_hash;
+        return stableName(view);
     }
 
-    /// The names of `views`, the modules of one link. A module is named by
-    /// its module name and checking interface, which a body edit leaves
-    /// alone. Modules with different content can share those, as two
-    /// versions of a package differing only in bodies do, and they are
-    /// distinct modules: each of them is named by its content identity.
+    /// The names of `views`, the modules of one link.
     pub fn fromViews(allocator: Allocator, views: []const checked.ImportedModuleView) Allocator.Error!ModuleNames {
         var owners: std.AutoHashMapUnmanaged([32]u8, ?[32]u8) = .empty;
         defer owners.deinit(allocator);
@@ -83,9 +85,7 @@ pub const ModuleNames = struct {
         var result: ModuleNames = .{};
         errdefer result.deinit(allocator);
         for (views) |view| {
-            const stable = stableName(view);
-            const shared = owners.get(stable).? == null;
-            try result.by_key.put(allocator, view.key.bytes, if (shared) view.module_identity.stable_hash else stable);
+            if (owners.get(stableName(view)).? == null) try result.content_named.put(allocator, view.key.bytes, {});
         }
         return result;
     }
@@ -123,7 +123,8 @@ pub const Modules = struct {
         if (entry.found_existing) return entry.value_ptr.*;
         const index: ModuleIndex = @fromBackingInt(@intCast(self.views.items.len));
         entry.value_ptr.* = index;
-        try self.views.append(self.allocator, .{ .index = index, .key = view.key.digest(), .view = view });
+        const link_name = if (self.link_names) |link_names| link_names.of(view) else view.module_identity.stable_hash;
+        try self.views.append(self.allocator, .{ .index = index, .key = view.key.digest(), .view = view, .link_name = link_name });
         return index;
     }
 
@@ -134,9 +135,7 @@ pub const Modules = struct {
     /// The name module `index`'s workers and nominal types are digested
     /// under, the same in every object of one link.
     pub fn linkName(self: *const Modules, index: ModuleIndex) [32]u8 {
-        const view = self.get(index);
-        const link_names = self.link_names orelse return view.view.module_identity.stable_hash;
-        return link_names.of(view.key.bytes);
+        return self.get(index).link_name;
     }
 
     /// The module of this lowering with key `key`, or null when the

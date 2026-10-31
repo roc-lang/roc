@@ -33,6 +33,8 @@ pub const Digests = struct {
     gpa: Allocator,
     names: ModuleNames,
     artifacts: std.AutoHashMapUnmanaged(Key, *const Artifact) = .empty,
+    /// Each module of `artifacts`' name under `names`.
+    module_names: std.AutoHashMapUnmanaged(Key, [32]u8) = .empty,
     interfaces: std.AutoHashMapUnmanaged(Key, Digest) = .empty,
     exports: std.AutoHashMapUnmanaged(Key, Digest) = .empty,
 
@@ -41,17 +43,29 @@ pub const Digests = struct {
         const views = try gpa.alloc(CheckedArtifact.ImportedModuleView, artifacts.len);
         defer gpa.free(views);
         for (artifacts, views) |artifact, *view| view.* = CheckedArtifact.importedView(artifact);
-        var names = try ModuleNames.fromViews(gpa, views);
-        errdefer names.deinit(gpa);
-        var by_key: std.AutoHashMapUnmanaged(Key, *const Artifact) = .empty;
-        errdefer by_key.deinit(gpa);
-        for (artifacts) |artifact| try by_key.put(gpa, artifact.key.bytes, artifact);
-        return .{ .gpa = gpa, .names = names, .artifacts = by_key };
+        var digests: Digests = .{ .gpa = gpa, .names = try ModuleNames.fromViews(gpa, views) };
+        errdefer digests.deinit();
+        for (artifacts) |artifact| _ = try digests.add(artifact);
+        return digests;
+    }
+
+    /// Add `artifact` to the link; false when it is already there.
+    pub fn add(self: *Digests, artifact: *const Artifact) Allocator.Error!bool {
+        const entry = try self.artifacts.getOrPut(self.gpa, artifact.key.bytes);
+        if (entry.found_existing) return false;
+        entry.value_ptr.* = artifact;
+        try self.module_names.put(self.gpa, artifact.key.bytes, self.names.of(CheckedArtifact.importedView(artifact)));
+        return true;
+    }
+
+    pub fn nameOf(self: *const Digests, key: Key) [32]u8 {
+        return self.module_names.get(key) orelse base.invariant("a module of a link was never added to its digests", .{});
     }
 
     pub fn deinit(self: *Digests) void {
         self.names.deinit(self.gpa);
         self.artifacts.deinit(self.gpa);
+        self.module_names.deinit(self.gpa);
         self.interfaces.deinit(self.gpa);
         self.exports.deinit(self.gpa);
     }
@@ -62,7 +76,7 @@ pub const Digests = struct {
         if (self.interfaces.get(artifact.key.bytes)) |known| return known;
         var hasher = Sha256.init(.{});
         hasher.update("roc.boxy.interface.v1");
-        hasher.update(&self.names.of(artifact.key.bytes));
+        hasher.update(&self.nameOf(artifact.key.bytes));
         try self.hashPublicSurface(&hasher, artifact);
         for (artifact.direct_import_module_keys) |key| {
             const imported = self.artifacts.get(key.bytes) orelse base.invariant("a module of a link imports a module outside it", .{});
@@ -97,6 +111,11 @@ pub const Digests = struct {
         try self.exports.put(self.gpa, artifact.key.bytes, hasher.finalResult());
     }
 
+    /// Take `artifact`'s exports as `other` recorded them.
+    pub fn adoptExports(self: *Digests, other: *const Digests, artifact: *const Artifact) Allocator.Error!void {
+        if (other.exports.get(artifact.key.bytes)) |digest| try self.exports.put(self.gpa, artifact.key.bytes, digest);
+    }
+
     /// What `artifact`'s object is a function of beyond the compilation's
     /// target and policy: the key its cache entry is filed under folds this
     /// in. Every import with an object has recorded its exports.
@@ -104,7 +123,7 @@ pub const Digests = struct {
         var hasher = Sha256.init(.{});
         hasher.update("roc.boxy.object_input.v1");
         hasher.update(&artifact.source_hash);
-        hasher.update(&self.names.of(artifact.key.bytes));
+        hasher.update(&self.nameOf(artifact.key.bytes));
         hasher.update(&CheckedArtifact.checkingContextPolicyHash(artifact.checking_context_identity));
         try self.hashStoredValues(&hasher, artifact, .every_root);
         for (artifact.direct_import_module_keys) |key| {
@@ -169,7 +188,7 @@ pub const Digests = struct {
     /// passes when `artifact` declares it. An imported template's are part of
     /// its own module's interface.
     fn hashTemplateRef(self: *const Digests, hasher: *Sha256, artifact: *const Artifact, ref: canonical.ProcedureTemplateRef) void {
-        hasher.update(&self.names.of(ref.artifact.bytes));
+        hasher.update(&self.nameOf(ref.artifact.bytes));
         hasher.update(std.mem.asBytes(&@as(u32, @backingInt(ref.template))));
         if (!std.mem.eql(u8, &ref.artifact.bytes, &artifact.key.bytes)) return;
         const templates = &artifact.checked_procedure_templates;
@@ -230,7 +249,7 @@ const ValueContext = struct {
     artifact: *const Artifact,
 
     pub fn moduleDigest(self: ValueContext, module: check.CheckedArtifact.CheckedModuleDigest) Digest {
-        return self.digests.names.of(module.bytes);
+        return self.digests.nameOf(module.bytes);
     }
 
     /// A stored function's evidence names types by canonical key, which

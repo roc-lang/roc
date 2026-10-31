@@ -15412,12 +15412,16 @@ and Per-Module Output is the invariant that makes it possible:
   type's runtime name digest the module's link name (`Types.ModuleNames`), so
   that one object can name another across an edit to its bodies: a module's
   name digests its module name and checking interface, which such an edit
-  leaves alone. Every checked module of the compilation is in the link. Two
-  different modules can share those, as two versions of a package differing
-  only in bodies do, and they stay distinct modules: every module of such a set
-  is named by its content identity instead. The name is an input of the
-  module's key and of its importers', so a key always names the object its
-  link needs. A whole program links nothing and names modules by content
+  leaves alone, so a unit needs no other module to name its own and can start
+  while checking continues. Every checked module of the compilation is in the
+  link. Two different modules can share those, as two versions of a package
+  differing only in bodies do, and they stay distinct modules: every module of
+  such a set is named by its content identity instead, which only the finished
+  link can show. When checking completes and shows such a set, the scheduler
+  waits for its running units and starts over under the link's names; the
+  entries already filed stay valid under their own keys. The name is an input
+  of the module's key and of its importers', so a key always names the object
+  its link needs. A whole program links nothing and names modules by content
   identity. A worker's name is the template's position in its table, which the
   interface covers for every template an importer can name; a default's is its
   position among its module's defaults, and a nominal type's is its position
@@ -15494,22 +15498,52 @@ run in a program linked against its imports' cached objects: a module unit
 (`TargetConfig.boxy_unit`) lowering only what those roots reach, compiled into
 the compiler's process and calling the imports' objects, loaded once per
 evaluation (`BoxyLinkedImages`), by symbol. A module with no object yet is
-compiled whole and filed the first time an importer needs it, whichever
+compiled whole and filed by the compilation that first needs it, whichever
 command that is; the root module's own constant code is compiled for the
-evaluation and discarded. The first such need builds not one object but
-every one it can: the importer's closure and, in a program's build, every
-other module the root sees whose roots are complete, since each is needed by
-a later program or by the link. Those units build on the post-check executor,
-each once its imports among them are done and the independent ones at once;
-modules are evaluated in dependency order, so building only what each program
-asks for would build one unit at a time. A platform module with requirements has no object of
-its own, so a module importing one runs as the whole program. Each object is
-filed with its `CodeLocations`: its line table, failure sites and source files
-(Compile-Time Failure Sites). A failure in an object's code is therefore found
-and reported exactly as one in a whole program's own code, and the two forms
-report identically. The table is read only when something fails, so the code
-that succeeds carries nothing extra. A compilation with no cache has no objects, and
-runs as the whole program.
+evaluation and discarded. A module can have an object only once every
+compile-time root of its own is complete: in its object, an evaluated root's
+entry wrapper restores the stored value, which the other objects of a link read
+through it, so an object lowered while a root was still pending would compute
+the root's body at every read instead. The coordinator's unit scheduler
+(`compile.coordinator.BoxyObjects`) therefore builds each module's object as
+soon as the module can have one, and no sooner: a module restored from the
+checked cache with its roots complete, or one with no roots, the moment it is
+type-checked, while checking continues; every other module the moment the
+evaluator completes its roots. Each unit lowers once its imports' units are
+done, since its calls compile against their export interfaces, and the units
+run on the post-check executor alongside checking, the other units, and the
+evaluations of other modules. The evaluations run the same way: a module's
+program is lowered and compiled as its own task of the scheduler's session once
+every value its roots read is complete and, where it links against its imports'
+objects, once those are known, so the programs of modules that read nothing of
+each other are built at the same time, and the evaluating thread runs each
+program as it is built, in the order the builds finish. The build of a program
+reads the checked modules and the loaded objects' symbols and writes nothing
+another thread reads; running it, which stores values and reports failures,
+stays on the evaluating thread, as do the roots the Solved evaluator owns. A
+module's evaluation thus waits only for the values its roots read and the
+objects of its own import closure. The link waits for every unit and links the
+objects this compilation built or restored without restoring them again: a
+build that links the objects keeps each one for the link as the scheduler
+completes it (`BoxyObjectLowering.Materializer`), so the link reads them back
+without writing them again. While checking continues, a compilation that links
+its program builds only modules reachable through import edges from the root
+package's root and the platform root, which every module the root will see is,
+and leaves one worker to checking; after it, exactly the modules the root sees.
+A compilation that does not link its program (`roc check`) builds the modules
+each evaluation's program needs and, as a program's build does, every other
+module the root sees whose roots are complete. The scheduler's post-check
+session stays open across checking and evaluation while the general session
+every other post-check stage borrows opens and closes within it: every task
+names its session, and whichever consumer takes a completion off the worker
+channel files it with the session that submitted it. A platform module with
+requirements has no object of its own, so a module importing one runs as the
+whole program. Each object is filed with its `CodeLocations`: its line table,
+failure sites and source files (Compile-Time Failure Sites). A failure in an
+object's code is therefore found and reported exactly as one in a whole
+program's own code, and the two forms report identically. The table is read
+only when something fails, so the code that succeeds carries nothing extra. A
+compilation with no cache has no objects, and runs as the whole program.
 
 A root whose value holds a function value (anywhere in its type, or a
 callable binding) is evaluated by the Solved evaluator under either strategy.

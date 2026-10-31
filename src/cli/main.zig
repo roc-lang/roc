@@ -11438,9 +11438,6 @@ fn buildBoxyLibraryObjects(
         }
     };
 
-    var ready: std.ArrayList(u32) = .empty;
-    defer ready.deinit(ctx.gpa);
-    for (remaining, 0..) |count, index| if (count == 0) try ready.append(ctx.gpa, @intCast(index));
     // The units' objects in unit order, whatever order they finish in, so
     // the link's inputs (and so the executable) are the same every build.
     const objects = try ctx.arena.alloc(?[]const u8, linked_units);
@@ -11450,6 +11447,36 @@ fn buildBoxyLibraryObjects(
     var restored: u32 = 0;
     var built: u32 = 0;
     var done: usize = 0;
+    // An object compile-time evaluation built or restored under this
+    // build's key is linked as it is; its exports are in `interfaces`. A key
+    // reads what the unit's imports recorded, so this walks imports first,
+    // and a unit left to run holds back its importers.
+    var ready: std.ArrayList(u32) = .empty;
+    defer ready.deinit(ctx.gpa);
+    var keyable: std.ArrayList(u32) = .empty;
+    defer keyable.deinit(ctx.gpa);
+    for (remaining, 0..) |count, index| if (count == 0) try keyable.append(ctx.gpa, @intCast(index));
+    while (keyable.pop()) |index| {
+        const task = &tasks[index];
+        try Prepare.run(tasks, digests, index);
+        const known = build_env.boxyObjectWithKey(task.artifact, task.key) orelse {
+            try ready.append(ctx.gpa, index);
+            continue;
+        };
+        try build_env.boxyAdoptExports(digests, task.artifact);
+        if (known.restored) restored += 1 else built += 1;
+        objects[index] = known.path orelse link_objects.materialize(known.object) catch return error.NativeCompilationFailed;
+        for (known.hosted_symbols) |symbol| {
+            const owned = try ctx.arena.dupe(u8, symbol);
+            if ((try seen_hosted.getOrPut(owned)).found_existing) continue;
+            try hosted_symbols.append(ctx.arena, owned);
+        }
+        done += 1;
+        for (dependents[index].items) |dependent| {
+            remaining[dependent] -= 1;
+            if (remaining[dependent] == 0) try keyable.append(ctx.gpa, dependent);
+        }
+    }
     var first_error: ?CliMainError = null;
     var executor_session: ?base.post_check_task_executor.Session = if (build_env.postCheckExecutor()) |executor| executor.begin() else null;
     defer if (executor_session) |*open| open.end();
@@ -11513,6 +11540,16 @@ fn buildBoxyLibraryObjects(
         if (artifact.platform_type_inputs.requirements.len != 0) try paired_platforms.append(ctx.arena, artifact.key.bytes);
     }
     return .{ .objects = ordered, .hosted_symbols = hosted_symbols.items, .platform = platform, .paired_platforms = paired_platforms.items };
+}
+
+/// Keep a Boxy module object compile-time evaluation built or restored for
+/// the link (`BoxyObjectLowering.Materializer`).
+fn materializeBoxyObject(context: *anyopaque, bytes: []const u8) Allocator.Error!?[]const u8 {
+    const objects: *link_artifacts.Objects = @ptrCast(@alignCast(context));
+    return objects.materialize(bytes) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => null,
+    };
 }
 
 /// The platform module whose hosted section binds every hosted function
@@ -12083,6 +12120,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     defer boxy_digests.deinit();
     const boxy_root_unit: ?postcheck.Boxy.Lower.ModuleUnit = if (boxy_interfaces) |*interfaces| .{ .imports = interfaces, .root = true, .names = &boxy_digests.names } else null;
     runtime_lowering.target.boxy_unit = boxy_root_unit;
+    // A build of the host target at dev opt links the objects compile-time
+    // evaluation builds, so their exports go in the link's table.
+    if (boxy_interfaces) |*interfaces| if (build_env.boxy_object_lowering) |*lowering| {
+        if (lowering.target == target) lowering.interfaces = interfaces;
+    };
     build_env.setRuntimeLowering(runtime_lowering);
     // A build of a program whose runtime output is recorded links that output
     // and lowers no runtime program. Debug pack emission reads the lowering.
@@ -12092,6 +12134,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     defer releaseScratchDir(ctx, build_scratch_dir);
     var link_objects = link_artifacts.Objects.init(ctx.coreCtx(), ctx.arena, if (object_store) |store| .{ .store = store.native, .identity = store.linkObjectIdentity(@splat(0)) } else null, build_scratch_dir) catch return error.NativeCompilationFailed;
     defer link_objects.deinit();
+    // The link keeps each of those objects as compile-time evaluation builds
+    // or restores it.
+    if (boxy_interfaces != null) if (build_env.boxy_object_lowering) |*lowering| {
+        if (lowering.target == target) lowering.materializer = .{ .context = &link_objects, .materialize = materializeBoxyObject };
+    };
     var program_probe: ?ProgramOutputProbe = null;
     if (object_store) |store| if (target_arch != .wasm32 and args.opt == .dev and runtime_lowering.target.specialization_strategy == .lss and !dev_diagnostics.isSet(.dev_pack_objects)) {
         program_probe = .{
