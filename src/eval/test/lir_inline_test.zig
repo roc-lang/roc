@@ -207,6 +207,7 @@ fn lowerModuleWithOptions(
         .{ .requests = &published_roots },
         .{
             .target_usize = base.target.TargetUsize.native,
+            .prove_uniqueness = true,
             .consume_dead_boxes = false,
             .specialization_strategy = options.specialization_strategy,
             // The harness evaluates the root it lowers, so a `.boxy`

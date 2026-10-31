@@ -101,6 +101,10 @@ pub const UniquenessMetrics = struct {
 
 /// A null executor uses the identical component solver on the calling thread.
 pub const UniquenessOptions = struct {
+    /// Settle the uniqueness analysis. Off, no local is proven unique and no
+    /// candidate read takes its fresh form, so every mutation keeps its
+    /// runtime check and every read stays the static datum.
+    prove: bool = true,
     executor: ?*const task_executor.Executor = null,
     metrics: ?*UniquenessMetrics = null,
 };
@@ -269,8 +273,12 @@ pub const Solution = struct {
     /// program's, so code compiled with the same body may still call its
     /// outcome variant (`outcomeSpanForCall`).
     stability_pinned: std.bit_set.DynamicBitSetUnmanaged = .{},
+    /// Every statement reachable from each proc, in the structural
+    /// depth-first order of `collectProcStatements`.
+    proc_statements: FrozenProcRows(LIR.CFStmtId) = .{},
     /// Store-shaped settlement inputs built by the first uniqueness
-    /// settlement and reused by every later one on this solution.
+    /// settlement and reused by every later one on this solution. Null when
+    /// the solve does not prove uniqueness.
     uniqueness_structure: ?*UniquenessStructure = null,
 
     pub fn deinit(self: *Solution) void {
@@ -283,6 +291,8 @@ pub const Solution = struct {
         self.allocator.free(self.sigs);
         self.allocator.free(self.outcomes);
         self.allocator.free(self.ret_conditions);
+        self.allocator.free(self.proc_statements.starts);
+        self.allocator.free(self.proc_statements.items);
         self.allocator.free(self.available_outcome_spans);
         self.allocator.free(self.restitution_params_by_stmt);
         self.allocator.free(self.unique_seed_masks);
@@ -382,17 +392,9 @@ pub const Solution = struct {
     }
 
     /// Every statement reachable from `proc`'s body, in the structural
-    /// depth-first order of `collectProcStatements`. The uniqueness structure
-    /// built by the solve owns these lists; the store must not have gained or
-    /// lost statements, locals, or procedures since.
-    pub fn procStatements(self: *const Solution, store: *const LirStore, proc: LIR.LirProcSpecId) []const LIR.CFStmtId {
-        const structure = self.uniqueness_structure orelse solveInvariant("ARC solution has no uniqueness structure");
-        if (structure.store != store or structure.stmt_count != store.cfStmtCount() or
-            structure.local_count != store.localCount() or structure.proc_count != store.procSpecCount())
-        {
-            solveInvariant("ARC procedure statements were read for a different store");
-        }
-        return structure.proc_stmts.of(@backingInt(proc));
+    /// depth-first order of `collectProcStatements`.
+    pub fn procStatements(self: *const Solution, proc: LIR.LirProcSpecId) []const LIR.CFStmtId {
+        return self.proc_statements.of(@backingInt(proc));
     }
 
     pub fn leaderOf(self: *const Solution, local: LIR.LocalId) LIR.LocalId {
@@ -1293,8 +1295,13 @@ pub fn solveWithOptions(
     solver.switch_index_by_stmt = &.{};
     errdefer solution.deinit();
 
-    solution.uniqueness_structure = try UniquenessStructure.build(allocator, store, rc_local, &solver.proc_stmts, &solver.proc_returns, options.executor, options.metrics);
-    try settleUniquenessWithOptions(allocator, store, layouts, rc_local, &solution, .none, consume_dead_boxes, options);
+    const statement_starts = try allocator.dupe(u32, solver.proc_stmts.starts.items);
+    solution.proc_statements.starts = statement_starts;
+    solution.proc_statements.items = try allocator.dupe(LIR.CFStmtId, solver.proc_stmts.items.items);
+    if (options.prove) {
+        solution.uniqueness_structure = try UniquenessStructure.build(allocator, store, rc_local, solution.proc_statements, &solver.proc_returns, options.executor, options.metrics);
+        try settleUniquenessWithOptions(allocator, store, layouts, rc_local, &solution, .none, consume_dead_boxes, options);
+    }
     try computeOutcomeRestitution(allocator, store, layouts, rc_local, consume_dead_boxes, &solution, &solver.proc_stmts);
 
     return solution;
@@ -4656,7 +4663,7 @@ const UniquenessStructure = struct {
         allocator: Allocator,
         store: *const LirStore,
         rc_local: []const bool,
-        lifted_stmts: *const ProcRows(LIR.CFStmtId),
+        proc_stmts: FrozenProcRows(LIR.CFStmtId),
         lifted_returns: *const ProcRows(u32),
         executor: ?*const task_executor.Executor,
         metrics: ?*UniquenessMetrics,
@@ -4687,13 +4694,9 @@ const UniquenessStructure = struct {
         // structure keeps its own copy for the reuse check.
         self.rc_local = try arena.dupe(bool, rc_local);
         const proc_count = store.procSpecCount();
-        if (lifted_stmts.procCount() != proc_count or lifted_returns.procCount() != proc_count) {
+        if (proc_stmts.starts.len != proc_count + 1 or lifted_returns.procCount() != proc_count) {
             solveInvariant("uniqueness structure received a lift for a different procedure count");
         }
-        const proc_stmts: FrozenProcRows(LIR.CFStmtId) = .{
-            .starts = try arena.dupe(u32, lifted_stmts.starts.items),
-            .items = try arena.dupe(LIR.CFStmtId, lifted_stmts.items.items),
-        };
         const return_locals = try arena.alloc(LIR.LocalId, lifted_returns.items.items.len);
         for (return_locals, lifted_returns.items.items) |*local, raw| local.* = @fromBackingInt(raw);
         const returns: FrozenProcRows(LIR.LocalId) = .{

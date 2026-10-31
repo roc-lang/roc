@@ -204,6 +204,10 @@ pub const TargetConfig = struct {
     /// Optional ARC mode specialization belongs to the consumer's optimization
     /// policy, independently of whether source wrappers are inlined.
     specialize_arc_modes: bool = false,
+    /// ARC's static uniqueness proofs. They only remove runtime refcount
+    /// checks, so optimized consumers enable them and the rest keep the
+    /// checks and skip the analysis.
+    prove_uniqueness: bool = false,
     /// Direct-call inlining scope for SpecConstr's value-aware clones.
     /// Optimized builds use `.all_calls`; dev builds use `.iterator_fusion`
     /// so post-check time and emitted program size stay bounded. Consulted
@@ -1163,6 +1167,7 @@ pub const SolvedPolicy = struct {
 /// under. A consumer continuing a shared Solved program brings its own.
 pub const LirPolicy = struct {
     specialize_arc_modes: bool,
+    prove_uniqueness: bool,
     consume_dead_boxes: bool,
     zero_dict_seed: bool,
     list_in_place_map: bool,
@@ -2111,6 +2116,7 @@ fn finishLoweredOutput(
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = arc_roots.items,
         .specialize = target.specialize_arc_modes,
+        .prove_uniqueness = target.prove_uniqueness,
         .consume_dead_boxes = target.consume_dead_boxes,
         .thread_confined_rc = target.thread_confined_rc,
         .post_check_executor = if (target.post_check_executor) |*executor| executor else null,

@@ -1298,6 +1298,7 @@ fn lowerAppPathToLir(
         .target_usize = opts.target_usize,
         .inline_mode = opts.inline_mode,
         .spec_constr_clone_inlining = opts.spec_constr_clone_inlining,
+        .prove_uniqueness = true,
         .consume_dead_boxes = opts.consume_dead_boxes,
         .list_in_place_map = opts.list_in_place_map,
         .proc_debug_names = opts.proc_debug_names,

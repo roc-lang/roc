@@ -66,6 +66,11 @@ pub const InsertOptions = struct {
     /// analysis proves confined. Optimized builds enable this; everything
     /// else emits only atomic count updates and skips the analysis.
     thread_confined_rc: bool = false,
+    /// Prove values unique so a mutation can skip its runtime refcount check,
+    /// and a read of static data can take its fresh form. Optimized builds
+    /// and the tests of the analysis enable this; off, every mutation keeps
+    /// its check, which answers the same question at runtime.
+    prove_uniqueness: bool = true,
     /// Select consuming Box.unbox when its lender is dead. Compiled backends
     /// enable this; the value-model interpreter keeps an explicit borrow.
     consume_dead_boxes: bool = true,
@@ -509,6 +514,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     inserter.local_contains_refcounted = local_contains_refcounted;
 
     const uniqueness_options: arc_solve.UniquenessOptions = .{
+        .prove = options.prove_uniqueness,
         .executor = options.post_check_executor,
         .metrics = if (options.metrics_out) |metrics| &metrics.uniqueness else null,
     };
@@ -551,7 +557,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         take_stmts.set(@backingInt(stmt.*));
         any_take = true;
     }
-    if (any_take) {
+    if (any_take and options.prove_uniqueness) {
         try arc_solve.settleUniquenessWithOptions(store.allocator, store, layouts, local_contains_refcounted, &solution, .{ .set = &take_stmts }, options.consume_dead_boxes, uniqueness_options);
     }
 
@@ -12302,6 +12308,29 @@ test "uniqueness: a cached proc's supplied facts reach its callers" {
 
         try f.run();
         try testing.expectEqual(@as(u64, @intFromBool(case.elided)), f.uniqueArgsFor(appended));
+    }
+}
+
+test "uniqueness: without proofs a mutation of a born-unique value keeps its runtime check" {
+    for ([_]bool{ true, false }) |prove| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+        const list = try f.local(f.list_i64);
+        const elem = try f.local(.i64);
+        const appended = try f.local(f.list_i64);
+        const result = try f.local(.i64);
+
+        const ret = try f.ret(result);
+        const result_assign = try f.assignI64(result, 1, ret);
+        const append = try f.assignLowLevel(appended, &.{ list, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+        const list_assign = try f.assignList(list, &.{}, append);
+        const body = try f.assignI64(elem, 5, list_assign);
+        const proc = try f.addProc(&.{}, body, .i64);
+
+        var metrics: ParallelMetrics = .{};
+        try insert(&f.store, &f.layouts, .{ .roots = &.{proc}, .prove_uniqueness = prove, .metrics_out = &metrics });
+        try testing.expectEqual(@as(u64, @intFromBool(prove)), f.uniqueArgsFor(appended));
+        try testing.expectEqual(prove, metrics.uniqueness.settlements != 0);
     }
 }
 

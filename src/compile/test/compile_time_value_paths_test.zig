@@ -54,7 +54,7 @@ const platform_files = [_]struct { path: []const u8, source: []const u8 }{
 fn optimizedTarget(inline_mode: lir.CheckedPipeline.InlineMode) lir.CheckedPipeline.TargetConfig {
     // An optimized build specializes ARC modes, as `--opt=size` and
     // `--opt=speed` do.
-    return .{ .inline_expects = .omit, .inline_mode = inline_mode, .specialize_arc_modes = true };
+    return .{ .inline_expects = .omit, .inline_mode = inline_mode, .specialize_arc_modes = true, .prove_uniqueness = true };
 }
 
 /// Both runtime programs of one app.
@@ -140,7 +140,7 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
             .include_provided_data_exports = true,
             .include_internal_static_data = true,
         },
-        .{ .target_usize = base.target.TargetUsize.native, .inline_mode = inline_mode, .specialize_arc_modes = true },
+        .{ .target_usize = base.target.TargetUsize.native, .inline_mode = inline_mode, .specialize_arc_modes = true, .prove_uniqueness = true },
     );
     errdefer restored.deinit();
     const image = static_data_exports.buildStaticData(

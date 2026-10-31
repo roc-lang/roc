@@ -22385,6 +22385,18 @@ only one reachable. The win per site is one count load and one branch, but
 the sites are the mutation points of hot loops, and removing the branch
 also lets LLVM optimize across what was an opaque control split.
 
+Uniqueness inference is an optimized-build analysis
+(`TargetConfig.prove_uniqueness`, on for `--opt=speed` and `--opt=size`). It
+answers at compile time a question the runtime check answers anyway, so
+skipping it costs each mutation only that branch, and it is a large share of
+ARC. Under `--opt=dev`, `--opt=interpreter`, and compile-time evaluation the
+settlement does not run: no local is proven unique, no signature carries a
+unique return, and every candidate read stays the static datum, which a
+mutation copies on first write. Borrow inference, field takes, and liveness
+run at every opt level, since they decide the ownership schedule rather than
+remove a check. This is one ARC with one analysis switched off, never a
+second implementation, and nothing observable depends on the switch.
+
 A join parameter is an ownership phi, not a foreign definition. Its origin is
 born-unique exactly when it has at least one explicit non-self
 `initialize_join_param` incoming edge and every such edge carries a born-unique

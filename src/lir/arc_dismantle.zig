@@ -1771,7 +1771,7 @@ const ComponentDominance = struct {
         defer stmts.deinit(gpa);
         const procs = self.component_procs[self.component_offsets[component]..self.component_offsets[component + 1]];
         for (procs) |proc| {
-            for (self.solution.procStatements(store, @fromBackingInt(@intCast(proc)))) |stmt_id| {
+            for (self.solution.procStatements(@fromBackingInt(@intCast(proc)))) |stmt_id| {
                 const dense = &self.dense[@backingInt(stmt_id)];
                 if (dense.* != no_index) continue;
                 dense.* = @intCast(stmts.items.len);
@@ -1881,7 +1881,7 @@ test "component dominance agrees with whole-store dominance across shared proced
     defer successors.deinit(gpa);
     for (0..store.procSpecCount()) |proc_index| {
         const proc: u32 = @intCast(proc_index);
-        for (solution.procStatements(&store, @fromBackingInt(proc))) |stmt_id| {
+        for (solution.procStatements(@fromBackingInt(proc))) |stmt_id| {
             const index = @backingInt(stmt_id);
             if (stmt_first_proc[index] != no_index) {
                 components.unite(stmt_first_proc[index], proc);
@@ -2684,7 +2684,7 @@ pub fn compute(
     defer dominance.deinit(gpa);
     for (0..store.procSpecCount()) |proc_index| {
         const proc: u32 = @intCast(proc_index);
-        for (solution.procStatements(store, @fromBackingInt(proc))) |stmt_id| {
+        for (solution.procStatements(@fromBackingInt(proc))) |stmt_id| {
             const stmt_index = @backingInt(stmt_id);
             reachable.set(stmt_index);
             const owner = stmt_proc[stmt_index];
@@ -2846,7 +2846,7 @@ pub fn compute(
         proc_cursor -= 1;
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_cursor))));
         const proc_params = store.getLocalSpan(store.getProcSpecImmediate(proc_id).args);
-        for (solution.procStatements(store, proc_id)) |current| {
+        for (solution.procStatements(proc_id)) |current| {
             const stmt_index = @backingInt(current);
             if (visited.isSet(stmt_index)) continue;
             visited.set(stmt_index);
@@ -3369,7 +3369,7 @@ pub fn compute(
                 if (owner == no_index or shared_stmts.isSet(first_read)) continue;
                 if (!joins_ready[owner]) {
                     joins_ready[owner] = true;
-                    try collectProcJoinBodies(store, solution.procStatements(store, @fromBackingInt(@intCast(owner))), &proc_joins[owner]);
+                    try collectProcJoinBodies(store, solution.procStatements(@fromBackingInt(@intCast(owner))), &proc_joins[owner]);
                     const proc_body = store.getProcSpec(@fromBackingInt(@intCast(owner))).body.?;
                     proc_graphs[owner] = try future_fields.buildProcGraph(gpa, store, &.{proc_body}, &proc_joins[owner]);
                 }

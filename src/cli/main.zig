@@ -11389,6 +11389,9 @@ fn buildBoxyLibraryObjects(
         }
     }
 
+    // The units run on the executor's lanes, so each phase of this timing
+    // sums the units' work rather than measuring elapsed time.
+    var unit_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     const tasks = try ctx.gpa.alloc(BoxyUnitTask, units.items.len);
     defer {
         for (tasks) |*task| task.deinit(ctx.gpa);
@@ -11405,6 +11408,7 @@ fn buildBoxyLibraryObjects(
             .target = target,
             .interfaces = interfaces,
             .cache_manager = if (args.no_cache) null else build_env.cache_manager,
+            .timing = &unit_timing,
         };
     }
 
@@ -11470,6 +11474,7 @@ fn buildBoxyLibraryObjects(
     // The summary counts cache work; a build without a cache does none.
     if (!args.no_cache) build_env.recordBoxyObjects(restored, built);
     reporter.end();
+    recordPostCheckLowering(reporter, &unit_timing, .boxy);
     const ordered = try ctx.arena.alloc([]const u8, units.items.len);
     for (objects, ordered) |object, *slot| slot.* = object orelse base.invariant("roc build invariant violated: a .boxy unit completed without an object", .{});
     return .{ .objects = ordered, .hosted_symbols = hosted_symbols.items, .platform = platform };
@@ -11523,6 +11528,7 @@ const BoxyUnitTask = struct {
     target: RocTarget,
     interfaces: *postcheck.Boxy.Lower.ExportInterfaces,
     cache_manager: ?*CacheManager,
+    timing: *lir.CheckedPipeline.Timing,
     outcome: union(enum) { pending, failed: CliMainError, done: compile.boxy_unit.Built } = .pending,
 
     fn deinit(self: *BoxyUnitTask, gpa: Allocator) void {
@@ -11542,6 +11548,7 @@ const BoxyUnitTask = struct {
     fn build(self: *BoxyUnitTask) CliMainError!compile.boxy_unit.Built {
         var config = checkedRuntimeLoweringConfig(.linked_output, self.args.opt, .boxy, self.target, self.args.synthetic_default_platform);
         config.target.boxy_unit = .{ .imports = self.interfaces, .root = false };
+        config.target.timing = self.timing;
         return try compile.boxy_unit.restoreOrBuild(.{
             .gpa = self.gpa,
             .artifact = self.artifact,
@@ -14722,6 +14729,21 @@ test "only optimized builds emit thread-confined count updates" {
     }
 }
 
+test "only optimized builds prove uniqueness" {
+    for ([_]struct { opt: cli_args.OptLevel, proves: bool }{
+        .{ .opt = .speed, .proves = true },
+        .{ .opt = .size, .proves = true },
+        .{ .opt = .dev, .proves = false },
+        .{ .opt = .interpreter, .proves = false },
+    }) |case| {
+        for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+            const config = checkedRuntimeLoweringConfig(.linked_output, case.opt, strategy, RocTarget.detectNative(), false);
+            try std.testing.expectEqual(case.proves, config.target.prove_uniqueness);
+            try std.testing.expectEqual(case.proves, lir.CheckedPipeline.LirPolicy.fromTarget(config.target).prove_uniqueness);
+        }
+    }
+}
+
 fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineMode {
     return switch (opt) {
         .size, .speed => .wrappers,
@@ -14873,6 +14895,7 @@ fn checkedRuntimeLoweringConfig(
             .prove_ranges = proveRangesForOpt(opt),
             .reuse_boxes = optimizeLirForOpt(opt),
             .thread_confined_rc = optimizeLirForOpt(opt),
+            .prove_uniqueness = optimizeLirForOpt(opt),
             .proc_debug_names = proc_debug_names or dev_diagnostics.isSet(.pack_trace),
         },
     };
