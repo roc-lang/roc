@@ -1707,10 +1707,6 @@ pub const BoxyObjectSet = struct {
     views: []const checked.ImportedModuleView,
 };
 
-/// Where a `.boxy` evaluation gets the objects of a module's imports, and
-/// the executor session it builds the modules' compile-time programs on,
-/// alongside the objects' units. Every function runs on the evaluating
-/// thread.
 /// A compile-time program's build as a task of the object scheduler, which
 /// runs it on a worker of its own or, when it is the only task left and the
 /// workers are idle, on the thread driving the scheduler, with those workers
@@ -1722,6 +1718,10 @@ pub const ProgramTask = struct {
     lend: *const fn (context: *anyopaque, executor: base.post_check_task_executor.Executor) void,
 };
 
+/// Where a `.boxy` evaluation gets the objects of a module's imports, and
+/// the executor session it builds the modules' compile-time programs on,
+/// alongside the objects' units. Every function runs on the evaluating
+/// thread.
 pub const BoxyObjectSource = struct {
     context: *anyopaque,
     /// Whether the object of every module of `module`'s import closure is
