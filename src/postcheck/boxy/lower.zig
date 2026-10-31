@@ -2357,14 +2357,16 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
 
 /// Whether a module unit emits `template` (design.md "Per-Module Output"):
 /// every template another object may call or compose, which leaves out the
-/// wrappers of `expect` and REPL roots. Nothing reaches those but a test
-/// plan's or a REPL's own roots, and each of those lowers as one program.
+/// wrappers of `expect` and REPL roots, which nothing reaches but a test
+/// plan's or a REPL's own roots, each of those lowering as one program, and
+/// the wrappers of hoisted roots, which only their own module reads: one a
+/// body reaches is lowered with that body, and the rest ran at compile time.
 fn unitEmitsTemplate(view: *const types.ModuleView, template: checked.CheckedProcedureTemplate) bool {
     return switch (template.body) {
         .checked_body, .intrinsic_wrapper, .unimplemented => true,
         .entry_wrapper => |wrapper_id| switch (view.view.compile_time_roots.root(view.view.entry_wrappers.get(wrapper_id).root).kind) {
-            .expect, .repl_expr => false,
-            .callable_binding, .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => true,
+            .expect, .repl_expr, .hoisted_constant, .hoisted_validation => false,
+            .callable_binding, .constant, .numeral_conversion, .quote_conversion, .literal_argument => true,
         },
     };
 }
