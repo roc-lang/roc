@@ -6,8 +6,8 @@ const harness = @import("lower_to_lir_harness.zig");
 fn inspect(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLirHarnessError!void {
     const store = &lowered.lir_result.store;
     const exports = lowered.frozen_static_data.?.exports;
-    var slots = std.AutoHashMap(lir.LIR.StaticDataId, void).init(std.testing.allocator);
-    defer slots.deinit();
+    var slots: std.ArrayList(lir.LIR.StaticDataId) = .empty;
+    defer slots.deinit(std.testing.allocator);
     var names = std.StringHashMap(void).init(std.testing.allocator);
     defer names.deinit();
     for (exports) |item| {
@@ -16,7 +16,7 @@ fn inspect(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLi
         try names.put(item.symbol_name, {});
         try std.testing.expect(std.mem.startsWith(u8, item.symbol_name, "roc__boxy_site_"));
         try std.testing.expect(std.mem.allEqual(u8, item.bytes, 0));
-        try slots.put(item.value_id.?, {});
+        try slots.append(std.testing.allocator, item.value_id.?);
     }
     var descriptors: usize = 0;
     var dictionaries: usize = 0;
@@ -28,7 +28,7 @@ fn inspect(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLi
             try std.testing.expectEqual(null, stmt.dyn.composition_cache);
             continue;
         }
-        try std.testing.expect(slots.contains(stmt.dyn.composition_cache.?));
+        try std.testing.expect(std.mem.findScalar(lir.LIR.StaticDataId, slots.items, stmt.dyn.composition_cache.?) != null);
         if (op == .dict_compose or op == .dict_record) dictionaries += 1 else descriptors += 1;
     }
     try std.testing.expect(descriptors > 0);

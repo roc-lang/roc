@@ -502,13 +502,13 @@ fn mappedSlice(comptime T: type, mapping: []const u8, offset: u64, count: u64) E
 
 test "boxy composition slots and their parents are never pooled between images" {
     const exports = [_]StaticDataExport{
-        .{ .symbol_name = "site", .bytes = &@as([8]u8, @splat(0)), .alignment = 8, .is_mutable = true },
-        .{ .symbol_name = "parent", .bytes = &@as([8]u8, @splat(0)), .alignment = 8, .relocations = &.{.{ .offset = 0, .target_symbol_name = "site", .target = .{ .data_symbol = @fromBackingInt(0) } }} },
         .{ .symbol_name = "constant", .bytes = &@as([8]u8, @splat(0)), .alignment = 8 },
+        .{ .symbol_name = "site", .bytes = &@as([8]u8, @splat(0)), .alignment = 8, .is_mutable = true },
+        .{ .symbol_name = "parent", .bytes = &@as([8]u8, @splat(0)), .alignment = 8, .relocations = &.{.{ .offset = 0, .target_symbol_name = "site", .target = .{ .data_symbol = @fromBackingInt(1) } }} },
     };
     var plan = try Plan.init(std.testing.allocator, &exports, true);
     defer plan.deinit();
-    try std.testing.expectEqualSlices(bool, &.{ false, false, true }, plan.poolable);
-    try std.testing.expect(!plan.placements[0].local.listed);
+    try std.testing.expectEqualSlices(bool, &.{ true, false, false }, plan.poolable);
     try std.testing.expect(!plan.placements[1].local.listed);
+    try std.testing.expect(!plan.placements[2].local.listed);
 }

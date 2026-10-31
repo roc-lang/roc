@@ -1349,22 +1349,22 @@ test "boxy composition slots survive LirImage transport with their initial state
     var fixed = std.heap.FixedBufferAllocator.init(memory);
     const graph = [_]Program.StaticDataExport{.{
         .symbol_name = "roc__boxy_site_test_0",
-        .value_id = @fromBackingInt(0),
+        .value_id = null,
         .bytes = &@as([8]u8, @splat(0)),
         .alignment = 8,
         .is_exported = false,
         .is_mutable = true,
     }};
     const copied = try StaticDataImage.copy(fixed.allocator(), memory.ptr, memory.len, &graph);
-    const viewed = try StaticDataImage.view(a, memory.ptr, fixed.end_index, copied, 1, 0, 0, 8);
+    const viewed = try StaticDataImage.view(a, memory.ptr, fixed.end_index, copied, 0, 0, 0, 8);
     defer StaticDataImage.deinit(a, viewed);
     try std.testing.expect(viewed[0].is_mutable);
     try std.testing.expectEqualStrings(graph[0].symbol_name, viewed[0].symbol_name);
     try std.testing.expectEqualSlices(u8, graph[0].bytes, viewed[0].bytes);
     const rows = try sliceFromRef(StaticDataImage.Export, memory.ptr, fixed.end_index, copied);
     rows[0].is_mutable = 2;
-    try std.testing.expectError(error.InvalidLirImage, StaticDataImage.view(a, memory.ptr, fixed.end_index, copied, 1, 0, 0, 8));
+    try std.testing.expectError(error.InvalidLirImage, StaticDataImage.view(a, memory.ptr, fixed.end_index, copied, 0, 0, 0, 8));
     rows[0].is_mutable = 1;
     @constCast(viewed[0].bytes)[0] = 1;
-    try std.testing.expectError(error.InvalidLirImage, StaticDataImage.view(a, memory.ptr, fixed.end_index, copied, 1, 0, 0, 8));
+    try std.testing.expectError(error.InvalidLirImage, StaticDataImage.view(a, memory.ptr, fixed.end_index, copied, 0, 0, 0, 8));
 }
