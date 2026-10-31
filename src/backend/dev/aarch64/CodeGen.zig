@@ -27,8 +27,8 @@ const RegisterWidth = Registers.RegisterWidth;
 pub fn CodeGen(comptime target: RocTarget) type {
     // Validate this is an aarch64 target
     const arch = target.toCpuArch();
-    if (arch != .aarch64 and arch != .aarch64_be) {
-        @compileError("aarch64.CodeGen requires an aarch64 target");
+    if (arch != .aarch64) {
+        @compileError("aarch64.CodeGen requires a little-endian aarch64 target");
     }
 
     const Emit = EmitMod.Emit(target);

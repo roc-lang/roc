@@ -14634,8 +14634,7 @@ fn devCapturePrefix(roots: CheckedLirRoots, opt: cli_args.OptLevel, target: RocT
         },
         .linked_output, .test_plan => {},
     }
-    const arch = target.toCpuArch();
-    return if (arch == .x86_64 or arch == .aarch64) @import("builtins").erased_callable.hot_reload_capture_prefix_size else 0;
+    return if (backend.dev.isa.isaOfOrNull(target) != null) @import("builtins").erased_callable.hot_reload_capture_prefix_size else 0;
 }
 
 test "native test generic procedures use the ordinary native dev representation and ownership policy" {
