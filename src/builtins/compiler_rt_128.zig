@@ -663,29 +663,48 @@ pub const FormatResult = struct {
 /// The largest power of ten that fits in a u64.
 const pow10_19: u64 = 10_000_000_000_000_000_000;
 
+/// "00" through "99", so digits can be written two at a time.
+const digit_pairs = "00010203040506070809101112131415161718192021222324252627282930313233343536373839" ++
+    "40414243444546474849505152535455565758596061626364656667686970717273747576777879" ++
+    "8081828384858687888990919293949596979899";
+
+fn digitPair(value: u64) [2]u8 {
+    std.debug.assert(value < 100);
+    return digit_pairs[@as(usize, @intCast(value)) * 2 ..][0..2].*;
+}
+
 /// Writes `val` in decimal so the digits end at `buf.len`. Values past the
 /// u64 range are split into 19-digit chunks with one 128-bit division each;
-/// every digit is then produced by native 64-bit arithmetic.
+/// every digit is then produced by native 64-bit arithmetic, two at a time.
 fn u128_to_str_inner(buf: []u8, val: u128) FormatResult {
     var pos: usize = buf.len;
     var v = val;
     while (v > math.maxInt(u64)) {
         const split = udivmod(u128, v, pow10_19);
         var chunk: u64 = @intCast(split.rem);
-        for (0..19) |_| {
-            pos -= 1;
-            buf[pos] = '0' + @as(u8, @intCast(chunk % 10));
-            chunk /= 10;
+        // 19 digits, zeros included: nine pairs, then the leading digit.
+        for (0..9) |_| {
+            pos -= 2;
+            buf[pos..][0..2].* = digitPair(chunk % 100);
+            chunk /= 100;
         }
+        pos -= 1;
+        buf[pos] = '0' + @as(u8, @intCast(chunk));
         v = split.quot;
     }
 
     var low: u64 = @intCast(v);
-    while (true) {
+    while (low >= 100) {
+        pos -= 2;
+        buf[pos..][0..2].* = digitPair(low % 100);
+        low /= 100;
+    }
+    if (low >= 10) {
+        pos -= 2;
+        buf[pos..][0..2].* = digitPair(low);
+    } else {
         pos -= 1;
-        buf[pos] = '0' + @as(u8, @intCast(low % 10));
-        low /= 10;
-        if (low == 0) break;
+        buf[pos] = '0' + @as(u8, @intCast(low));
     }
     return .{ .str = buf[pos..], .start = pos };
 }

@@ -329,3 +329,38 @@ test "integer decimal text matches digit-by-digit formatting across chunk bounda
         i128h.i128_to_str(&buf, std.math.minInt(i128)).str,
     );
 }
+
+test "integer decimal text matches digit-by-digit formatting at every digit count" {
+    var buf: [40]u8 = undefined;
+    var expected: [40]u8 = undefined;
+    var small: u128 = 0;
+    while (small <= 10_000) : (small += 1) {
+        try std.testing.expectEqualStrings(
+            decimalText(&expected, small),
+            i128h.u128_to_str(&buf, small).str,
+        );
+    }
+    // Around each power of ten up to 10^38, where the digit count changes and an odd count ends
+    // in one digit; past u64 these have chunks of zeros.
+    var power: u128 = 10;
+    while (true) {
+        for ([_]u128{ power - 1, power, power + 1 }) |value| {
+            try std.testing.expectEqualStrings(
+                decimalText(&expected, value),
+                i128h.u128_to_str(&buf, value).str,
+            );
+            const negative = -@as(i128, @intCast(value));
+            try std.testing.expectEqualStrings(
+                signedDecimalText(&expected, negative),
+                i128h.i128_to_str(&buf, negative).str,
+            );
+        }
+        power = std.math.mul(u128, power, 10) catch break;
+    }
+    // Two 19-digit chunks above the leading digits, the lower one mostly zeros.
+    const two_chunks = (@as(u128, std.math.maxInt(u64)) + 1) * 10_000_000_000_000_000_000 + 7;
+    try std.testing.expectEqualStrings(
+        decimalText(&expected, two_chunks),
+        i128h.u128_to_str(&buf, two_chunks).str,
+    );
+}
