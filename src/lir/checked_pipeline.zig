@@ -89,6 +89,8 @@ pub fn resolveCheckedAbiLayouts(
 
 /// The export interfaces a `.boxy` module unit compiles its calls against.
 pub const BoxyExportInterfaces = postcheck.Boxy.Lower.ExportInterfaces;
+/// The names the modules of one link give their workers and nominal types.
+pub const BoxyModuleNames = postcheck.Boxy.Types.ModuleNames;
 
 /// Resource failure while lowering checked modules to LIR, plus the one
 /// checked input this entrance rejects outright: see

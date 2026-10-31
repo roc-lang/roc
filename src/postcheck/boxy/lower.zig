@@ -87,6 +87,8 @@ pub const ModuleUnit = struct {
     /// which are lowered at the app's types and belong to no module's own
     /// object (design.md "Host ABI").
     root: bool,
+    /// The name each module of the link gives its workers and nominal types.
+    names: *const types.ModuleNames,
 };
 
 /// The ownership signature and tail-drive summary a unit's ARC solved for
@@ -128,6 +130,12 @@ pub const ExportInterfaces = struct {
     pub fn deinit(self: *ExportInterfaces) void {
         self.map.deinit(self.allocator);
         self.arena.deinit();
+    }
+
+    /// Forget every interface. No unit may be running.
+    pub fn clear(self: *ExportInterfaces) void {
+        self.map.clearRetainingCapacity();
+        _ = self.arena.reset(.retain_capacity);
     }
 
     /// Record `interface` for `identity`, copying its condition rows.
@@ -513,21 +521,22 @@ pub const Program = struct {
     }
 
     /// The content identity of a module's worker (design.md "Per-Module
-    /// Output"): a digest of the declaring module's content identity and
-    /// the worker's checked key, the same in every lowering, so one object's
-    /// reference to another's worker names it by symbol.
+    /// Output"): a digest of the declaring module's link name
+    /// (`types.Modules.linkName`) and the worker's checked key, the same in
+    /// every lowering, so one object's reference to another's worker names it
+    /// by symbol.
     pub fn workerIdentity(self: *Program, key: WorkerKey) LIR.ProcIdentity {
         var hasher = base.TypeDigestHasher.init();
         hasher.update("roc.boxy.worker.v1");
         switch (key) {
             .template => |template| {
                 hasher.update("template");
-                hasher.update(&self.module(template.module).view.module_identity.stable_hash);
+                hasher.update(&self.modules.linkName(template.module));
                 hasher.update(std.mem.asBytes(&@as(u32, @backingInt(template.template))));
             },
             .lambda => |lambda| {
                 hasher.update("lambda");
-                hasher.update(&self.module(lambda.module).view.module_identity.stable_hash);
+                hasher.update(&self.modules.linkName(lambda.module));
                 hasher.update(std.mem.asBytes(&@as(u32, @backingInt(lambda.expr))));
                 hasher.update(&self.worker(lambda.outer).identityBytes(self));
                 hasher.update(&[_]u8{@intFromBool(lambda.captured_scheme)});
@@ -538,12 +547,21 @@ pub const Program = struct {
             },
             .default => |default| {
                 hasher.update("default");
-                hasher.update(&self.module(default.module).view.module_identity.stable_hash);
-                hasher.update(std.mem.asBytes(&@as(u32, @backingInt(default.expr))));
+                hasher.update(&self.modules.linkName(default.module));
+                hasher.update(std.mem.asBytes(&self.defaultOrdinal(default.module, default.expr)));
             },
             .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a worker no module's object exports has no content identity"),
         }
         return .{ .bytes = hasher.finalResult() };
+    }
+
+    /// The position of default expression `expr` among its module's, which
+    /// an edit elsewhere in the module leaves alone.
+    fn defaultOrdinal(self: *const Program, module_index: ModuleIndex, expr: checked.CheckedExprId) u32 {
+        for (self.module(module_index).bodies().default_exprs, 0..) |default, ordinal| {
+            if (default.checked_expr == expr) return @intCast(ordinal);
+        }
+        invariant("a default worker's expression is no default expression of its module");
     }
 
     /// Whether workers of `key`'s kind are the workers a module's object
@@ -2033,7 +2051,10 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     var program: Program = .{
         .allocator = allocator,
         .input = input,
-        .modules = .{ .allocator = allocator },
+        .modules = .{ .allocator = allocator, .link_names = switch (input.unit) {
+            .program => null,
+            .module => |unit| unit.names,
+        } },
         .store = types.Store.init(allocator),
         .layouts = undefined,
         .result = try LirProgram.Result.init(allocator, input.target_usize),
@@ -2327,7 +2348,9 @@ fn seedSourceFiles(program: *Program) Allocator.Error!void {
     for (order, 0..) |*slot, index| slot.* = @intCast(index);
     std.mem.sort(u32, order, program, struct {
         fn lessThan(p: *Program, a: u32, b: u32) bool {
-            return std.mem.order(u8, &p.modules.views.items[a].key.bytes, &p.modules.views.items[b].key.bytes) == .lt;
+            const a_view = &p.modules.views.items[a];
+            const b_view = &p.modules.views.items[b];
+            return std.mem.order(u8, &p.modules.linkName(a_view.index), &p.modules.linkName(b_view.index)) == .lt;
         }
     }.lessThan);
     program.source_files = try program.arena.allocator().alloc(u32, count);
@@ -2339,7 +2362,7 @@ fn seedSourceFiles(program: *Program) Allocator.Error!void {
         files[file_index] = .{
             .name = view.view.module_env.module_name,
             .qualified_name = view.view.module_env.qualifiedModuleName(),
-            .module_identity = view.view.module_identity.stable_hash,
+            .module_identity = program.modules.linkName(view.index),
         };
         program.source_files[module_position] = @intCast(file_index);
         program.lowering_module_ids[module_position] = try program.result.appendLoweringModule(view.key);

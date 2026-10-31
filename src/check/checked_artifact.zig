@@ -287,21 +287,38 @@ fn computeStableModuleIdentityHash(module_env: *const ModuleEnv) [32]u8 {
 
 fn hashCheckingContextIdentity(identity: CheckingContextIdentity) [32]u8 {
     var hasher = base.Sha256.init(.{});
+    hashCheckingContextPolicy(&hasher, identity, true);
+    return hasher.finalResult();
+}
+
+/// The digest of the checking inputs of a module that its imports' and its
+/// app pairing's implementations do not reach: its imports' names, explicit
+/// root requests, validation mode and platform requirement context.
+pub fn checkingContextPolicyHash(identity: CheckingContextIdentity) [32]u8 {
+    var hasher = base.Sha256.init(.{});
+    hashCheckingContextPolicy(&hasher, identity, false);
+    return hasher.finalResult();
+}
+
+fn hashCheckingContextPolicy(hasher: *base.Sha256, identity: CheckingContextIdentity, include_keys: bool) void {
     if (identity.platform_requirement_context) |context| {
         hasher.update(&[_]u8{1});
         hasher.update(&context.bytes);
     } else {
         hasher.update(&[_]u8{0});
     }
-    if (identity.platform_app_relation) |relation| {
-        hasher.update(&[_]u8{1});
-        hasher.update(&relation.bytes);
-    } else {
-        hasher.update(&[_]u8{0});
+    if (include_keys) {
+        if (identity.platform_app_relation) |relation| {
+            hasher.update(&[_]u8{1});
+            hasher.update(&relation.bytes);
+        } else {
+            hasher.update(&[_]u8{0});
+        }
     }
-    hashU32(&hasher, @intCast(identity.imports.len));
+    hashU32(hasher, @intCast(identity.imports.len));
     for (identity.imports) |import_identity| {
         hasher.update(&import_identity.import_name_hash);
+        if (!include_keys) continue;
         if (import_identity.artifact_key) |key| {
             hasher.update(&[_]u8{1});
             hasher.update(&key.bytes);
@@ -309,12 +326,11 @@ fn hashCheckingContextIdentity(identity: CheckingContextIdentity) [32]u8 {
             hasher.update(&[_]u8{0});
         }
     }
-    hashU32(&hasher, @intCast(identity.explicit_roots.len));
+    hashU32(hasher, @intCast(identity.explicit_roots.len));
     for (identity.explicit_roots) |root| {
-        hashExplicitRootRequestInput(&hasher, root);
+        hashExplicitRootRequestInput(hasher, root);
     }
-    hashByteSlice(&hasher, @tagName(identity.validation));
-    return hasher.finalResult();
+    hashByteSlice(hasher, @tagName(identity.validation));
 }
 
 fn hashExplicitRootRequestInput(
@@ -3492,6 +3508,14 @@ pub const CheckedTypeStoreView = struct {
             if (canonicalNominalTypeKeyEql(declaration.nominal, nominal)) return declaration;
         }
         return null;
+    }
+
+    /// The name `declaration` declares.
+    pub fn nominalDeclarationName(self: CheckedTypeStoreView, declaration: CheckedNominalDeclaration) canonical.TypeNameId {
+        return switch (self.payload(declaration.declaration_root)) {
+            .nominal => |nominal| nominal.name,
+            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => base.invariant("a nominal declaration's root is no nominal type", .{}),
+        };
     }
 
     pub fn nominalDeclarationById(
@@ -26179,6 +26203,26 @@ fn publishLiteralConversionRoots(
     }
 }
 
+/// What makes two literal requirements of one literal the same: the type's
+/// key, which names its variables only up to renaming, and the variables
+/// themselves. Instantiating an open type gives a new root every time, even
+/// around a recursive cycle that maps each variable back to itself.
+fn literalRequirementTypeIdentity(
+    store: *const CheckedTypeStore,
+    orderer: *CheckedIdentityOrderer,
+    ty: CheckedTypeId,
+) Allocator.Error![32]u8 {
+    const key = store.view().rootKey(ty);
+    if (!store.rootContainsIdentityVariables(ty)) return key.bytes;
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(&key.bytes);
+    for (try orderer.identityRoots(ty)) |variable| {
+        const origin: u32 = @backingInt(store.identityOrigin(variable));
+        hasher.update(std.mem.asBytes(&origin));
+    }
+    return hasher.finalResult();
+}
+
 /// Publish each scheme's literal requirements, the literal arguments of every
 /// edge, and the `literal_argument` roots this module's instantiations fix
 /// (design.md "Literal Arguments").
@@ -26217,12 +26261,14 @@ fn publishLiteralArgumentRoots(
     // generalized local scope's. A scope inside a defaulted field
     // expression has no template.
     const ScopeKey = struct { template: ?u32, scope: ?u32 };
-    const ObligationKey = struct { site: LiteralSite, ty: CheckedTypeId };
+    const ObligationKey = struct { site: LiteralSite, ty: [32]u8 };
     const ScopeState = struct {
         list: std.ArrayListUnmanaged(LiteralRequirement) = .empty,
         index: std.AutoHashMapUnmanaged(ObligationKey, u32) = .empty,
     };
     var scope_states = std.AutoHashMapUnmanaged(ScopeKey, ScopeState).empty;
+    var identity_orderer = CheckedIdentityOrderer.init(allocator, names, store);
+    defer identity_orderer.deinit();
     defer {
         var it = scope_states.valueIterator();
         while (it.next()) |state| {
@@ -26292,7 +26338,7 @@ fn publishLiteralArgumentRoots(
                 .numeral, .str_from_quote => literal_expr.ty,
                 .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => checkedArtifactInvariant("a literal conversion plan's expression is not a literal", .{}),
             };
-            const slot = try entry.value_ptr.index.getOrPut(allocator, .{ .site = site, .ty = ty });
+            const slot = try entry.value_ptr.index.getOrPut(allocator, .{ .site = site, .ty = try literalRequirementTypeIdentity(store, &identity_orderer, ty) });
             if (slot.found_existing) continue;
             slot.value_ptr.* = @intCast(entry.value_ptr.list.items.len);
             try entry.value_ptr.list.append(allocator, .{ .site = site, .ty = ty, .edge = .literal, .callee_requirement = 0 });
@@ -26799,8 +26845,6 @@ fn publishLiteralArgumentRoots(
     }.get;
     var formals = std.ArrayListUnmanaged(CheckedTypeId).empty;
     defer formals.deinit(allocator);
-    var equality = CheckedTypeStoreView.EqualityScratch.init(allocator);
-    defer equality.deinit();
     while (true) {
         var changed = false;
         for (edges.items, edge_args.items) |edge, *args| {
@@ -26834,7 +26878,7 @@ fn publishLiteralArgumentRoots(
                 const obligation = liveObligations(callee, &scope_states)[j];
                 const projected = if (projector) |p| try p.project(obligation.ty) else obligation.ty;
                 const ty = if (substitution) |*s| try store.cloneCheckedTypeRootSubstituting(allocator, projected, s) else projected;
-                const key: ObligationKey = .{ .site = obligation.site, .ty = ty };
+                const key: ObligationKey = .{ .site = obligation.site, .ty = try literalRequirementTypeIdentity(store, &identity_orderer, ty) };
                 if (!store.rootContainsIdentityVariables(ty)) {
                     const slot = try root_index.getOrPut(allocator, key);
                     if (!slot.found_existing) {
@@ -26863,14 +26907,8 @@ fn publishLiteralArgumentRoots(
                     if (!state.found_existing) state.value_ptr.* = .{};
                     const slot = try state.value_ptr.index.getOrPut(allocator, key);
                     if (!slot.found_existing) {
-                        // Substitution gives an open type a root of its own, so
-                        // a cycle of schemes returns to an equal type under a
-                        // new id: the requirement is the one already listed.
-                        const equal: ?u32 = for (state.value_ptr.list.items, 0..) |existing, index| {
-                            if (existing.site.eql(obligation.site) and try store.view().rootExactEql(&equality, existing.ty, ty)) break @intCast(index);
-                        } else null;
-                        slot.value_ptr.* = equal orelse @intCast(state.value_ptr.list.items.len);
-                        if (equal == null) try state.value_ptr.list.append(allocator, .{ .site = obligation.site, .ty = ty, .edge = edge.key, .callee_requirement = j });
+                        slot.value_ptr.* = @intCast(state.value_ptr.list.items.len);
+                        try state.value_ptr.list.append(allocator, .{ .site = obligation.site, .ty = ty, .edge = edge.key, .callee_requirement = j });
                     }
                     try args.append(allocator, .{ .forwarded = slot.value_ptr.* });
                 }

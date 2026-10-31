@@ -76,6 +76,7 @@ const watch_inputs = @import("watch_inputs.zig");
 const module_discovery = @import("module_discovery.zig");
 
 // Actor model components
+const boxy_interface = @import("boxy_interface.zig");
 const coordinator_mod = @import("coordinator.zig");
 const Coordinator = coordinator_mod.Coordinator;
 const DiscoveredParse = @import("messages.zig").DiscoveredParse;
@@ -2759,6 +2760,14 @@ pub const BuildEnv = struct {
         return .{ .object = known.object.?.object, .hosted_symbols = known.object.?.hosted_symbols, .restored = known.restored, .path = known.path };
     }
 
+    /// Record in `digests` the exports of `artifact`'s object, which this
+    /// compilation's compile-time evaluation built or restored.
+    pub fn boxyAdoptExports(self: *BuildEnv, digests: *boxy_interface.Digests, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!void {
+        const coordinator = self.coordinator orelse return;
+        const objects = &(coordinator.boxy_objects orelse return);
+        try digests.adoptExports(&objects.digests, artifact);
+    }
+
     pub const BoxyKnownObject = struct {
         object: []const u8,
         hosted_symbols: []const []const u8,
@@ -3681,6 +3690,11 @@ pub const BuildEnv = struct {
             try artifacts.append(allocator, artifact);
         }
         return artifacts.toOwnedSlice(allocator);
+    }
+
+    /// The digests of every checked module of this build, its link.
+    pub fn boxyLinkDigests(self: *BuildEnv) Allocator.Error!boxy_interface.Digests {
+        return self.builtCoordinator().boxyLinkDigests();
     }
 
     /// Collect published checked artifacts available to post-check lowering.

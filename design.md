@@ -15117,9 +15117,8 @@ strategy).
   local function's use or construction), recording the type after the edge's
   substitution, the edge, and the callee's literal requirement index. Literal requirements are
   computed to a fixpoint over the module's schemes and deduplicated by
-  literal and type equality (not type root, since substitution gives an open
-  type a root of its own), so a recursive call, or a cycle of calls, that
-  returns to the same types adds nothing.
+  literal, type key, and the type's variables, so a recursive call at the same
+  types adds nothing, however many roots its instantiations produce.
 - Each edge's *literal arguments* (`literalEdgeArgs`): for every literal requirement
   of the instantiated scheme, where the body gets the value from. An
   instantiation at a closed type is a `literal_argument` compile-time root
@@ -15399,10 +15398,51 @@ one strategy is served to the other.
 The per-module Boxy cache is exactly as simple as the checked-module cache,
 and Per-Module Output is the invariant that makes it possible:
 
-- The KEY of a module's lowered output is the module's checked-module cache
-  key (its content identity plus its direct imports' checked keys, which
-  covers every upstream module's source transitively) extended with the
-  compiler version, the opt level, and the target. A key names one file.
+- The KEY of a module's lowered output is what that output is a function of,
+  extended with the compiler version, the opt level, and the target
+  (`compile.boxy_interface`, `Digests.objectInput`): the module's source
+  inputs, its name in the link, the policy of its checking context, the value
+  of every compile-time root it holds, and its direct imports' interfaces. No
+  import's implementation is an input, so an edit that leaves a module's
+  interface alone rebuilds that module's object and no other. A key names one
+  file.
+- A module's INTERFACE is what lowering its importers reads of it. Its checked
+  half (`Digests.interfaceOf`) is its checking interface (names, schemes and
+  their evidence, nominal backings, method bindings; Checking dependencies and
+  inference reuse), what commit derives from bodies for callers (each exported
+  procedure's and method's worker and hidden parameters, including its literal
+  requirements), its field defaults and nominal declarations, and the
+  compile-time values importers restore, by value. Its export half
+  (`Digests.recordExports`) is the ownership signature its object solved for each
+  worker, which is solved from bodies, so an edit that changes one still
+  rebuilds its importers, as it must, and which is known only once that object
+  exists, so a key is computed after its imports' units finish. Each half folds
+  in the same half of the module's imports: lowering reads through an import to
+  the modules behind it. A compile-time value a module computes by running an
+  import's code is one of the module's own root values, so an edit that changes
+  that value rebuilds the module however its interfaces compare.
+- NAMES come from the link, not from content. A worker's symbol and a nominal
+  type's runtime name digest the module's link name (`Types.ModuleNames`), so
+  that one object can name another across an edit to its bodies: a module's
+  name digests its module name and checking interface, which such an edit
+  leaves alone, so a unit needs no other module to name its own and can start
+  while checking continues. Every checked module of the compilation is in the
+  link. Two different modules can share those, as two versions of a package
+  differing only in bodies do, and they stay distinct modules: every module of
+  such a set is named by its content identity instead, which only the finished
+  link can show. When checking completes and shows such a set, the scheduler
+  waits for its running units and starts over under the link's names; the
+  entries already filed stay valid under their own keys. The name is an input
+  of the module's key and of its importers', so a key always names the object
+  its link needs. A whole program links nothing and names modules by content
+  identity. A worker's name is the template's position in its table, which the
+  interface covers for every template an importer can name; a default's is its
+  position among its module's defaults, and a nominal type's is its position
+  among the declarations sharing its name. A lambda's worker is named by its
+  expression, which only a function value stored in a constant reaches across
+  modules, and a stored function value's digest is its module's checked key.
+- The root program's key adds the checked keys of its platform modules, since
+  the root unit lowers their implementations at the app's types.
 - The FILE is deterministically byte-identical for its key: a cold build and
   a warm build, and two machines, write the same bytes. It holds everything
   lowered for the module, through the object's machine code, and the few
@@ -15410,7 +15450,9 @@ and Per-Module Output is the invariant that makes it possible:
   procedure's solved ownership signature and uniqueness data, which
   Per-Module Output makes a function of the module and its imports). There
   is no index, no manifest, no second cache the file refers to, and nothing
-  in it comes from any other cache.
+  in it comes from any other cache. `ROC_VERIFY_BOXY_OBJECT_REUSE` rebuilds
+  every restored object and compares the bytes, so a key that misses an input
+  fails instead of linking a stale object.
 - The TARGET is part of the object file's key because machine code is
   target-specific. If lowered data that is not object code is ever kept (a
   LIR image for the interpreter paths, for instance), it goes in a separate
