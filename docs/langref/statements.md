@@ -362,7 +362,7 @@ The `break` statement immediately exits the innermost `for` or `while` loop. See
 
 ## [`continue`](#continue) {#continue}
 
-⚠️️ `continue` has not been implemented yet. It is intended to skip to the next iteration of a `for` or `while` loop.
+⚠️ `continue` is planned for after 0.1.0 and has not been implemented yet. It is intended to skip to the next iteration of a `for` or `while` loop.
 
 ## [`crash`](#crash) {#crash}
 
