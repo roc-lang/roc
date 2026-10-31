@@ -1666,10 +1666,10 @@ const BoxyObjects = struct {
         defer pending.deinit(gpa);
         var index_by_key = std.AutoHashMapUnmanaged([32]u8, u32).empty;
         defer index_by_key.deinit(gpa);
-        try self.collectPending(&self.coordinator.builtin_modules.checked_artifact, &pending, &index_by_key);
+        _ = try self.collectPending(&self.coordinator.builtin_modules.checked_artifact, &pending, &index_by_key);
         for (module.direct_import_module_keys) |key| {
             const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
-            try self.collectPending(imported, &pending, &index_by_key);
+            _ = try self.collectPending(imported, &pending, &index_by_key);
         }
         if (self.coordinator.checked_program) {
             // The program's link needs the object of every module the root
@@ -1678,7 +1678,7 @@ const BoxyObjects = struct {
             const root = self.coordinator.executableRootCheckedArtifact();
             for (root.lowering_visibility.module_ids) |key| {
                 const artifact = self.coordinator.checkedArtifactByKey(key) orelse continue;
-                try self.collectPending(artifact, &pending, &index_by_key);
+                _ = try self.collectPending(artifact, &pending, &index_by_key);
             }
         }
         if (pending.items.len == 0) return;
@@ -1773,18 +1773,22 @@ const BoxyObjects = struct {
     }
 
     /// Append `artifact` and its imports whose objects are not known yet to
-    /// `pending`, imports first. A module with roots still to evaluate, or
-    /// lowered at its app's types, has no object to build yet.
-    fn collectPending(self: *BoxyObjects, artifact: *const Artifact, pending: *std.ArrayList(*const Artifact), index_by_key: *std.AutoHashMapUnmanaged([32]u8, u32)) Error!void {
+    /// `pending`, imports first. A module lowered at its app's types has no
+    /// object to build. False when `artifact` or an import has roots still to
+    /// evaluate: its values are not final, and no importer's object can be
+    /// built before it, so neither is appended.
+    fn collectPending(self: *BoxyObjects, artifact: *const Artifact, pending: *std.ArrayList(*const Artifact), index_by_key: *std.AutoHashMapUnmanaged([32]u8, u32)) Error!bool {
         const gpa = self.coordinator.gpa;
-        if (self.objects.contains(artifact.key.bytes) or index_by_key.contains(artifact.key.bytes)) return;
-        if (artifact.platform_type_inputs.requirements.len != 0 or artifact.hasUnevaluatedRequests(.boxy) or artifact.hasPendingRoots()) return;
+        if (self.objects.contains(artifact.key.bytes) or index_by_key.contains(artifact.key.bytes)) return true;
+        if (artifact.platform_type_inputs.requirements.len != 0) return true;
+        if (artifact.hasUnevaluatedRequests(.boxy) or artifact.hasPendingRoots()) return false;
         for (artifact.direct_import_module_keys) |key| {
             const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
-            try self.collectPending(imported, pending, index_by_key);
+            if (!try self.collectPending(imported, pending, index_by_key)) return false;
         }
         try index_by_key.put(gpa, artifact.key.bytes, @intCast(pending.items.len));
         try pending.append(gpa, artifact);
+        return true;
     }
 };
 
