@@ -11824,8 +11824,9 @@ position—the `Err` payload and the `Try` argument—at the request's row rathe
 than by rewriting the node.
 
 When the closed row ends in a variable the template QUANTIFIES, and nothing
-else in the template's type reaches that variable—no argument, payload or
-other position—the variable is determined by the result alone
+else in the template's type reaches that variable—no argument, payload,
+other position, or signature of a where-clause constraint on a variable the
+type reaches—the variable is determined by the result alone
 (`requestDeterminedResultRowVariable`). The specialization's substitution
 gives that slot a fresh cell instead of the variable the use site recorded
 (`requestDeterminedSubstitution`), so relating the template's root to the
