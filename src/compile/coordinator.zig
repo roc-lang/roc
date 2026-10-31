@@ -1534,6 +1534,8 @@ const BoxyObjects = struct {
     /// Modules declaring hosted functions, offered while no checked platform
     /// module bound them. They are offered again when one is checked.
     unbound_hosted: std.ArrayList(*const Artifact) = .empty,
+    /// The modules whose import closures are known (`closureKnown`).
+    closures_known: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
     session: post_check_executor.Session,
     first_error: ?Error = null,
     /// Whether `settleNames` ran.
@@ -1595,6 +1597,7 @@ const BoxyObjects = struct {
         self.program_ids.deinit(gpa);
         self.program_completions.deinit(gpa);
         self.unbound_hosted.deinit(gpa);
+        self.closures_known.deinit(gpa);
         self.records.deinit(gpa);
         if (self.owned_interfaces) |*owned| owned.deinit();
         self.digests.deinit();
@@ -1631,7 +1634,7 @@ const BoxyObjects = struct {
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
         try self.offerClosure(module);
         if (self.first_error) |err| return err;
-        const known = self.closureKnown(module);
+        const known = try self.closureKnown(module);
         if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: objects for {s}: {s}, {d} known, {d} units in progress, {d} ready\n", .{ module.moduleEnvConst().module_name, if (known) "ready" else "waiting", self.records.count(), self.units.count(), self.ready.items.len });
         return known;
     }
@@ -1706,13 +1709,17 @@ const BoxyObjects = struct {
 
     /// Whether every module of `module`'s import closure, the compiler's
     /// Builtin module included, has a known object or is known to have none.
-    fn closureKnown(self: *BoxyObjects, module: *const Artifact) bool {
+    /// Objects only become known, so a closure once known stays known until
+    /// the build starts over under the link's names.
+    fn closureKnown(self: *BoxyObjects, module: *const Artifact) Allocator.Error!bool {
+        if (self.closures_known.contains(module.key.bytes)) return true;
         if (!self.records.contains(self.coordinator.builtin_modules.checked_artifact.key.bytes)) return false;
         for (module.direct_import_module_keys) |key| {
             const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
             if (!self.records.contains(imported.key.bytes)) return false;
-            if (!self.closureKnown(imported)) return false;
+            if (!try self.closureKnown(imported)) return false;
         }
+        try self.closures_known.put(self.coordinator.gpa, module.key.bytes, {});
         return true;
     }
 
@@ -1926,6 +1933,7 @@ const BoxyObjects = struct {
         self.waiting.clearRetainingCapacity();
         self.ready.clearRetainingCapacity();
         self.records.clearRetainingCapacity();
+        self.closures_known.clearRetainingCapacity();
         self.interfaces.clear();
     }
 
