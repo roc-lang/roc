@@ -141,6 +141,7 @@ const no_family = std.math.maxInt(u32);
 /// What a piece's `a` and `b` hold, for a stored function naming it.
 pub const PieceOperands = enum { none, types, type_and_name, type_and_word };
 
+/// What a piece of `kind` holds in its `a` and `b`.
 pub fn pieceOperands(kind: PieceKind) PieceOperands {
     return switch (kind) {
         .constructor, .runtime => .none,

@@ -89,6 +89,7 @@ pub fn resolveCheckedAbiLayouts(
 
 /// The export interfaces a `.boxy` module unit compiles its calls against.
 pub const BoxyExportInterfaces = postcheck.Boxy.Lower.ExportInterfaces;
+/// What reading a `.boxy` program's function values takes after lowering.
 pub const BoxyStoredFunctions = postcheck.Boxy.StoredFn.Retained;
 
 /// Resource failure while lowering checked modules to LIR, plus the one

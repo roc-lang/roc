@@ -106,6 +106,7 @@ pub const Retained = struct {
     /// The closed type of each descriptor resolved so far.
     desc_types: std.AutoHashMapUnmanaged(*const TypeDesc, TypeId) = .empty,
 
+    /// Free the retained program and everything read from it.
     pub fn deinit(self: *Retained) void {
         self.workers.deinit(self.allocator);
         self.desc_types.deinit(self.allocator);
