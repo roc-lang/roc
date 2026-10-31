@@ -35,6 +35,8 @@ pub const ModuleView = struct {
     index: ModuleIndex,
     key: checked.ModuleId,
     view: checked.ImportedModuleView,
+    /// What `Modules.linkName` returns.
+    link_name: [32]u8,
 
     pub fn types(self: *const ModuleView) checked.CheckedTypeStoreView {
         return self.view.checked_types;
@@ -49,11 +51,66 @@ pub const ModuleView = struct {
     }
 };
 
+/// The name each module of one link gives its workers and nominal types
+/// (design.md "Caching Under `.boxy`"): what lets a module's object survive an
+/// edit to another module's bodies. A module is named by its module name and
+/// checking interface, which a body edit leaves alone. Modules with different
+/// content can share those, as two versions of a package differing only in
+/// bodies do, and they are distinct modules: this holds them, and each is
+/// named by its content identity.
+pub const ModuleNames = struct {
+    content_named: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
+
+    pub fn deinit(self: *ModuleNames, allocator: Allocator) void {
+        self.content_named.deinit(allocator);
+    }
+
+    pub fn of(self: *const ModuleNames, view: checked.ImportedModuleView) [32]u8 {
+        if (self.content_named.contains(view.key.bytes)) return view.module_identity.stable_hash;
+        return stableName(view);
+    }
+
+    /// The names of `views`, the modules of one link.
+    pub fn fromViews(allocator: Allocator, views: []const checked.ImportedModuleView) Allocator.Error!ModuleNames {
+        var owners: std.AutoHashMapUnmanaged([32]u8, ?[32]u8) = .empty;
+        defer owners.deinit(allocator);
+        for (views) |view| {
+            const entry = try owners.getOrPut(allocator, stableName(view));
+            if (!entry.found_existing) {
+                entry.value_ptr.* = view.module_identity.stable_hash;
+            } else if (entry.value_ptr.*) |owner| {
+                if (!std.mem.eql(u8, &owner, &view.module_identity.stable_hash)) entry.value_ptr.* = null;
+            }
+        }
+        var result: ModuleNames = .{};
+        errdefer result.deinit(allocator);
+        for (views) |view| {
+            if (owners.get(stableName(view)).? == null) try result.content_named.put(allocator, view.key.bytes, {});
+        }
+        return result;
+    }
+
+    /// The name a body edit leaves alone (`fromViews`).
+    pub fn stableName(view: checked.ImportedModuleView) [32]u8 {
+        var hasher = base.Sha256.init(.{});
+        hasher.update("roc.boxy.module_name.v1");
+        hasher.update(view.module_env.module_name);
+        hasher.update(&[_]u8{0});
+        hasher.update(@tagName(view.module_identity.kind));
+        hasher.update(&[_]u8{0});
+        hasher.update(&view.module_env.checking_dependency.digest);
+        return hasher.finalResult();
+    }
+};
+
 /// The checked modules of one lowering, by dense index and by key.
 pub const Modules = struct {
     allocator: Allocator,
     views: std.ArrayList(ModuleView) = .empty,
     by_key: std.AutoHashMapUnmanaged([32]u8, ModuleIndex) = .empty,
+    /// The names of a module unit's link. A whole program links nothing, and
+    /// names each module by its content identity.
+    link_names: ?*const ModuleNames = null,
 
     pub fn deinit(self: *Modules) void {
         self.views.deinit(self.allocator);
@@ -66,12 +123,19 @@ pub const Modules = struct {
         if (entry.found_existing) return entry.value_ptr.*;
         const index: ModuleIndex = @fromBackingInt(@intCast(self.views.items.len));
         entry.value_ptr.* = index;
-        try self.views.append(self.allocator, .{ .index = index, .key = view.key.digest(), .view = view });
+        const link_name = if (self.link_names) |link_names| link_names.of(view) else view.module_identity.stable_hash;
+        try self.views.append(self.allocator, .{ .index = index, .key = view.key.digest(), .view = view, .link_name = link_name });
         return index;
     }
 
     pub fn get(self: *const Modules, index: ModuleIndex) *const ModuleView {
         return &self.views.items[@backingInt(index)];
+    }
+
+    /// The name module `index`'s workers and nominal types are digested
+    /// under, the same in every object of one link.
+    pub fn linkName(self: *const Modules, index: ModuleIndex) [32]u8 {
+        return self.get(index).link_name;
     }
 
     /// The module of this lowering with key `key`, or null when the
@@ -100,15 +164,15 @@ pub fn labelContentId(text: []const u8) boxy_runtime.NameId {
     return boxy_runtime.desc.nameIdFromDigest(hasher.finalResult());
 }
 
-/// The content id of nominal declaration `source_decl` of the module whose
-/// content identity is `module_identity`, named `text`
+/// The content id of the `same_name_ordinal`th nominal declaration named
+/// `text` of the module with link name `module_name`
 /// (`boxy_runtime.nominalId`).
-pub fn nominalContentId(module_identity: [32]u8, source_decl: u32, text: []const u8) boxy_runtime.NameId {
+pub fn nominalContentId(module_name: [32]u8, same_name_ordinal: u32, text: []const u8) boxy_runtime.NameId {
     var hasher = base.Sha256.init(.{});
     hasher.update(boxy_runtime.desc.nominal_name_domain);
-    hasher.update(&module_identity);
+    hasher.update(&module_name);
     var index_bytes: [4]u8 = undefined;
-    std.mem.writeInt(u32, &index_bytes, source_decl, .little);
+    std.mem.writeInt(u32, &index_bytes, same_name_ordinal, .little);
     hasher.update(&index_bytes);
     hasher.update(text);
     return boxy_runtime.desc.nameIdFromDigest(hasher.finalResult());
@@ -367,15 +431,16 @@ pub const Store = struct {
     }
 
     /// The name of nominal declaration `decl`, whose text is `text`:
-    /// `module_identity` is the declaring module's content identity and
-    /// `source_decl` the declaration's index in that module.
-    pub fn internDeclName(self: *Store, decl: NominalDeclKey, module_identity: [32]u8, source_decl: u32, text: []const u8) Allocator.Error!NameId {
+    /// `module_name` is the declaring module's link name and
+    /// `same_name_ordinal` the declaration's position among those it shares
+    /// `text` with.
+    pub fn internDeclName(self: *Store, decl: NominalDeclKey, module_name: [32]u8, same_name_ordinal: u32, text: []const u8) Allocator.Error!NameId {
         if (self.decl_name_ids.get(decl)) |existing| return existing;
         const owned = try self.name_arena.allocator().dupe(u8, text);
         const id: NameId = @fromBackingInt(@intCast(self.name_texts.items.len));
         try self.name_texts.append(self.allocator, owned);
         errdefer _ = self.name_texts.pop();
-        try self.name_content_ids.append(self.allocator, nominalContentId(module_identity, source_decl, text));
+        try self.name_content_ids.append(self.allocator, nominalContentId(module_name, same_name_ordinal, text));
         errdefer _ = self.name_content_ids.pop();
         try self.decl_name_ids.put(self.allocator, decl, id);
         return id;
@@ -1347,11 +1412,18 @@ pub const Converter = struct {
 
     /// The name of nominal declaration `decl`, which is its own name
     /// whatever its text (design.md "Name Identity"): the runtime node's id
-    /// digests the declaring module's content identity and the declaration.
+    /// digests the declaring module's link name and the declaration.
     fn declName(self: Converter, decl: NominalDeclKey, text: []const u8) Allocator.Error!NameId {
         const view = self.modules.get(decl.module);
         const declaration = view.types().nominalDeclarationById(decl.decl);
-        return try self.store.internDeclName(decl, view.view.module_identity.stable_hash, declaration.nominal.source_decl, text);
+        // Declarations sharing a name are told apart by their order, which
+        // the rest of the module's source leaves alone.
+        var ordinal: u32 = 0;
+        const name = view.types().nominalDeclarationName(declaration);
+        for (view.types().nominal_declarations[0..@backingInt(decl.decl)]) |earlier| {
+            if (view.types().nominalDeclarationName(earlier) == name) ordinal += 1;
+        }
+        return try self.store.internDeclName(decl, self.modules.linkName(decl.module), ordinal, text);
     }
 
     /// The variables of an enclosing scope that the backing of `decl` (a

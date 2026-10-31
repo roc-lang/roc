@@ -12,6 +12,7 @@ const eval = @import("eval");
 const roc_target = @import("roc_target");
 const static_data_exports = @import("static_data");
 const object_cache = @import("boxy_object_cache.zig");
+const boxy_interface = @import("boxy_interface.zig");
 const cache_manager_mod = @import("cache_manager.zig");
 
 const Allocator = std.mem.Allocator;
@@ -46,10 +47,14 @@ pub const Built = struct {
     /// The object's encoded `CodeLocations`. Owned by the unit's `gpa`.
     code_locations: []const u8,
     hosted_symbols: []const []const u8,
+    /// The ownership signatures the object exports. Owned by the unit's `gpa`.
+    exports: []const object_cache.ExportRecord,
 
     pub fn deinit(self: Built, gpa: Allocator) void {
         gpa.free(self.object);
         gpa.free(self.code_locations);
+        for (self.exports) |record| gpa.free(record.rc_ret_conditions);
+        gpa.free(self.exports);
         for (self.hosted_symbols) |symbol| gpa.free(symbol);
         gpa.free(self.hosted_symbols);
     }
@@ -58,11 +63,11 @@ pub const Built = struct {
 /// The key of `artifact`'s object. A module declaring hosted functions is
 /// lowered against the platform header's hosted section, which binds them to
 /// their host symbols, so its key covers a digest of that section too.
-/// `root` selects the root program's key, which covers its platform pairing:
-/// the root unit lowers the platform modules at the app's types. A library
-/// module's object is a function of the module and its imports alone, so its
-/// key is its checked key whatever program pairs it.
-pub fn objectKey(gpa: Allocator, artifact: *const Artifact, platform: ?ImportedView, opt: []const u8, inline_expects: bool, target: roc_target.RocTarget, root: bool) Allocator.Error!object_cache.Key {
+/// `paired_platforms` are the checked keys of the root program's platform
+/// modules, whose implementations the root unit lowers at the app's types.
+/// A library module's object is a function of the module and its imports'
+/// interfaces alone, whatever program pairs it.
+pub fn objectKey(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *const Artifact, platform: ?ImportedView, opt: []const u8, inline_expects: bool, target: roc_target.RocTarget, paired_platforms: []const [32]u8) Allocator.Error!object_cache.Key {
     const hosted_bindings: ?[32]u8 = if (platform) |platform_view| blk: {
         const inputs = try gpa.alloc(object_cache.HostedBindingInput, platform_view.hosted_bindings.bindings.len);
         defer gpa.free(inputs);
@@ -73,8 +78,11 @@ pub fn objectKey(gpa: Allocator, artifact: *const Artifact, platform: ?ImportedV
         };
         break :blk object_cache.hostedBindingsDigest(inputs);
     } else null;
+    var input = base.Sha256.init(.{});
+    input.update(&try digests.objectInput(artifact));
+    for (paired_platforms) |*paired| input.update(paired);
     return object_cache.key(.{
-        .checked_key = if (root) artifact.codeGenerationKey().bytes else artifact.key.bytes,
+        .object_input = input.finalResult(),
         .hosted_bindings = hosted_bindings,
         .target = @tagName(target),
         .opt = opt,
@@ -188,17 +196,35 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     if (try restore(gpa, unit.cache_manager, unit.key, unit.interfaces)) |entry| {
         defer object_cache.deinitEntry(gpa, entry);
         if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache hit for {s} key {s}\n", .{ module_name, &std.fmt.bytesToHex(unit.key.bytes[0..8], .lower) });
+        if (dev_diagnostics.isSet(.verify_boxy_object_reuse)) {
+            const fresh = try build(unit, module_name);
+            defer fresh.deinit(gpa);
+            if (!std.mem.eql(u8, fresh.object, entry.object)) {
+                base.invariant("the cached object of module {s} differs from a fresh build of it: its key misses an input", .{module_name});
+            }
+        }
         return .{
             .restored = true,
             .object = try gpa.dupe(u8, entry.object),
             .code_locations = try gpa.dupe(u8, entry.code_locations),
             .hosted_symbols = try dupeSymbols(gpa, entry.hosted_symbols),
+            .exports = try dupeRecords(gpa, entry.exports),
         };
     }
     if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache miss for {s} key {s}\n", .{ module_name, &std.fmt.bytesToHex(unit.key.bytes[0..8], .lower) });
+    const built = try build(unit, module_name);
+    errdefer built.deinit(gpa);
+    var cache_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_cache);
+    defer cache_scope.end();
+    try store(gpa, unit.cache_manager, unit.key, .{ .exports = built.exports, .hosted_symbols = built.hosted_symbols, .code_locations = built.code_locations, .object = built.object });
+    return built;
+}
+
+/// Lower and compile `unit`.
+fn build(unit: Unit, module_name: []const u8) BuildError!Built {
+    const gpa = unit.gpa;
     const trace_clock: ?std.Io = if (dev_diagnostics.isSet(.trace_boxy_work)) (if (unit.config.timing) |timing| timing.std_io else null) else null;
     const build_started_ns: i96 = if (trace_clock) |io| std.Io.Timestamp.now(io, .awake).nanoseconds else 0;
-
     var views: std.ArrayList(ImportedView) = .empty;
     defer views.deinit(gpa);
     try views.appendSlice(gpa, unit.views);
@@ -239,19 +265,30 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     defer written.deinit();
     codegen_scope.end();
 
-    var cache_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_cache);
-    defer cache_scope.end();
     const records = try exportRecords(gpa, &lowered, unit.interfaces);
     defer gpa.free(records);
     var hosted_arena = std.heap.ArenaAllocator.init(gpa);
     defer hosted_arena.deinit();
     const hosted = try hostedSymbols(hosted_arena.allocator(), &lowered.lir_result.store);
-    try store(gpa, unit.cache_manager, unit.key, .{ .exports = records, .hosted_symbols = hosted, .code_locations = written.code_locations, .object = written.object_bytes });
     if (trace_clock) |io| std.debug.print("boxy-work: built {s} in {d} ms\n", .{ module_name, @divTrunc(std.Io.Timestamp.now(io, .awake).nanoseconds - build_started_ns, std.time.ns_per_ms) });
     return .{
         .restored = false,
         .object = try gpa.dupe(u8, written.object_bytes),
         .code_locations = try gpa.dupe(u8, written.code_locations),
         .hosted_symbols = try dupeSymbols(gpa, hosted),
+        .exports = try dupeRecords(gpa, records),
     };
+}
+
+/// Copies of `records`, each and the slice allocated from `gpa`.
+fn dupeRecords(gpa: Allocator, records: []const object_cache.ExportRecord) Allocator.Error![]const object_cache.ExportRecord {
+    const copies = try gpa.dupe(object_cache.ExportRecord, records);
+    errdefer gpa.free(copies);
+    var duped: usize = 0;
+    errdefer for (copies[0..duped]) |copy| gpa.free(copy.rc_ret_conditions);
+    for (records, copies) |record, *copy| {
+        copy.rc_ret_conditions = try gpa.dupe(u32, record.rc_ret_conditions);
+        duped += 1;
+    }
+    return copies;
 }

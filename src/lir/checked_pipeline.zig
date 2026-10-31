@@ -91,6 +91,8 @@ pub fn resolveCheckedAbiLayouts(
 pub const BoxyExportInterfaces = postcheck.Boxy.Lower.ExportInterfaces;
 /// What reading a `.boxy` program's function values takes after lowering.
 pub const BoxyStoredFunctions = postcheck.Boxy.StoredFn.Retained;
+/// The names the modules of one link give their workers and nominal types.
+pub const BoxyModuleNames = postcheck.Boxy.Types.ModuleNames;
 
 /// Resource failure while lowering checked modules to LIR, plus the one
 /// checked input this entrance rejects outright: see

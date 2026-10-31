@@ -1687,6 +1687,8 @@ const RootFilterKey = struct { module: [32]u8, root: checked.ComptimeRootId };
 
 /// The export interfaces a `.boxy` module unit compiles its calls against.
 pub const ExportInterfaces = lir.CheckedPipeline.BoxyExportInterfaces;
+/// The names the modules of one link give their workers and nominal types.
+pub const ModuleNames = lir.CheckedPipeline.BoxyModuleNames;
 
 /// One imported module's object, loaded into the compiler's process.
 pub const BoxyObject = struct {
@@ -1731,6 +1733,7 @@ pub const BoxyObjectSource = struct {
     /// will happen.
     progress: *const fn (context: *anyopaque) FinalizeError!bool,
     interfaces: *ExportInterfaces,
+    names: *const ModuleNames,
     /// The lowering the objects were compiled under, which a program calling
     /// into them shares.
     target: lir.CheckedPipeline.TargetConfig,
@@ -1864,7 +1867,7 @@ fn boxyCompileTimeTarget(options: Options) lir.CheckedPipeline.TargetConfig {
 fn boxyLinkedCompileTimeTarget(source: BoxyObjectSource, options: Options) lir.CheckedPipeline.TargetConfig {
     var target = source.target;
     target.boxy_compile_time = true;
-    target.boxy_unit = .{ .imports = source.interfaces, .root = false };
+    target.boxy_unit = .{ .imports = source.interfaces, .root = false, .names = source.names };
     target.checked_module_state = .checking_finalization;
     target.proc_debug_names = true;
     target.post_check_executor = options.post_check_executor;
@@ -7232,6 +7235,13 @@ const ComptimeFailureSite = struct {
 /// rendered origin stays human-readable: the bare display name, or the
 /// qualified name when the bare name coincides with the finalized module's and
 /// would not identify the declaring module.
+/// Whether source file `file` is `module`'s: an object names its modules'
+/// files as its link names them (`ModuleNames`), a whole program by content.
+fn fileIsModule(file: base.SourceFileEntry, module: *const checked.CheckedModuleArtifact) bool {
+    if (@as(u256, @bitCast(file.module_identity)) == @as(u256, @bitCast(module.module_identity.stable_hash))) return true;
+    return @as(u256, @bitCast(file.module_identity)) == @as(u256, @bitCast(ModuleNames.stableName(checked.importedView(module))));
+}
+
 fn comptimeFailureSiteFrom(
     module: *const checked.CheckedModuleArtifact,
     root_region: base.Region,
@@ -7242,9 +7252,7 @@ fn comptimeFailureSiteFrom(
     const loc = failed_loc orelse return .{ .region = root_region, .foreign = null };
     const file = failed_file orelse return .{ .region = root_region, .foreign = null };
     const env = module.moduleEnvConst();
-    if (@as(u256, @bitCast(file.module_identity)) == @as(u256, @bitCast(module.module_identity.stable_hash))) {
-        return .{ .region = failed_region orelse root_region, .foreign = null };
-    }
+    if (fileIsModule(file, module)) return .{ .region = failed_region orelse root_region, .foreign = null };
     const bare_name_collides = if (env.common.idents.lookup(base.Ident.for_text(file.name))) |display_ident|
         display_ident.eql(env.display_module_name_idx)
     else
