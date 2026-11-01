@@ -1395,7 +1395,7 @@ test "markRegisterOverflow spends wasm's parameter limit in order" {
     const lowered: LoweredCall = .{ .leading_ops = false, .ret = .indirect, .args = &args };
     try std.testing.expectEqual(@as(u32, wasm_max_function_params + 2), wasmCAbiParamCount(lowered));
     markRegisterOverflow(.wasm32, lowered, 1, &overflow);
-    try std.testing.expectEqual(@as(?usize, args.len - 4), std.mem.findScalar(bool, &overflow, true) orelse null);
+    try std.testing.expectEqual(@as(?usize, wasm_max_function_params - 1), std.mem.findScalar(bool, &overflow, true));
 }
 
 test "markRegisterOverflow leaves trailing pointers their registers" {
