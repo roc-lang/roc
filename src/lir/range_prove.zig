@@ -596,9 +596,9 @@ test "range prove folds a threaded Bool join site that wrote the parameter as a 
     try testing.expectEqual(one, chosen.ret.value);
 }
 
-// Lowering shares a value's consumer between a join declared for the result
-// and a path that writes the result and arrives at the consumer directly. A
-// literal written on that path says nothing about the join's own jump.
+// A loop's `break`s share the statement after the loop, so a join declared for
+// one `break`'s value and another `break` that writes the result both enter it.
+// A literal written on that path says nothing about the join's own jump.
 test "range prove keeps a join body's arms when another path arrives at it with a literal" {
     const testing = std.testing;
     var store = LirStore.init(testing.allocator);
@@ -696,8 +696,9 @@ test "range prove keeps a join body's arms when another path arrives at it with 
     try testing.expect(returns_zero);
 }
 
-// Lowering gives a value's consumer to every join declared for that result. A
-// literal one join's only jump writes says nothing about the other join's.
+// A loop's `break`s share the statement after the loop, so the joins declared
+// for two `break`s' values share a body. A literal one join's only jump writes
+// says nothing about the other join's.
 test "range prove keeps a body's arms when two joins share it" {
     const testing = std.testing;
     var store = LirStore.init(testing.allocator);
