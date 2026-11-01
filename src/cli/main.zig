@@ -10817,21 +10817,24 @@ fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
     };
 }
 
-fn devBackendPhaseName(target_arch: std.Target.Cpu.Arch) []const u8 {
-    if (target_arch == .x86_64) return "x64 Backend";
-    if (target_arch == .aarch64) return "arm64 Backend";
-    if (target_arch == .wasm32) return "wasm32 Bytecode Generation";
+fn devBackendPhaseName(target: RocTarget) []const u8 {
+    if (backend.dev.isa.isaOfOrNull(target)) |isa| return switch (isa) {
+        .x86_64 => "x64 Backend",
+        .aarch64 => "arm64 Backend",
+    };
+    if (target.toCpuArch() == .wasm32) return "wasm32 Bytecode Generation";
     base.invariant(
-        "dev code-generation timing invariant violated: unsupported architecture {s}",
-        .{@tagName(target_arch)},
+        "dev code-generation timing invariant violated: unsupported target {s}",
+        .{@tagName(target)},
     );
 }
 
-fn devInstructionGenerationPhaseName(target_arch: std.Target.Cpu.Arch) []const u8 {
-    if (target_arch == .x86_64) return "x64 Instruction Generation";
-    if (target_arch == .aarch64) return "arm64 Instruction Generation";
-    if (target_arch == .wasm32) return "wasm32 Bytecode Generation";
-    return devBackendPhaseName(target_arch);
+fn devInstructionGenerationPhaseName(target: RocTarget) []const u8 {
+    if (backend.dev.isa.isaOfOrNull(target)) |isa| return switch (isa) {
+        .x86_64 => "x64 Instruction Generation",
+        .aarch64 => "arm64 Instruction Generation",
+    };
+    return devBackendPhaseName(target);
 }
 
 fn devBackendBreakdown(timing: backend.ObjectFileCompiler.TimingSnapshot) [8]progress.SubTiming {
@@ -10877,11 +10880,12 @@ test "native artifact counters preserve every measured field" {
 }
 
 test "dev backend timing labels name the backend and emitted instruction format" {
-    try std.testing.expectEqualStrings("x64 Backend", devBackendPhaseName(.x86_64));
-    try std.testing.expectEqualStrings("arm64 Backend", devBackendPhaseName(.aarch64));
+    try std.testing.expectEqualStrings("x64 Backend", devBackendPhaseName(.x64musl));
+    try std.testing.expectEqualStrings("arm64 Backend", devBackendPhaseName(.arm64mac));
     try std.testing.expectEqualStrings("wasm32 Bytecode Generation", devBackendPhaseName(.wasm32));
-    try std.testing.expectEqualStrings("x64 Instruction Generation", devInstructionGenerationPhaseName(.x86_64));
-    try std.testing.expectEqualStrings("arm64 Instruction Generation", devInstructionGenerationPhaseName(.aarch64));
+    try std.testing.expectEqualStrings("x64 Instruction Generation", devInstructionGenerationPhaseName(.x64v1win));
+    try std.testing.expectEqualStrings("arm64 Instruction Generation", devInstructionGenerationPhaseName(.arm64linux));
+    try std.testing.expectEqualStrings("wasm32 Bytecode Generation", devInstructionGenerationPhaseName(.wasm32));
 }
 
 fn noTargetLibcallsForLlvmBuild(target: RocTarget) bool {
@@ -11753,14 +11757,14 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         return error.UnsupportedCrossCompilation;
     }
 
-    if (target_arch != .x86_64 and target_arch != .aarch64 and target_arch != .wasm32) {
+    if (target_arch != .wasm32 and backend.dev.isa.isaOfOrNull(target) == null) {
         try ctx.io.stderr().print(
             "Error: The native object backend does not support the '{s}' architecture.\n",
             .{@tagName(target_arch)},
         );
         return error.UnsupportedTarget;
     }
-    const code_generation_phase_name = devBackendPhaseName(target_arch);
+    const code_generation_phase_name = devBackendPhaseName(target);
 
     const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
     try removeStaleBuildOutput(ctx, final_output_path);
@@ -18835,7 +18839,7 @@ fn compileTimeEvaluationBreakdown(timing: eval.CompileTimeFinalization.TimingSna
         .{ .name = "Shared LIR Passes", .ns = timing.lowering.lir_passes_ns },
         .{ .name = "Shared ARC", .ns = timing.lowering.arc_ns },
         .{ .name = "Static Data", .ns = timing.static_data_ns },
-        .{ .name = devInstructionGenerationPhaseName(backend.dev.LirCodeGenMod.host_lir_codegen_target.toCpuArch()), .ns = timing.code_generation_ns },
+        .{ .name = devInstructionGenerationPhaseName(backend.dev.LirCodeGenMod.host_lir_codegen_target), .ns = timing.code_generation_ns },
         .{ .name = "Execution", .ns = timing.execution_ns },
         .{ .name = "Store Results", .ns = timing.store_results_ns },
     };

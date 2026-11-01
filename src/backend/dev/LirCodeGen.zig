@@ -43,7 +43,7 @@ const CallingConventionMod = @import("CallingConvention.zig");
 const roc_target_mod = @import("roc_target");
 const RocTarget = roc_target_mod.RocTarget;
 const isaOf = @import("isa.zig").isaOf;
-const isaOfOrNull = @import("isa.zig").isaOfOrNull;
+const host_isa = @import("isa.zig").host;
 const CpuLevel = roc_target_mod.CpuLevel;
 
 // Num builtin functions for 128-bit integer operations
@@ -24087,10 +24087,13 @@ pub const host_lir_codegen_target = RocTarget.detectNative();
 /// Whether this compiler build has a fast native dev backend for the target it
 /// is being compiled to run on.
 ///
-/// 32-bit ARM builds intentionally report false for now. The long-term fix is
-/// for dev builds on those targets to route through LLVM rather than trying to
-/// instantiate a nonexistent fast native backend.
-pub const host_lir_codegen_available = isaOfOrNull(host_lir_codegen_target) != null;
+/// Asks `isa.host`, not `host_lir_codegen_target`: `detectNative` maps an
+/// unknown architecture (riscv64, powerpc64le, ...) to an x64 target and
+/// big-endian aarch64 to a little-endian one, neither of which this host can
+/// execute. 32-bit ARM builds intentionally report false for now. The long-term
+/// fix is for dev builds on those targets to route through LLVM rather than
+/// trying to instantiate a nonexistent fast native backend.
+pub const host_lir_codegen_available = host_isa != null;
 
 /// Host LirCodeGen for the target this compiler build runs on.
 pub const HostLirCodeGen = if (host_lir_codegen_available)
