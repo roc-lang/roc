@@ -4319,7 +4319,7 @@ pub const Coordinator = struct {
         // previous entry, whatever the module's own roots.
         try relocations.add(artifact, &previous);
         if (artifact.compile_time_root_identities.rows.len == 0) return;
-        var transplant = try eval.CompileTimeReuse.plan(self.gpa, artifact, &previous, read_inputs);
+        var transplant = try eval.CompileTimeReuse.plan(self.gpa, artifact, &previous, read_inputs, relocations);
         var transplant_owned = true;
         defer if (transplant_owned) transplant.deinit();
 

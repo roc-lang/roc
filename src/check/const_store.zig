@@ -1837,7 +1837,8 @@ pub const ConstStore = struct {
             children.clearRetainingCapacity();
             const copied: ConstValue = switch (value) {
                 .pending => constStoreInvariant("a pending node reached a value copy"),
-                .fn_value, .boxy_fn => constStoreInvariant("a function value reached a value copy"),
+                .fn_value => constStoreInvariant("a Monotype function value reached a value copy"),
+                .boxy_fn => |function| .{ .boxy_fn = .{ .recipe = try self.copyBlob(source, function.recipe), .captures = try mappedNodes(&children, self.allocator, &map, function.captures) } },
                 .zst => .zst,
                 .scalar => |scalar| .{ .scalar = scalar },
                 .str => |str| .{ .str = try self.copyBlob(source, str) },
@@ -1930,6 +1931,40 @@ pub const ConstStore = struct {
         return true;
     }
 
+    /// The modules a stored function's recipe names, by checked key: the
+    /// recipe begins with their table (`postcheck.Boxy.StoredFn`).
+    pub fn recipeModuleKeys(recipe: []const u8) []const [32]u8 {
+        const count = std.mem.readInt(u32, recipe[0..4], .little);
+        return @as([*]const [32]u8, @ptrCast(recipe[4..].ptr))[0..count];
+    }
+
+    /// The bytes of a stored function's recipe after its table of modules.
+    pub fn recipeBody(recipe: []const u8) []const u8 {
+        return recipe[4 + recipeModuleKeys(recipe).len * 32 ..];
+    }
+
+    /// Give the stored function at `node` a recipe naming each module by
+    /// the key `relocations.currentKey` gives for it.
+    pub fn relocateRecipe(self: *ConstStore, node: ConstNodeId, relocations: anytype) Allocator.Error!void {
+        const slot = &self.values.items[@backingInt(node)];
+        const function = switch (slot.*) {
+            .boxy_fn => |function| function,
+            else => constStoreInvariant("a recipe relocation reached a node that is no stored function"),
+        };
+        const recipe = self.blobBytes(function.recipe);
+        const keys = recipeModuleKeys(recipe);
+        var bytes = std.ArrayList(u8).empty;
+        defer bytes.deinit(self.allocator);
+        try bytes.appendSlice(self.allocator, recipe[0..4]);
+        for (keys) |key| {
+            const current = relocations.currentKey(key) orelse constStoreInvariant("a relocated stored function names a module with no current version");
+            try bytes.appendSlice(self.allocator, &current);
+        }
+        try bytes.appendSlice(self.allocator, recipeBody(recipe));
+        const data = try self.addBlobData(bytes.items);
+        slot.boxy_fn.recipe = .{ .data = data, .offset = 0, .len = @intCast(bytes.items.len) };
+    }
+
     /// Whether the value graph at `root` can move into other versions of the
     /// modules it names (design.md "Compile-Time Value Reuse Across Edits").
     pub const Relocatability = enum { relocatable, holds_function, names_version };
@@ -1949,7 +1984,10 @@ pub const ConstStore = struct {
             const value = self.get(node);
             switch (value) {
                 .pending => constStoreInvariant("a pending node reached a relocatability walk"),
-                .fn_value, .boxy_fn => return .holds_function,
+                .fn_value => return .holds_function,
+                .boxy_fn => |function| for (recipeModuleKeys(self.blobBytes(function.recipe))) |key| {
+                    if (relocations.currentKey(key) == null) return .names_version;
+                },
                 .nominal => |nominal| if (!relocations.nominalRelocatable(nominal.named_type)) return .names_version,
                 .zst, .scalar, .str, .crash, .checked_error, .box, .list, .tuple, .record, .tag => {},
             }
@@ -2028,7 +2066,13 @@ pub const ConstStore = struct {
             const right = other.get(pair.right);
             if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
             switch (left) {
-                .pending, .fn_value, .boxy_fn => return false,
+                .pending, .fn_value => return false,
+                .boxy_fn => |function| {
+                    const right_function = right.boxy_fn;
+                    if (!sameBytes(self.blobBytes(function.recipe), other.blobBytes(right_function.recipe))) return false;
+                    if (function.captures.len != right_function.captures.len) return false;
+                    for (function.captures, right_function.captures) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
+                },
                 .zst => {},
                 .scalar => |scalar| if (!std.meta.eql(scalar, right.scalar)) return false,
                 .str => |str| if (!sameBytes(self.blobBytes(str), other.blobBytes(right.str))) return false,
@@ -2125,7 +2169,13 @@ pub const ConstStore = struct {
                     try pending.appendSlice(self.allocator, items);
                 },
                 .boxy_fn => |function| {
-                    hashBytes(hasher, self.blobBytes(function.recipe));
+                    // The recipe names its modules by checked key; the
+                    // identity names them as `context` does.
+                    const recipe = self.blobBytes(function.recipe);
+                    const keys = recipeModuleKeys(recipe);
+                    hasher.update(std.mem.asBytes(&@as(u32, @intCast(keys.len))));
+                    for (keys) |key| hasher.update(&context.moduleDigest(.{ .bytes = key }));
+                    hashBytes(hasher, recipeBody(recipe));
                     hasher.update(std.mem.asBytes(&@as(u32, @intCast(function.captures.len))));
                     try pending.appendSlice(self.allocator, function.captures);
                 },

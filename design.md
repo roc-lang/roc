@@ -3726,9 +3726,11 @@ A completed value may also reuse the checked producer's module-independent
 identity (`test_rows`) when an imported entry changes. This identity includes
 the referenced implementations and dispatch targets, checked type contexts,
 checking policy, and file inputs. Admission requires the value and its stored
-type to hold no function value, erased or generated type or field default, and
-every named type they hold to have an exact current counterpart under the checked
-producer fingerprints above. The copy replaces its declaration module, occurrence
+type to hold no Monotype function value, erased or generated type or field
+default, every named type they hold to have an exact current counterpart under
+the checked producer fingerprints above, and every module a `.boxy` function
+value's recipe names to have a current version (`CompileTimeReuse.Relocations`),
+which the copied recipe then names. The copy replaces its declaration module, occurrence
 module and checked type id together, and updates a stored type's canonical
 identity and declaration location from that producer. This can relocate a nominal
 declaration across a comment edit to its own source as well as imported edits.
@@ -15505,7 +15507,8 @@ and Per-Module Output is the invariant that makes it possible:
   position among its module's defaults, and a nominal type's is its position
   among the declarations sharing its name. A lambda's worker is named by its
   expression, which only a function value stored in a constant reaches across
-  modules, and a stored function value's digest is its module's checked key.
+  modules; a stored function value's recipe names its modules by checked key,
+  and its digest names them by link name.
 - The root program's key adds the code-generation keys of its platform modules,
   including their exact app binding environments: the root unit lowers their
   implementations at the app's types and calls the supplied app workers. The
@@ -15653,7 +15656,11 @@ captured values and dictionaries as nodes of the constant store. Restoring
 the value rebuilds the worker from the recipe and packs the same captures, so
 nothing is inferred about the value and no checked evidence is consulted.
 
-The recipe holds its own table of types rather than ids of stored types. A
+The recipe begins with the table of the modules it names, by checked key, each
+once, which the constant store reads to name a stored function in an identity
+by its modules' link names and to move a reused value to the modules' current
+versions; a module elsewhere in the recipe is an index into that table. The
+recipe then holds its own table of types rather than ids of stored types. A
 generated codec worker's signature is generic, so a recipe type can name
 variables, which no stored type does, and a table keeps a block-local nominal's
 outer arguments, which a stored type leaves to its reader's scope. Workers are
