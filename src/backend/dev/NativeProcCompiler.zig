@@ -82,22 +82,18 @@ pub const Retained = struct {
     /// Final image/object linking consumes carried data separately from code.
     /// The returned slice is caller-owned; its fields borrow this retained owner.
     pub fn dataItems(self: *const Retained, allocator: Allocator) Allocator.Error![]const Excerpt.DataItem {
-        var items: std.ArrayList(Excerpt.DataItem) = .empty;
+        var collector = Excerpt.DataCollector{ .allocator = allocator };
+        defer collector.deinit();
+        for (self.procedures.items) |proc| for (proc.fragment.set.excerpts) |excerpt| try collector.add(excerpt);
+        for (self.helpers.items) |helper| for (helper.fragment.set.excerpts) |excerpt| try collector.add(excerpt);
+        var items = std.ArrayList(Excerpt.DataItem).empty;
         errdefer items.deinit(allocator);
         var names = std.StringHashMap(void).init(allocator);
         defer names.deinit();
-        for (self.procedures.items) |proc| try collectData(allocator, &proc.fragment, &items, &names);
-        for (self.helpers.items) |helper| try collectData(allocator, &helper.fragment, &items, &names);
-        return items.toOwnedSlice(allocator);
-    }
-
-    fn collectData(allocator: Allocator, fragment: *const Excerpt.Fragment, items: *std.ArrayList(Excerpt.DataItem), names: *std.StringHashMap(void)) Allocator.Error!void {
-        for (fragment.set.excerpts) |excerpt| {
-            for (excerpt.data) |item| {
-                const entry = try names.getOrPut(item.name);
-                if (!entry.found_existing) try items.append(allocator, item);
-            }
+        for (collector.items.items) |item| {
+            if (!(try names.getOrPut(item.name)).found_existing) try items.append(allocator, item);
         }
+        return items.toOwnedSlice(allocator);
     }
 
     /// Release all fragment and collection storage.
