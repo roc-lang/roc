@@ -9296,7 +9296,9 @@ constructor. Return-destination reuse metadata is not a tail-position proof.
 
 Boxy lowering keeps generic calls in this form. A dynamic result is written by
 the callee into the caller's result storage, and a call whose result storage
-is the procedure's own result storage returns it directly. No conversion
+is the procedure's own result storage returns it directly. The call's target
+is then the result local, so it gives the procedure no dynamic frame region
+and a self call that only passes its parameters along is a loop. No conversion
 statement ever follows a call, because caller and callee share one
 representation of every type. An erased call is written in the layout the
 callee's function type gives its arguments and result, which both sides
@@ -21078,9 +21080,18 @@ call between functions of different signatures, so the LLVM backend uses the
 same driver scheme there as the WebAssembly backend: a frame-replacing call
 copies its arguments into static storage, records its callee as pending and
 returns, and every ordinary call to a tail-group member is followed by a call
-to the group's driver with the address of the call's result. Both driver
-schemes hand the driver the descriptor address as well when the group's
-members return one.
+to the group's driver with the address of the call's result.
+
+Both driver schemes carry `.boxy` values the way a frame-replacing call does
+everywhere else. The call moves its dynamic arguments into one fresh carry,
+leaves their addresses and the carry in static storage for the driver to pass
+on, and releases its own carry once it has read its arguments, since they may
+live there. A dynamic result is written to the storage the entry call passed,
+so that one address reaches every member of the chain: the LLVM driver already
+has it as the address of the call's result, and the WebAssembly backend's
+frame-replacing call leaves it in the tail area, because that backend's driver
+takes a result by value. When an ordinary call's target is dynamic, the
+address given to the driver is that of the target's bytes.
 
 A procedure with a `tail_group` is never offered to the object cache. A
 program that links a cached entry has no body for it, so it would see the
