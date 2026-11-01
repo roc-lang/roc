@@ -28,6 +28,8 @@ const Ident = base.Ident;
 
 /// Whether the graph checks that reads keep every existing class's root.
 const debug_reads = @import("builtin").mode == .debug;
+/// Debug builds prove every row extension chain finite as they flatten it.
+const check_row_chains_finite = @import("builtin").mode == .debug;
 
 /// A compile-time entry root qualified by the checked module that owns it.
 /// `ComptimeRootId`s are module-local, so a root that travels across template
@@ -7927,14 +7929,18 @@ pub const InstGraph = struct {
                 {
                     Common.invariant("instantiation unified a non-absorbable record with an empty record");
                 }
-                try self.unify(flat.ext, empty);
                 if (flat.fields.len == 0) {
+                    try self.unify(flat.ext, empty);
                     try self.setContent(row, .empty_record);
                     try self.union_(empty, row);
                 } else {
                     // The empty construction adopts the explicit optional or
                     // defaulted slots; its lowering materializes Missing tags
-                    // or defaults from the now-shared record class.
+                    // or defaults from the now-shared record class. That class
+                    // becomes the record, so the record closes at its own tail.
+                    const tail = try self.newNode(.empty_record);
+                    if (self.find(flat.ext) != self.find(empty)) try self.unify(flat.ext, tail);
+                    try self.setContent(row, .{ .record = .{ .fields = flat.fields, .ext = tail } });
                     try self.union_(row, empty);
                 }
             },
@@ -8012,17 +8018,12 @@ pub const InstGraph = struct {
 
         var seen = self.node_set_pool.acquire();
         defer self.node_set_pool.release(&seen);
-        try seen.put(root, {});
+        if (check_row_chains_finite) try seen.put(root, {});
 
         while (true) {
-            if (seen.contains(ext)) {
-                // A cyclic extension chain contributes no further tags—every
-                // tag on the cycle is already collected—but the row remains
-                // extensible, so the chain terminates open.
-                ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
-                break;
+            if (check_row_chains_finite and (try seen.getOrPut(ext)).found_existing) {
+                Common.invariant("instantiation tag row has a cyclic extension chain");
             }
-            try seen.put(ext, {});
             switch (try self.rootContent(ext)) {
                 .tag_union => |tail| {
                     try tags.appendSlice(self.allocator, tail.tags);
@@ -8088,17 +8089,12 @@ pub const InstGraph = struct {
 
         var seen = self.node_set_pool.acquire();
         defer self.node_set_pool.release(&seen);
-        try seen.put(root, {});
+        if (check_row_chains_finite) try seen.put(root, {});
 
         while (true) {
-            if (seen.contains(ext)) {
-                // A cyclic extension chain contributes no further fields—
-                // every field on the cycle is already collected—but the row
-                // remains extensible, so the chain terminates open.
-                ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
-                break;
+            if (check_row_chains_finite and (try seen.getOrPut(ext)).found_existing) {
+                Common.invariant("instantiation record row has a cyclic extension chain");
             }
-            try seen.put(ext, {});
             switch (try self.rootContent(ext)) {
                 .record => |tail| {
                     try fields.appendSlice(row_allocator, tail.fields);
@@ -12417,6 +12413,24 @@ test "construction row relation absorbs only explicit optional or defaulted fiel
     const absorbed_empty = try graph.flattenRecordRow(empty);
     try std.testing.expectEqual(@as(usize, 1), absorbed_empty.fields.len);
     try std.testing.expectEqual(b, absorbed_empty.fields[0].name);
+    try std.testing.expectEqual(InstNode.empty_record, try graph.content(absorbed_empty.ext));
+
+    const open_tail = try graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
+    const open_optional = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &right_only),
+        .ext = open_tail,
+    } });
+    try graph.unifyConstruction(try graph.newNode(.empty_record), open_optional);
+    try std.testing.expectEqual(InstNode.empty_record, try graph.content(open_tail));
+
+    const shared_tail = try graph.newNode(.empty_record);
+    const shared_optional = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &right_only),
+        .ext = shared_tail,
+    } });
+    try graph.unifyConstruction(shared_tail, shared_optional);
+    const absorbed_shared = try graph.flattenRecordRow(shared_optional);
+    try std.testing.expectEqual(InstNode.empty_record, try graph.content(absorbed_shared.ext));
 }
 
 test "independent closed tag-row imports have distinct solver nodes" {
