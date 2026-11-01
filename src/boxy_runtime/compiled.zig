@@ -259,7 +259,8 @@ const AdaptWork = struct { from: *const TypeDesc, to: *const TypeDesc, src: [*]c
 /// `#Missing` slot cannot be. Lists and boxes whose contents change storage
 /// are rebuilt; everything else is copied and retained.
 pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]const u8, ops: *RocOps) void {
-    var stack: walk.Stack(AdaptWork, 16) = .{};
+    var stack: walk.Stack(AdaptWork, 16) = undefined;
+    stack.init();
     defer stack.deinit(ops);
     stack.push(.{ .from = from, .to = to, .src = src, .dst = dst }, ops);
     while (stack.pop()) |work| {
