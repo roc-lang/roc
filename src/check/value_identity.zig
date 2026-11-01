@@ -363,7 +363,15 @@ const State = struct {
             try DependencyGraph.appendPatternBinders(env, env.store.getDef(def_idx).pattern, &binders, &scratch, allocator);
             for (binders.items) |binder| try state.pattern_to_def.put(binder, def_idx);
         }
-        for (env.store.sliceStatements(env.all_statements)) |statement| try state.type_walk.top_level.put(statement, {});
+        // `all_statements` also holds block-local type declarations, and
+        // `type_decls` holds the types nested in a block-local type's
+        // associated block, so only a declaration in both is module-level.
+        var statements = collections.DenseMap(CIR.Statement.Idx, void).init(allocator);
+        defer statements.deinit();
+        for (env.store.sliceStatements(env.all_statements)) |statement| try statements.put(statement, {});
+        for (env.store.sliceStatements(env.type_decls)) |statement| {
+            if (statements.contains(statement)) try state.type_walk.top_level.put(statement, {});
+        }
         state.order = try state.computeOrder();
         return state;
     }
@@ -912,11 +920,17 @@ const State = struct {
         const env = self.inputs.env;
         var owners = collections.DenseMap(CIR.Statement.Idx, Owner).init(self.allocator);
         defer owners.deinit();
-        // Block-local type declarations and a platform's for-clause aliases
-        // are declarations too, outside `type_decls`.
+        // A checked type can name any declaration the module holds, including
+        // one in code that canonicalization or checking replaced with a
+        // runtime error, which no expression reaches. So the explicit
+        // declaration lists are enumerated here, and blocks add ownership.
         var declarations = std.ArrayList(CIR.Statement.Idx).empty;
         defer declarations.deinit(self.allocator);
         try declarations.appendSlice(self.allocator, env.store.sliceStatements(env.type_decls));
+        try declarations.appendSlice(self.allocator, env.store.sliceStatements(env.forward_type_decls));
+        for (env.store.sliceStatements(env.all_statements)) |statement| {
+            if (declaresType(env.store.getStatement(statement))) try declarations.append(self.allocator, statement);
+        }
         for (env.for_clause_aliases.items.items) |alias| try declarations.append(self.allocator, alias.alias_stmt_idx);
         var expressions = self.owners.keyIterator();
         while (expressions.next()) |expr| {
@@ -1594,8 +1608,9 @@ const TypeDigest = struct {
     allocator: Allocator,
     inputs: Inputs,
     visited: collections.DenseMap(CheckedTypeId, u32),
-    /// The module's top-level statements, whose declarations the type world
-    /// covers by source.
+    /// The module's top-level type declarations, which the type world covers
+    /// by source. A declaration in a block depends on its lexical context, so
+    /// it is not one of them.
     top_level: collections.DenseMap(CIR.Statement.Idx, void),
     /// The digest of each top-level declaration's source text, computed the
     /// first time a type names that declaration. A declaration's text can be
