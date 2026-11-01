@@ -1538,6 +1538,10 @@ const BoxyObjects = struct {
     closures_known: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
     session: post_check_executor.Session,
     first_error: ?Error = null,
+    /// Whether a task finished since `progress` last reported, whichever
+    /// call took its completion. A finished task can make a program waiting
+    /// on the evaluation's loop runnable, with nothing left in flight.
+    finished_since_progress: bool = false,
     /// Whether `settleNames` ran.
     names_settled: bool = false,
 
@@ -1984,6 +1988,10 @@ const BoxyObjects = struct {
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
         try self.drain();
         if (self.first_error) |err| return err;
+        if (self.finished_since_progress) {
+            self.finished_since_progress = false;
+            return true;
+        }
         if (self.session.outstanding == 0) return self.runAlone();
         self.coordinator.pumpPostCheckResult();
         try self.drain();
@@ -2063,6 +2071,7 @@ const BoxyObjects = struct {
 
     fn complete(self: *BoxyObjects, completion: post_check_executor.Completion) Error!void {
         const gpa = self.coordinator.gpa;
+        self.finished_since_progress = true;
         if (self.program_ids.remove(completion.id)) {
             try self.program_completions.append(gpa, completion);
             try self.submitReady();
