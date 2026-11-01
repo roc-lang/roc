@@ -15246,7 +15246,23 @@ instantiation (`enterEdge`: its module, its variables bound to the edge's
 types, its dictionaries from the edge's evidence, its literal arguments from
 the edge's literal arguments), follows a forwarded literal requirement into the next
 scheme the same way, and lowers the literal's own conversion plan where it
-ends, unwrapping its `Try` as an in-place conversion does. A body reads a
+ends, unwrapping its `Try` as an in-place conversion does.
+
+A root exists once the literal's own type is closed, which says nothing about
+the other types at its edge: `inner({ w: y }, 0)` with `0 : U64` has a root
+while `y` is a variable of the enclosing scheme. The wrapper has no enclosing
+scope, so such a variable seals, and a requirement over it names a type no
+value of the program has and a dictionary only the unentered scope holds. A
+chain frame therefore composes nothing when it is entered: each dictionary and
+each literal argument is composed at its first read, in the scope holding the
+frame's edge (`Body.frameDictionary`, `frameLiteral`), and an exact procedure
+alias's scopes stay entered under the procedure they reach so that its
+evidence reads through them. A conversion reads the requirements of the
+literal's own closed type, whose evidence names no scope, so a read of an
+unentered scope is a compiler invariant. A frame descriptor is never read: a
+frame's types are its environment.
+
+A body reads a
 literal of its own scheme by calling the argument (`lowerInstanceLiteral`); a
 call passes the callee's literal arguments from the edge's
 (`fillLiteralArgs`): a root's thunk or one of the caller's own arguments. A
@@ -15262,7 +15278,10 @@ types as it derives its dictionaries: a *literal thunk* worker per
 literal requirement (`WorkerKey.literal_thunk`, keyed by the worker, the types its
 scheme takes, and the literal requirement), whose body enters the worker's scopes at
 those types with dictionaries resolved from types
-(`Program.resolveRequirement`) and converts the literal there.
+(`Program.resolveRequirement`) and converts the literal there. Its frames
+compose their dictionaries at the first read too, so a derived codec or map
+requirement of a scope, which no conversion reads, is never resolved from a
+type.
 
 Every evidence parameter is a runtime dictionary, a numeral requirement's
 included: a body converts a literal through its dictionary wherever no
