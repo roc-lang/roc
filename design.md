@@ -18848,12 +18848,17 @@ body that consumes those parameters, and a remainder that enters the shared
 control region. The id is in scope in both body and remainder; the parameters
 are in scope only in the body. A jump names an in-scope id and supplies exactly
 one argument of the declared type for every parameter. The join body and
-remainder both produce the enclosing expression's result type. Lowering gives
-both the same consumer statement, so a value-position join's body, any join
-declared inside its remainder for the same result, and a direct arrival may all
-enter one LIR statement: LIR consumers treat such a statement as a merge of
-every edge into it, not as a body entered only through one join's jumps. These
-forms express shared control only; they do not choose layouts or ownership.
+remainder both produce the enclosing expression's result type. Lowering declares
+one consumer join around both: its parameter is the result and its body is the
+statement that consumes the result, so every path through a value-position join
+arrives by an explicit jump that tag-case fusion can see as a producer. A
+`match`, `if`, initialized-payload switch, or callable dispatch whose continuation
+is that jump delivers through the consumer rather than declaring a join of its
+own. A loop's `break`s all continue at the statement after the loop, so a join
+declared for one `break`'s value and another `break` may enter one LIR
+statement: LIR consumers treat such a statement as a merge of every edge into
+it, not as a body entered only through one join's jumps. These forms express
+shared control only; they do not choose layouts or ownership.
 
 Case-of-case and let-of-case rewrites use these forms to thread branch results
 to one continuation. They never clone that continuation into each branch. Join
