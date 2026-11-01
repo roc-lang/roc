@@ -12313,7 +12313,8 @@ fn customIssue12701SharedPackageCodecCache(
 // its signature. The app's dev build boxes a function of that type and passes
 // it to `Flow.score`, so the same specialization key must name the same
 // procedure there: the build must succeed on the warm cache and the program
-// must print what it prints from an empty cache.
+// must behave as it does from an empty cache, printing the same output and
+// releasing the boxed function it passed to `Flow.score`.
 fn customIssue12747CheckThenBuild(
     io: std.Io,
     allocator: Allocator,
@@ -12343,6 +12344,7 @@ fn customIssue12747CheckThenBuild(
     return runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
         .args = &.{},
         .stdout_exact = "42 0 44\n",
+        .not_contains = &.{.{ .stream = .stderr, .text = "Memory leak detected" }},
     });
 }
 
