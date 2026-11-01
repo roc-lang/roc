@@ -168,13 +168,13 @@ const Owner = union(enum) {
 
     fn retain(self: Owner) void {
         switch (self) {
-            inline else => |owner| owner.retain(),
+            inline .record, .data => |owner| owner.retain(),
         }
     }
 
     fn release(self: Owner) void {
         switch (self) {
-            inline else => |owner| owner.release(),
+            inline .record, .data => |owner| owner.release(),
         }
     }
 };
