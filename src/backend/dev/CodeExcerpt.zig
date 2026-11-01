@@ -168,13 +168,13 @@ const Owner = union(enum) {
 
     fn retain(self: Owner) void {
         switch (self) {
-            inline else => |owner| owner.retain(),
+            inline .record, .data => |owner| owner.retain(),
         }
     }
 
     fn release(self: Owner) void {
         switch (self) {
-            inline else => |owner| owner.release(),
+            inline .record, .data => |owner| owner.release(),
         }
     }
 };
@@ -3089,7 +3089,7 @@ test "excerpt catalog sharing survives copying and renaming without changing its
     try std.testing.checkAllAllocationFailures(deterministic.allocator(), testSharedCatalog, .{});
 }
 
-fn testSharedCatalog(allocator: Allocator) !void {
+fn testSharedCatalog(allocator: Allocator) (ExtractError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const relocations = [_]DataRelocation{
         .{ .offset = 0, .name = "leaf", .addend = 0, .function = false },
         .{ .offset = 8, .name = "code", .addend = 0, .function = true },

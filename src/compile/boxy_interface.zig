@@ -164,7 +164,33 @@ pub const Digests = struct {
             hasher.update(&try self.interfaceOf(imported));
         }
         self.hashImportedExports(&hasher, artifact);
-        return hasher.finalResult();
+        const digest = hasher.finalResult();
+        if (base.dev_diagnostics.isSet(.trace_boxy_work)) try self.traceObjectInput(artifact, digest);
+        return digest;
+    }
+
+    /// Print the digest of each part of `artifact`'s object input, so a
+    /// trace of two builds shows which part an edit changed.
+    fn traceObjectInput(self: *Digests, artifact: *const Artifact, digest: Digest) Allocator.Error!void {
+        var values = Sha256.init(.{});
+        try self.hashStoredValues(&values, artifact, .every_root);
+        var imports = Sha256.init(.{});
+        for (artifact.direct_import_module_keys) |key| {
+            const imported = self.artifacts.get(key.bytes) orelse base.invariant("a module of a link imports a module outside it", .{});
+            imports.update(&try self.interfaceOf(imported));
+        }
+        var exports = Sha256.init(.{});
+        self.hashImportedExports(&exports, artifact);
+        std.debug.print("boxy-work: object input of {s}: {s} source {s} name {s} policy {s} values {s} imports {s} exports {s}\n", .{
+            artifact.moduleEnvConst().module_name,
+            &std.fmt.bytesToHex(digest[0..8], .lower),
+            &std.fmt.bytesToHex(artifact.source_hash[0..8], .lower),
+            &std.fmt.bytesToHex(self.nameOf(artifact.key.bytes)[0..8], .lower),
+            &std.fmt.bytesToHex(CheckedArtifact.checkingContextPolicyHash(artifact.checking_context_identity)[0..8], .lower),
+            &std.fmt.bytesToHex(values.finalResult()[0..8], .lower),
+            &std.fmt.bytesToHex(imports.finalResult()[0..8], .lower),
+            &std.fmt.bytesToHex(exports.finalResult()[0..8], .lower),
+        });
     }
 
     fn hashImportedExports(self: *const Digests, hasher: *Sha256, artifact: *const Artifact) void {

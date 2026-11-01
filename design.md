@@ -3592,16 +3592,16 @@ covers:
   content enters only through these keys, which cover the module's imports
   transitively.
 - The module's type world: the source bytes of every top-level type, alias,
-  where-alias and import statement, and the definition identity of every
-  method the module registers (its `method_defs`, which include receiver
-  extensions of imported types). Static dispatch selects a method of an own
-  type, or an own method of an imported type, only from these, so every
-  dispatch target and every `to_inspect` override a root's evaluation can
-  select is covered by name.
+  where-alias and import statement, and the definition identities of the
+  module's `is_eq`, `to_hash` and `to_inspect` methods, which a structural
+  derivation looks up on a type by name rather than through a dispatch plan.
+  Every other method a root's evaluation can select is a dispatch target of the
+  code that reaches it, which the root's own computation covers.
 - The root's own computation. For a top-level value or callable binding, its
   definition identity. For a hoisted root, its expression's source bytes,
-  the definition identities of the definitions that expression names, its
-  resolved imported references, its hoisted body kind and extraction patterns,
+  the definition identities of the definitions that expression names and of
+  the methods its dispatch sites resolve to, its resolved imported references
+  and dispatch targets, its hoisted body kind and extraction patterns,
   and the checked type graph of every expression it contains, with sharing
   preserved across those types. A lexical binding read additionally names the
   enclosing declaration's full identity; that declaration supplies the binding.
@@ -3622,17 +3622,29 @@ covers:
   reused. Imported, builtin and structural types are named by their checked
   identity and structure.
 
-A definition identity (`value_identity.zig`) is the per-definition analogue
-of a module's content identity: a Merkle digest over the module's
-name-reference graph (`DependencyGraph.collectNameReferences`), computed per
-strongly connected component in dependency order. Each definition contributes
-its source bytes (pattern, annotation and body) and the type digest of its
-generalized scheme, which captures a type that a use elsewhere pinned. A
-component's identity folds its members' contributions and the identities of
-the components they reference; references are by name, which the source
-bytes spell, so the identity is independent of node ids and source positions.
-Whitespace inside a definition is part of its source bytes and changes its
-identity; that is a missed reuse, never a wrong one.
+A definition identity (`value_identity.zig`) is the per-definition analogue of
+a module's content identity: a Merkle digest over the module's dependency
+graph, computed per strongly connected component in dependency order. The
+graph's nodes are the module's definitions and method bindings; its edges are
+the definitions a body names (`DependencyGraph.collectNameReferences`) and the
+methods the body's checked plans resolve to (`StaticDispatchPlanTable`): the
+target of each dispatch site and of each literal's conversion, the evidence
+each call's instantiation edge records for its callee's requirements, and every
+nested obligation those targets' instantiations resolve. A site dispatching on
+a scheme variable takes its target from the evidence of the instantiating call,
+whose plan resolves it. An edge whose nested obligations are derived from the
+concrete callable at lowering covers every method binding of the module and, in
+a module-independent identity, the version of each direct import. Each
+definition contributes its source bytes (pattern, annotation and body) and the
+type digest of its generalized scheme, which captures a type that a use
+elsewhere pinned. A component's identity folds its members' contributions and
+the identities of the components they reference; references are by name, which
+the source bytes spell, or by the checked resolution of a dispatch site, so the
+identity is independent of node ids and source positions. Whitespace inside a
+definition is part of its source bytes and changes its identity; that is a
+missed reuse, never a wrong one. A module-independent identity names an
+imported dispatch target by the identity its module published for the target's
+definition.
 
 A stored nominal value may retain a checked type occurrence in the module that
 stored it even when a different, unchanged module declares its nominal type.
@@ -3688,13 +3700,20 @@ covers that type's declaration and methods through the type world. A stored
 constant's type names every nominal it mentions, so a constant whose type
 mentions one of the module's own types is not portable.
 
-A completed value with no module-version references may also reuse the checked
-producer's checked dependency identity (`test_rows`) when an imported entry
-changes. This identity includes the referenced implementations, checked type
-contexts, checking policy, and file inputs. Admission requires both the value
-and its stored type to contain no named type, field default, callable or other
-module-version reference, and every recorded root read to retain its
-producer-authored value identity.
+A completed value may also reuse the checked producer's module-independent
+identity (`test_rows`) when an imported entry changes. This identity includes
+the referenced implementations and dispatch targets, checked type contexts,
+checking policy, and file inputs. Admission requires the value and its stored
+type to hold no function value, erased or generated type or field default, and
+every named type they hold to name module versions the compilation can bind to
+the current ones (`CompileTimeReuse.Relocations`): a module the compilation
+re-checked from an unchanged source succeeds its previous entry, which the
+coordinator records before planning that module's reuse, imports first, so a
+stored named type's `module` moves to the successor and its occurrence moves
+through the successor's type roots by canonical key; every other module of the
+compilation is named as it is; a module whose source changed has no successor,
+so a value naming a type it declares stays with its version. Every recorded
+root read must also retain its producer-authored value identity.
 When committing a checked module, the coordinator records each read's source
 placement, source root site and producer-authored value identity beside its exact
 module key and root id. Reuse resolves these placements and sites in the current
