@@ -384,7 +384,7 @@ pub const Store = struct {
         }
     };
 
-    fn acquireRetained(self: *const Store, owner: *base.retained_cache.Owner, batch: *compile.artifacts.RetentionBatch, key: [64]u8, kind: base.retained_cache.Kind) (Allocator.Error || error{ Unavailable, Corrupt })!*const base.retained_cache.Record {
+    fn acquireRetained(self: *const Store, owner: *base.retained_cache.Owner, batch: *compile.artifacts.Session, key: [64]u8, kind: base.retained_cache.Kind) (Allocator.Error || error{ Unavailable, Corrupt })!*const base.retained_cache.Record {
         const acquired = (batch.acquireKey(key, self.read_timestamp) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return error.Unavailable,
@@ -1185,7 +1185,7 @@ pub const LoadedPacks = struct {
     negative: std.AutoHashMapUnmanaged(MissKey, void) = .empty,
 
     record_owner: ?*base.retained_cache.Owner = null,
-    retention_batches: std.StringHashMapUnmanaged(*compile.artifacts.RetentionBatch) = .empty,
+    store_sessions: std.StringHashMapUnmanaged(*compile.artifacts.Session) = .empty,
     record_domain: [32]u8 = @splat(0),
     payloads: std.AutoHashMapUnmanaged([32]u8, *const base.retained_cache.Record) = .empty,
     retained_offers: std.AutoHashMapUnmanaged([32]u8, *const base.retained_cache.Record) = .empty,
@@ -1262,21 +1262,21 @@ pub const LoadedPacks = struct {
         return owner;
     }
 
-    fn retentionBatch(self: *LoadedPacks, store: *const Store) Allocator.Error!*compile.artifacts.RetentionBatch {
-        if (self.retention_batches.get(store.native.root)) |batch| return batch;
+    fn storeSession(self: *LoadedPacks, store: *const Store) Allocator.Error!*compile.artifacts.Session {
+        if (self.store_sessions.get(store.native.root)) |batch| return batch;
         const owner = try self.recordOwner(store.roc_ctx.std_io);
-        const batch = try store.allocator.create(compile.artifacts.RetentionBatch);
+        const batch = try store.allocator.create(compile.artifacts.Session);
         errdefer store.allocator.destroy(batch);
-        batch.* = try compile.artifacts.RetentionBatch.init(&store.native);
+        batch.* = try compile.artifacts.Session.init(&store.native);
         errdefer batch.deinit();
-        try self.retention_batches.ensureUnusedCapacity(self.allocator, 1);
-        try owner.adopt(.{ .context = batch, .deinit = releaseRetentionBatch });
-        self.retention_batches.putAssumeCapacity(batch.store.root, batch);
+        try self.store_sessions.ensureUnusedCapacity(self.allocator, 1);
+        try owner.adopt(.{ .context = batch, .deinit = releaseStoreSession });
+        self.store_sessions.putAssumeCapacity(batch.store.root, batch);
         return batch;
     }
 
-    fn releaseRetentionBatch(context: *anyopaque) void {
-        const batch: *compile.artifacts.RetentionBatch = @ptrCast(@alignCast(context));
+    fn releaseStoreSession(context: *anyopaque) void {
+        const batch: *compile.artifacts.Session = @ptrCast(@alignCast(context));
         const allocator = batch.store.allocator;
         batch.deinit();
         allocator.destroy(batch);
@@ -1343,7 +1343,7 @@ pub const LoadedPacks = struct {
     fn loadOfferAdvertisement(self: *LoadedPacks, root: *IndexRoot) Allocator.Error!bool {
         const store = root.store;
         const owner = try self.recordOwner(store.roc_ctx.std_io);
-        const record = store.acquireRetained(owner, try self.retentionBatch(store), store.offerDomainIdentity(root.origin).indexedKey(), .native_offer_domain_v1) catch |err| switch (err) {
+        const record = store.acquireRetained(owner, try self.storeSession(store), store.offerDomainIdentity(root.origin).indexedKey(), .native_offer_domain_v1) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.Unavailable, error.Corrupt => return false,
         };
@@ -1403,7 +1403,7 @@ pub const LoadedPacks = struct {
         if (self.metadata.get(hash)) |existing| return existing;
         self.index_stats.metadata_opens += 1;
         const owner = try self.recordOwner(store.roc_ctx.std_io);
-        const record = store.acquireRetained(owner, try self.retentionBatch(store), store.indexedIdentity(.local, @splat(0), hash, .metadata).indexedKey(), .native_component_v1) catch |err| switch (err) {
+        const record = store.acquireRetained(owner, try self.storeSession(store), store.indexedIdentity(.local, @splat(0), hash, .metadata).indexedKey(), .native_component_v1) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.Corrupt => {
                 self.index_stats.corrupt += 1;
@@ -1469,7 +1469,7 @@ pub const LoadedPacks = struct {
         const keys = try allocator.alloc([64]u8, hashes.len);
         defer allocator.free(keys);
         for (hashes, keys) |hash, *key| key.* = store.indexedIdentity(.local, @splat(0), hash, kind).indexedKey();
-        const batch = try self.retentionBatch(store);
+        const batch = try self.storeSession(store);
         const acquired = batch.acquireKeys(allocator, keys, store.read_timestamp) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return null,
@@ -1730,7 +1730,7 @@ pub const LoadedPacks = struct {
             if (!root.advertised.?) continue;
             self.index_stats.bucket_opens += 1;
             const group = root.store.indexedIdentity(root.origin, key, @splat(0), .offer);
-            const keys = (try self.retentionBatch(root.store)).groupKeys(allocator, group) catch |err| switch (err) {
+            const keys = (try self.storeSession(root.store)).groupKeys(allocator, group) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => {
                     cacheable = false;
@@ -1742,7 +1742,7 @@ pub const LoadedPacks = struct {
             profile.enter(.offers);
             for (keys) |catalog_key| {
                 const owner = try self.recordOwner(root.store.roc_ctx.std_io);
-                const record = root.store.acquireRetained(owner, try self.retentionBatch(root.store), catalog_key, .native_offer_v3) catch |err| switch (err) {
+                const record = root.store.acquireRetained(owner, try self.storeSession(root.store), catalog_key, .native_offer_v3) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
                     error.Corrupt => {
                         self.index_stats.corrupt += 1;
@@ -1849,7 +1849,7 @@ pub const LoadedPacks = struct {
         if (self.payloads.get(hash)) |record| return record;
         self.index_stats.payload_opens += 1;
         const owner = try self.recordOwner(store.roc_ctx.std_io);
-        const record = store.acquireRetained(owner, try self.retentionBatch(store), store.indexedIdentity(.local, @splat(0), hash, .payload).indexedKey(), .native_payload_v1) catch |err| switch (err) {
+        const record = store.acquireRetained(owner, try self.storeSession(store), store.indexedIdentity(.local, @splat(0), hash, .payload).indexedKey(), .native_payload_v1) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.Corrupt => {
                 self.index_stats.corrupt += 1;
@@ -2317,7 +2317,7 @@ pub const LoadedPacks = struct {
         self.index_dirs.deinit(self.allocator);
         self.payloads.deinit(self.allocator);
         self.retained_offers.deinit(self.allocator);
-        self.retention_batches.deinit(self.allocator);
+        self.store_sessions.deinit(self.allocator);
         defer if (self.record_owner) |owner| owner.release();
         var settlements = self.discovery.valueIterator();
         while (settlements.next()) |list| list.deinit(self.allocator);

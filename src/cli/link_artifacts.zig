@@ -47,6 +47,8 @@ pub const Objects = struct {
     arena: Allocator,
     /// Same compiler/format/target/optimization namespace as program records.
     root: ?Cache,
+    /// The store session the link's lookups and publications go through.
+    session: ?artifacts.Session,
 
     scratch: []const u8,
     lease: std.Io.File,
@@ -60,10 +62,13 @@ pub const Objects = struct {
     pub fn init(core: CoreCtx, arena: Allocator, root: ?Cache, scratch: []const u8) InitError!Objects {
         const lock_path = try std.fs.path.join(arena, &.{ scratch, "link.lock" });
         const lease = try std.Io.Dir.cwd().createFile(core.std_io, lock_path, .{ .read = true, .exclusive = true, .lock = .exclusive });
-        return .{ .core = core, .arena = arena, .root = root, .scratch = scratch, .lease = lease };
+        errdefer lease.close(core.std_io);
+        const session: ?artifacts.Session = if (root) |cache| try artifacts.Session.init(&cache.store) else null;
+        return .{ .core = core, .arena = arena, .root = root, .session = session, .scratch = scratch, .lease = lease };
     }
 
     pub fn deinit(self: *Objects) void {
+        if (self.session) |*session| session.deinit();
         self.lease.close(self.core.std_io);
     }
 
@@ -73,7 +78,8 @@ pub const Objects = struct {
 
     fn cachePath(self: *Objects, id: Identity) Allocator.Error!?[]const u8 {
         const cache = self.root orelse return null;
-        var artifact = (cache.store.acquire(cache.key(id), cache.store.now()) catch |err| switch (err) {
+        const session = &self.session.?;
+        var artifact = (session.acquire(cache.key(id), session.now()) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return null,
         }) orelse return null;
@@ -89,7 +95,8 @@ pub const Objects = struct {
 
     fn findKnown(self: *Objects, id: Identity, expected: ?[]const u8) Allocator.Error!?[]const u8 {
         const cache = self.root orelse return null;
-        var artifact = (cache.store.acquire(cache.key(id), cache.store.now()) catch |err| switch (err) {
+        const session = &self.session.?;
+        var artifact = (session.acquire(cache.key(id), session.now()) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return null,
         }) orelse return null;
@@ -154,7 +161,8 @@ pub const Objects = struct {
         try backend.writeFileWindowsAvSafe(self.core.std_io, path, bytes);
         self.counters.written += bytes.len;
         if (self.root) |cache| {
-            var staging = cache.store.reserve(cache.key(id), bytes.len, cache.store.now()) catch |err| switch (err) {
+            const session = &self.session.?;
+            var staging = session.reserve(cache.key(id), bytes.len, session.now()) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => return path,
             };

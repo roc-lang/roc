@@ -8251,6 +8251,7 @@ fn compileAppWithCheckedModuleCache(
         .enabled = true,
         .cache_dir = cache_dir,
     }, roc_ctx);
+    defer cache_manager.deinit();
 
     const builtin_modules = try sharedBuiltinModules();
 
@@ -8373,6 +8374,7 @@ fn compileAppFactsWithWorkers(
         .enabled = cache_dir != null,
         .cache_dir = cache_dir orelse "",
     }, roc_ctx);
+    defer cache_manager.deinit();
 
     const builtin_modules = try sharedBuiltinModules();
 
@@ -8606,6 +8608,7 @@ fn compileAppRootIdentityExpecting(
         .enabled = true,
         .cache_dir = cache_dir,
     }, roc_ctx);
+    defer cache_manager.deinit();
 
     const builtin_modules = try sharedBuiltinModules();
 
@@ -9241,6 +9244,7 @@ fn compileForReuseWithStrategy(allocator: Allocator, cache_dir: []const u8, app_
     roc_ctx.ctx = &stderr_capture;
     roc_ctx.vtable.writeStderr = StderrCapture.write;
     var cache_manager = CacheManager.init(allocator, .{ .enabled = true, .cache_dir = cache_dir }, roc_ctx);
+    defer cache_manager.deinit();
     var coord = try Coordinator.init(
         allocator,
         .single_threaded,
@@ -11062,6 +11066,7 @@ test "hosted distinctness: identical hosted declarations bound to different plat
         .enabled = true,
         .cache_dir = cache_dir,
     }, roc_ctx);
+    defer cache_manager.deinit();
 
     const builtin_modules = try sharedBuiltinModules();
 
@@ -12486,6 +12491,7 @@ fn expectModulesQualifiedByOwningPackage(
         .enabled = true,
         .cache_dir = cache_dir,
     }, roc_ctx);
+    defer cache_manager.deinit();
 
     var coord = try Coordinator.init(
         allocator,
@@ -14121,6 +14127,7 @@ test "successful compile-time dbg replays from warm checked cache without evalua
         ctx.ctx = capture;
         ctx.vtable.writeStderr = Capture.write;
         var cache_manager = CacheManager.init(allocator, .{ .enabled = true, .cache_dir = cache_dir }, ctx);
+        defer cache_manager.deinit();
         var coord = try Coordinator.init(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), builtin_modules, build_options.compiler_compatibility_id, &cache_manager, ctx);
         defer coord.deinit();
         coord.enable_hosted_transform = true;
@@ -14215,6 +14222,7 @@ test "app discovery rejects a repeated package shorthand before registering pack
     const app_path = try tmp.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
     defer gpa.free(app_path);
     var cache_manager = CacheManager.init(gpa, .{ .enabled = false }, ctx);
+    defer cache_manager.deinit();
     var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), builtin_modules, build_options.compiler_compatibility_id, &cache_manager, ctx);
     defer coord.deinit();
     var arena = base.SingleThreadArena.init(gpa);
@@ -14243,6 +14251,7 @@ test "app discovery retains tokenizer rejection reports before platform resoluti
         const app_path = try tmp.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
         defer gpa.free(app_path);
         var cache_manager = CacheManager.init(gpa, .{ .enabled = false }, ctx);
+        defer cache_manager.deinit();
         var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), builtin_modules, build_options.compiler_compatibility_id, &cache_manager, ctx);
         defer coord.deinit();
         var arena = base.SingleThreadArena.init(gpa);
@@ -14396,6 +14405,7 @@ test "semantic test discovery survives edits and never hides invalid literals or
             context.ctx = &capture;
             context.vtable.writeStderr = StderrCapture.write;
             var manager = CacheManager.init(gpa, .{ .enabled = true, .cache_dir = directory }, context);
+            defer manager.deinit();
             var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, context);
             defer coord.deinit();
             coord.enable_hosted_transform = true;
@@ -14475,6 +14485,7 @@ test "initializer validation certificates defer values without losing errors obs
             context.ctx = &capture;
             context.vtable.writeStderr = StderrCapture.write;
             var manager = CacheManager.init(gpa, .{ .enabled = true, .cache_dir = directory }, context);
+            defer manager.deinit();
             var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, context);
             defer coord.deinit();
             coord.enable_hosted_transform = true;

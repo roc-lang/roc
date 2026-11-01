@@ -2655,6 +2655,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         .roc_ctx = ctx.coreCtx(),
     };
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
+    defer cache_manager.deinit();
 
     // The linked executable is post-check work, so the executable cache is
     // read and written only under a strategy that caches it.
@@ -3486,6 +3487,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
         .roc_ctx = ctx.coreCtx(),
     };
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
+    defer cache_manager.deinit();
     // The linked executable is post-check work, so the executable cache is
     // read and written only under a strategy that caches it.
     const caches_executable = cachesPostCheckWork(currentRuntimeSpecializationStrategy(args.specialization_strategy));
@@ -13028,6 +13030,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         .roc_ctx = ctx.coreCtx(),
     };
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
+    defer cache_manager.deinit();
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
     // The shim library this build links is post-check work, so it is
