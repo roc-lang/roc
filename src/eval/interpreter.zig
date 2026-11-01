@@ -1515,33 +1515,11 @@ pub const Interpreter = struct {
         var stack_first_buffer: [512]u8 align(@alignOf(usize)) = undefined;
         var stack_first = std.heap.BufferFirstAllocator.init(&stack_first_buffer, self.allocator);
         const offsets_allocator = stack_first.allocator();
-        // Arguments are packed in decreasing alignment order, ties in
-        // argument order.
-        const sorted_indices = try offsets_allocator.alloc(usize, arg_count);
-        defer offsets_allocator.free(sorted_indices);
-        for (sorted_indices, 0..) |*index, i| index.* = i;
-        const AlignmentOrder = struct {
-            interpreter: *const LirInterpreter,
-            layouts: []const layout_mod.Idx,
-
-            fn lessThan(order: @This(), a: usize, b: usize) bool {
-                const a_align = order.interpreter.helper.sizeAlignOf(order.layouts[a]).alignment.toByteUnits();
-                const b_align = order.interpreter.helper.sizeAlignOf(order.layouts[b]).alignment.toByteUnits();
-                return a_align > b_align;
-            }
-        };
-        std.sort.insertion(usize, sorted_indices, AlignmentOrder{ .interpreter = self, .layouts = arg_layouts }, AlignmentOrder.lessThan);
-
-        const arg_offsets = try offsets_allocator.alloc(usize, arg_count);
+        // The buffer is laid out by the code that wrote it (the LLVM backend's
+        // entrypoint wrapper), so read it at that same layout.
+        const arg_offsets = try offsets_allocator.alloc(u32, arg_count);
         defer offsets_allocator.free(arg_offsets);
-        var byte_offset: usize = 0;
-        for (sorted_indices) |orig_idx| {
-            const sa = self.helper.sizeAlignOf(arg_layouts[orig_idx]);
-            const byte_align = sa.alignment.toByteUnits();
-            byte_offset = std.mem.alignForward(usize, byte_offset, byte_align);
-            arg_offsets[orig_idx] = byte_offset;
-            byte_offset += sa.size;
-        }
+        layout_mod.entrypoint_args.computeOffsets(self.helper.store, arg_layouts, arg_offsets);
 
         for (0..arg_count) |i| {
             const sa = self.helper.sizeAlignOf(arg_layouts[i]);

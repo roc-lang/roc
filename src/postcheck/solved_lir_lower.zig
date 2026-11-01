@@ -13,6 +13,7 @@ const can = @import("can");
 const check = @import("check");
 const collections = @import("collections");
 const layout = @import("layout");
+const host_boundary = layout.host_boundary_digest;
 const Common = @import("common.zig");
 const value_rules = @import("value_rules");
 const AnyAll = collections.AnyAll;
@@ -185,6 +186,8 @@ pub const Options = struct {
     /// (`CheckedPipeline.TargetConfig.site_code_keys`); required whenever
     /// `spec_cache` is set.
     site_code_keys: bool = false,
+    /// Explicit dev ownership policy, independent of cache availability.
+    owned_proc_signatures: bool = false,
     inline_plan: SolvedInline.Plan = .{},
     /// Lower every keyed specialization's procedure body, even one whose every
     /// call was inlined, so a pack program can offer it.
@@ -205,6 +208,8 @@ pub const Options = struct {
     dict_seed_mode: DictSeedMode = .runtime,
     /// Preserve source-level procedure names in LIR for runtime diagnostics.
     proc_debug_names: bool = false,
+    /// Record each platform entrypoint's host boundary digest.
+    host_boundary_digests: bool = false,
     /// Build ConstStore materialization plans for requested layouts.
     /// Static-data exports require this; layout-only consumers such as glue do not.
     layout_request_const_plans: bool = true,
@@ -905,9 +910,11 @@ const Lowerer = struct {
     completed_scalar_values: ?*const ComptimeScalarValues.CompletedScalarValues,
     completed_erased_members: ?*const CompletedErasedMembers,
     proc_debug_names: bool,
+    host_boundary_digests: bool,
     spec_cache: ?Common.SpecCacheLookup,
     spec_cache_takes: Common.SpecCacheTakes,
     site_code_keys: bool,
+    owned_proc_signatures: bool,
     /// The module identities of this program's source files, which the
     /// object cache serves entries for (`Common.ProgramModules`).
     program_modules: Common.ProgramModules = &.{},
@@ -1279,9 +1286,11 @@ const Lowerer = struct {
             .completed_scalar_values = options.completed_scalar_values,
             .completed_erased_members = options.completed_erased_members,
             .proc_debug_names = options.proc_debug_names,
+            .host_boundary_digests = options.host_boundary_digests,
             .spec_cache = options.spec_cache,
             .spec_cache_takes = options.spec_cache_takes,
             .site_code_keys = options.site_code_keys,
+            .owned_proc_signatures = options.owned_proc_signatures,
             .root_manifest = options.root_manifest,
             .fn_queue_index = 0,
             .initializer_queue_index = 0,
@@ -1500,7 +1509,8 @@ const Lowerer = struct {
         self.result.deinit();
     }
 
-    /// Mark every procedure with a code key that code without one can call
+    /// The explicit owned-ABI policy pins every procedure. Otherwise, mark
+    /// every procedure with a code key that code without one can call
     /// (`LIR.LirProcSpec.stable_signature`): a member of a lambda set in the
     /// signature of a procedure without a code key, or an app function such
     /// a procedure's code reaches (`Lifted.Program.appCalleesReachedBy`).
@@ -1510,6 +1520,13 @@ const Lowerer = struct {
     /// from a pack, so every program marks the same procedures. Every
     /// specialization of a marked source function is marked.
     fn markStableSignatures(self: *Lowerer) Common.LowerError!void {
+        if (self.owned_proc_signatures) {
+            for (self.fn_entries.items) |entry| {
+                const proc = entry.proc orelse continue;
+                self.result.store.getProcSpecPtr(proc).stable_signature = true;
+            }
+            return;
+        }
         // Without code keys no procedure is stable.
         if (!self.site_code_keys) return;
         const stable_sources = try self.allocator.alloc(bool, self.solved.lifted.fnCount());
@@ -3333,9 +3350,14 @@ const Lowerer = struct {
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
             .hosted = try self.hostedProcForSource(source_fn.source),
             .external = cached != null,
+            .may_leave_pending = if (cached) |hit| hit.may_leave_pending else false,
             .cache_key = cached_key,
             .code_key = code_key,
             .source_monotype_fn = if (source_fn.source) |template| if (template.frozen_fn) |mono_fn| @backingInt(mono_fn) else null else null,
+            .cache_provider_module = if (keyed_offer) if (source_fn.source) |template| switch (template.fn_def) {
+                .local_template, .imported_template, .checked_generated => |owner| owner.artifact.bytes,
+                .nested, .local_hosted, .imported_hosted, .parser_runtime, .encoder_for_runtime => null,
+            } else null else null,
             .c_abi_entry = if (cached) |hit| hit.c_abi_entry else false,
             .rc_borrowed_params = if (cached) |hit| hit.rc_borrowed_params else 0,
             .rc_ret_borrowed = if (cached) |hit| hit.rc_ret_borrowed else false,
@@ -4493,7 +4515,7 @@ const Lowerer = struct {
         const keyed = try self.allocator.alloc(Keyed, tags.len);
         defer self.allocator.free(keyed);
         for (tags, keyed) |tag, *entry| {
-            var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+            var hasher = base.Sha256.init(.{});
             const payloads = self.types.span(tag.payloads);
             for (0..payloads.len) |payload_index| {
                 const digest = try self.types.typeDigest(&self.solved.lifted.names, GuardedList.at(payloads, payload_index));
@@ -4872,6 +4894,9 @@ const Lowerer = struct {
             try self.result.root_procs.append(self.allocator, proc);
             var metadata = RootMetadata.fromCheckedRoot(root.request);
             metadata.test_plan = Common.testPlanMetadataForRoot(self.root_requests, root.request, root.request_index);
+            if (self.host_boundary_digests and root.request.abi == .platform) {
+                metadata.host_boundary_digest = try self.hostBoundaryDigest(entry);
+            }
             try self.result.root_metadata.append(self.allocator, metadata);
             if (root.request.abi == .compile_time) {
                 const ret_layout = try self.layoutOfType(entry.ret);
@@ -4929,6 +4954,103 @@ const Lowerer = struct {
             });
         }
     }
+
+    /// The host boundary digest of a platform entrypoint taking `entry`'s
+    /// arguments and returning its result.
+    fn hostBoundaryDigest(self: *Lowerer, entry: FnEntry) Common.LowerError!host_boundary.Digest {
+        // Laying out a type may grow the type store, so the arguments are
+        // copied out of its span first.
+        const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.types.span(entry.args));
+        defer self.allocator.free(arg_tys);
+        const values = try self.allocator.alloc(HostBoundaryGraph.Edge, arg_tys.len + 1);
+        defer self.allocator.free(values);
+        for (values[0..arg_tys.len], arg_tys, 0..) |*value, arg_ty, index| {
+            value.* = .{ .node = arg_ty, .position = @intCast(index), .layout = try self.layoutOfType(arg_ty) };
+        }
+        values[arg_tys.len] = .{ .node = entry.ret, .position = @intCast(arg_tys.len), .layout = try self.layoutOfType(entry.ret) };
+
+        var walk = host_boundary.Walk(Type.TypeId, HostBoundaryGraph, Common.LowerError).init(self.allocator, &self.result.layouts, .{ .lowerer = self });
+        defer walk.deinit();
+        return try walk.signature(values);
+    }
+
+    /// The Lambda Mono types a host boundary digest walks. An erased
+    /// callable's ABI is the function type its callable was erased from.
+    const HostBoundaryGraph = struct {
+        lowerer: *Lowerer,
+
+        const Edge = host_boundary.Edge(Type.TypeId);
+
+        pub fn shape(self: HostBoundaryGraph, ty: Type.TypeId, edges: *std.ArrayList(Edge)) Common.LowerError!host_boundary.Shape(Type.TypeId) {
+            const lowerer = self.lowerer;
+            const allocator = lowerer.allocator;
+            const types = &lowerer.types;
+            switch (types.get(ty)) {
+                .primitive, .zst, .hole, .erased_capture_ptr => return .leaf,
+                .named => |named| {
+                    if (named.builtin_owner) |owner| {
+                        if (builtinOwnerLayout(owner) != null) return .leaf;
+                    }
+                    const backing = named.backing orelse Common.invariant("named type without runtime backing reached a host boundary");
+                    return .{ .transparent = backing.ty };
+                },
+                .record => |fields| {
+                    const field_span = types.fieldSpan(fields);
+                    for (0..field_span.len) |index| {
+                        try edges.append(allocator, .{ .node = GuardedList.at(field_span, index).ty, .position = @intCast(index) });
+                    }
+                },
+                .capture_record => |fields| {
+                    const field_span = types.captureFieldSpan(fields);
+                    for (0..field_span.len) |index| {
+                        try edges.append(allocator, .{ .node = GuardedList.at(field_span, index).storage_ty, .position = @intCast(index) });
+                    }
+                },
+                .tuple => |items| {
+                    const item_span = types.span(items);
+                    for (0..item_span.len) |index| {
+                        try edges.append(allocator, .{ .node = GuardedList.at(item_span, index), .position = @intCast(index) });
+                    }
+                },
+                .tag_union => |tags| {
+                    // Payloads are numbered across the tags in variant order;
+                    // the layout fingerprint fixes each variant's payload count.
+                    const tag_span = types.tagSpan(tags);
+                    var position: u32 = 0;
+                    for (0..tag_span.len) |tag_index| {
+                        const payloads = types.span(GuardedList.at(tag_span, tag_index).payloads);
+                        for (0..payloads.len) |index| {
+                            try edges.append(allocator, .{ .node = GuardedList.at(payloads, index), .position = position });
+                            position += 1;
+                        }
+                    }
+                },
+                .callable => |variants| {
+                    const variant_span = types.fnVariantSpan(variants);
+                    for (0..variant_span.len) |index| {
+                        if (GuardedList.at(variant_span, index).capture_ty) |capture_ty| {
+                            try edges.append(allocator, .{ .node = capture_ty, .position = @intCast(index) });
+                        }
+                    }
+                },
+                .list, .box => |elem| try edges.append(allocator, .{ .node = elem, .position = 0 }),
+                .erased_fn => {
+                    const view_fn_ty = lowerer.callable_source_fn_map.get(ty) orelse
+                        Common.invariant("host boundary erased callable lacked its source function type");
+                    const abi_fn_ty = lowerer.erasedAbiFn(view_fn_ty);
+                    const arg_tys = try lowerer.lowerSolvedFnArgTypes(abi_fn_ty);
+                    defer allocator.free(arg_tys);
+                    for (arg_tys, 0..) |arg_ty, index| {
+                        try edges.append(allocator, .{ .node = arg_ty, .position = @intCast(index), .layout = try lowerer.layoutOfType(arg_ty) });
+                    }
+                    const ret_ty = try lowerer.lowerSolvedFnRetType(abi_fn_ty);
+                    try edges.append(allocator, .{ .node = ret_ty, .position = @intCast(arg_tys.len), .layout = try lowerer.layoutOfType(ret_ty) });
+                    return .erased;
+                },
+            }
+            return .container;
+        }
+    };
 
     fn layoutOnlyConstPlan(self: *Lowerer) Common.LowerError!LirProgram.ConstPlanId {
         const id: LirProgram.ConstPlanId = @fromBackingInt(@intCast(@as(u32, @intCast(self.result.const_plans.items.len))));

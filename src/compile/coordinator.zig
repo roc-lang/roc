@@ -34,6 +34,7 @@
 //! ```
 
 const std = @import("std");
+const completed = @import("completed_compilation.zig");
 const builtin = @import("builtin");
 const threading = @import("threading.zig");
 const can = @import("can");
@@ -55,6 +56,7 @@ const compile_build = @import("compile_build.zig");
 const module_discovery = @import("module_discovery.zig");
 const cache_manager_mod = @import("cache_manager.zig");
 const cache_versioning = @import("cache_versioning.zig");
+const discovery_roots = @import("discovery_roots.zig");
 const cache_key_mod = @import("cache_key.zig");
 const canonicalized_cache_entry = @import("canonicalized_cache_entry.zig");
 const package_source = @import("package_source.zig");
@@ -99,8 +101,8 @@ const CheckedModuleCacheRunError = CoordinatorError || eval.BuiltinModules.InitE
     LowLevelOperationsNotFound,
     TestUnexpectedResult,
 };
-const OverwriteFilesUnderDirError = Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || std.Io.Dir.WriteFileError;
-const CorruptCheckedModuleCacheError = Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || std.Io.Dir.ReadFileAllocError || std.Io.Dir.WriteFileError || error{FileNotFound};
+const OverwriteFilesUnderDirError = @import("artifact_store.zig").Error || Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || CoreCtx.WriteError;
+const CorruptCheckedModuleCacheError = @import("artifact_store.zig").Error || Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || CoreCtx.ReadError || CoreCtx.WriteError || error{FileNotFound};
 const TypeCheckedResult = messages.TypeCheckedResult;
 const DiscoveredLocalImport = messages.DiscoveredLocalImport;
 const DiscoveredExternalImport = messages.DiscoveredExternalImport;
@@ -246,6 +248,8 @@ const checked_module_cache_zero_padding: [CompactWriter.SERIALIZATION_ALIGNMENT.
 
 /// Counts of compile-time value reuse across module edits in one compilation.
 pub const CtfeReuseStats = struct {
+    settled_discovery_roots: u32 = 0,
+    validated_comptime_roots: u32 = 0,
     /// Freshly checked modules whose previous cache entry was found.
     previous_entries: u32 = 0,
     /// Roots of those modules awaiting evaluation when they were checked.
@@ -700,6 +704,15 @@ pub const LocalImportEdge = struct {
 
 /// State of a single module within a package
 pub const ModuleState = struct {
+    /// Work performed for this module during its current checking task.
+    inference_runs: u32 = 0,
+    checking_cache_hits: u32 = 0,
+    inference_cache_hits: u32 = 0,
+    checking_interfaces_built: u32 = 0,
+    checking_owner_bindings: u32 = 0,
+    checking_reference_bindings: u32 = 0,
+    checking_diagnostics_replayed: u32 = 0,
+    checked_artifacts_published: u32 = 0,
     /// Module name (e.g., "Main", "Foo")
     name: []const u8,
     /// Package-qualified module name (e.g., "pf.Foo"). Workspace information
@@ -765,6 +778,9 @@ pub const ModuleState = struct {
     external_dependents: std.ArrayList(ModuleRef),
     /// Diagnostic reports
     reports: std.ArrayList(Report),
+    completion_report_start: usize = 0,
+    /// Diagnostic ownership before app/platform pairing replaces an artifact.
+    completion_module_key: ?[32]u8 = null,
     /// Reports already present before checked-cache lookup: parsing and
     /// canonicalization produced them, and their own caches reproduce them.
     /// Checking (including the deferred import drain) and evaluation append
@@ -998,6 +1014,10 @@ pub const PublicModuleTarget = struct {
 
 /// State of a package in the workspace
 pub const PackageState = struct {
+    /// Canonical paths accepted while resolving imports. Recorded at the
+    /// validation boundary, never reconstructed from the solved program.
+    pub const SourcePathCheck = struct { path: []const u8, canonical: []const u8, spelling_checked: bool = false };
+    source_path_checks: std.ArrayList(SourcePathCheck) = .empty,
     /// Package name (alias in workspace)
     name: []const u8,
     /// Root directory for the package
@@ -1048,6 +1068,11 @@ pub const PackageState = struct {
     }
 
     pub fn deinit(self: *PackageState, gpa: Allocator) void {
+        for (self.source_path_checks.items) |entry| {
+            gpa.free(entry.path);
+            gpa.free(entry.canonical);
+        }
+        self.source_path_checks.deinit(gpa);
         if (comptime trace_build) {
             std.debug.print("[PKG DEINIT] {s}: deiniting {} modules\n", .{ self.name, self.modules.items.len });
         }
@@ -1216,6 +1241,7 @@ pub const PackageState = struct {
 /// failure and every probe of it a miss.
 const CacheEntryDirs = struct {
     checked: ?[]u8 = null,
+    inference: ?[]u8 = null,
     canonicalized: ?[]u8 = null,
     platform_pairing: ?[]u8 = null,
 
@@ -1225,6 +1251,10 @@ const CacheEntryDirs = struct {
         var dirs: CacheEntryDirs = .{};
         errdefer dirs.deinit(allocator);
         dirs.checked = manager.config.getCheckedArtifactCacheDir(allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.NoHomeDirectory => null,
+        };
+        dirs.inference = manager.config.getInferenceCacheDir(allocator) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.NoHomeDirectory => null,
         };
@@ -1241,6 +1271,7 @@ const CacheEntryDirs = struct {
 
     fn deinit(self: *CacheEntryDirs, allocator: Allocator) void {
         if (self.checked) |dir| allocator.free(dir);
+        if (self.inference) |dir| allocator.free(dir);
         if (self.canonicalized) |dir| allocator.free(dir);
         if (self.platform_pairing) |dir| allocator.free(dir);
         self.* = .{};
@@ -1471,9 +1502,15 @@ pub const Coordinator = struct {
     checked_program: bool = false,
     runtime_lowering: ?compile_build.RuntimeLoweringConfig = null,
     runtime_output_probe: ?compile_build.RuntimeOutputProbe = null,
-    /// Set by checked-program finalization when the probe found this exact
-    /// program's runtime output recorded, so no runtime program was lowered.
-    runtime_output_cached: bool = false,
+    /// A completed result owns the semantic outcome independently of checked
+    /// modules, which can remain prepared when no live finalization is needed.
+    compilation_result: union(enum) { live, recorded: *const completed.Outcome } = .live,
+    completion_arena: ?*base.SingleThreadArena = null,
+    completion_outcome: completed.Outcome = .{},
+    completion_capture_ns: u64 = 0,
+    completion_observations: std.ArrayList([]const u8) = .empty,
+    completion_demand: std.ArrayList(completed.Demand) = .empty,
+    debug_observer: ?eval.CompileTimeFinalization.DebugObserver = null,
     compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
     /// Keep the code compile-time evaluation ran as artifacts even without
     /// an object cache to publish it to, so a test can compare it with a
@@ -1588,6 +1625,11 @@ pub const Coordinator = struct {
     /// Modules this build parsed and canonicalized.
     canonicalized_cache_misses: u32 = 0,
     modules_compiled: u32,
+    inference_cache_hits: u32 = 0,
+    checking_interfaces_built: u32 = 0,
+    checking_owner_bindings: u32 = 0,
+    checking_reference_bindings: u32 = 0,
+    checking_diagnostics_replayed: u32 = 0,
     /// Source publications of the parametric platform. Session composition
     /// consumes its checked output without publishing another module.
     platform_root_publish_count: u32 = 0,
@@ -1741,6 +1783,12 @@ pub const Coordinator = struct {
             }
         }
 
+        if (self.completion_arena) |arena| {
+            self.completion_demand.deinit(self.gpa);
+            self.completion_observations.deinit(self.gpa);
+            arena.deinit();
+            self.gpa.destroy(arena);
+        }
         if (self.program_session) |*session| session.deinit();
         self.program_session = null;
         for (self.program_literal_values.items) |entry| {
@@ -2337,6 +2385,17 @@ pub const Coordinator = struct {
         try self.checkCancelRequest();
         if (self.release_checked_solver_types) try self.releaseCheckedSolverTypes();
         self.checked_program = mode == .executable_artifacts and self.appRootChecked();
+        if (self.checked_program and self.runtime_lowering != null and !self.hasUserErrors()) {
+            if (self.runtime_output_probe) |probe| {
+                if (try probe.cached(probe.context, self.executableRootCheckedArtifact())) |outcome| {
+                    try self.replayCompleted(outcome);
+                    self.compilation_result = .{ .recorded = outcome };
+                    return;
+                }
+                try self.beginCompletion();
+            }
+        }
+
         if (self.checked_program and self.findRootModule(.platform) != null) {
             const platform_root = self.findRootModule(.platform).?;
             const platform = platform_root.mod.checkedArtifact().?;
@@ -2362,21 +2421,152 @@ pub const Coordinator = struct {
             const program_root = if (self.checked_program) self.executableRootCheckedArtifact() else null;
             try self.evaluateProgram(null, program_root);
         }
+        if (self.completion_arena != null) try self.captureCompletionReports();
     }
 
-    /// Evaluate the checked program. A build whose runtime output for exactly
-    /// this program is recorded evaluates the same compile-time roots a build
-    /// without the record does, since its program's specialization decides
-    /// which roots are demanded, and its consumer lowers no runtime program.
+    /// Evaluate only the live alternative. Recorded compilations return before
+    /// platform evaluation, pairing and shared demand discovery.
     fn evaluateProgram(
         self: *Coordinator,
         extra_cached: ?*const CheckedArtifact.CheckedModuleArtifact,
         program_root: ?*const CheckedArtifact.CheckedModuleArtifact,
     ) CoordinatorError!void {
-        if (self.runtime_lowering != null) if (program_root) |root| if (self.runtime_output_probe) |probe| {
-            self.runtime_output_cached = try probe.cached(probe.context, root);
-        };
         return self.evaluatePreparedModules(true, null, extra_cached, program_root);
+    }
+
+    /// Full checked closure after resolution and content validation, before any
+    /// evaluation or app/platform pairing. Physical paths serve diagnostic
+    /// rebinding; identity paths exclude compiler-owned staging directories.
+    pub fn compilationModules(self: *Coordinator, allocator: Allocator) Allocator.Error![]completed.Module {
+        var modules = std.ArrayList(completed.Module).empty;
+        errdefer modules.deinit(allocator);
+        var packages = self.packages.iterator();
+        while (packages.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            const compiler_source = std.mem.eql(u8, pkg.name, package_identity.synthetic_platform_identity) or compiler_platforms.fromIdentity(pkg.name) != null;
+            for (pkg.modules.items) |*mod| {
+                if (mod.checkedArtifact()) |artifact| try modules.append(allocator, .{
+                    .key = artifact.key.bytes,
+                    .path = mod.path,
+                    // Compiler-owned platform locations are logical names;
+                    // their materialization directory is not a program input.
+                    .identity_path = if (compiler_source) mod.name else self.crashReportPath(mod.path),
+                });
+            }
+        }
+        std.mem.sort(completed.Module, modules.items, {}, struct {
+            fn lessThan(_: void, a: completed.Module, b: completed.Module) bool {
+                const order = std.mem.order(u8, &a.key, &b.key);
+                return if (order == .eq) std.mem.lessThan(u8, a.identity_path, b.identity_path) else order == .lt;
+            }
+        }.lessThan);
+        return modules.toOwnedSlice(allocator);
+    }
+
+    fn beginCompletion(self: *Coordinator) Allocator.Error!void {
+        const started = std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds;
+        defer self.completion_capture_ns += @intCast(std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds - started);
+        const arena = try self.gpa.create(base.SingleThreadArena);
+        arena.* = base.SingleThreadArena.init(self.gpa);
+        self.completion_arena = arena;
+        self.completion_outcome.modules = try self.compilationModules(arena.allocator());
+        var packages = self.packages.iterator();
+        while (packages.next()) |entry| for (entry.value_ptr.*.modules.items) |*mod| {
+            mod.completion_report_start = mod.reports.items.len;
+            mod.completion_module_key = if (mod.checkedArtifact()) |artifact| artifact.key.bytes else null;
+        };
+    }
+
+    fn captureDebug(context: *anyopaque, message: []const u8) Allocator.Error!void {
+        const self: *Coordinator = @ptrCast(@alignCast(context));
+        const started = std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds;
+        defer self.completion_capture_ns += @intCast(std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds - started);
+        try self.completion_observations.append(self.gpa, try self.completion_arena.?.allocator().dupe(u8, message));
+    }
+
+    fn captureDemand(context: *anyopaque, demand: lir.CheckedPipeline.ComptimeDemand, roots: []const lir.CheckedPipeline.MonotypeRoot, modules: []const CheckedArtifact.ModuleId, literals: []const lir.CheckedPipeline.MonotypeLiteralRoot) Allocator.Error!void {
+        const self: *Coordinator = @ptrCast(@alignCast(context));
+        const started = std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds;
+        defer self.completion_capture_ns += @intCast(std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds - started);
+        const allocator = self.completion_arena.?.allocator();
+        const evaluated = try allocator.alloc(completed.RootDemand, roots.len);
+        for (roots, evaluated, 0..) |root, *out, i| out.* = .{
+            .root = .{ .module = modules[@backingInt(root.owner)].bytes, .root = @backingInt(root.request.compile_time_root.?) },
+            .reads = try copyCompletionRoots(allocator, demand.rootReads(i)),
+        };
+        const literal_demands = try allocator.alloc(completed.LiteralDemand, demand.literals.len);
+        for (demand.literals, literals, literal_demands) |literal, source, *out| out.* = .{
+            .module = source.module.bytes,
+            .checked_expr = source.site.checked_expr,
+            .kind = source.site.kind,
+            .identity = literal.identity,
+            .reads = try copyCompletionRoots(allocator, demand.reads[literal.reads.start..][0..literal.reads.len]),
+        };
+        try self.completion_demand.append(self.gpa, .{
+            .evaluated = evaluated,
+            .stored = try copyCompletionRoots(allocator, demand.stored),
+            .literals = literal_demands,
+        });
+    }
+
+    fn copyCompletionRoots(allocator: Allocator, roots: []const lir.CheckedPipeline.ComptimeDemandRoot) Allocator.Error![]const completed.Root {
+        const result = try allocator.alloc(completed.Root, roots.len);
+        for (roots, result) |root, *out| out.* = .{ .module = root.module.bytes, .root = @backingInt(root.root) };
+        return result;
+    }
+
+    fn captureCompletionReports(self: *Coordinator) Allocator.Error!void {
+        const started = std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds;
+        defer self.completion_capture_ns += @intCast(std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds - started);
+        const allocator = self.completion_arena.?.allocator();
+        var diagnostics = std.ArrayList(completed.Diagnostic).empty;
+        var packages = self.packages.iterator();
+        while (packages.next()) |entry| for (entry.value_ptr.*.modules.items) |*mod| {
+            const module_key = mod.completion_module_key orelse continue;
+            for (mod.reports.items[mod.completion_report_start..]) |report| try diagnostics.append(allocator, .{
+                .module = module_key,
+                .title = report.title,
+                .severity = report.severity,
+                .file = report.file,
+                .headline = report.headline.elements.items,
+                .body = report.document.elements.items,
+            });
+        };
+        // Reports move to the build's sink after finalization; retain structured
+        // copies before their owner can render and release them.
+        const bytes = try completed.encode(allocator, diagnostics.items);
+        var reader = completed.Reader{ .bytes = bytes, .arena = allocator, .remaining = bytes.len * 4 };
+        self.completion_outcome.diagnostics = reader.read([]completed.Diagnostic) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidRecord => coordinatorInvariant("the completion writer produced an invalid diagnostic record", .{}),
+        };
+        self.completion_outcome.observations = self.completion_observations.items;
+        self.completion_outcome.demand = self.completion_demand.items;
+    }
+
+    fn replayCompleted(self: *Coordinator, outcome: *const completed.Outcome) Allocator.Error!void {
+        const modules = try self.compilationModules(self.gpa);
+        defer self.gpa.free(modules);
+        for (outcome.diagnostics) |diagnostic| {
+            const location = self.checked_artifact_index.get(diagnostic.module) orelse
+                coordinatorInvariant("validated completion diagnostic omitted its checked module", .{});
+            const mod = location.module();
+            var report = try Report.init(self.gpa, diagnostic.title, "", diagnostic.severity);
+            errdefer report.deinit();
+            report.title = try report.addOwnedString(diagnostic.title);
+            // The record's arena outlives all reports emitted by this build.
+            completed.rebindElements(diagnostic.headline, outcome.modules, modules);
+            completed.rebindElements(diagnostic.body, outcome.modules, modules);
+            try report.headline.elements.appendSlice(diagnostic.headline);
+            try report.document.elements.appendSlice(diagnostic.body);
+            if (completed.rebindPath(diagnostic.file, outcome.modules, modules)) |path| try report.setFile(path);
+            try mod.reports.append(self.gpa, report);
+        }
+        for (outcome.observations) |message| {
+            self.roc_ctx.writeStderr("[dbg] ") catch {};
+            self.roc_ctx.writeStderr(message) catch {};
+            self.roc_ctx.writeStderr("\n") catch {};
+        }
     }
 
     /// Return `error.Canceled` when the embedder has asked to abandon this build.
@@ -2870,6 +3060,7 @@ pub const Coordinator = struct {
             // cannot return the error itself, so it recorded the OOM here.
             if (self.worker_oom.load(.acquire)) return error.OutOfMemory;
             try self.checkCancelRequest();
+            if (comptime !threading.is_freestanding) @import("cache_cleanup.zig").safePoint(.serial);
 
             var made_progress = false;
 
@@ -2884,7 +3075,14 @@ pub const Coordinator = struct {
             } else {
                 // Multi-threaded: receive from workers via channel
                 // Use blocking recv with timeout to avoid busy spinning
-                if (self.result_channel.recvTimeout(10_000_000)) |result| { // 10ms timeout
+                const next_result = self.result_channel.tryRecv() orelse blk: {
+                    if (comptime !threading.is_freestanding) @import("cache_cleanup.zig").safePoint(.{ .waiting = .{
+                        .budget = self.max_threads,
+                        .tasks = self.inflight.load(.acquire),
+                    } });
+                    break :blk self.result_channel.recvTimeout(10_000_000);
+                };
+                if (next_result) |result| {
                     _ = self.inflight.fetchSub(1, .monotonic);
                     try self.handleResult(result);
                     made_progress = true;
@@ -3121,7 +3319,13 @@ pub const Coordinator = struct {
         else
             &.{};
         defer if (!explicit_runtime and program_root != null) self.gpa.free(entrypoint_requests);
-        // Then the program's tests, each owned by the module declaring it.
+        // Runtime entrypoints and compile-time discovery are distinct demands.
+        // Tests are executable roots only when an explicit test consumer names
+        // them; build/check retain their literal-validation obligations below.
+        var discovery_requests = std.ArrayList(CheckedArtifact.RootRequest).empty;
+        defer discovery_requests.deinit(self.gpa);
+        var discovery_sources = std.ArrayList(CheckedArtifact.ModuleId).empty;
+        defer discovery_sources.deinit(self.gpa);
         var program_requests = std.ArrayList(CheckedArtifact.RootRequest).empty;
         defer program_requests.deinit(self.gpa);
         var program_sources = std.ArrayList(CheckedArtifact.ModuleId).empty;
@@ -3134,8 +3338,8 @@ pub const Coordinator = struct {
                     coordinatorInvariant("program test module has no checked module data", .{});
                 for (artifact.root_requests.requests) |request| {
                     if (request.kind != .test_expect) continue;
-                    try program_requests.append(self.gpa, request);
-                    try program_sources.append(self.gpa, key.digest());
+                    try discovery_requests.append(self.gpa, request);
+                    try discovery_sources.append(self.gpa, key.digest());
                 }
             }
         }
@@ -3159,8 +3363,63 @@ pub const Coordinator = struct {
         options.object_cache = self.compile_time_object_cache;
         options.keep_artifacts = self.compile_time_object_cache != null or self.keep_compile_time_artifacts;
         options.cached_debug_modules = cached_debug_modules.items;
-        if (self.runtime_lowering) |config| options.discovery_roots = config.compile_time_discovery_roots;
+        if (self.runtime_lowering) |config| {
+            const configured = config.compile_time_discovery_roots;
+            try discovery_requests.appendSlice(self.gpa, configured.requests);
+            if (configured.source_modules.len == 0) {
+                try discovery_sources.appendNTimes(self.gpa, root.key.digest(), configured.requests.len);
+            } else {
+                try discovery_sources.appendSlice(self.gpa, configured.source_modules);
+            }
+        }
+        // A validation fact does not copy a stored value or its old checked
+        // type references. It permits deferring that value until actually read.
+        var validation_cache = discovery_roots.Cache{ .allocator = self.gpa, .manager = self.cache_manager, .namespace = "semantic-initializer-validation-v1" };
+        defer validation_cache.deinit();
+        var validated_roots = std.AutoHashMapUnmanaged(lir.CheckedPipeline.ComptimeDemandRoot, void).empty;
+        defer validated_roots.deinit(self.gpa);
+        for (entries.items) |entry| {
+            const artifact = entry.mod.checkedArtifact().?;
+            const placement = checkedPlacement(entry.pkg, entry.mod);
+            for (artifact.root_requests.compile_time_requests) |request| {
+                const key = discovery_roots.rootKey(artifact, request);
+                if (try validation_cache.lookup(placement, key)) {
+                    try validation_cache.retain(placement, key);
+                    try validated_roots.put(self.gpa, .{ .module = artifact.key.digest(), .root = request.compile_time_root.? }, {});
+                }
+            }
+        }
+        self.ctfe_reuse_stats.validated_comptime_roots += @intCast(validated_roots.count());
+        if (eval.CompileTimeReuse.traceEnabled()) std.debug.print("ctfe-reuse validated initializers: {d} roots\n", .{validated_roots.count()});
+        // Explicit tests retain check-like validation of every initializer;
+        // uncertified roots remain mandatory even when no test executes.
+        if (explicit_runtime) options.validated_comptime_roots = &validated_roots;
+        var discovery_cache = discovery_roots.Cache{ .allocator = self.gpa, .manager = self.cache_manager };
+        defer discovery_cache.deinit();
+        // Runtime tests settle discovery too, but their execution is never
+        // omitted on the strength of a discovery-only certificate.
+        for (program_roots.requests, 0..) |request, index| {
+            const owner = if (program_roots.source_modules.len == 0) root.key.digest() else program_roots.source_modules[index];
+            _ = try self.registerTestDiscovery(&discovery_cache, request, owner);
+        }
+        var retained: usize = 0;
+        for (discovery_requests.items, discovery_sources.items) |request, owner| {
+            if (try self.registerTestDiscovery(&discovery_cache, request, owner)) {
+                discovery_cache.hits += 1;
+                continue;
+            }
+            discovery_requests.items[retained] = request;
+            discovery_sources.items[retained] = owner;
+            retained += 1;
+        }
+        discovery_requests.shrinkRetainingCapacity(retained);
+        discovery_sources.shrinkRetainingCapacity(retained);
+        self.ctfe_reuse_stats.settled_discovery_roots += discovery_cache.hits;
+        if (eval.CompileTimeReuse.traceEnabled()) std.debug.print("ctfe-reuse settled test discovery: {d} roots\n", .{discovery_cache.hits});
+        options.discovery_roots = .{ .requests = discovery_requests.items, .source_modules = discovery_sources.items };
         options.defer_debug_replay = !replay_cached_debug;
+        if (self.completion_arena != null) options.completion_sink = .{ .context = self, .demand = captureDemand, .debug = captureDebug };
+        options.debug_observer = self.debug_observer;
         var runtime_target: ?lir.CheckedPipeline.TargetConfig = if (self.runtime_lowering) |config| config.target else null;
         // An explicitly empty test execution subset has no runtime consumer.
         // Checking still finalizes every pending compile-time obligation.
@@ -3193,6 +3452,28 @@ pub const Coordinator = struct {
         if (literal_values) |entry| try self.storeProgramLiteralValues(entry, literal_records_before);
         for (entries.items) |entry| try self.commitPreparedModule(entry.pkg, entry.mod);
         try unfinalized.commit();
+        if (!self.hasUserErrors() and self.program_session.?.discovery_silent) {
+            try discovery_cache.publish();
+            for (entries.items) |entry| {
+                const artifact = entry.mod.checkedArtifact().?;
+                const placement = checkedPlacement(entry.pkg, entry.mod);
+                for (artifact.root_requests.compile_time_requests) |request| {
+                    switch (artifact.compile_time_roots.root(request.compile_time_root.?).payload) {
+                        .const_node, .discarded => try validation_cache.retain(placement, discovery_roots.rootKey(artifact, request)),
+                        .pending, .unevaluated, .fn_value, .expect, .runtime => {},
+                    }
+                }
+            }
+            try validation_cache.publish();
+        }
+    }
+
+    fn registerTestDiscovery(self: *Coordinator, cache: *discovery_roots.Cache, request: CheckedArtifact.RootRequest, owner: CheckedArtifact.ModuleId) Allocator.Error!bool {
+        if (request.kind != .test_expect) return false;
+        const location = self.checked_artifact_index.get(owner.bytes) orelse return false;
+        const module = location.module();
+        const artifact = module.checkedArtifact().?;
+        return cache.register(checkedPlacement(location.pkg, module), discovery_roots.rootKey(artifact, request));
     }
 
     /// The checked module of this compilation whose key is `key`.
@@ -4166,7 +4447,7 @@ pub const Coordinator = struct {
         };
         writeCheckedModuleCacheHeader(.platform_pairing, bytes[0..checked_module_cache_header_len], key, 0, writer.total_bytes, @splat(0));
         _ = writer.writeToBuffer(bytes[checked_module_cache_header_len..]) catch unreachable; // bytes was allocated with writer.total_bytes after the header
-        manager.storeRawBytes(key.bytes, bytes, directory, artifact.moduleEnvConst().module_name);
+        manager.storeFamilyBytes(.pairing, key.bytes, bytes, directory, artifact.moduleEnvConst().module_name);
     }
 
     fn tryLoadCachedPlatformPairing(self: *Coordinator, platform: *const CheckedArtifact.CheckedModuleArtifact, app: *const CheckedArtifact.CheckedModuleArtifact) ?CheckedArtifact.CheckedModuleArtifact {
@@ -4174,7 +4455,7 @@ pub const Coordinator = struct {
         if (!manager.config.enabled) return null;
         const directory = self.cache_entry_dirs.platform_pairing orelse return null;
         const key = cache_key_mod.platformPairingCacheKey(platform.key, app.key);
-        const data = manager.loadRawBytesMapped(key.bytes, directory) orelse return null;
+        const data = manager.loadFamilyMapped(manager.allocator, .checked, .pairing, key.bytes, directory) orelse return null;
         defer data.deinit(manager.allocator);
         const bodies = decodeCheckedCacheEnvelope(.platform_pairing, key, data.data()) orelse {
             manager.stats.recordInvalidation();
@@ -4643,6 +4924,7 @@ pub const Coordinator = struct {
     }
 
     fn finishCachedModule(self: *Coordinator, pkg: *PackageState, mod: *ModuleState) Allocator.Error!void {
+        mod.checking_cache_hits += 1;
         const module_time = mod.compile_time_ns;
         if (module_time < self.module_time_min_ns) self.module_time_min_ns = module_time;
         if (module_time > self.module_time_max_ns) self.module_time_max_ns = module_time;
@@ -4991,6 +5273,16 @@ pub const Coordinator = struct {
 
         if (!pathIsWithinRoot(canonical_path, canonical_root)) return .outside_package;
 
+        if (self.track_watch_inputs) {
+            for ([_][]const u8{ package_root, path }, [_][]const u8{ canonical_root, canonical_path }) |input, canonical_input| {
+                const owned_input = try self.gpa.dupe(u8, input);
+                errdefer self.gpa.free(owned_input);
+                const owned_canonical = try self.gpa.dupe(u8, canonical_input);
+                errdefer self.gpa.free(owned_canonical);
+                try pkg.source_path_checks.append(self.gpa, .{ .path = owned_input, .canonical = owned_canonical });
+            }
+        }
+
         const lexical_path = try std.fs.path.resolve(self.gpa, &.{path});
         defer self.gpa.free(lexical_path);
         if (!pathsHaveExactSpelling(canonical_path, lexical_path)) {
@@ -5009,6 +5301,7 @@ pub const Coordinator = struct {
                 }
             }
             if (!has_exact_spelling) return .incorrect_spelling;
+            if (self.track_watch_inputs) pkg.source_path_checks.items[pkg.source_path_checks.items.len - 1].spelling_checked = true;
         }
 
         if (pkg.physical_module_paths.get(canonical_path)) |existing| {
@@ -5289,7 +5582,7 @@ pub const Coordinator = struct {
         // an executable build defers that publication). The walk's closure over
         // their imports and type owners makes each requirement owner available
         // to checking and publication, including owners from external packages.
-        // The seeds, and so the app's method lookup scope, are a function of the
+        // The seeds are a function of the
         // platform's import graph alone: the app is scheduled only after the
         // platform root completed, so every module in that graph has completed,
         // and no seed depends on which other platform package modules happen to
@@ -5348,6 +5641,7 @@ pub const Coordinator = struct {
                 .platform_requirements = platform_surface,
                 .explicit_roots = explicit_roots,
                 .validation = mod.validation,
+                .source_pin_validation = canonicalized_cache_entry.pinValidationHash(mod.has_source_version_pin, self.source_pin_version),
             },
         });
     }
@@ -5369,6 +5663,11 @@ pub const Coordinator = struct {
                 .whole_module, .type_decl, .unresolved_nested_type => {},
             }
         }
+        std.mem.sort([]const u8, missing.items, {}, struct {
+            fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.order(u8, a, b) == .lt;
+            }
+        }.lessThan);
         return missing.toOwnedSlice(allocator);
     }
 
@@ -5475,8 +5774,25 @@ pub const Coordinator = struct {
         installPlatformRequirementSurface(mod);
 
         // Update compile stats
-        self.cache_misses += 1;
-        self.modules_compiled += 1;
+        mod.checked_artifacts_published += 1;
+        if (result.inference_reused) {
+            mod.checking_cache_hits += 1;
+            self.cache_hits += 1;
+            self.inference_cache_hits += 1;
+            mod.inference_cache_hits += 1;
+            self.checking_owner_bindings += result.owner_bindings;
+            mod.checking_owner_bindings += result.owner_bindings;
+            self.checking_reference_bindings += result.reference_bindings;
+            mod.checking_reference_bindings += result.reference_bindings;
+            self.checking_diagnostics_replayed += result.diagnostics_replayed;
+            mod.checking_diagnostics_replayed += result.diagnostics_replayed;
+        } else {
+            self.cache_misses += 1;
+            self.modules_compiled += 1;
+            mod.inference_runs += 1;
+            self.checking_interfaces_built += 1;
+            mod.checking_interfaces_built += 1;
+        }
 
         try self.completeModuleSuccessfully(pkg, result.module_id);
     }
@@ -6048,6 +6364,11 @@ pub const Coordinator = struct {
             else
                 0,
             .modules_compiled = self.modules_compiled,
+            .inference_cache_hits = self.inference_cache_hits,
+            .checking_interfaces_built = self.checking_interfaces_built,
+            .checking_owner_bindings = self.checking_owner_bindings,
+            .checking_reference_bindings = self.checking_reference_bindings,
+            .checking_diagnostics_replayed = self.checking_diagnostics_replayed,
             .module_time_min_ns = self.module_time_min_ns,
             .module_time_max_ns = self.module_time_max_ns,
             .module_time_sum_ns = self.module_time_sum_ns,
@@ -6706,9 +7027,11 @@ pub const Coordinator = struct {
             if (task.platform_requirements) |surface| surface.context else null,
             task.explicit_roots,
             task.validation,
+            task.source_pin_validation,
             ctfe_options,
             .{ .explicit = task.deferred_imports },
             task.missing_public_types,
+            if (self.cache_entry_dirs.inference) |directory| .{ .manager = self.cache_manager.?, .directory = directory } else null,
         );
         defer typecheck_output.deinit();
         // On error the coordinator still owns the input environment. Transfer
@@ -6779,6 +7102,10 @@ pub const Coordinator = struct {
                 .reports = reports,
                 .type_check_ns = type_check_ns,
                 .check_diagnostics_ns = diagnostics_ns,
+                .inference_reused = typecheck_output.inference_reused,
+                .owner_bindings = typecheck_output.owner_bindings,
+                .reference_bindings = typecheck_output.reference_bindings,
+                .diagnostics_replayed = typecheck_output.diagnostics_replayed,
             },
         };
     }
@@ -7015,14 +7342,30 @@ const CompiledBuildFacts = struct {
     reports: []u8,
     /// Every published checked-artifact key, sorted.
     artifact_keys: [][32]u8,
+    artifact_digests: [][32]u8,
+    checking: []ModuleCheckingFacts,
     rejected_modules: usize,
     failed_modules: usize,
+    has_errors: bool,
 
     fn deinit(self: *CompiledBuildFacts, allocator: Allocator) void {
         allocator.free(self.reports);
         allocator.free(self.artifact_keys);
+        allocator.free(self.artifact_digests);
+        for (self.checking) |facts| allocator.free(facts.name);
+        allocator.free(self.checking);
         self.* = undefined;
     }
+};
+
+const ModuleCheckingFacts = struct {
+    name: []const u8,
+    inference_runs: u32,
+    inference_hits: u32,
+    interfaces_built: u32,
+    owner_bindings: u32,
+    reference_bindings: u32,
+    diagnostics_replayed: u32,
 };
 
 fn lessThanBytes(_: void, a: [32]u8, b: [32]u8) bool {
@@ -7050,6 +7393,16 @@ fn compileAppFactsWithPinVersion(
     app_path: []const u8,
     source_pin_version: ?[]const u8,
 ) CheckedModuleCacheRunError!CompiledBuildFacts {
+    return compileAppFactsWithWorkers(allocator, cache_dir, app_path, source_pin_version, 1);
+}
+
+fn compileAppFactsWithWorkers(
+    allocator: Allocator,
+    cache_dir: ?[]const u8,
+    app_path: []const u8,
+    source_pin_version: ?[]const u8,
+    workers: u32,
+) CheckedModuleCacheRunError!CompiledBuildFacts {
     const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
     var cache_manager = CacheManager.init(allocator, .{
         .enabled = cache_dir != null,
@@ -7060,8 +7413,8 @@ fn compileAppFactsWithPinVersion(
 
     var coord = try Coordinator.init(
         allocator,
-        .single_threaded,
-        1,
+        if (workers > 1) .multi_threaded else .single_threaded,
+        workers,
         roc_target.RocTarget.detectNative(),
         builtin_modules,
         build_options.compiler_compatibility_id,
@@ -7086,10 +7439,16 @@ fn compileAppFactsWithPinVersion(
 
     var report_lines = std.ArrayList([]const u8).empty;
     defer report_lines.deinit(arena);
+    var report_positions = std.StringHashMap(u32).init(arena);
+    defer report_positions.deinit();
     var report_it = coord.iterReports();
     while (report_it.next()) |entry| {
+        const owner = try std.fmt.allocPrint(arena, "{s}|{s}", .{ entry.package_name, entry.module_name });
+        const position = try report_positions.getOrPut(owner);
+        if (!position.found_existing) position.value_ptr.* = 0;
         var rendered = std.Io.Writer.Allocating.init(arena);
-        rendered.writer.print("{s}|{s}|", .{ entry.package_name, entry.module_name }) catch return error.OutOfMemory;
+        rendered.writer.print("{s}|{d}|", .{ owner, position.value_ptr.* }) catch return error.OutOfMemory;
+        position.value_ptr.* += 1;
         reporting.renderReport(entry.report, &rendered.writer, .markdown) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.WriteFailed => return error.OutOfMemory,
@@ -7110,6 +7469,13 @@ fn compileAppFactsWithPinVersion(
     var failed_modules: usize = 0;
     var keys = std.ArrayList([32]u8).empty;
     errdefer keys.deinit(allocator);
+    var digests = std.ArrayList([32]u8).empty;
+    errdefer digests.deinit(allocator);
+    var checking = std.ArrayList(ModuleCheckingFacts).empty;
+    errdefer {
+        for (checking.items) |facts| allocator.free(facts.name);
+        checking.deinit(allocator);
+    }
     var pkg_it = coord.packages.iterator();
     while (pkg_it.next()) |pkg_entry| {
         for (pkg_entry.value_ptr.*.modules.items) |*mod| {
@@ -7123,16 +7489,43 @@ fn compileAppFactsWithPinVersion(
             }
             if (mod.checkedArtifact()) |artifact| {
                 try keys.append(allocator, artifact.key.bytes);
+                if (!coord.hasUserErrors()) {
+                    // Portability is populated only when the optional cross-edit
+                    // value cache is used. Compare all semantic columns, including
+                    // evaluated values and their references, without that cache's
+                    // population bookkeeping.
+                    var semantic_artifact = artifact.*;
+                    semantic_artifact.compile_time_root_portability = .{};
+                    const bytes = try serializedCheckedArtifactBytes(arena, &semantic_artifact);
+                    var hash = base.Sha256.init(.{});
+                    hash.update(bytes);
+                    try digests.append(allocator, hash.finalResult());
+                }
             }
+            const name = try allocator.dupe(u8, mod.name);
+            errdefer allocator.free(name);
+            try checking.append(allocator, .{
+                .name = name,
+                .inference_runs = mod.inference_runs,
+                .inference_hits = mod.inference_cache_hits,
+                .interfaces_built = mod.checking_interfaces_built,
+                .owner_bindings = mod.checking_owner_bindings,
+                .reference_bindings = mod.checking_reference_bindings,
+                .diagnostics_replayed = mod.checking_diagnostics_replayed,
+            });
         }
     }
     std.mem.sort([32]u8, keys.items, {}, lessThanBytes);
+    std.mem.sort([32]u8, digests.items, {}, lessThanBytes);
 
     return .{
         .build = coord.getBuildStats(),
         .cache = cache_manager.stats,
         .reports = owned_reports,
         .artifact_keys = try keys.toOwnedSlice(allocator),
+        .artifact_digests = try digests.toOwnedSlice(allocator),
+        .checking = try checking.toOwnedSlice(allocator),
+        .has_errors = coord.hasUserErrors(),
         .rejected_modules = rejected_modules,
         .failed_modules = failed_modules,
     };
@@ -7683,7 +8076,7 @@ test "issue 11389 invalid pairing cache recomposes from immutable modules" {
     const config = CacheConfig{ .enabled = true, .cache_dir = cache };
     const pair_directory = try config.getPlatformPairingCacheDir(allocator);
     defer allocator.free(pair_directory);
-    const corrupted = try overwriteFilesUnderDir(allocator, pair_directory, "invalid pairing");
+    const corrupted = try overwriteFilesUnderDir(allocator, cache, pair_directory, .pairing, "invalid pairing");
     try std.testing.expectEqual(@as(usize, 1), corrupted);
     var repaired = try compileAppRootIdentity(allocator, cache, app);
     defer repaired.deinit(allocator);
@@ -7802,10 +8195,17 @@ const ReuseRun = struct {
     /// The checked occurrence of every named type in each root's stored
     /// value and type, by name, in walk order.
     occurrences: [][]NamedOccurrence,
+    /// The app module's checked key, whose version-specific checked types
+    /// no stored closed occurrence of an imported type names.
+    module_key: [32]u8,
+    hoisted: []HoistedIdentity,
 
+    const HoistedIdentity = struct { text: []u8, value: [32]u8 };
     const NamedOccurrence = struct { ty_module: [32]u8, ty: u32 };
 
     fn deinit(self: *ReuseRun, allocator: Allocator) void {
+        for (self.hoisted) |entry| allocator.free(entry.text);
+        allocator.free(self.hoisted);
         for (self.occurrences) |list| allocator.free(list);
         allocator.free(self.occurrences);
         for (self.literals) |literal| allocator.free(literal.text);
@@ -7827,6 +8227,11 @@ const ReuseRun = struct {
 
     fn identity(self: *const ReuseRun, name: []const u8) [32]u8 {
         return self.identities[self.index(name)];
+    }
+
+    fn hoistedIdentity(self: *const ReuseRun, text: []const u8) [32]u8 {
+        for (self.hoisted) |entry| if (std.mem.eql(u8, entry.text, text)) return entry.value;
+        std.debug.panic("no hoisted root for {s}", .{text});
     }
 
     fn value(self: *const ReuseRun, name: []const u8) ?i64 {
@@ -7915,10 +8320,24 @@ fn compileForReuseWith(allocator: Allocator, cache_dir: []const u8, app_path: []
         for (occurrences.items) |list| allocator.free(list);
         occurrences.deinit(allocator);
     }
+    var hoisted = std.ArrayList(ReuseRun.HoistedIdentity).empty;
+    errdefer {
+        for (hoisted.items) |entry| allocator.free(entry.text);
+        hoisted.deinit(allocator);
+    }
     for (app.compile_time_roots.roots) |root| {
         const def = switch (root.source) {
             .def => |def| def,
-            .expr, .statement, .required_binding, .hoisted => continue,
+            .hoisted => |source| {
+                const region = env.store.getExprRegion(source.expr);
+                const text = try allocator.dupe(u8, env.getSourceAll()[region.start.offset..region.end.offset]);
+                hoisted.append(allocator, .{ .text = text, .value = app.compile_time_root_identities.rows[@backingInt(root.id)].value }) catch |err| {
+                    allocator.free(text);
+                    return err;
+                };
+                continue;
+            },
+            .expr, .statement, .required_binding => continue,
         };
         const pattern = env.store.getPattern(env.store.getDef(def).pattern);
         if (pattern != .assign) continue;
@@ -7958,6 +8377,8 @@ fn compileForReuseWith(allocator: Allocator, cache_dir: []const u8, app_path: []
         .values = try values.toOwnedSlice(allocator),
         .literals = try literals.toOwnedSlice(allocator),
         .occurrences = try occurrences.toOwnedSlice(allocator),
+        .module_key = app.key.bytes,
+        .hoisted = try hoisted.toOwnedSlice(allocator),
     };
 }
 
@@ -8194,8 +8615,10 @@ test "a transplanted value carries no checked type occurrence of the version tha
         \\}
         \\
     ;
-    // `built`'s type is lowered from the app's own checked types, `made`'s
-    // from `Counter`'s.
+    // `built`'s type is the app's own annotation and `made`'s is inferred
+    // from `Counter.make`'s return type: both stored constants carry
+    // `Counter`'s own occurrence, which its declaring module holds inside the
+    // app's import closure, never the app's version-specific one.
     const occurrence_app =
         \\app [answer] { pf: platform "./platform.roc" }
         \\
@@ -8216,13 +8639,23 @@ test "a transplanted value carries no checked type occurrence of the version tha
 
     var first = try compileForReuse(allocator, cache, app);
     defer first.deinit(allocator);
+    for ([_][]const u8{ "built", "made" }) |name| {
+        const stored = first.namedOccurrences(name);
+        try std.testing.expect(stored.len != 0);
+        for (stored) |occurrence| try std.testing.expect(!std.mem.eql(u8, &first.module_key, &occurrence.ty_module));
+    }
+    // All values are unchanged, including the nominals the app annotates.
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = occurrence_app ++ "# unchanged values\n" });
+    var unchanged = try compileForReuseVerifying(allocator, cache, app, true);
+    defer unchanged.deinit(allocator);
+    try std.testing.expectEqual(unchanged.stats.pending_roots, unchanged.stats.transplanted_roots);
     // A definition ahead of them shifts the app's checked type ids, so an
     // occurrence the previous version's app types held would name another
     // type, or none.
     const shifted = try std.mem.replaceOwned(u8, allocator, occurrence_app, "import Counter\n", "import Counter\n\npad : { a : Str, b : List(U8), d : (I64, Str) }\npad = { a: \"x\", b: [], d: (1, \"y\") }\n");
     defer allocator.free(shifted);
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = shifted });
-    for ([_]bool{ std.debug.runtime_safety, false }, 0..) |verify, index| {
+    for ([_]bool{ true, false }, 0..) |verify, index| {
         const edited = try std.fmt.allocPrint(allocator, "{s}# edit {d}\n", .{ shifted, index });
         defer allocator.free(edited);
         try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = edited });
@@ -8247,6 +8680,45 @@ test "a transplanted value carries no checked type occurrence of the version tha
             }
         }
         try std.testing.expectEqual(cold.value("answer"), warm.value("answer"));
+    }
+}
+
+test "hoisted constants depend on their typed expressions instead of unrelated owner code" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const source =
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\base = 10.I64
+        \\compute = |n| {
+        \\    fixed = [base, 20.I64]
+        \\    local = 30.I64
+        \\    captured = [local, 40.I64]
+        \\    n + List.len(fixed).to_i64_wrap() + List.len(captured).to_i64_wrap()
+        \\}
+        \\answer = compute(1.I64)
+        \\
+    ;
+    try writeReuseFixture(&tmp, source);
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+    var first = try compileForReuseVerifying(allocator, cache, app, true);
+    defer first.deinit(allocator);
+    const edits = [_]struct { from: []const u8, to: []const u8, fixed_changes: bool, captured_changes: bool }{
+        .{ .from = "n + List.len(fixed)", .to = "n + 1.I64 + List.len(fixed)", .fixed_changes = false, .captured_changes = true },
+        .{ .from = "base = 10.I64", .to = "base = 11.I64", .fixed_changes = true, .captured_changes = true },
+        .{ .from = "local = 30.I64", .to = "local = 31.I64", .fixed_changes = false, .captured_changes = true },
+    };
+    for (edits) |edit| {
+        const edited = try std.mem.replaceOwned(u8, allocator, source, edit.from, edit.to);
+        defer allocator.free(edited);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = edited });
+        var current = try compileForReuseVerifying(allocator, cache, app, true);
+        defer current.deinit(allocator);
+        try std.testing.expectEqual(edit.fixed_changes, !std.mem.eql(u8, &first.hoistedIdentity("[base, 20.I64]"), &current.hoistedIdentity("[base, 20.I64]")));
+        try std.testing.expectEqual(edit.captured_changes, !std.mem.eql(u8, &first.hoistedIdentity("[local, 40.I64]"), &current.hoistedIdentity("[local, 40.I64]")));
     }
 }
 
@@ -9416,157 +9888,6 @@ fn writeHostedDistinctnessFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.Crea
     });
 }
 
-/// A platform whose root imports `Left` and `Right`, each of which imports a
-/// leaf module of its own. Every platform module declares a method, so each one
-/// belongs in the method lookup scope of an app that imports none of them.
-fn writeMethodScopeOrderFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
-    try tmp_dir.dir.createDirPath(std.testing.io, "app/.roc_scope_platform");
-    const files = [_]struct { rel: []const u8, data: []const u8 }{
-        .{ .rel = "app/main.roc", .data =
-        \\app [main!] { pf: platform "./.roc_scope_platform/main.roc" }
-        \\
-        \\main! = |_args| Ok({})
-        },
-        .{ .rel = "app/.roc_scope_platform/main.roc", .data =
-        \\platform ""
-        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
-        \\    exposes [Left, Right]
-        \\    packages {}
-        \\    provides { "roc_main": main_for_host! }
-        \\
-        \\import Left
-        \\import Right
-        \\
-        \\main_for_host! : List(Str) => I8
-        \\main_for_host! = |args|
-        \\    match main!(args) {
-        \\        Ok({}) => 0
-        \\        Err(Exit(code)) => code
-        \\        Err(_) => 1
-        \\    }
-        },
-        .{ .rel = "app/.roc_scope_platform/Left.roc", .data =
-        \\import LeftLeaf
-        \\
-        \\Left := [Left].{
-        \\    of_leaf : LeftLeaf -> Str
-        \\    of_leaf = |leaf| leaf.label()
-        \\}
-        },
-        .{ .rel = "app/.roc_scope_platform/Right.roc", .data =
-        \\import RightLeaf
-        \\
-        \\Right := [Right].{
-        \\    of_leaf : RightLeaf -> Str
-        \\    of_leaf = |leaf| leaf.label()
-        \\}
-        },
-        .{ .rel = "app/.roc_scope_platform/LeftLeaf.roc", .data =
-        \\LeftLeaf := [LeftLeaf].{
-        \\    label : LeftLeaf -> Str
-        \\    label = |_| "left"
-        \\}
-        },
-        .{ .rel = "app/.roc_scope_platform/RightLeaf.roc", .data =
-        \\RightLeaf := [RightLeaf].{
-        \\    label : RightLeaf -> Str
-        \\    label = |_| "right"
-        \\}
-        },
-    };
-    for (files) |file| {
-        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = file.rel, .data = file.data });
-    }
-}
-
-const TestTaskOrder = enum { oldest_first, newest_first };
-
-/// Drive the coordinator on this thread, always running the queued task that
-/// `order` selects. Two orders give two different module discovery and
-/// completion orders for the same program.
-fn runCoordinatorInTaskOrder(coord: *Coordinator, order: TestTaskOrder) (Allocator.Error || CoordinatorError || error{ TestUnexpectedResult, TestExpectedEqual })!void {
-    var held = std.ArrayList(WorkerTask).empty;
-    defer held.deinit(std.testing.allocator);
-    while (!coord.isComplete()) {
-        while (coord.task_channel.tryRecv()) |task| try held.append(std.testing.allocator, task);
-        if (held.items.len == 0) {
-            try std.testing.expect(try coord.tryUnblockAllWaiting());
-            continue;
-        }
-        const task = switch (order) {
-            .oldest_first => held.orderedRemove(0),
-            .newest_first => held.pop().?,
-        };
-        const result = try coord.executeTaskInline(task, coord.inline_worker_allocs.taskAllocators());
-        coord.inline_worker_allocs.resetArena();
-        try coord.handleResult(result);
-    }
-    try std.testing.expectEqual(@as(usize, 0), held.items.len);
-}
-
-/// The app's method lookup scope, as copies of the names of the modules whose
-/// artifacts it lists, in search order. A key no package module owns is the
-/// builtin module's.
-fn appMethodLookupScopeNames(coord: *Coordinator, allocator: Allocator) Allocator.Error![]const []const u8 {
-    const scope = coord.appRootCheckedArtifact().method_lookup_scope.module_ids;
-    const names = try allocator.alloc([]const u8, scope.len);
-    for (scope, names) |key, *name| {
-        name.* = "(builtin)";
-        var pkg_it = coord.packages.iterator();
-        while (pkg_it.next()) |entry| {
-            for (entry.value_ptr.*.modules.items) |*mod| {
-                const artifact = mod.checkedArtifact() orelse continue;
-                if (artifact.key.digest().eql(key)) name.* = try allocator.dupe(u8, mod.name);
-            }
-        }
-    }
-    return names;
-}
-
-test "app method lookup scope follows the platform import graph, not task completion order" {
-    const allocator = std.testing.allocator;
-
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-    try writeMethodScopeOrderFixture(&tmp_dir);
-    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "app/main.roc", allocator);
-    defer allocator.free(app_path);
-
-    var arena_impl = base.SingleThreadArena.init(allocator);
-    defer arena_impl.deinit();
-    const arena = arena_impl.allocator();
-
-    var scopes: [2][]const []const u8 = undefined;
-    for (&scopes, [_]TestTaskOrder{ .oldest_first, .newest_first }) |*scope, order| {
-        const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
-        var coord = try Coordinator.init(
-            allocator,
-            .single_threaded,
-            1,
-            roc_target.RocTarget.detectNative(),
-            try sharedBuiltinModules(),
-            build_options.compiler_compatibility_id,
-            null,
-            roc_ctx,
-        );
-        defer coord.deinit();
-
-        try coord.start();
-        try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
-        try runCoordinatorInTaskOrder(&coord, order);
-        try std.testing.expect(!coord.hasUserErrors());
-        scope.* = try appMethodLookupScopeNames(&coord, arena);
-    }
-
-    // The availability walk pops its seeds last-first: the platform root's
-    // imports `Right`, then `Left`, each followed by its own imports.
-    const expected = [_][]const u8{ "Right", "RightLeaf", "(builtin)", "Left", "LeftLeaf" };
-    for (scopes) |scope| {
-        try std.testing.expectEqual(expected.len, scope.len);
-        for (expected, scope) |want, got| try std.testing.expectEqualStrings(want, got);
-    }
-}
-
 test "hosted distinctness: identical hosted declarations bound to different platform symbols stay distinct" {
     const allocator = std.testing.allocator;
 
@@ -9938,46 +10259,57 @@ fn countHoistedValidations(
     return count;
 }
 
-fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, contents: []const u8) OverwriteFilesUnderDirError!usize {
-    const io = std.testing.io;
-    var dir = try std.Io.Dir.openDirAbsolute(io, absolute_dir, .{ .iterate = true });
-    defer dir.close(io);
-
-    var walker = try dir.walk(allocator);
-    defer walker.deinit();
-
-    var overwritten: usize = 0;
-    while (try walker.next(io)) |entry| {
-        if (entry.kind != .file) continue;
-        try dir.writeFile(io, .{ .sub_path = entry.path, .data = contents });
-        overwritten += 1;
+/// Test-only access to published payloads, without corrupting control records.
+fn testCachePaths(allocator: Allocator, root: []const u8, scope: []const u8, family: @import("artifact_store.zig").Family) @import("artifact_store.zig").Error![][]u8 {
+    var store = try @import("artifact_store.zig").Store.init(allocator, std.testing.io, root);
+    defer store.deinit();
+    const keys = try store.groupKeys(allocator, CacheManager.identity(family, @splat(0), scope));
+    defer allocator.free(keys);
+    var paths: std.ArrayList([]u8) = .empty;
+    errdefer {
+        for (paths.items) |path| allocator.free(path);
+        paths.deinit(allocator);
     }
-    return overwritten;
+    for (keys) |key| {
+        var artifact = (try store.acquireKey(key, store.now())) orelse continue;
+        defer artifact.deinit();
+        try paths.ensureUnusedCapacity(allocator, 1);
+        paths.appendAssumeCapacity(try allocator.dupe(u8, artifact.path));
+    }
+    return paths.toOwnedSlice(allocator);
 }
 
-/// Drop the last byte of every cache entry under `absolute_dir`, leaving a body
-/// whose header lengths no longer describe it.
-fn truncateFilesUnderDir(allocator: Allocator, absolute_dir: []const u8) CorruptCheckedModuleCacheError!usize {
-    const io = std.testing.io;
-    var dir = try std.Io.Dir.openDirAbsolute(io, absolute_dir, .{ .iterate = true });
-    defer dir.close(io);
+fn overwriteFilesUnderDir(allocator: Allocator, root: []const u8, scope: []const u8, family: @import("artifact_store.zig").Family, contents: []const u8) OverwriteFilesUnderDirError!usize {
+    const paths = try testCachePaths(allocator, root, scope, family);
+    defer {
+        for (paths) |path| allocator.free(path);
+        allocator.free(paths);
+    }
+    const filesystem = CoreCtx.os(allocator, allocator, std.testing.io);
+    for (paths) |path| try filesystem.writeFile(path, contents);
+    return paths.len;
+}
 
-    var walker = try dir.walk(allocator);
-    defer walker.deinit();
-
+/// Drop the last byte, leaving header lengths that no longer describe the body.
+fn truncateFilesUnderDir(allocator: Allocator, root: []const u8, scope: []const u8, family: @import("artifact_store.zig").Family) CorruptCheckedModuleCacheError!usize {
+    const paths = try testCachePaths(allocator, root, scope, family);
+    defer {
+        for (paths) |path| allocator.free(path);
+        allocator.free(paths);
+    }
     var truncated: usize = 0;
-    while (try walker.next(io)) |entry| {
-        if (entry.kind != .file) continue;
-        const contents = try dir.readFileAlloc(io, entry.path, allocator, .unlimited);
+    const filesystem = CoreCtx.os(allocator, allocator, std.testing.io);
+    for (paths) |path| {
+        const contents = try filesystem.readFile(path, allocator);
         defer allocator.free(contents);
         if (contents.len == 0) continue;
-        try dir.writeFile(io, .{ .sub_path = entry.path, .data = contents[0 .. contents.len - 1] });
+        try filesystem.writeFile(path, contents[0 .. contents.len - 1]);
         truncated += 1;
     }
     return truncated;
 }
 
-fn corruptCheckedModuleEnvIdentBytesLens(allocator: Allocator, checked_module_cache_dir: []const u8) CorruptCheckedModuleCacheError!usize {
+fn corruptCheckedModuleEnvIdentBytesLens(allocator: Allocator, root: []const u8, checked_module_cache_dir: []const u8) CorruptCheckedModuleCacheError!usize {
     const env_ident_bytes_len_offset =
         checked_module_cache_header_len +
         @offsetOf(ModuleEnv.Serialized, "common") +
@@ -9987,22 +10319,20 @@ fn corruptCheckedModuleEnvIdentBytesLens(allocator: Allocator, checked_module_ca
         @offsetOf(collections.SafeList(u8).Serialized, "len");
 
     const io = std.testing.io;
-    var dir = try std.Io.Dir.openDirAbsolute(io, checked_module_cache_dir, .{ .iterate = true });
-    defer dir.close(io);
-
-    var walker = try dir.walk(allocator);
-    defer walker.deinit();
-
+    const filesystem = CoreCtx.os(allocator, allocator, io);
+    const paths = try testCachePaths(allocator, root, checked_module_cache_dir, .checked);
+    defer {
+        for (paths) |path| allocator.free(path);
+        allocator.free(paths);
+    }
     var corrupted: usize = 0;
-    while (try walker.next(io)) |entry| {
-        if (entry.kind != .file) continue;
-
-        const bytes = try dir.readFileAlloc(io, entry.path, allocator, .limited(@import("cache_config.zig").Constants.MAX_CACHE_SIZE));
+    for (paths) |path| {
+        const bytes = try filesystem.readFile(path, allocator);
         defer allocator.free(bytes);
         if (bytes.len < env_ident_bytes_len_offset + @sizeOf(u64)) continue;
 
         std.mem.writeInt(u64, bytes[env_ident_bytes_len_offset..][0..8], std.math.maxInt(u64), .little);
-        try dir.writeFile(io, .{ .sub_path = entry.path, .data = bytes });
+        try filesystem.writeFile(path, bytes);
         corrupted += 1;
     }
 
@@ -10257,13 +10587,20 @@ test "Coordinator corrupt checked module cache entries compile from source" {
     const config = CacheConfig{ .cache_dir = cache_dir };
     const checked_module_cache_dir = try config.getCheckedArtifactCacheDir(allocator);
     defer allocator.free(checked_module_cache_dir);
-    const overwritten = try overwriteFilesUnderDir(allocator, checked_module_cache_dir, "not a checked module cache entry");
+    const overwritten = try overwriteFilesUnderDir(allocator, cache_dir, checked_module_cache_dir, .checked, "not a checked module cache entry");
     try std.testing.expect(overwritten > 0);
+    // Inference entries also restore checked environments; corrupting them as
+    // well leaves source as the only admissible input.
+    const inference_cache_dir = try config.getInferenceCacheDir(allocator);
+    defer allocator.free(inference_cache_dir);
+    const overwritten_inference = try overwriteFilesUnderDir(allocator, cache_dir, inference_cache_dir, .checked, "not an inference cache entry");
+    try std.testing.expect(overwritten_inference > 0);
 
     const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");
     try std.testing.expectEqual(@as(u32, 0), second.build.cache_hits);
     try std.testing.expect(second.build.modules_compiled > 0);
     try std.testing.expect(second.cache.invalidations > 0);
+    try std.testing.expect(second.cache.inference_invalidations > 0);
 }
 
 test "Coordinator corrupt checked module cache env relocations compile from source" {
@@ -10280,8 +10617,14 @@ test "Coordinator corrupt checked module cache env relocations compile from sour
     const config = CacheConfig{ .cache_dir = cache_dir };
     const checked_module_cache_dir = try config.getCheckedArtifactCacheDir(allocator);
     defer allocator.free(checked_module_cache_dir);
-    const corrupted = try corruptCheckedModuleEnvIdentBytesLens(allocator, checked_module_cache_dir);
+    const corrupted = try corruptCheckedModuleEnvIdentBytesLens(allocator, cache_dir, checked_module_cache_dir);
     try std.testing.expect(corrupted > 0);
+    // Inference entries also restore checked environments; corrupting them as
+    // well leaves source as the only admissible input.
+    const inference_cache_dir = try config.getInferenceCacheDir(allocator);
+    defer allocator.free(inference_cache_dir);
+    const overwritten_inference = try overwriteFilesUnderDir(allocator, cache_dir, inference_cache_dir, .checked, "not an inference cache entry");
+    try std.testing.expect(overwritten_inference > 0);
 
     const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");
     try std.testing.expect(second.build.modules_compiled > 0);
@@ -10406,15 +10749,9 @@ fn readCheckedModuleCacheEntry(allocator: Allocator, cache_dir: []const u8, key:
     const config = CacheConfig{ .cache_dir = cache_dir };
     const entries_dir = try config.getCheckedArtifactCacheDir(allocator);
     defer allocator.free(entries_dir);
-    var dir = try std.Io.Dir.openDirAbsolute(io, entries_dir, .{});
-    defer dir.close(io);
-    const hex = std.fmt.bytesToHex(key, .lower);
-    const sub_path = try std.fs.path.join(allocator, &.{ hex[0..2], hex[2..] });
-    defer allocator.free(sub_path);
-    return dir.readFileAlloc(io, sub_path, allocator, .unlimited) catch |err| switch (err) {
-        error.FileNotFound => null,
-        else => |e| return e,
-    };
+    var store = try @import("artifact_store.zig").Store.init(allocator, io, cache_dir);
+    defer store.deinit();
+    return store.read(allocator, CacheManager.identity(.checked, key, entries_dir), store.now());
 }
 
 test "issue 12059: a checked module's cache entry does not depend on how an importer reads its constants" {
@@ -10494,22 +10831,13 @@ test "issue 12059: an app reading an imported constant at a defaulted nominal ty
 }
 
 /// Count the entry files one cache directory holds.
-fn countCacheEntries(allocator: Allocator, absolute_dir: []const u8) (std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || Allocator.Error)!usize {
-    const io = std.testing.io;
-    var dir = std.Io.Dir.openDirAbsolute(io, absolute_dir, .{ .iterate = true }) catch |err| switch (err) {
-        error.FileNotFound => return 0,
-        else => |e| return e,
-    };
-    defer dir.close(io);
-
-    var walker = try dir.walk(allocator);
-    defer walker.deinit();
-
-    var count: usize = 0;
-    while (try walker.next(io)) |entry| {
-        if (entry.kind == .file) count += 1;
+fn countCacheEntries(allocator: Allocator, root: []const u8, scope: []const u8, family: @import("artifact_store.zig").Family) @import("artifact_store.zig").Error!usize {
+    const paths = try testCachePaths(allocator, root, scope, family);
+    defer {
+        for (paths) |path| allocator.free(path);
+        allocator.free(paths);
     }
-    return count;
+    return paths.len;
 }
 
 test "canonicalized module cache hits every module on a second compile and produces identical output" {
@@ -10592,6 +10920,314 @@ test "canonicalized module cache entry survives a change to an imported module" 
     try std.testing.expect(second.build.cache_misses > 0);
 }
 
+test "issue 12592: a dependency test edit preserves importer checking results" {
+    const allocator = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+
+    const a_source =
+        \\A := {}.{
+        \\    value : {} -> I64
+        \\    value = |_| 7
+        \\}
+        \\
+    ;
+    try writeFileImportFixture(&tmp_dir, "checking_dependency",
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import C
+        \\
+        \\main! = |_args| {
+        \\    _ = C.value({})
+        \\    Ok({})
+        \\}
+    );
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "checking_dependency/app/A.roc",
+        .data = a_source ++ "\nexpect A.value({}) == 7\n",
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "checking_dependency/app/B.roc",
+        .data =
+        \\import A
+        \\
+        \\B := {}.{
+        \\    value : {} -> I64
+        \\    value = |arg| A.value(arg)
+        \\}
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "checking_dependency/app/C.roc",
+        .data =
+        \\import B
+        \\
+        \\C := {}.{
+        \\    value : {} -> I64
+        \\    value = |arg| B.value(arg)
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "checking_dependency/app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    var cold = try compileAppFacts(allocator, cache_dir, app_path);
+    defer cold.deinit(allocator);
+    try std.testing.expectEqualStrings("", cold.reports);
+    try std.testing.expectEqual(@as(u32, 0), cold.build.cache_hits);
+
+    var concurrent = try compileAppFactsWithWorkers(allocator, null, app_path, null, 4);
+    defer concurrent.deinit(allocator);
+    try std.testing.expectEqualStrings(cold.reports, concurrent.reports);
+    try std.testing.expectEqualSlices([32]u8, cold.artifact_digests, concurrent.artifact_digests);
+
+    var warm = try compileAppFacts(allocator, cache_dir, app_path);
+    defer warm.deinit(allocator);
+    try std.testing.expectEqualStrings("", warm.reports);
+    try std.testing.expectEqual(@as(u32, 0), warm.build.modules_compiled);
+    try std.testing.expectEqual(cold.build.modules_compiled, warm.build.cache_hits);
+
+    // Only A's test changes. All source-level callable signatures and the
+    // code B and C call are identical. The full implementation keys must
+    // nevertheless change throughout this chain.
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "checking_dependency/app/A.roc",
+        .data = a_source ++ "\nexpect A.value({}) != 8\n",
+    });
+    var edited = try compileAppFacts(allocator, cache_dir, app_path);
+    defer edited.deinit(allocator);
+    try std.testing.expectEqualStrings("", edited.reports);
+    try std.testing.expectEqual(@as(u32, 1), edited.build.canonicalized_cache_misses);
+
+    // A cache hit must still publish current implementation identities.
+    // Compare with an independent uncached build before checking work counts.
+    var uncached = try compileAppFacts(allocator, null, app_path);
+    defer uncached.deinit(allocator);
+    try std.testing.expectEqualStrings(uncached.reports, edited.reports);
+    try std.testing.expectEqualSlices([32]u8, uncached.artifact_keys, edited.artifact_keys);
+    var changed_keys: usize = 0;
+    for (edited.artifact_keys) |key| {
+        const unchanged = for (cold.artifact_keys) |previous| {
+            if (std.mem.eql(u8, &key, &previous)) break true;
+        } else false;
+        if (!unchanged) changed_keys += 1;
+    }
+    try std.testing.expect(changed_keys >= 4); // A, B, C, and the app.
+
+    // Establishing A's new checking interface may require inference. Its
+    // unchanged importers must reuse checking without losing the new keys.
+    try std.testing.expectEqual(@as(u32, 1), edited.build.modules_compiled);
+    try std.testing.expectEqual(warm.build.cache_hits - 1, edited.build.cache_hits);
+    try std.testing.expectEqualSlices([32]u8, uncached.artifact_digests, edited.artifact_digests);
+    try std.testing.expectEqual(@as(u32, 3), edited.build.inference_cache_hits); // B, C, app
+    try std.testing.expectEqual(@as(u32, 1), edited.build.checking_interfaces_built);
+    for (edited.checking) |module| {
+        if (!std.mem.eql(u8, module.name, "B") and !std.mem.eql(u8, module.name, "C")) continue;
+        try std.testing.expectEqual(@as(u32, 0), module.inference_runs);
+        try std.testing.expectEqual(@as(u32, 0), module.interfaces_built);
+        try std.testing.expectEqual(@as(u32, 1), module.inference_hits);
+        try std.testing.expect(module.owner_bindings > 0);
+    }
+
+    // Same-signature implementations, a revert, an unused-argument warning,
+    // and moved source locations must all agree with an independent build.
+    // Byte equality covers current checked bodies, evaluated constants,
+    // relations, and source/debug origins, not just the module keys.
+    const implementations = [_]struct { source: []const u8, reusable: bool }{
+        .{ .source = "A := {}.{ value : {} -> I64\n value = |_| 8\n}\nexpect A.value({}) == 8\n", .reusable = true },
+        .{ .source = "A := {}.{ value : {} -> I64\n value = |_| 9\n}\nexpect A.value({}) == 9\n", .reusable = true },
+        .{ .source = a_source ++ "\nexpect A.value({}) == 7\n", .reusable = true },
+        .{ .source = "A := {}.{ value : {} -> I64\n value = |unused| 8\n}\nexpect A.value({}) == 8\n", .reusable = false },
+        .{ .source = "\n\nA := {}.{ value : {} -> I64\n value = |_| 8\n}\nexpect A.value({}) == 8\n", .reusable = true },
+    };
+    for (implementations) |edit| {
+        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "checking_dependency/app/A.roc", .data = edit.source });
+        var cached = try compileAppFacts(allocator, cache_dir, app_path);
+        defer cached.deinit(allocator);
+        var fresh = try compileAppFacts(allocator, null, app_path);
+        defer fresh.deinit(allocator);
+        try std.testing.expectEqualStrings(fresh.reports, cached.reports);
+        try std.testing.expectEqualSlices([32]u8, fresh.artifact_keys, cached.artifact_keys);
+        try std.testing.expectEqualSlices([32]u8, fresh.artifact_digests, cached.artifact_digests);
+        if (!edit.reusable) continue;
+        try std.testing.expect(cached.build.modules_compiled <= 1);
+        for (cached.checking) |module| {
+            if (std.mem.eql(u8, module.name, "B") or std.mem.eql(u8, module.name, "C")) {
+                try std.testing.expectEqual(@as(u32, 0), module.inference_runs);
+                try std.testing.expectEqual(@as(u32, 0), module.interfaces_built);
+            }
+        }
+    }
+    // Platform requirement context also uses its checking surface, so a test
+    // edit in the platform republishes the app without repeating its inference.
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "checking_dependency/app/.roc_echo_platform/main.roc",
+        .data = echo_platform_root_source ++ "\nexpect True\n",
+    });
+    var platform_edit = try compileAppFacts(allocator, cache_dir, app_path);
+    defer platform_edit.deinit(allocator);
+    var platform_fresh = try compileAppFacts(allocator, null, app_path);
+    defer platform_fresh.deinit(allocator);
+    try std.testing.expectEqualStrings(platform_fresh.reports, platform_edit.reports);
+    try std.testing.expectEqualSlices([32]u8, platform_fresh.artifact_digests, platform_edit.artifact_digests);
+    try std.testing.expectEqual(@as(u32, 1), platform_edit.build.modules_compiled);
+    try std.testing.expectEqual(@as(u32, 1), platform_edit.build.inference_cache_hits);
+
+    // A changed result type, changed nominal representation, and a dependency
+    // error change checking inputs. Inference must run in affected importers.
+    const interfaces = [_][]const u8{
+        "A := {}.{ value : {} -> Str\n value = |_| \"changed\"\n}\n",
+        "A := { hidden : U64 }.{ value : {} -> I64\n value = |_| 7\n}\n",
+        "A := {}.{ value : {} -> I64\n value = |_| 7\n extra = |arg| arg\n}\n",
+        "A := {}.{ value : {} -> I64\n value = |_| 7\n encoder_for : _\n}\n",
+        "A := {}.{ value : {} -> I64\n value = |_| 7\n step : a -> a where [a.bump : a -> a]\n step = |arg| arg.bump()\n}\n",
+        "A := {}.{ value : {} -> I64\n value = |_| 7\n step : a -> a where [a.next : a -> a]\n step = |arg| arg.next()\n}\n",
+        "A := {}.{ value : {} -> I64\n value = |_| \"wrong\"\n}\n",
+    };
+    for (interfaces) |source| {
+        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "checking_dependency/app/A.roc", .data = source });
+        var cached = try compileAppFacts(allocator, cache_dir, app_path);
+        defer cached.deinit(allocator);
+        var fresh = try compileAppFacts(allocator, null, app_path);
+        defer fresh.deinit(allocator);
+        try std.testing.expectEqualStrings(fresh.reports, cached.reports);
+        try std.testing.expectEqualSlices([32]u8, fresh.artifact_keys, cached.artifact_keys);
+        try std.testing.expectEqualSlices([32]u8, fresh.artifact_digests, cached.artifact_digests);
+        try std.testing.expect(cached.build.modules_compiled > 1);
+    }
+
+    // A partially usable cache still has current source/full entries, but its
+    // inference capsules are corrupt. Reject those optional entries and obtain
+    // the same current output by checking again.
+    const config = CacheConfig{ .enabled = true, .cache_dir = cache_dir, .roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io) };
+    const inference_dir = try config.getInferenceCacheDir(allocator);
+    defer allocator.free(inference_dir);
+    try std.testing.expect(try overwriteFilesUnderDir(allocator, cache_dir, inference_dir, .checked, "truncated inference capsule") > 0);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "checking_dependency/app/A.roc",
+        .data = "A := {}.{ value : {} -> I64\n value = |_| 2\n}\nexpect A.value({}) == 2\n",
+    });
+    var repaired = try compileAppFacts(allocator, cache_dir, app_path);
+    defer repaired.deinit(allocator);
+    var fresh_repaired = try compileAppFacts(allocator, null, app_path);
+    defer fresh_repaired.deinit(allocator);
+    try std.testing.expect(repaired.cache.inference_invalidations > 0);
+    try std.testing.expectEqual(@as(u32, 4), repaired.build.modules_compiled);
+    try std.testing.expectEqualStrings(fresh_repaired.reports, repaired.reports);
+    try std.testing.expectEqualSlices([32]u8, fresh_repaired.artifact_digests, repaired.artifact_digests);
+}
+
+test "issue 12611: declaration slots and diagnostic outcomes survive dependency edits" {
+    const allocator = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+    try writeFileImportFixture(&tmp_dir, "inference_outcomes",
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import C
+        \\main! = |_args| { _ = C.value({})
+        \\    Ok({}) }
+    );
+    const a_sources = [_][]const u8{
+        "A := {}.{ value : {} -> I64\n value = |_| 7\n}\n",
+        "expect True\nA := {}.{ value : {} -> I64\n value = |_| { local = 8\n local }\n}\n",
+        "\n\nexpect 1 == 1\nA := {}.{ value : {} -> I64\n value = |_| 9\n}\n",
+        "A := {}.{ value : {} -> I64\n value = |_| 7\n}\n",
+    };
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "inference_outcomes/app/C.roc",
+        .data = "import B\nC := {}.{ value : {} -> I64\n value = |arg| B.value(arg)\n carry = |item| B.id(item)\n}\n",
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "inference_outcomes/app/main.roc", allocator);
+    defer allocator.free(app_path);
+    const outcomes = [_]struct { source: []const u8, reports: bool }{
+        .{ .source = "import A\nB := {}.{ value : {} -> I64\n value = |arg| A.value(arg)\n id : A -> A\n id = |item| item\n}\n", .reports = false },
+        .{ .source = "import A\nB := {}.{ value : {} -> I64\n value = |unused| A.value({})\n tag : {} -> [Ok, ..]\n tag = |_| Ok\n id : A -> A\n id = |item| item\n}\n", .reports = true },
+        .{ .source = "import A\nB := {}.{ value : {} -> I64\n value = |arg| A.value(arg)\n bad : I64\n bad = \"wrong\"\n id : A -> A\n id = |item| item\n}\n", .reports = true },
+        .{ .source = "import A\nB := {}.{ value : {} -> I64\n value = |arg| A.value(arg)\n bad : A\n bad = \"changed error\"\n id : A -> A\n id = |item| item\n}\n", .reports = true },
+        .{ .source = "import A\nB := {}.{ value : {} -> I64\n value = |arg| A.value(arg)\n id : A -> A\n id = |item| item\n}\n", .reports = false },
+    };
+    var saw_reference_binding = false;
+    var saw_diagnostic_replay = false;
+    for (outcomes) |outcome| {
+        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "inference_outcomes/app/B.roc", .data = outcome.source });
+        for (a_sources, 0..) |a_source, edit| {
+            try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "inference_outcomes/app/A.roc", .data = a_source });
+            var cached = try compileAppFacts(allocator, cache_dir, app_path);
+            defer cached.deinit(allocator);
+            var fresh = try compileAppFacts(allocator, null, app_path);
+            defer fresh.deinit(allocator);
+            try std.testing.expectEqual(outcome.reports, cached.reports.len != 0);
+            try std.testing.expectEqualStrings(fresh.reports, cached.reports);
+            try std.testing.expectEqual(fresh.failed_modules, cached.failed_modules);
+            try std.testing.expectEqual(fresh.has_errors, cached.has_errors);
+            try std.testing.expectEqualSlices([32]u8, fresh.artifact_keys, cached.artifact_keys);
+            try std.testing.expectEqualSlices([32]u8, fresh.artifact_digests, cached.artifact_digests);
+            if (edit == 0) continue;
+            for (cached.checking) |module| {
+                if (!std.mem.eql(u8, module.name, "B") and !std.mem.eql(u8, module.name, "C")) continue;
+                try std.testing.expectEqual(@as(u32, 0), module.inference_runs);
+                try std.testing.expectEqual(@as(u32, 0), module.interfaces_built);
+                if (module.inference_hits != 0 and std.mem.eql(u8, module.name, "B")) {
+                    try std.testing.expectEqual(@as(u32, 1), module.inference_hits);
+                    try std.testing.expect(module.reference_bindings > 0);
+                    saw_reference_binding = true;
+                    saw_diagnostic_replay = saw_diagnostic_replay or module.diagnostics_replayed > 0;
+                    try std.testing.expectEqual(outcome.reports, module.diagnostics_replayed > 0);
+                }
+            }
+        }
+    }
+    try std.testing.expect(saw_reference_binding);
+    try std.testing.expect(saw_diagnostic_replay);
+
+    // Dependency reports come from its current source, even when importer
+    // inference is reused. Shift a warning's snippet and then remove it.
+    const dependency_reports = [_][]const u8{
+        "A := {}.{ value : {} -> I64\n value = |unused| 7\n}\n",
+        "\n\nexpect True\nA := {}.{ value : {} -> I64\n value = |unused| 7\n}\n",
+        a_sources[0],
+    };
+    for (dependency_reports, 0..) |source, index| {
+        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "inference_outcomes/app/A.roc", .data = source });
+        var cached = try compileAppFacts(allocator, cache_dir, app_path);
+        defer cached.deinit(allocator);
+        var fresh = try compileAppFacts(allocator, null, app_path);
+        defer fresh.deinit(allocator);
+        try std.testing.expectEqual(index < 2, cached.reports.len != 0);
+        try std.testing.expectEqualStrings(fresh.reports, cached.reports);
+        try std.testing.expectEqual(fresh.has_errors, cached.has_errors);
+        for (cached.checking) |module| {
+            if (std.mem.eql(u8, module.name, "B") or std.mem.eql(u8, module.name, "C")) try std.testing.expectEqual(@as(u32, 0), module.inference_runs);
+        }
+    }
+
+    // The same inference capsules must observe the current dependency bodies
+    // when evaluating a demanded compile-time constant.
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "inference_outcomes/app/main.roc",
+        .data = "app [main!] { pf: platform \"./.roc_echo_platform/main.roc\" }\nimport C\nimport pf.Echo\nmessage = if C.value({}) == 7 \"ok\" else crash \"current implementation\"\nmain! = |_args| { Echo.line!(message)\n Ok({}) }\n",
+    });
+    for (a_sources, 0..) |a_source, edit| {
+        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "inference_outcomes/app/A.roc", .data = a_source });
+        var cached = try compileAppFacts(allocator, cache_dir, app_path);
+        defer cached.deinit(allocator);
+        var fresh = try compileAppFacts(allocator, null, app_path);
+        defer fresh.deinit(allocator);
+        try std.testing.expectEqualStrings(fresh.reports, cached.reports);
+        try std.testing.expectEqual(edit == 1 or edit == 2, cached.has_errors);
+        try std.testing.expectEqual(fresh.has_errors, cached.has_errors);
+        for (cached.checking) |module| {
+            if (std.mem.eql(u8, module.name, "B") or std.mem.eql(u8, module.name, "C")) try std.testing.expectEqual(@as(u32, 0), module.inference_runs);
+        }
+    }
+}
+
 test "canonicalized module cache shares one entry between identical modules in different packages" {
     const allocator = std.testing.allocator;
 
@@ -10667,7 +11303,7 @@ test "canonicalized module cache shares one entry between identical modules in d
     // the cache holds exactly one fewer entry than the build canonicalized
     // modules, because nothing about a module's package, path, or importers
     // reaches its key.
-    const entry_count = try countCacheEntries(allocator, canonicalized_dir);
+    const entry_count = try countCacheEntries(allocator, cache_dir, canonicalized_dir, .canonicalized);
     try std.testing.expectEqual(first.build.canonicalized_cache_misses - 1, @as(u32, @intCast(entry_count)));
 
     // Both of them load that one entry on the next build.
@@ -10675,7 +11311,7 @@ test "canonicalized module cache shares one entry between identical modules in d
     defer second.deinit(allocator);
     try std.testing.expectEqual(first.build.canonicalized_cache_misses, second.build.canonicalized_cache_hits);
     try std.testing.expectEqual(@as(u32, 0), second.build.canonicalized_cache_misses);
-    try std.testing.expectEqual(entry_count, try countCacheEntries(allocator, canonicalized_dir));
+    try std.testing.expectEqual(entry_count, try countCacheEntries(allocator, cache_dir, canonicalized_dir, .canonicalized));
     try std.testing.expectEqualStrings(first.reports, second.reports);
 }
 
@@ -10925,7 +11561,7 @@ test "Coordinator corrupt canonicalized module cache entries compile from source
     defer allocator.free(canonicalized_dir);
 
     // A body that is not a canonicalized entry at all.
-    const overwritten = try overwriteFilesUnderDir(allocator, canonicalized_dir, "not a canonicalized module cache entry");
+    const overwritten = try overwriteFilesUnderDir(allocator, cache_dir, canonicalized_dir, .canonicalized, "not a canonicalized module cache entry");
     try std.testing.expect(overwritten > 0);
 
     var second = try compileAppFacts(allocator, cache_dir, app_path);
@@ -10941,7 +11577,7 @@ test "Coordinator corrupt canonicalized module cache entries compile from source
     try std.testing.expectEqualStrings(first.reports, third.reports);
 
     // A truncated body is rejected the same way.
-    const truncated = try truncateFilesUnderDir(allocator, canonicalized_dir);
+    const truncated = try truncateFilesUnderDir(allocator, cache_dir, canonicalized_dir, .canonicalized);
     try std.testing.expect(truncated > 0);
 
     var fourth = try compileAppFacts(allocator, cache_dir, app_path);
@@ -12466,5 +13102,278 @@ test "app discovery retains tokenizer rejection reports before platform resoluti
             try std.testing.expect(std.mem.find(u8, rendered.written(), "main.roc:2:") != null);
         }
         try std.testing.expect(reports.next() == null);
+    }
+}
+
+test "module-independent compile-time values survive an imported test edit" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const source =
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\import Value
+        \\answer = Value.get({})
+        \\fixed = 17.I64
+        \\wrapped = Value.Token.Token(3.I64)
+    ;
+    const dependency =
+        \\Value := {}.{
+        \\    Token := [Token(I64)]
+        \\    get : {} -> I64
+        \\    get = |_| 41.I64
+        \\}
+    ;
+    try writeReuseFixture(&tmp, source);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Value.roc", .data = dependency });
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+    var first = try compileForReuseVerifying(allocator, cache, app, true);
+    defer first.deinit(allocator);
+    try std.testing.expectEqual(@as(?i64, 41), first.value("answer"));
+
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Value.roc", .data = dependency ++ "\nexpect True\n" });
+    // Verification evaluates the transplanted roots independently and checks
+    // their values, read dependencies and observations before installation.
+    var edited = try compileForReuseVerifying(allocator, cache, app, true);
+    defer edited.deinit(allocator);
+    try std.testing.expect(edited.stats.transplanted_roots > 0);
+    try std.testing.expectEqual(@as(?i64, 41), edited.value("answer"));
+    try std.testing.expectEqual(@as(?i64, 17), edited.value("fixed"));
+    try std.testing.expect(!std.mem.eql(u8, &first.identity("fixed"), &edited.identity("fixed")));
+
+    const changed = try std.mem.replaceOwned(u8, allocator, dependency, "41.I64", "42.I64");
+    defer allocator.free(changed);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Value.roc", .data = changed });
+    var implementation = try compileForReuseVerifying(allocator, cache, app, true);
+    defer implementation.deinit(allocator);
+    // Changing a method also changes the imported semantic type context,
+    // so this case requires invalidation rather than a particular reuse count.
+    try std.testing.expectEqual(@as(?i64, 42), implementation.value("answer"));
+    try std.testing.expectEqual(@as(?i64, 17), implementation.value("fixed"));
+}
+
+test "application builds keep test bodies in discovery rather than runtime demand" {
+    if (is_freestanding) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeCacheKeyPurityFixture(&tmp, "build_discovery");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "build_discovery/app/main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\main! = |_args| Ok({})
+        \\expect List.len([1.I64, 2, 3]) == 3
+        \\expect List.len([4.I64, 5]) == 2
+        ,
+    });
+    const app_path = try tmp.dir.realPathFileAlloc(std.testing.io, "build_discovery/app/main.roc", allocator);
+    defer allocator.free(app_path);
+    var coord = try Coordinator.init(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, null, CoreCtx.os(allocator, allocator, std.testing.io));
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+    var arena = base.SingleThreadArena.init(allocator);
+    defer arena.deinit();
+    try coord.start();
+    try coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+    const app = coord.appRootCheckedArtifact();
+    const test_modules = [_]CheckedArtifact.CheckedModuleArtifactKey{app.key};
+    coord.program_test_modules = &test_modules;
+    coord.runtime_lowering = .{ .target = .{ .inline_expects = .run } };
+    try coord.finishCheckedProgram(.executable_artifacts);
+    try std.testing.expect(!coord.hasUserErrors());
+    const prepared = &coord.program_session.?.runtime_prepared.?;
+    var runtime_count: usize = 0;
+    for (prepared.program.lifted.rootsView()) |root| {
+        try std.testing.expect(root.request.kind != .test_expect);
+        if (root.request.abi != .compile_time) runtime_count += 1;
+    }
+    try std.testing.expect(runtime_count > 0);
+}
+
+test "semantic test discovery survives edits and never hides invalid literals or observations" {
+    if (is_freestanding) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeCacheKeyPurityFixture(&tmp, "discovery_cache");
+    try tmp.dir.createDirPath(std.testing.io, "cache");
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app_path = try tmp.dir.realPathFileAlloc(std.testing.io, "discovery_cache/app/main.roc", allocator);
+    defer allocator.free(app_path);
+    const source =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\Word := { text : Str }.{
+        \\    from_quote : Str -> Try(Word, [BadQuotedBytes(Str)])
+        \\    from_quote = |text| if text == "bad" Err(BadQuotedBytes("rejected")) else Ok(Word.{ text })
+        \\    show : Word -> Str
+        \\    show = |word| word.text
+        \\}
+        \\label : a -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
+        \\label = |_| "good"
+        \\base = List.len([1.I64, 2, 3])
+        \\add_base = |value| base + value
+        \\total = add_base(3)
+        \\main! = |_args| if total == 6 Ok({}) else crash "wrong total"
+        \\expect {
+        \\    word : Word
+        \\    word = label(Word.{ text: "good" })
+        \\    List.contains(List.map([1.U64, 2, 3], add_base), 6) and word.show() == "good"
+        \\}
+    ;
+    const Run = struct {
+        const Result = struct { hits: u32, errors: bool, observed: bool };
+        fn run(gpa: Allocator, directory: []const u8, path: []const u8) error{ AbsolutePlatformPath, AccessDenied, BuiltinArtifactVersionMismatch, BuiltinLowLevelAnnotationMustBeFunction, Canceled, CorruptArtifact, CorruptBuiltinArtifact, CorruptEmbeddedBuiltins, EmptyCode, FileNotFound, HeaderParseFailed, Internal, InvalidPackageHeader, InvalidPlatformPath, IoError, LockedMemoryLimitExceeded, LowLevelOperationsNotFound, MmapFailed, MprotectFailed, NotAnAppHeader, OutOfMemory, RuntimeError, SourceTokenizationFailed, StaleEmbeddedBuiltins, StreamTooLong, SystemResources, ThreadQuotaExceeded, Unexpected, UnsupportedBuiltinAnnotationOnly, UnsupportedPackageSpec, UnsupportedPlatform, UnsupportedPlatformSpec, UnwindRegistrationFailed, VirtualAllocFailed, VirtualProtectFailed }!Result {
+            var capture = StderrCapture{ .allocator = gpa };
+            defer capture.bytes.deinit(gpa);
+            var context = CoreCtx.os(gpa, gpa, std.testing.io);
+            context.ctx = &capture;
+            context.vtable.writeStderr = StderrCapture.write;
+            var manager = CacheManager.init(gpa, .{ .enabled = true, .cache_dir = directory }, context);
+            var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, context);
+            defer coord.deinit();
+            coord.enable_hosted_transform = true;
+            var arena = base.SingleThreadArena.init(gpa);
+            defer arena.deinit();
+            try coord.start();
+            try coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = path });
+            try coord.coordinatorLoop();
+            const app = coord.appRootCheckedArtifact();
+            const test_modules = [_]CheckedArtifact.CheckedModuleArtifactKey{app.key};
+            coord.program_test_modules = &test_modules;
+            coord.runtime_lowering = .{ .target = .{ .inline_expects = .run } };
+            try coord.finishCheckedProgram(.executable_artifacts);
+            return .{ .hits = coord.ctfe_reuse_stats.settled_discovery_roots, .errors = coord.hasUserErrors(), .observed = std.mem.find(u8, capture.bytes.items, "discovery observation") != null };
+        }
+    };
+    const relative = "discovery_cache/app/main.roc";
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = source });
+    const cold = try Run.run(allocator, cache, app_path);
+    try std.testing.expect(!cold.errors);
+    try std.testing.expectEqual(@as(u32, 0), cold.hits);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = source ++ "\n# unrelated edit\n" });
+    const edited = try Run.run(allocator, cache, app_path);
+    try std.testing.expect(!edited.errors);
+    try std.testing.expectEqual(@as(u32, 1), edited.hits);
+
+    // Changing the conversion invalidates the certificate even though the
+    // expect itself did not change, and repeated erroneous builds never settle.
+    const invalid = try std.mem.replaceOwned(u8, allocator, source, "text == \"bad\"", "text == \"good\"");
+    defer allocator.free(invalid);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = invalid });
+    for (0..2) |_| {
+        const result = try Run.run(allocator, cache, app_path);
+        try std.testing.expect(result.errors);
+        try std.testing.expectEqual(@as(u32, 0), result.hits);
+    }
+    const observing = try std.mem.replaceOwned(u8, allocator, source, "from_quote = |text| if text == \"bad\" Err(BadQuotedBytes(\"rejected\")) else Ok(Word.{ text })", "from_quote = |text| {\n        dbg \"discovery observation\"\n        Ok(Word.{ text })\n    }");
+    defer allocator.free(observing);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = observing });
+    for (0..2) |_| {
+        const result = try Run.run(allocator, cache, app_path);
+        try std.testing.expect(!result.errors);
+        try std.testing.expectEqual(@as(u32, 0), result.hits);
+        try std.testing.expect(result.observed);
+    }
+}
+
+test "initializer validation certificates defer values without losing errors observations or test positions" {
+    if (is_freestanding) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeCacheKeyPurityFixture(&tmp, "validation_cache");
+    try tmp.dir.createDirPath(std.testing.io, "cache");
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const path = try tmp.dir.realPathFileAlloc(std.testing.io, "validation_cache/app/main.roc", allocator);
+    defer allocator.free(path);
+    const relative = "validation_cache/app/main.roc";
+    const source =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\Foo := { value : I64 }.{
+        \\    get = |foo| foo.value
+        \\}
+        \\make = |n| if n == 0 crash "initializer validation failed" else Foo.{ value: n + 1 }
+        \\unused = make(41)
+        \\main! = |_args| Ok({})
+        \\expect 1.I64 + 1 == 2
+        \\expect 3.I64 + 1 == 4
+    ;
+    const Run = struct {
+        const Result = struct { hits: u32, evaluated: u64, errors: bool, observed: bool };
+        fn run(gpa: Allocator, directory: []const u8, app_path: []const u8) error{ AbsolutePlatformPath, AccessDenied, BuiltinArtifactVersionMismatch, BuiltinLowLevelAnnotationMustBeFunction, Canceled, CorruptArtifact, CorruptBuiltinArtifact, CorruptEmbeddedBuiltins, EmptyCode, FileNotFound, HeaderParseFailed, Internal, InvalidPackageHeader, InvalidPlatformPath, IoError, LockedMemoryLimitExceeded, LowLevelOperationsNotFound, MmapFailed, MprotectFailed, NotAnAppHeader, OutOfMemory, RuntimeError, SourceTokenizationFailed, StaleEmbeddedBuiltins, StreamTooLong, SystemResources, TestExpectedEqual, TestUnexpectedResult, ThreadQuotaExceeded, Unexpected, UnsupportedBuiltinAnnotationOnly, UnsupportedPackageSpec, UnsupportedPlatform, UnsupportedPlatformSpec, UnwindRegistrationFailed, VirtualAllocFailed, VirtualProtectFailed }!Result {
+            var capture = StderrCapture{ .allocator = gpa };
+            defer capture.bytes.deinit(gpa);
+            var context = CoreCtx.os(gpa, gpa, std.testing.io);
+            context.ctx = &capture;
+            context.vtable.writeStderr = StderrCapture.write;
+            var manager = CacheManager.init(gpa, .{ .enabled = true, .cache_dir = directory }, context);
+            var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, context);
+            defer coord.deinit();
+            coord.enable_hosted_transform = true;
+            var arena = base.SingleThreadArena.init(gpa);
+            defer arena.deinit();
+            try coord.start();
+            try coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = app_path });
+            try coord.coordinatorLoop();
+            try std.testing.expect(!coord.hasUserErrors());
+            const app = coord.appRootCheckedArtifact();
+            var roots = std.ArrayList(CheckedArtifact.RootRequest).empty;
+            defer roots.deinit(gpa);
+            var metadata = std.ArrayList(lir.CheckedPipeline.RootTestPlanMetadata).empty;
+            defer metadata.deinit(gpa);
+            for (app.root_requests.requests) |request| {
+                if (request.kind != .test_expect) continue;
+                const index: u32 = @intCast(roots.items.len);
+                try roots.append(gpa, request);
+                try metadata.append(gpa, .{ .request_index = index, .root_order = index + 7, .result_index = index + 11, .module_index = 0, .root_index = index });
+            }
+            coord.runtime_lowering = .{ .root_module = app, .target = .{ .inline_expects = .run }, .explicit_roots = .{ .requests = roots.items, .test_plan_metadata = metadata.items } };
+            try coord.finishCheckedProgram(.executable_artifacts);
+            if (!coord.hasUserErrors()) if (coord.program_session.?.runtime_prepared) |prepared| {
+                for (prepared.test_plan_metadata, 0..) |item, index| {
+                    try std.testing.expectEqual(@as(u32, @intCast(index)), item.request_index);
+                    try std.testing.expectEqual(@as(u32, @intCast(index + 7)), item.root_order);
+                    try std.testing.expectEqual(@as(u32, @intCast(index + 11)), item.result_index);
+                }
+            };
+            return .{ .hits = coord.ctfe_reuse_stats.validated_comptime_roots, .evaluated = coord.ctfe_timing.snapshot().roots_evaluated, .errors = coord.hasUserErrors(), .observed = std.mem.find(u8, capture.bytes.items, "initializer observation") != null };
+        }
+    };
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = source });
+    const cold = try Run.run(allocator, cache, path);
+    try std.testing.expect(!cold.errors);
+    try std.testing.expect(cold.evaluated > 0);
+    for ([_][]const u8{ "\n# first edit\n", "\n# second edit\n" }) |edit| {
+        const edited = try std.mem.concat(allocator, u8, &.{ source, edit });
+        defer allocator.free(edited);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = edited });
+        const result = try Run.run(allocator, cache, path);
+        try std.testing.expect(!result.errors);
+        try std.testing.expect(result.hits > 0);
+        try std.testing.expectEqual(@as(u64, 0), result.evaluated);
+    }
+    // A new reader needs the nominal value, even though its validation hit.
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = source ++ "\nexpect unused.get() == 42\n" });
+    const reader = try Run.run(allocator, cache, path);
+    try std.testing.expect(!reader.errors);
+    try std.testing.expect(reader.evaluated > 0);
+    const invalid = try std.mem.replaceOwned(u8, allocator, source, "make(41)", "make(0)");
+    defer allocator.free(invalid);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = invalid });
+    for (0..2) |_| try std.testing.expect((try Run.run(allocator, cache, path)).errors);
+    const observing = try std.mem.replaceOwned(u8, allocator, source, "unused = make(41)", "unused = { dbg \"initializer observation\"\n make(41) }");
+    defer allocator.free(observing);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = observing });
+    for (0..2) |_| {
+        const result = try Run.run(allocator, cache, path);
+        try std.testing.expect(!result.errors);
+        try std.testing.expect(result.observed);
     }
 }

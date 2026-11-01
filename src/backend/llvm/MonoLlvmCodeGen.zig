@@ -386,7 +386,7 @@ pub const MonoLlvmCodeGen = struct {
     /// objects, which may define the same entries and constants.
     object_cache_pack: bool = false,
     /// By static-data export row, the content name an object-cache pack's
-    /// object defines each export under (`ProcArtifact.ContentNames.
+    /// object defines each export under (`CodeExcerpt.ContentNames.
     /// initObjectData`); a host-visible export keeps its own name and stays
     /// internal to the object.
     pack_data_names: []const []const u8 = &.{},
@@ -411,6 +411,9 @@ pub const MonoLlvmCodeGen = struct {
     /// The current procedure's slot lifetime markers.
     slot_lifetimes: SlotLifetimes,
     stmt_entry_blocks: collections.DenseMap(u32, LlvmBuilder.Function.Block.Index),
+    /// The join body being entered in its own block, which is also the entry
+    /// block of that statement when other paths arrive at it.
+    entering_join_body: ?CFStmtId = null,
     /// Store-indexed statement marks for one statement-graph walk at a time:
     /// a statement is visited when its mark equals `stmt_visit_epoch`.
     stmt_visit_marks: std.ArrayList(u32) = .empty,
@@ -3929,6 +3932,7 @@ pub const MonoLlvmCodeGen = struct {
                         wip.cursor = .{ .block = state.join_block };
                         self.rollbackValues(state.mark);
                         try self.enterMerge(state.body);
+                        self.entering_join_body = state.body;
                         try work.append(wa, .{ .join_after_body = state });
                         try work.append(wa, .{ .node = state.body });
                     } else {
@@ -4343,6 +4347,10 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn enterSharedStmtBlock(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) Error!bool {
+        if (self.entering_join_body == stmt_id) {
+            self.entering_join_body = null;
+            return false;
+        }
         const key = @backingInt(stmt_id);
         const count = self.stmt_incoming_counts.get(key) orelse 0;
         if (count <= 1) return false;
@@ -9524,7 +9532,7 @@ pub const MonoLlvmCodeGen = struct {
     fn emitJoin(self: *MonoLlvmCodeGen, join_stmt: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
         const key = @backingInt(join_stmt.id);
-        const join_block = wip.block(0, "join_body") catch return error.OutOfMemory;
+        const join_block = try self.joinBodyBlock(key, join_stmt.body);
         const after_block = wip.block(0, "join_after") catch return error.OutOfMemory;
         try self.join_points.put(key, .{ .block = join_block, .params = join_stmt.params, .body = join_stmt.body });
 
@@ -9536,6 +9544,24 @@ pub const MonoLlvmCodeGen = struct {
             .mark = self.valueMark(),
         } });
         try work.append(wa, .{ .node = join_stmt.remainder });
+    }
+
+    /// The block a join's jumps enter. A body other paths also arrive at
+    /// without a jump has one block for all of them, so that every edge reaches
+    /// the same merge. A body such a path already emitted is not emitted again.
+    fn joinBodyBlock(self: *MonoLlvmCodeGen, key: u32, body: CFStmtId) Error!LlvmBuilder.Function.Block.Index {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const body_key = @backingInt(body);
+        if ((self.stmt_incoming_counts.get(body_key) orelse 0) <= 1) {
+            return wip.block(0, "join_body") catch return error.OutOfMemory;
+        }
+        if (self.stmt_entry_blocks.get(body_key)) |block| {
+            try self.compiled_joins.put(key, {});
+            return block;
+        }
+        const block = wip.block(0, "join_body") catch return error.OutOfMemory;
+        try self.stmt_entry_blocks.put(body_key, block);
+        return block;
     }
 
     fn emitJump(self: *MonoLlvmCodeGen, jump_stmt: anytype) Error!void {
@@ -13723,35 +13749,21 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeListCapacity(ptr, builder.intValue(self.ptrSizedIntType(), cap) catch return error.OutOfMemory);
     }
 
-    fn entrypointParamSlotSize(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) u32 {
-        const runtime_layout_idx = self.layouts().runtimeRepresentationLayoutIdx(layout_idx);
-        if (runtime_layout_idx == .str) return self.rocStrSize();
-        if (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec) return 16;
-        const layout_val = self.layoutValue(runtime_layout_idx);
-        const size = self.layoutByteSize(runtime_layout_idx);
-        if (layout_val.tag == .zst or size == 0) return 0;
-        // Internal Roc procedure arguments use fixed-size slots in a shared
-        // byte buffer. A vector occupies its full 16-byte value; rounding it
-        // down to the ordinary scalar slot size makes the following argument
-        // overlap the vector's upper half.
-        if (layout_val.tag == .scalar and layout_val.getScalar().tag == .vector) return 16;
-        if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return RocList.word_count * @sizeOf(u64);
-        if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
-            if (size > 8) return @intCast(std.mem.alignForward(u32, size, 8));
-        }
-        return 8;
-    }
-
     fn computeArgOffsets(self: *MonoLlvmCodeGen, arg_layouts: []const layout.Idx, rounded_slots: bool) Error![]u32 {
+        const offsets = try self.allocator.alloc(u32, arg_layouts.len);
+        errdefer self.allocator.free(offsets);
+        if (rounded_slots) {
+            layout.entrypoint_args.computeOffsets(self.layouts(), arg_layouts, offsets);
+            return offsets;
+        }
         const ordered = try self.allocator.alloc(ArgOrder, arg_layouts.len);
         defer self.allocator.free(ordered);
-        const offsets = try self.allocator.alloc(u32, arg_layouts.len);
         for (arg_layouts, 0..) |arg_layout, i| {
             const sa = self.sizeAlignOf(arg_layout);
             ordered[i] = .{
                 .index = i,
                 .alignment = @intCast(@max(sa.alignment.toByteUnits(), 1)),
-                .size = if (rounded_slots) self.entrypointParamSlotSize(arg_layout) else sa.size,
+                .size = sa.size,
             };
         }
         const SortCtx = struct {
@@ -13776,7 +13788,7 @@ pub const MonoLlvmCodeGen = struct {
         defer self.allocator.free(offsets);
         var total: u32 = 0;
         for (arg_layouts, offsets) |arg_layout, offset| {
-            const slot_size = if (rounded_slots) self.entrypointParamSlotSize(arg_layout) else self.layoutByteSize(arg_layout);
+            const slot_size = if (rounded_slots) layout.entrypoint_args.slotSize(self.layouts(), arg_layout) else self.layoutByteSize(arg_layout);
             total = @max(total, offset + slot_size);
         }
         return @max(total, 8);
@@ -14275,7 +14287,10 @@ pub const MonoLlvmCodeGen = struct {
         if (!std.mem.eql(u8, self.store.getString(hosted.symbol), shim_symbols.roc_default_echo_line)) return false;
 
         switch (self.target.os.tag) {
-            .linux, .macos, .windows, .freebsd, .netbsd => {},
+            .linux, .freebsd, .netbsd => {},
+            // Without a system call ABI to inline, the line goes through the
+            // `roc_default_echo_line` the default platform's runtime exports.
+            .macos, .windows => return false,
             .freestanding, .wiiu, .@"switch", .gba, .psx, .tios, .ashetos, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .plan9, .rtems, .serenity, .dragonfly, .openbsd, .driverkit, .ios, .maccatalyst, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => return error.CompilationFailed,
         }
         if (arg_ptrs.len != 1 or arg_layouts.len != 1 or arg_layouts[0] != .str or ret_layout != .zst) {
@@ -14317,33 +14332,9 @@ pub const MonoLlvmCodeGen = struct {
         switch (self.target.os.tag) {
             .linux => try self.emitLinuxWriteStdout(ptr, len),
             .freebsd, .netbsd => try self.emitX86_64WriteStdout(ptr, len, 4),
-            .macos, .windows => try self.emitCWriteStdout(ptr, len),
+            .macos, .windows => unreachable, // emitDefaultPlatformHostedCall leaves these to the hosted call
             .freestanding, .wiiu, .@"switch", .gba, .psx, .tios, .ashetos, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .plan9, .rtems, .serenity, .dragonfly, .openbsd, .driverkit, .ios, .maccatalyst, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => return error.CompilationFailed,
         }
-    }
-
-    fn emitCWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {
-        const builder, const wip = try self.builderAndWip();
-        const ptr_ty = try self.ptrType();
-        const len_ty: LlvmBuilder.Type = if (self.target.os.tag == .windows) .i32 else self.ptrSizedIntType();
-        const ret_ty: LlvmBuilder.Type = if (self.target.os.tag == .windows) .i32 else self.ptrSizedIntType();
-        const symbol = if (self.target.os.tag == .windows) "_write" else "write";
-        const fn_ty = builder.fnType(ret_ty, &.{ .i32, ptr_ty, len_ty }, .normal) catch return error.OutOfMemory;
-        const write_fn = try self.declareExternSymbol(symbol, fn_ty);
-
-        _ = wip.call(
-            .normal,
-            .ccc,
-            .none,
-            fn_ty,
-            write_fn.toValue(builder),
-            &.{
-                builder.intValue(.i32, 1) catch return error.OutOfMemory,
-                ptr,
-                try self.coerceScalar(len, len_ty, false),
-            },
-            "",
-        ) catch return error.OutOfMemory;
     }
 
     fn emitLinuxWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {

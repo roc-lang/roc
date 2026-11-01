@@ -72,7 +72,7 @@ pub const ErasedOwner = @import("erased_owner.zig");
 pub const ArcDismantle = @import("arc_dismantle.zig");
 /// Shared-memory ARC-inserted LIR image for interpreter-shim execution.
 pub const LirImage = @import("lir_image.zig");
-/// The Boxy runtime table numbers a canonical dev image uses.
+/// The Boxy runtime table numbers a arranged dev image uses.
 pub const RuntimeTables = @import("runtime_tables.zig");
 
 test "LIR image tests" {

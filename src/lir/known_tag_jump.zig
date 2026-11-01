@@ -18,7 +18,7 @@
 //! declared shapes; the exit continuation must lexically enclose the edge
 //! (a selected arm that is not a bare jump becomes the body of a fresh join
 //! declared around its switch, which encloses an edge inside that switch);
-//! and nothing the exit executes may read a local whose value the rewrite
+//! and nothing the exit executes may observe a local whose value the rewrite
 //! would change. Any other shape is left unchanged.
 
 const std = @import("std");
@@ -170,10 +170,11 @@ const Analysis = struct {
             }
         }
 
-        // Locals whose value on the threaded path differs from the original
-        // path: every forwarded parameter the edge does not pass unchanged,
-        // and every definition the threaded path skips.
+        // Forwarded parameters the edge does not pass unchanged, which hold
+        // a different value on the threaded path, and the definitions the
+        // threaded path skips, which hold none.
         var changed = collections.DenseMap(LocalId, void).init(self.allocator);
+        var skipped = collections.DenseMap(LocalId, void).init(self.allocator);
         var target = first_target;
         var visited = collections.DenseMap(LIR.JoinPointId, void).init(self.allocator);
         const exit = while (true) {
@@ -211,14 +212,14 @@ const Analysis = struct {
                         .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return null,
                     };
                     try env.put(assign.target, value);
-                    try changed.put(assign.target, {});
+                    try skipped.put(assign.target, {});
                     cursor = assign.next;
                 } else if (stmt.* == .assign_literal) {
                     try env.put(stmt.assign_literal.target, if (boolLiteralDiscriminant(self.store, stmt.assign_literal.value)) |discriminant|
                         .{ .tag = discriminant }
                     else
                         .opaque_value);
-                    try changed.put(stmt.assign_literal.target, {});
+                    try skipped.put(stmt.assign_literal.target, {});
                     cursor = stmt.assign_literal.next;
                 } else if (stmt.* == .assign_low_level and stmt.assign_low_level.op == .bool_not) {
                     const assign = stmt.assign_low_level;
@@ -232,7 +233,12 @@ const Analysis = struct {
                         },
                         .discriminant, .fields, .local, .opaque_value => .opaque_value,
                     });
-                    try changed.put(assign.target, {});
+                    try skipped.put(assign.target, {});
+                    cursor = assign.next;
+                } else if (stmt.* == .assign_struct and stmt.assign_struct.contents_desc == .none) {
+                    const assign = stmt.assign_struct;
+                    try env.put(assign.target, .{ .fields = try self.resolveSpan(&env, assign.fields) });
+                    try skipped.put(assign.target, {});
                     cursor = assign.next;
                 } else if (stmt.* == .join) {
                     cursor = stmt.join.remainder;
@@ -271,11 +277,11 @@ const Analysis = struct {
                 const exit_join = self.store.getCFStmtImmediate(exit_stmt).join;
                 if (!plainJoin(self.store, exit_join) or exit_join.params.len != 0) return null;
                 if (try self.reachableOutside(chain[0], exit_stmt)) return null;
-                if (try self.exitReads(exit_join.body, &changed)) return null;
+                if (try self.exitObserves(exit_join.body, &changed, &skipped)) return null;
             },
             .arm => |arm| {
                 if (try self.reachableOutside(chain[0], arm.switch_stmt)) return null;
-                if (try self.exitReads(arm.arm, &changed)) return null;
+                if (try self.exitObserves(arm.arm, &changed, &skipped)) return null;
             },
         }
         return .{ .chain = chain, .exit = exit };
@@ -350,25 +356,33 @@ const Analysis = struct {
     }
 
     /// Whether anything the exit continuation executes, following jumps into
-    /// join bodies, reads a local in `changed`.
-    fn exitReads(self: *Analysis, exit_body: CFStmtId, changed: *const collections.DenseMap(LocalId, void)) ResourceError!bool {
-        const Probe = struct {
-            changed: *const collections.DenseMap(LocalId, void),
-            hit: bool = false,
-
-            fn note(probe: *@This(), local: LocalId) void {
-                if (probe.changed.contains(local)) probe.hit = true;
-            }
-        };
-        var probe: Probe = .{ .changed = changed };
+    /// join bodies, reads a definition in `skipped` or observes a value that
+    /// differs because a parameter in `changed` does. A pure definition only
+    /// carries a differing value to its target, and a struct built from one
+    /// differs only in that field, so a read of a field the struct took
+    /// unchanged observes nothing. Every other statement observes what it
+    /// reads.
+    fn exitObserves(
+        self: *Analysis,
+        exit_body: CFStmtId,
+        changed: *const collections.DenseMap(LocalId, void),
+        skipped: *const collections.DenseMap(LocalId, void),
+    ) ResourceError!bool {
+        var probe: ExitProbe = .{ .analysis = self, .skipped = skipped, .differs = collections.DenseMap(LocalId, Difference).init(self.allocator) };
+        var params = changed.constIterator();
+        while (params.next()) |entry| try probe.differs.put(entry.key_ptr.*, .whole);
         var seen = collections.DenseMap(CFStmtId, void).init(self.allocator);
         var work = std.ArrayList(CFStmtId).empty;
         try work.append(self.allocator, exit_body);
         while (work.pop()) |current| {
             if ((try seen.getOrPut(current)).found_existing) continue;
             const stmt = self.store.getCFStmtImmediate(current);
-            body_clone.forEachStmtRead(self.store, stmt.*, &probe, Probe.note);
+            body_clone.forEachStmtRead(self.store, stmt.*, &probe, ExitProbe.noteSkipped);
             if (probe.hit) return true;
+            if (!try probe.carry(stmt.*)) {
+                body_clone.forEachStmtRead(self.store, stmt.*, &probe, ExitProbe.noteObserved);
+                if (probe.hit) return true;
+            }
             if (stmt.* == .jump) {
                 const target = self.joins.get(stmt.jump.target) orelse return true;
                 try work.append(self.allocator, self.store.getCFStmtImmediate(target).join.body);
@@ -441,6 +455,105 @@ const Analysis = struct {
         try self.store.replaceCFStmt(switch_id, .{ .join = join }, origin);
         try joins.record(join);
         return exit;
+    }
+};
+
+/// How a local's value on the threaded path differs from the original path.
+const Difference = union(enum) {
+    whole,
+    /// A struct built in the exit; per field, how it differs, or null when the
+    /// field is the same.
+    fields: []const ?Difference,
+};
+
+const ExitProbe = struct {
+    analysis: *Analysis,
+    skipped: *const collections.DenseMap(LocalId, void),
+    differs: collections.DenseMap(LocalId, Difference),
+    hit: bool = false,
+
+    fn noteSkipped(probe: *ExitProbe, local: LocalId) void {
+        if (probe.skipped.contains(local)) probe.hit = true;
+    }
+
+    fn noteObserved(probe: *ExitProbe, local: LocalId) void {
+        if (probe.differs.contains(local)) probe.hit = true;
+    }
+
+    /// Record what a pure definition's target differs by and report true,
+    /// or report false for a statement that observes its reads.
+    fn carry(probe: *ExitProbe, stmt: LIR.CFStmt) ResourceError!bool {
+        const store = probe.analysis.store;
+        switch (stmt) {
+            .assign_ref => |assign| {
+                if (store.stmtRowOrDefault(assign.extra).take_kind != .none) return false;
+                const source = probe.differs.get(assign.op.source) orelse return true;
+                const target: ?Difference = switch (assign.op.kind) {
+                    .local => source,
+                    .field => switch (source) {
+                        .whole => .whole,
+                        .fields => |fields| if (assign.op.index < fields.len) fields[assign.op.index] else .whole,
+                    },
+                    .discriminant, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => .whole,
+                };
+                if (target) |difference| try probe.differs.put(assign.target, difference);
+                return true;
+            },
+            .assign_literal => return true,
+            .assign_struct => |assign| {
+                if (assign.contents_desc != .none) return false;
+                const locals = store.getLocalSpan(assign.fields);
+                const fields = try probe.analysis.allocator.alloc(?Difference, locals.len);
+                var any = false;
+                for (fields, 0..) |*field, index| {
+                    field.* = probe.differs.get(GuardedList.at(locals, index));
+                    if (field.* != null) any = true;
+                }
+                if (any) try probe.differs.put(assign.target, .{ .fields = fields });
+                return true;
+            },
+            .init_uninitialized,
+            .set_local,
+            .join,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_record_update,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .assign_low_level,
+            .assign_list,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .jump,
+            .ret,
+            .crash,
+            => return false,
+        }
     }
 };
 
@@ -544,8 +657,11 @@ const FlagLoop = struct {
 };
 
 /// `while !$done { match step($state) { Done => $done = True, Next(s) => { $state = s; $steps += 1 } } }`
-/// lowered with the loop exit reading either `$steps` or `$done`.
-fn flagLoop(exit_reads: enum { steps, done }, true_flag: enum { tag, bool_literal }, header_test: enum { discriminant, bool_not, bool_not_inline_exit }) Allocator.Error!FlagLoop {
+/// lowered with the loop exit reading either `$steps` or `$done`, directly or
+/// as a field of the `($done, $state, $steps)` tuple the exit packs. The tuple
+/// shapes also give the merge body the unit value a statement-position
+/// assignment produces.
+fn flagLoop(exit_reads: enum { steps, done, tuple_steps, tuple_done }, true_flag: enum { tag, bool_literal }, header_test: enum { discriminant, bool_not, bool_not_inline_exit }) Allocator.Error!FlagLoop {
     var store = LirStore.init(testing.allocator);
     errdefer store.deinit();
     var joins = body_clone.JoinParamIndex.init(testing.allocator);
@@ -568,13 +684,30 @@ fn flagLoop(exit_reads: enum { steps, done }, true_flag: enum { tag, bool_litera
     const merge_steps = try local(&store, .u64);
 
     // Loop exit.
-    const exit_value = try local(&store, if (exit_reads == .steps) .u64 else .bool);
+    const reads_steps = exit_reads == .steps or exit_reads == .tuple_steps;
+    const exit_value = try local(&store, if (reads_steps) .u64 else .bool);
     const ret = try store.addCFStmt(.{ .ret = .{ .value = exit_value } }, .test_fixture);
-    const exit_body = try store.addCFStmt(.{ .assign_ref = .{
-        .target = exit_value,
-        .op = .local(if (exit_reads == .steps) steps else done),
-        .next = ret,
-    } }, .test_fixture);
+    const exit_body = switch (exit_reads) {
+        .steps, .done => try store.addCFStmt(.{ .assign_ref = .{
+            .target = exit_value,
+            .op = .local(if (reads_steps) steps else done),
+            .next = ret,
+        } }, .test_fixture),
+        .tuple_steps, .tuple_done => blk: {
+            // The pass reads no layouts, so the tuple's local takes any.
+            const tuple = try local(&store, .u64);
+            const read = try store.addCFStmt(.{ .assign_ref = .{
+                .target = exit_value,
+                .op = .field(tuple, if (reads_steps) 2 else 0),
+                .next = ret,
+            } }, .test_fixture);
+            break :blk try store.addCFStmt(.{ .assign_struct = .{
+                .target = tuple,
+                .fields = try store.addLocalSpan(&.{ done, state, steps }),
+                .next = read,
+            } }, .test_fixture);
+        },
+    };
 
     // Merge join body: forward every parameter to the header.
     const back_edge = try store.addCFStmt(.{ .jump = .{ .target = header } }, .test_fixture);
@@ -583,6 +716,10 @@ fn flagLoop(exit_reads: enum { steps, done }, true_flag: enum { tag, bool_litera
         const copy = try local(&store, store.getLocal(merge_param).layout_idx);
         forward = try store.addCFStmt(.{ .set_local = .{ .target = header_param, .value = copy, .mode = .initialize_join_param, .next = forward } }, .test_fixture);
         forward = try store.addCFStmt(.{ .assign_ref = .{ .target = copy, .op = .local(merge_param), .next = forward } }, .test_fixture);
+    }
+    if (exit_reads == .tuple_steps or exit_reads == .tuple_done) {
+        const unit = try local(&store, .zst);
+        forward = try store.addCFStmt(.{ .assign_struct = .{ .target = unit, .fields = .empty(), .next = forward } }, .test_fixture);
     }
 
     // `Done`: the flag becomes True, the rest of the state is unchanged.
@@ -742,6 +879,24 @@ test "known tag jump evaluates bool_not of a known flag in the loop header" {
 
 test "known tag jump keeps a bool_not header edge when the exit reads the flag it sets" {
     var fixture = try flagLoop(.done, .tag, .bool_not);
+    defer fixture.deinit();
+    try fixture.run();
+    const edge = fixture.doneEdge();
+    try testing.expectEqual(fixture.merge, edge.target);
+    try testing.expect(edge.writes_params);
+}
+
+test "known tag jump threads past an exit that reads an unchanged field of a tuple holding the flag" {
+    var fixture = try flagLoop(.tuple_steps, .tag, .bool_not);
+    defer fixture.deinit();
+    try fixture.run();
+    const edge = fixture.doneEdge();
+    try testing.expectEqual(fixture.exit, edge.target);
+    try testing.expect(!edge.writes_params);
+}
+
+test "known tag jump keeps the edge when the exit reads the flag's field of a tuple" {
+    var fixture = try flagLoop(.tuple_done, .tag, .bool_not);
     defer fixture.deinit();
     try fixture.run();
     const edge = fixture.doneEdge();

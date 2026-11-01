@@ -21,7 +21,7 @@ const builtin = @import("builtin");
 const builtins = @import("builtins");
 const lir = @import("lir");
 const LirCodeGenMod = @import("LirCodeGen.zig");
-const ProcArtifact = @import("ProcArtifact.zig");
+const CodeExcerpt = @import("CodeExcerpt.zig");
 const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
 const StaticDataImage = @import("StaticDataImage.zig").StaticDataImage;
 const relocation_mod = @import("Relocation.zig");
@@ -51,7 +51,7 @@ const stub_size = 16;
 pub const HostSplice = struct {
     allocator: Allocator,
     /// The carried data items in placement order, one per name.
-    data: std.ArrayList(ProcArtifact.DataItem) = .empty,
+    data: std.ArrayList(CodeExcerpt.DataItem) = .empty,
     /// Each carried data item's index in `data`, by name.
     data_names: std.StringHashMap(u32),
     /// Each data item's offset in the mapping once `link` has laid it out.
@@ -116,17 +116,17 @@ pub const HostSplice = struct {
             try external.append(self.allocator, proc_id);
         }
         if (external.items.len == 0) return;
-        var carried = std.ArrayList(ProcArtifact.DataItem).empty;
+        var carried = std.ArrayList(CodeExcerpt.DataItem).empty;
         defer carried.deinit(self.allocator);
         try spliceExternalProcs(HostLirCodeGen, self.allocator, codegen, codegen.store.getProcSpecs(), external.items, source, &carried);
         try self.addDataItems(carried.items);
         self.spliced_procs += external.items.len;
     }
 
-    /// Carry artifact data into the executable mapping, once per exact name.
+    /// Carry excerpt data into the executable mapping, once per exact name.
     /// Records are copied; their names, bytes, and relocations remain borrowed
     /// and must outlive this splice and its `link` call.
-    pub fn addDataItems(self: *HostSplice, items: []const ProcArtifact.DataItem) Allocator.Error!void {
+    pub fn addDataItems(self: *HostSplice, items: []const CodeExcerpt.DataItem) Allocator.Error!void {
         for (items) |item| {
             const gop = try self.data_names.getOrPut(item.name);
             if (gop.found_existing) continue;
@@ -161,7 +161,7 @@ pub const HostSplice = struct {
                     if (self.static_data) |layout| if (layout.symbolOffset(name) != null) continue;
                     break :blk name;
                 },
-                .local_data, .retired, .runtime_ref => continue,
+                .local_data, .retired, .runtime_number => continue,
             };
             if (compilerFunction(name, boxy_native_fns) != null or code_symbols.contains(name) or self.data_names.contains(name) or self.hosted_stubs.contains(name)) continue;
             if (!containsName(needed.items, name)) try needed.append(self.allocator, name);
@@ -194,7 +194,7 @@ pub const HostSplice = struct {
         for (codegen.getRelocations()) |indexed| {
             try relocations.append(self.allocator, switch (indexed) {
                 // The image keeps the program's own table numbers.
-                .retired, .runtime_ref => continue,
+                .retired, .runtime_number => continue,
                 .linked_function => |function| .{ .linked_function = .{ .offset = function.offset, .name = names[@backingInt(function.symbol)], .kind = function.kind } },
                 .linked_data => |data| .{ .linked_data = .{ .offset = data.offset, .name = names[@backingInt(data.symbol)], .kind = data.kind } },
                 .local_data => |data| .{ .local_data = data },
@@ -498,7 +498,7 @@ test "static data is placed in the mapping and stays writable" {
     var splice = HostSplice.init(allocator);
     defer splice.deinit();
     // A carried item that points at the slot.
-    const pointers = [_]ProcArtifact.DataItem{.{
+    const pointers = [_]CodeExcerpt.DataItem{.{
         .name = "test_slot_pointer",
         .bytes = &(@as([8]u8, @splat(0))),
         .alignment = 8,
@@ -545,13 +545,13 @@ test "linking many data items resolves each pointer through its target's own sym
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const count = 100_000;
-    const items = try arena.allocator().alloc(ProcArtifact.DataItem, count);
+    const items = try arena.allocator().alloc(CodeExcerpt.DataItem, count);
     const names = try arena.allocator().alloc([]const u8, count);
     for (names, 0..) |*name, index| name.* = try std.fmt.allocPrint(arena.allocator(), "test_item_{d}", .{index});
     for (items, 0..) |*item, index| {
         const bytes = try arena.allocator().alloc(u8, 2 * @sizeOf(usize));
         @memset(bytes, 0);
-        const relocations = try arena.allocator().alloc(ProcArtifact.DataRelocation, 1);
+        const relocations = try arena.allocator().alloc(CodeExcerpt.DataRelocation, 1);
         relocations[0] = .{ .offset = @sizeOf(usize), .name = names[(index + 1) % count], .addend = 0, .function = false };
         item.* = .{
             .name = names[index],

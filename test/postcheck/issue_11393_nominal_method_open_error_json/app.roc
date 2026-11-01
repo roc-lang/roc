@@ -10,7 +10,7 @@ main! = |args| {
         Err(_) => "about:blank"
     }
     page = Browser.open({})
-    match page.navigate(url) {
+    match Browser.navigate(page, url) {
         Ok(json) => Stdout.line!(json)
         Err(_) => Stdout.line!("error")
     }

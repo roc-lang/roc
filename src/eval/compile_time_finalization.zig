@@ -52,6 +52,13 @@ pub const EventCallback = struct {
     notify: *const fn (*anyopaque, EventView) void,
 };
 
+/// Observes the ordered semantic debug payloads emitted by finalization.
+/// Unlike REPL events this includes every root, including cached observations.
+pub const DebugObserver = struct {
+    context: *anyopaque,
+    observe: *const fn (*anyopaque, []const u8) Allocator.Error!void,
+};
+
 /// Where the compile-time evaluator splices object-cache entries from.
 pub const SpliceSource = backend.dev.SpliceSource;
 
@@ -80,6 +87,12 @@ pub const StageSink = struct {
         comptime_reads: *const lir.CheckedPipeline.SpecComptimeReads,
     ) Allocator.Error!void,
 };
+/// Observes the completed semantic decisions while their producer owns them.
+pub const CompletionSink = struct {
+    context: *anyopaque,
+    demand: *const fn (*anyopaque, lir.CheckedPipeline.ComptimeDemand, []const lir.CheckedPipeline.MonotypeRoot, []const checked.ModuleId, []const lir.CheckedPipeline.MonotypeLiteralRoot) Allocator.Error!void,
+    debug: *const fn (*anyopaque, []const u8) Allocator.Error!void,
+};
 /// Runtime options for compile-time finalization.
 pub const Options = struct {
     pub const StderrWriter = struct {
@@ -96,13 +109,18 @@ pub const Options = struct {
     /// Runtime outcomes already supplied by the caller. Only their literal
     /// conversion obligations may specialize; these roots never execute.
     discovery_roots: lir.CheckedPipeline.RootRequestSet = .{},
+    /// Prior successful, silent validation; not a stored value. Every root
+    /// absent from this set is still demanded for validation in test/check.
+    validated_comptime_roots: ?*const std.AutoHashMapUnmanaged(lir.CheckedPipeline.ComptimeDemandRoot, void) = null,
     max_threads: usize = 0,
     /// Borrow the coordinator's workers after all frontend tasks have finished.
     /// Standalone finalizers without a coordinator lower on their calling thread.
     post_check_executor: ?base.post_check_task_executor.Executor = null,
     stderr: ?StderrWriter = null,
     event_callback: ?EventCallback = null,
+    debug_observer: ?DebugObserver = null,
     debug_events: ?*DebugEvents = null,
+    completion_sink: ?CompletionSink = null,
     /// Artifact copies store results independently; shared slots publish once.
     publish_shared_slots: bool = true,
     /// A coordinator may persist an early dependency batch, then replay all
@@ -117,7 +135,7 @@ pub const Options = struct {
     timing: ?*Timing = null,
     object_cache: ?CompileTimeObjectCache = null,
     /// Keep each stage's code as object-cache artifacts
-    /// (`CompletedStages.artifacts`): what an object cache publishes.
+    /// (`CompletedStages.excerpts`): what an object cache publishes.
     keep_artifacts: bool = false,
     /// Where a compile-time failure is reported when the source it names
     /// belongs to a checked module this finalization does not complete: a
@@ -397,6 +415,9 @@ const DebugEvents = struct {
     };
     allocator: Allocator,
     events: std.ArrayList(Event) = .empty,
+    /// Literal-root messages are emitted directly, without a checked root
+    /// to attach a stored event to. They still prevent silent discovery reuse.
+    emitted: bool = false,
 
     fn deinit(self: *DebugEvents) void {
         for (self.events.items) |event| self.allocator.free(event.message);
@@ -586,6 +607,9 @@ pub const ProgramSession = struct {
     /// The position of each runtime request in the specialized program's root
     /// plan.
     runtime_positions: []u32,
+    /// All compile-time observations, including replayed observations, were
+    /// empty. Together with the caller's error check this certifies discovery.
+    discovery_silent: bool = false,
 
     /// Where a runtime consumer reads completed values from.
     pub const RuntimeStages = union(enum) {
@@ -629,6 +653,7 @@ pub const ProgramSession = struct {
         roots: lir.CheckedPipeline.RootRequestSet,
         requested_target: lir.CheckedPipeline.TargetConfig,
     ) RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
+        base.dev_diagnostics.countTestWork(.runtime_lir, 1);
         const configured = self.runtime_target orelse finalizationInvariant("check-only session has no runtime consumer");
         // Whether the program's specializations go to the object cache was
         // decided with the consumer, before the shared program was lowered.
@@ -755,12 +780,17 @@ pub const CompletedStages = struct {
     erased_members: lir.CheckedPipeline.CompletedErasedMembers = .{},
     /// The producers of the stage being lowered, whose slots it evaluates.
     pending: std.AutoHashMapUnmanaged(ProducerSlotKey, void) = .empty,
+    /// Each producer's level, and the level of the stage being lowered.
+    /// A stage reserves, without filling, the slots of producers a later
+    /// level evaluates (`evaluatesLater`).
+    levels: std.AutoHashMapUnmanaged(ProducerSlotKey, u32) = .empty,
+    level: u32 = 0,
     /// The specializations' compile-time reads, which the object cache
     /// writes beside the program's procedures.
     spec_comptime_reads: ?lir.CheckedPipeline.SpecComptimeReads = null,
-    /// Each stage's code as object-cache artifacts, when the evaluation
+    /// Each stage's code as object-cache excerpts, when the evaluation
     /// writes to an object cache.
-    artifacts: std.ArrayList(backend.dev.ProcArtifact.Set) = .empty,
+    excerpts: std.ArrayList(backend.dev.CodeExcerpt.Set) = .empty,
     /// The discovery summaries of the evaluation's program (design.md
     /// "Discovery Summaries"); null when the evaluation produced a message a
     /// later compilation that skipped its bodies would not repeat.
@@ -794,19 +824,20 @@ pub const CompletedStages = struct {
         self.scalar_values.deinit(self.allocator);
         self.erased_members.deinit(self.allocator);
         self.pending.deinit(self.allocator);
+        self.levels.deinit(self.allocator);
         if (self.spec_comptime_reads) |*reads| reads.deinit();
-        for (self.artifacts.items) |*set| set.deinit();
-        self.artifacts.deinit(self.allocator);
+        for (self.excerpts.items) |*set| set.deinit();
+        self.excerpts.deinit(self.allocator);
         if (self.discovery_summaries) |*summaries| summaries.deinit();
         self.* = undefined;
     }
 
-    /// The stages' code as one artifact set, one copy of each procedure.
-    pub fn combinedArtifacts(self: *const CompletedStages, allocator: Allocator) Allocator.Error!backend.dev.ProcArtifact.Set {
-        const sets = try allocator.alloc(*const backend.dev.ProcArtifact.Set, self.artifacts.items.len);
+    /// The stages' code as one excerpt set, one copy of each procedure.
+    pub fn combinedExcerpts(self: *const CompletedStages, allocator: Allocator) Allocator.Error!backend.dev.CodeExcerpt.Set {
+        const sets = try allocator.alloc(*const backend.dev.CodeExcerpt.Set, self.excerpts.items.len);
         defer allocator.free(sets);
-        for (self.artifacts.items, sets) |*set, *ptr| ptr.* = set;
-        return backend.dev.ProcArtifact.combineDistinct(allocator, sets);
+        for (self.excerpts.items, sets) |*set, *ptr| ptr.* = set;
+        return backend.dev.CodeExcerpt.combineDistinct(allocator, sets);
     }
 
     /// The stages' programs, in evaluation order. Each one's code was
@@ -909,6 +940,17 @@ pub const CompletedStages = struct {
         return self.pending.contains(.{ .module = module, .root = root });
     }
 
+    /// Whether a level after the stage being lowered evaluates `module`'s
+    /// `root`. The stage's code reads such a root only from a function it
+    /// compiles without running: a function value it creates as an erased
+    /// callable's member. Code the stage may run reads only roots of
+    /// earlier levels or its own (design.md "Dependency-Ordered
+    /// Compile-Time Evaluation").
+    fn evaluatesLater(self: *const CompletedStages, module: checked.ModuleId, root: lir.LIR.ComptimeProducer) bool {
+        const level = self.levels.get(.{ .module = module, .root = root }) orelse return false;
+        return level > self.level;
+    }
+
     fn materializeStage(allocator: Allocator, context: *anyopaque, target: *LirProgram.Result) Allocator.Error!LirProgram.FrozenStaticData {
         const self: *CompletedStages = @ptrCast(@alignCast(context));
         return transcodeCompletedSlots(allocator, self, target);
@@ -963,12 +1005,18 @@ const ProgramSlots = struct {
     fn evaluatesHere(_: *const ProgramSlots, _: checked.ModuleId, _: lir.LIR.ComptimeProducer) bool {
         return false;
     }
+
+    fn evaluatesLater(_: *const ProgramSlots, _: checked.ModuleId, _: lir.LIR.ComptimeProducer) bool {
+        return false;
+    }
 };
 
 /// Freeze each of `target`'s compile-time value slots that `sources` holds
 /// a completed value for, matched by owner module and producer identity.
 /// Target representation comes exclusively from the paired slot plans. A
-/// slot `sources` holds no value for is one the target evaluates itself.
+/// slot `sources` holds no value for is one the target evaluates itself, or
+/// one a later level evaluates, which only code the target never runs reads
+/// and which the target reserves uninitialized.
 fn transcodeCompletedSlots(
     allocator: Allocator,
     sources: anytype,
@@ -989,7 +1037,14 @@ fn transcodeCompletedSlots(
         const target_slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(index));
         const source = sources.find(target_root.module, target_root.root, std.meta.activeTag(target_root.role)) orelse {
             if (sources.evaluatesHere(target_root.module, target_root.root)) continue;
-            finalizationInvariant("target slot has no corresponding host root");
+            if (!sources.evaluatesLater(target_root.module, target_root.root)) finalizationInvariant("target slot has no corresponding host root");
+            const reserved = try uninitializedSlot(allocator, target, target_slot);
+            appendFrozenGraph(allocator, &exports, reserved) catch |err| {
+                static_data_exports.deinitStaticData(allocator, reserved);
+                return err;
+            };
+            allocator.free(reserved);
+            continue;
         };
         const source_result = &source.program.lir_result;
         const frozen = source.program.frozen_static_data.?;
@@ -1006,7 +1061,7 @@ fn transcodeCompletedSlots(
         const converted = if (target_root.role == .failure_message)
             try FrozenRootTranscode.transcodeFailure(allocator, source_result, source_entry, frozen.exports, source_symbol, target, target_slot)
         else if (failed)
-            try uninitializedFailedSlot(allocator, target, target_slot)
+            try uninitializedSlot(allocator, target, target_slot)
         else
             try FrozenRootTranscode.transcodeValueSlot(allocator, source_result, source_entry, frozen.exports, source_symbol, target, target_slot);
         appendFrozenGraph(allocator, &exports, converted) catch |err| {
@@ -1023,9 +1078,11 @@ fn frozenSlotSymbol(symbols: []const ?static_data_exports.StaticDataSymbolId, sl
     return symbols[@backingInt(slot)] orelse finalizationInvariant("completed frozen graph omitted a declared slot");
 }
 
-/// Failed values have no representation to convert. Their explicit guard
-/// owns the failure; reserve the destination slot without inspecting its bytes.
-fn uninitializedFailedSlot(allocator: Allocator, program: *const LirProgram.Result, slot: lir.LIR.StaticDataId) Allocator.Error![]static_data_exports.StaticDataExport {
+/// Failed values have no representation to convert, and their explicit guard
+/// owns the failure; a later level's values do not exist yet, and no code
+/// that runs reads them. Either way, reserve the destination slot without
+/// inspecting its bytes.
+fn uninitializedSlot(allocator: Allocator, program: *const LirProgram.Result, slot: lir.LIR.StaticDataId) Allocator.Error![]static_data_exports.StaticDataExport {
     const entry = program.static_data_values.items[@backingInt(slot)];
     const size_align = program.layouts.layoutSizeAlign(program.layouts.getLayout(entry.layout_idx));
     const name = try LirProgram.staticDataSymbolName(allocator, slot);
@@ -1100,13 +1157,13 @@ fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.Solved
         // callables reserve the hot-reload prefix; an interpreted evaluation
         // reserves none.
         .erased_capture_prefix = if (compilerHostMustUseInterpreterForCtfe()) 0 else builtins.erased_callable.hot_reload_capture_prefix_size,
-        .scalarize_joins = false,
         .reuse_boxes = false,
         // Specialization records procedure names for every consumer of the
         // program; a runtime consumer's diagnostics read them.
         .proc_debug_names = true,
         .spec_cache = if (options.object_cache) |cache| cache.spec_cache else null,
         .site_code_keys = true,
+        .owned_proc_signatures = true,
         .code_provision = if (!compilerHostMustUseInterpreterForCtfe() and backend.host_lir_codegen_available and options.object_cache != null)
             .host_dev_objects
         else
@@ -1226,7 +1283,7 @@ pub fn finalizeProgram(
         finalizationInvariant("program roots omitted their checked owners");
 
     const lss_runtime = if (runtime_target) |target| target.specialization_strategy == .lss else false;
-    const demand_driven = demandDrivenEvaluation(modules, program_roots, lss_runtime);
+    const demand_driven = options.validated_comptime_roots != null or demandDrivenEvaluation(modules, program_roots, lss_runtime);
     const owned_imports = try allocator.dupe(checked.ImportedModuleView, lowering_modules.imports);
     errdefer allocator.free(owned_imports);
     const owned_relations = try allocator.dupe(checked.ImportedModuleView, lowering_modules.root.relation_modules);
@@ -1272,8 +1329,14 @@ pub fn finalizeProgram(
         var quiet_unfinalized: QuietUnfinalizedReports = .{ .inner = options.unfinalized_reports };
         var quiet_options = options;
         quiet_options.stderr = null;
+        quiet_options.debug_observer = null;
         quiet_options.event_callback = null;
+        quiet_options.completion_sink = null;
         quiet_options.keep_artifacts = false;
+        // The first specialization settled discovery-only test roots and
+        // reported their observations. They contribute no runtime entrypoint;
+        // only the runtime program's own literal roots belong in this pass.
+        quiet_options.discovery_roots = .{};
         quiet_options.unfinalized_reports = if (options.unfinalized_reports != null) quiet_unfinalized.reports() else null;
         // The evaluation's run verified the program's restored literal
         // values, and the compile-time pack holds the evaluation's code, so
@@ -1282,6 +1345,8 @@ pub fn finalizeProgram(
         if (quiet_options.object_cache) |*cache| cache.stage_sink = null;
         var quiet_events = DebugEvents{ .allocator = allocator };
         defer quiet_events.deinit();
+        if (options.timing) |timing| timing.respecialization_passes.add(1);
+        base.dev_diagnostics.countTestWork(.second_specialization, 1);
         var respecialized = try specializeAndEvaluate(
             allocator,
             quiet_modules,
@@ -1293,7 +1358,7 @@ pub fn finalizeProgram(
             null,
             false,
             lss_runtime,
-            demandDrivenEvaluation(quiet_modules, program_roots, lss_runtime),
+            options.validated_comptime_roots != null or demandDrivenEvaluation(quiet_modules, program_roots, lss_runtime),
         );
         if (respecialized.compile_time_root_count != 0)
             finalizationInvariant("a program specialized again after its evaluation completed demanded a compile-time root again");
@@ -1310,7 +1375,7 @@ pub fn finalizeProgram(
     // Observations replay in sorted order once every root has evaluated:
     // those stored for the roots this program demands, and this
     // compilation's own.
-    const replay_filter: ?*const StoredRootSet = if (demand_driven) &stored_demand else null;
+    const replay_filter: ?*const StoredRootSet = if (demand_driven and options.validated_comptime_roots == null) &stored_demand else null;
     try debug_events.appendCached(options.cached_debug_modules, replay_filter);
     for (modules) |entry| try debug_events.appendStored(entry.module, replay_filter);
     try debug_events.persist(modules);
@@ -1330,6 +1395,7 @@ pub fn finalizeProgram(
         .runtime_stages = runtime_stages,
         .runtime_prepared = runtime_prepared,
         .runtime_positions = runtime_positions,
+        .discovery_silent = debug_events.events.items.len == 0 and !debug_events.emitted,
     };
 }
 
@@ -1394,6 +1460,7 @@ fn specializeAndEvaluate(
     var source_modules = std.ArrayList(checked.ModuleId).empty;
     defer source_modules.deinit(allocator);
     for (modules) |entry| {
+        const module_start = requests.items.len;
         for (entry.module.root_requests.compile_time_requests) |request| {
             // A reopened artifact's roots that an earlier compilation
             // evaluated are read from its store like any other module's.
@@ -1401,6 +1468,7 @@ fn specializeAndEvaluate(
             try requests.append(allocator, request);
             try source_modules.append(allocator, entry.module.key.digest());
         }
+        if (base.dev_diagnostics.isSet(.ctfe_reuse_trace)) std.debug.print("ctfe-reuse pending {s}: {d} roots\n", .{ entry.module.moduleEnvConst().module_name, requests.items.len - module_start });
     }
     const requested_root_count = requests.items.len;
 
@@ -1479,8 +1547,8 @@ fn specializeAndEvaluate(
     var union_roots = program_roots;
     union_roots.requests = requests.items;
     union_roots.source_modules = source_modules.items;
-    // Test roots are addressed by their position in the request list, so
-    // a program that runs tests is never demand-driven.
+    // The Monotype producer translates these positions through its selected
+    // compile-time prefix before a runtime consumer reads them.
     const union_test_metadata = try allocator.dupe(@typeInfo(@TypeOf(program_roots.test_plan_metadata)).pointer.child, if (lss_runtime) program_roots.test_plan_metadata else &.{});
     defer allocator.free(union_test_metadata);
     for (union_test_metadata) |*metadata| metadata.request_index += @intCast(requested_root_count);
@@ -1501,6 +1569,7 @@ fn specializeAndEvaluate(
     const solved_policy = if (lss_runtime) lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime_target.?) else check_solved_policy;
     var host_target = compileTimeTarget(options, solved_policy);
     host_target.demand_driven_comptime_roots = demand_driven;
+    host_target.validated_comptime_roots = options.validated_comptime_roots;
     if (options.literal_values) |values| {
         host_target.literal_values = values.lookup();
         host_target.verify_literal_values = options.verify_literal_values;
@@ -1520,6 +1589,7 @@ fn specializeAndEvaluate(
     }
     if (options.object_cache != null) host_target.spec_comptime_reads = true;
     try options.checkCancelRequest();
+    if (options.timing) |timing| timing.specialization_passes.add(1);
     var monotype = lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, lowering_modules, union_roots, host_target) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.HostedFunctionNotBound => finalizationInvariant("compile-time evaluation required every hosted procedure to be bound"),
@@ -1532,6 +1602,7 @@ fn specializeAndEvaluate(
     if (!demand_driven and compile_time_root_count != requested_root_count)
         finalizationInvariant("compile-time evaluation published a different count of compile-time roots than it requested");
     if (options.timing) |timing| timing.recordRoots(demand.?);
+    if (options.completion_sink) |sink| try sink.demand(sink.context, demand.?, monotype.program.rootsView()[0..compile_time_root_count], monotype.program.view().lowering_modules, monotype.program.view().literal_roots);
     try published.init(allocator, modules, monotype.program.rootsView()[0..compile_time_root_count], monotype.program.view().lowering_modules);
     if (demand_driven) if (stored_demand) |stored| try stored.fill(allocator, demand.?.stored);
     // An LSS runtime consumer continues this Solved program.
@@ -1564,7 +1635,7 @@ fn specializeAndEvaluate(
         const fresh_message = for (debug_events.events.items) |event| {
             if (event.fresh) break true;
         } else false;
-        if (options.object_cache != null and !fresh_message) {
+        if (options.object_cache != null and !fresh_message and !debug_events.emitted) {
             result.completed.?.discovery_summaries = try lir.CheckedPipeline.DiscoverySummary.collect(allocator, &prepared.program.lifted);
         }
         if (!shares_solved) {
@@ -1958,6 +2029,10 @@ fn evaluateStaged(
 
     var completed = CompletedStages.init(allocator);
     errdefer completed.deinit();
+    for (groups.groups.items) |group| for (groups.membersOf(group)) |ordinal| {
+        const gop = try completed.levels.getOrPut(allocator, CompletedStages.producerSlotKey(producers, lifted.loweringModules(), ordinal));
+        gop.value_ptr.* = if (gop.found_existing) @min(gop.value_ptr.*, group.level) else group.level;
+    };
     var stage_roots = std.ArrayList(u32).empty;
     defer stage_roots.deinit(allocator);
     var stage_literals = std.ArrayList(lir.LIR.LiteralRootId).empty;
@@ -1982,6 +2057,7 @@ fn evaluateStaged(
             try stage_producers.appendSlice(allocator, groups.membersOf(group));
         }
         std.sort.pdq(usize, stage_producers.items, {}, std.sort.asc(usize));
+        completed.level = @intCast(level);
         for (stage_producers.items) |ordinal| {
             if (ordinal < roots.len) {
                 try stage_roots.append(allocator, @intCast(ordinal));
@@ -2026,9 +2102,9 @@ fn evaluateStaged(
         if (stage.frozen_static_data) |*read| read.deinit();
         stage.frozen_static_data = frozen;
         if (ProgramPtr == *DevProgram and options.keep_artifacts) {
-            var set = try program.extractArtifacts(stage);
+            var set = try program.extractExcerpts(stage);
             errdefer set.deinit();
-            try completed.artifacts.append(allocator, set);
+            try completed.excerpts.append(allocator, set);
         }
         try completed.finishStage();
         if (options.object_cache) |cache| if (cache.stage_sink) |sink| if (prepared.spec_comptime_reads) |*reads| {
@@ -2636,6 +2712,8 @@ pub const Timing = struct {
     store_results_ns: TimingCounter = .{},
     /// Compile-time roots the shared program declared, and how many of them
     /// it published for evaluation.
+    specialization_passes: TimingCounter = .{},
+    respecialization_passes: TimingCounter = .{},
     roots_declared: TimingCounter = .{},
     roots_evaluated: TimingCounter = .{},
     /// Process footprint range observed at burst boundaries. Compile-time
@@ -2665,6 +2743,8 @@ pub const Timing = struct {
             .code_generation_ns = self.code_generation_ns.load(),
             .execution_ns = self.execution_ns.load(),
             .store_results_ns = self.store_results_ns.load(),
+            .specialization_passes = self.specialization_passes.load(),
+            .respecialization_passes = self.respecialization_passes.load(),
             .roots_declared = self.roots_declared.load(),
             .roots_evaluated = self.roots_evaluated.load(),
             .mem_min = self.mem_min.load(),
@@ -2687,6 +2767,8 @@ pub const Timing = struct {
         self.code_generation_ns.add(snapshot_value.code_generation_ns);
         self.execution_ns.add(snapshot_value.execution_ns);
         self.store_results_ns.add(snapshot_value.store_results_ns);
+        self.specialization_passes.add(snapshot_value.specialization_passes);
+        self.respecialization_passes.add(snapshot_value.respecialization_passes);
         self.roots_declared.add(snapshot_value.roots_declared);
         self.roots_evaluated.add(snapshot_value.roots_evaluated);
         if (snapshot_value.mem_min != std.math.maxInt(u64)) self.mem_min.min(snapshot_value.mem_min);
@@ -2741,6 +2823,8 @@ pub const TimingSnapshot = struct {
     code_generation_ns: u64 = 0,
     execution_ns: u64 = 0,
     store_results_ns: u64 = 0,
+    specialization_passes: u64 = 0,
+    respecialization_passes: u64 = 0,
     roots_declared: u64 = 0,
     roots_evaluated: u64 = 0,
     mem_min: u64 = std.math.maxInt(u64),
@@ -4778,7 +4862,7 @@ const StaticSlotEnvironment = struct {
 /// roots it runs, and of every procedure of the program that the
 /// object-cache code it splices calls, to a fixed point. A spliced entry's
 /// call to a procedure the program has binds to the program's own code
-/// (`ProcArtifact.splice`), so that procedure is compiled too, and the
+/// (`CodeExcerpt.splice`), so that procedure is compiled too, and the
 /// object-cache entries its closure reaches are spliced in turn.
 fn evaluationDemand(
     allocator: Allocator,
@@ -4801,7 +4885,7 @@ fn evaluationDemand(
     var added = collections.DenseMap(lir.LIR.LirProcSpecId, void).init(allocator);
     defer added.deinit();
     for (roots) |root| try added.put(root, {});
-    const Visit = struct { set: *const backend.dev.ProcArtifact.Set, index: u32 };
+    const Visit = struct { set: *const backend.dev.CodeExcerpt.Set, index: u32 };
     var visited = std.AutoHashMapUnmanaged(Visit, void).empty;
     defer visited.deinit(allocator);
     var stack = std.ArrayList(Visit).empty;
@@ -4816,14 +4900,14 @@ fn evaluationDemand(
             const located = source.find(source.context, key) orelse continue;
             try stack.append(allocator, .{ .set = located.set, .index = located.index });
         }
-        // Every artifact the spliced closures place, walked once, as
-        // `ProcArtifact.splice` places them: set-local references, and
+        // Every excerpt the spliced closures place, walked once, as
+        // `CodeExcerpt.splice` places them: set-local references, and
         // symbolic references to code the program does not have.
         while (stack.pop()) |visit| {
             if ((try visited.getOrPut(allocator, visit)).found_existing) continue;
-            const artifact = visit.set.artifacts[visit.index];
-            for (artifact.refs) |ref| try stack.append(allocator, .{ .set = visit.set, .index = ref.target });
-            for (artifact.symbolic_refs) |ref| {
+            const excerpt = visit.set.excerpts[visit.index];
+            for (excerpt.refs) |ref| try stack.append(allocator, .{ .set = visit.set, .index = ref.target });
+            for (excerpt.symbolic_refs) |ref| {
                 switch (ref.target) {
                     .proc => |identity| if (procs_by_identity.get(identity)) |proc_id| {
                         if ((try added.getOrPut(proc_id)).found_existing) continue;
@@ -4851,7 +4935,7 @@ const DevProgram = struct {
     splice: backend.dev.HostSplice,
     executable: backend.ExecutableMemory,
     entry_offsets: collections.DenseMap(lir.LIR.LirProcSpecId, usize),
-    artifacts: ?NativeProcCompiler.Retained,
+    excerpts: ?NativeProcCompiler.Retained,
     /// The bytes the program's erased callables reserve before their
     /// captures (`LirProgram.Result.erased_capture_prefix`).
     capture_prefix: u32,
@@ -5002,7 +5086,7 @@ const DevProgram = struct {
             .splice = splice,
             .executable = executable,
             .entry_offsets = entry_offsets,
-            .artifacts = artifacts,
+            .excerpts = artifacts,
             .capture_prefix = lowered.lir_result.erased_capture_prefix,
         };
     }
@@ -5089,9 +5173,9 @@ const DevProgram = struct {
     /// The image's code as object-cache artifacts, carrying the completed
     /// values it reads. Its procedures are a dev build's object code, so a
     /// build splices them as its own.
-    fn extractArtifacts(self: *DevProgram, lowered: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error!backend.dev.ProcArtifact.Set {
+    fn extractExcerpts(self: *DevProgram, lowered: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error!backend.dev.CodeExcerpt.Set {
         const frozen = lowered.frozen_static_data orelse finalizationInvariant("compile-time stage froze no completed values");
-        return backend.dev.ProcArtifact.extract(
+        return backend.dev.CodeExcerpt.extract(
             backend.HostLirCodeGen,
             self.allocator,
             &self.codegen,
@@ -5111,7 +5195,7 @@ const DevProgram = struct {
         self.executable.deinit();
         self.splice.deinit();
         self.codegen.deinit();
-        if (self.artifacts) |*artifacts| artifacts.deinit();
+        if (self.excerpts) |*excerpts| excerpts.deinit();
         self.slots.deinit();
         self.static_strings.deinit();
         self.* = undefined;
@@ -5381,6 +5465,7 @@ fn evalDevProgramRoots(
 }
 
 fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
+    base.dev_diagnostics.countTestWork(.ctfe_execution, 1);
     const job = &context.jobs[item_id];
     job.host.resetForRun();
     if (context.boxy_global_installed) {
@@ -5626,6 +5711,9 @@ fn reportDebugMessage(allocator: Allocator, options: Options, module: checked.Mo
 }
 
 fn emitDebugMessage(allocator: Allocator, options: Options, is_repl: bool, message: []const u8) Allocator.Error!void {
+    if (options.debug_events) |events| events.emitted = true;
+    if (options.completion_sink) |sink| try sink.debug(sink.context, message);
+    if (options.debug_observer) |observer| try observer.observe(observer.context, message);
     if (is_repl) {
         if (options.event_callback) |callback| callback.notify(callback.context, .{ .dbg = message });
     }

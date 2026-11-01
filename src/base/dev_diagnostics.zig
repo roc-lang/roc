@@ -18,14 +18,28 @@ pub const available = builtin.link_libc and build_options.dev_diagnostics;
 pub const Var = enum {
     /// Trace Boxy-only work; specialized compilation must produce no events.
     trace_boxy_work,
+    /// Measure serialization of completed specialization bodies.
+    sealed_body_profile,
+    /// Exercise validated completed specialization-body replay.
+    completed_body_cache,
+    /// Separate coordinator request-resolution costs into exclusive phases.
+    spec_resolution_profile,
     /// Print the final LIR of every procedure whose debug name contains the value.
     lir_dump,
     /// Print every closed specialization key.
     spec_census,
+    /// Print deterministic Lambda Solved work once per required invocation.
+    lambda_solve_stats,
+    /// Exercise the experimental complete Lambda Solved analysis cache.
+    lambda_analysis_cache,
+    /// Start each top-level recursive type analysis with empty proof tables.
+    fresh_type_analysis,
     /// Print every object cache lookup and offer.
     pack_trace,
     /// Print how many procedures a dev build served from cached packs.
     pack_stats,
+    /// Measure specialization with persistent interface replay disabled.
+    disable_persistent_interfaces,
     /// Print every compile-time demand decision.
     ctfe_demand_trace,
     /// Print what each module's compile-time evaluation reused, verified, and stored.
@@ -35,27 +49,61 @@ pub const Var = enum {
     /// Load the pack objects in the named directory into a native dev build.
     dev_pack_hits,
     /// Check every object compile against one assembled from its artifacts.
-    dev_artifact_roundtrip,
+    dev_excerpt_roundtrip,
     /// Append one record to the named file per in-process LLVM object compile.
     test_llvm_object_compile_count_file,
+    /// Print deterministic work counters for one test command.
+    test_command_work,
 
     /// The variable's name in the environment.
     pub fn envName(comptime self: Var) [:0]const u8 {
         return switch (self) {
+            .sealed_body_profile => "ROC_SEALED_BODY_PROFILE",
+            .completed_body_cache => "ROC_COMPLETED_BODY_CACHE",
+            .spec_resolution_profile => "ROC_SPEC_RESOLUTION_PROFILE",
             .trace_boxy_work => "ROC_TRACE_BOXY_WORK",
             .lir_dump => "ROC_LIR_DUMP",
             .spec_census => "ROC_SPEC_CENSUS",
+            .lambda_solve_stats => "ROC_LAMBDA_SOLVE_STATS",
+            .lambda_analysis_cache => "ROC_LAMBDA_ANALYSIS_CACHE",
+            .fresh_type_analysis => "ROC_FRESH_TYPE_ANALYSIS",
             .pack_trace => "ROC_PACK_TRACE",
             .pack_stats => "ROC_PACK_STATS",
+            .disable_persistent_interfaces => "ROC_DISABLE_PERSISTENT_INTERFACES",
             .ctfe_demand_trace => "ROC_CTFE_DEMAND_TRACE",
             .ctfe_reuse_trace => "ROC_CTFE_REUSE_TRACE",
             .dev_pack_objects => "ROC_DEV_PACK_OBJECTS",
             .dev_pack_hits => "ROC_DEV_PACK_HITS",
-            .dev_artifact_roundtrip => "ROC_DEV_ARTIFACT_ROUNDTRIP",
+            .dev_excerpt_roundtrip => "ROC_DEV_EXCERPT_ROUNDTRIP",
             .test_llvm_object_compile_count_file => "ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE",
+            .test_command_work => "ROC_TEST_COMMAND_WORK",
         };
     }
 };
+
+/// Stage-owned counters used to prove complete-command reuse skips producers.
+pub const TestWork = enum {
+    specialization,
+    ctfe_execution,
+    second_specialization,
+    runtime_lir,
+    arc,
+    static_data,
+    native_test_procedures,
+    test_root_execution,
+};
+var test_work: [@typeInfo(TestWork).@"enum".field_names.len]std.atomic.Value(u64) = @splat(.init(0));
+
+/// Add `amount` to a test-work counter when test command work tracing is on.
+pub fn countTestWork(counter: TestWork, amount: usize) void {
+    if (!isSet(.test_command_work)) return;
+    _ = test_work[@backingInt(counter)].fetchAdd(amount, .monotonic);
+}
+
+/// The number of times a stage has counted this test work.
+pub fn testWorkCount(counter: TestWork) u64 {
+    return test_work[@backingInt(counter)].load(.monotonic);
+}
 
 /// The variable's value, or null when it is unset or this compiler does not
 /// read developer diagnostics.

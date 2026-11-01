@@ -175,7 +175,8 @@ test "Solved-LIR runtime loops joins try and crash commit deterministically on w
 
 test "Solved-LIR runtime nested nominal record and interpolation patterns commit deterministically on workers" {
     // Nested payloads and both ends of the string pattern depend on host input.
-    // Wrappers-only inlining preserves the worker-owned match procedures.
+    // Two calls keep `decode` a procedure the workers own, since wrappers
+    // inlining would lower a single-use body into `main!`.
     try harness.expectRuntimeWorkerParallelismDeterministicLir(.{ .app_body =
         \\Envelope := [Message({ label: Str, payload: [Count(U64), Missing] }), Empty]
         \\
@@ -198,7 +199,7 @@ test "Solved-LIR runtime nested nominal record and interpolation patterns commit
         \\    payload = if count == 1 Missing else Count(count)
         \\    envelope : Envelope
         \\    envelope = if count == 0 Empty else Message({ label, payload })
-        \\    result = decode(envelope)
+        \\    result = decode(envelope) + decode(envelope)
         \\    if result == 0 Ok({}) else Err(Exit(1))
         \\}
     }, .{ .inline_mode = .wrappers }, &.{ .match, .literal }, null);
@@ -207,6 +208,8 @@ test "Solved-LIR runtime nested nominal record and interpolation patterns commit
 test "Solved-LIR runtime recursive local closure commits deterministically on workers" {
     // The recursive closure captures a runtime offset and escapes through a
     // finite choice, retaining both its recursive binding and an indirect call.
+    // Two calls keep `run`, which makes the indirect call, a procedure the
+    // workers own rather than a single-use body lowered into `main!`.
     try harness.expectRuntimeWorkerParallelismDeterministicLir(.{ .app_body =
         \\make_counter = |offset, flag| {
         \\    count : U64 -> U64
@@ -221,7 +224,7 @@ test "Solved-LIR runtime recursive local closure commits deterministically on wo
         \\
         \\main! : List(Str) => Try({}, [Exit(I8), ..])
         \\main! = |args| {
-        \\    result = run(args.len().to_u64())
+        \\    result = run(args.len().to_u64()) + run(args.len().to_u64() + 1)
         \\    if result == 0 Ok({}) else Err(Exit(1))
         \\}
     }, .{ .inline_mode = .wrappers }, &.{ .indirect_call, .capturing }, null);

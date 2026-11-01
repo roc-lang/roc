@@ -53,9 +53,10 @@ const max_phases: usize = 16;
 const max_subphases: usize = 25;
 // Shared lowering and a runtime continuation each report nine lowering groups
 // and native emission. Also reserve compile-time roots, test result admission,
-// and dev test emission.
-const max_counter_groups: usize = 2 * 10 + 3;
-const max_counters_per_group: usize = 32;
+// dev test emission, completed compilation, completed test command,
+// native test artifact cache, and individual test outcome admission.
+const max_counter_groups: usize = 2 * 10 + 7;
+const max_counters_per_group: usize = 42;
 /// Rows in the ranked timing list printed after the phases.
 const max_ranked_timings: usize = 10;
 /// Bytes reserved for copies of the ranked rows' names, which the caller's
@@ -925,7 +926,7 @@ test "ranked timings are omitted without --timings" {
     try testing.expect(std.mem.find(u8, buf.written(), "pdf.Slow") == null);
 }
 
-test "timing counter groups retain every Monotype graph diagnostic" {
+test "timing counter groups retain every Monotype body diagnostic" {
     var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
     var reporter = Reporter.init(.{
@@ -939,14 +940,14 @@ test "timing counter groups retain every Monotype graph diagnostic" {
     reporter.start();
     var counters = repeated: {
         const pattern = [_]Counter{.{ .name = "Graph diagnostic", .count = 0 }};
-        var result: [pattern.len * (27)]@TypeOf(pattern[0]) = undefined;
-        for (0..(27)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], &pattern);
+        var result: [pattern.len * (38)]@TypeOf(pattern[0]) = undefined;
+        for (0..(38)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], &pattern);
         break :repeated result;
     };
-    counters[26] = .{ .name = "Generated-private guard returns", .count = 12345 };
-    reporter.recordCounters("Monotype type graph", &counters);
+    counters[37] = .{ .name = "Direct call request reuses", .count = 12345 };
+    reporter.recordCounters("Monotype body + dispatch", &counters);
     reporter.finish();
-    try testing.expect(std.mem.find(u8, buf.written(), "Generated-private guard returns") != null);
+    try testing.expect(std.mem.find(u8, buf.written(), "Direct call request reuses") != null);
     try testing.expect(std.mem.find(u8, buf.written(), "12345") != null);
 }
 
@@ -1017,12 +1018,16 @@ test "counter capacity includes shared runtime native and test groups" {
     for (0..20) |_| reporter.recordCounters("Compiler work", &.{.{ .name = "Count", .count = 1 }});
     reporter.recordCounters("Compile-time roots", &.{.{ .name = "Evaluated", .count = 2 }});
     reporter.recordCounters("Final test cache", &.{.{ .name = "Hits", .count = 7 }});
+    reporter.recordCounters("Completed compilation", &.{.{ .name = "Hits", .count = 1 }});
     reporter.recordCounters("Dev test emission", &.{.{ .name = "Procedures emitted", .count = 3 }});
+    reporter.recordCounters("Native test artifact cache", &.{.{ .name = "Hits", .count = 1 }});
     reporter.finish();
     try testing.expectEqual(@as(usize, 20), std.mem.count(u8, buf.written(), "Compiler work"));
     try testing.expect(std.mem.find(u8, buf.written(), "Final test cache") != null);
+    try testing.expect(std.mem.find(u8, buf.written(), "Completed compilation") != null);
     try testing.expect(std.mem.find(u8, buf.written(), "Compile-time roots") != null);
     try testing.expect(std.mem.find(u8, buf.written(), "Dev test emission") != null);
+    try testing.expect(std.mem.find(u8, buf.written(), "Native test artifact cache") != null);
 }
 
 test "static breakdown lists every phase with the timings flag" {

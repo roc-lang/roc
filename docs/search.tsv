@@ -1,0 +1,90 @@
+# directive\tcategory\tterm\tdestination\tlabel (fields separated by tabs)
+category	api	API
+category	guides	Guides & examples
+term	guides	:=	langref/types/#nominal-types	Types › Nominal Types
+term	guides	::	langref/types/#opaque-nominal-types	Types › Opaque Nominal Types
+term	guides	nominal	langref/types/#nominal-types	Types › Nominal Types
+term	guides	opaque	langref/types/#opaque-nominal-types	Types › Opaque Nominal Types
+
+# Operators; ambiguous symbols intentionally link to both forms.
+term	guides	+	langref/operators/#arithmetic-operators	Operators › Arithmetic Operators
+term	guides	-	langref/operators/#arithmetic-operators	Operators › Arithmetic Operators
+term	guides	*	langref/operators/#arithmetic-operators	Operators › Arithmetic Operators
+term	guides	/	langref/operators/#arithmetic-operators	Operators › Arithmetic Operators
+term	guides	//	langref/operators/#arithmetic-operators	Operators › Arithmetic Operators
+term	guides	%	langref/operators/#arithmetic-operators	Operators › Arithmetic Operators
+term	guides	==	langref/operators/#comparison-operators	Operators › Comparison Operators
+term	guides	!=	langref/operators/#comparison-operators	Operators › Comparison Operators
+term	guides	<	langref/operators/#comparison-operators	Operators › Comparison Operators
+term	guides	<=	langref/operators/#comparison-operators	Operators › Comparison Operators
+term	guides	>	langref/operators/#comparison-operators	Operators › Comparison Operators
+term	guides	>=	langref/operators/#comparison-operators	Operators › Comparison Operators
+term	guides	..<	langref/operators/#range-operators	Operators › Range Operators
+term	guides	..=	langref/operators/#range-operators	Operators › Range Operators
+term	guides	and	langref/operators/#and	Operators › and
+term	guides	or	langref/operators/#or	Operators › or
+term	guides	??	langref/operators/#-default-value-on-err	Operators › ?? (default value on Err)
+term	guides	?	langref/operators/#-unwrap-if-ok-early-return-if-err	Operators › ? (unwrap or return Err)
+term	guides	?	langref/operators/#-with-a-handler	Operators › ? with a Handler
+term	guides	|>	langref/operators/#-pipe	Operators › |> (pipe)
+term	guides	-	langref/operators/#--negate	Operators › - (negation)
+term	guides	!	langref/operators/#-not	Operators › ! (not)
+term	guides	[]	langref/operators/#…-subscript-operator	Operators › Subscript Operator (not yet implemented)
+term	guides	[…]	langref/operators/#…-subscript-operator	Operators › Subscript Operator (not yet implemented)
+term	guides	[...]	langref/operators/#…-subscript-operator	Operators › Subscript Operator (not yet implemented)
+term	guides	#	langref/comments-and-docs/	Comments
+
+# Aliases from https://www.roc-lang.org/different-names
+term	api	foldl	List/#fold	List.fold
+term	api	foldLeft	List/#fold	List.fold
+term	api	fold_left	List/#fold	List.fold
+term	api	fold-left	List/#fold	List.fold
+term	api	reduce	List/#fold	List.fold
+term	api	lreduce	List/#fold	List.fold
+term	api	array_reduce	List/#fold	List.fold
+term	api	inject	List/#fold	List.fold
+term	api	accumulate	List/#fold	List.fold
+term	api	Aggregate	List/#fold	List.fold
+term	api	walk	List/#fold	List.fold
+term	api	foldr	List/#fold_rev	List.fold_rev
+term	api	foldRight	List/#fold_rev	List.fold_rev
+term	api	fold_right	List/#fold_rev	List.fold_rev
+term	api	fold-right	List/#fold_rev	List.fold_rev
+term	api	reduceRight	List/#fold_rev	List.fold_rev
+term	api	rreduce	List/#fold_rev	List.fold_rev
+term	api	walk_backwards	List/#fold_rev	List.fold_rev
+term	api	head	List/#first	List.first
+term	api	get(0)	List/#first	List.first
+term	api	[0]	List/#first	List.first
+term	api	filter	List/#keep_if	List.keep_if
+term	api	select	List/#keep_if	List.keep_if
+term	api	copy_if	List/#keep_if	List.keep_if
+term	api	remove-if-not	List/#keep_if	List.keep_if
+term	api	reject	List/#drop_if	List.drop_if
+term	api	remove_copy_if	List/#drop_if	List.drop_if
+term	api	remove-if	List/#drop_if	List.drop_if
+term	guides	bind	langref/operators/#-unwrap-if-ok-early-return-if-err	?
+term	guides	flatMap	langref/operators/#-unwrap-if-ok-early-return-if-err	?
+term	guides	andThen	langref/operators/#-unwrap-if-ok-early-return-if-err	?
+term	guides	(>>=)	langref/operators/#-unwrap-if-ok-early-return-if-err	?
+term	guides	Result.try	langref/operators/#-unwrap-if-ok-early-return-if-err	?
+term	api	zip	List/#map2	List.map2(x, y, |a, b| (a, b))
+
+# Empty-search suggestions: query and group label.
+suggestion	List	a type
+suggestion	Dict	a type
+suggestion	Set	a type
+suggestion	Str	a type
+suggestion	map	a function
+suggestion	keep_if	a function
+suggestion	fold	a function
+suggestion	Str.split_on	a function
+suggestion	JSON	a task
+suggestion	CLI args	a task
+suggestion	random numbers	a task
+suggestion	pattern matching	a language concept
+suggestion	opaque	a language concept
+suggestion	error handling	a language concept
+suggestion	|>	an operator
+suggestion	?	an operator
+suggestion	??	an operator

@@ -9,10 +9,10 @@
 //! hold quadratic content in the nest depth. They are therefore never built
 //! per node: inside a cyclic component, a bit that a whole loop carries (the
 //! loop defines it nowhere, and it is exposed somewhere in the loop) is set
-//! once on that loop's carried row, every row of the loop shares that row's
-//! structure, and only the bits exposed at a node itself are added to the
-//! node's row. Acyclic nodes are one equation step from their successors'
-//! finished rows and share their structure.
+//! once on that loop's carried row, and a loop header's row is that row plus
+//! the bits exposed at the header itself. Every other node, in a loop or not,
+//! is one equation step from its successors' finished rows and shares their
+//! structure.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -241,6 +241,12 @@ pub fn equationRow(
     return row;
 }
 
+/// Whether `node` is the header of its innermost loop.
+fn isHeader(forest: *const LoopForest, node: u32) bool {
+    const loop = forest.innermost[node];
+    return loop != LoopForest.none and forest.loops[loop].header == node;
+}
+
 fn rowAt(rows: []const Row, node: u32) *const Row {
     return &rows[node];
 }
@@ -434,6 +440,10 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
     @memset(seed_heads, no_link);
     var seeds = std.ArrayList(SeedLink).empty;
     var seed_bits = std.ArrayList(u32).empty;
+    // A component's non-header members, by how many of their successors in
+    // the component that are not headers still lack a row.
+    var pending = collections.DenseMap(u32, u32).init(scratch);
+    var ready = std.ArrayList(u32).empty;
 
     var component_cursor = components.count();
     while (component_cursor > 0) {
@@ -486,7 +496,9 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
                         if (graph.passes(entry.predecessor, entry.target, search.bit)) try search.reach(entry.predecessor);
                     }
                 } else {
-                    try search.note(search.node_heads, &search.node_bits, unit.index);
+                    // Only a loop header's row is built from its exposed bits;
+                    // every other member follows from its successors' rows.
+                    if (isHeader(&forest, unit.index)) try search.note(search.node_heads, &search.node_bits, unit.index);
                     try search.reachPredecessorsOf(unit.index, null);
                 }
             }
@@ -505,14 +517,46 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
             }
             carried[loop] = row;
         }
+        // A header's row is the bits its loops carry plus the bits exposed
+        // at the header. Every other member's row is one equation step from
+        // its successors' rows, which the least solution satisfies, so it is
+        // built after them and shares their structure: removing the edges
+        // into headers leaves the component acyclic, since every cycle
+        // passes through a depth-first back edge and every back edge enters
+        // a header. Building each member's row from its own exposed bits
+        // instead would share nothing between neighboring rows, and a loop
+        // holding many values live across many nodes would allocate the
+        // product of the two.
+        pending.clearRetainingCapacity();
+        ready.clearRetainingCapacity();
         for (members) |member| {
-            var row = carried[forest.innermost[member]];
-            var cursor = search.node_heads[member];
-            while (cursor != no_link) : (cursor = search.node_bits.items[cursor].next) {
-                try row.set(allocator, search.node_bits.items[cursor].bit);
+            if (isHeader(&forest, member)) {
+                var row = carried[forest.innermost[member]];
+                var cursor = search.node_heads[member];
+                while (cursor != no_link) : (cursor = search.node_bits.items[cursor].next) {
+                    try row.set(allocator, search.node_bits.items[cursor].bit);
+                }
+                rows[member] = row;
+                continue;
             }
-            rows[member] = row;
+            var waiting: u32 = 0;
+            for (graph.successorsOf(member)) |successor| {
+                if (component_of[successor] == component and !isHeader(&forest, successor)) waiting += 1;
+            }
+            try pending.put(member, waiting);
+            if (waiting == 0) try ready.append(scratch, member);
         }
+        var built: usize = 0;
+        while (ready.pop()) |member| {
+            rows[member] = try equationRow(graph, member, allocator, @as([]const Row, rows), rowAt);
+            built += 1;
+            for (graph.predecessorsOf(member)) |predecessor| {
+                const waiting = pending.getPtr(predecessor) orelse continue;
+                waiting.* -= 1;
+                if (waiting.* == 0) try ready.append(scratch, predecessor);
+            }
+        }
+        if (built != pending.count()) invariant("ARC liveness component held a cycle that enters no loop header", .{});
         for (search.loop_bits.items) |link| search.loop_heads[link.index] = no_link;
         for (search.node_bits.items) |link| search.node_heads[link.index] = no_link;
     }

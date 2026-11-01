@@ -24,6 +24,7 @@
 //! package root on a hit exactly as it does on a miss.
 
 const std = @import("std");
+const Sha256 = @import("base").Sha256;
 const parse = @import("parse");
 
 const AST = parse.AST;
@@ -73,7 +74,7 @@ pub fn pinValidationMatches(stamp: ?PinValidation, version: ?[]const u8) bool {
 /// checked artifact's semantic key and its target-independent identity.
 pub fn pinValidationHash(has_pin: bool, version: ?[]const u8) [32]u8 {
     if (!has_pin) return @splat(0);
-    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+    var hash = Sha256.init(.{});
     hash.update("roc-source-pin-validation-v1");
     if (recognizedPinVersion(version)) |text| hash.update(text);
     return hash.finalResult();

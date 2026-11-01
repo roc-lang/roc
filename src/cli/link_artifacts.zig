@@ -3,6 +3,7 @@
 //! Evicting a cache name cannot remove an object from an in-progress link.
 
 const std = @import("std");
+const artifacts = @import("compile").artifacts;
 const backend = @import("backend");
 const CoreCtx = @import("ctx").CoreCtx;
 const Allocator = std.mem.Allocator;
@@ -28,10 +29,25 @@ pub const Counters = struct {
 
 /// Owns the scratch lifetime pins for one native build's immutable objects.
 pub const Objects = struct {
+    pub const Cache = struct {
+        store: artifacts.Store,
+        identity: artifacts.Identity,
+
+        fn key(self: Cache, id: Identity) artifacts.Identity {
+            var result = self.identity;
+            result.key = id.digest;
+            return result;
+        }
+
+        fn forTest(allocator: Allocator, io: std.Io, path: []const u8) Allocator.Error!Cache {
+            return .{ .store = try artifacts.Store.init(allocator, io, path), .identity = .{ .namespace = @splat(0), .family = .program_output, .key = @splat(0) } };
+        }
+    };
     core: CoreCtx,
     arena: Allocator,
     /// Same compiler/format/target/optimization namespace as program records.
-    root: ?[]const u8,
+    root: ?Cache,
+
     scratch: []const u8,
     lease: std.Io.File,
     counters: Counters = .{},
@@ -41,7 +57,7 @@ pub const Objects = struct {
     /// Why writing an object into the scratch directory can fail.
     pub const MaterializeError = Allocator.Error || CoreCtx.DeleteError || std.Io.Dir.WriteFileError;
 
-    pub fn init(core: CoreCtx, arena: Allocator, root: ?[]const u8, scratch: []const u8) InitError!Objects {
+    pub fn init(core: CoreCtx, arena: Allocator, root: ?Cache, scratch: []const u8) InitError!Objects {
         const lock_path = try std.fs.path.join(arena, &.{ scratch, "link.lock" });
         const lease = try std.Io.Dir.cwd().createFile(core.std_io, lock_path, .{ .read = true, .exclusive = true, .lock = .exclusive });
         return .{ .core = core, .arena = arena, .root = root, .scratch = scratch, .lease = lease };
@@ -56,20 +72,30 @@ pub const Objects = struct {
     }
 
     fn cachePath(self: *Objects, id: Identity) Allocator.Error!?[]const u8 {
-        const root = self.root orelse return null;
-        return try std.fs.path.join(self.arena, &.{ root, "programs", try self.name(id) });
+        const cache = self.root orelse return null;
+        var artifact = (cache.store.acquire(cache.key(id), cache.store.now()) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return null,
+        }) orelse return null;
+        defer artifact.deinit();
+        return try self.arena.dupe(u8, artifact.path);
     }
 
-    /// Pin before validating. The sweep may unlink the cache name at any time.
-    /// No writer ever opens a published object (or its pin) for writing.
+    /// Acquire a catalog lease before creating the scratch hard link. The
+    /// registered scratch lease then pins the inode for the complete link.
     pub fn find(self: *Objects, id: Identity) Allocator.Error!?[]const u8 {
         return self.findKnown(id, null);
     }
 
     fn findKnown(self: *Objects, id: Identity, expected: ?[]const u8) Allocator.Error!?[]const u8 {
-        const cache_path = try self.cachePath(id) orelse return null;
+        const cache = self.root orelse return null;
+        var artifact = (cache.store.acquire(cache.key(id), cache.store.now()) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return null,
+        }) orelse return null;
+        defer artifact.deinit();
         const path = try std.fs.path.join(self.arena, &.{ self.scratch, try self.name(id) });
-        self.core.hardLink(cache_path, path) catch |err| switch (err) {
+        self.core.hardLink(artifact.path, path) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return null,
         };
@@ -127,14 +153,14 @@ pub const Objects = struct {
         };
         try backend.writeFileWindowsAvSafe(self.core.std_io, path, bytes);
         self.counters.written += bytes.len;
-        if (try self.cachePath(id)) |cache_path| {
-            self.core.makePath(std.fs.path.dirname(cache_path).?) catch return path;
-            // Each invocation's scratch directory gives its staging name a
-            // unique identity, even when many writers publish the same object.
-            const staging = try std.fmt.allocPrint(self.arena, "{s}.{s}.tmp", .{ cache_path, std.fs.path.basename(self.scratch) });
-            self.core.hardLink(path, staging) catch return path;
-            defer self.core.deleteFile(staging) catch {};
-            self.core.rename(staging, cache_path) catch return path;
+        if (self.root) |cache| {
+            var staging = cache.store.reserve(cache.key(id), bytes.len, cache.store.now()) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return path,
+            };
+            defer staging.deinit();
+            self.core.hardLink(path, staging.path) catch return path;
+            staging.publish() catch return path;
         }
         return path;
     }
@@ -152,9 +178,9 @@ test "immutable objects pin bytes through eviction and repair corruption without
     try tmp.dir.createDir(io, "third", .default_dir);
     const root = try tmp.dir.realPathFileAlloc(io, ".", a);
     const core = CoreCtx.os(std.testing.allocator, a, io);
-    var first = try Objects.init(core, a, root, try std.fs.path.join(a, &.{ root, "first" }));
+    var first = try Objects.init(core, a, try Objects.Cache.forTest(a, io, root), try std.fs.path.join(a, &.{ root, "first" }));
     defer first.deinit();
-    var second = try Objects.init(core, a, root, try std.fs.path.join(a, &.{ root, "second" }));
+    var second = try Objects.init(core, a, try Objects.Cache.forTest(a, io, root), try std.fs.path.join(a, &.{ root, "second" }));
     defer second.deinit();
     const data = "immutable object bytes";
     const id = Identity.of(data);
@@ -167,16 +193,16 @@ test "immutable objects pin bytes through eviction and repair corruption without
     try core.deleteFile(cache_path);
     try std.testing.expectEqualStrings(data, try core.readFile(pinned, a));
     try std.testing.expectEqualStrings(data, try core.readFile(published, a));
-    var third = try Objects.init(core, a, root, try std.fs.path.join(a, &.{ root, "third" }));
+    var third = try Objects.init(core, a, try Objects.Cache.forTest(a, io, root), try std.fs.path.join(a, &.{ root, "third" }));
     defer third.deinit();
     try std.testing.expect(try third.find(id) == null);
     // An interrupted or corrupt publication is a miss, even at the right name
     // and size; repairing it must not mutate another reader's inode.
-    try core.writeFile(cache_path, "xxxxxxxxxxxxxxxxxxxxxx");
+    try first.root.?.store.write(first.root.?.key(id), "xxxxxxxxxxxxxxxxxxxxxx", first.root.?.store.now());
     try std.testing.expect(try third.find(id) == null);
     _ = try third.materialize(data);
     try std.testing.expectEqualStrings(data, try core.readFile(pinned, a));
-    try std.testing.expectEqualStrings(data, try core.readFile(cache_path, a));
+    try std.testing.expectEqualStrings(data, try core.readFile((try third.cachePath(id)).?, a));
     // A second publisher takes the existing content without writing it.
     _ = try second.materialize(data);
     try std.testing.expectEqual(@as(u64, 0), second.counters.written);
@@ -205,7 +231,7 @@ test "concurrent object publishers leave complete immutable objects" {
             var storage = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             defer storage.deinit();
             const allocator = storage.allocator();
-            var objects = try Objects.init(CoreCtx.os(allocator, allocator, thread_io), allocator, cache_root, scratch);
+            var objects = try Objects.init(CoreCtx.os(allocator, allocator, thread_io), allocator, try Objects.Cache.forTest(allocator, thread_io, cache_root), scratch);
             defer objects.deinit();
             _ = try objects.materialize("concurrent content");
         }
@@ -219,8 +245,8 @@ test "concurrent object publishers leave complete immutable objects" {
     first.join();
     second.join();
     for (failures) |failure| if (failure) |err| return err;
-    const name = try std.fmt.allocPrint(a, "programs/{s}.o", .{std.fmt.bytesToHex(Identity.of("concurrent content").digest, .lower)});
-    const content = try tmp.dir.readFileAlloc(io, name, a, .unlimited);
+    const cache = try Objects.Cache.forTest(a, io, root);
+    const content = (try cache.store.read(a, cache.key(Identity.of("concurrent content")), cache.store.now())).?;
     try std.testing.expectEqualStrings("concurrent content", content);
 }
 
@@ -234,7 +260,7 @@ test "a refused unlink never permits truncating a published inode" {
     try tmp.dir.createDir(io, "scratch", .default_dir);
     const root = try tmp.dir.realPathFileAlloc(io, ".", a);
     const core = CoreCtx.os(std.testing.allocator, a, io);
-    var objects = try Objects.init(core, a, root, try std.fs.path.join(a, &.{ root, "scratch" }));
+    var objects = try Objects.init(core, a, try Objects.Cache.forTest(a, io, root), try std.fs.path.join(a, &.{ root, "scratch" }));
     defer objects.deinit();
     const content = "retained by another linker";
     const pinned = try objects.materialize(content);

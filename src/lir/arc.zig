@@ -496,6 +496,7 @@ const GroupLivenessIndex = struct {
 
 /// Public `insert` function.
 pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: InsertOptions) ResourceError!void {
+    @import("base").dev_diagnostics.countTestWork(.arc, 1);
     if (options.metrics_out) |metrics| metrics.* = .{};
     var inserter = Inserter{
         .store = store,
@@ -3619,6 +3620,9 @@ const Inserter = struct {
             const param = GuardedList.at(params, position);
             if (!owned.contains(param)) {
                 arcInvariant("ARC restitution boundary did not carry its exact entry parameter unit");
+            }
+            if (owned.residualMask(param) != owned.fullResidualMask(param)) {
+                arcInvariant("ARC restitution boundary carried a parameter with a field taken out of it");
             }
             try keep.copyResourceFrom(owned, param);
         }
@@ -15976,6 +15980,71 @@ test "RC outcome restitution releases every returned argument before a nested jo
     try testing.expect(remaining > 0);
 }
 
+test "RC outcome restitution keeps a field a callee passes to a hosted call inside the returned record" {
+    // A stable procedure owns a record whose first field it passes to a
+    // hosted call, then returns a tag chosen by the hosted result without
+    // touching the record again. Every outcome hands the record's exact
+    // entry unit back to a caller that demands restitution, so the field
+    // must be retained for the hosted call rather than taken out of the
+    // record: certification rejects a returned record missing a field.
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const outcome_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.list_i64,
+    });
+
+    const record = try f.local(f.pair_list);
+    const handle = try f.local(f.list_i64);
+    const status = try f.local(.i64);
+    const fresh = try f.local(f.list_i64);
+    const result = try f.local(outcome_layout);
+    const ok_ret = try f.ret(result);
+    const ok_tag = try f.assignTag(result, 1, fresh, ok_ret);
+    const ok_body = try f.assignList(fresh, &.{}, ok_tag);
+    const err_ret = try f.ret(result);
+    const err_body = try f.assignTag(result, 0, null, err_ret);
+    const choose = try f.switchStmt(status, ok_body, err_body, null);
+    const hosted = try f.assignHostedCall(status, &.{handle}, choose);
+    const project = try f.assignRefField(handle, record, 0, hosted);
+    const callee = try f.addProc(&.{record}, project, outcome_layout);
+    f.store.getProcSpecPtr(callee).stable_signature = true;
+
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const input = try f.local(f.pair_list);
+    const call_result = try f.local(outcome_layout);
+    const discriminant = try f.local(.u8);
+    const ok_value = try f.local(.i64);
+    const err_value = try f.local(.i64);
+    const caller_ok_ret = try f.ret(ok_value);
+    const caller_ok_done = try f.assignI64(ok_value, 1, caller_ok_ret);
+    const caller_ok = try f.expectStmt(input, caller_ok_done);
+    const caller_err_ret = try f.ret(err_value);
+    const caller_err_done = try f.assignI64(err_value, 0, caller_err_ret);
+    const caller_err = try f.expectStmt(input, caller_err_done);
+    const refine = try f.switchStmt(discriminant, caller_ok, caller_err, null);
+    const read_discriminant = try f.assignDiscriminant(discriminant, call_result, refine);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = call_result,
+        .proc = callee,
+        .args = try f.span(&.{input}),
+        .next = read_discriminant,
+    } }, .test_fixture);
+    const make_input = try f.assignStruct(input, &.{ first, second }, call);
+    const make_second = try f.assignList(second, &.{}, make_input);
+    const caller_body = try f.assignList(first, &.{}, make_second);
+    const caller = try f.addProc(&.{}, caller_body, .i64);
+    f.store.getProcSpecPtr(caller).code_key = @splat(1);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{});
+
+    // The caller lends its record to the outcome variant without a retain.
+    try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+    try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
+}
+
 test "ARC outcome capability rejects a stale discriminant after return-local rebind" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -18315,4 +18384,29 @@ test "ARC ownership iteration skips absent resources and preserves release order
     var empty = filtered.iterator(.{});
     try testing.expectEqual(null, empty.next());
     for (keys) |key| try testing.expect(owned.contains(locals[key]));
+}
+
+test "ARC outcome capability excludes conventions that return no ownership units" {
+    for ([_]bool{ false, true }) |stable| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+        const outcome_layout = try f.layouts.putTagUnion(&.{ f.list_i64, f.list_i64 });
+        const param = try f.local(f.list_i64);
+        const choose = try f.local(.i64);
+        const result = try f.local(outcome_layout);
+        const ret = try f.ret(result);
+        const left = try f.assignTag(result, 0, param, ret);
+        const right = try f.assignTag(result, 1, param, ret);
+        const body = try f.switchStmt(choose, left, right, null);
+        const proc = try f.addProc(&.{ param, choose }, body, outcome_layout);
+        f.store.getProcSpecPtr(proc).stable_signature = stable;
+        const rc = [_]bool{ true, false, true };
+        {
+            var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
+            defer solution.deinit();
+            try testing.expect(solution.availableOutcomeSpanOf(proc).isEmpty());
+        }
+        try insert(&f.store, &f.layouts, .{ .specialize = false });
+        try testing.expect(!f.store.getProcSpec(proc).rc_variant_demandable);
+    }
 }

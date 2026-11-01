@@ -31,6 +31,10 @@ pub const HoistRoots = @import("hoist_roots.zig");
 pub const RequirementSolution = @import("requirement_solution.zig");
 pub const ConstStore = @import("const_store.zig");
 pub const CheckedArtifact = @import("checked_artifact.zig");
+/// Import-facing checking identities and explicit binding to current owners.
+pub const CheckingDependencies = @import("checking_dependencies.zig");
+pub const CheckingInterface = @import("checking_interface.zig");
+pub const InferenceOutput = @import("inference_output.zig");
 /// Comptime layout fingerprint for a registered serialization root (recurses into
 /// nested aggregates and `SerializedElement`s), so every admitted blob invalidates on
 /// any layout change, not just a top-level one.
@@ -46,6 +50,10 @@ pub const TestEnv = @import("test/TestEnv.zig");
 pub const ReportBuilder = report.ReportBuilder;
 
 test "check tests" {
+    std.testing.refAllDecls(@import("callable_checking.zig"));
+    std.testing.refAllDecls(@import("checking_dependencies.zig"));
+    std.testing.refAllDecls(@import("checking_interface.zig"));
+    std.testing.refAllDecls(@import("inference_output.zig"));
     std.testing.refAllDecls(@import("Check.zig"));
     std.testing.refAllDecls(@import("exhaustive.zig"));
     std.testing.refAllDecls(@import("exhaustiveness_context.zig"));
@@ -171,6 +179,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_12553_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12586_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12587_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12677_test.zig"));
     std.testing.refAllDecls(@import("test/nominal_decl_growth_test.zig"));
     std.testing.refAllDecls(@import("test/frame_owned_judgment_test.zig"));
 

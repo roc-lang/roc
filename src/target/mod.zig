@@ -687,6 +687,53 @@ pub const RocTarget = enum {
         };
     }
 
+    /// The target whose LLVM private runtime (src/builtins/llvm_private_runtime.zig)
+    /// a native LLVM object for this target links, or null for a target that
+    /// has none. Every CPU level of a target shares one runtime, compiled for
+    /// the lowest of them. Wasm objects compose their compiler support when
+    /// they are sealed instead, and 32-bit native targets have no LLVM build.
+    ///
+    /// Every target is listed rather than using `else`, so adding a target
+    /// fails to compile until its runtime is declared here.
+    pub fn llvmPrivateRuntimeTarget(self: RocTarget) ?RocTarget {
+        return switch (self) {
+            .x64mac,
+            .x64win,
+            .x64mingw,
+            .x64freebsd,
+            .x64openbsd,
+            .x64netbsd,
+            .x64musl,
+            .x64glibc,
+            .x64linux,
+            .x64elf,
+            .x64v1mac,
+            .x64v1win,
+            .x64v1mingw,
+            .x64v1freebsd,
+            .x64v1openbsd,
+            .x64v1netbsd,
+            .x64v1musl,
+            .x64v1glibc,
+            .x64v1linux,
+            .x64v1elf,
+            .arm64mac,
+            .arm64win,
+            .arm64mingw,
+            .arm64linux,
+            .arm64musl,
+            .arm64glibc,
+            .arm64v1win,
+            .arm64v1mingw,
+            .arm64v1linux,
+            .arm64v1musl,
+            .arm64v1glibc,
+            => self.defaultCpuTarget(),
+
+            .arm32linux, .arm32musl, .wasm32, .wasm32v1 => null,
+        };
+    }
+
     /// How old a CPU this target's generated code must run on.
     pub fn cpuLevel(self: RocTarget) CpuLevel {
         return if (self.defaultCpuTarget() == self) .default else .v1;

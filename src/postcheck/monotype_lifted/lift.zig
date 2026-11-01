@@ -576,6 +576,9 @@ const Lifter = struct {
         self.output.setFn(fn_id, .{
             .symbol = def.symbol,
             .source = source,
+            // A served body already passed this normalization. Its scope is
+            // part of source identity even though no body remains to rewrite.
+            .iterator_fusion_scope = if (source) |template| if (template.cached) |hit| hit.iterator_fusion_scope else false else false,
             .root_identity = def.root_identity,
             .signature = if (def.fn_id) |source_fn_id| switch (self.source.fnSignatureRelation(source_fn_id)) {
                 .independent_roots => null,
@@ -3226,4 +3229,51 @@ test "if_initialized_payload reads its payload as a free local" {
 
 test "monotype lifted lower declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "lift restores cached iterator normalization scope before source identity is computed" {
+    const a = std.testing.allocator;
+    for ([_]bool{ false, true }) |normalized| {
+        var mono = Mono.Program.init(a);
+        var owned = true;
+        defer if (owned) mono.deinit();
+        const result = try mono.types.add(.zst);
+        const function = try mono.types.add(.{ .func = .{ .args = .empty(), .ret = result } });
+        const template: Mono.FnTemplate = .{
+            .fn_def = .{ .local_template = .{
+                .artifact = .{},
+                .proc_base = try mono.names.internProcBase(.{
+                    .module_name = try mono.names.internModuleName("Cached"),
+                    .export_name = null,
+                    .kind = .checked_source,
+                    .ordinal = 0,
+                }),
+                .template = @fromBackingInt(1),
+            } },
+            .source_fn_ty = @fromBackingInt(1),
+            .source_fn_key = .{},
+            .mono_fn_ty = function,
+            .cached = .{
+                .identity = @splat(1),
+                .iterator_fusion_scope = normalized,
+                .rc_borrowed_params = 0,
+                .rc_ret_borrowed = false,
+                .rc_ret_lenders = 0,
+                .rc_read_only_params = 0,
+                .rc_ret_unique = false,
+                .rc_ret_unique_fields = 0,
+                .rc_ret_conditions = &.{},
+            },
+        };
+        const fn_id = try mono.addFn(template);
+        _ = try mono.addDef(.{ .symbol = @fromBackingInt(1), .fn_id = fn_id, .fn_def = template, .args = .empty(), .body = .hosted, .ret = result });
+        mono.freeze();
+        owned = false;
+        var lifted = try run(a, mono);
+        defer lifted.deinit();
+        try std.testing.expectEqual(@as(usize, 1), lifted.fnCount());
+        for (0..lifted.fnCount()) |index| {
+            try std.testing.expectEqual(normalized, lifted.getFn(@fromBackingInt(@intCast(index))).iterator_fusion_scope);
+        }
+    }
 }

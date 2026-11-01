@@ -52,7 +52,7 @@ const CpuLevel = roc_target_mod.CpuLevel;
 // with 24-byte RocList struct returns on aarch64
 
 const Relocation = @import("Relocation.zig").IndexedRelocation;
-const RuntimeRef = @import("Relocation.zig").RuntimeRef;
+const RuntimeNumber = @import("Relocation.zig").RuntimeNumber;
 const collections = @import("collections");
 const SymbolTable = @import("SymbolTable.zig");
 const StackPlan = lir.StackPlan;
@@ -292,7 +292,7 @@ pub const FragmentContextDependencies = struct {
 /// Non-LIR inputs to fragment emission. Reuse additionally requires producer
 /// domain/revision authority; the owner supplies that, not the code generator.
 /// Dependency flags permit ignoring Boxy-init policy differences only when the
-/// emitted artifact proves it does not depend on that policy.
+/// emitted excerpt proves it does not depend on that policy.
 pub const FragmentContract = struct {
     /// Platform/codegen identity; the selected instruction floor is separate.
     target: RocTarget,
@@ -726,8 +726,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Region starts of procedures spliced from object-cache entries, by
         /// identity; a second pack holding the same procedure splices nothing.
         spliced_proc_starts: std.AutoHashMap(lir.ProcIdentity, usize),
-        /// The source location each procedure placed from an artifact set
-        /// carries (`ProcArtifact.Artifact.loc`), in this program's
+        /// The source location each procedure placed from an excerpt set
+        /// carries (`CodeExcerpt.Excerpt.loc`), in this program's
         /// source-file domain, by identity.
         assembled_proc_locs: std.AutoHashMapUnmanaged(lir.ProcIdentity, base.SourceLoc) = .empty,
 
@@ -1006,7 +1006,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Every call or address literal that targets the buffer itself is
         /// logged with one of these, so a procedure's bytes can be lifted out
         /// of the buffer and placed in another one with its references
-        /// re-resolved (see `ProcArtifact.zig`).
+        /// re-resolved (see `CodeExcerpt.zig`).
         pub const CodeRefTarget = union(enum) {
             proc: lir.LIR.LirProcSpecId,
             /// Encoded RC helper key (`RcHelperVariant.encode`).
@@ -1056,6 +1056,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// One contiguous range of the code buffer with a known producer.
         pub const CodeRegion = struct {
+            payload: ?@import("CodeExcerpt.zig").AssembledPayload = null,
             start: usize,
             end: usize,
             /// Offset from `start` that references to this region resolve to.
@@ -1065,7 +1066,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Frame metadata carried with an assembled region so its unwind
         /// record can be re-recorded where it lands.
-        pub const AssembledFrame = @import("ProcArtifact.zig").Frame;
+        pub const AssembledFrame = @import("CodeExcerpt.zig").Frame;
 
         /// Tracks position of a BL/CALL to a compiled lambda proc.
         /// Used to re-patch relative offsets after deferred-prologue body shifts.
@@ -12636,7 +12637,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
-            var runtime_regs: RuntimeRefRegs = .{};
+            var runtime_regs: RuntimeNumberRegs = .{};
             for (args) |arg| switch (arg) {
                 .lea => |offset| try builder.addLeaArg(frame_ptr, offset),
                 .list => |offset| try builder.addListBytesLenCapMemArgs(frame_ptr, offset),
@@ -13094,7 +13095,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
-            var runtime_regs: RuntimeRefRegs = .{};
+            var runtime_regs: RuntimeNumberRegs = .{};
             try builder.addRegArg(capture_reg);
             try self.addRuntimeLayoutArg(&builder, &runtime_regs, capture_layout);
             try builder.addRegArg(desc_reg);
@@ -14411,7 +14412,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // no value until then, so its storage is left as allocated.
                 var defer_builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 defer defer_builder.deinit();
-                var defer_runtime_regs: RuntimeRefRegs = .{};
+                var defer_runtime_regs: RuntimeNumberRegs = .{};
                 try defer_builder.addMemArg(frame_ptr, fn_ptr_slot);
                 try defer_builder.addMemArg(frame_ptr, closure_ptr_slot);
                 try defer_builder.addMemArg(frame_ptr, capture_stack_offset);
@@ -14447,7 +14448,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // the call site's public ABI.
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
-            var runtime_regs: RuntimeRefRegs = .{};
+            var runtime_regs: RuntimeNumberRegs = .{};
             try builder.addMemArg(frame_ptr, fn_ptr_slot);
             if (ret_size == 0) {
                 try builder.addImmArg(0);
@@ -14530,7 +14531,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
-            var runtime_regs: RuntimeRefRegs = .{};
+            var runtime_regs: RuntimeNumberRegs = .{};
             if (size == 0) {
                 try builder.addImmArg(0);
             } else {
@@ -14565,7 +14566,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const slot = self.codegen.allocStackSlot(8);
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
-            var runtime_regs: RuntimeRefRegs = .{};
+            var runtime_regs: RuntimeNumberRegs = .{};
             if (result_desc_slot) |s| try builder.addMemArg(frame_ptr, s) else try builder.addImmArg(0);
             const returned_layout = self.early_return_ret_layout orelse
                 std.debug.panic("Dev/codegen invariant violated: a procedure returning a pending call has no return layout", .{});
@@ -15713,66 +15714,66 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// The registers a call's runtime table numbers were loaded into,
         /// released once the call is emitted.
-        const RuntimeRefRegs = struct {
+        const RuntimeNumberRegs = struct {
             regs: [boxy_call_plan.max_operands]GeneralReg = undefined,
             len: u8 = 0,
 
-            fn release(self: *RuntimeRefRegs, owner: *Self) void {
+            fn release(self: *RuntimeNumberRegs, owner: *Self) void {
                 for (self.regs[0..self.len]) |reg| owner.codegen.freeGeneral(reg);
                 self.len = 0;
             }
         };
 
         /// Load a number the Boxy runtime reads its sidecar tables by into a
-        /// temporary register. An object file's canonical image renumbers
-        /// what its code uses (design.md "Canonical Dev Images"), so the load
+        /// temporary register. An object file's arranged image renumbers
+        /// what its code uses (design.md "Deterministic Dev Images"), so the load
         /// is patchable and recorded as a runtime reference, which every
         /// other image leaves holding the program's own number.
-        fn loadRuntimeRef(self: *Self, ref: RuntimeRef) Allocator.Error!GeneralReg {
+        fn loadRuntimeNumber(self: *Self, ref: RuntimeNumber) Allocator.Error!GeneralReg {
             const reg = try self.allocTempGeneral();
-            try self.emitRuntimeRefInto(reg, ref);
+            try self.emitRuntimeNumberInto(reg, ref);
             return reg;
         }
 
-        /// `loadRuntimeRef` into a register the caller holds.
-        fn emitRuntimeRefInto(self: *Self, reg: GeneralReg, ref: RuntimeRef) Allocator.Error!void {
+        /// `loadRuntimeNumber` into a register the caller holds.
+        fn emitRuntimeNumberInto(self: *Self, reg: GeneralReg, ref: RuntimeNumber) Allocator.Error!void {
             const value = switch (ref) {
                 .layout => |idx| idx,
                 .erased_arg_layouts => |span| span.start,
             };
             const site = try self.codegen.emitPatchableImm32(reg, value);
-            try self.codegen.relocations.append(self.allocator, .{ .runtime_ref = .{ .offset = site, .ref = ref } });
+            try self.codegen.relocations.append(self.allocator, .{ .runtime_number = .{ .offset = site, .ref = ref } });
         }
 
         /// Give every runtime table number the placed code loads its
         /// canonical number, in placement order, and patch each load to it
-        /// (design.md "Canonical Dev Images"). The recorded references then
+        /// (design.md "Deterministic Dev Images"). The recorded references then
         /// name canonical numbers.
-        pub fn renumberRuntimeRefs(self: *Self, numbering: *lir.RuntimeTables.Numbering) Allocator.Error!void {
+        pub fn renumberRuntimeNumbers(self: *Self, numbering: *lir.RuntimeTables.Numbering) Allocator.Error!void {
             if (self.store.runtime_contract == .specialized) return;
             const code = self.codegen.emit.buf.items;
             for (self.codegen.relocations.items) |*relocation| switch (relocation.*) {
-                .runtime_ref => |*runtime_ref| {
-                    const canonical: RuntimeRef = switch (runtime_ref.ref) {
+                .runtime_number => |*runtime_number| {
+                    const canonical: RuntimeNumber = switch (runtime_number.ref) {
                         .layout => |idx| .{ .layout = try numbering.layoutId(self.allocator, @fromBackingInt(@intCast(idx))) },
                         .erased_arg_layouts => |span| .{ .erased_arg_layouts = .{
                             .start = try numbering.erasedArgLayoutsStart(self.allocator, .{ .start = span.start, .len = span.len }),
                             .len = span.len,
                         } },
                     };
-                    @TypeOf(self.codegen).patchImm32(code, @intCast(runtime_ref.offset), switch (canonical) {
+                    @TypeOf(self.codegen).patchImm32(code, @intCast(runtime_number.offset), switch (canonical) {
                         .layout => |idx| idx,
                         .erased_arg_layouts => |span| span.start,
                     });
-                    runtime_ref.ref = canonical;
+                    runtime_number.ref = canonical;
                 },
                 .linked_function, .linked_data, .local_data, .retired => {},
             };
         }
 
         /// Pass a runtime table number as the call's next argument.
-        fn addRuntimeRefArg(self: *Self, builder: *Builder, regs: *RuntimeRefRegs, ref: RuntimeRef) Allocator.Error!void {
-            const reg = try self.loadRuntimeRef(ref);
+        fn addRuntimeNumberArg(self: *Self, builder: *Builder, regs: *RuntimeNumberRegs, ref: RuntimeNumber) Allocator.Error!void {
+            const reg = try self.loadRuntimeNumber(ref);
             regs.regs[regs.len] = reg;
             regs.len += 1;
             try builder.addRegArg(reg);
@@ -15780,14 +15781,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Pass a layout index the Boxy runtime reads as the call's next
         /// argument.
-        fn addRuntimeLayoutArg(self: *Self, builder: *Builder, regs: *RuntimeRefRegs, layout_idx: layout.Idx) Allocator.Error!void {
-            try self.addRuntimeRefArg(builder, regs, .{ .layout = @backingInt(layout_idx) });
+        fn addRuntimeLayoutArg(self: *Self, builder: *Builder, regs: *RuntimeNumberRegs, layout_idx: layout.Idx) Allocator.Error!void {
+            try self.addRuntimeNumberArg(builder, regs, .{ .layout = @backingInt(layout_idx) });
         }
 
         /// Pass a run of erased argument layouts as the call's next two
         /// arguments: its start and its length.
-        fn addErasedArgLayoutsArgs(self: *Self, builder: *Builder, regs: *RuntimeRefRegs, span: lir.LIR.BoxySpan) Allocator.Error!void {
-            try self.addRuntimeRefArg(builder, regs, .{ .erased_arg_layouts = .{ .start = span.start, .len = span.len } });
+        fn addErasedArgLayoutsArgs(self: *Self, builder: *Builder, regs: *RuntimeNumberRegs, span: lir.LIR.BoxySpan) Allocator.Error!void {
+            try self.addRuntimeNumberArg(builder, regs, .{ .erased_arg_layouts = .{ .start = span.start, .len = span.len } });
             try builder.addImmArg(span.len);
         }
 
@@ -15796,7 +15797,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn callBoxyToSlot(self: *Self, boxy_fn: BoxyBuiltinFn, args: []const BoxyScalarArg) Allocator.Error!i32 {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
-            var runtime_regs: RuntimeRefRegs = .{};
+            var runtime_regs: RuntimeNumberRegs = .{};
             for (args) |arg| switch (arg) {
                 .imm => |value| try builder.addImmArg(value),
                 .mem => |offset| try builder.addMemArg(frame_ptr, offset),
@@ -16061,7 +16062,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 defer projection_builder.deinit();
                 try projection_builder.addMemArg(frame_ptr, base_slot);
                 if (assign.box_payload_layout) |box_layout| {
-                    var runtime_regs: RuntimeRefRegs = .{};
+                    var runtime_regs: RuntimeNumberRegs = .{};
                     try self.addRuntimeLayoutArg(&projection_builder, &runtime_regs, box_layout);
                     try self.callBoxyBuiltin(&projection_builder, .box_payload_desc);
                     runtime_regs.release(self);
@@ -16157,7 +16158,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
-            var runtime_regs: RuntimeRefRegs = .{};
+            var runtime_regs: RuntimeNumberRegs = .{};
             for (plan.operands(), operand_slots[0..plan.len]) |operand, slot| switch (operand) {
                 .out => try builder.addLeaArg(frame_ptr, slots.out),
                 .out_desc => try builder.addLeaArg(frame_ptr, slots.out_desc),
@@ -16481,7 +16482,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const reg = try self.allocTempGeneral();
                 if (plan.value_off) |off| try self.emitLeaStack(reg, off) else try self.codegen.emitLoadImm(reg, 0);
                 try self.emitStore(.w64, frame_ptr, entry_base + call_arg_value_off, reg);
-                try self.emitRuntimeRefInto(reg, .{ .layout = @backingInt(plan.layout) });
+                try self.emitRuntimeNumberInto(reg, .{ .layout = @backingInt(plan.layout) });
                 try self.emitStore(.w32, frame_ptr, entry_base + call_arg_layout_off, reg);
                 if (plan.desc_slot) |s| try self.emitLoad(.w64, reg, frame_ptr, s) else try self.codegen.emitLoadImm(reg, 0);
                 try self.emitStore(.w64, frame_ptr, entry_base + call_arg_desc_off, reg);
@@ -16505,7 +16506,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
-            var runtime_regs: RuntimeRefRegs = .{};
+            var runtime_regs: RuntimeNumberRegs = .{};
             try builder.addLeaArg(frame_ptr, out_slot);
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             try builder.addMemArg(frame_ptr, dict_slot);
@@ -16545,7 +16546,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             try builder.addLeaArg(frame_ptr, value_slot);
             try builder.addMemArg(frame_ptr, desc_slot);
-            var runtime_regs: RuntimeRefRegs = .{};
+            var runtime_regs: RuntimeNumberRegs = .{};
             try self.addRuntimeLayoutArg(&builder, &runtime_regs, default_layout);
             try self.addRuntimeLayoutArg(&builder, &runtime_regs, target_layout);
             try self.callBoxyBuiltin(&builder, boxy_fn);
@@ -16588,7 +16589,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
-            var runtime_regs: RuntimeRefRegs = .{};
+            var runtime_regs: RuntimeNumberRegs = .{};
             try builder.addLeaArg(frame_ptr, value_off);
             try self.addRuntimeLayoutArg(&builder, &runtime_regs, value_layout);
             try builder.addMemArg(frame_ptr, desc_slot);
@@ -22352,7 +22353,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitInternalCodeAddress(.{ .proc = proc.id }, proc.code_start, addr_reg);
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
-            var runtime_regs: RuntimeRefRegs = .{};
+            var runtime_regs: RuntimeNumberRegs = .{};
             try builder.addRegArg(addr_reg);
             try self.addRuntimeLayoutArg(&builder, &runtime_regs, self.runtimeRepresentationLayoutIdx(proc_spec.ret_layout));
             try builder.addImmArg(metadata_offset);
@@ -22406,7 +22407,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitInternalCodeAddress(.{ .boxy_thunk = proc_id }, thunk_offset, addr_reg);
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 defer builder.deinit();
-                var runtime_regs: RuntimeRefRegs = .{};
+                var runtime_regs: RuntimeNumberRegs = .{};
                 try builder.addImmArg(@intCast(proc_index));
                 try builder.addRegArg(addr_reg);
                 try self.addRuntimeLayoutArg(&builder, &runtime_regs, ret_layout);
@@ -22419,42 +22420,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        const EntrypointArgOrder = struct {
-            index: usize,
-            alignment: u32,
-            size: u32,
-        };
-
-        fn computeEntrypointArgOffsets(self: *Self, arg_layouts: []const layout.Idx, offsets: []u32) Allocator.Error!void {
-            std.debug.assert(arg_layouts.len == offsets.len);
-
-            var ordered = try self.allocator.alloc(EntrypointArgOrder, arg_layouts.len);
-            defer self.allocator.free(ordered);
-
-            for (arg_layouts, 0..) |arg_layout, i| {
-                const size_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(arg_layout));
-                ordered[i] = .{
-                    .index = i,
-                    .alignment = @intCast(size_align.alignment.toByteUnits()),
-                    .size = size_align.size,
-                };
-            }
-
-            const SortCtx = struct {
-                fn lessThan(_: void, lhs: EntrypointArgOrder, rhs: EntrypointArgOrder) bool {
-                    if (lhs.alignment != rhs.alignment) return lhs.alignment > rhs.alignment;
-                    return lhs.index < rhs.index;
-                }
-            };
-
-            std.mem.sort(EntrypointArgOrder, ordered, {}, SortCtx.lessThan);
-
-            var current_offset: u32 = 0;
-            for (ordered) |arg| {
-                current_offset = std.mem.alignForward(u32, current_offset, arg.alignment);
-                offsets[arg.index] = current_offset;
-                current_offset += arg.size;
-            }
+        /// Offsets of the arguments in the buffer an entrypoint wrapper receives,
+        /// laid out as the LLVM backend's host-facing wrapper writes it.
+        fn computeEntrypointArgOffsets(self: *Self, arg_layouts: []const layout.Idx, offsets: []u32) void {
+            layout.entrypoint_args.computeOffsets(self.layout_store, arg_layouts, offsets);
         }
 
         fn entrypointParamSlotSize(self: *Self, layout_idx: layout.Idx) u32 {
@@ -22496,7 +22465,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const arg_offsets = try self.allocator.alloc(u32, arg_layouts.len);
             defer self.allocator.free(arg_offsets);
-            try self.computeEntrypointArgOffsets(arg_layouts, arg_offsets);
+            self.computeEntrypointArgOffsets(arg_layouts, arg_offsets);
 
             for (arg_layouts, 0..) |arg_layout, i| {
                 const slot_size = self.entrypointParamSlotSize(arg_layout);
@@ -23062,6 +23031,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Every range of the code buffer with its producer, in emission order.
+        /// Assembly copies canonical bytes and changes only relocation sites.
+        /// The source set owns this borrow until extraction retains its owner.
+        pub fn retainAssembledPayload(self: *Self, start: usize, payload: @import("CodeExcerpt.zig").AssembledPayload) void {
+            const region = &self.code_regions.items[self.code_regions.items.len - 1];
+            std.debug.assert(region.start == start and region.end - region.start == payload.code.len);
+            region.payload = payload;
+        }
+
         pub fn codeRegions(self: *const Self) []const CodeRegion {
             return self.code_regions.items;
         }
@@ -23174,7 +23151,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (!gop.found_existing) gop.value_ptr.* = entry;
         }
 
-        /// Remember the source location a procedure placed from an artifact
+        /// Remember the source location a procedure placed from an excerpt
         /// set carries; the first placement of an identity wins, as for its
         /// code.
         pub fn registerAssembledProcLoc(self: *Self, identity: lir.ProcIdentity, loc: base.SourceLoc) Allocator.Error!void {
@@ -23182,7 +23159,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (!gop.found_existing) gop.value_ptr.* = loc;
         }
 
-        /// The source location a procedure placed from an artifact set
+        /// The source location a procedure placed from an excerpt set
         /// carries, when one was placed.
         pub fn assembledProcLoc(self: *const Self, identity: lir.ProcIdentity) ?base.SourceLoc {
             return self.assembled_proc_locs.get(identity);
@@ -23198,7 +23175,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// The queue owns helper names through the generator's symbol table;
-        /// callers may destroy the source artifact immediately after append.
+        /// callers may destroy the source excerpt immediately after append.
         pub fn queueAssembledSymbolicRef(self: *Self, reference: anytype) Allocator.Error!void {
             var owned = SymbolicReference{
                 .site = reference.site,
@@ -23382,12 +23359,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Detached stubs belong to placement. Embedded stubs stay with their
         /// body's branch so a large body never loses its reachable reservation.
-        pub fn artifactRelocations(self: *Self, allocator: Allocator) Allocator.Error![]Relocation {
+        pub fn excerptRelocations(self: *Self, allocator: Allocator) Allocator.Error![]Relocation {
             const relocations = try allocator.dupe(Relocation, self.getRelocations());
             if (comptime target.toCpuArch() == .aarch64) {
                 for (self.codegen.extern_stubs.items) |stub| {
                     const stub_start = relocations[stub.page_relocation].linked_data.offset;
-                    if (self.artifactContainsExternStub(stub.call, stub_start)) continue;
+                    if (self.excerptContainsExternStub(stub.call, stub_start)) continue;
                     relocations[stub.original_relocation] = .{ .linked_function = .{
                         .offset = @intCast(stub.call),
                         .symbol = stub.symbol,
@@ -23400,7 +23377,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return relocations;
         }
 
-        fn artifactContainsExternStub(self: *const Self, call: usize, stub_start: u64) bool {
+        fn excerptContainsExternStub(self: *const Self, call: usize, stub_start: u64) bool {
             for (self.code_regions.items) |region| {
                 if (region.kind == .branch_island) continue;
                 if (call >= region.start and call < region.end and
@@ -23411,11 +23388,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Remove placement-specific stub displacements using producer records.
         /// Clear the placement-specific displacement of a reference at
-        /// `site` in an artifact's `bytes`, and of the in-body veneer it
+        /// `site` in an excerpt's `bytes`, and of the in-body veneer it
         /// goes through, as if it named itself. Placement patches every
-        /// reference again, so an artifact's bytes are then the same however
+        /// reference again, so an excerpt's bytes are then the same however
         /// the buffer it was lifted from was laid out.
-        pub fn normalizeArtifactRefSite(bytes: []u8, site: usize, form: CodeRefForm, veneer: ?usize) void {
+        pub fn normalizeExcerptRefSite(bytes: []u8, site: usize, form: CodeRefForm, veneer: ?usize) void {
             if (comptime target.toCpuArch() == .aarch64) {
                 const EmitT = aarch64.Emit(target);
                 switch (form) {
@@ -23451,7 +23428,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (words, 0..) |word, i| std.mem.writeInt(u32, bytes[loc + i * 4 ..][0..4], word, .little);
         }
 
-        pub fn normalizeArtifactCode(self: *const Self, start: usize, bytes: []u8) void {
+        pub fn normalizeExcerptCode(self: *const Self, start: usize, bytes: []u8) void {
             if (comptime target.toCpuArch() == .aarch64) {
                 for (self.codegen.extern_stubs.items) |stub| {
                     if (stub.call < start or stub.call >= start + bytes.len) continue;
@@ -24360,9 +24337,9 @@ test "Boxy dictionary thunks are emitted only for producer-named workers" {
     try std.testing.expect(!codegen.boxy_dict_thunks.contains(@backingInt(ordinary_proc)));
 }
 
-test "Boxy thunk artifact splice preserves worker namespace in both orders and across packs" {
+test "Boxy thunk excerpt splice preserves worker namespace in both orders and across packs" {
     if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) return error.SkipZigTest;
-    const artifacts = @import("ProcArtifact.zig");
+    const excerpts = @import("CodeExcerpt.zig");
     const allocator = std.testing.allocator;
     var store = LirStore.init(allocator);
     defer store.deinit();
@@ -24384,18 +24361,18 @@ test "Boxy thunk artifact splice preserves worker namespace in both orders and a
     defer producer.deinit();
     try producer.compileAllProcSpecs(store.getProcSpecs());
     try producer.finishImage();
-    var original = try artifacts.extract(HostLirCodeGen, allocator, &producer, store.getProcSpecs(), &test_state.layout_store, &.{}, &.{}, &.{});
+    var original = try excerpts.extract(HostLirCodeGen, allocator, &producer, store.getProcSpecs(), &test_state.layout_store, &.{}, &.{}, &.{});
     defer original.deinit();
-    try std.testing.expectEqual(@as(usize, 2), original.artifacts.len);
+    try std.testing.expectEqual(@as(usize, 2), original.excerpts.len);
 
     for ([_]bool{ false, true }) |reverse| {
-        var set = try artifacts.combine(allocator, &.{&original});
+        var set = try excerpts.combine(allocator, &.{&original});
         defer set.deinit();
         if (reverse) {
-            const entries = @constCast(set.artifacts);
-            std.mem.swap(artifacts.Artifact, &entries[0], &entries[1]);
-            for (entries) |*artifact| {
-                for (@constCast(artifact.refs)) |*ref| ref.target = 1 - ref.target;
+            const entries = @constCast(set.excerpts);
+            std.mem.swap(excerpts.Excerpt, &entries[0], &entries[1]);
+            for (entries) |*excerpt| {
+                for (@constCast(excerpt.refs)) |*ref| ref.target = 1 - ref.target;
             }
         }
         for ([_]bool{ false, true }) |declared| {
@@ -24416,12 +24393,12 @@ test "Boxy thunk artifact splice preserves worker namespace in both orders and a
             if (declared) try procs.put(identity, worker);
             var placed = std.AutoHashMap(u32, usize).init(allocator);
             defer placed.deinit();
-            var data = std.ArrayList(artifacts.DataItem).empty;
+            var data = std.ArrayList(excerpts.DataItem).empty;
             defer data.deinit(allocator);
             // Separate calls also prove a previously placed worker cannot hide
-            // its thunk, regardless of artifact ordering.
-            try artifacts.splice(HostLirCodeGen, allocator, &receiver, &set, &.{0}, &procs, &placed, &data);
-            try artifacts.splice(HostLirCodeGen, allocator, &receiver, &set, &.{1}, &procs, &placed, &data);
+            // its thunk, regardless of excerpt ordering.
+            try excerpts.splice(HostLirCodeGen, allocator, &receiver, &set, &.{0}, &procs, &placed, &data);
+            try excerpts.splice(HostLirCodeGen, allocator, &receiver, &set, &.{1}, &procs, &placed, &data);
             const worker_start = receiver.splicedProcStart(identity).?;
             const thunk_entry = receiver.assembledThunkEntry(identity).?;
             try std.testing.expect(worker_start != thunk_entry);
@@ -24437,20 +24414,20 @@ test "Boxy thunk artifact splice preserves worker namespace in both orders and a
             }
             // A second pack has its own placement map, but reuses both bodies.
             placed.clearRetainingCapacity();
-            try artifacts.splice(HostLirCodeGen, allocator, &receiver, &set, &.{ 1, 0 }, &procs, &placed, &data);
+            try excerpts.splice(HostLirCodeGen, allocator, &receiver, &set, &.{ 1, 0 }, &procs, &placed, &data);
             try std.testing.expectEqual(code_len, receiver.codegen.currentOffset());
-            for (set.artifacts, 0..) |artifact, index| {
-                try std.testing.expectEqual(switch (artifact.kind) {
+            for (set.excerpts, 0..) |excerpt, index| {
+                try std.testing.expectEqual(switch (excerpt.kind) {
                     .proc => worker_start,
-                    .boxy_thunk => thunk_entry - artifact.entry,
+                    .boxy_thunk => thunk_entry - excerpt.entry,
                     .rc_helper, .entrypoint, .message_pool_run, .branch_island => return error.TestUnexpectedResult,
                 }, placed.get(@intCast(index)).?);
             }
             try receiver.finishImage();
-            var recaptured = try artifacts.extract(HostLirCodeGen, allocator, &receiver, store.getProcSpecs(), &test_state.layout_store, &.{}, &.{}, &.{});
+            var recaptured = try excerpts.extract(HostLirCodeGen, allocator, &receiver, store.getProcSpecs(), &test_state.layout_store, &.{}, &.{}, &.{});
             defer recaptured.deinit();
-            try std.testing.expectEqual(@as(usize, 2), recaptured.artifacts.len);
-            try std.testing.expect(std.meta.activeTag(recaptured.artifacts[0].kind) != std.meta.activeTag(recaptured.artifacts[1].kind));
+            try std.testing.expectEqual(@as(usize, 2), recaptured.excerpts.len);
+            try std.testing.expect(std.meta.activeTag(recaptured.excerpts[0].kind) != std.meta.activeTag(recaptured.excerpts[1].kind));
         }
     }
 }
@@ -25739,9 +25716,14 @@ test "entrypoint arg offsets preserve Roc alignment order" {
     defer codegen.deinit();
 
     var offsets: [2]u32 = undefined;
-    try codegen.computeEntrypointArgOffsets(&.{ .bool, .i64 }, offsets[0..]);
+    codegen.computeEntrypointArgOffsets(&.{ .bool, .i64 }, offsets[0..]);
 
     try std.testing.expectEqualSlices(u32, &.{ 8, 0 }, offsets[0..]);
+
+    // Each argument takes a slot of at least 8 bytes, as the LLVM entrypoint
+    // wrapper that fills the buffer lays it out.
+    codegen.computeEntrypointArgOffsets(&.{ .u32, .u32 }, offsets[0..]);
+    try std.testing.expectEqualSlices(u32, &.{ 0, 8 }, offsets[0..]);
 }
 
 test "entrypoint param slots round aggregates to ABI word width" {
@@ -26170,8 +26152,8 @@ test "independent fragment symbolic calls resolve after all procedures are place
     }
 }
 
-test "AArch64 finalized artifacts preserve external calls across changed placement" {
-    const Artifact = @import("ProcArtifact.zig");
+test "AArch64 finalized excerpts preserve external calls across changed placement" {
+    const Excerpt = @import("CodeExcerpt.zig");
     const allocator = std.testing.allocator;
     const CG = LirCodeGen(.arm64linux);
     var store = LirStore.init(allocator);
@@ -26182,7 +26164,7 @@ test "AArch64 finalized artifacts preserve external calls across changed placeme
         var original = try CG.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
         defer original.deinit();
         original.codegen.branch_reach_limit = 4096;
-        const symbol = try original.internSymbolName("artifact_external_target", .shared);
+        const symbol = try original.internSymbolName("excerpt_external_target", .shared);
         while (original.codegen.currentOffset() < 4096) try original.codegen.emit.buf.appendSlice(allocator, &.{ 0x1f, 0x20, 0x03, 0xd5 });
         const call_offset = original.codegen.currentOffset();
         try original.codegen.emitExternCall(symbol);
@@ -26205,20 +26187,20 @@ test "AArch64 finalized artifacts preserve external calls across changed placeme
         });
         try original.finishImage();
         try std.testing.expectEqual(@as(usize, 1), original.codegen.extern_stubs.items.len);
-        var set = try Artifact.extract(CG, allocator, &original, &.{}, &layouts.layout_store, &.{}, &.{}, &.{});
+        var set = try Excerpt.extract(CG, allocator, &original, &.{}, &layouts.layout_store, &.{}, &.{}, &.{});
         defer set.deinit();
-        try std.testing.expectEqual(@as(usize, 1), set.artifacts.len);
-        const artifact = set.artifacts[0];
-        try std.testing.expectEqual(@as(usize, if (embedded) 2 else 1), artifact.relocations.len);
-        try std.testing.expectEqualStrings("artifact_external_target", artifact.relocations[0].name);
+        try std.testing.expectEqual(@as(usize, 1), set.excerpts.len);
+        const excerpt = set.excerpts[0];
+        try std.testing.expectEqual(@as(usize, if (embedded) 2 else 1), excerpt.relocations.len);
+        try std.testing.expectEqualStrings("excerpt_external_target", excerpt.relocations[0].name);
         if (embedded) {
-            try std.testing.expectEqual(.page21, artifact.relocations[0].kind.data);
-            try std.testing.expectEqual(.pageoff12, artifact.relocations[1].kind.data);
-            try std.testing.expectEqualSlices(u8, original.getGeneratedCode()[call_offset..][0..4], artifact.code[call_offset..][0..4]);
+            try std.testing.expectEqual(.page21, excerpt.relocations[0].kind.data);
+            try std.testing.expectEqual(.pageoff12, excerpt.relocations[1].kind.data);
+            try std.testing.expectEqualSlices(u8, original.getGeneratedCode()[call_offset..][0..4], excerpt.code[call_offset..][0..4]);
         } else {
-            try std.testing.expect(artifact.relocations[0].kind == .function);
-            try std.testing.expectEqual(@as(u32, @intCast(call_offset)), artifact.relocations[0].offset);
-            try std.testing.expectEqual(@as(u32, 0x94000000), std.mem.readInt(u32, artifact.code[call_offset..][0..4], .little));
+            try std.testing.expect(excerpt.relocations[0].kind == .function);
+            try std.testing.expectEqual(@as(u32, @intCast(call_offset)), excerpt.relocations[0].offset);
+            try std.testing.expectEqual(@as(u32, 0x94000000), std.mem.readInt(u32, excerpt.code[call_offset..][0..4], .little));
         }
 
         var placed = try CG.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
@@ -26226,17 +26208,17 @@ test "AArch64 finalized artifacts preserve external calls across changed placeme
         placed.codegen.branch_reach_limit = 4096;
         const prefix = @as([512]u8, @splat(0));
         _ = try placed.appendAssembledRegion(&prefix, .{ .message_pool_run = 0 }, 0, null);
-        var helpers = Artifact.HelperKeys.init(allocator);
+        var helpers = Excerpt.HelperKeys.init(allocator);
         defer helpers.deinit();
-        try Artifact.assemble(CG, allocator, &placed, &set, &.{}, &helpers);
+        try Excerpt.assemble(CG, allocator, &placed, &set, &.{}, &helpers);
         try placed.finishImage();
         if (embedded) {
             try std.testing.expectEqual(@as(usize, 0), placed.codegen.extern_stubs.items.len);
             const page = placed.getRelocations()[0].linked_data;
             const pageoff = placed.getRelocations()[1].linked_data;
-            try std.testing.expectEqual(prefix.len + artifact.relocations[0].offset, page.offset);
+            try std.testing.expectEqual(prefix.len + excerpt.relocations[0].offset, page.offset);
             try std.testing.expectEqual(page.offset + 4, pageoff.offset);
-            try std.testing.expectEqualStrings("artifact_external_target", placed.symbolName(page.symbol));
+            try std.testing.expectEqualStrings("excerpt_external_target", placed.symbolName(page.symbol));
             const moved_call = prefix.len + call_offset;
             const instruction = std.mem.readInt(u32, placed.getGeneratedCode()[moved_call..][0..4], .little);
             try std.testing.expectEqual(page.offset, moved_call + (instruction & 0x03ffffff) * 4);
@@ -26247,7 +26229,7 @@ test "AArch64 finalized artifacts preserve external calls across changed placeme
         try std.testing.expectEqual(prefix.len + call_offset, stub.call);
         const page = placed.getRelocations()[stub.page_relocation].linked_data;
         const pageoff = placed.getRelocations()[stub.page_relocation + 1].linked_data;
-        try std.testing.expectEqualStrings("artifact_external_target", placed.symbolName(page.symbol));
+        try std.testing.expectEqualStrings("excerpt_external_target", placed.symbolName(page.symbol));
         try std.testing.expectEqual(page.symbol, pageoff.symbol);
         try std.testing.expectEqual(page.offset + 4, pageoff.offset);
         const instruction = std.mem.readInt(u32, placed.getGeneratedCode()[stub.call..][0..4], .little);
@@ -26310,7 +26292,7 @@ test "independent fragments record their static data use" {
             .linked_data => |data| {
                 if (std.mem.eql(u8, cg.getSymbolNames()[@backingInt(data.symbol)], "fragment_static_value")) reads_value = true;
             },
-            .linked_function, .retired, .runtime_ref => {},
+            .linked_function, .retired, .runtime_number => {},
         }
     }
     try std.testing.expect(reads_value);

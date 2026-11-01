@@ -20,21 +20,13 @@
 //! closure returns a stream holding that same closure, and recursive nominal
 //! types are cycles in the graph by nature.
 //!
-//! Two programs draw the same recursive type as different graphs: one may
-//! hold a single node per knot while another rolls the knot out a level
-//! before tying it back, depending on which parts of the type each program's
-//! lambda solving touched. The identity must not see that difference, so a
-//! type digests as its bisimulation class rather than as its graph. Every
-//! request runs the same reduction Monotype's type digests use: the reachable
-//! subgraph is decomposed into strongly connected components, which resolve
-//! in reverse topological order; an acyclic node hashes its encoding with its
-//! children's finished digests, and a cyclic component is refined to its
-//! coarsest bisimulation partition, rendered once as a group in label order
-//! with in-group references written as ranks, and every member digests as its
-//! rank against the group. Each member's one-step unfolding (its encoding
-//! with every child as a finished digest) is remembered, so an acyclic node
-//! that is a rolled-out copy of a group position folds to that position's
-//! digest instead of getting one of its own.
+//! Two programs draw the same recursive type as different graphs, depending
+//! on which parts of the type each program's lambda solving touched: one may
+//! tie a single knot where another rolls it out a level, or ties one copy
+//! whose references lead into a second, separately tied copy. The identity
+//! must not see that difference, so a type digests as its infinite unfolding
+//! through the reduction every type identity shares
+//! (`base.recursive_digest`).
 //!
 //! Every digest is a function of the infinite type alone, so the `Memo` shared
 //! across procedures remembers every type it has rendered: a solved type graph
@@ -53,21 +45,23 @@ const Lifted = @import("monotype_lifted/ast.zig");
 const SolvedType = @import("lambda_solved/type.zig");
 const names = check.CheckedNames;
 const TypeDigestHasher = base.TypeDigestHasher;
+const recursive_digest = base.recursive_digest;
 const Allocator = std.mem.Allocator;
 
 /// SHA-256 content identity of one procedure.
 pub const Identity = [TypeDigestHasher.digest_length]u8;
 
-const domain = "roc.proc.identity.v3";
+const domain = "roc.proc.identity.v4";
 
 /// Everything one solved program has rendered so far, shared by every
 /// identity rendered over it.
 pub const Memo = struct {
     /// Digest of every type rendered so far, keyed by its root variable.
     digests: collections.DenseMap(SolvedType.TypeVarId, Identity),
-    /// The one-step unfolding of every cyclic group position rendered so far,
-    /// mapped to that position's digest.
-    unfoldings: std.AutoHashMap(Identity, Identity),
+    /// Every recursive group rendered so far.
+    settled: recursive_digest.Settled,
+    /// Reduction scratch kept across reductions.
+    graph: recursive_digest.Graph,
     /// Reduction node maps kept across reductions. A fresh map spanning old
     /// and new variables would allocate and clear a chunk table for that
     /// whole span on every reduction.
@@ -76,14 +70,16 @@ pub const Memo = struct {
     pub fn init(allocator: Allocator) Memo {
         return .{
             .digests = collections.DenseMap(SolvedType.TypeVarId, Identity).init(allocator),
-            .unfoldings = std.AutoHashMap(Identity, Identity).init(allocator),
+            .settled = recursive_digest.Settled.init(allocator, domain),
+            .graph = recursive_digest.Graph.init(allocator),
             .node_maps = collections.DenseMapPool(SolvedType.TypeVarId, u32).init(allocator),
         };
     }
 
     pub fn deinit(self: *Memo) void {
         self.digests.deinit();
-        self.unfoldings.deinit();
+        self.settled.deinit();
+        self.graph.deinit();
         self.node_maps.deinit();
     }
 };
@@ -162,122 +158,75 @@ pub const Renderer = struct {
     }
 };
 
-/// A child position in a node's encoding: another node of the current
-/// reduction, or a type whose digest is already known.
-const Child = union(enum) {
-    node: u32,
-    digest: Identity,
-};
-
-/// One piece of a node's encoding, in order: literal bytes or a child.
-const Item = union(enum) {
-    bytes: struct { start: u32, len: u32 },
-    child: Child,
-};
-
-const Node = struct {
-    ty: SolvedType.TypeVarId,
-    item_start: u32 = 0,
-    item_len: u32 = 0,
-    child_start: u32 = 0,
-    child_len: u32 = 0,
-    index: u32 = unvisited,
-    lowlink: u32 = unvisited,
-    on_stack: bool = false,
-    digest: ?Identity = null,
-};
-
-const unvisited = std.math.maxInt(u32);
-const no_position = std.math.maxInt(u32);
-
 /// One reduction: the subgraph reachable from a requested type through
 /// types the memo does not hold yet.
 const Engine = struct {
     renderer: *const Renderer,
     gpa: Allocator,
-    nodes: std.ArrayList(Node) = .empty,
+    graph: *recursive_digest.Graph,
     node_of_ty: collections.DenseMap(SolvedType.TypeVarId, u32),
-    items: std.ArrayList(Item) = .empty,
-    children: std.ArrayList(Child) = .empty,
-    bytes: std.ArrayList(u8) = .empty,
+    /// The type of every node of the reduction.
+    tys: std.ArrayList(SolvedType.TypeVarId) = .empty,
     /// Nodes discovered but not yet encoded.
     pending: std.ArrayList(u32) = .empty,
-    /// Scratch `resolveCyclicComponent` keeps across the components of one
-    /// run. `position_of_node` covers every node and holds `no_position`
-    /// except at the members of the component being resolved.
-    position_of_node: std.ArrayList(u32) = .empty,
-    label_scratch: std.ArrayList(Identity) = .empty,
-    distinct_labels: std.AutoHashMapUnmanaged(Identity, u32) = .empty,
-    sorted_labels: std.ArrayList(Identity) = .empty,
-    rank_of_member: std.ArrayList(u32) = .empty,
-    block_rep: std.ArrayList(u32) = .empty,
+    /// Content of the node being encoded.
+    hasher: TypeDigestHasher = undefined,
 
     fn init(renderer: *const Renderer) Engine {
+        renderer.memo.graph.reset();
         return .{
             .renderer = renderer,
             .gpa = renderer.allocator,
+            .graph = &renderer.memo.graph,
             .node_of_ty = renderer.memo.node_maps.acquire(),
         };
     }
 
     fn deinit(self: *Engine) void {
-        self.nodes.deinit(self.gpa);
+        self.graph.reset();
         self.renderer.memo.node_maps.release(&self.node_of_ty);
-        self.items.deinit(self.gpa);
-        self.children.deinit(self.gpa);
-        self.bytes.deinit(self.gpa);
+        self.tys.deinit(self.gpa);
         self.pending.deinit(self.gpa);
-        self.position_of_node.deinit(self.gpa);
-        self.label_scratch.deinit(self.gpa);
-        self.distinct_labels.deinit(self.gpa);
-        self.sorted_labels.deinit(self.gpa);
-        self.rank_of_member.deinit(self.gpa);
-        self.block_rep.deinit(self.gpa);
     }
 
     fn run(self: *Engine, root: SolvedType.TypeVarId) Allocator.Error!Identity {
         const root_node = try self.discover(root);
         while (self.pending.pop()) |node| try self.encode(node);
-        try self.resolveAll();
-        return self.nodes.items[root_node].digest orelse
-            Common.invariant("procedure identity reduction left its root type without a digest");
+        const memo = self.renderer.memo;
+        try self.graph.resolve(&memo.settled, null);
+        for (self.tys.items, 0..) |ty, node| try memo.digests.put(ty, self.graph.digest(@intCast(node)));
+        return self.graph.digest(root_node);
     }
 
     /// The node for `ty`, created and queued for encoding if new.
     fn discover(self: *Engine, ty: SolvedType.TypeVarId) Allocator.Error!u32 {
         const gop = try self.node_of_ty.getOrPut(ty);
         if (gop.found_existing) return gop.value_ptr.*;
-        const index: u32 = @intCast(self.nodes.items.len);
-        gop.value_ptr.* = index;
-        try self.nodes.append(self.gpa, .{ .ty = ty });
-        try self.pending.append(self.gpa, index);
-        return index;
-    }
-
-    /// The child position for `ty`: a finished digest when the memo holds
-    /// it, otherwise a node of this reduction.
-    fn childFor(self: *Engine, ty: SolvedType.TypeVarId) Allocator.Error!Child {
-        const root = self.renderer.renderedRoot(ty);
-        if (self.renderer.memo.digests.get(root)) |digest| return .{ .digest = digest };
-        return .{ .node = try self.discover(root) };
+        const node = try self.graph.addNode();
+        gop.value_ptr.* = node;
+        try self.tys.append(self.gpa, ty);
+        try self.pending.append(self.gpa, node);
+        return node;
     }
 
     fn putBytes(self: *Engine, bytes: []const u8) Allocator.Error!void {
-        const start: u32 = @intCast(self.bytes.items.len);
-        try self.bytes.appendSlice(self.gpa, bytes);
-        try self.items.append(self.gpa, .{ .bytes = .{ .start = start, .len = @intCast(bytes.len) } });
+        writeBytes(&self.hasher, bytes);
     }
 
     fn putU32(self: *Engine, value: u32) Allocator.Error!void {
-        var buffer: [4]u8 = undefined;
-        encodeU32(&buffer, value);
-        try self.putBytes(&buffer);
+        writeU32(&self.hasher, value);
     }
 
+    /// A child slot: a type the memo holds is a settled digest, any other is
+    /// a node of this reduction.
     fn putChild(self: *Engine, ty: SolvedType.TypeVarId) Allocator.Error!void {
-        const child = try self.childFor(ty);
-        try self.items.append(self.gpa, .{ .child = child });
-        try self.children.append(self.gpa, child);
+        writeBytes(&self.hasher, "child");
+        const root = self.renderer.renderedRoot(ty);
+        if (self.renderer.memo.digests.get(root)) |digest| {
+            try self.graph.putChild(.{ .settled = digest });
+        } else {
+            try self.graph.putChild(.{ .node = try self.discover(root) });
+        }
     }
 
     fn putSpan(self: *Engine, span: SolvedType.Span) Allocator.Error!void {
@@ -306,9 +255,9 @@ const Engine = struct {
     /// and its ordered children.
     fn encode(self: *Engine, node: u32) Allocator.Error!void {
         const renderer = self.renderer;
-        const item_start: u32 = @intCast(self.items.items.len);
-        const child_start: u32 = @intCast(self.children.items.len);
-        const content = renderer.types.get(self.nodes.items[node].ty);
+        self.hasher = TypeDigestHasher.init();
+        self.graph.beginNode(node);
+        const content = renderer.types.get(self.tys.items[node]);
         switch (content) {
             .mono, .link, .unbound, .forall => Common.invariant("unresolved Lambda Solved type reached procedure identity rendering"),
             .primitive => |primitive| {
@@ -409,291 +358,7 @@ const Engine = struct {
             },
             .lambda_set => |members| try self.putMembers(members),
         }
-        const entry = &self.nodes.items[node];
-        entry.item_start = item_start;
-        entry.item_len = @intCast(self.items.items.len - item_start);
-        entry.child_start = child_start;
-        entry.child_len = @intCast(self.children.items.len - child_start);
-    }
-
-    fn itemsOf(self: *const Engine, node: u32) []const Item {
-        const entry = self.nodes.items[node];
-        return self.items.items[entry.item_start .. entry.item_start + entry.item_len];
-    }
-
-    fn childrenOf(self: *const Engine, node: u32) []const Child {
-        const entry = self.nodes.items[node];
-        return self.children.items[entry.child_start .. entry.child_start + entry.child_len];
-    }
-
-    fn bytesOf(self: *const Engine, start: u32, len: u32) []const u8 {
-        return self.bytes.items[start .. start + len];
-    }
-
-    /// Iterative Tarjan discovery over every node. Components pop in
-    /// reverse topological order, so every component a node reaches is
-    /// resolved before the node's own.
-    fn resolveAll(self: *Engine) Allocator.Error!void {
-        const Frame = struct { node: u32, next_child: u32 };
-        var frames: std.ArrayList(Frame) = .empty;
-        defer frames.deinit(self.gpa);
-        var scc_stack: std.ArrayList(u32) = .empty;
-        defer scc_stack.deinit(self.gpa);
-        var members: std.ArrayList(u32) = .empty;
-        defer members.deinit(self.gpa);
-        var next_index: u32 = 0;
-
-        for (0..self.nodes.items.len) |start_index| {
-            const start: u32 = @intCast(start_index);
-            if (self.nodes.items[start].index != unvisited) continue;
-            try self.visit(start, &next_index, &scc_stack);
-            try frames.append(self.gpa, .{ .node = start, .next_child = 0 });
-            while (frames.items.len != 0) {
-                const frame = &frames.items[frames.items.len - 1];
-                const node = frame.node;
-                const children = self.childrenOf(node);
-                if (frame.next_child < children.len) {
-                    const child = children[frame.next_child];
-                    frame.next_child += 1;
-                    const target = switch (child) {
-                        .digest => continue,
-                        .node => |target| target,
-                    };
-                    const target_entry = &self.nodes.items[target];
-                    if (target_entry.index == unvisited) {
-                        try self.visit(target, &next_index, &scc_stack);
-                        try frames.append(self.gpa, .{ .node = target, .next_child = 0 });
-                    } else if (target_entry.on_stack) {
-                        const entry = &self.nodes.items[node];
-                        entry.lowlink = @min(entry.lowlink, target_entry.index);
-                    }
-                    continue;
-                }
-                _ = frames.pop();
-                const entry = self.nodes.items[node];
-                if (frames.items.len != 0) {
-                    const parent = &self.nodes.items[frames.items[frames.items.len - 1].node];
-                    parent.lowlink = @min(parent.lowlink, entry.lowlink);
-                }
-                if (entry.lowlink == entry.index) {
-                    members.clearRetainingCapacity();
-                    while (true) {
-                        const member = scc_stack.pop() orelse
-                            Common.invariant("procedure identity reduction popped past its component root");
-                        self.nodes.items[member].on_stack = false;
-                        try members.append(self.gpa, member);
-                        if (member == node) break;
-                    }
-                    try self.resolveComponent(members.items);
-                }
-            }
-        }
-    }
-
-    fn visit(self: *Engine, node: u32, next_index: *u32, scc_stack: *std.ArrayList(u32)) Allocator.Error!void {
-        const entry = &self.nodes.items[node];
-        entry.index = next_index.*;
-        entry.lowlink = next_index.*;
-        entry.on_stack = true;
-        next_index.* += 1;
-        try scc_stack.append(self.gpa, node);
-    }
-
-    fn resolveComponent(self: *Engine, members: []const u32) Allocator.Error!void {
-        if (members.len == 1 and !self.hasSelfEdge(members[0])) {
-            const node = members[0];
-            const key = self.unfoldingKey(node);
-            const digest = self.renderer.memo.unfoldings.get(key) orelse key;
-            try self.finalize(node, digest);
-            return;
-        }
-        try self.resolveCyclicComponent(members);
-    }
-
-    fn hasSelfEdge(self: *const Engine, node: u32) bool {
-        for (self.childrenOf(node)) |child| switch (child) {
-            .node => |target| if (target == node) return true,
-            .digest => {},
-        };
-        return false;
-    }
-
-    fn childDigest(self: *const Engine, child: Child) Identity {
-        return switch (child) {
-            .digest => |digest| digest,
-            .node => |target| self.nodes.items[target].digest orelse
-                Common.invariant("procedure identity reduction read a child digest before resolving it"),
-        };
-    }
-
-    /// The node's encoding with every child as its finished digest.
-    fn unfoldingKey(self: *const Engine, node: u32) Identity {
-        var hasher = TypeDigestHasher.init();
-        writeBytes(&hasher, "node");
-        for (self.itemsOf(node)) |item| switch (item) {
-            .bytes => |range| writeBytes(&hasher, self.bytesOf(range.start, range.len)),
-            .child => |child| {
-                writeBytes(&hasher, "child");
-                hasher.update(&self.childDigest(child));
-            },
-        };
-        return hasher.finalResult();
-    }
-
-    fn finalize(self: *Engine, node: u32, digest: Identity) Allocator.Error!void {
-        const entry = &self.nodes.items[node];
-        if (entry.digest != null) Common.invariant("procedure identity reduction resolved a type twice");
-        entry.digest = digest;
-        try self.renderer.memo.digests.put(entry.ty, digest);
-    }
-
-    /// Reduce one cyclic component by bisimulation refinement over content
-    /// labels, order the reduced positions by their final labels, and digest
-    /// every member as its position in that one group rendering.
-    fn resolveCyclicComponent(self: *Engine, members: []const u32) Allocator.Error!void {
-        const member_count = members.len;
-        const known_nodes = self.position_of_node.items.len;
-        if (known_nodes < self.nodes.items.len) {
-            try self.position_of_node.appendNTimes(self.gpa, no_position, self.nodes.items.len - known_nodes);
-        }
-        const position_of_node = self.position_of_node.items;
-        for (members, 0..) |node, pos| position_of_node[node] = @intCast(pos);
-        defer for (members) |node| {
-            position_of_node[node] = no_position;
-        };
-
-        // Refine to the stable bisimulation partition. Every member starts
-        // from its content label: its encoding with every out-of-component
-        // child as a finished digest and every in-component child as a bare
-        // marker. Each round relabels a member by its own label followed by
-        // the labels of its ordered in-component children until a round
-        // stops separating members. A label is a pure function of the
-        // member's unfolding to the current depth, so two members carry
-        // equal labels exactly when they are bisimilar, and the labels are
-        // identical for bisimilar positions of any two knots regardless of
-        // how many nodes either knot uses.
-        try self.label_scratch.resize(self.gpa, 2 * member_count);
-        var labels = self.label_scratch.items[0..member_count];
-        var next_labels = self.label_scratch.items[member_count..];
-        const distinct_labels = &self.distinct_labels;
-        distinct_labels.clearRetainingCapacity();
-        for (members, 0..) |node, pos| {
-            var hasher = TypeDigestHasher.init();
-            writeBytes(&hasher, "label");
-            for (self.itemsOf(node)) |item| switch (item) {
-                .bytes => |range| writeBytes(&hasher, self.bytesOf(range.start, range.len)),
-                .child => |child| {
-                    const in_component = switch (child) {
-                        .digest => false,
-                        .node => |target| position_of_node[target] != no_position,
-                    };
-                    if (in_component) {
-                        writeBytes(&hasher, "in-component");
-                    } else {
-                        writeBytes(&hasher, "child");
-                        hasher.update(&self.childDigest(child));
-                    }
-                },
-            };
-            labels[pos] = hasher.finalResult();
-            try distinct_labels.put(self.gpa, labels[pos], no_position);
-        }
-        var label_count: u32 = distinct_labels.count();
-        while (true) {
-            distinct_labels.clearRetainingCapacity();
-            for (members, 0..) |node, pos| {
-                var hasher = TypeDigestHasher.init();
-                hasher.update(&labels[pos]);
-                for (self.childrenOf(node)) |child| {
-                    const target = switch (child) {
-                        .digest => continue,
-                        .node => |target| target,
-                    };
-                    const target_pos = position_of_node[target];
-                    if (target_pos == no_position) continue;
-                    hasher.update(&labels[target_pos]);
-                }
-                next_labels[pos] = hasher.finalResult();
-                try distinct_labels.put(self.gpa, next_labels[pos], no_position);
-            }
-            const next_count: u32 = distinct_labels.count();
-            const stable = next_count == label_count;
-            std.mem.swap([]Identity, &labels, &next_labels);
-            label_count = next_count;
-            if (stable) break;
-        }
-
-        // Group order: the reduced positions sorted by label. Labels are
-        // intrinsic to the infinite type, so the order is too.
-        const block_count = label_count;
-        try self.sorted_labels.resize(self.gpa, block_count);
-        const sorted_labels = self.sorted_labels.items;
-        {
-            var it = distinct_labels.keyIterator();
-            var next: usize = 0;
-            while (it.next()) |label| : (next += 1) sorted_labels[next] = label.*;
-            std.debug.assert(next == block_count);
-        }
-        std.mem.sort(Identity, sorted_labels, {}, struct {
-            fn lessThan(_: void, lhs: Identity, rhs: Identity) bool {
-                return std.mem.order(u8, &lhs, &rhs) == .lt;
-            }
-        }.lessThan);
-        for (sorted_labels, 0..) |label, rank| {
-            const slot = distinct_labels.getPtr(label) orelse unreachable; // sorted_labels holds exactly the keys of distinct_labels
-            slot.* = @intCast(rank);
-        }
-        try self.rank_of_member.resize(self.gpa, member_count);
-        const rank_of_member = self.rank_of_member.items;
-        try self.block_rep.resize(self.gpa, block_count);
-        const block_rep = self.block_rep.items;
-        @memset(block_rep, no_position);
-        for (members, 0..) |node, pos| {
-            const rank = distinct_labels.get(labels[pos]) orelse unreachable; // distinct_labels holds every label of the final stable round
-            rank_of_member[pos] = rank;
-            // The partition is stable, so any member represents its position.
-            if (block_rep[rank] == no_position) block_rep[rank] = node;
-        }
-
-        // One group rendering: every reduced position in label order with
-        // in-component references written as ranks. Every member then
-        // digests as its rank against the rendering's digest.
-        var group_hasher = TypeDigestHasher.init();
-        writeBytes(&group_hasher, "group");
-        writeU32(&group_hasher, block_count);
-        for (block_rep) |rep| {
-            writeBytes(&group_hasher, "position");
-            for (self.itemsOf(rep)) |item| switch (item) {
-                .bytes => |range| writeBytes(&group_hasher, self.bytesOf(range.start, range.len)),
-                .child => |child| {
-                    const in_component: ?u32 = switch (child) {
-                        .digest => null,
-                        .node => |target| if (position_of_node[target] == no_position) null else rank_of_member[position_of_node[target]],
-                    };
-                    if (in_component) |rank| {
-                        writeBytes(&group_hasher, "rank");
-                        writeU32(&group_hasher, rank);
-                    } else {
-                        writeBytes(&group_hasher, "child");
-                        group_hasher.update(&self.childDigest(child));
-                    }
-                },
-            };
-        }
-        const group_digest = group_hasher.finalResult();
-        for (members, 0..) |node, pos| {
-            var hasher = TypeDigestHasher.init();
-            writeBytes(&hasher, "group-member");
-            hasher.update(&group_digest);
-            writeU32(&hasher, rank_of_member[pos]);
-            try self.finalize(node, hasher.finalResult());
-        }
-        // A rolled-out copy of any position unfolds to the same one-step
-        // encoding, so it folds to that position's digest.
-        for (members) |node| {
-            const digest = self.nodes.items[node].digest orelse unreachable; // the loop above finalized every member's digest
-            try self.renderer.memo.unfoldings.put(self.unfoldingKey(node), digest);
-        }
+        self.graph.endNode(node, self.hasher.finalResult());
     }
 };
 
@@ -702,22 +367,45 @@ fn transparentAliasBacking(content: SolvedType.Content) ?SolvedType.TypeVarId {
     return (content.named.backing orelse Common.invariant("transparent alias reached procedure identity rendering without a backing type")).ty;
 }
 
-fn writeBytes(hasher: *TypeDigestHasher, bytes: []const u8) void {
-    writeU32(hasher, @intCast(bytes.len));
-    hasher.update(bytes);
-}
+const writeBytes = recursive_digest.writeBytes;
+const writeU32 = recursive_digest.writeU32;
 
-fn encodeU32(buffer: *[4]u8, value: u32) void {
-    buffer[0] = @truncate(value);
-    buffer[1] = @truncate(value >> 8);
-    buffer[2] = @truncate(value >> 16);
-    buffer[3] = @truncate(value >> 24);
-}
-
-fn writeU32(hasher: *TypeDigestHasher, value: u32) void {
-    var buffer: [4]u8 = undefined;
-    encodeU32(&buffer, value);
-    hasher.update(&buffer);
+test "procedure identity folds partial recursive copies across component boundaries" {
+    const a = std.testing.allocator;
+    var types = SolvedType.Store.init(a);
+    defer types.deinit();
+    var name_store = names.NameStore.init(a);
+    defer name_store.deinit();
+    var fn_by_symbol = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(a);
+    defer fn_by_symbol.deinit();
+    // A = (A, B), B = List(A). A partial copy C = (C, B) denotes
+    // exactly A, but C is a separate strongly connected component.
+    const original = try types.add(.unbound);
+    const list = try types.add(.{ .list = original });
+    try types.set(original, .{ .tuple = try types.addSpan(&.{ original, list }) });
+    const copy = try types.add(.unbound);
+    try types.set(copy, .{ .tuple = try types.addSpan(&.{ copy, list }) });
+    const scalar = try types.add(.{ .primitive = .u8 });
+    const different_list = try types.add(.{ .list = scalar });
+    const different = try types.add(.unbound);
+    try types.set(different, .{ .tuple = try types.addSpan(&.{ different, different_list }) });
+    for ([_]bool{ false, true }) |copy_first| {
+        var memo = Memo.init(a);
+        defer memo.deinit();
+        const renderer = Renderer{
+            .allocator = a,
+            .types = types.view(),
+            .names = &name_store,
+            .fn_tys = &.{},
+            .source_digests = &.{},
+            .fn_by_symbol = &fn_by_symbol,
+            .memo = &memo,
+        };
+        const first = try renderer.typeDigest(if (copy_first) copy else original);
+        const second = try renderer.typeDigest(if (copy_first) original else copy);
+        try std.testing.expectEqual(first, second);
+        try std.testing.expect(!std.mem.eql(u8, &first, &try renderer.typeDigest(different)));
+    }
 }
 
 test "procedure identity excludes outer callable sets but retains nested callable sets" {
@@ -819,4 +507,63 @@ test "procedure identity excludes outer callable sets but retains nested callabl
         &try erased_renderer.specIdentity(first_fn, takes_boxed_first, &.{}, "finite", "none"),
         &try erased_renderer.specIdentity(first_fn, takes_boxed_other, &.{}, "finite", "none"),
     ));
+}
+
+test "procedure identity digests a knot entangled with a separately tied copy as that copy" {
+    // `copy` and `copy_list` tie a knot of List(Node) whose second reference
+    // leads into `node`, a separately tied knot of the same infinite type, as
+    // one program's lambda solving can draw it. Another program draws only
+    // `node`. Both must render one identity, whichever is rendered first.
+    const allocator = std.testing.allocator;
+    var types = SolvedType.Store.init(allocator);
+    defer types.deinit();
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+    var fn_by_symbol = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator);
+    defer fn_by_symbol.deinit();
+
+    const node = try types.add(.zst);
+    const node_list = try types.add(.{ .list = node });
+    try types.set(node, .{ .tuple = try types.addSpan(&.{ node_list, node_list }) });
+    const copy = try types.add(.zst);
+    const copy_list = try types.add(.{ .list = copy });
+    try types.set(copy, .{ .tuple = try types.addSpan(&.{ copy_list, node_list }) });
+
+    var digests: [2][2]Identity = undefined;
+    for (&digests, [_][2]SolvedType.TypeVarId{ .{ node, copy }, .{ copy, node } }) |*out, order| {
+        var memo = Memo.init(allocator);
+        defer memo.deinit();
+        const renderer = Renderer{
+            .allocator = allocator,
+            .types = types.view(),
+            .names = &name_store,
+            .fn_tys = &.{},
+            .source_digests = &.{},
+            .fn_by_symbol = &fn_by_symbol,
+            .memo = &memo,
+        };
+        out[0] = try renderer.typeDigest(order[0]);
+        out[1] = try renderer.typeDigest(order[1]);
+    }
+    try std.testing.expectEqual(digests[0][0], digests[0][1]);
+    try std.testing.expectEqual(digests[1][0], digests[1][1]);
+    try std.testing.expectEqual(digests[0][0], digests[1][0]);
+
+    var alone_types = SolvedType.Store.init(allocator);
+    defer alone_types.deinit();
+    const alone = try alone_types.add(.zst);
+    const alone_list = try alone_types.add(.{ .list = alone });
+    try alone_types.set(alone, .{ .tuple = try alone_types.addSpan(&.{ alone_list, alone_list }) });
+    var memo = Memo.init(allocator);
+    defer memo.deinit();
+    const renderer = Renderer{
+        .allocator = allocator,
+        .types = alone_types.view(),
+        .names = &name_store,
+        .fn_tys = &.{},
+        .source_digests = &.{},
+        .fn_by_symbol = &fn_by_symbol,
+        .memo = &memo,
+    };
+    try std.testing.expectEqual(digests[0][0], try renderer.typeDigest(alone));
 }
