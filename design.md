@@ -19255,10 +19255,14 @@ The producers are:
 Inside Lambda Solved, the boundaries that mark every callable they reach as
 erased are hosted function signatures and platform or hosted root signatures,
 layout requests (including constants the const store materializes), runtime
-schema requests, `Box.box` and `Box.unbox` operands, and forced-dynamic
-iterator types. After solving, debug builds walk every one of those boundaries
-again and assert that each function value reached has an erased callable
-slot.
+schema requests, every `Box` type, and forced-dynamic iterator types. A `Box`
+is a boundary by its type alone: every function a box holds is erased whether
+or not the program boxes, unboxes, or passes across a boundary any value of
+that type. The object cache depends on this, because a request whose function
+types all sit inside a `Box` is closed, so its key must name one procedure in
+every program, including a program in which nothing reaches the box. After
+solving, debug builds walk every one of those boundaries again and assert that
+each function value reached has an erased callable slot.
 
 Monotype lowering carries boundary requirements as typed annotations into
 Lambda Solved IR. Lambda solving also consumes the explicit iterator
@@ -19267,7 +19271,7 @@ erased. It unifies all requirements through the same function
 `args/callable/ret` graph used for finite lambda sets. If a callable slot is
 forced to `erased`, direct LIR lowering produces packed erased callable values
 and indirect erased calls. If no explicit erased requirement reaches a callable
-slot, finite lambda-set dispatch is used.
+slot and no box holds it, finite lambda-set dispatch is used.
 
 No ordinary source expression becomes erased because direct lowering finds
 finite dispatch inconvenient. Erasure is introduced only by explicit checked
