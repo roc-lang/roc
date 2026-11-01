@@ -8514,7 +8514,7 @@ fn generateDynRc(self: *Self, value: ProcLocalId, op: layout.RcOp, count: u32) A
 /// procedure also returns.
 fn generateDynResultReturn(self: *Self, result: ProcLocalId, value: ProcLocalId) Allocator.Error!void {
     const result_local = (try self.procLocalBinding(result)).idx;
-    try self.emitDescCopy(self.localDyn(result).?.desc, .{ .dynamic = result_local }, value);
+    if (result != value) try self.emitDescCopy(self.localDyn(result).?.desc, .{ .dynamic = result_local }, value);
     try self.emitLocalGet(result_local);
     try self.emitLocalSet(self.proc_return_local);
 }

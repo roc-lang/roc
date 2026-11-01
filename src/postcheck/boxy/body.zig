@@ -2564,9 +2564,9 @@ pub const Builder = struct {
                 // Every branch of a construct in tail position returned.
                 if (self.hole == null) return;
                 if (self.result_local) |result| {
-                    // A call's result is written straight into the result
-                    // storage, so the call returns it directly.
-                    if (!try self.retargetLastCall(value, result)) {
+                    // An immediately returned call or constructor writes
+                    // straight into the caller's result storage.
+                    if (!try self.retargetLastProducer(value, result)) {
                         try self.emitDyn(result, .{ .copy = .{ .src = value, .desc = self.store.localDyn(result).?.desc } });
                     }
                     try self.emitTerminal(.{ .ret = .{ .value = result } });
@@ -6428,11 +6428,12 @@ pub const Builder = struct {
         return self.view.view.static_dispatch_plans.siteSubstitution(site) orelse &.{};
     }
 
-    /// When the statement emitted last is a call whose target is `value`,
-    /// a dynamic frame local, make `result` its target instead. A call's
-    /// target is a local that call created, so nothing else names `value`
-    /// and it leaves the frame.
-    pub fn retargetLastCall(self: *Builder, value: LocalId, result: LocalId) Allocator.Error!bool {
+    /// Redirect an immediately returned call or constructor from its fresh
+    /// dynamic frame local into the caller's result storage. Nothing has
+    /// read the fresh local yet. Boxy calls supply separate result storage;
+    /// forwarding that destination cannot overlap a constructor's operands.
+    /// ARC sees the rewritten producer and assigns ownership normally.
+    pub fn retargetLastProducer(self: *Builder, value: LocalId, result: LocalId) Allocator.Error!bool {
         const last = self.last_stmt orelse return false;
         const dyn = self.store.localDyn(value) orelse return false;
         if (dyn.storage != .frame) return false;
@@ -6444,7 +6445,15 @@ pub const Builder = struct {
             },
             .dyn => |*op| {
                 if (op.target != value or op.next != self.hole.?) return false;
-                if (self.store.stmtRow(op.data) != .call_erased) return false;
+                switch (self.store.stmtRow(op.data)) {
+                    .call_erased => {},
+                    .record, .tag => {
+                        // Adaptation to a different result representation
+                        // must remain an explicit operation.
+                        if (dyn.desc != self.store.localDyn(result).?.desc) return false;
+                    },
+                    else => return false,
+                }
                 op.target = result;
             },
             .init_uninitialized, .assign_ref, .assign_literal, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return false,

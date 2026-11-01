@@ -17086,6 +17086,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// bytes are written to the caller's result storage, unless the
         /// procedure built them there.
         fn generateDynResultReturn(self: *Self, result: LocalId, value: LocalId) Allocator.Error!void {
+            if (result == value) return;
             try self.emitDescCopy(self.localDyn(result).?.desc, .{ .dynamic = self.localSlot(result) }, value);
         }
 

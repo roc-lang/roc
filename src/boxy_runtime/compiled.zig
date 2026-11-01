@@ -202,9 +202,18 @@ pub fn updateRecord(base_desc: *const TypeDesc, base: [*]u8, desc: *const TypeDe
 pub fn buildTag(desc: *const TypeDesc, name: *const Name, dst: [*]u8, payloads: []const [*]const u8, ops: *RocOps) void {
     const found = variantNamed(desc, name, ops);
     if (payloads.len != found.variant.payload_count) invariant(ops, "a tag built with a different number of arguments than its descriptor has");
-    @memset(dst[0..found.union_desc.size], 0);
-    for (payloads, 0..) |src, index| {
-        writeComponent(payloadDesc(found.variant, @intCast(index)), dst + payloadOffset(found.variant, @intCast(index)), src, ops);
+    if (payloads.len == 1) {
+        // A single payload starts at zero and writeComponent initializes
+        // its entire slot, including a recursive box's pointer. Preserve
+        // zeroes in the unused payload space, alignment gaps, and tail.
+        const payload = found.variant.payload;
+        writeComponent(payload, dst, payloads[0], ops);
+        @memset(dst[payload.size..found.union_desc.size], 0);
+    } else {
+        @memset(dst[0..found.union_desc.size], 0);
+        for (payloads, 0..) |src, index| {
+            writeComponent(payloadDesc(found.variant, @intCast(index)), dst + payloadOffset(found.variant, @intCast(index)), src, ops);
+        }
     }
     writeDiscriminant(found.union_desc, dst, found.variant.discriminant);
 }

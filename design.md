@@ -15065,6 +15065,24 @@ sized `alloca`; the dev backend adjusts the stack pointer after its fixed frame
 and keeps the region base in a frame slot; the wasm backend bumps the shadow
 stack; the interpreter allocates a buffer per activation.
 
+Boxy lowering gives a call fresh result storage, separate from its arguments
+and captures. In return position it may forward the enclosing procedure's
+result destination to the immediately preceding call, record constructor, or
+tag constructor, replacing that producer's fresh frame local. Constructor
+forwarding requires the same explicit descriptor local for the produced and
+returned value; a representation adaptation remains an explicit operation.
+The result destination has not been exposed to the operands, so forwarding
+does not introduce overlap. This is a local lowering rule before ARC, not an
+ownership decision in a backend. A backend returning the exact `dyn_result`
+local emits no byte copy; returning a different local still copies its bytes.
+
+Runtime construction initializes the same complete byte representation whether
+or not it clears the whole destination first. A single tag payload fills its
+slot at offset zero, including a recursive box's pointer slot, so construction
+clears only the bytes after that slot and then writes the discriminant. Unused
+variant space, alignment gaps, and tail padding remain initialized. Multiple
+payloads retain their operand and allocation order and the full initial clear.
+
 The LIR statements a generic body uses on dynamic values all name the
 descriptor explicitly as an operand:
 
