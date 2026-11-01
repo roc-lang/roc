@@ -124,6 +124,9 @@ pub const Kind = union(enum) {
 /// A static datum the excerpt's relocations name and its program
 /// defined: carried so a program that lacks it can define it.
 pub const DataItem = struct {
+    /// Immutable backing retained by every set carrying this datum. Null for
+    /// data owned directly by a set or borrowed from an external producer.
+    owner: ?*DataOwner = null,
     name: []const u8,
     bytes: []const u8,
     alignment: u32,
@@ -138,6 +141,42 @@ pub const DataItem = struct {
     program_local_name: bool = false,
     /// Program-owned zero-initialized state, identified by site rather than content.
     is_mutable: bool = false,
+};
+
+/// Immutable catalog storage, shared by worker fragments and assembled sets.
+/// Only the reference count changes after the catalog is published.
+const DataOwner = struct {
+    allocator: Allocator,
+    arena: collections.SingleThreadArena,
+    references: std.atomic.Value(usize) = .init(1),
+
+    fn retain(self: *DataOwner) void {
+        _ = self.references.fetchAdd(1, .monotonic);
+    }
+
+    fn release(self: *DataOwner) void {
+        if (self.references.fetchSub(1, .acq_rel) != 1) return;
+        self.arena.deinit();
+        self.allocator.destroy(self);
+    }
+};
+
+/// Storage borrowed by an excerpt set, independently of its metadata arena.
+const Owner = union(enum) {
+    record: *base.retained_cache.Owner,
+    data: *DataOwner,
+
+    fn retain(self: Owner) void {
+        switch (self) {
+            inline .record, .data => |owner| owner.retain(),
+        }
+    }
+
+    fn release(self: Owner) void {
+        switch (self) {
+            inline .record, .data => |owner| owner.release(),
+        }
+    }
 };
 
 /// One pointer-sized relocation inside a data item.
@@ -207,18 +246,19 @@ pub const Set = struct {
     /// The module content identity of each source-file index the excerpts'
     /// lines use (`LirStore.sourceFileModuleIdentity`).
     source_files: []const [32]u8 = &.{},
-    record_owners: []const *base.retained_cache.Owner = &.{},
+    owners: []const Owner = &.{},
 
     /// Allocate the owner list before transferring the arena to a result.
     /// No retain happens until the last fallible allocation has succeeded.
-    fn retainRecordOwners(a: Allocator, excerpts: []const Excerpt) Allocator.Error![]const *base.retained_cache.Owner {
-        var owners = std.AutoHashMap(*base.retained_cache.Owner, void).init(a);
+    fn retainOwners(a: Allocator, excerpts: []const Excerpt) Allocator.Error![]const Owner {
+        var owners = std.AutoHashMap(Owner, void).init(a);
         defer owners.deinit();
         for (excerpts) |excerpt| {
-            if (excerpt.payload_record) |record| try owners.put(record.owner, {});
-            if (excerpt.metadata_origin) |origin| try owners.put(origin.record.owner, {});
+            if (excerpt.payload_record) |record| try owners.put(.{ .record = record.owner }, {});
+            if (excerpt.metadata_origin) |origin| try owners.put(.{ .record = origin.record.owner }, {});
+            for (excerpt.data) |item| if (item.owner) |owner| try owners.put(.{ .data = owner }, {});
         }
-        const retained = try a.alloc(*base.retained_cache.Owner, owners.count());
+        const retained = try a.alloc(Owner, owners.count());
         var it = owners.keyIterator();
         var i: usize = 0;
         while (it.next()) |owner| : (i += 1) retained[i] = owner.*;
@@ -227,7 +267,7 @@ pub const Set = struct {
     }
 
     pub fn deinit(self: *Set) void {
-        for (self.record_owners) |owner| owner.release();
+        for (self.owners) |owner| owner.release();
         self.arena.deinit();
     }
 
@@ -353,6 +393,12 @@ fn captureFragmentPrepared(
 }
 
 fn cloneData(a: Allocator, item: DataItem) Allocator.Error!DataItem {
+    if (item.owner != null) return item;
+    return copyData(a, item);
+}
+
+/// Sever ownership when constructing a new immutable catalog.
+fn copyData(a: Allocator, item: DataItem) Allocator.Error!DataItem {
     const relocations = try a.dupe(DataRelocation, item.relocations);
     var copier = NameCopier{};
     for (relocations) |*relocation| relocation.name = try copier.copy(a, relocation.name);
@@ -382,7 +428,8 @@ const NameCopier = struct {
     }
 };
 
-/// Deep-copy sets into one ownership domain, rebasing only set-local references.
+/// Copy sets into one ownership domain, rebasing only set-local references.
+/// Immutable catalog data retains its owner; other payloads are copied.
 /// Callers select cache entries using their full compilation provenance.
 pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!Set {
     var arena = collections.SingleThreadArena.init(allocator);
@@ -404,11 +451,11 @@ pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!S
     }
     const owned = try excerpts.toOwnedSlice(a);
     const owned_source_files = try source_files.toOwnedSlice(a);
-    const retained = try Set.retainRecordOwners(arena.allocator(), owned);
-    return .{ .arena = arena, .excerpts = owned, .source_files = owned_source_files, .record_owners = retained };
+    const retained = try Set.retainOwners(arena.allocator(), owned);
+    return .{ .arena = arena, .excerpts = owned, .source_files = owned_source_files, .owners = retained };
 }
 
-/// Deep-copy sets compiled from programs of one Solved program, which name a
+/// Copy sets compiled from programs of one Solved program, which name a
 /// procedure or refcount helper only by the code they hold, into
 /// one ownership domain with one copy of each: a later set's copy of one is
 /// dropped, and references to it resolve to the first copy. The sets share
@@ -511,8 +558,8 @@ pub fn combineDistinct(allocator: Allocator, sets: []const *const Set) Allocator
     // Both slices come from the arena before it is copied into the set.
     const owned_excerpts = try excerpts.toOwnedSlice(a);
     const owned_source_files = try a.dupe([32]u8, source_files);
-    const retained = try Set.retainRecordOwners(arena.allocator(), owned_excerpts);
-    return .{ .arena = arena, .excerpts = owned_excerpts, .source_files = owned_source_files, .record_owners = retained };
+    const retained = try Set.retainOwners(arena.allocator(), owned_excerpts);
+    return .{ .arena = arena, .excerpts = owned_excerpts, .source_files = owned_source_files, .owners = retained };
 }
 
 /// Replace every program-local constant name `excerpt` carries or refers
@@ -524,6 +571,9 @@ fn nameDataByContent(a: Allocator, excerpt: *Excerpt, names: *const ContentNames
         relocation.scope = .shared;
     }
     for (@constCast(excerpt.data)) |*item| {
+        // Renamed metadata belongs to this set, not to the shared catalog.
+        // Sever that ownership before changing either names or relocations.
+        if (item.owner != null) item.* = try copyData(a, item.*);
         if (names.renames(item.name)) {
             item.name = try a.dupe(u8, names.of(item.name));
             item.program_local_name = false;
@@ -535,7 +585,7 @@ fn nameDataByContent(a: Allocator, excerpt: *Excerpt, names: *const ContentNames
     }
 }
 
-/// Deep-copy a set whose lines index a source-file table it does not carry
+/// Copy a set whose lines index a source-file table it does not carry
 /// (`extractPrepared`), keeping its file indices.
 fn copySet(allocator: Allocator, set: *const Set) Allocator.Error!Set {
     std.debug.assert(set.source_files.len == 0);
@@ -545,12 +595,13 @@ fn copySet(allocator: Allocator, set: *const Set) Allocator.Error!Set {
     var excerpts = std.ArrayList(Excerpt).empty;
     try copyExcerpts(a, &excerpts, set, null);
     const owned = try excerpts.toOwnedSlice(a);
-    const retained = try Set.retainRecordOwners(arena.allocator(), owned);
-    return .{ .arena = arena, .excerpts = owned, .record_owners = retained };
+    const retained = try Set.retainOwners(arena.allocator(), owned);
+    return .{ .arena = arena, .excerpts = owned, .owners = retained };
 }
 
-/// Append deep copies of `set`'s excerpts, rebasing set-local references
-/// and, given a `file_map`, carrying line file indices through it.
+/// Append independently owned excerpt metadata, rebasing set-local references
+/// and, given a `file_map`, carrying line file indices through it. Immutable
+/// catalog backing is shared and retained by the completed destination set.
 fn copyExcerpts(a: Allocator, excerpts: *std.ArrayList(Excerpt), set: *const Set, file_map: ?[]const u32) Allocator.Error!void {
     const first: u32 = @intCast(excerpts.items.len);
     for (set.excerpts) |source| {
@@ -847,10 +898,15 @@ pub const ContentNames = struct {
 };
 
 /// Immutable data catalog prepared once by the coordinator. Worker lookups
-/// borrow it read-only; retained excerpts copy only their reachable closure.
+/// borrow it read-only; retained excerpts share the backing of their reached data.
 pub const PreparedData = struct {
-    arena: collections.SingleThreadArena,
+    owner: *DataOwner,
     items: std.StringHashMapUnmanaged(DataItem),
+    /// Exact outgoing symbol edges, indexed once rather than rescanning large
+    /// relocation arrays for every procedure that refers to the same value.
+    targets: std.StringHashMapUnmanaged(Targets),
+
+    const Targets = struct { data: []const []const u8, all: []const []const u8 };
 
     pub fn init(
         allocator: Allocator,
@@ -858,12 +914,13 @@ pub const PreparedData = struct {
         constant_exports: []const lir.Program.StaticDataExport,
         spliced_data: []const DataItem,
     ) Allocator.Error!PreparedData {
-        var arena = collections.SingleThreadArena.init(allocator);
-        errdefer arena.deinit();
-        const a = arena.allocator();
+        const owner = try allocator.create(DataOwner);
+        owner.* = .{ .allocator = allocator, .arena = collections.SingleThreadArena.init(allocator) };
+        errdefer owner.release();
+        const a = owner.arena.allocator();
         var items = std.StringHashMapUnmanaged(DataItem){};
         for (string_exports) |string_export| {
-            const item = try cloneData(a, .{
+            const item = try copyData(a, .{
                 .name = string_export.symbol_name,
                 .bytes = string_export.bytes,
                 .alignment = string_export.alignment,
@@ -901,14 +958,49 @@ pub const PreparedData = struct {
             try items.put(a, item.name, item);
         }
         for (spliced_data) |item| {
-            const owned = try cloneData(a, item);
+            const owned = try copyData(a, item);
             try items.put(a, owned.name, owned);
         }
-        return .{ .arena = arena, .items = items };
+        var targets = std.StringHashMapUnmanaged(Targets){};
+        var iterator = items.iterator();
+        var data = std.ArrayList([]const u8).empty;
+        defer data.deinit(allocator);
+        var all = std.ArrayList([]const u8).empty;
+        defer all.deinit(allocator);
+        var seen_data = std.StringHashMap(void).init(allocator);
+        defer seen_data.deinit();
+        var seen_all = std.StringHashMap(void).init(allocator);
+        defer seen_all.deinit();
+        while (iterator.next()) |entry| {
+            entry.value_ptr.owner = owner;
+            data.clearRetainingCapacity();
+            all.clearRetainingCapacity();
+            seen_data.clearRetainingCapacity();
+            seen_all.clearRetainingCapacity();
+            // Keep the last occurrence of a repeated edge: traversals pop a
+            // LIFO work list, so this preserves their existing visit order.
+            var i = entry.value_ptr.relocations.len;
+            while (i > 0) {
+                i -= 1;
+                const relocation = entry.value_ptr.relocations[i];
+                if (!(try seen_all.getOrPut(relocation.name)).found_existing)
+                    try all.append(allocator, relocation.name);
+                if (!relocation.function and !relocation.external and
+                    !(try seen_data.getOrPut(relocation.name)).found_existing)
+                    try data.append(allocator, relocation.name);
+            }
+            std.mem.reverse([]const u8, data.items);
+            std.mem.reverse([]const u8, all.items);
+            try targets.put(a, entry.key_ptr.*, .{
+                .data = try a.dupe([]const u8, data.items),
+                .all = try a.dupe([]const u8, all.items),
+            });
+        }
+        return .{ .owner = owner, .items = items, .targets = targets };
     }
 
     pub fn deinit(self: *PreparedData) void {
-        self.arena.deinit();
+        self.owner.release();
     }
 };
 
@@ -1199,8 +1291,8 @@ pub fn extractPrepared(
         };
     }
 
-    const retained = try Set.retainRecordOwners(arena.allocator(), excerpts);
-    return .{ .arena = arena, .excerpts = excerpts, .record_owners = retained };
+    const retained = try Set.retainOwners(arena.allocator(), excerpts);
+    return .{ .arena = arena, .excerpts = excerpts, .owners = retained };
 }
 
 fn refSite(ref: anytype) ?usize {
@@ -1364,7 +1456,7 @@ fn captureData(
         if (visited.found_existing) continue;
         const item = prepared.items.get(name) orelse return error.DanglingReference;
         try data.append(arena_allocator, try cloneData(arena_allocator, item));
-        try appendDataTargets(allocator, &pending, item.relocations);
+        try pending.appendSlice(allocator, prepared.targets.get(item.name).?.data);
     }
     return try data.toOwnedSlice(arena_allocator);
 }
@@ -1391,32 +1483,7 @@ pub fn dataClosure(
         if ((try seen.getOrPut(name)).found_existing) continue;
         const item = catalog.items.get(name) orelse return error.DanglingReference;
         try out.append(allocator, item);
-        try appendDataTargets(allocator, &pending, item.relocations);
-    }
-}
-
-/// Append to `pending` every symbol `relocations` name, code included, each
-/// once per run of relocations that name it in a row.
-fn appendRelocationTargets(allocator: Allocator, pending: *std.ArrayList([]const u8), relocations: []const DataRelocation) Allocator.Error!void {
-    var previous: ?[]const u8 = null;
-    for (relocations) |relocation| {
-        if (previous) |name| if (std.mem.eql(u8, name, relocation.name)) continue;
-        previous = relocation.name;
-        try pending.append(allocator, relocation.name);
-    }
-}
-
-/// Append to `pending` the constants `relocations` name, skipping code
-/// targets. A target the relocation before it also names is the same
-/// constant, already appended: a list of copies of one value names it once
-/// per item.
-fn appendDataTargets(allocator: Allocator, pending: *std.ArrayList([]const u8), relocations: []const DataRelocation) Allocator.Error!void {
-    var previous: ?[]const u8 = null;
-    for (relocations) |relocation| {
-        if (relocation.function or relocation.external) continue;
-        if (previous) |name| if (std.mem.eql(u8, name, relocation.name)) continue;
-        previous = relocation.name;
-        try pending.append(allocator, relocation.name);
+        try pending.appendSlice(allocator, catalog.targets.get(item.name).?.data);
     }
 }
 
@@ -1532,7 +1599,7 @@ pub fn retainReachable(allocator: Allocator, set: *const Set, catalog: *const Pr
             }
             if ((try data_seen.getOrPut(name)).found_existing) continue;
             const item = catalog.items.get(name) orelse continue;
-            try appendRelocationTargets(allocator, &data_work, item.relocations);
+            try data_work.appendSlice(allocator, catalog.targets.get(item.name).?.all);
         }
     }
 
@@ -1582,8 +1649,8 @@ pub fn retainReachable(allocator: Allocator, set: *const Set, catalog: *const Pr
     // Allocated before the arena is copied into the result, which must own
     // every node.
     const source_files = try a.dupe([32]u8, set.source_files);
-    const retained = try Set.retainRecordOwners(arena.allocator(), excerpts);
-    return .{ .arena = arena, .excerpts = excerpts, .source_files = source_files, .record_owners = retained };
+    const retained = try Set.retainOwners(arena.allocator(), excerpts);
+    return .{ .arena = arena, .excerpts = excerpts, .source_files = source_files, .owners = retained };
 }
 
 /// A program's machine code in its one layout: every excerpt of the code
@@ -1749,8 +1816,8 @@ pub fn arrange(allocator: Allocator, set: *const Set, host_visible: []const Data
     }.lessThan);
 
     const source_files = try a.dupe([32]u8, set.source_files);
-    const retained = try Set.retainRecordOwners(arena.allocator(), excerpts);
-    return .{ .set = .{ .arena = arena, .excerpts = excerpts, .source_files = source_files, .record_owners = retained }, .data = data[0..data_len] };
+    const retained = try Set.retainOwners(arena.allocator(), excerpts);
+    return .{ .set = .{ .arena = arena, .excerpts = excerpts, .source_files = source_files, .owners = retained }, .data = data[0..data_len] };
 }
 
 fn renamedData(a: Allocator, item: DataItem, names: *const ContentNames) Allocator.Error!DataItem {
@@ -2523,6 +2590,16 @@ fn testPreparedData(allocator: Allocator) (ExtractError || error{ TestExpectedEq
         .{ .offset = 4, .name = "roc__d1", .scope = .program, .kind = .{ .data = .rel32 } },
     };
     const items = try captureData(allocator, a, &refs, &prepared);
+    const owners = try Set.retainOwners(a, &.{.{
+        .kind = .entrypoint,
+        .code = &.{},
+        .entry = 0,
+        .frame = null,
+        .refs = &.{},
+        .relocations = &refs,
+        .data = items,
+    }});
+    defer for (owners) |owner| owner.release();
     prepared.deinit();
     prepared_live = false;
     try std.testing.expectEqual(@as(usize, 1), items.len);
@@ -3005,4 +3082,81 @@ test "boxy composition slots keep identity through canonical arrangement and pac
         try std.testing.expect(std.mem.eql(u8, item.name, "site_a") or std.mem.eql(u8, item.name, "site_b"));
     }
     try std.testing.expectEqual(@as(usize, 2), mutable);
+}
+
+test "excerpt catalog sharing survives copying and renaming without changing its source" {
+    var deterministic = collections.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), testSharedCatalog, .{});
+}
+
+fn testSharedCatalog(allocator: Allocator) (ExtractError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+    const relocations = [_]DataRelocation{
+        .{ .offset = 0, .name = "leaf", .addend = 0, .function = false },
+        .{ .offset = 8, .name = "code", .addend = 0, .function = true },
+        .{ .offset = 16, .name = "external", .addend = 0, .function = false, .external = true },
+        .{ .offset = 24, .name = "leaf", .addend = 0, .function = false },
+        .{ .offset = 32, .name = "roc__d0", .addend = 0, .function = false },
+    };
+    var prepared = try PreparedData.init(allocator, &.{}, &.{}, &.{
+        .{ .name = "roc__d0", .bytes = "0123456701234567012345670123456701234567", .alignment = 8, .symbol_offset = 0, .relocations = &relocations, .program_local_name = true },
+        .{ .name = "leaf", .bytes = "leaf value", .alignment = 1, .symbol_offset = 0 },
+        .{ .name = "unreferenced", .bytes = "not reached", .alignment = 1, .symbol_offset = 0 },
+    });
+    var prepared_live = true;
+    defer if (prepared_live) prepared.deinit();
+    const targets = prepared.targets.get("roc__d0").?;
+    try std.testing.expectEqual(@as(usize, 2), targets.data.len);
+    try std.testing.expectEqual(@as(usize, 4), targets.all.len);
+    var arena = collections.SingleThreadArena.init(allocator);
+    var arena_owned = true;
+    defer if (arena_owned) arena.deinit();
+    const a = arena.allocator();
+    const refs = [_]NamedRelocation{.{ .offset = 0, .name = "roc__d0", .scope = .program, .kind = .{ .data = .rel32 } }};
+    const first = try captureData(allocator, a, &refs, &prepared);
+    const second = try captureData(allocator, a, &refs, &prepared);
+    try std.testing.expectEqual(@as(usize, 2), first.len);
+    try std.testing.expectEqual(first[0].bytes.ptr, second[0].bytes.ptr);
+    try std.testing.expectEqual(first[0].relocations.ptr, second[0].relocations.ptr);
+    const excerpts = try a.alloc(Excerpt, 2);
+    for (excerpts, [_][]const DataItem{ first, second }, 0..) |*excerpt, data, i| excerpt.* = .{
+        .kind = .{ .proc = lir.ProcIdentity.forTest(@intCast(i + 1)) },
+        .code = "code",
+        .entry = 0,
+        .frame = null,
+        .refs = &.{},
+        .relocations = &refs,
+        .data = data,
+    };
+    const owners = try Set.retainOwners(a, excerpts);
+    var source = Set{ .arena = arena, .excerpts = excerpts, .owners = owners };
+    arena_owned = false;
+    var source_live = true;
+    defer if (source_live) source.deinit();
+    var aliases = std.StringHashMap([]const u8).init(allocator);
+    defer aliases.deinit();
+    var reachable = try retainReachable(allocator, &source, &prepared, .{
+        .procs = &.{lir.ProcIdentity.forTest(1)},
+        .data = &.{},
+        .helper_aliases = &aliases,
+    });
+    defer reachable.deinit();
+    try std.testing.expectEqual(@as(usize, 1), reachable.excerpts.len);
+    try std.testing.expectEqual(first[0].bytes.ptr, reachable.excerpts[0].data[0].bytes.ptr);
+    prepared.deinit();
+    prepared_live = false;
+    var copied = try copySet(allocator, &source);
+    defer copied.deinit();
+    try std.testing.expectEqual(source.excerpts[0].data[0].bytes.ptr, copied.excerpts[0].data[0].bytes.ptr);
+    var renamed = try combineDistinct(allocator, &.{&source});
+    defer renamed.deinit();
+    try std.testing.expectEqualStrings("roc__d0", source.excerpts[0].data[0].name);
+    try std.testing.expectEqualStrings("roc__d0", source.excerpts[0].data[0].relocations[4].name);
+    try std.testing.expect(std.mem.startsWith(u8, renamed.excerpts[0].data[0].name, content_data_prefix));
+    source.deinit();
+    source_live = false;
+    try std.testing.expectEqualStrings("leaf value", reachable.excerpts[0].data[1].bytes);
+    var arranged = try arrange(allocator, &reachable, &.{});
+    defer arranged.deinit();
+    try std.testing.expectEqualStrings("leaf value", copied.excerpts[0].data[1].bytes);
+    try std.testing.expectEqualStrings("roc__d0", copied.excerpts[0].data[0].relocations[4].name);
 }

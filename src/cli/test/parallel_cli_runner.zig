@@ -11643,13 +11643,13 @@ fn customBoxyModuleObjectCache(
     const Build = struct { name: []const u8, no_cache: bool, objects: []const u8, identical: bool };
     // The program's units are Builtin, Combinator, Tree, Main, and the
     // default platform's module; the root unit's object makes six. An edit
-    // of the app rebuilds the app's unit and the root unit, whose key covers
-    // the app's exact bindings. An edit of Tree that leaves its signatures
-    // alone rebuilds Tree's unit, the app's unit and the root unit: the app
-    // stores a closure, and Tree stores a function value its importers
-    // restore, and a stored function value's digest is its module's checked
-    // key. The builds of unedited sources produce the same bytes whatever
-    // the cache held; an edit's executable is only required to run.
+    // of the app rebuilds Main's unit and the root unit, whose key covers the
+    // app the platform is paired with. An edit of Tree that leaves its
+    // interface alone rebuilds Tree's unit and no module compiled against
+    // that interface; Main's unit and the root unit follow only because the
+    // app stores a closure, whose digest is its module's checked key. The builds of
+    // unedited sources produce the same bytes whatever the cache held; an
+    // edit's executable is only required to run.
     const builds = [_]Build{
         .{ .name = "cold", .no_cache = false, .objects = "Boxy objects: 0 cached, 6 built", .identical = true },
         .{ .name = "warm", .no_cache = false, .objects = "Boxy objects: 6 cached, 0 built", .identical = true },
