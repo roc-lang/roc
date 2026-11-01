@@ -21719,8 +21719,18 @@ parameter and its same-value aliases, and a field read passed to a consuming
 position retains the field under that count; a take would instead move the
 field's stored unit out of the parameter that the boundary returns. Field-take
 decisions and the uniqueness they settle are shared by every emission of a
-procedure, so the boundary constrains the base procedure's takes too. These are compile-time ownership-state transitions only. The
-post-ARC program contains ordinary calls, switches, `incref`, and `decref`
+procedure, so the boundary constrains the base procedure's takes too.
+
+The rule also covers ownership-complete field and tag-payload reads, whose
+root-unit move is decided per emission at the read. In an emission with an
+outcome convention, each restitution boundary is a use of its restituted
+parameters' ownership places, so a complete read that reaches one retains the
+projected value and leaves the root's unit in place, unless the read's own
+checked call restores that unit first. An emission without an outcome
+convention releases the parameter at the same statement, and the read may move
+its unit.
+
+These are compile-time ownership-state transitions only. The post-ARC program contains ordinary calls, switches, `incref`, and `decref`
 statements, and backends continue to follow those statements without knowing
 about conditional ownership.
 

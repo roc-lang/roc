@@ -10,6 +10,10 @@ Proc :: { host : Box(U64), pid_value : U32, command : Str }.{
     ## Check a live handle as `Ok`, releasing the owned argument.
     handle_close! : Box(U64) => Try({}, [HostErr(Str)])
 
+    ## Read a live handle's value plus the two scalars as `Ok`, releasing the
+    ## owned argument.
+    handle_read_exactly! : Box(U64), U64, U64 => Try(U64, [HostErr(Str)])
+
     spawn! : Str => Try(Proc, [SpawnErr(Str)])
     spawn! = |command| Ok({ host: Proc.handle_new!(7), pid_value: 1, command })
 
@@ -67,6 +71,36 @@ Proc :: { host : Box(U64), pid_value : U32, command : Str }.{
         peek! : Counted => Try(U64, [ReadErr(Str)])
         peek! = |counted|
             Proc.handle_poll!(counted.host)
+                .map_err(|HostErr(e)| ReadErr(e))
+    }
+
+    ## A timeout read through a method, shaped like basic-cli's `Duration`.
+    Timeout :: { nanos : U64 }.{
+
+        to_nanos : Timeout -> U64
+        to_nanos = |timeout| timeout.nanos
+    }
+
+    ## A host handle beside scalar settings, shaped like basic-cli's
+    ## `Tcp.Connection`.
+    Connection :: { host : Box(U64), timeout : Timeout, line_limit : U64 }.{
+
+        open! : U64 => Connection
+        open! = |value| { host: Proc.handle_new!(value), timeout: { nanos: 10 }, line_limit: 100 }
+
+        ## Read the handle, rebuilding each result, as
+        ## `Tcp.Connection.read_exactly!` does.
+        read_exactly! : Connection, U64 => Try(U64, [UnexpectedEndOfInput, ReadErr(Str)])
+        read_exactly! = |conn, count|
+            match Proc.handle_read_exactly!(conn.host, count, conn.timeout.to_nanos()) {
+                Ok(n) => Ok(n)
+                Err(HostErr(e)) => Err(ReadErr(e))
+            }
+
+        ## The later read a caller makes, forwarding through `map_err`.
+        peek! : Connection => Try(U64, [ReadErr(Str)])
+        peek! = |conn|
+            Proc.handle_poll!(conn.host)
                 .map_err(|HostErr(e)| ReadErr(e))
     }
 

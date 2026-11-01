@@ -789,6 +789,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test for #12746: an argument returned to its caller on a switched result outcome keeps the handle its callee reads through an ownership-complete projection and passes to a hosted call",
     },
     .{
+        .roc_file = "test/fx/issue_12746_connection_handle.roc",
+        .io_spec = "1>connection: 16 1",
+        .description = "Regression test for #12746: a record of a handle and scalar settings returned to its caller on a switched result outcome keeps the handle its callee passes to a hosted call alongside a method call on a sibling field",
+    },
+    .{
         .roc_file = "test/fx/issue_12706_shared_case_arm.roc",
         .io_spec = "1>small 2001|1>small 1001|1>small 2008|1>big 1060|1>small 2099|1>small missing101",
         .description = "Regression test for #12706: a case-of-case arm shared through a join keeps the arms of the code after a match whose result reaches that code along several paths",
