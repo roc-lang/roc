@@ -8842,6 +8842,17 @@ const ObjectPackBinding = struct {
 /// and every entry reaching one is app-bound to it. The object exports a weak
 /// C-ABI entry for each. Null when no candidate qualifies or LLVM cannot
 /// compile the code.
+/// Whether `proc`'s C-ABI entry would declare more wasm parameters than an
+/// engine loads. An object offers no such entry, so each program compiles the
+/// procedure itself and calls it with its arguments in memory.
+fn objectEntryPassesWasmParamLimit(arena: Allocator, lowered: *const lir.CheckedPipeline.LoweredProgram, proc: lir.LirProcSpec, target: RocTarget) Allocator.Error!bool {
+    const store = &lowered.lir_result.store;
+    const params = store.getLocalSpan(proc.args);
+    const arg_layouts = try arena.alloc(layout.Idx, params.len);
+    for (arg_layouts, 0..) |*arg_layout, index| arg_layout.* = store.getLocal(lir.LirStore.GuardedList.at(params, index)).layout_idx;
+    return try wasmCAbiParamCount(arena, lowered, target, arg_layouts, proc.ret_layout) > layout.abi.wasm_max_function_params;
+}
+
 fn objectPackBytes(
     ctx: *CliCtx,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
@@ -8892,6 +8903,7 @@ fn objectPackBytes(
         if (proc.body == null or proc.abi != .roc or proc.hosted != null) continue;
         if (!candidate.reads.offerable) continue;
         if (proc.rc_variant_demandable or proc.inlined_at_calls or proc.tail_group != null) continue;
+        if (target.toCpuArch() == .wasm32 and try objectEntryPassesWasmParamLimit(arena, lowered, proc, target)) continue;
         const closure = try lir.PackProgram.procCallClosure(ctx.gpa, store, candidate.proc);
         defer ctx.gpa.free(closure);
         var excluded = false;
@@ -10470,6 +10482,61 @@ fn linkWasmOutput(
     };
 }
 
+/// The C ABI a wasm build's boundary functions and linked entries follow.
+fn wasmAbiTarget(target: RocTarget) layout.abi.Target {
+    return if (target.cpuLevel() == .v1) .wasm32v1 else .wasm32;
+}
+
+/// The parameters of the wasm function type a C-ABI signature declares.
+fn wasmCAbiParamCount(arena: Allocator, lowered: *const lir.CheckedPipeline.LoweredProgram, target: RocTarget, arg_layouts: []const layout.Idx, ret_layout: layout.Idx) Allocator.Error!u32 {
+    return layout.abi.wasmCAbiParamCount(try layout.abi.lower(arena, &lowered.lir_result.layouts, wasmAbiTarget(target), arg_layouts, ret_layout, false));
+}
+
+/// Report every function on a platform boundary that no wasm engine would
+/// load. The host fixes these signatures, so unlike calls between Roc
+/// procedures their arguments cannot move into memory.
+fn rejectWasmHostParameterOverflow(
+    ctx: *CliCtx,
+    target: RocTarget,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    entrypoints: []const backend.Entrypoint,
+) CliMainError!void {
+    const store = &lowered.lir_result.store;
+    const limit = layout.abi.wasm_max_function_params;
+    var rejected = false;
+    for (entrypoints) |entry| {
+        const count = try wasmCAbiParamCount(ctx.arena, lowered, target, entry.arg_layouts, entry.ret_layout);
+        if (count <= limit) continue;
+        try ctx.addProblem(.{ .wasm_host_parameter_limit = .{
+            .symbol = try ctx.arena.dupe(u8, entry.symbol_name),
+            .direction = .provided_to_host,
+            .param_count = count,
+            .limit = limit,
+        } });
+        rejected = true;
+    }
+    var seen = std.AutoHashMap(u32, void).init(ctx.gpa);
+    defer seen.deinit();
+    for (store.getProcSpecs()) |proc| {
+        const hosted = proc.hosted orelse continue;
+        if (seen.contains(hosted.dispatch_index)) continue;
+        try seen.put(hosted.dispatch_index, {});
+        const params = store.getLocalSpan(proc.args);
+        const arg_layouts = try ctx.arena.alloc(layout.Idx, params.len);
+        for (arg_layouts, 0..) |*arg_layout, index| arg_layout.* = store.getLocal(lir.LirStore.GuardedList.at(params, index)).layout_idx;
+        const count = try wasmCAbiParamCount(ctx.arena, lowered, target, arg_layouts, proc.ret_layout);
+        if (count <= limit) continue;
+        try ctx.addProblem(.{ .wasm_host_parameter_limit = .{
+            .symbol = try ctx.arena.dupe(u8, store.getString(hosted.symbol)),
+            .direction = .hosted,
+            .param_count = count,
+            .limit = limit,
+        } });
+        rejected = true;
+    }
+    if (rejected) return error.CliError;
+}
+
 fn rocBuildWasm(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
@@ -10487,6 +10554,7 @@ fn rocBuildWasm(
     if (entrypoints.len == 0) {
         base.invariant("wasm build invariant violated: no exported platform entrypoints", .{});
     }
+    try rejectWasmHostParameterOverflow(ctx, target, lowered, entrypoints);
 
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
     const stack_checks = wasmStackChecks(link_inputs.wasm);
@@ -11070,6 +11138,7 @@ fn rocBuildWasmLlvm(
     if (entrypoints.len == 0) {
         base.invariant("LLVM wasm build invariant violated: no exported platform entrypoints", .{});
     }
+    try rejectWasmHostParameterOverflow(ctx, target, lowered, entrypoints);
 
     const stack_checks = wasmStackChecks(if (targets_config.getLinkSpec(target)) |spec| spec.wasm else null);
     const app_object = try compileLlvmAppObject(

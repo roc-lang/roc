@@ -1975,11 +1975,14 @@ pub const MonoLlvmCodeGen = struct {
     fn computeFastSignature(self: *MonoLlvmCodeGen, arena: std.mem.Allocator, proc: LirProcSpec) Error!FastSignature {
         const owned = try self.procArgLayoutsIn(arena, proc, .explicit);
         const lowered = layout.abi.lower(arena, self.layouts(), self.abiTarget(), owned, fastRetLayout(proc), false) catch return error.OutOfMemory;
-        const scratch: TailScratch = if (proc.tail_group) |group| blk: {
+        const group_scratch: TailScratch = if (proc.tail_group) |group| blk: {
             if (@backingInt(group) >= self.tail_scratch.items.len) llvmInvariantFmt("tail group {d} has no recorded argument storage", .{@backingInt(group)});
             break :blk self.tail_scratch.items[@backingInt(group)];
         } else .{};
-        const tail_args = try self.tailArgs(arena, proc, lowered, owned, scratch.size > 0);
+        const tail_args = try self.tailArgs(arena, proc, lowered, owned, group_scratch.size > 0);
+        // Wasm has no group storage: each call's stored arguments live in
+        // storage its caller owns, sized for this procedure alone.
+        const scratch: TailScratch = if (self.usesTailDrivers()) tail_args.scratch else group_scratch;
         var cursor: u32 = if (lowered.ret == .indirect) 1 else 0;
         const args_start = cursor;
         for (lowered.args, tail_args.stored) |placement, stored| {
@@ -2025,16 +2028,22 @@ pub const MonoLlvmCodeGen = struct {
         @memset(offsets, 0);
         const stored = try arena.alloc(bool, lowered.args.len);
         @memset(stored, false);
-        if (proc.tail_group != null and !self.usesTailDrivers()) {
-            // The dynamic result address, the tail carry, and the group
-            // storage pointer follow the arguments, so their registers are
-            // reserved up front.
-            const trailing_pointers: u32 = @as(u32, @intFromBool(group_storage)) + @intFromBool(proc.dyn_result != null) + @intFromBool(procCarriesTailArgs(self.store, proc));
+        // The dynamic result address, the tail carry, and the storage pointer
+        // follow the arguments, so their registers are reserved up front.
+        const trailing_pointers: u32 = @as(u32, @intFromBool(proc.dyn_result != null)) + @intFromBool(procCarriesTailArgs(self.store, proc));
+        if (self.usesTailDrivers()) {
+            // Only a signature past the wasm parameter limit takes a storage
+            // pointer, which then counts against the limit too.
             layout.abi.markRegisterOverflow(self.abiTarget(), lowered, trailing_pointers, stored);
+            if (std.mem.findScalar(bool, stored, true) != null) {
+                layout.abi.markRegisterOverflow(self.abiTarget(), lowered, trailing_pointers + 1, stored);
+            }
+        } else if (proc.tail_group != null) {
+            layout.abi.markRegisterOverflow(self.abiTarget(), lowered, trailing_pointers + @intFromBool(group_storage), stored);
         }
         var cursor: TailScratchCursor = .{};
         for (lowered.args, arg_layouts, offsets, stored) |placement, arg_layout, *offset, is_stored| {
-            if (placement != .indirect and !is_stored) continue;
+            if (!is_stored and (placement != .indirect or self.usesTailDrivers())) continue;
             offset.* = cursor.place(self.layoutDataSize(arg_layout), @intCast(@max(self.sizeAlignOf(arg_layout).alignment.toByteUnits(), 1)));
         }
         return .{
@@ -2267,7 +2276,12 @@ pub const MonoLlvmCodeGen = struct {
                 try param_types.append(self.allocator, ptr_ty);
                 try call_args.append(self.allocator, result_ptr);
             }
-            for (sig.lowered.args, sig.arg_layouts, offsets) |placement, arg_layout, offset| {
+            const scratch: ?LlvmBuilder.Value = if (sig.scratch_index != null) try self.wasmStoredArgs(sig) else null;
+            for (sig.lowered.args, sig.arg_layouts, offsets, 0..) |placement, arg_layout, offset, i| {
+                if (sig.tail_args.stored[i]) {
+                    _ = try self.writeTailArg(scratch.?, sig, i, try self.offsetPtr(args_ptr, offset));
+                    continue;
+                }
                 switch (placement) {
                     .none => {},
                     .indirect => {
@@ -2284,6 +2298,10 @@ pub const MonoLlvmCodeGen = struct {
             if (sig.carry_index != null) {
                 try param_types.append(self.allocator, ptr_ty);
                 try call_args.append(self.allocator, try self.loadPointer(try self.offsetPtr(args_ptr, carry_offset)));
+            }
+            if (scratch) |storage| {
+                try param_types.append(self.allocator, ptr_ty);
+                try call_args.append(self.allocator, storage);
             }
             const result = wip.call(.normal, self.fastCallConv(proc), attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
             if (sig.lowered.ret == .registers) {
@@ -2368,6 +2386,7 @@ pub const MonoLlvmCodeGen = struct {
     /// in the same group passes its own along; any other caller owns a slot
     /// for that group in its frame.
     fn tailScratchArg(self: *MonoLlvmCodeGen, callee: LirProcSpec, sig: *const FastSignature) Error!LlvmBuilder.Value {
+        if (self.usesTailDrivers()) return self.wasmStoredArgs(sig);
         const group = callee.tail_group orelse llvmInvariantFmt("procedure without a tail group takes tail argument storage", .{});
         if (self.current_tail_scratch) |own| {
             if (self.current_tail_group == group) return own;
@@ -2383,6 +2402,12 @@ pub const MonoLlvmCodeGen = struct {
             storage.* = try self.allocEntryBlockSlot(.i8, sig.scratch.size, LlvmBuilder.Alignment.fromByteUnits(sig.scratch.alignment), "tail_scratch");
         }
         return storage.*.?;
+    }
+
+    /// Storage in this frame for a wasm call's stored arguments, which the
+    /// callee copies out on entry.
+    fn wasmStoredArgs(self: *MonoLlvmCodeGen, sig: *const FastSignature) Error!LlvmBuilder.Value {
+        return self.allocEntryBlockSlot(.i8, sig.scratch.size, LlvmBuilder.Alignment.fromByteUnits(sig.scratch.alignment), "stored_args");
     }
 
     /// This procedure's tail group storage, where a frame-replacing call

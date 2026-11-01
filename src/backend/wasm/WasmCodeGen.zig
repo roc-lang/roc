@@ -315,6 +315,9 @@ func_type_key_scratch: std.ArrayList(u8),
 /// The ops slot is part of the public erased-callable ABI; generated callbacks
 /// ignore it and callers pass null.
 on_drop_type_idx: u32 = 0,
+/// Offset in the tail area of the slots a tail driver writes for the arguments
+/// its callee takes in memory.
+tail_area_stored_offset: u32 = 0,
 indirect_call_types_registered: bool = false,
 proc_arg_counts_offset: u32 = 0,
 /// Static storage a frame-replacing call hands its callee through: a word
@@ -1803,16 +1806,23 @@ pub fn generateEntrypointWrapper(
         }
     }
 
-    for (arg_values) |value| {
+    const entry_spec = self.store.getProcSpec(entry_proc);
+    const entry_params = self.store.getLocalSpan(entry_spec.args);
+    const stored = try self.beginStoredArgs(entry_spec);
+    for (arg_values, 0..) |value, i| {
+        const in_memory = if (stored) |s| s.holds(i) else false;
+        if (in_memory) try self.emitLocalGet(stored.?.base_local);
         switch (value) {
             .zst => {
                 try self.emitI32Const(0);
             },
             .direct, .ptr => |local| try self.emitLocalGet(local),
         }
+        if (in_memory) try self.emitStoreOp(try self.procLocalValType(GuardedList.at(entry_params, i)), stored.?.slotOffset(i));
     }
+    if (stored) |s| try self.emitLocalGet(s.base_local);
     try self.emitCall(root_func_idx);
-    try self.emitTailDrive(self.store.getProcSpec(entry_proc));
+    try self.emitTailDrive(entry_spec);
 
     // Marshal the proc's result back out per the C ABI.
     const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
@@ -5790,15 +5800,13 @@ fn internFuncType(self: *Self, params: []const ValType, results: []const ValType
     if (self.cpu_level == .v1) for ([_][]const ValType{ params, results }) |types| {
         for (types) |vt| if (vt == .v128) wasmInvariantFmt("WASM/codegen invariant violated: v128 function type declared for WebAssembly 1.0", .{});
     };
+    // The key is the parameter bytes, a byte no value type uses, and the result
+    // bytes, so each signature has exactly one key.
     self.func_type_key_scratch.clearRetainingCapacity();
-    try self.func_type_key_scratch.append(self.allocator, @intCast(params.len));
-    for (params) |param| {
-        try self.func_type_key_scratch.append(self.allocator, @backingInt(param));
-    }
-    try self.func_type_key_scratch.append(self.allocator, @intCast(results.len));
-    for (results) |result| {
-        try self.func_type_key_scratch.append(self.allocator, @backingInt(result));
-    }
+    try self.func_type_key_scratch.ensureUnusedCapacity(self.allocator, params.len + 1 + results.len);
+    for (params) |param| self.func_type_key_scratch.appendAssumeCapacity(@backingInt(param));
+    self.func_type_key_scratch.appendAssumeCapacity(@backingInt(BlockType.void));
+    for (results) |result| self.func_type_key_scratch.appendAssumeCapacity(@backingInt(result));
 
     if (self.func_type_cache.get(self.func_type_key_scratch.items)) |existing| {
         return existing;
@@ -6195,9 +6203,11 @@ fn tailArgOffsets(self: *Self, proc: LirProcSpec, offsets: ?[]u32) Allocator.Err
 
 fn registerTailDrivers(self: *Self, proc_specs: []const LirProcSpec) Allocator.Error!void {
     var area_size: u32 = 0;
+    var stored_size: u32 = 0;
     for (proc_specs, 0..) |proc, i| {
         if (!isTailGroupMember(proc)) continue;
         area_size = @max(area_size, try self.tailArgOffsets(proc, null));
+        stored_size = @max(stored_size, @as(u32, @intCast(self.store.getLocalSpan(proc.args).len - self.directArgCount(proc))) * stored_arg_slot_size);
         const driver = if (try self.tailDriverIndex(proc)) |index| &self.tail_drivers.items[index] else blk: {
             const result = try self.resolveValType(proc.ret_layout);
             const type_idx = try self.internFuncType(&.{result}, &.{result});
@@ -6210,7 +6220,8 @@ fn registerTailDrivers(self: *Self, proc_specs: []const LirProcSpec) Allocator.E
     }
     if (self.tail_drivers.items.len == 0) return;
 
-    const bytes = try self.allocator.alloc(u8, tail_area_args_offset + area_size);
+    self.tail_area_stored_offset = tail_area_args_offset + area_size;
+    const bytes = try self.allocator.alloc(u8, tail_area_args_offset + area_size + stored_size);
     defer self.allocator.free(bytes);
     @memset(bytes, 0);
     self.tail_area = try self.addStaticDataSymbol(
@@ -6292,14 +6303,18 @@ fn compileTailDrivers(self: *Self) Allocator.Error!void {
             const offsets = try self.allocator.alloc(u32, args.len + hidden_count);
             defer self.allocator.free(offsets);
             _ = try self.tailArgOffsets(proc, offsets);
+            const direct_count = self.directArgCount(proc);
             for (0..args.len) |i| {
                 const arg_layout = self.procLocalLayoutIdx(GuardedList.at(args, i));
+                const in_memory = i >= direct_count;
+                if (in_memory) try self.emitDataAddressConst(area, @intCast(self.tail_area_stored_offset + (i - direct_count) * stored_arg_slot_size));
                 try self.emitDataAddressConst(area, @intCast(tail_area_args_offset + offsets[i]));
-                if (!try self.isCompositeLayout(arg_layout)) {
-                    const vt = try self.resolveValType(arg_layout);
-                    try self.emitLoadOpSized(vt, valTypeByteSize(vt), 0);
-                }
+                const composite = try self.isCompositeLayout(arg_layout);
+                const vt: ValType = if (composite) .i32 else try self.resolveValType(arg_layout);
+                if (!composite) try self.emitLoadOpSized(vt, valTypeByteSize(vt), 0);
+                if (in_memory) try self.emitStoreOp(vt, 0);
             }
+            if (direct_count < args.len) try self.emitDataAddressConst(area, @intCast(self.tail_area_stored_offset));
             // The result pointer and the tail carry are words.
             for (0..hidden_count) |i| {
                 try self.emitDataAddressConst(area, @intCast(tail_area_args_offset + offsets[args.len + i]));
@@ -6489,11 +6504,13 @@ fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) 
     var param_types: std.ArrayList(ValType) = .empty;
     defer param_types.deinit(self.allocator);
 
-    for (0..args.len) |i| {
+    const direct_count = self.directArgCount(proc);
+    for (0..direct_count) |i| {
         const arg = GuardedList.at(args, i);
         const vt = try self.resolveValType(self.store.getLocal(arg).layout_idx);
         param_types.append(self.allocator, vt) catch return error.OutOfMemory;
     }
+    if (direct_count < args.len) param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
     // The hidden result pointer and tail carry follow the explicit arguments.
     const hidden = self.hiddenParams(proc);
     if (hidden.result) param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
@@ -6568,13 +6585,23 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         break :blk ret_ptr;
     } else blk: {
         // Bind parameters to locals.
-        for (0..args.len) |i| {
+        const direct_count = self.directArgCount(proc);
+        for (0..direct_count) |i| {
             const arg = GuardedList.at(args, i);
             _ = try self.bindProcParamLocal(arg);
         }
+        const stored_args: ?u32 = if (direct_count < args.len) self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory else null;
         const hidden = self.hiddenParams(proc);
         if (hidden.result) _ = try self.bindProcParamLocal(proc.dyn_result.?);
         if (hidden.carry) self.carry_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        if (stored_args) |base_local| {
+            for (direct_count..args.len) |i| {
+                const binding = try self.bindProcParamLocal(GuardedList.at(args, i));
+                try self.emitLocalGet(base_local);
+                try self.emitLoadOp(binding.val_type, @intCast((i - direct_count) * stored_arg_slot_size));
+                try self.emitLocalSet(binding.idx);
+            }
+        }
         break :blk null;
     };
 
@@ -6662,7 +6689,8 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         6
     else blk: {
         const hidden = self.hiddenParams(proc);
-        break :blk @intCast(args.len + @intFromBool(hidden.result) + @intFromBool(hidden.carry));
+        const direct_count = self.directArgCount(proc);
+        break :blk @intCast(direct_count + @intFromBool(direct_count < args.len) + hidden.count());
     };
     try self.encodeLocalsDecl(&self.currentBody().preamble, param_count);
 
@@ -8212,6 +8240,41 @@ fn wasm32StructSize(comptime T: type) u32 {
     }
 }
 
+/// Bytes each argument passed in memory takes (see `directArgCount`).
+const stored_arg_slot_size: u32 = 16;
+
+/// How many of `proc`'s explicit arguments are wasm parameters. A signature
+/// past `layout.abi.wasm_max_function_params` passes the rest in memory (see
+/// "Wasm Calling Convention" in design.md).
+fn directArgCount(self: *const Self, proc: LirProcSpec) usize {
+    const arg_count = self.store.getLocalSpan(proc.args).len;
+    const hidden_count = self.hiddenParams(proc).count();
+    if (arg_count + hidden_count <= layout.abi.wasm_max_function_params) return arg_count;
+    return layout.abi.wasm_max_function_params - 1 - hidden_count;
+}
+
+const StoredArgs = struct {
+    start: usize,
+    base_local: u32,
+
+    fn holds(self: StoredArgs, index: usize) bool {
+        return index >= self.start;
+    }
+
+    fn slotOffset(self: StoredArgs, index: usize) u32 {
+        return @intCast((index - self.start) * stored_arg_slot_size);
+    }
+};
+
+/// Reserve this frame's slots for the arguments a call passes in memory.
+fn beginStoredArgs(self: *Self, proc: LirProcSpec) Allocator.Error!?StoredArgs {
+    const start = self.directArgCount(proc);
+    const arg_count = self.store.getLocalSpan(proc.args).len;
+    if (start == arg_count) return null;
+    const offset = try self.allocStackMemory(@intCast((arg_count - start) * stored_arg_slot_size), stored_arg_slot_size);
+    return .{ .start = start, .base_local = try self.emitFpOffsetToNewLocal(offset) };
+}
+
 /// The hidden trailing parameters of a `.roc` procedure's wasm signature,
 /// after its explicit arguments: the address of its dynamic result's
 /// storage, then its tail carry.
@@ -8528,10 +8591,14 @@ fn generateDynCall(self: *Self, proc_id: LIR.LirProcSpecId, args: ProcLocalSpan,
     const func_idx = self.tables().registered_procs.get(@backingInt(proc_id)) orelse
         wasmInvariantFmt("WASM/codegen invariant violated: unresolved proc call target {d}", .{@backingInt(proc_id)});
 
+    const stored = try self.beginStoredArgs(callee);
     for (0..arg_refs.len) |i| {
         const arg = GuardedList.at(arg_refs, i);
+        const in_memory = if (stored) |s| s.holds(i) else false;
+        if (in_memory) try self.emitLocalGet(stored.?.base_local);
         if (self.localDyn(GuardedList.at(param_refs, i)) != null) {
             try self.emitBytesAddress(arg);
+            if (in_memory) try self.emitStoreOp(.i32, stored.?.slotOffset(i));
             continue;
         }
         if (self.localDyn(arg) != null) wasmInvariantFmt(
@@ -8539,7 +8606,9 @@ fn generateDynCall(self: *Self, proc_id: LIR.LirProcSpecId, args: ProcLocalSpan,
             .{ @backingInt(arg), @backingInt(proc_id) },
         );
         try self.emitProcLocal(arg);
+        if (in_memory) try self.emitStoreOp(try self.procLocalValType(arg), stored.?.slotOffset(i));
     }
+    if (stored) |s| try self.emitLocalGet(s.base_local);
     var result_target: ?DynTarget = null;
     if (callee.dyn_result != null) {
         const t = try self.dynTarget(target);
@@ -9305,7 +9374,8 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
         base.invariant("generateCall: unresolved proc call target {d}", .{@backingInt(c.proc)});
     };
 
-    try self.emitCallArgs(c.args);
+    const stored = try self.beginStoredArgs(proc);
+    try self.emitCallArgs(c.args, stored);
     try self.emitCall(func_idx);
     try self.emitTailDrive(proc);
 
@@ -9623,12 +9693,19 @@ fn emitCall(self: *Self, func_idx: u32) Allocator.Error!void {
 }
 
 /// Generate call arguments (helper to avoid duplication).
-fn emitCallArgs(self: *Self, args: ProcLocalSpan) Allocator.Error!void {
+fn emitCallArgs(self: *Self, args: ProcLocalSpan, stored: ?StoredArgs) Allocator.Error!void {
     const arg_refs = self.store.getLocalSpan(args);
     for (0..arg_refs.len) |i| {
         const arg = GuardedList.at(arg_refs, i);
+        if (stored) |s| if (s.holds(i)) {
+            try self.emitLocalGet(s.base_local);
+            try self.emitProcLocal(arg);
+            try self.emitStoreOp(try self.procLocalValType(arg), s.slotOffset(i));
+            continue;
+        };
         try self.emitProcLocal(arg);
     }
+    if (stored) |s| try self.emitLocalGet(s.base_local);
 }
 
 // ---- Lambda set / Closure value generation ----
@@ -17607,6 +17684,29 @@ fn expectOneReloc(module: *const WasmModule, type_id: anytype) error{TestUnexpec
         found = entry;
     }
     return found orelse error.TestUnexpectedResult;
+}
+
+test "function types intern by their whole signature" {
+    const allocator = std.testing.allocator;
+    const fake_store: *const LirStore = undefined;
+    const fake_layouts: *const LayoutStore = undefined;
+
+    var codegen = Self.init(allocator, fake_store, fake_layouts, .default);
+    defer codegen.deinit();
+
+    const takes_i32 = try codegen.internFuncType(&.{.i32}, &.{});
+    const returns_i32 = try codegen.internFuncType(&.{}, &.{.i32});
+    try std.testing.expect(takes_i32 != returns_i32);
+    try std.testing.expectEqual(takes_i32, try codegen.internFuncType(&.{.i32}, &.{}));
+
+    // The second signature's count differs from the first's by a multiple of 256.
+    var wide: [301]ValType = @splat(.i64);
+    const short = try codegen.internFuncType(wide[0..44], &.{.i64});
+    const long = try codegen.internFuncType(wide[0..300], &.{.i64});
+    wide[299] = .i32;
+    const mixed = try codegen.internFuncType(wide[0..300], &.{.i64});
+    try std.testing.expect(short != long and long != mixed);
+    try std.testing.expectEqual(mixed, try codegen.internFuncType(wide[0..300], &.{.i64}));
 }
 
 test "relocatable object addresses static data relative to __memory_base" {

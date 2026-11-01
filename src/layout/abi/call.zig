@@ -282,6 +282,10 @@ pub const aarch64_gp_registers: u8 = 8;
 pub const simd_argument_registers: u8 = 8;
 /// Windows x64 argument positions, shared between general and SSE registers.
 pub const win64_argument_registers: u8 = 4;
+/// The most parameters a wasm function type can declare and still load: the
+/// limit the WebAssembly JS API sets for every engine it hosts. Wasm itself has
+/// no argument registers, so this is the budget `markRegisterOverflow` spends.
+pub const wasm_max_function_params: u32 = 1000;
 
 /// Marks each argument of `lowered` that the target's argument registers
 /// cannot hold, for a parameter list that ends with `trailing_pointers`
@@ -340,8 +344,34 @@ pub fn markRegisterOverflow(target: Target, lowered: LoweredCall, trailing_point
                 }
             }
         },
-        .wasm32, .wasm32v1, .wasm64 => unreachable, // the LLVM backend calls this only when usesTailDrivers is false, which excludes wasm
+        .wasm32, .wasm32v1, .wasm64 => {
+            var used: u32 = @as(u32, @intFromBool(lowered.ret == .indirect)) + @intFromBool(lowered.leading_ops) + trailing_pointers;
+            for (lowered.args, overflow) |placement, *overflows| {
+                const count = wasmPlacementParamCount(placement);
+                if (count == 0) continue;
+                if (used + count <= wasm_max_function_params) used += count else overflows.* = true;
+            }
+        },
     }
+}
+
+/// The wasm parameters one lowered argument takes.
+fn wasmPlacementParamCount(placement: Placement) u32 {
+    return switch (placement) {
+        .none => 0,
+        .indirect => 1,
+        .registers => |registers| @intCast(registers.pieces.len),
+    };
+}
+
+/// The parameters the wasm function type of a C-ABI signature declares. A
+/// count past `wasm_max_function_params` is a signature no engine loads, and
+/// nothing can move its arguments into memory, because the other side of the
+/// boundary fixes the signature.
+pub fn wasmCAbiParamCount(lowered: LoweredCall) u32 {
+    var count: u32 = @as(u32, @intFromBool(lowered.ret == .indirect)) + @intFromBool(lowered.leading_ops);
+    for (lowered.args) |placement| count += wasmPlacementParamCount(placement);
+    return count;
 }
 
 const PieceCounts = struct { gp: u8, sse: u8 };
@@ -1349,6 +1379,23 @@ test "physical Apple arm64 stack arguments use compact natural alignment" {
     try testing.expectEqual(@as(u32, 8), elf.args[9].stack_value.offset);
     try testing.expectEqual(@as(u32, 16), elf.args[10].stack_value.offset);
     try testing.expectEqual(@as(u32, 24), elf.stack_size);
+}
+
+test "markRegisterOverflow spends wasm's parameter limit in order" {
+    var args: [wasm_max_function_params + 2]Placement = undefined;
+    @memset(&args, .indirect);
+    args[0] = .none;
+    var overflow: [args.len]bool = undefined;
+
+    const within = args[0 .. wasm_max_function_params + 1];
+    markRegisterOverflow(.wasm32, .{ .leading_ops = false, .ret = .none, .args = within }, 0, overflow[0..within.len]);
+    try std.testing.expectEqual(null, std.mem.findScalar(bool, overflow[0..within.len], true));
+    try std.testing.expectEqual(@as(u32, wasm_max_function_params), wasmCAbiParamCount(.{ .leading_ops = false, .ret = .none, .args = within }));
+
+    const lowered: LoweredCall = .{ .leading_ops = false, .ret = .indirect, .args = &args };
+    try std.testing.expectEqual(@as(u32, wasm_max_function_params + 2), wasmCAbiParamCount(lowered));
+    markRegisterOverflow(.wasm32, lowered, 1, &overflow);
+    try std.testing.expectEqual(@as(?usize, args.len - 4), std.mem.findScalar(bool, &overflow, true) orelse null);
 }
 
 test "markRegisterOverflow leaves trailing pointers their registers" {

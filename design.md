@@ -1299,7 +1299,8 @@ callable's procedure or capture drop helper) names the function the object
 defines. An entry whose code makes an erased call or builds
 an erased callable is not offered, since the erased-call runtime is passed the
 program's own layout indices, and a module whose object needs the runtime at
-all gets no object pack.
+all gets no object pack. A wasm object also offers no entry whose C-ABI
+signature passes the parameter limit (see "Wasm Calling Convention").
 
 Only a consumer whose code is linked takes an object pack's entry
 (`CodeProvision.specCacheTakes`): a `roc build --opt=dev` program or
@@ -23541,6 +23542,42 @@ one newly allocated architecture register per recursive layout, control-flow nod
 list item layer, or tag payload layer. Register-pool exhaustion is therefore
 an internal lifetime-invariant failure, not a source-program condition and not
 an invitation for an architecture-specific best-effort spill.
+
+## Wasm Calling Convention
+
+Wasm has no argument registers: every argument of a function is a parameter of
+its type, and the WebAssembly JS API sets the limit every engine it hosts
+enforces, 1000 parameters (`layout.abi.wasm_max_function_params`). A module
+declaring one more does not load. Roc's own calling convention treats that limit
+the way a native convention treats its registers. A program never reaches it, so
+a program's behavior does not depend on how many parameters lowering added: a
+`.boxy` worker takes hidden descriptors, dictionaries, and literal arguments, and
+a function with 1000 open literals behaves like the same function specialized.
+
+A Roc-ABI procedure whose signature would pass the limit is declared with the
+first arguments as parameters, then one pointer, then its hidden trailing
+parameters. The pointer takes the place of every remaining argument, a *stored*
+argument, so the signature declares exactly the limit. Every caller writes the
+stored arguments to storage in its own frame and the callee copies them into its
+own locals on entry, before anything can replace that storage. A tail driver
+is such a caller: it moves a pending callee's stored arguments out of the tail
+area into storage of its own (`WasmCodeGen`, a region at the end of the tail area
+that frame-replacing calls never write; `MonoLlvmCodeGen`, a slot in the driver's
+frame). `WasmCodeGen` keeps each stored argument's wasm value in a 16-byte slot
+(`directArgCount`); `MonoLlvmCodeGen` lays out a signature's stored arguments
+consecutively through the storage its `stored` tail arguments already use, with
+`layout.abi.markRegisterOverflow` spending the limit as a target's register
+budget. A signature within the limit is unaffected: its type, its code, and its
+callers' code are what they would be if the limit did not exist.
+
+The wasm C ABI has no such escape, because the other side of the boundary fixes
+the signature. A platform's `provides` function or a `hosted` function past the
+limit is a user-facing build failure (`wasm_host_parameter_limit`), reported for
+every such function before code generation, whichever backend the build uses;
+a record crosses the boundary as one parameter. An object pack entry also has a
+C-ABI signature, but both of its sides are Roc: an object offers no wasm entry
+past the limit, so each program compiles that procedure itself and calls it
+through the convention above.
 
 ## Wasm Local Binding
 

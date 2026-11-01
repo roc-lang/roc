@@ -516,6 +516,13 @@ const CustomCase = enum {
     issue_12029_wasm_boxy_tail_calls,
     issue_12769_wasm_many_parameters_specialized,
     issue_12769_wasm_many_parameters_boxy,
+    issue_12769_wasm_parameter_limit_dev_specialized,
+    issue_12769_wasm_parameter_limit_dev_boxy,
+    issue_12769_wasm_parameter_limit_speed_specialized,
+    issue_12769_wasm_parameter_limit_speed_boxy,
+    issue_12769_wasm_host_parameter_limit_dev,
+    issue_12769_wasm_host_parameter_limit_speed,
+    issue_12769_wasm_object_entry_parameter_limit,
     issue_12741_wasm_generic_tail_calls_dev,
     issue_12741_wasm_generic_tail_calls_size,
     issue_12741_wasm_generic_tail_calls_speed,
@@ -3786,6 +3793,13 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12029: boxy tail calls run in constant stack on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12029_wasm_boxy_tail_calls } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 functions take more than 255 parameters (dev, specialized)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_many_parameters_specialized } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 functions take more than 255 parameters (dev, boxy)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_many_parameters_boxy } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 arguments past the parameter limit travel in memory (dev, specialized)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_parameter_limit_dev_specialized } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 arguments past the parameter limit travel in memory (dev, boxy)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_parameter_limit_dev_boxy } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 arguments past the parameter limit travel in memory (speed, specialized)", .timeout_ms = 600_000, .backend = .speed, .body = .{ .custom = .issue_12769_wasm_parameter_limit_speed_specialized } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 arguments past the parameter limit travel in memory (speed, boxy)", .timeout_ms = 600_000, .backend = .speed, .body = .{ .custom = .issue_12769_wasm_parameter_limit_speed_boxy } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 platform functions past the parameter limit are reported (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_host_parameter_limit_dev } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 platform functions past the parameter limit are reported (speed)", .timeout_ms = 600_000, .backend = .speed, .body = .{ .custom = .issue_12769_wasm_host_parameter_limit_speed } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 object packs offer no entry past the parameter limit (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_12769_wasm_object_entry_parameter_limit } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_dev } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_size } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (speed)", .timeout_ms = 600_000, .backend = .speed, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_speed } },
@@ -5440,6 +5454,13 @@ fn runCustomCase(
         .issue_12029_wasm_boxy_tail_calls => customIssue12029WasmBoxyTailCalls(io, allocator, &env, &timer, timeout_ms),
         .issue_12769_wasm_many_parameters_specialized => customIssue12769WasmManyParameters(io, allocator, &env, &timer, timeout_ms, "--specialize=yes"),
         .issue_12769_wasm_many_parameters_boxy => customIssue12769WasmManyParameters(io, allocator, &env, &timer, timeout_ms, "--specialize=no"),
+        .issue_12769_wasm_parameter_limit_dev_specialized => customIssue12769WasmParameterLimit(io, allocator, &env, &timer, timeout_ms, "--opt=dev", "--specialize=yes"),
+        .issue_12769_wasm_parameter_limit_dev_boxy => customIssue12769WasmParameterLimit(io, allocator, &env, &timer, timeout_ms, "--opt=dev", "--specialize=no"),
+        .issue_12769_wasm_parameter_limit_speed_specialized => customIssue12769WasmParameterLimit(io, allocator, &env, &timer, timeout_ms, "--opt=speed", "--specialize=yes"),
+        .issue_12769_wasm_parameter_limit_speed_boxy => customIssue12769WasmParameterLimit(io, allocator, &env, &timer, timeout_ms, "--opt=speed", "--specialize=no"),
+        .issue_12769_wasm_host_parameter_limit_dev => customIssue12769WasmHostParameterLimit(io, allocator, &env, &timer, timeout_ms, "--opt=dev"),
+        .issue_12769_wasm_host_parameter_limit_speed => customIssue12769WasmHostParameterLimit(io, allocator, &env, &timer, timeout_ms, "--opt=speed"),
+        .issue_12769_wasm_object_entry_parameter_limit => customIssue12769WasmObjectEntryParameterLimit(io, allocator, &env, &timer, timeout_ms),
         .issue_12741_wasm_generic_tail_calls_dev => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=dev"),
         .issue_12741_wasm_generic_tail_calls_size => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=size"),
         .issue_12741_wasm_generic_tail_calls_speed => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=speed"),
@@ -14469,6 +14490,381 @@ fn customIssue12769WasmManyParameters(
 /// frame that called it is gone, and whatever carries them must be released
 /// on the way, so only the result the host holds stays allocated. The
 /// interpreter's stack is far smaller than the cycles are deep.
+/// The parameters a function may declare and still load in a JS API engine.
+/// bytebox accepts more, so the tests read the limit off the module's types.
+const wasm_engine_param_limit = 1000;
+
+/// Append `count` comma-separated copies of `item`, each formatted with its
+/// position.
+fn appendWasmParamList(out: *std.ArrayList(u8), allocator: Allocator, count: usize, comptime item: []const u8) Allocator.Error!void {
+    for (0..count) |i| {
+        if (i != 0) try out.appendSlice(allocator, ", ");
+        try out.print(allocator, item, .{i});
+    }
+}
+
+/// Append `count` parameter patterns that bind only the positions in `used`.
+fn appendWasmParamPatterns(out: *std.ArrayList(u8), allocator: Allocator, count: usize, used: []const usize) Allocator.Error!void {
+    for (0..count) |i| {
+        if (i != 0) try out.appendSlice(allocator, ", ");
+        if (std.mem.findScalar(usize, used, i) != null) try out.print(allocator, "a{d}", .{i}) else try out.append(allocator, '_');
+    }
+}
+
+/// An app whose functions pass the wasm parameter limit in every way a program
+/// can: written parameters, a generic function that adds hidden ones, generic
+/// tail calls that hold their arguments between frames, and, without
+/// `--opt=speed`, hidden literal arguments alone. Each result depends on where
+/// the arguments arrive, and the arguments come from the host, so no call runs
+/// at compile time.
+fn issue12769WideApp(allocator: Allocator, platform: []const u8, literals: bool) Allocator.Error![]const u8 {
+    const count = 1100;
+    var out: std.ArrayList(u8) = .empty;
+    try out.print(allocator, "app [main!] {{ pf: platform \"{s}\" }}\n\nimport pf.FallibleHost\n\n", .{platform});
+
+    try out.appendSlice(allocator, "direct : ");
+    for (0..count) |i| try out.appendSlice(allocator, if (i == 0) "U64" else ", U64");
+    try out.appendSlice(allocator, " -> U64\n");
+    for ([_][]const u8{ "direct", "generic" }) |name| {
+        try out.print(allocator, "{s} = |", .{name});
+        try appendWasmParamPatterns(&out, allocator, count, &.{ 0, 550, 1099 });
+        try out.appendSlice(allocator, "| a0 + 1000 * a550 + 1000000 * a1099\n\n");
+    }
+
+    for ([_][2][]const u8{ .{ "ping", "pong" }, .{ "pong", "ping" } }) |names| {
+        try out.print(allocator, "{s} = |d, ", .{names[0]});
+        try appendWasmParamList(&out, allocator, count, "a{d}");
+        try out.print(allocator, "| if d == 0 a0 else {s}(d - 1, ", .{names[1]});
+        for (1..count) |i| try out.print(allocator, "a{d}, ", .{i});
+        try out.appendSlice(allocator, "a0)\n\n");
+    }
+
+    if (literals) {
+        try out.appendSlice(allocator, "literals = |n| n");
+        for (1..count + 1) |i| try out.print(allocator, " + {d}", .{i});
+        try out.appendSlice(allocator, "\n\n");
+    }
+
+    try out.appendSlice(allocator,
+        \\main! = || {
+        \\    input = FallibleHost.json_input!({})
+        \\    n = input.count_utf8_bytes()
+        \\    heap = Str.concat(input, " and a string long enough to live on the heap")
+        \\    other = Str.concat(heap, "!")
+        \\    direct_result : U64
+        \\    direct_result = direct(
+    );
+    try appendWasmParamList(&out, allocator, count, "n + {d}");
+    try out.appendSlice(allocator, ")\n    generic_result : U64\n    generic_result = generic(");
+    try appendWasmParamList(&out, allocator, count, "n + {d}");
+    try out.appendSlice(allocator, ")\n    tail_number : U64\n    tail_number = ping(n, ");
+    try appendWasmParamList(&out, allocator, count, "n + {d}");
+    try out.appendSlice(allocator, ")\n    tail_string = ping(n, ");
+    for (0..count) |i| {
+        if (i != 0) try out.appendSlice(allocator, ", ");
+        try out.appendSlice(allocator, if (i == 21) "other" else "heap");
+    }
+    try out.appendSlice(allocator, ")\n");
+    if (literals) {
+        try out.appendSlice(allocator, "    literal_result : U64\n    literal_result = literals(n)\n");
+        try out.appendSlice(allocator, "    \"${direct_result.to_str()} ${generic_result.to_str()} ${tail_number.to_str()} ${tail_string} ${literal_result.to_str()}\"\n}\n");
+    } else {
+        try out.appendSlice(allocator, "    \"${direct_result.to_str()} ${generic_result.to_str()} ${tail_number.to_str()} ${tail_string}\"\n}\n");
+    }
+    return out.items;
+}
+
+/// Fail unless the wasm module at `path` declares a function type near the
+/// limit, so that a wide signature survived to this module, and none past it.
+fn checkWasmParamLimit(io: std.Io, allocator: Allocator, timer: *harness.Timer, path: []const u8) ?TestResult {
+    const wasm_bytes = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read wasm output {s}: {}", .{ path, err });
+    defer allocator.free(wasm_bytes);
+    var module_def = bytebox.createModuleDefinition(allocator, .{ .debug_name = "cli_wasm_output" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create wasm decoder: {}", .{err});
+    defer module_def.destroy();
+    module_def.decode(wasm_bytes) catch |err|
+        return customFailure(allocator, timer, "generated invalid wasm {s}: {}", .{ path, err });
+    var widest: u32 = 0;
+    for (module_def.types.items) |func_type| widest = @max(widest, func_type.num_params);
+    if (widest > wasm_engine_param_limit) {
+        return customFailure(allocator, timer, "wasm declares a function type with {d} parameters, past the limit of {d}", .{ widest, wasm_engine_param_limit });
+    }
+    if (widest < wasm_engine_param_limit - 100) {
+        return customFailure(allocator, timer, "wasm's widest function type has {d} parameters, so nothing tested the limit", .{widest});
+    }
+    return null;
+}
+
+fn customIssue12769WasmParameterLimit(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    opt_arg: []const u8,
+    specialize_arg: []const u8,
+) ?TestResult {
+    const literals = std.mem.eql(u8, opt_arg, "--opt=dev");
+    const platform_path = absoluteFromProjectRoot(allocator, "test/wasm/platform/main.roc") catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform path: {}", .{err});
+    const platform = std.fs.path.relative(allocator, project_root_path, null, env.dirs.work_dir, platform_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to relate the platform path: {}", .{err});
+    if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, platform, '\\', '/');
+    const source = issue12769WideApp(allocator, platform, literals) catch |err|
+        return customInfraFailure(allocator, timer, "failed to generate the wide app: {}", .{err});
+    const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "wide_app.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ app_path, err });
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "wide.wasm" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output path: {}", .{err});
+    const output_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output argument: {}", .{err});
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--target=wasm32", opt_arg, specialize_arg, "--no-cache", output_arg },
+        .roc_file = app_path,
+        .exit = .success,
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+    })) |failure| return failure;
+    if (checkWasmParamLimit(io, allocator, timer, output_path)) |failure| return failure;
+
+    var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
+        return customFailure(allocator, timer, "failed to load the wide wasm module: {}", .{err});
+    defer wasm.deinit();
+    const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
+        return customFailure(allocator, timer, "wide wasm execution failed: {}", .{err});
+    const common = "1120571021 1120571021 42 {\"favoritesCount\":14} and a string long enough to live on the heap!";
+    const expected: []const u8 = if (literals) common ++ " 605571" else common;
+    if (!std.mem.eql(u8, result, expected)) {
+        return customFailure(allocator, timer, "wide wasm returned \"{s}\"", .{result});
+    }
+    const outstanding = wasmOutstandingAllocations(&wasm) catch |err|
+        return customFailure(allocator, timer, "failed to read the wide module's allocation counts: {}", .{err});
+    if (outstanding != 1) {
+        return customFailure(allocator, timer, "wide wasm left {d} allocations outstanding, not just its result", .{outstanding});
+    }
+    return null;
+}
+
+const WasmHostBoundary = enum { provides, hosted };
+
+/// Stage a platform with one boundary function of `count` wasm parameters and
+/// an app for it, and return the app's path.
+fn stageWasmBoundaryApp(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    boundary: WasmHostBoundary,
+    count: usize,
+) (Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)![]const u8 {
+    const dir = try std.fmt.allocPrint(allocator, "{s}/boundary_{s}_{d}", .{ env.dirs.work_dir, @tagName(boundary), count });
+    const platform_dir = try std.fs.path.join(allocator, &.{ dir, "platform" });
+    try std.Io.Dir.cwd().createDirPath(io, platform_dir);
+
+    var types: std.ArrayList(u8) = .empty;
+    for (0..count) |i| try types.appendSlice(allocator, if (i == 0) "U64" else ", U64");
+
+    var platform: std.ArrayList(u8) = .empty;
+    switch (boundary) {
+        .provides => {
+            try platform.appendSlice(allocator,
+                \\platform ""
+                \\    requires {} { run : U64 -> U64 }
+                \\    exposes []
+                \\    packages {}
+                \\    provides { "roc_run": run_for_host }
+                \\    hosted {}
+                \\    targets: {
+                \\        inputs_dir: "targets/",
+                \\        wasm32: { inputs: [app], output: Archive },
+                \\    }
+                \\
+                \\
+            );
+            try platform.print(allocator, "run_for_host : {s} -> U64\nrun_for_host = |", .{types.items});
+            try appendWasmParamPatterns(&platform, allocator, count, &.{ 0, 999 });
+            try platform.appendSlice(allocator, "| run(a0 + a999)\n");
+        },
+        .hosted => {
+            try platform.appendSlice(allocator,
+                \\platform ""
+                \\    requires {} { run : U64 -> U64 }
+                \\    exposes [Host]
+                \\    packages {}
+                \\    provides { "roc_run": run_for_host! }
+                \\    hosted { "roc_wide_host": Host.wide! }
+                \\    targets: {
+                \\        inputs_dir: "targets/",
+                \\        wasm32: { inputs: [app], output: Archive },
+                \\    }
+                \\
+                \\import Host
+                \\
+                \\run_for_host! : U64 => U64
+                \\run_for_host! = |n| Host.wide!(
+            );
+            try appendWasmParamList(&platform, allocator, count, "run(n) + {d}");
+            try platform.appendSlice(allocator, ")\n");
+            const host_path = try std.fs.path.join(allocator, &.{ platform_dir, "Host.roc" });
+            const host = try std.fmt.allocPrint(allocator, "Host := [].{{\n    wide! : {s} => U64\n}}\n", .{types.items});
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = host_path, .data = host });
+        },
+    }
+    const platform_path = try std.fs.path.join(allocator, &.{ platform_dir, "main.roc" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = platform_path, .data = platform.items });
+
+    const app_path = try std.fs.path.join(allocator, &.{ dir, "app.roc" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = "app [run] { pf: platform \"./platform/main.roc\" }\n\nrun : U64 -> U64\nrun = |n| n + 1\n" });
+    return app_path;
+}
+
+fn customIssue12769WasmHostParameterLimit(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    opt_arg: []const u8,
+) ?TestResult {
+    for ([_]WasmHostBoundary{ .provides, .hosted }) |boundary| {
+        const symbol = switch (boundary) {
+            .provides => "roc_run",
+            .hosted => "roc_wide_host",
+        };
+        const accepted_app = stageWasmBoundaryApp(io, allocator, env, boundary, wasm_engine_param_limit) catch |err|
+            return customInfraFailure(allocator, timer, "failed to stage the boundary app: {}", .{err});
+        const accepted_output = std.fmt.allocPrint(allocator, "{s}.a", .{accepted_app}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const accepted_arg = outputArg(allocator, accepted_output) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "build", "--target=wasm32", opt_arg, "--no-cache", accepted_arg },
+            .roc_file = accepted_app,
+            .exit = .success,
+            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        })) |failure| return failure;
+
+        const rejected_app = stageWasmBoundaryApp(io, allocator, env, boundary, wasm_engine_param_limit + 1) catch |err|
+            return customInfraFailure(allocator, timer, "failed to stage the boundary app: {}", .{err});
+        const rejected_output = std.fmt.allocPrint(allocator, "{s}.a", .{rejected_app}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const rejected_arg = outputArg(allocator, rejected_output) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+        const message = std.fmt.allocPrint(allocator, "{s} with 1001 wasm parameters", .{symbol}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate expected message: {}", .{err});
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "build", "--target=wasm32", opt_arg, "--no-cache", rejected_arg },
+            .roc_file = rejected_app,
+            .exit = .failure,
+            .contains = &.{.{ .stream = .stderr, .text = message }},
+            .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+        })) |failure| return failure;
+    }
+    return null;
+}
+
+/// A wide recursive pair beside a narrow one, for an object pack to serve.
+fn issue12769ObjectPackApp(allocator: Allocator, platform: []const u8) Allocator.Error![]const u8 {
+    const count = 1100;
+    var out: std.ArrayList(u8) = .empty;
+    try out.print(allocator, "app [main!] {{ pf: platform \"{s}\" }}\n\nimport pf.FallibleHost\n\n", .{platform});
+    for ([_][3][]const u8{ .{ "wide", "weave", "1" }, .{ "weave", "wide", "2" } }) |names| {
+        try out.print(allocator, "{s} : U64", .{names[0]});
+        for (0..count) |_| try out.appendSlice(allocator, ", U64");
+        try out.print(allocator, " -> U64\n{s} = |d, ", .{names[0]});
+        try appendWasmParamList(&out, allocator, count, "a{d}");
+        try out.print(allocator, "| if d == 0 a0 + a550 + a1099 else {s} + {s}(d - 1, ", .{ names[2], names[1] });
+        for (1..count) |i| try out.print(allocator, "a{d}, ", .{i});
+        try out.appendSlice(allocator, "a0)\n\n");
+    }
+    try out.appendSlice(allocator,
+        \\narrow : U64, U64 -> U64
+        \\narrow = |d, x| if d == 0 x else 1 + narrower(d - 1, x)
+        \\
+        \\narrower : U64, U64 -> U64
+        \\narrower = |d, x| if d == 0 x else 2 + narrow(d - 1, x)
+        \\
+        \\main! = || {
+        \\    n = FallibleHost.json_input!({}).count_utf8_bytes()
+        \\    small = narrow(n, n)
+        \\    large = wide(n,
+    );
+    try appendWasmParamList(&out, allocator, count, " n + {d}");
+    try out.appendSlice(allocator, ")\n    \"${large.to_str()} ${small.to_str()}\"\n}\n");
+    return out.items;
+}
+
+fn customIssue12769WasmObjectEntryParameterLimit(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const platform_path = absoluteFromProjectRoot(allocator, "test/wasm/platform/main.roc") catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform path: {}", .{err});
+    const platform = std.fs.path.relative(allocator, project_root_path, null, env.dirs.work_dir, platform_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to relate the platform path: {}", .{err});
+    if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, platform, '\\', '/');
+    const source = issue12769ObjectPackApp(allocator, platform) catch |err|
+        return customInfraFailure(allocator, timer, "failed to generate the object pack app: {}", .{err});
+    const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "object_pack_app.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ app_path, err });
+    const cache_root = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "object_pack_cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
+
+    var store_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone the store environment: {}", .{err}),
+    };
+    defer store_env.env_map.deinit();
+    for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+        store_env.env_map.put(key, cache_root) catch |err|
+            return customInfraFailure(allocator, timer, "failed to set the cache root: {}", .{err});
+    }
+    store_env.env_map.put("ROC_PACK_STATS", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable pack statistics: {}", .{err});
+
+    for ([_][]const u8{ "--opt=size", "--opt=dev" }) |opt_arg| {
+        const output_path = std.fmt.allocPrint(allocator, "{s}/object_pack{s}.wasm", .{ env.dirs.work_dir, opt_arg }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, output_path) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+        const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+        const built = runRocInEnv(io, allocator, &store_env, &.{ "build", "--target=wasm32", opt_arg, out_arg }, app_path, .absolute, &.{}, null, build_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+        if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null) {
+            return failureFromRun(allocator, timer, built, "wasm32 build did not succeed");
+        }
+        if (std.mem.eql(u8, opt_arg, "--opt=dev")) {
+            const marker = "linked procs: ";
+            const at = std.mem.find(u8, built.stderr, marker) orelse
+                return failureFromRun(allocator, timer, built, "the dev build did not report pack statistics");
+            if (countAfterMarker(built.stderr[at + marker.len ..]) == 0) {
+                return failureFromRun(allocator, timer, built, "the dev build linked no entry of the optimized build's pack");
+            }
+        }
+        if (checkWasmParamLimit(io, allocator, timer, output_path)) |failure| return failure;
+
+        var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
+            return customFailure(allocator, timer, "failed to load the {s} module: {}", .{ opt_arg, err });
+        defer wasm.deinit();
+        const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
+            return customFailure(allocator, timer, "the {s} module failed: {}", .{ opt_arg, err });
+        if (!std.mem.eql(u8, result, "706 52")) {
+            return customFailure(allocator, timer, "the {s} module returned \"{s}\"", .{ opt_arg, result });
+        }
+    }
+    return null;
+}
+
 fn customIssue12741WasmGenericTailCalls(
     io: std.Io,
     allocator: Allocator,
