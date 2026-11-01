@@ -3727,7 +3727,10 @@ pub const Builder = struct {
                             const use_ty = try self.convert(self.bodies().expr(expr).ty);
                             self.defer_edge_literals = true;
                             defer self.defer_edge_literals = false;
-                            const instance = try self.callInstanceAt(callee, self.siteSubstitution(expr), self.view.view.static_dispatch_plans.siteEvidence(expr) orelse &.{}, use_ty, edge);
+                            const instance = if (tag == .platform_required_proc)
+                                try self.requiredInstanceAt(callee, ref, self.siteSubstitution(expr), use_ty, edge)
+                            else
+                                try self.callInstanceAt(callee, self.siteSubstitution(expr), self.view.view.static_dispatch_plans.siteEvidence(expr) orelse &.{}, use_ty, edge);
                             defer self.allocator.free(instance.hidden);
                             return try self.enterWorkerFrame(callee, instance, edge);
                         },
@@ -4023,8 +4026,8 @@ pub const Builder = struct {
                 if (local.is_alias) return try self.lowerAliasUse(expr_id, local);
                 return try self.pushValue(try self.localProcUseValue(expr_id, local));
             },
-            .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |use| return try self.procedureValue(expr_id, use),
-            .platform_required_proc => |required| return try self.procedureValue(expr_id, required.procedure),
+            .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |use| return try self.procedureValue(expr_id, use, null),
+            .platform_required_proc => |required| return try self.procedureValue(expr_id, required.procedure, required),
             .platform_required_const => |required| return try self.restoreConstUse(expr_id, required.const_use, try self.constReadType(expr_id)),
             .platform_required_checked_error => return try self.crashValue("runtime error", try self.exprType(expr_id)),
             .platform_required_declaration => invariant("a platform requirement reached lowering unpaired with its app binding"),
@@ -4542,12 +4545,15 @@ pub const Builder = struct {
 
     /// A procedure used as a function value: an immortal callable of its
     /// dictionary entry, capturing the use site's hidden arguments.
-    pub fn procedureValue(self: *Builder, expr_id: CheckedExprId, use: checked.ProcedureUseTemplate) Allocator.Error!void {
+    pub fn procedureValue(self: *Builder, expr_id: CheckedExprId, use: checked.ProcedureUseTemplate, required: ?checked.PlatformRequiredProcedureResolvedRef) Allocator.Error!void {
         switch (try self.procedureUseCallee(use)) {
             .worker => |callee| {
                 const use_ty = try self.exprType(expr_id);
                 const subst = self.siteSubstitution(expr_id);
-                const hidden = try self.hiddenArgsAt(callee, subst, self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{}, use_ty, .{ .use = expr_id });
+                const hidden = if (required) |requirement|
+                    (try self.requiredInstanceAt(callee, requirement, subst, use_ty, .literal)).hidden
+                else
+                    try self.hiddenArgsAt(callee, subst, self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{}, use_ty, .{ .use = expr_id });
                 defer self.allocator.free(hidden);
                 const value = try self.composeDictionary(try self.program.methodEntryWorker(callee), hidden);
                 // The procedure stores record fields its own way where its
@@ -5356,8 +5362,10 @@ pub const Builder = struct {
         // literal arguments derive from the call's instantiation, as its
         // dictionaries do.
         const required_call = if (resolved) |id| self.resolvedRef(id).ref == .platform_required_proc else false;
-        const edge: checked.LiteralEdge = if (required_call) .literal else .{ .use = call.func };
-        const instance = try self.callInstanceAt(callee, subst, self.view.view.static_dispatch_plans.siteEvidence(call.func) orelse &.{}, call_fn, edge);
+        const instance = if (required_call)
+            try self.requiredInstanceAt(callee, self.resolvedRef(resolved.?).ref.platform_required_proc, subst, call_fn, .literal)
+        else
+            try self.callInstanceAt(callee, subst, self.view.view.static_dispatch_plans.siteEvidence(call.func) orelse &.{}, call_fn, .{ .use = call.func });
         var adapt: ?CallAdapt = null;
         if (try self.program.signatureHasSlots(callee)) {
             const arg_types = try self.program.arena.allocator().alloc(TypeId, call.args.len);
@@ -5430,6 +5438,29 @@ pub const Builder = struct {
     /// arguments from the checked edge `edge` of this body's module
     /// (design.md "Literal Arguments").
     pub fn callInstanceBound(self: *Builder, callee: WorkerId, bound: []const TypeId, evidence: []const static_dispatch.CheckedEvidence, edge: checked.LiteralEdge) Allocator.Error!CallInstance {
+        return try self.callInstanceFrom(callee, bound, evidence, null, edge);
+    }
+
+    /// The call instance of a use of platform requirement `required`, whose
+    /// target is the app's binding `callee`. Checking pairs the two after the
+    /// platform's use, so the use has no evidence of its own: the requirement
+    /// carries the root evidence the app's table holds for the binding's
+    /// complete scheme, captured codec requirements included (design.md
+    /// "Platform/App Relation").
+    pub fn requiredInstanceAt(self: *Builder, callee: WorkerId, required: checked.PlatformRequiredProcedureResolvedRef, subst: []const checked.CheckedTypeId, call_fn: ?TypeId, edge: checked.LiteralEdge) Allocator.Error!CallInstance {
+        const owned = try self.boundTypesAt(callee, subst, call_fn);
+        defer self.allocator.free(owned);
+        const bound = try self.program.arena.allocator().dupe(TypeId, owned);
+        const span = required.root_evidence orelse return try self.callInstanceFrom(callee, bound, &.{}, null, edge);
+        const owner = self.program.moduleByKey(span.checked_module);
+        const evidence = owner.view.static_dispatch_plans.evidence_refs[span.span.start..][0..span.span.len];
+        return try self.callInstanceFrom(callee, bound, evidence, owner, edge);
+    }
+
+    /// `callInstanceBound` with evidence read from `evidence_owner`'s table
+    /// when it is not this body's module's, resolved in that module at the
+    /// instance's bindings of the callee's scheme.
+    fn callInstanceFrom(self: *Builder, callee: WorkerId, bound: []const TypeId, evidence: []const static_dispatch.CheckedEvidence, evidence_owner: ?*const types.ModuleView, edge: checked.LiteralEdge) Allocator.Error!CallInstance {
         // Only this instance's frame reads as it goes, not the instances its
         // dictionaries are built from.
         const defer_literals = self.defer_edge_literals;
@@ -5440,12 +5471,25 @@ pub const Builder = struct {
         for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
         if (target.dictionary_params.len != 0) {
             const context = self.templateParamContext(callee, bound);
+            const saved_module = self.module;
+            const saved_view = self.view;
+            const saved_env = self.env;
+            const saved_foreign = self.foreign_scopes;
+            defer {
+                self.module = saved_module;
+                self.view = saved_view;
+                self.env = saved_env;
+                self.foreign_scopes = saved_foreign;
+            }
+            if (evidence_owner) |owner| {
+                self.module = owner.index;
+                self.view = owner;
+                self.env = context.env;
+                self.foreign_scopes = self.alias_scopes.items.len;
+            }
             for (target.dictionary_params, hidden[bound.len..][0..target.dictionary_params.len]) |param_index, *dict| {
-                // A call of a platform requirement is checked before the app
-                // binding it names is paired, so checking records no evidence
-                // at it: each dictionary is resolved from the call's
-                // instantiation of the requirement's scheme.
-                dict.* = if (param_index < evidence.len) try self.paramDictionary(evidence, param_index, context) else try self.derivedParamDictionary(param_index, context);
+                if (param_index >= evidence.len) invariant("a call's evidence does not cover its target's dictionaries");
+                dict.* = try self.paramDictionary(evidence, param_index, context);
             }
         }
         const literals = hidden[bound.len + target.dictionary_params.len ..];
