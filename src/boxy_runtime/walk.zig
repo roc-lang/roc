@@ -181,22 +181,34 @@ noinline fn increfComposite(desc: *const TypeDesc, ptr: [*]u8, count: isize, ops
     stack.init();
     defer stack.deinit(ops);
     stack.push(.at(desc, ptr), ops);
-    while (stack.pop()) |value| {
-        const d = value.desc;
-        switch (d.kind) {
-            .zst, .scalar, .bool => {},
-            .str => value.rocStr().incref(@intCast(count), ops),
-            .list => value.rocList().incref(count, d.child.?.flags.contains_refcounted, ops),
-            .box, .recursive_box => if (d.child.?.size != 0) utils.increfDataPtr(value.word(), count, .atomic, ops),
-            .erased_callable => utils.increfDataPtr(value.word(), count, .atomic, ops),
-            .record, .tuple => for (d.fields()) |*f| {
-                if (f.is_padding == 0 and f.desc.flags.contains_refcounted) stack.push(value.field(f), ops);
-            },
-            .tag_union => {
-                const variant = &d.variants()[d.readDiscriminant(value.ptr)];
-                if (variant.payload.flags.contains_refcounted) stack.push(.at(variant.payload, value.ptr), ops);
-            },
-            .nominal => stack.push(.at(d.child.?, value.ptr), ops),
+    while (stack.pop()) |pending| {
+        var value = pending;
+        // A wrapper has only one child. Follow it without scheduling work.
+        while (true) {
+            const d = value.desc;
+            switch (d.kind) {
+                .zst, .scalar, .bool => {},
+                .str => value.rocStr().incref(@intCast(count), ops),
+                .list => value.rocList().incref(count, d.child.?.flags.contains_refcounted, ops),
+                .box, .recursive_box => if (d.child.?.size != 0) utils.increfDataPtr(value.word(), count, .atomic, ops),
+                .erased_callable => utils.increfDataPtr(value.word(), count, .atomic, ops),
+                .record, .tuple => {
+                    const fields = d.fields();
+                    for (d.refcountedFieldSlots()) |slot| stack.push(value.field(&fields[slot]), ops);
+                },
+                .tag_union => {
+                    const variant = &d.variants()[d.readDiscriminant(value.ptr)];
+                    if (variant.payload.flags.contains_refcounted) {
+                        value = .at(variant.payload, value.ptr);
+                        continue;
+                    }
+                },
+                .nominal => {
+                    value = .at(d.child.?, value.ptr);
+                    continue;
+                },
+            }
+            break;
         }
     }
 }
@@ -267,51 +279,62 @@ noinline fn decrefComposite(desc: *const TypeDesc, ptr: [*]u8, ops: *RocOps) voi
     while (walker.stack.pop()) |work| switch (work) {
         .release_box => |box| utils.decrefDataPtr(box.alloc, box.alignment, true, .atomic, ops),
         .release_list => |list| utils.decref(list.list.getAllocationDataPtr(ops), list.list.capacity_or_alloc_ptr, list.alignment, true, .atomic, ops),
-        .value => |value| {
-            const d = value.desc;
-            switch (d.kind) {
-                .zst, .scalar, .bool => {},
-                .str => value.rocStr().decref(ops),
-                .list => {
-                    const elem = d.child.?;
-                    const list = value.rocList().*;
-                    const alignment: u32 = if (elem.size == 0) 1 else elem.alignment;
-                    if (elem.flags.contains_refcounted and list.isUnique(ops)) {
-                        walker.stack.push(.{ .release_list = .{ .list = list, .alignment = alignment } }, ops);
-                        walker.element_desc = elem;
-                        const start = walker.stack.len;
-                        list.decrefElements(elem.size, @ptrCast(&walker), &DecrefWalker.pushElement, ops);
-                        walker.stack.reverseFrom(start);
-                    } else {
-                        list.decref(alignment, elem.size, elem.flags.contains_refcounted, null, &builtins.list.rcNone, ops);
-                    }
-                },
-                .box, .recursive_box => {
-                    const payload = d.child.?;
-                    if (payload.size == 0) continue;
-                    const alloc = value.word();
-                    if (payload.flags.contains_refcounted and alloc != null and utils.isUnique(alloc, ops)) {
-                        walker.stack.push(.{ .release_box = .{ .alloc = alloc, .alignment = payload.alignment } }, ops);
-                        walker.stack.push(.{ .value = value.boxPayload() }, ops);
-                    } else {
-                        utils.decrefDataPtr(alloc, payload.alignment, payload.flags.contains_refcounted, .atomic, ops);
-                    }
-                },
-                .erased_callable => erased_callable.decref(value.word(), ops),
-                .record, .tuple => {
-                    const fields = d.fields();
-                    var index = fields.len;
-                    while (index > 0) {
-                        index -= 1;
-                        const f = &fields[index];
-                        if (f.is_padding == 0 and f.desc.flags.contains_refcounted) walker.stack.push(.{ .value = value.field(f) }, ops);
-                    }
-                },
-                .tag_union => {
-                    const variant = &d.variants()[d.readDiscriminant(value.ptr)];
-                    if (variant.payload.flags.contains_refcounted) walker.stack.push(.{ .value = .at(variant.payload, value.ptr) }, ops);
-                },
-                .nominal => walker.stack.push(.{ .value = .at(d.child.?, value.ptr) }, ops),
+        .value => |pending| {
+            var value = pending;
+            // Keep cleanup sentinels on the stack while following wrappers.
+            while (true) {
+                const d = value.desc;
+                switch (d.kind) {
+                    .zst, .scalar, .bool => {},
+                    .str => value.rocStr().decref(ops),
+                    .list => {
+                        const elem = d.child.?;
+                        const list = value.rocList().*;
+                        const alignment: u32 = if (elem.size == 0) 1 else elem.alignment;
+                        if (elem.flags.contains_refcounted and list.isUnique(ops)) {
+                            walker.stack.push(.{ .release_list = .{ .list = list, .alignment = alignment } }, ops);
+                            walker.element_desc = elem;
+                            const start = walker.stack.len;
+                            list.decrefElements(elem.size, @ptrCast(&walker), &DecrefWalker.pushElement, ops);
+                            walker.stack.reverseFrom(start);
+                        } else {
+                            list.decref(alignment, elem.size, elem.flags.contains_refcounted, null, &builtins.list.rcNone, ops);
+                        }
+                    },
+                    .box, .recursive_box => {
+                        const payload = d.child.?;
+                        if (payload.size == 0) break;
+                        const alloc = value.word();
+                        if (payload.flags.contains_refcounted and alloc != null and utils.isUnique(alloc, ops)) {
+                            walker.stack.push(.{ .release_box = .{ .alloc = alloc, .alignment = payload.alignment } }, ops);
+                            walker.stack.push(.{ .value = value.boxPayload() }, ops);
+                        } else {
+                            utils.decrefDataPtr(alloc, payload.alignment, payload.flags.contains_refcounted, .atomic, ops);
+                        }
+                    },
+                    .erased_callable => erased_callable.decref(value.word(), ops),
+                    .record, .tuple => {
+                        const fields = d.fields();
+                        const slots = d.refcountedFieldSlots();
+                        var index = slots.len;
+                        while (index > 0) {
+                            index -= 1;
+                            walker.stack.push(.{ .value = value.field(&fields[slots[index]]) }, ops);
+                        }
+                    },
+                    .tag_union => {
+                        const variant = &d.variants()[d.readDiscriminant(value.ptr)];
+                        if (variant.payload.flags.contains_refcounted) {
+                            value = .at(variant.payload, value.ptr);
+                            continue;
+                        }
+                    },
+                    .nominal => {
+                        value = .at(d.child.?, value.ptr);
+                        continue;
+                    },
+                }
+                break;
             }
         },
     };

@@ -415,6 +415,41 @@ test "decref of a deep recursive value keeps its work off the call stack" {
     try testing.expectEqual(baseline, env.allocations());
 }
 
+test "reference counting follows deep wrappers and preserves pending container releases" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    var wrapped = compose.strDesc();
+    for (0..10_000) |_| {
+        wrapped = compose.nominal(&env.cache, ops, wrapped, &name_point, null, false);
+        wrapped = compose.tagUnion(&env.cache, ops, &.{
+            .{ .name = &name_ok, .payload_count = 1, .payloads = &.{wrapped} },
+        });
+    }
+    const record = recordAB(&env, wrapped, wrapped);
+    const boxed = compose.box(&env.cache, ops, record);
+    const list_desc = compose.list(&env.cache, ops, boxed);
+    const baseline = env.allocations();
+    const payload = utils.allocateWithRefcount(record.size, record.alignment, true, ops);
+    const text = "a heap string under many nominal and tag wrappers";
+    for (0..2) |i| {
+        @as(*RocStr, @ptrCast(@alignCast(payload + fieldOffset(record, @intCast(i))))).* = bigStr(text, ops);
+    }
+    // Retaining the wrapped record visits both children without recursion.
+    walk.incref(record, payload, 1, ops);
+    walk.decref(record, payload, ops);
+    try testing.expectEqual(baseline + 3, env.allocations());
+    for (0..2) |i| {
+        const str: *const RocStr = @ptrCast(@alignCast(payload + fieldOffset(record, @intCast(i))));
+        try testing.expectEqualStrings(text, str.asSlice());
+    }
+    var list = RocList.list_allocate(boxed.alignment, 1, boxed.size, true, ops);
+    @as(*?[*]u8, @ptrCast(@alignCast(list.bytes.?))).* = payload;
+    // List and box cleanup remain pending while their wrapped children run.
+    walk.decref(list_desc, @ptrCast(&list), ops);
+    try testing.expectEqual(baseline, env.allocations());
+}
+
 test "equality compares structure and honors is_eq overrides" {
     var env = Env.init();
     defer env.deinit();
@@ -729,4 +764,73 @@ test "single-payload tag construction initializes the exact byte image and relea
             try testing.expectEqual(allocations, env.allocations());
         }
     }
+}
+
+test "reference field tables select physical slots and exclude scalars and padding" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    const text = compose.strDesc();
+    const number = compose.scalarDesc(.u64);
+    const structural = compose.record(&env.cache, ops, &.{
+        .{ .name = &name_a, .desc = text },
+        .{ .name = &name_b, .desc = number },
+        .{ .name = &name_c, .desc = text },
+    });
+    const tuple = compose.tuple(&env.cache, ops, &.{ text, number, text });
+    const args = compose.args(&env.cache, ops, &.{ text, number, text });
+    const declared = compose.declaredRecord(&env.cache, ops, &.{
+        .{ .name = &name_b, .desc = number, .is_padding = 0 },
+        .{ .name = null, .desc = text, .is_padding = 1 },
+        .{ .name = &name_a, .desc = text, .is_padding = 0 },
+        .{ .name = &name_c, .desc = text, .is_padding = 0 },
+    });
+    const cases = [_]struct { desc: *const TypeDesc, slots: []const u32 }{
+        .{ .desc = structural, .slots = &.{ 1, 2 } },
+        .{ .desc = tuple, .slots = &.{ 1, 2 } },
+        .{ .desc = args, .slots = &.{ 0, 2 } },
+        .{ .desc = declared, .slots = &.{ 2, 3 } },
+    };
+    for (cases) |case| {
+        try testing.expectEqualSlices(u32, case.slots, case.desc.refcountedFieldSlots());
+        const baseline = env.allocations();
+        var value: Slot = .{};
+        // Padding is deliberately invalid as a string: it must not be visited.
+        @memset(value.bytes[0..case.desc.size], 0xaa);
+        for (case.slots) |index| {
+            value.write(case.desc.fields()[index].offset, RocStr, bigStr("a heap string in a selected reference field", ops));
+        }
+        walk.incref(case.desc, value.ptr(), 1, ops);
+        walk.decref(case.desc, value.ptr(), ops);
+        try testing.expectEqual(baseline + 2, env.allocations());
+        walk.decref(case.desc, value.ptr(), ops);
+        try testing.expectEqual(baseline, env.allocations());
+    }
+    const plain = compose.args(&env.cache, ops, &.{ number, compose.boolDesc(), compose.zstDesc() });
+    try testing.expectEqual(@as(usize, 0), plain.refcountedFieldSlots().len);
+    const empty = compose.tuple(&env.cache, ops, &.{});
+    try testing.expectEqual(@as(usize, 0), empty.refcountedFieldSlots().len);
+}
+
+test "reference field tables remain exact when recursive placeholders close" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    var key: u8 = 0;
+    const shell = compose.recursiveOpen(&env.cache, ops, &key, &.{});
+    const box = compose.recursiveBox(&env.cache, ops, shell);
+    const node = compose.args(&env.cache, ops, &.{ compose.scalarDesc(.u64), box });
+    try testing.expectEqualSlices(u32, &.{1}, node.refcountedFieldSlots());
+    const closed = compose.recursiveClose(&env.cache, ops, shell, node, &key, &.{});
+    try testing.expectEqualSlices(u32, &.{1}, closed.refcountedFieldSlots());
+    const baseline = env.allocations();
+    const child = utils.allocateWithRefcount(closed.size, closed.alignment, true, ops);
+    @memset(child[0..closed.size], 0);
+    var value: Slot = .{};
+    value.write(fieldOffset(closed, 1), ?[*]u8, child);
+    walk.incref(closed, value.ptr(), 1, ops);
+    walk.decref(closed, value.ptr(), ops);
+    try testing.expectEqual(baseline + 1, env.allocations());
+    walk.decref(closed, value.ptr(), ops);
+    try testing.expectEqual(baseline, env.allocations());
 }

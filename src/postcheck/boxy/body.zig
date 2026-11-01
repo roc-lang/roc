@@ -4534,6 +4534,10 @@ pub const Builder = struct {
         // The procedure stores record fields its own way where its kinds
         // are its own scheme's (design.md "Field Kinds").
         for (args, arg_types, params) |*arg, arg_ty, param_ty| arg.* = try self.adaptValue(arg.*, arg_ty, param_ty);
+        if (words.len == 0 and args.len == 1 and self.canPassUnaryArgument(closure, args[0])) {
+            const target = try self.callErased(closure, args[0], ret);
+            return self.pushValue(try self.adaptValue(target, ret, result_ty));
+        }
         const word = try self.opaqueWordDesc();
         const elems = try self.allocator.alloc(LocalId, words.len + params.len);
         defer self.allocator.free(elems);
@@ -7121,7 +7125,9 @@ pub const Builder = struct {
             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a called value's type is not a function type"),
         };
         var record: ?LocalId = null;
-        if (args.len != 0) {
+        if (args.len == 1 and self.canPassUnaryArgument(closure, args[0])) {
+            record = args[0];
+        } else if (args.len != 0) {
             const params_copy = try self.allocator.dupe(TypeId, params);
             defer self.allocator.free(params_copy);
             const local = try self.argsRecordLocal(params_copy, .frame);
@@ -7143,8 +7149,19 @@ pub const Builder = struct {
         return try self.adaptValue(try self.callErased(closure, record, ret), ret, result_ty);
     }
 
-    /// Call the erased callable `closure` with the packed argument record
-    /// `record`, for a result of `result_ty`.
+    /// One complete argument has exactly the argument block's size and
+    /// alignment, at offset zero. Its existing ownership unit is consumed by
+    /// the call. A view must still be copied: deferred calls release the
+    /// caller's owners before copying their argument bytes, potentially
+    /// freeing the allocation containing a view. Frame and caller-provided
+    /// storage remain valid until the invocation returns.
+    fn canPassUnaryArgument(self: *Builder, closure: LocalId, arg: LocalId) bool {
+        if (closure == arg) return false;
+        return if (self.store.localDyn(arg)) |dyn| dyn.storage != .view else true;
+    }
+
+    /// Call the erased callable `closure` with the complete argument block
+    /// `record` (possibly a single value), for a result of `result_ty`.
     pub fn callErased(self: *Builder, closure: LocalId, record: ?LocalId, result_ty: TypeId) Allocator.Error!LocalId {
         const target = try self.localOf(result_ty, .frame);
         try self.emitDyn(target, .{ .call_erased = .{ .closure = closure, .args = record } });

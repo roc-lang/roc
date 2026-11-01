@@ -14972,6 +14972,21 @@ existing order. Immediately before searching, Debug builds assert that the
 names are strictly sorted; release builds do not walk the variants to validate
 this compiler invariant.
 
+A reference-containing record or tuple's field table ends with a `u32`
+count followed by that many `u32` memory-slot indices, in ascending order.
+These name exactly its non-padding fields whose descriptors contain
+references. Retain and release walk these slots directly, preserving their
+existing traversal order. Static descriptor emission derives the slots from
+the committed field layouts; composition derives them from its immutable
+component descriptors. A recursive placeholder is only reached through a
+pointer descriptor whose reference-containing flag is already final, so
+closing the placeholder cannot change the selected slots. Debug walkers
+verify the list against all fields; release walkers do not rescan them.
+The trailer shares the field table's allocation and static-data node. It
+adds four bytes per selected field and four bytes per reference-containing
+record/tuple layout, and adds nothing to the descriptor header or to
+reference-free field tables.
+
 Descriptors come from two sources and nowhere else:
 
 - *Static descriptors.* The lowerer interns a descriptor for every closed
@@ -15336,6 +15351,17 @@ are dynamic, the record is composed from the argument descriptors and built in
 the dynamic frame region. Both sides compute the same layout from the same
 descriptors, so a closure created at a concrete type and called from a generic
 body, or the reverse, agree on every offset.
+
+When the complete argument block has one field and no hidden words, Boxy
+lowering may pass the argument's existing storage directly. A one-field block
+has that field's size and alignment and offset zero. The call consumes the
+argument's ownership unit; ARC retains it when the caller also needs it.
+Closed locals and dynamic frame or caller-provided storage survive the
+pre-call releases of a deferred call. A dynamic view into another value does
+not have that guarantee and is still packed into separate frame storage.
+Deferred calls copy the argument block before returning from the invocation,
+as they do for multi-field blocks. No backend infers ownership or elides a
+copy on its own.
 
 #### Ownership
 

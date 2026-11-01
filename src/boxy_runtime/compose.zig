@@ -769,7 +769,7 @@ pub fn tagUnion(cache: *Cache, ops: *RocOps, variants: []const VariantInput) *co
 
     const discriminant_size = shape.discriminantSize(variants.len);
     var measure = shape.TagUnionMeasure.init(discriminant_size);
-    const block = allocWithEntries(Variant, variants.len, ops);
+    const block = allocWithEntries(Variant, variants.len, 0, ops);
     var contains_refcounted = false;
     for (by_name, 0..) |input_index, discriminant| {
         const input = variants[input_index];
@@ -857,10 +857,10 @@ fn WithEntries(comptime Entry: type) type {
     return struct { desc: *TypeDesc, entries: [*]Entry };
 }
 
-/// One immortal block holding a descriptor followed by its entries.
-fn allocWithEntries(comptime Entry: type, count: usize, ops: *RocOps) WithEntries(Entry) {
+/// One immortal block holding a descriptor, its entries, and optional trailer.
+fn allocWithEntries(comptime Entry: type, count: usize, trailing_bytes: usize, ops: *RocOps) WithEntries(Entry) {
     const entries_offset = std.mem.alignForward(usize, @sizeOf(TypeDesc), @alignOf(Entry));
-    const total = entries_offset + count * @sizeOf(Entry);
+    const total = entries_offset + count * @sizeOf(Entry) + trailing_bytes;
     const bytes: [*]u8 = immortalBytes(ops, total, @max(@alignOf(TypeDesc), @alignOf(Entry)));
     return .{
         .desc = @ptrCast(@alignCast(bytes)),
@@ -890,9 +890,16 @@ fn buildStruct(ops: *RocOps, kind: Kind, order: Order, members: []const Member) 
         },
     }
 
-    const block = allocWithEntries(Field, members.len, ops);
+    var refcounted_count: u32 = 0;
+    for (members) |member| {
+        if (!member.is_padding and member.desc.flags.contains_refcounted) refcounted_count += 1;
+    }
+    const trailing_bytes = if (refcounted_count == 0) 0 else (@as(usize, refcounted_count) + 1) * @sizeOf(u32);
+    const block = allocWithEntries(Field, members.len, trailing_bytes, ops);
+    const trailer: [*]u32 = @ptrCast(@alignCast(block.entries + members.len));
+    if (refcounted_count != 0) trailer[0] = refcounted_count;
+    var next_refcounted: usize = 1;
     var measure: shape.StructMeasure = .{};
-    var contains_refcounted = false;
     for (memory_order, 0..) |member_index, slot| {
         const member = members[member_index];
         const offset = measure.place(.{
@@ -901,7 +908,10 @@ fn buildStruct(ops: *RocOps, kind: Kind, order: Order, members: []const Member) 
             .sort_key = sortKeyOf(member.desc),
             .is_padding = member.is_padding,
         });
-        if (!member.is_padding) contains_refcounted = contains_refcounted or member.desc.flags.contains_refcounted;
+        if (!member.is_padding and member.desc.flags.contains_refcounted) {
+            trailer[next_refcounted] = @intCast(slot);
+            next_refcounted += 1;
+        }
         block.entries[slot] = .{
             .field_index = member.field_index,
             .offset = offset,
@@ -926,7 +936,7 @@ fn buildStruct(ops: *RocOps, kind: Kind, order: Order, members: []const Member) 
         .kind = kind,
         .scalar = .u8,
         .sort_key = @backingInt(if (zero_sized) SortKey.align_1 else metrics.sort_key),
-        .flags = .{ .contains_refcounted = contains_refcounted, .declared_order = order == .declared },
+        .flags = .{ .contains_refcounted = refcounted_count != 0, .declared_order = order == .declared },
         .count = @intCast(members.len),
         .discriminant_offset = 0,
         .discriminant_size = 0,
