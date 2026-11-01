@@ -791,7 +791,7 @@ const Solver = struct {
         }
     }
 
-    /// Seed erasure boundaries, then publish and finalize every solved type.
+    /// Seed erasure boundaries, then output and finalize every solved type.
     fn finishSolve(self: *Solver) Allocator.Error!void {
         try self.markAbiBoundaryCallables();
 
