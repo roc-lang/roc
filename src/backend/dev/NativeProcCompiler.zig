@@ -379,10 +379,12 @@ const TestExecutor = struct {
     lanes: usize,
 
     fn executor(self: *@This()) tasks.Executor {
-        return .{ .context = self, .worker_count = self.lanes, .beginFn = begin, .submitFn = submit, .receiveFn = receive, .endFn = end };
+        return .{ .context = self, .worker_count = self.lanes, .lane_count = self.lanes, .beginFn = begin, .submitFn = submit, .receiveFn = receive, .tryReceiveFn = tryReceive, .endFn = end };
     }
-    fn begin(_: *anyopaque) void {}
-    fn submit(context: *anyopaque, task: tasks.Task) Allocator.Error!void {
+    fn begin(context: *anyopaque) std.mem.Allocator.Error!*anyopaque {
+        return context;
+    }
+    fn submit(context: *anyopaque, _: *anyopaque, task: tasks.Task) Allocator.Error!void {
         const self: *@This() = @ptrCast(@alignCast(context));
         if (self.submitted == self.fail_after) return error.OutOfMemory;
         std.debug.assert(self.len < self.lanes);
@@ -390,7 +392,7 @@ const TestExecutor = struct {
         self.len += 1;
         self.submitted += 1;
     }
-    fn receive(context: *anyopaque) tasks.Completion {
+    fn receive(context: *anyopaque, _: *anyopaque) tasks.Completion {
         const self: *@This() = @ptrCast(@alignCast(context));
         self.len -= 1;
         const task = self.pending[self.len];
@@ -408,7 +410,10 @@ const TestExecutor = struct {
         self.received += 1;
         return .{ .id = task.id, .worker_id = self.len, .value = value };
     }
-    fn end(context: *anyopaque) void {
+    fn tryReceive(_: *anyopaque, _: *anyopaque) ?tasks.Completion {
+        return null;
+    }
+    fn end(context: *anyopaque, _: *anyopaque) void {
         const self: *@This() = @ptrCast(@alignCast(context));
         std.debug.assert(self.len == 0 and self.received == self.submitted);
     }

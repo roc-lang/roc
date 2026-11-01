@@ -2521,12 +2521,13 @@ test "interface summaries relocate across bodies and executor lanes" {
             for (&self.lane_states) |*state| state.deinit();
         }
 
-        fn begin(context: *anyopaque) void {
+        fn begin(context: *anyopaque) std.mem.Allocator.Error!*anyopaque {
             const self: *@This() = @ptrCast(@alignCast(context));
             std.debug.assert(self.pending_len == 0);
+            return context;
         }
 
-        fn submit(context: *anyopaque, task: TaskExecutor.Task) Allocator.Error!void {
+        fn submit(context: *anyopaque, _: *anyopaque, task: TaskExecutor.Task) Allocator.Error!void {
             const self: *@This() = @ptrCast(@alignCast(context));
             const lane = self.next_lane;
             self.next_lane = (lane + 1) % 2;
@@ -2543,13 +2544,17 @@ test "interface summaries relocate across bodies and executor lanes" {
             self.pending_len += 1;
         }
 
-        fn receive(context: *anyopaque) TaskExecutor.Completion {
+        fn receive(context: *anyopaque, _: *anyopaque) TaskExecutor.Completion {
             const self: *@This() = @ptrCast(@alignCast(context));
             self.pending_len -= 1;
             return self.pending[self.pending_len];
         }
 
-        fn end(context: *anyopaque) void {
+        fn tryReceive(_: *anyopaque, _: *anyopaque) ?TaskExecutor.Completion {
+            return null;
+        }
+
+        fn end(context: *anyopaque, _: *anyopaque) void {
             const self: *@This() = @ptrCast(@alignCast(context));
             std.debug.assert(self.pending_len == 0);
         }
@@ -2558,9 +2563,11 @@ test "interface summaries relocate across bodies and executor lanes" {
             return .{
                 .context = self,
                 .worker_count = 2,
+                .lane_count = 2,
                 .beginFn = begin,
                 .submitFn = submit,
                 .receiveFn = receive,
+                .tryReceiveFn = tryReceive,
                 .endFn = end,
             };
         }

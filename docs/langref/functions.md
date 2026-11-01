@@ -41,7 +41,7 @@ give different answers than if they were run at runtime.
 Pure functions also have no side effects. That said, pure functions in Roc can run things
 that can reasonably be considered side effects:
 
-1. Crashing. Roc pure functions can crash (or get stuck in an infinite loop), as they are not guaranteed to be _total_. If they crash at compile time, it will be reported as a compile error, which is considered an improvement over the alternative of the end user of the program encountering a crash at runtime. ⚠️ If they get stuck in an infinite loop, this currently hangs the compiler (although there are plans to improve this in the future), which is also considered better than the alternative of an end user encountering a program hang at runtime.
+1. Crashing. Roc pure functions can crash (or get stuck in an infinite loop), as they are not guaranteed to be _total_. If they crash at compile time, it will be reported as a compile error, which is considered an improvement over the alternative of the end user of the program encountering a crash at runtime. ⚠️ If they get stuck in an infinite loop, this currently hangs the compiler (improvements are planned for after 0.1.0), which is also considered better than the alternative of an end user encountering a program hang at runtime.
 2. Memory allocation and deallocation. Although memory allocation and deallocation absolutely does depend on mutating state for bookkeeping, Roc does automatic memory management, and so program correctness should never depend on the state of this bookkeeping. Allocation can fail, which in Roc results in a crash—and as previously noted, a crash at compile time is considered preferable to the end user encountering a program crash at runtime.
 3. `dbg` and `expect` output. Pure functions are allowed to use `dbg` and `expect`, as these outputs are intended to be for the programmer only. By design, program behavior should never depend on them, so it's considered fine to display these outputs at compile time only (or not at all, if their code paths end up getting optimized away entirely), as this only means the programmer will see them even earlier in the process.
 
@@ -170,8 +170,8 @@ For example, suppose you wrote a function which called an effectful function, an
 it as if it were a pure function. You'd get an error saying this is an effectful function
 that's been incorrectly annotated as a pure function.
 
-⚠️ In 0.1.0, a wrong purity annotation will cause a compiler warning instead of an error.
-This will allow you to do things like take a function that has been historically pure and add some debugging that involves doing I/O in the middle of the function.
+⚠️ Changing incorrect purity annotations from errors to warnings is planned for after 0.1.0.
+Once implemented, this change will allow you to do things like take a function that has been historically pure and add some debugging that involves doing I/O in the middle of the function.
 You'll get a warning (and potentially miss out on some optimizations) but you won't have to do the chore of going around changing a bunch of annotations just to be able to run the program.
 The compiler will simply treat the wrongly annotated function as an effectful function, ignoring the wrong annotation.
 

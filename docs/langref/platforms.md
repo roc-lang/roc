@@ -64,7 +64,7 @@ These security guarantees can be relied on because platforms have _exclusive_ co
 
 ### Performance benefits
 
-> ⚠️ Note that although platform-implemented scheduling of concurrent operations is possible in principle, some pieces needed to make it practical for platform authors to implement haven't been built yet.
+> ⚠️ Note that although platform-implemented scheduling of concurrent operations is possible in principle, some pieces needed to make it practical for platform authors to implement haven't been built yet. These are planned for after 0.1.0.
 
 Many I/O operations can benefit from being run concurrently. Since platforms are in charge of how those I/O operations are implemented, they can also determine how they are scheduled. In principle, both applications and packages could describe which operations they want to run concurrently, and the platform could optimize their scheduling using its domain-specific knowledge.
 

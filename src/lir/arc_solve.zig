@@ -5132,7 +5132,7 @@ fn runUniquenessTasks(
     executor: *const task_executor.Executor,
     metrics: *UniquenessMetrics,
 ) SolveError!void {
-    var session = executor.begin();
+    var session = try executor.begin();
     var submitted: usize = 0;
     var received: usize = 0;
     var failed = false;
@@ -5147,7 +5147,7 @@ fn runUniquenessTasks(
         }
         if (received < submitted) {
             const completion = session.receive();
-            if (completion.id >= submitted or completion.worker_id >= executor.worker_count) solveInvariant("uniqueness received invalid task identity");
+            if (completion.id >= submitted or completion.worker_id >= executor.lane_count) solveInvariant("uniqueness received invalid task identity");
             const context = &contexts[completion.id];
             if (context.completed or completion.value != @as(*anyopaque, @ptrCast(context))) solveInvariant("uniqueness received invalid task completion");
             context.completed = true;

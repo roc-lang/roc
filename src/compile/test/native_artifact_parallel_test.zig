@@ -67,14 +67,15 @@ const ObservedExecutor = struct {
         }
     };
 
-    fn begin(context: *anyopaque) void {
+    fn begin(context: *anyopaque) std.mem.Allocator.Error!*anyopaque {
         const self: *ObservedExecutor = @ptrCast(@alignCast(context));
         std.debug.assert(self.session == null);
-        self.session = self.inner.begin();
+        self.session = try self.inner.begin();
         self.session_start = self.submitted;
+        return context;
     }
 
-    fn submit(context: *anyopaque, task: tasks.Task) std.mem.Allocator.Error!void {
+    fn submit(context: *anyopaque, _: *anyopaque, task: tasks.Task) std.mem.Allocator.Error!void {
         const self: *ObservedExecutor = @ptrCast(@alignCast(context));
         for (&self.slots) |*slot| {
             if (slot.* != null) continue;
@@ -89,7 +90,7 @@ const ObservedExecutor = struct {
         @panic("ObservedExecutor.submit: every slot holds an outstanding task");
     }
 
-    fn receive(context: *anyopaque) tasks.Completion {
+    fn receive(context: *anyopaque, _: *anyopaque) tasks.Completion {
         const self: *ObservedExecutor = @ptrCast(@alignCast(context));
         const completion = if (self.reverse) blk: {
             if (self.buffered == 0) {
@@ -128,7 +129,11 @@ const ObservedExecutor = struct {
         @panic("ObservedExecutor.receive: completion matches no submitted task");
     }
 
-    fn end(context: *anyopaque) void {
+    fn tryReceive(_: *anyopaque, _: *anyopaque) ?tasks.Completion {
+        return null;
+    }
+
+    fn end(context: *anyopaque, _: *anyopaque) void {
         const self: *ObservedExecutor = @ptrCast(@alignCast(context));
         std.debug.assert(self.outstanding == 0 and self.buffered == 0);
         self.session.?.end();
@@ -141,9 +146,11 @@ const ObservedExecutor = struct {
         return .{
             .context = self,
             .worker_count = self.inner.worker_count,
+            .lane_count = self.inner.lane_count,
             .beginFn = begin,
             .submitFn = submit,
             .receiveFn = receive,
+            .tryReceiveFn = tryReceive,
             .endFn = end,
         };
     }

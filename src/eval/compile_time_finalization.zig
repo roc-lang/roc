@@ -1707,17 +1707,6 @@ pub const BoxyObjectSet = struct {
     views: []const checked.ImportedModuleView,
 };
 
-/// A compile-time program's build as a task of the object scheduler, which
-/// runs it on a worker of its own or, when it is the only task left and the
-/// workers are idle, on the thread driving the scheduler, with those workers
-/// lent to the build's parallel waves.
-pub const ProgramTask = struct {
-    task: base.post_check_task_executor.Task,
-    /// Lend `executor` to the build's lowering and code generation, before
-    /// `task` runs on the thread that owns the executor.
-    lend: *const fn (context: *anyopaque, executor: base.post_check_task_executor.Executor) void,
-};
-
 /// Where a `.boxy` evaluation gets the objects of a module's imports, and
 /// the executor session it builds the modules' compile-time programs on,
 /// alongside the objects' units. Every function runs on the evaluating
@@ -1736,7 +1725,7 @@ pub const BoxyObjectSource = struct {
     /// be built: the evaluation of a module importing it may need it.
     completed: *const fn (context: *anyopaque, module: *const checked.CheckedModuleArtifact) FinalizeError!void,
     /// Build `program` on the session, as soon as it has a worker for it.
-    submit: *const fn (context: *anyopaque, program: ProgramTask) FinalizeError!void,
+    submit: *const fn (context: *anyopaque, program: base.post_check_task_executor.Task) FinalizeError!void,
     /// A completion of a submitted task, if one has finished.
     takeCompletion: *const fn (context: *anyopaque) FinalizeError!?base.post_check_task_executor.Completion,
     /// Wait for the next task of the session, a unit or a submitted one, to
@@ -2297,16 +2286,10 @@ const ModuleEvaluation = struct {
             build.complete();
             return self.run(shared, evaluations);
         };
-        // A worker lowers and compiles the program by itself: the session's
-        // executor is this thread's. The scheduler lends the program the
-        // workers when it runs the program on this thread instead.
-        build.build_options.post_check_executor = null;
-        build.target.post_check_executor = null;
+        // The program's lowering and code generation run their waves on the
+        // same pool, whichever thread builds the program.
         self.state = .building;
-        try source.submit(source.context, .{
-            .task = .{ .id = @intFromPtr(build), .context = build, .run = ProgramBuild.run },
-            .lend = ProgramBuild.lend,
-        });
+        try source.submit(source.context, .{ .id = @intFromPtr(build), .context = build, .run = ProgramBuild.run });
     }
 
     /// Evaluate the roots `members` (positions in `roots`), which hold
@@ -2526,15 +2509,6 @@ const ProgramBuild = struct {
         const self: *ProgramBuild = @ptrCast(@alignCast(context));
         self.complete();
         return null;
-    }
-
-    /// Lend `executor` to the build's lowering and code generation: `run`
-    /// follows on the executor's own thread.
-    fn lend(context: *anyopaque, executor: base.post_check_task_executor.Executor) void {
-        const self: *ProgramBuild = @ptrCast(@alignCast(context));
-        std.debug.assert(self.outcome == .pending);
-        self.build_options.post_check_executor = executor;
-        self.target.post_check_executor = executor;
     }
 
     /// Lower and compile the program.
@@ -7616,9 +7590,11 @@ test "CTFE native emission uses worker callbacks and retains reusable code witho
         completions: std.ArrayList(tasks.Completion) = .empty,
         callbacks: usize = 0,
 
-        fn begin(_: *anyopaque) void {}
-        fn end(_: *anyopaque) void {}
-        fn submit(raw: *anyopaque, task: tasks.Task) Allocator.Error!void {
+        fn begin(context: *anyopaque) std.mem.Allocator.Error!*anyopaque {
+            return context;
+        }
+        fn end(_: *anyopaque, _: *anyopaque) void {}
+        fn submit(raw: *anyopaque, _: *anyopaque, task: tasks.Task) Allocator.Error!void {
             const self: *@This() = @ptrCast(@alignCast(raw));
             var scratch = base.SingleThreadArena.init(std.testing.allocator);
             defer scratch.deinit();
@@ -7631,12 +7607,15 @@ test "CTFE native emission uses worker callbacks and retains reusable code witho
             });
             try self.completions.append(std.testing.allocator, .{ .id = task.id, .worker_id = 0, .value = value });
         }
-        fn receive(raw: *anyopaque) tasks.Completion {
+        fn receive(raw: *anyopaque, _: *anyopaque) tasks.Completion {
             const self: *@This() = @ptrCast(@alignCast(raw));
             return self.completions.orderedRemove(0);
         }
+        fn tryReceive(_: *anyopaque, _: *anyopaque) ?tasks.Completion {
+            return null;
+        }
         fn executor(self: *@This()) tasks.Executor {
-            return .{ .context = self, .worker_count = 1, .beginFn = begin, .submitFn = submit, .receiveFn = receive, .endFn = end };
+            return .{ .context = self, .worker_count = 1, .lane_count = 1, .beginFn = begin, .submitFn = submit, .receiveFn = receive, .tryReceiveFn = tryReceive, .endFn = end };
         }
     };
     var program = try LirProgram.Result.init(allocator, .native);

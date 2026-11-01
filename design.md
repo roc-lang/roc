@@ -9296,7 +9296,9 @@ constructor. Return-destination reuse metadata is not a tail-position proof.
 
 Boxy lowering keeps generic calls in this form. A dynamic result is written by
 the callee into the caller's result storage, and a call whose result storage
-is the procedure's own result storage returns it directly. No conversion
+is the procedure's own result storage returns it directly. The call's target
+is then the result local, so it gives the procedure no dynamic frame region
+and a self call that only passes its parameters along is a loop. No conversion
 statement ever follows a call, because caller and callee share one
 representation of every type. An erased call is written in the layout the
 callee's function type gives its arguments and result, which both sides
@@ -14963,6 +14965,12 @@ what make open rows work in generic code: a body generic over `{ x : a }r` or
 has under the actual type, and the offset a field name has, come from the
 descriptor at runtime.
 
+Tag descriptors store variants in strict byte-wise name order (the same order
+that assigns discriminants). Runtime tag-name lookup uses binary search of that
+existing order. Immediately before searching, Debug builds assert that the
+names are strictly sorted; release builds do not walk the variants to validate
+this compiler invariant.
+
 Descriptors come from two sources and nowhere else:
 
 - *Static descriptors.* The lowerer interns a descriptor for every closed
@@ -15611,39 +15619,41 @@ program as it is built, in the order the builds finish. The build of a program
 reads the checked modules and the loaded objects' symbols and writes nothing
 another thread reads; running it, which stores values and reports failures,
 stays on the evaluating thread, as do the programs of roots holding function
-values ("Stored Function Values"). A module's evaluation thus waits only for the values its roots read and the
-objects of its own import closure. The link waits for every unit after program
-evaluation. Platform-only evaluation before pairing
-joins running object tasks before publishing its values, but retains queued
-app units: their imports can still have roots that program evaluation must
-complete. This publication barrier requires no active readers, not completion
-of units whose inputs belong to the later evaluation.
-The link uses the objects this compilation built or restored without restoring them again: a
+values ("Stored Function Values"). A module's evaluation thus waits only for
+the values its roots read and the objects of its own import closure. The link
+waits for every unit after program evaluation. Platform-only evaluation before
+pairing joins running object tasks before publishing its values, but retains
+queued app units: their imports can still have roots that program evaluation
+must complete. This publication barrier requires no active readers, not
+completion of units whose inputs belong to the later evaluation. The link uses
+the objects this compilation built or restored without restoring them again: a
 build that links the objects keeps each one for the link as the scheduler
 completes it (`BoxyObjectLowering.Materializer`), so the link reads them back
 without writing them again. While checking continues, a compilation that links
 its program builds only modules reachable through import edges from the root
 package's root and the platform root, which every module the root will see is,
 and leaves one worker to checking; after it, exactly the modules the root sees.
-After checking, a unit or program that is the only task queued while nothing is
-in flight is submitted to no worker: the evaluating thread runs it itself when
-it has nothing else to do, lending it the general executor, so the parallel
-waves of its ARC and native code generation run on the otherwise idle workers,
-as the root program's do, instead of on one of them. A compilation that does
-not link its program (`roc check`) builds the modules each evaluation's program
-needs and, as a program's build does, every other module the root sees whose
-roots are complete. The scheduler's post-check session stays open across
-checking and evaluation while the general session every other post-check stage
-borrows opens and closes within it: every task names its session, and whichever
-consumer takes a completion off the worker channel files it with the session
-that submitted it. A platform module with requirements has no object of its
-own, so a module importing one runs as the whole program. Each object is filed
-with its `CodeLocations`: its line table, failure sites and source files
-(Compile-Time Failure Sites). A failure in an object's code is therefore found
-and reported exactly as one in a whole program's own code, and the two forms
-report identically. The table is read only when something fails, so the code
-that succeeds carries nothing extra. A compilation with no cache has no
-objects, and runs as the whole program.
+Every unit and program build is given the post-check executor, whichever thread
+runs it: a session may be opened on any thread, a running task included, and a
+thread waiting in a session runs that session's queued tasks itself, so the
+parallel waves of a unit's ARC and native code generation spread over the pool
+from a worker as they do from the coordinating thread, and the evaluating
+thread, waiting for the next unit or program, builds queued ones itself. A
+compilation that does not link its program (`roc check`) builds the modules
+each evaluation's program needs and, as a program's build does, every other
+module the root sees whose roots are complete. The scheduler's post-check
+session stays open across checking and evaluation while the sessions every
+other post-check stage opens come and go within it: each session queues its own
+tasks and receives its own completions, a token on the worker channel tells a
+worker a session has a task queued, and the session's owner takes completions
+it already has without waiting while checking continues. A platform module with
+requirements has no object of its own, so a module importing one runs as the
+whole program. Each object is filed with its `CodeLocations`: its line table,
+failure sites and source files (Compile-Time Failure Sites). A failure in an
+object's code is therefore found and reported exactly as one in a whole
+program's own code, and the two forms report identically. The table is read
+only when something fails, so the code that succeeds carries nothing extra. A
+compilation with no cache has no objects, and runs as the whole program.
 
 A root whose value holds a function value (anywhere in its type, or a
 callable binding) has no compile-time value slot, so it is evaluated by the
@@ -21078,9 +21088,18 @@ call between functions of different signatures, so the LLVM backend uses the
 same driver scheme there as the WebAssembly backend: a frame-replacing call
 copies its arguments into static storage, records its callee as pending and
 returns, and every ordinary call to a tail-group member is followed by a call
-to the group's driver with the address of the call's result. Both driver
-schemes hand the driver the descriptor address as well when the group's
-members return one.
+to the group's driver with the address of the call's result.
+
+Both driver schemes carry `.boxy` values the way a frame-replacing call does
+everywhere else. The call moves its dynamic arguments into one fresh carry,
+leaves their addresses and the carry in static storage for the driver to pass
+on, and releases its own carry once it has read its arguments, since they may
+live there. A dynamic result is written to the storage the entry call passed,
+so that one address reaches every member of the chain: the LLVM driver already
+has it as the address of the call's result, and the WebAssembly backend's
+frame-replacing call leaves it in the tail area, because that backend's driver
+takes a result by value. When an ordinary call's target is dynamic, the
+address given to the driver is that of the target's bytes.
 
 A procedure with a `tail_group` is never offered to the object cache. A
 program that links a cached entry has no body for it, so it would see the
@@ -24591,6 +24610,17 @@ levels and the runtime consumer compile their own members against the
 completed value. The `.boxy` compile-time evaluator has no Solved program;
 it orders its roots from the checked modules alone
 (`eval/checked_root_graph.zig`, see Compile-Time Evaluation Strategy).
+
+Within one checked dependency-graph build, each reached procedure template's
+direct references are decoded once into shared arrays of callee template IDs
+and compile-time root IDs. Later roots replay those exact direct references
+instead of rescanning checked bodies and dispatch evidence. Evidence visitation
+belongs to the individual summary, so evidence shared by two templates appears
+in both summaries. Per-root template visitation still terminates recursive
+calls, and each root's final dependency list is sorted, deduplicated, and excludes
+itself. These summaries cache no transitive closure, live only for this graph
+build, and never enter checked artifacts or cache identities.
+
 
 Each level is lowered as its own consumer of the Solved program once every
 level before it has run: a completed value that lowers as a construction is

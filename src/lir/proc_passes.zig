@@ -235,7 +235,7 @@ pub fn run(
             if (completion.id >= contexts.items.len) invariant("LIR pass returned an unknown task");
             const context = &contexts.items[completion.id];
             if (context.completed) invariant("LIR pass completed one task more than once");
-            if (completion.worker_id >= executor.?.worker_count) invariant("LIR pass returned an invalid worker lane");
+            if (completion.worker_id >= executor.?.lane_count) invariant("LIR pass returned an invalid worker lane");
             if (completion.value != @as(*anyopaque, @ptrCast(context))) invariant("LIR pass returned the wrong task context");
             context.completed = true;
         }

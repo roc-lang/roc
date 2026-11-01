@@ -1265,7 +1265,7 @@ const Lowerer = struct {
         errdefer padded_backing_owners.deinit();
         try collectPaddedBackingOwners(solved.types.view(), &padded_backing_owners);
 
-        const workspace_count = if (options.post_check_executor) |executor| executor.worker_count else 0;
+        const workspace_count = if (options.post_check_executor) |executor| executor.lane_count else 0;
         const worker_workspaces = try allocator.alloc(?FnBodyWorkspace, workspace_count);
         errdefer allocator.free(worker_workspaces);
         @memset(worker_workspaces, null);
@@ -2295,7 +2295,7 @@ const Lowerer = struct {
             if (returned != @as(*anyopaque, @ptrCast(context))) {
                 Common.invariant("Solved-LIR executor returned the wrong task context");
             }
-            if (completion.worker_id >= executor.worker_count) {
+            if (completion.worker_id >= executor.lane_count) {
                 Common.invariant("Solved-LIR executor returned an invalid worker id");
             }
             if (context.shard) |shard| {

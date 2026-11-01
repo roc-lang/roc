@@ -1453,24 +1453,69 @@ test "dependency post-order of a deep dependency chain runs on a small stack" {
 
 /// One post-check session's state on the coordinator
 /// (`messages.PostCheckSession`).
-const PostCheckSessionState = struct {
-    coordinator: *Coordinator = undefined,
-    session: messages.PostCheckSession = .general,
-    active: bool = false,
-    /// Tasks submitted and not yet received by the session, the ones in
-    /// `stash` included.
-    outstanding: usize = 0,
-    /// Completions taken off the result channel, or run inline, and not yet
-    /// received by the session. A slot is reserved per submitted task.
-    stash: std.ArrayList(post_check_executor.Completion) = .empty,
+/// One open post-check session: the tasks its owner submitted that no
+/// thread has taken yet, and the completions delivered and not yet received.
+/// A box outlives its sessions: a token for a task the owner ran itself can
+/// still be in the worker channel when the session ends, and a worker
+/// finding the box's queue empty just moves on.
+const SessionBox = struct {
+    tasks: Channel(post_check_executor.Task),
+    completions: Channel(post_check_executor.Completion),
     /// The work the session's owner was doing when it began, if it recorded
-    /// any, for the crash context of the workers running its tasks.
+    /// any, for the crash context of the threads running its tasks.
     frame: ?base.ice_context.Frame = null,
 
-    fn deinit(self: *PostCheckSessionState, gpa: Allocator) void {
-        self.stash.deinit(gpa);
+    fn deinit(self: *SessionBox) void {
+        self.tasks.deinit();
+        self.completions.deinit();
     }
 };
+
+/// How deep sessions nest on one thread: a thread waiting in a session runs
+/// that session's tasks itself, and such a task may wait in a session of its
+/// own. Every depth has a lane of its own, so a task never shares lane state
+/// or scratch with the task waiting under it.
+const max_lane_depth = 4;
+
+/// A thread's lanes, one per session nesting depth, each created when first
+/// used.
+const ThreadLanes = struct {
+    backing: Allocator,
+    /// The thread's index: a worker's id, or the worker count for the
+    /// coordinating thread.
+    index: usize,
+    /// Whether these are a worker thread's lanes, which outlive every
+    /// session the worker serves; the coordinating thread's belong to one
+    /// coordinator, and another coordinator on that thread replaces them.
+    worker: bool,
+    depth: usize = 0,
+    allocs: [max_lane_depth]?WorkerAllocators = .{ null, null, null, null },
+
+    fn init(backing: Allocator, index: usize, worker: bool) ThreadLanes {
+        return .{ .backing = backing, .index = index, .worker = worker };
+    }
+
+    fn deinit(self: *ThreadLanes) void {
+        for (&self.allocs) |*slot| if (slot.*) |*allocs| {
+            allocs.deinit();
+            slot.* = null;
+        };
+    }
+
+    fn at(self: *ThreadLanes, depth: usize) *WorkerAllocators {
+        if (self.allocs[depth] == null) self.allocs[depth] = WorkerAllocators.init(self.backing);
+        return &self.allocs[depth].?;
+    }
+
+    fn laneId(self: *const ThreadLanes, depth: usize) usize {
+        return self.index * max_lane_depth + depth;
+    }
+};
+
+/// The lanes of the thread running this code, once it has any: workers set
+/// theirs when they start, the coordinating thread when it first uses the
+/// executor.
+threadlocal var thread_lanes: ?*ThreadLanes = null;
 
 /// The lowering of the module objects compile-time evaluation links against.
 pub const BoxyObjectLowering = struct {
@@ -1526,7 +1571,7 @@ const BoxyObjects = struct {
     ready: std.ArrayList(*UnitTask) = .empty,
     /// The compile-time programs the evaluation asked to build, not
     /// submitted yet (`BoxyObjectSource.submit`).
-    programs: std.ArrayList(eval.CompileTimeFinalization.ProgramTask) = .empty,
+    programs: std.ArrayList(post_check_executor.Task) = .empty,
     /// The programs submitted and not yet finished, by task id.
     program_ids: std.AutoHashMapUnmanaged(usize, void) = .empty,
     /// The programs finished and not yet taken by the evaluation.
@@ -1573,7 +1618,7 @@ const BoxyObjects = struct {
             .digests = .{ .gpa = coordinator.gpa, .names = .{} },
             .interfaces = undefined,
             .owned_interfaces = if (lowering.interfaces == null) .init(coordinator.gpa, coordinator.roc_ctx.std_io) else null,
-            .session = coordinator.postCheckExecutorFor(.boxy_objects).begin(),
+            .session = try coordinator.postCheckExecutor().begin(),
         };
         self.interfaces = lowering.interfaces orelse &self.owned_interfaces.?;
         return self;
@@ -1781,9 +1826,9 @@ const BoxyObjects = struct {
         errdefer gpa.free(views);
         var config = self.lowering.config;
         config.boxy_unit = .{ .imports = self.interfaces, .root = false, .names = &self.digests.names };
-        // A unit on a worker lowers and compiles by itself; `runAlone` lends
-        // the workers to a unit it runs on the coordinating thread.
-        config.post_check_executor = null;
+        // The unit's ARC and code generation run their waves on the same
+        // pool, whichever thread runs the unit.
+        config.post_check_executor = self.coordinator.postCheckExecutor();
         config.checked_module_state = if (artifact.evaluation_state == .finalized) .complete else .checking_finalization;
         return .{ .unit = .{
             .gpa = gpa,
@@ -1966,11 +2011,11 @@ const BoxyObjects = struct {
 
     /// Build the compile-time program `program` on the session, as soon as
     /// it has a worker for it.
-    fn submitProgram(context: *anyopaque, program: eval.CompileTimeFinalization.ProgramTask) Error!void {
+    fn submitProgram(context: *anyopaque, program: post_check_executor.Task) Error!void {
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
         const gpa = self.coordinator.gpa;
-        try self.program_ids.put(gpa, program.task.id, {});
-        errdefer _ = self.program_ids.remove(program.task.id);
+        try self.program_ids.put(gpa, program.id, {});
+        errdefer _ = self.program_ids.remove(program.id);
         try self.programs.append(gpa, program);
         try self.submitReady();
     }
@@ -1985,9 +2030,9 @@ const BoxyObjects = struct {
 
     /// Whether a unit or program finished since the last call, through
     /// whichever call recorded it; otherwise wait for the next one to
-    /// finish, or run the one held task with the workers lent to it. False
-    /// when none finished and none is running or held: nothing the
-    /// evaluation waits for will happen.
+    /// finish, running queued units and programs on this thread meanwhile.
+    /// False when none finished and none is running: nothing the evaluation
+    /// waits for will happen.
     fn progress(context: *anyopaque) Error!bool {
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
         try self.drain();
@@ -1996,62 +2041,21 @@ const BoxyObjects = struct {
             self.finished_since_progress = false;
             return true;
         }
-        if (self.session.outstanding == 0) return self.runAlone();
-        self.coordinator.pumpPostCheckResult();
-        try self.drain();
-        return true;
-    }
-
-    /// Whether the one queued task is held for `runAlone` rather than
-    /// submitted: checking is done, nothing is in flight, and the workers
-    /// would otherwise idle while one of them builds it.
-    fn holdsAlone(self: *const BoxyObjects) bool {
-        return self.coordinator.frontend_complete and self.coordinator.hasWorkers() and
-            self.session.outstanding == 0 and self.programs.items.len + self.ready.items.len == 1;
-    }
-
-    /// Run the held task on the coordinating thread, lending it the workers
-    /// for the parallel waves of its lowering and code generation, and
-    /// record its completion. False when no task is held.
-    fn runAlone(self: *BoxyObjects) Error!bool {
-        if (!self.holdsAlone()) return false;
-        const coordinator = self.coordinator;
-        const executor = coordinator.postCheckExecutor();
-        const task: post_check_executor.Task = if (self.programs.pop()) |program| blk: {
-            program.lend(program.task.context, executor);
-            if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: building a compile-time program alone, with {d} workers\n", .{executor.worker_count});
-            break :blk program.task;
-        } else blk: {
-            const unit = self.ready.pop().?;
-            try self.keyUnit(&unit.prepared);
-            unit.prepared.unit.config.post_check_executor = executor;
-            if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: building {s} key {s} alone, with {d} workers\n", .{ unit.artifact.moduleEnvConst().module_name, &std.fmt.bytesToHex(unit.artifact.key.bytes[0..8], .lower), executor.worker_count });
-            break :blk .{ .id = @intFromPtr(unit), .context = unit, .run = UnitTask.run };
-        };
-        const allocators = coordinator.inline_worker_allocs.taskAllocators();
-        defer coordinator.inline_worker_allocs.resetArena();
-        const value = task.run(task.context, .{
-            .id = 0,
-            .allocator = allocators.module,
-            .scratch = allocators.scratch,
-            .lane_state = &coordinator.inline_worker_allocs.post_check_lane_state,
-        });
-        try self.complete(.{ .id = task.id, .worker_id = 0, .value = value });
+        if (self.session.outstanding == 0) return false;
+        try self.complete(self.session.receive());
         return true;
     }
 
     /// Submit the programs the evaluation waits for, then ready units, as
     /// many as the executor takes. While checking continues, one worker is
-    /// left to it. A task `holdsAlone` keeps is submitted to no worker: the
-    /// evaluation runs it through `progress` when it has nothing else to do.
+    /// left to it.
     fn submitReady(self: *BoxyObjects) Error!void {
-        if (self.holdsAlone()) return;
         const workers = self.session.executor.worker_count;
         const limit = if (self.coordinator.frontend_complete) workers else @max(1, workers - 1);
         while (self.programs.items.len != 0 and self.first_error == null and self.session.canSubmit() and self.session.outstanding < limit) {
             const program = self.programs.pop().?;
             if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: building a compile-time program ({d} tasks in progress)\n", .{self.session.outstanding + 1});
-            self.session.submit(program.task) catch |err| {
+            self.session.submit(program) catch |err| {
                 self.programs.appendAssumeCapacity(program);
                 return err;
             };
@@ -2067,12 +2071,10 @@ const BoxyObjects = struct {
         }
     }
 
-    /// Record the completions filed with the scheduler's session. A
-    /// completion may submit the next task, which a coordinator without
-    /// workers runs and files at once.
+    /// Record the completions filed with the scheduler's session, without
+    /// waiting for or running anything.
     fn drain(self: *BoxyObjects) Error!void {
-        const state = self.coordinator.post_check_sessions.getPtr(.boxy_objects);
-        while (state.stash.items.len != 0) try self.complete(self.session.receive());
+        while (self.session.tryReceive()) |completion| try self.complete(completion);
     }
 
     fn complete(self: *BoxyObjects, completion: post_check_executor.Completion) Error!void {
@@ -2117,18 +2119,15 @@ const BoxyObjects = struct {
         }
     }
 
-    /// Record completions until `done` holds of `context`, taking each
-    /// next completion off the worker channel as it arrives.
+    /// Record completions until `done` holds of `context`, waiting for each
+    /// next one and running queued tasks on this thread meanwhile.
     fn waitUntil(self: *BoxyObjects, context: anytype, comptime done: fn (*BoxyObjects, @TypeOf(context)) bool) Error!void {
         while (true) {
             try self.drain();
             if (self.first_error) |err| return err;
             if (done(self, context)) return;
-            if (self.session.outstanding == 0) {
-                if (!try self.runAlone()) Coordinator.coordinatorInvariant("a module's object waits for an import no unit builds", .{});
-                continue;
-            }
-            self.coordinator.pumpPostCheckResult();
+            if (self.session.outstanding == 0) Coordinator.coordinatorInvariant("a module's object waits for an import no unit builds", .{});
+            try self.complete(self.session.receive());
         }
     }
 
@@ -2189,7 +2188,13 @@ pub const Coordinator = struct {
     /// that session, so the Boxy unit scheduler's session stays open while
     /// the general session is borrowed and released around it, and while
     /// the frontend loop still consumes its own results.
-    post_check_sessions: std.EnumArray(messages.PostCheckSession, PostCheckSessionState),
+    /// The coordinating thread's lanes for the post-check tasks it runs
+    /// while waiting in a session.
+    coordinator_lanes: ThreadLanes,
+    /// Every session box allocated, for teardown, and the ones no session
+    /// uses now.
+    all_session_boxes: Channel(*SessionBox),
+    free_session_boxes: Channel(*SessionBox),
     /// Set only after the frontend coordinator loop has drained every
     /// frontend task and result.
     frontend_complete: bool,
@@ -2408,7 +2413,9 @@ pub const Coordinator = struct {
             .inflight = std.atomic.Value(usize).init(0),
             .shutting_down = std.atomic.Value(bool).init(false),
             .worker_oom = std.atomic.Value(bool).init(false),
-            .post_check_sessions = .initFill(.{}),
+            .coordinator_lanes = ThreadLanes.init(worker_allocator, max_threads, false),
+            .all_session_boxes = try Channel(*SessionBox).init(channel_allocator, 64, roc_ctx.std_io),
+            .free_session_boxes = try Channel(*SessionBox).init(channel_allocator, 64, roc_ctx.std_io),
             .frontend_complete = false,
             .total_remaining = 0,
             .app_package_name = null,
@@ -2461,7 +2468,7 @@ pub const Coordinator = struct {
         // unit scheduler that ran to the end received every completion.
         // Only aborted compilations need to drain channels; the normal path
         // takes no locks.
-        if (!self.frontend_complete or self.postCheckTasksInChannels() != 0) {
+        if (!self.frontend_complete) {
             const payload_alloc = self.getWorkerAllocator();
             while (self.task_channel.tryRecv()) |task| {
                 switch (task) {
@@ -2490,7 +2497,14 @@ pub const Coordinator = struct {
         }
         if (self.boxy_objects) |*objects| objects.deinit();
         self.boxy_objects = null;
-        for (&self.post_check_sessions.values) |*state| state.deinit(self.gpa);
+        while (self.all_session_boxes.tryRecv()) |box| {
+            box.deinit();
+            self.sessionBoxAllocator().destroy(box);
+        }
+        self.all_session_boxes.deinit();
+        self.free_session_boxes.deinit();
+        if (thread_lanes == &self.coordinator_lanes) thread_lanes = null;
+        self.coordinator_lanes.deinit();
 
         if (self.completion_arena) |arena| {
             self.completion_demand.deinit(self.gpa);
@@ -3653,12 +3667,6 @@ pub const Coordinator = struct {
     /// pick up additional queued work.
     pub fn shutdown(self: *Coordinator) void {
         if (!threads_available) return;
-        // The unit scheduler's session is torn down with the coordinator;
-        // a borrowed general session is released before shutdown.
-        if (self.post_check_sessions.get(.general).active) {
-            base.invariant("{s}", .{"compiler coordinator shut down during a post-check session"});
-        }
-
         // Signal workers to stop before closing channels, so workers that
         // are between recv() calls see the flag and exit instead of
         // processing more buffered tasks.
@@ -3673,6 +3681,10 @@ pub const Coordinator = struct {
             w.join();
         }
         self.workers.clearRetainingCapacity();
+        // The coordinating thread's lanes go with the workers': lane state
+        // is destroyed with the pool.
+        if (thread_lanes == &self.coordinator_lanes) thread_lanes = null;
+        self.coordinator_lanes.deinit();
     }
 
     /// Enqueue a task for processing
@@ -4942,29 +4954,23 @@ pub const Coordinator = struct {
         }
     }
 
-    /// A stage-independent view over the persistent compilation workers:
-    /// the general post-check session, which post-check stages borrow one
-    /// at a time.
-    ///
-    /// The returned executor is owned by the coordinator thread and must not
-    /// be used concurrently with coordinator lifecycle methods.
+    /// A stage-independent view over the persistent compilation workers.
+    /// A session may be opened on any thread, a running task included; its
+    /// owner runs the session's queued tasks itself while it waits for a
+    /// completion none of the workers has delivered.
     pub fn postCheckExecutor(self: *Coordinator) post_check_executor.Executor {
-        return self.postCheckExecutorFor(.general);
-    }
-
-    fn postCheckExecutorFor(self: *Coordinator, session: messages.PostCheckSession) post_check_executor.Executor {
         if (self.shutting_down.load(.acquire)) {
             base.invariant("{s}", .{"post-check executor requested after the coordinator shut down"});
         }
-        const state = self.post_check_sessions.getPtr(session);
-        state.coordinator = self;
-        state.session = session;
+        if (thread_lanes == null or !thread_lanes.?.worker) thread_lanes = &self.coordinator_lanes;
         return .{
-            .context = state,
-            .worker_count = if (self.hasWorkers()) self.workers.items.len else 1,
+            .context = self,
+            .worker_count = self.workerCount(),
+            .lane_count = (self.max_threads + 1) * max_lane_depth,
             .beginFn = beginPostCheckSession,
             .submitFn = submitPostCheckTask,
             .receiveFn = receivePostCheckCompletion,
+            .tryReceiveFn = tryReceivePostCheckCompletion,
             .endFn = endPostCheckSession,
         };
     }
@@ -4975,108 +4981,116 @@ pub const Coordinator = struct {
         return threads_available and self.mode == .multi_threaded and self.workers.items.len > 0;
     }
 
-    fn beginPostCheckSession(context: *anyopaque) void {
-        const state: *PostCheckSessionState = @ptrCast(@alignCast(context));
-        const self = state.coordinator;
+    /// The threads that take post-check tasks: the workers, or this thread.
+    fn workerCount(self: *const Coordinator) usize {
+        return if (self.hasWorkers()) self.workers.items.len else 1;
+    }
+
+    fn sessionBoxAllocator(self: *const Coordinator) Allocator {
+        return if (threads_available) thread_safe_allocator else self.gpa;
+    }
+
+    fn beginPostCheckSession(context: *anyopaque) Allocator.Error!*anyopaque {
+        const self: *Coordinator = @ptrCast(@alignCast(context));
         if (self.shutting_down.load(.acquire)) {
             base.invariant("{s}", .{"post-check session started after the coordinator shut down"});
         }
-        if (state.active) {
-            base.invariant("{s}", .{"compiler coordinator started overlapping post-check sessions"});
+        const box = self.free_session_boxes.tryRecv() orelse blk: {
+            const allocator = self.sessionBoxAllocator();
+            const box = try allocator.create(SessionBox);
+            errdefer allocator.destroy(box);
+            // A session has at most `worker_count` tasks out, so neither
+            // channel fills.
+            const capacity = self.workerCount() + 1;
+            box.* = .{
+                .tasks = try Channel(post_check_executor.Task).init(allocator, capacity, self.roc_ctx.std_io),
+                .completions = undefined,
+            };
+            errdefer box.tasks.deinit();
+            box.completions = try Channel(post_check_executor.Completion).init(allocator, capacity, self.roc_ctx.std_io);
+            errdefer box.completions.deinit();
+            self.all_session_boxes.sendGrowable(box) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.Closed => base.invariant("{s}", .{"a post-check session began after the coordinator's boxes closed"}),
+            };
+            break :blk box;
+        };
+        box.frame = base.ice_context.innermost();
+        return box;
+    }
+
+    fn submitPostCheckTask(context: *anyopaque, handle: *anyopaque, task: post_check_executor.Task) Allocator.Error!void {
+        const self: *Coordinator = @ptrCast(@alignCast(context));
+        const box: *SessionBox = @ptrCast(@alignCast(handle));
+        box.tasks.send(task) catch base.invariant("{s}", .{"a post-check session's task queue refused a task within its window"});
+        if (!self.hasWorkers()) return;
+        // A token wakes a worker, which takes whatever task of the box is
+        // queued then; the owner may have run this one itself meanwhile.
+        self.task_channel.sendGrowable(.{ .post_check = box }) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Closed => base.invariant("{s}", .{"a post-check task was submitted after the worker channel closed"}),
+        };
+    }
+
+    /// Run `task` of `box` on this thread, on the lane of the current
+    /// nesting depth, and deliver its completion.
+    fn runSessionTask(self: *Coordinator, box: *SessionBox, task: post_check_executor.Task) void {
+        _ = self;
+        const lanes = thread_lanes orelse base.invariant("{s}", .{"a post-check task ran on a thread without lanes"});
+        if (lanes.depth == max_lane_depth) base.invariant("{s}", .{"post-check sessions nested deeper than a thread's lanes"});
+        const depth = lanes.depth;
+        lanes.depth += 1;
+        defer lanes.depth -= 1;
+        const allocs = lanes.at(depth);
+        const ice = if (box.frame) |frame| base.ice_context.enter(frame) else null;
+        defer if (ice) |guard| guard.leave();
+        const lane_id = lanes.laneId(depth);
+        const value = task.run(task.context, .{
+            .id = lane_id,
+            .allocator = allocs.taskAllocators().module,
+            .scratch = allocs.taskAllocators().scratch,
+            .lane_state = &allocs.post_check_lane_state,
+        });
+        allocs.resetArena();
+        box.completions.send(.{ .id = task.id, .worker_id = lane_id, .value = value }) catch base.invariant("{s}", .{"a post-check session's completions refused a completion within its window"});
+    }
+
+    fn receivePostCheckCompletion(context: *anyopaque, handle: *anyopaque) post_check_executor.Completion {
+        const self: *Coordinator = @ptrCast(@alignCast(context));
+        const box: *SessionBox = @ptrCast(@alignCast(handle));
+        while (true) {
+            if (box.completions.tryRecv()) |completion| return completion;
+            // Nobody else submits to this session, so once its queue is
+            // empty every task of it is running on another thread, which
+            // delivers the completion this wait is for.
+            if (box.tasks.tryRecv()) |task| {
+                self.runSessionTask(box, task);
+                continue;
+            }
+            return box.completions.recv() orelse base.invariant("{s}", .{"a post-check session's completions closed while a task was out"});
         }
-        std.debug.assert(state.outstanding == 0 and state.stash.items.len == 0);
-        state.active = true;
-        state.frame = base.ice_context.innermost();
     }
 
-    fn submitPostCheckTask(context: *anyopaque, task: post_check_executor.Task) Allocator.Error!void {
-        const state: *PostCheckSessionState = @ptrCast(@alignCast(context));
-        const self = state.coordinator;
-        std.debug.assert(state.active);
-        // Every outstanding task has a stash slot reserved, so filing its
-        // completion cannot fail.
-        try state.stash.ensureTotalCapacity(self.gpa, state.outstanding + 1);
-        if (!self.hasWorkers()) {
-            const allocator = self.inline_worker_allocs.taskAllocators().module;
-            defer self.inline_worker_allocs.resetArena();
-            state.outstanding += 1;
-            state.stash.appendAssumeCapacity(.{
-                .id = task.id,
-                .worker_id = 0,
-                .value = task.run(task.context, .{
-                    .id = 0,
-                    .allocator = allocator,
-                    .scratch = self.inline_worker_allocs.taskAllocators().scratch,
-                    .lane_state = &self.inline_worker_allocs.post_check_lane_state,
-                }),
-            });
-            return;
-        }
-        // enqueueTask increments inflight before sending and rolls it back if
-        // channel growth fails, so a failed submit accepts no work.
-        state.outstanding += 1;
-        errdefer state.outstanding -= 1;
-        try self.enqueueTask(.{ .post_check = .{ .session = state.session, .frame = state.frame, .task = task } });
+    fn tryReceivePostCheckCompletion(context: *anyopaque, handle: *anyopaque) ?post_check_executor.Completion {
+        _ = context;
+        const box: *SessionBox = @ptrCast(@alignCast(handle));
+        return box.completions.tryRecv();
     }
 
-    fn receivePostCheckCompletion(context: *anyopaque) post_check_executor.Completion {
-        const state: *PostCheckSessionState = @ptrCast(@alignCast(context));
-        const self = state.coordinator;
-        std.debug.assert(state.active and state.outstanding > 0);
-        while (state.stash.items.len == 0) self.pumpPostCheckResult();
-        state.outstanding -= 1;
-        return state.stash.pop().?;
-    }
-
-    /// Take the next result off the worker channel and file it with its
-    /// post-check session. Only post-check completions arrive here: the
-    /// frontend loop is the sole consumer while frontend tasks run.
-    fn pumpPostCheckResult(self: *Coordinator) void {
-        if (!self.hasWorkers()) base.invariant("{s}", .{"inline post-check receive without a submitted task"});
-        const result = self.result_channel.recv() orelse
-            base.invariant("{s}", .{"post-check result channel closed while a session was active"});
-        _ = self.inflight.fetchSub(1, .monotonic);
-        switch (result) {
-            .post_check => |completion| self.filePostCheckCompletion(completion),
-            .parsed,
-            .canonicalized,
-            .canonicalized_cached,
-            .type_checked,
-            .operation_failed,
-            .worker_oom,
-            => coordinatorInvariant("post-check session received a {t} result", .{std.meta.activeTag(result)}),
-        }
-    }
-
-    /// File a completion with the session that submitted its task.
-    fn filePostCheckCompletion(self: *Coordinator, completion: messages.PostCheckCompletion) void {
-        const state = self.post_check_sessions.getPtr(completion.session);
-        std.debug.assert(state.active and state.outstanding > state.stash.items.len);
-        state.stash.appendAssumeCapacity(completion.completion);
-    }
-
-    fn endPostCheckSession(context: *anyopaque) void {
-        const state: *PostCheckSessionState = @ptrCast(@alignCast(context));
-        std.debug.assert(state.active and state.outstanding == 0 and state.stash.items.len == 0);
-        state.active = false;
-        state.frame = null;
-    }
-
-    /// The post-check tasks still in the worker channels: submitted to a
-    /// session and not yet taken off the result channel.
-    fn postCheckTasksInChannels(self: *const Coordinator) usize {
-        var count: usize = 0;
-        for (self.post_check_sessions.values) |state| count += state.outstanding - state.stash.items.len;
-        return count;
+    fn endPostCheckSession(context: *anyopaque, handle: *anyopaque) void {
+        const self: *Coordinator = @ptrCast(@alignCast(context));
+        const box: *SessionBox = @ptrCast(@alignCast(handle));
+        std.debug.assert(box.tasks.isEmpty() and box.completions.isEmpty());
+        box.frame = null;
+        self.free_session_boxes.sendGrowable(box) catch |err| switch (err) {
+            // The box stays in `all_session_boxes` for teardown.
+            error.OutOfMemory, error.Closed => {},
+        };
     }
 
     /// The frontend tasks queued or running.
     fn frontendInflight(self: *const Coordinator) usize {
-        const total = self.inflight.load(.acquire);
-        if (!self.hasWorkers()) return total;
-        const post_check = self.postCheckTasksInChannels();
-        std.debug.assert(post_check <= total);
-        return total - post_check;
+        return self.inflight.load(.acquire);
     }
 
     fn createOwnedSemanticResult(
@@ -5869,13 +5883,11 @@ pub const Coordinator = struct {
             .type_checked => |*r| try self.handleTypeChecked(r),
             .operation_failed => |r| return self.handleOperationFailed(r),
             .worker_oom => return error.OutOfMemory,
-            // Only the unit scheduler submits work while frontend tasks run.
-            .post_check => |completion| {
-                if (completion.session != .boxy_objects) coordinatorInvariant("the frontend loop received a {t} post-check completion", .{completion.session});
-                self.filePostCheckCompletion(completion);
-                try self.boxy_objects.?.drain();
-            },
         }
+        // The unit scheduler's completions arrive in its own session while
+        // frontend tasks run; recording them releases the units waiting
+        // for them.
+        if (self.boxy_objects) |*objects| try objects.drain();
     }
 
     /// Handle a successful parse result
@@ -8120,8 +8132,11 @@ pub const Coordinator = struct {
         // - gpa: smp_allocator for long-lived data (ModuleEnv, source)
         // - arena: for temporary allocations, reset between tasks
         const backing = if (threads_available) thread_safe_allocator else self.gpa;
-        var worker_allocs = WorkerAllocators.init(backing);
-        defer worker_allocs.deinit();
+        var lanes = ThreadLanes.init(backing, worker_id, true);
+        defer lanes.deinit();
+        thread_lanes = &lanes;
+        defer thread_lanes = null;
+        const worker_allocs = lanes.at(0);
 
         while (true) {
             // Check shutdown flag before blocking on the next task.
@@ -8134,21 +8149,10 @@ pub const Coordinator = struct {
             const t = self.task_channel.recv() orelse break;
 
             if (t == .post_check) {
-                const task = t.post_check.task;
-                const ice = if (t.post_check.frame) |frame| base.ice_context.enter(frame) else null;
-                defer if (ice) |guard| guard.leave();
-                const completion: WorkerResult = .{ .post_check = .{ .session = t.post_check.session, .completion = .{
-                    .id = task.id,
-                    .worker_id = worker_id,
-                    .value = task.run(task.context, .{
-                        .id = worker_id,
-                        .allocator = worker_allocs.taskAllocators().module,
-                        .scratch = worker_allocs.taskAllocators().scratch,
-                        .lane_state = &worker_allocs.post_check_lane_state,
-                    }),
-                } } };
-                worker_allocs.resetArena();
-                self.result_channel.send(completion) catch break;
+                // A token of a session: run a task of it if one is still
+                // queued.
+                const box: *SessionBox = @ptrCast(@alignCast(t.post_check));
+                if (box.tasks.tryRecv()) |task| self.runSessionTask(box, task);
                 continue;
             }
 
@@ -13217,13 +13221,12 @@ test "Coordinator post-check executor supports incremental sessions and repeated
         }
     };
 
-    var active_by_worker = [_]std.atomic.Value(bool){
-        std.atomic.Value(bool).init(false),
-        std.atomic.Value(bool).init(false),
-    };
+    // One slot per lane: two workers and the coordinating thread, each with
+    // a lane per nesting depth.
+    var active_by_worker: [3 * max_lane_depth]std.atomic.Value(bool) = @splat(std.atomic.Value(bool).init(false));
     var hits = std.atomic.Value(usize).init(0);
     var destroyed_lane_data = std.atomic.Value(usize).init(0);
-    var lane_data_by_worker = [_]?*LaneData{ null, null };
+    var lane_data_by_worker: [3 * max_lane_depth]?*LaneData = @splat(null);
     var contexts: [7]TaskContext = undefined;
     var tasks: [7]post_check_executor.Task = undefined;
     var completions: [7]post_check_executor.Completion = undefined;
@@ -13242,7 +13245,7 @@ test "Coordinator post-check executor supports incremental sessions and repeated
     }
 
     const executor = coord.postCheckExecutor();
-    var session = executor.begin();
+    var session = try executor.begin();
     try session.submit(tasks[0]);
     try session.submit(tasks[1]);
     try std.testing.expect(!session.canSubmit());
@@ -13304,11 +13307,14 @@ test "Coordinator inline post-check executor supports repeated session tasks" {
 
     const TaskContext = struct {
         runs: usize = 0,
+        lane: ?usize = null,
         lane_state: ?*post_check_executor.LaneState = null,
 
         fn run(opaque_context: *anyopaque, worker: post_check_executor.Worker) ?*anyopaque {
             const self: *@This() = @ptrCast(@alignCast(opaque_context));
-            if (worker.id != 0) base.invariant("{s}", .{"inline post-check executor changed worker id"});
+            if (self.lane) |lane| {
+                if (worker.id != lane) base.invariant("{s}", .{"inline post-check executor changed worker id"});
+            } else self.lane = worker.id;
             if (self.lane_state) |existing| {
                 if (existing != worker.lane_state) {
                     base.invariant("{s}", .{"inline post-check executor replaced its lane state"});
@@ -13333,7 +13339,7 @@ test "Coordinator inline post-check executor supports repeated session tasks" {
     const executor = coord.postCheckExecutor();
     try std.testing.expectEqual(@as(usize, 1), executor.worker_count);
 
-    var session = executor.begin();
+    var session = try executor.begin();
     try session.submit(tasks[0]);
     try std.testing.expect(!session.canSubmit());
     const first = session.receive();

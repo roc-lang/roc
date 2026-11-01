@@ -516,6 +516,10 @@ const CustomCase = enum {
     issue_12029_wasm_boxy_tail_calls,
     issue_12769_wasm_many_parameters_specialized,
     issue_12769_wasm_many_parameters_boxy,
+||||||| d8f78e6d41
+    issue_12741_wasm_generic_tail_calls_dev,
+    issue_12741_wasm_generic_tail_calls_size,
+    issue_12741_wasm_generic_tail_calls_speed,
     issue_10827_private_compiler_support,
     issue_11134_wasm_post_llvm_pipeline,
     macos_output_basename_reproducible,
@@ -3783,6 +3787,10 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12029: boxy tail calls run in constant stack on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12029_wasm_boxy_tail_calls } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 functions take more than 255 parameters (dev, specialized)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_many_parameters_specialized } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 functions take more than 255 parameters (dev, boxy)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_many_parameters_boxy } },
+||||||| d8f78e6d41
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_dev } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_size } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (speed)", .timeout_ms = 600_000, .backend = .speed, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_speed } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: LLVM size wasm32 links the Boxy runtime", .backend = .size, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=size", "--no-cache", "--output=boxed_closure_size.wasm" }, .roc_file = "test/wasm/boxed_closure_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "UnresolvedBuiltinImport" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: LLVM speed wasm32 links the Boxy runtime", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=speed", "--no-cache", "--output=boxed_closure_speed.wasm" }, .roc_file = "test/wasm/boxed_closure_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "UnresolvedBuiltinImport" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10827: Roc compiler support is private from a strong-intrinsic wasm host", .backend = .dev, .body = .{ .custom = .issue_10827_private_compiler_support } },
@@ -5434,6 +5442,10 @@ fn runCustomCase(
         .issue_12029_wasm_boxy_tail_calls => customIssue12029WasmBoxyTailCalls(io, allocator, &env, &timer, timeout_ms),
         .issue_12769_wasm_many_parameters_specialized => customIssue12769WasmManyParameters(io, allocator, &env, &timer, timeout_ms, "--specialize=yes"),
         .issue_12769_wasm_many_parameters_boxy => customIssue12769WasmManyParameters(io, allocator, &env, &timer, timeout_ms, "--specialize=no"),
+||||||| d8f78e6d41
+        .issue_12741_wasm_generic_tail_calls_dev => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=dev"),
+        .issue_12741_wasm_generic_tail_calls_size => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=size"),
+        .issue_12741_wasm_generic_tail_calls_speed => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=speed"),
         .issue_10827_private_compiler_support => customIssue10827PrivateCompilerSupport(io, allocator, &env, &timer, timeout_ms),
         .issue_11134_wasm_post_llvm_pipeline => customWasmPostLlvmPipeline(io, allocator, &env, &timer, timeout_ms),
         .macos_output_basename_reproducible => customMacosOutputBasenameReproducible(io, allocator, &env, &timer, timeout_ms),
@@ -14451,6 +14463,54 @@ fn customIssue12769WasmManyParameters(
     const expected = "64043021 320171021 321171021 320171021 45171";
     if (!std.mem.eql(u8, result, expected)) {
         return customFailure(allocator, timer, "many-parameter wasm returned \"{s}\"", .{result});
+    }
+    return null;
+}
+
+||||||| d8f78e6d41
+/// Build generic tail-call cycles for wasm32 without specialization and run
+/// them. Their dynamic arguments and results must reach each callee after the
+/// frame that called it is gone, and whatever carries them must be released
+/// on the way, so only the result the host holds stays allocated. The
+/// interpreter's stack is far smaller than the cycles are deep.
+fn customIssue12741WasmGenericTailCalls(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    opt_arg: []const u8,
+) ?TestResult {
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "generic-tail-calls.wasm" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output path: {}", .{err});
+    defer allocator.free(output_path);
+    const output_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output argument: {}", .{err});
+    defer allocator.free(output_arg);
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--target=wasm32", opt_arg, "--specialize=no", "--no-cache", output_arg },
+        .roc_file = "test/wasm/issue_12741_generic_tail_calls_app.roc",
+        .exit = .success,
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+    })) |failure| return failure;
+    if (validateWasmOutput(io, allocator, timer, output_path)) |failure| return failure;
+
+    var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
+        return customFailure(allocator, timer, "failed to load the generic tail call wasm module: {}", .{err});
+    defer wasm.deinit();
+    const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
+        return customFailure(allocator, timer, "generic tail call wasm execution failed: {}", .{err});
+    const heap_string = "{\"favoritesCount\":14} and a string long enough to live on the heap";
+    const expected = heap_string ++ "!!! " ++ heap_string ++ ",b 42000 63000 cc";
+    if (!std.mem.eql(u8, result, expected)) {
+        return customFailure(allocator, timer, "generic tail call wasm returned \"{s}\"", .{result});
+    }
+    const outstanding = wasmOutstandingAllocations(&wasm) catch |err|
+        return customFailure(allocator, timer, "failed to read the generic tail call module's allocation counts: {}", .{err});
+    if (outstanding != 1) {
+        return customFailure(allocator, timer, "generic tail call wasm left {d} allocations outstanding, not just its result", .{outstanding});
     }
     return null;
 }
