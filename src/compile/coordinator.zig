@@ -5099,8 +5099,7 @@ pub const Coordinator = struct {
 
     /// Run `task` of `box` on this thread, on the lane of the current
     /// nesting depth, and deliver its completion.
-    fn runSessionTask(self: *Coordinator, box: *SessionBox, task: post_check_executor.Task) void {
-        _ = self;
+    fn runSessionTask(box: *SessionBox, task: post_check_executor.Task) void {
         const lanes = thread_lanes orelse base.invariant("{s}", .{"a post-check task ran on a thread without lanes"});
         if (lanes.depth == max_lane_depth) base.invariant("{s}", .{"post-check sessions nested deeper than a thread's lanes"});
         const depth = lanes.depth;
@@ -5120,8 +5119,7 @@ pub const Coordinator = struct {
         box.completions.send(.{ .id = task.id, .worker_id = lane_id, .value = value }) catch base.invariant("{s}", .{"a post-check session's completions refused a completion within its window"});
     }
 
-    fn receivePostCheckCompletion(context: *anyopaque, handle: *anyopaque) post_check_executor.Completion {
-        const self: *Coordinator = @ptrCast(@alignCast(context));
+    fn receivePostCheckCompletion(_: *anyopaque, handle: *anyopaque) post_check_executor.Completion {
         const box: *SessionBox = @ptrCast(@alignCast(handle));
         while (true) {
             if (box.completions.tryRecv()) |completion| return completion;
@@ -5129,15 +5127,14 @@ pub const Coordinator = struct {
             // empty every task of it is running on another thread, which
             // delivers the completion this wait is for.
             if (box.tasks.tryRecv()) |task| {
-                self.runSessionTask(box, task);
+                runSessionTask(box, task);
                 continue;
             }
             return box.completions.recv() orelse base.invariant("{s}", .{"a post-check session's completions closed while a task was out"});
         }
     }
 
-    fn tryReceivePostCheckCompletion(context: *anyopaque, handle: *anyopaque) ?post_check_executor.Completion {
-        _ = context;
+    fn tryReceivePostCheckCompletion(_: *anyopaque, handle: *anyopaque) ?post_check_executor.Completion {
         const box: *SessionBox = @ptrCast(@alignCast(handle));
         return box.completions.tryRecv();
     }
@@ -8218,7 +8215,7 @@ pub const Coordinator = struct {
                 // A token of a session: run a task of it if one is still
                 // queued.
                 const box: *SessionBox = @ptrCast(@alignCast(t.post_check));
-                if (box.tasks.tryRecv()) |task| self.runSessionTask(box, task);
+                if (box.tasks.tryRecv()) |task| runSessionTask(box, task);
                 continue;
             }
 

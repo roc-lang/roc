@@ -315,6 +315,9 @@ func_type_key_scratch: std.ArrayList(u8),
 /// The ops slot is part of the public erased-callable ABI; generated callbacks
 /// ignore it and callers pass null.
 on_drop_type_idx: u32 = 0,
+/// Offset in the tail area of the slots a tail driver writes for the arguments
+/// its callee takes in memory.
+tail_area_stored_offset: u32 = 0,
 indirect_call_types_registered: bool = false,
 proc_arg_counts_offset: u32 = 0,
 /// Static storage a frame-replacing call hands its callee through: a word
@@ -1803,16 +1806,23 @@ pub fn generateEntrypointWrapper(
         }
     }
 
-    for (arg_values) |value| {
+    const entry_spec = self.store.getProcSpec(entry_proc);
+    const entry_params = self.store.getLocalSpan(entry_spec.args);
+    const stored = try self.beginStoredArgs(entry_spec);
+    for (arg_values, 0..) |value, i| {
+        const in_memory = if (stored) |s| s.holds(i) else false;
+        if (in_memory) try self.emitLocalGet(stored.?.base_local);
         switch (value) {
             .zst => {
                 try self.emitI32Const(0);
             },
             .direct, .ptr => |local| try self.emitLocalGet(local),
         }
+        if (in_memory) try self.emitStoreOp(try self.procLocalValType(GuardedList.at(entry_params, i)), stored.?.slotOffset(i));
     }
+    if (stored) |s| try self.emitLocalGet(s.base_local);
     try self.emitCall(root_func_idx);
-    try self.emitTailDrive(self.store.getProcSpec(entry_proc));
+    try self.emitTailDrive(entry_spec);
 
     // Marshal the proc's result back out per the C ABI.
     const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
@@ -5790,15 +5800,13 @@ fn internFuncType(self: *Self, params: []const ValType, results: []const ValType
     if (self.cpu_level == .v1) for ([_][]const ValType{ params, results }) |types| {
         for (types) |vt| if (vt == .v128) wasmInvariantFmt("WASM/codegen invariant violated: v128 function type declared for WebAssembly 1.0", .{});
     };
+    // The key is the parameter bytes, a byte no value type uses, and the result
+    // bytes, so each signature has exactly one key.
     self.func_type_key_scratch.clearRetainingCapacity();
-    try self.func_type_key_scratch.append(self.allocator, @intCast(params.len));
-    for (params) |param| {
-        try self.func_type_key_scratch.append(self.allocator, @backingInt(param));
-    }
-    try self.func_type_key_scratch.append(self.allocator, @intCast(results.len));
-    for (results) |result| {
-        try self.func_type_key_scratch.append(self.allocator, @backingInt(result));
-    }
+    try self.func_type_key_scratch.ensureUnusedCapacity(self.allocator, params.len + 1 + results.len);
+    for (params) |param| self.func_type_key_scratch.appendAssumeCapacity(@backingInt(param));
+    self.func_type_key_scratch.appendAssumeCapacity(@backingInt(BlockType.void));
+    for (results) |result| self.func_type_key_scratch.appendAssumeCapacity(@backingInt(result));
 
     if (self.func_type_cache.get(self.func_type_key_scratch.items)) |existing| {
         return existing;
@@ -6195,9 +6203,11 @@ fn tailArgOffsets(self: *Self, proc: LirProcSpec, offsets: ?[]u32) Allocator.Err
 
 fn registerTailDrivers(self: *Self, proc_specs: []const LirProcSpec) Allocator.Error!void {
     var area_size: u32 = 0;
+    var stored_size: u32 = 0;
     for (proc_specs, 0..) |proc, i| {
         if (!isTailGroupMember(proc)) continue;
         area_size = @max(area_size, try self.tailArgOffsets(proc, null));
+        stored_size = @max(stored_size, @as(u32, @intCast(self.store.getLocalSpan(proc.args).len - self.directArgCount(proc))) * stored_arg_slot_size);
         const driver = if (try self.tailDriverIndex(proc)) |index| &self.tail_drivers.items[index] else blk: {
             const result = try self.resolveValType(proc.ret_layout);
             const type_idx = try self.internFuncType(&.{result}, &.{result});
@@ -6210,7 +6220,8 @@ fn registerTailDrivers(self: *Self, proc_specs: []const LirProcSpec) Allocator.E
     }
     if (self.tail_drivers.items.len == 0) return;
 
-    const bytes = try self.allocator.alloc(u8, tail_area_args_offset + area_size);
+    self.tail_area_stored_offset = tail_area_args_offset + area_size;
+    const bytes = try self.allocator.alloc(u8, tail_area_args_offset + area_size + stored_size);
     defer self.allocator.free(bytes);
     @memset(bytes, 0);
     self.tail_area = try self.addStaticDataSymbol(
@@ -6292,14 +6303,18 @@ fn compileTailDrivers(self: *Self) Allocator.Error!void {
             const offsets = try self.allocator.alloc(u32, args.len + hidden_count);
             defer self.allocator.free(offsets);
             _ = try self.tailArgOffsets(proc, offsets);
+            const direct_count = self.directArgCount(proc);
             for (0..args.len) |i| {
                 const arg_layout = self.procLocalLayoutIdx(GuardedList.at(args, i));
+                const in_memory = i >= direct_count;
+                if (in_memory) try self.emitDataAddressConst(area, @intCast(self.tail_area_stored_offset + (i - direct_count) * stored_arg_slot_size));
                 try self.emitDataAddressConst(area, @intCast(tail_area_args_offset + offsets[i]));
-                if (!try self.isCompositeLayout(arg_layout)) {
-                    const vt = try self.resolveValType(arg_layout);
-                    try self.emitLoadOpSized(vt, valTypeByteSize(vt), 0);
-                }
+                const composite = try self.isCompositeLayout(arg_layout);
+                const vt: ValType = if (composite) .i32 else try self.resolveValType(arg_layout);
+                if (!composite) try self.emitLoadOpSized(vt, valTypeByteSize(vt), 0);
+                if (in_memory) try self.emitStoreOp(vt, 0);
             }
+            if (direct_count < args.len) try self.emitDataAddressConst(area, @intCast(self.tail_area_stored_offset));
             // The result pointer and the tail carry are words.
             for (0..hidden_count) |i| {
                 try self.emitDataAddressConst(area, @intCast(tail_area_args_offset + offsets[args.len + i]));
@@ -6489,11 +6504,13 @@ fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) 
     var param_types: std.ArrayList(ValType) = .empty;
     defer param_types.deinit(self.allocator);
 
-    for (0..args.len) |i| {
+    const direct_count = self.directArgCount(proc);
+    for (0..direct_count) |i| {
         const arg = GuardedList.at(args, i);
         const vt = try self.resolveValType(self.store.getLocal(arg).layout_idx);
         param_types.append(self.allocator, vt) catch return error.OutOfMemory;
     }
+    if (direct_count < args.len) param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
     // The hidden result pointer and tail carry follow the explicit arguments.
     const hidden = self.hiddenParams(proc);
     if (hidden.result) param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
@@ -6568,13 +6585,23 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         break :blk ret_ptr;
     } else blk: {
         // Bind parameters to locals.
-        for (0..args.len) |i| {
+        const direct_count = self.directArgCount(proc);
+        for (0..direct_count) |i| {
             const arg = GuardedList.at(args, i);
             _ = try self.bindProcParamLocal(arg);
         }
+        const stored_args: ?u32 = if (direct_count < args.len) self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory else null;
         const hidden = self.hiddenParams(proc);
         if (hidden.result) _ = try self.bindProcParamLocal(proc.dyn_result.?);
         if (hidden.carry) self.carry_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        if (stored_args) |base_local| {
+            for (direct_count..args.len) |i| {
+                const binding = try self.bindProcParamLocal(GuardedList.at(args, i));
+                try self.emitLocalGet(base_local);
+                try self.emitLoadOp(binding.val_type, @intCast((i - direct_count) * stored_arg_slot_size));
+                try self.emitLocalSet(binding.idx);
+            }
+        }
         break :blk null;
     };
 
@@ -6662,7 +6689,8 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         6
     else blk: {
         const hidden = self.hiddenParams(proc);
-        break :blk @intCast(args.len + @intFromBool(hidden.result) + @intFromBool(hidden.carry));
+        const direct_count = self.directArgCount(proc);
+        break :blk @intCast(direct_count + @intFromBool(direct_count < args.len) + hidden.count());
     };
     try self.encodeLocalsDecl(&self.currentBody().preamble, param_count);
 
@@ -8212,6 +8240,41 @@ fn wasm32StructSize(comptime T: type) u32 {
     }
 }
 
+/// Bytes each argument passed in memory takes (see `directArgCount`).
+const stored_arg_slot_size: u32 = 16;
+
+/// How many of `proc`'s explicit arguments are wasm parameters. A signature
+/// past `layout.abi.wasm_max_function_params` passes the rest in memory (see
+/// "Wasm Calling Convention" in design.md).
+fn directArgCount(self: *const Self, proc: LirProcSpec) usize {
+    const arg_count = self.store.getLocalSpan(proc.args).len;
+    const hidden_count = self.hiddenParams(proc).count();
+    if (arg_count + hidden_count <= layout.abi.wasm_max_function_params) return arg_count;
+    return layout.abi.wasm_max_function_params - 1 - hidden_count;
+}
+
+const StoredArgs = struct {
+    start: usize,
+    base_local: u32,
+
+    fn holds(self: StoredArgs, index: usize) bool {
+        return index >= self.start;
+    }
+
+    fn slotOffset(self: StoredArgs, index: usize) u32 {
+        return @intCast((index - self.start) * stored_arg_slot_size);
+    }
+};
+
+/// Reserve this frame's slots for the arguments a call passes in memory.
+fn beginStoredArgs(self: *Self, proc: LirProcSpec) Allocator.Error!?StoredArgs {
+    const start = self.directArgCount(proc);
+    const arg_count = self.store.getLocalSpan(proc.args).len;
+    if (start == arg_count) return null;
+    const offset = try self.allocStackMemory(@intCast((arg_count - start) * stored_arg_slot_size), stored_arg_slot_size);
+    return .{ .start = start, .base_local = try self.emitFpOffsetToNewLocal(offset) };
+}
+
 /// The hidden trailing parameters of a `.roc` procedure's wasm signature,
 /// after its explicit arguments: the address of its dynamic result's
 /// storage, then its tail carry.
@@ -8451,7 +8514,7 @@ fn generateDynRc(self: *Self, value: ProcLocalId, op: layout.RcOp, count: u32) A
 /// procedure also returns.
 fn generateDynResultReturn(self: *Self, result: ProcLocalId, value: ProcLocalId) Allocator.Error!void {
     const result_local = (try self.procLocalBinding(result)).idx;
-    try self.emitDescCopy(self.localDyn(result).?.desc, .{ .dynamic = result_local }, value);
+    if (result != value) try self.emitDescCopy(self.localDyn(result).?.desc, .{ .dynamic = result_local }, value);
     try self.emitLocalGet(result_local);
     try self.emitLocalSet(self.proc_return_local);
 }
@@ -8528,10 +8591,14 @@ fn generateDynCall(self: *Self, proc_id: LIR.LirProcSpecId, args: ProcLocalSpan,
     const func_idx = self.tables().registered_procs.get(@backingInt(proc_id)) orelse
         wasmInvariantFmt("WASM/codegen invariant violated: unresolved proc call target {d}", .{@backingInt(proc_id)});
 
+    const stored = try self.beginStoredArgs(callee);
     for (0..arg_refs.len) |i| {
         const arg = GuardedList.at(arg_refs, i);
+        const in_memory = if (stored) |s| s.holds(i) else false;
+        if (in_memory) try self.emitLocalGet(stored.?.base_local);
         if (self.localDyn(GuardedList.at(param_refs, i)) != null) {
             try self.emitBytesAddress(arg);
+            if (in_memory) try self.emitStoreOp(.i32, stored.?.slotOffset(i));
             continue;
         }
         if (self.localDyn(arg) != null) wasmInvariantFmt(
@@ -8539,7 +8606,9 @@ fn generateDynCall(self: *Self, proc_id: LIR.LirProcSpecId, args: ProcLocalSpan,
             .{ @backingInt(arg), @backingInt(proc_id) },
         );
         try self.emitProcLocal(arg);
+        if (in_memory) try self.emitStoreOp(try self.procLocalValType(arg), stored.?.slotOffset(i));
     }
+    if (stored) |s| try self.emitLocalGet(s.base_local);
     var result_target: ?DynTarget = null;
     if (callee.dyn_result != null) {
         const t = try self.dynTarget(target);
@@ -9074,7 +9143,7 @@ fn boxyListOp(op: base.LowLevel) ?BoxyListOp {
         .list_map_can_reuse => .map_can_reuse,
         .list_item_size_at_most => .item_size_at_most,
         .list_map_cast_unsafe => .map_cast_unsafe,
-        .list_map_extract_unsafe => .map_extract_unsafe,
+        .list_map_extract_unsafe, .list_move_out_unsafe => .map_extract_unsafe,
         .list_map_write_unsafe => .map_write_unsafe,
         .list_sublist => .sublist,
         .list_sublist_borrowed => .sublist_borrowed,
@@ -9138,7 +9207,7 @@ fn generateDynElemLowLevel(self: *Self, assign: anytype) Allocator.Error!void {
             try self.emitMemCopy(to, 0, source, roc_list_size);
             return self.finishTarget(dst, t);
         },
-        .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_capacity, .list_get_unsafe, .list_prefetched, .list_append_unsafe, .list_concat, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_sublist, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_item_size_at_most, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .box_unbox_borrowed, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
+        .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_capacity, .list_get_unsafe, .list_prefetched, .list_append_unsafe, .list_concat, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_sublist, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_move_out_unsafe, .list_map_write_unsafe, .list_item_size_at_most, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .box_unbox_borrowed, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
     }
     const list_op = boxyListOp(assign.op) orelse wasmInvariantFmt(
         "WASM/codegen invariant violated: low-level {s} has no element-descriptor form",
@@ -9305,7 +9374,8 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
         base.invariant("generateCall: unresolved proc call target {d}", .{@backingInt(c.proc)});
     };
 
-    try self.emitCallArgs(c.args);
+    const stored = try self.beginStoredArgs(proc);
+    try self.emitCallArgs(c.args, stored);
     try self.emitCall(func_idx);
     try self.emitTailDrive(proc);
 
@@ -9623,12 +9693,19 @@ fn emitCall(self: *Self, func_idx: u32) Allocator.Error!void {
 }
 
 /// Generate call arguments (helper to avoid duplication).
-fn emitCallArgs(self: *Self, args: ProcLocalSpan) Allocator.Error!void {
+fn emitCallArgs(self: *Self, args: ProcLocalSpan, stored: ?StoredArgs) Allocator.Error!void {
     const arg_refs = self.store.getLocalSpan(args);
     for (0..arg_refs.len) |i| {
         const arg = GuardedList.at(arg_refs, i);
+        if (stored) |s| if (s.holds(i)) {
+            try self.emitLocalGet(s.base_local);
+            try self.emitProcLocal(arg);
+            try self.emitStoreOp(try self.procLocalValType(arg), s.slotOffset(i));
+            continue;
+        };
         try self.emitProcLocal(arg);
     }
+    if (stored) |s| try self.emitLocalGet(s.base_local);
 }
 
 // ---- Lambda set / Closure value generation ----
@@ -10967,7 +11044,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitProcLocal(GuardedList.at(args, 1));
             try self.emitOps(.{Op.i64_le_u});
         },
-        .list_map_extract_unsafe => {
+        .list_map_extract_unsafe, .list_move_out_unsafe => {
             // Like list_get_unsafe, but the element layout comes from the
             // result (input element type) while the buffer is typed with the
             // output element type; lowering guarantees the strides match.
@@ -17607,6 +17684,29 @@ fn expectOneReloc(module: *const WasmModule, type_id: anytype) error{TestUnexpec
         found = entry;
     }
     return found orelse error.TestUnexpectedResult;
+}
+
+test "function types intern by their whole signature" {
+    const allocator = std.testing.allocator;
+    const fake_store: *const LirStore = undefined;
+    const fake_layouts: *const LayoutStore = undefined;
+
+    var codegen = Self.init(allocator, fake_store, fake_layouts, .default);
+    defer codegen.deinit();
+
+    const takes_i32 = try codegen.internFuncType(&.{.i32}, &.{});
+    const returns_i32 = try codegen.internFuncType(&.{}, &.{.i32});
+    try std.testing.expect(takes_i32 != returns_i32);
+    try std.testing.expectEqual(takes_i32, try codegen.internFuncType(&.{.i32}, &.{}));
+
+    // The second signature's count differs from the first's by a multiple of 256.
+    var wide: [301]ValType = @splat(.i64);
+    const short = try codegen.internFuncType(wide[0..44], &.{.i64});
+    const long = try codegen.internFuncType(wide[0..300], &.{.i64});
+    wide[299] = .i32;
+    const mixed = try codegen.internFuncType(wide[0..300], &.{.i64});
+    try std.testing.expect(short != long and long != mixed);
+    try std.testing.expectEqual(mixed, try codegen.internFuncType(wide[0..300], &.{.i64}));
 }
 
 test "relocatable object addresses static data relative to __memory_base" {

@@ -194,7 +194,7 @@ const NamedTarget = struct {
         const declaration = switch (self.owner.checked_types.view().payload(self.ty)) {
             .nominal => |n| n.owner_module.*,
             .alias => |a| a.owner_module.*,
-            else => base.invariant("reuse type identity names a non-named type", .{}),
+            .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => base.invariant("reuse type identity names a non-named type", .{}),
         };
         return .{ .module = declaration, .ty_module = self.owner.key.digest(), .ty = self.ty };
     }
@@ -518,7 +518,7 @@ fn copyRoot(module: *checked.CheckedModuleArtifact, previous: *const Previous, m
             // Only semantic admission copies a stored function, after
             // `valueRelocatability` found every module it names current.
             .boxy_fn => try module.const_store.relocateRecipe(@fromBackingInt(@intCast(index)), relocations),
-            else => {},
+            .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .fn_value => {},
         }
     }
     for (module.const_store.type_store.named_pool.items[types_start..]) |*named| {
@@ -531,7 +531,7 @@ fn copyRoot(module: *checked.CheckedModuleArtifact, previous: *const Previous, m
                     named.def.type_name = try module.canonical_names.internTypeName(target.owner.canonical_names.typeNameText(ty.name));
                     named.def.source_decl = ty.source_decl;
                 },
-                else => base.invariant("relocated stored type must have a named checked occurrence", .{}),
+                .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => base.invariant("relocated stored type must have a named checked occurrence", .{}),
             }
         } else rebindOccurrence(&named.named_type, previous.key, module.key, &transplant.type_occurrences, relocations);
     }
@@ -925,6 +925,7 @@ fn replaceStoredConst(module: *checked.CheckedModuleArtifact, root: checked.Comp
     if (root.kind == .constant) module.exported_const_templates.fillStoredConst(const_ref, stored);
 }
 
+/// How reuse resolves a stored nominal occurrence to its current identity.
 pub const NominalInputs = struct {
     context: *anyopaque,
     resolve: *const fn (*anyopaque, check.ConstStore.NamedType) ?checked.ReuseNominalIdentity,

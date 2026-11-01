@@ -1027,3 +1027,68 @@ test "boxy composition site hits bypass the interner and operand changes replace
     interpreter_cache.table.store(interpreted_table, .release);
     try run.env.checkForLeaks();
 }
+
+/// Return a one-field generic record either directly in the caller's result
+/// storage or from a distinct frame local. Its heap string is moved out again
+/// by the caller, so every backend must preserve exactly one owned reference.
+fn buildReturnedRecordProgram(b: *Builder, in_result: bool) TestError!struct { worker: LirProcSpecId, root: LirProcSpecId } {
+    const elem_desc = try b.local(.opaque_ptr);
+    const record_desc = try b.local(.opaque_ptr);
+    const x = try b.dynLocal(elem_desc, .param);
+    const result = try b.dynLocal(record_desc, .result);
+    const produced = if (in_result) result else try b.dynLocal(record_desc, .frame);
+    const worker_body = try b.dyn(null, .frame_alloc, try b.dyn(produced, .{ .record = .{
+        .desc = record_desc,
+        .fields = try b.span(&.{x}),
+    } }, try b.ret(produced)));
+    const worker = try b.proc(&.{ x, elem_desc, record_desc }, worker_body, b.dynamic, .{ .dyn_result = result });
+
+    const str_desc = try b.local(.opaque_ptr);
+    const desc = try b.local(.opaque_ptr);
+    const field_name = try b.local(.opaque_ptr);
+    const record = try b.dynLocal(desc, .frame);
+    const field = try b.dynLocal(str_desc, .view);
+    const left = try b.local(.str);
+    const right = try b.local(.str);
+    const joined = try b.local(.str);
+    const out = try b.local(.str);
+    const body = try b.static(str_desc, .{ .desc = boxy.compose.strDesc() }, try b.static(field_name, .{ .name = &name_a }, try b.dyn(desc, .{ .desc_record = .{
+        .names = try b.span(&.{field_name}),
+        .descs = try b.span(&.{str_desc}),
+    } }, try b.dyn(null, .frame_alloc, try b.str(left, "a returned record containing a heap string, ", try b.str(right, "still owned after returning", try b.lowLevel(joined, .str_concat, &.{ left, right }, false, try b.decref(right, try b.call(record, worker, &.{ joined, str_desc, desc }, try b.dyn(field, .{ .field_addr = .{ .base = record, .desc = desc, .field_index = 0 } }, try b.dyn(out, .{ .copy = .{ .src = field, .desc = str_desc } }, try b.ret(out))))))))))));
+    return .{ .worker = worker, .root = try b.proc(&.{}, body, .str, .{}) };
+}
+
+test "boxy dynamic returns copy distinct storage and omit an already constructed result" {
+    for ([_]bool{ false, true }) |in_result| {
+        var b = try Builder.init(.native);
+        defer b.deinit();
+        const program = try buildReturnedRecordProgram(&b, in_result);
+        if (comptime backend.host_lir_codegen_available) {
+            var codegen = try backend.HostLirCodeGen.init(allocator, &b.store, &b.layouts, .{}, .default);
+            defer codegen.deinit();
+            try codegen.emitProcFragment(program.worker);
+            var copies_result = false;
+            for (codegen.getSymbolNames()) |symbol| {
+                if (std.mem.eql(u8, symbol, "roc_desc_copy")) copies_result = true;
+            }
+            try std.testing.expectEqual(!in_result, copies_result);
+        }
+        var run: Run = undefined;
+        try run.init(&b);
+        defer run.deinit();
+        const result = try run.eval(program.root, .str);
+        try std.testing.expectEqualStrings("a returned record containing a heap string, still owned after returning", readStr(result.value));
+        run.interpreter.dropValue(result.value, .str);
+        try run.env.checkForLeaks();
+    }
+}
+
+test "boxy wasm dynamic returns preserve a heap string in either result storage" {
+    for ([_]bool{ false, true }) |in_result| {
+        var b = try Builder.init(.u32);
+        defer b.deinit();
+        const program = try buildReturnedRecordProgram(&b, in_result);
+        try expectWasmStr(&b, program.root, "a returned record containing a heap string, still owned after returning");
+    }
+}

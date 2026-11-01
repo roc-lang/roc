@@ -519,7 +519,7 @@ fn typesOf(modules: []const *checked.CheckedModuleArtifact, imports: []const che
     return null;
 }
 
-fn expectSharedDependencies(source: []const u8, imports: []const @import("inspected.zig").ModuleSource) !void {
+fn expectSharedDependencies(source: []const u8, imports: []const @import("inspected.zig").ModuleSource) (@import("inspected.zig").Error || Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const allocator = std.testing.allocator;
     var parsed = try @import("inspected.zig").parseProgram(allocator, .module, source, imports, .{ .roots = .published_only });
     defer parsed.deinit(allocator);
@@ -586,7 +586,7 @@ fn expectSharedDependencies(source: []const u8, imports: []const @import("inspec
         const actual = try shared.dependencies(root, @intCast(ordinal));
         defer allocator.free(actual);
         try std.testing.expectEqualSlices(u32, deps, actual);
-        try std.testing.expect(std.mem.indexOfScalar(u32, actual, @intCast(ordinal)) == null);
+        try std.testing.expect(std.mem.findScalar(u32, actual, @intCast(ordinal)) == null);
     }
     try std.testing.expect(total_reads > 0);
     const decoded = shared.summaries.count();

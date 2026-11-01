@@ -1299,7 +1299,8 @@ callable's procedure or capture drop helper) names the function the object
 defines. An entry whose code makes an erased call or builds
 an erased callable is not offered, since the erased-call runtime is passed the
 program's own layout indices, and a module whose object needs the runtime at
-all gets no object pack.
+all gets no object pack. A wasm object also offers no entry whose C-ABI
+signature passes the parameter limit (see "Wasm Calling Convention").
 
 Only a consumer whose code is linked takes an object pack's entry
 (`CodeProvision.specCacheTakes`): a `roc build --opt=dev` program or
@@ -15064,6 +15065,24 @@ sized `alloca`; the dev backend adjusts the stack pointer after its fixed frame
 and keeps the region base in a frame slot; the wasm backend bumps the shadow
 stack; the interpreter allocates a buffer per activation.
 
+Boxy lowering gives a call fresh result storage, separate from its arguments
+and captures. In return position it may forward the enclosing procedure's
+result destination to the immediately preceding call, record constructor, or
+tag constructor, replacing that producer's fresh frame local. Constructor
+forwarding requires the same explicit descriptor local for the produced and
+returned value; a representation adaptation remains an explicit operation.
+The result destination has not been exposed to the operands, so forwarding
+does not introduce overlap. This is a local lowering rule before ARC, not an
+ownership decision in a backend. A backend returning the exact `dyn_result`
+local emits no byte copy; returning a different local still copies its bytes.
+
+Runtime construction initializes the same complete byte representation whether
+or not it clears the whole destination first. A single tag payload fills its
+slot at offset zero, including a recursive box's pointer slot, so construction
+clears only the bytes after that slot and then writes the discriminant. Unused
+variant space, alignment gaps, and tail padding remain initialized. Multiple
+payloads retain their operand and allocation order and the full initial clear.
+
 The LIR statements a generic body uses on dynamic values all name the
 descriptor explicitly as an operand:
 
@@ -15246,7 +15265,23 @@ instantiation (`enterEdge`: its module, its variables bound to the edge's
 types, its dictionaries from the edge's evidence, its literal arguments from
 the edge's literal arguments), follows a forwarded literal requirement into the next
 scheme the same way, and lowers the literal's own conversion plan where it
-ends, unwrapping its `Try` as an in-place conversion does. A body reads a
+ends, unwrapping its `Try` as an in-place conversion does.
+
+A root exists once the literal's own type is closed, which says nothing about
+the other types at its edge: `inner({ w: y }, 0)` with `0 : U64` has a root
+while `y` is a variable of the enclosing scheme. The wrapper has no enclosing
+scope, so such a variable seals, and a requirement over it names a type no
+value of the program has and a dictionary only the unentered scope holds. A
+chain frame therefore composes nothing when it is entered: each dictionary and
+each literal argument is composed at its first read, in the scope holding the
+frame's edge (`Body.frameDictionary`, `frameLiteral`), and an exact procedure
+alias's scopes stay entered under the procedure they reach so that its
+evidence reads through them. A conversion reads the requirements of the
+literal's own closed type, whose evidence names no scope, so a read of an
+unentered scope is a compiler invariant. A frame descriptor is never read: a
+frame's types are its environment.
+
+A body reads a
 literal of its own scheme by calling the argument (`lowerInstanceLiteral`); a
 call passes the callee's literal arguments from the edge's
 (`fillLiteralArgs`): a root's thunk or one of the caller's own arguments. A
@@ -15262,7 +15297,10 @@ types as it derives its dictionaries: a *literal thunk* worker per
 literal requirement (`WorkerKey.literal_thunk`, keyed by the worker, the types its
 scheme takes, and the literal requirement), whose body enters the worker's scopes at
 those types with dictionaries resolved from types
-(`Program.resolveRequirement`) and converts the literal there.
+(`Program.resolveRequirement`) and converts the literal there. Its frames
+compose their dictionaries at the first read too, so a derived codec or map
+requirement of a scope, which no conversion reads, is never resolved from a
+type.
 
 Every evidence parameter is a runtime dictionary, a numeral requirement's
 included: a body converts a literal through its dictionary wherever no
@@ -19018,6 +19056,28 @@ The solver:
 - propagates erased callable requirements through the same type graph
 - verifies each lifted jump is lexically scoped and unifies its arguments with
   the corresponding join-point parameter types
+- relates the types of every low-level operation that moves a value
+
+A low-level operation has no body for callable flow to pass through, so
+`bindLowLevelTypes` states each operation's flow, in a switch that names every
+operation. A value's callable set comes from where the value was produced, and
+inlining removes the calls that consume it, so an operation whose result holds
+an operand's value must relate the two itself. A result with no relation to its
+source closes with an empty callable set, which is zero-sized and cannot be
+called. The switch's arms are the operations that relate types, the operations
+whose results hold no function (numbers, strings, byte lists, answers about an
+operand), and the operations later stages build from LIR, which solving never
+sees.
+
+`list_map_extract_unsafe` is the one operation that reads a value its operand
+types do not describe: `List.map`'s buffer is typed by the output item while
+its unwritten slots hold input items. Its third operand is the map's transform,
+whose parameter is the input item (`list_map_can_reuse` relates that parameter
+to the input list). The operand exists for its type alone
+(`LowLevel.typeOnlyOperands`): Lambda Solved reads it, and both lowerers drop it
+unevaluated, so LIR carries the operation's two runtime operands. Adding the
+item's type to the buffer's instead would give every in-place operation a
+second type parameter for what this operand states directly.
 
 Solving is monomorphic. Every lifted function's type is registered before any
 body is solved, and all of a function's call sites unify with those same type
@@ -19596,6 +19656,7 @@ the explicit allow list of operations whose lowering is layout-only; a new
 operation is not on it until someone adds it after checking its lowering. An
 operation stays off the list when its lowering reads anything but operand and
 result layouts: `list_map_can_reuse` reads its transform's solved function type,
+`list_map_extract_unsafe` takes a function for its type,
 `dict_pseudo_seed` reads the program's seed mode, and operations over fixed
 types gain nothing from the key and are not listed. A template carries its
 operation explicitly: the Builtin low-level transform records the operation
@@ -23047,10 +23108,14 @@ Inside an eligible in-place loop, `list_map_extract_unsafe` moves one item's
 ownership out of the buffer and `list_map_write_unsafe` moves the transform's
 result into the vacated slot. Neither performs RC work: the extracted item is an
 ordinary owned local, so ARC places its release according to the transform's
-solved convention, and the certifier checks the loop like any other code.
-`list_move_out_unsafe` and `list_move_in_unsafe` are the same two operations
-declared for a list whose item type does not change; the list sort below is
-built from them.
+solved convention, and the certifier checks the loop like any other code. The
+extract also takes the transform, for its type only: the buffer's type names the
+output item, so the transform's parameter is what tells Lambda Solved which
+callable set the extracted item has (see Lambda Solving).
+`list_move_out_unsafe` is the same move as an operation of its own, for a list
+whose item type does not change: its result is an item of the list's type.
+`list_move_in_unsafe` declares `list_map_write_unsafe` for such a list. `List.update`
+and the list sort below are built from these two.
 Between the two ops the slot holds stale bytes and the buffer is typed by the
 output item while later slots still hold input items. For
 descriptor-governed items, the descriptor representation condition
@@ -23541,6 +23606,42 @@ one newly allocated architecture register per recursive layout, control-flow nod
 list item layer, or tag payload layer. Register-pool exhaustion is therefore
 an internal lifetime-invariant failure, not a source-program condition and not
 an invitation for an architecture-specific best-effort spill.
+
+## Wasm Calling Convention
+
+Wasm has no argument registers: every argument of a function is a parameter of
+its type, and the WebAssembly JS API sets the limit every engine it hosts
+enforces, 1000 parameters (`layout.abi.wasm_max_function_params`). A module
+declaring one more does not load. Roc's own calling convention treats that limit
+the way a native convention treats its registers. A program never reaches it, so
+a program's behavior does not depend on how many parameters lowering added: a
+`.boxy` worker takes hidden descriptors, dictionaries, and literal arguments, and
+a function with 1000 open literals behaves like the same function specialized.
+
+A Roc-ABI procedure whose signature would pass the limit is declared with the
+first arguments as parameters, then one pointer, then its hidden trailing
+parameters. The pointer takes the place of every remaining argument, a *stored*
+argument, so the signature declares exactly the limit. Every caller writes the
+stored arguments to storage in its own frame and the callee copies them into its
+own locals on entry, before anything can replace that storage. A tail driver
+is such a caller: it moves a pending callee's stored arguments out of the tail
+area into storage of its own (`WasmCodeGen`, a region at the end of the tail area
+that frame-replacing calls never write; `MonoLlvmCodeGen`, a slot in the driver's
+frame). `WasmCodeGen` keeps each stored argument's wasm value in a 16-byte slot
+(`directArgCount`); `MonoLlvmCodeGen` lays out a signature's stored arguments
+consecutively through the storage its `stored` tail arguments already use, with
+`layout.abi.markRegisterOverflow` spending the limit as a target's register
+budget. A signature within the limit is unaffected: its type, its code, and its
+callers' code are what they would be if the limit did not exist.
+
+The wasm C ABI has no such escape, because the other side of the boundary fixes
+the signature. A platform's `provides` function or a `hosted` function past the
+limit is a user-facing build failure (`wasm_host_parameter_limit`), reported for
+every such function before code generation, whichever backend the build uses;
+a record crosses the boundary as one parameter. An object pack entry also has a
+C-ABI signature, but both of its sides are Roc: an object offers no wasm entry
+past the limit, so each program compiles that procedure itself and calls it
+through the convention above.
 
 ## Wasm Local Binding
 

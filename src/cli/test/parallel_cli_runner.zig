@@ -514,6 +514,15 @@ const CustomCase = enum {
     issue_11627_static_data_names_cache,
     issue_10733_wasm_boxy_dev_sealed_object,
     issue_12029_wasm_boxy_tail_calls,
+    issue_12769_wasm_many_parameters_specialized,
+    issue_12769_wasm_many_parameters_boxy,
+    issue_12769_wasm_parameter_limit_dev_specialized,
+    issue_12769_wasm_parameter_limit_dev_boxy,
+    issue_12769_wasm_parameter_limit_speed_specialized,
+    issue_12769_wasm_parameter_limit_speed_boxy,
+    issue_12769_wasm_host_parameter_limit_dev,
+    issue_12769_wasm_host_parameter_limit_speed,
+    issue_12769_wasm_object_entry_parameter_limit,
     issue_12741_wasm_generic_tail_calls_dev,
     issue_12741_wasm_generic_tail_calls_size,
     issue_12741_wasm_generic_tail_calls_speed,
@@ -3223,6 +3232,14 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11344: concrete callable roots and generic aliases (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue_11344_shared_ctfe/callable.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (6) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11344: concrete callable roots and generic aliases (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/issue_11344_shared_ctfe/callable.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (6) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11344: concrete callable roots and generic aliases (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "test", "--opt=size", "--no-cache" }, .roc_file = "test/cli/issue_11344_shared_ctfe/callable.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (6) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "in-place List.map and List.update keep function items (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/ListInPlaceFunctionItems.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "in-place List.map and List.update keep function items (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/ListInPlaceFunctionItems.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "in-place List.map and List.update keep function items (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "test", "--opt=size", "--no-cache" }, .roc_file = "test/cli/ListInPlaceFunctionItems.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "in-place List.map and List.update keep function items (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/ListInPlaceFunctionItems.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "List.append_sublist keeps function items (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/ListAppendSublistFunctionItems.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "List.append_sublist keeps function items (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/ListAppendSublistFunctionItems.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "List.append_sublist keeps function items (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "test", "--opt=size", "--no-cache" }, .roc_file = "test/cli/ListAppendSublistFunctionItems.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "List.append_sublist keeps function items (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/ListAppendSublistFunctionItems.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "pipeline parity: check/build/run/test share one checked-module cache (issue 9788)", .body = .{ .custom = .pipeline_parity_shared_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9509: run renders each diagnostic exactly once (PR 9759)", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/pipeline_parity/error_app/main.roc", .exit = .{ .code = 1 }, .occurrences = &.{.{ .stream = .stderr, .text = "type mismatch", .count = 1 }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "transitive package dependency runs exactly when it builds", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/pipeline_parity/app/main.roc", .contains = &.{.{ .stream = .stdout, .text = "alpha[beta:parity]" }} } } },
@@ -3755,6 +3772,32 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12744: a platform calls and stores an app binding that parses a tag union (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12744_platform_tag_codec.roc", .exit = .success, .stdout_exact = "3\n4\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12744: a platform calls and stores an app binding that parses a tag union (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12744_platform_tag_codec.roc", .exit = .success, .stdout_exact = "3\n4\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12744: a platform calls and stores an app binding that parses a tag union (interpreter, specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12744_platform_tag_codec.roc", .exit = .success, .stdout_exact = "3\n4\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument of a generic call wraps an open type in a record for a derived codec (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_generic_call_record_codec.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument of a generic call wraps an open type in a record for a derived codec (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12768_generic_call_record_codec.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument of a generic call wraps an open type in a record for a derived codec (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_generic_call_record_codec.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument of a generic call wraps an open type in a record for a derived codec (interpreter, specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12768_generic_call_record_codec.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches a dispatch through an exact procedure alias whose other requirement is a derived codec (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_method_alias.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches a dispatch through an exact procedure alias whose other requirement is a derived codec (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12768_method_alias.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches a generalized local function whose other requirement is a derived codec (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_local_scope.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches a generalized local function whose other requirement is a derived codec (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12768_local_scope.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches two generic frames whose other requirement is a derived codec (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_nested_frames.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches two generic frames whose other requirement is a derived codec (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12768_nested_frames.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches a numeric variable the wrapper seals whose other requirement is a derived codec (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_sealed_numeric.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches a numeric variable the wrapper seals whose other requirement is a derived codec (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12768_sealed_numeric.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches a user literal type whose other requirement is a derived codec (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_user_literal.roc", .exit = .success, .stdout_exact = "18\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches a user literal type whose other requirement is a derived codec (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12768_user_literal.roc", .exit = .success, .stdout_exact = "18\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument of a generic call wraps an open type in a record for a derived codec (speed, specialize=no)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_generic_call_record_codec.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument of a generic call wraps an open type in a record for a derived codec (size, specialize=no)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_generic_call_record_codec.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches a dispatch through an exact procedure alias whose other requirement is a derived codec (speed, specialize=no)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_method_alias.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches a dispatch through an exact procedure alias whose other requirement is a derived codec (size, specialize=no)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_method_alias.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches a generalized local function whose other requirement is a derived codec (speed, specialize=no)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_local_scope.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches a generalized local function whose other requirement is a derived codec (size, specialize=no)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_local_scope.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches two generic frames whose other requirement is a derived codec (speed, specialize=no)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_nested_frames.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches two generic frames whose other requirement is a derived codec (size, specialize=no)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_nested_frames.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches a numeric variable the wrapper seals whose other requirement is a derived codec (speed, specialize=no)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_sealed_numeric.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches a numeric variable the wrapper seals whose other requirement is a derived codec (size, specialize=no)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_sealed_numeric.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches a user literal type whose other requirement is a derived codec (speed, specialize=no)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_user_literal.roc", .exit = .success, .stdout_exact = "18\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches a user literal type whose other requirement is a derived codec (size, specialize=no)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_user_literal.roc", .exit = .success, .stdout_exact = "18\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "boxy roc build dev builds a platform whose rejected provided export crashes when called", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache", "--target=x64musl", "--specialize=no" }, .roc_file = "test/postcheck/boxy_rejected_provided_export/app.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stdout, .text = "successfully building" }, .{ .stream = .stderr, .text = "type mismatch" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10670: roc build rejects a platform required capture without an app", .body = .{ .command = .{ .args = &.{ "build", "--target=x64musl", "--no-cache" }, .roc_file = "test/postcheck/issue_10670_platform_required_capture.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "execution requires app or default app" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "platform required declaration reached Monotype without a binding" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build divergent if with all crash branches does not panic", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/fx/divergent_if_all_branches_crash_repro.roc", .exit = .not_panic, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
@@ -3782,6 +3825,15 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12554: wasm32 platform that reserves memory below a global_base smaller than its stack links (LLVM)", .backend = .size, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=size", "--no-cache" }, .roc_file = "test/wasm/issue_12554_reserved_low_memory/app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "linker failed" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: dev wasm32 emits a valid sealed Boxy object", .backend = .dev, .body = .{ .custom = .issue_10733_wasm_boxy_dev_sealed_object } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12029: boxy tail calls run in constant stack on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12029_wasm_boxy_tail_calls } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 functions take more than 255 parameters (dev, specialized)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_many_parameters_specialized } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 functions take more than 255 parameters (dev, boxy)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_many_parameters_boxy } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 arguments past the parameter limit travel in memory (dev, specialized)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_parameter_limit_dev_specialized } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 arguments past the parameter limit travel in memory (dev, boxy)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_parameter_limit_dev_boxy } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 arguments past the parameter limit travel in memory (speed, specialized)", .timeout_ms = 600_000, .backend = .speed, .body = .{ .custom = .issue_12769_wasm_parameter_limit_speed_specialized } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 arguments past the parameter limit travel in memory (speed, boxy)", .timeout_ms = 600_000, .backend = .speed, .body = .{ .custom = .issue_12769_wasm_parameter_limit_speed_boxy } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 platform functions past the parameter limit are reported (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_host_parameter_limit_dev } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 platform functions past the parameter limit are reported (speed)", .timeout_ms = 600_000, .backend = .speed, .body = .{ .custom = .issue_12769_wasm_host_parameter_limit_speed } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 object packs offer no entry past the parameter limit (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_12769_wasm_object_entry_parameter_limit } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_dev } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_size } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (speed)", .timeout_ms = 600_000, .backend = .speed, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_speed } },
@@ -5434,6 +5486,15 @@ fn runCustomCase(
         .literal_root_rejected_every_build => customLiteralRootRejectedEveryBuild(io, allocator, &env, &timer, timeout_ms),
         .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
         .issue_12029_wasm_boxy_tail_calls => customIssue12029WasmBoxyTailCalls(io, allocator, &env, &timer, timeout_ms),
+        .issue_12769_wasm_many_parameters_specialized => customIssue12769WasmManyParameters(io, allocator, &env, &timer, timeout_ms, "--specialize=yes"),
+        .issue_12769_wasm_many_parameters_boxy => customIssue12769WasmManyParameters(io, allocator, &env, &timer, timeout_ms, "--specialize=no"),
+        .issue_12769_wasm_parameter_limit_dev_specialized => customIssue12769WasmParameterLimit(io, allocator, &env, &timer, timeout_ms, "--opt=dev", "--specialize=yes"),
+        .issue_12769_wasm_parameter_limit_dev_boxy => customIssue12769WasmParameterLimit(io, allocator, &env, &timer, timeout_ms, "--opt=dev", "--specialize=no"),
+        .issue_12769_wasm_parameter_limit_speed_specialized => customIssue12769WasmParameterLimit(io, allocator, &env, &timer, timeout_ms, "--opt=speed", "--specialize=yes"),
+        .issue_12769_wasm_parameter_limit_speed_boxy => customIssue12769WasmParameterLimit(io, allocator, &env, &timer, timeout_ms, "--opt=speed", "--specialize=no"),
+        .issue_12769_wasm_host_parameter_limit_dev => customIssue12769WasmHostParameterLimit(io, allocator, &env, &timer, timeout_ms, "--opt=dev"),
+        .issue_12769_wasm_host_parameter_limit_speed => customIssue12769WasmHostParameterLimit(io, allocator, &env, &timer, timeout_ms, "--opt=speed"),
+        .issue_12769_wasm_object_entry_parameter_limit => customIssue12769WasmObjectEntryParameterLimit(io, allocator, &env, &timer, timeout_ms),
         .issue_12741_wasm_generic_tail_calls_dev => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=dev"),
         .issue_12741_wasm_generic_tail_calls_size => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=size"),
         .issue_12741_wasm_generic_tail_calls_speed => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=speed"),
@@ -5468,7 +5529,7 @@ fn runCustomCase(
             .roc_file = "test/echo/issue_11355_platform_codec_root.roc",
             .output_name = "issue_11355_platform_codec_root",
             .exit = .{ .code = 1 },
-            .stdout_exact = "",
+            .stdout_exact = "Program exited with error: InvalidJson(\"Invalid JSON\")\n",
         }),
         .issue_11355_boxy_built_try_low_levels => customBoxyBuiltEchoApp(io, allocator, &env, &timer, timeout_ms, .{
             .roc_file = "test/echo/boxy_try_low_levels.roc",
@@ -9237,6 +9298,8 @@ const PackStoreFiles = struct {
     contents: std.ArrayList([]u8) = .empty,
     /// Each pack's cache family, parallel to `paths`.
     families: std.ArrayList(artifact_store.Family) = .empty,
+    /// Each pack's store variant, parallel to `paths`.
+    variants: std.ArrayList([32]u8) = .empty,
 
     fn deinit(self: *PackStoreFiles, allocator: Allocator) void {
         for (self.paths.items) |path| allocator.free(path);
@@ -9244,6 +9307,7 @@ const PackStoreFiles = struct {
         self.paths.deinit(allocator);
         self.contents.deinit(allocator);
         self.families.deinit(allocator);
+        self.variants.deinit(allocator);
     }
 
     fn read(io: std.Io, allocator: Allocator, cache_root: []const u8) CliRunnerError!PackStoreFiles {
@@ -9270,6 +9334,7 @@ const PackStoreFiles = struct {
                 continue;
             }
             try result.families.append(allocator, entry.family);
+            try result.variants.append(allocator, entry.variant);
             const path = try allocator.dupe(u8, &std.fmt.bytesToHex(entry.key, .lower));
             result.paths.append(allocator, path) catch |err| {
                 allocator.free(path);
@@ -9996,22 +10061,63 @@ fn customLinkedObjectPack(
     var second = PackStoreFiles.read(io, allocator, stores[1]) catch |err|
         return customInfraFailure(allocator, timer, "failed to read the second store's packs: {}", .{err});
     defer second.deinit(allocator);
-    // A pack is filed under its module's placement, which names the package
-    // by where this store keeps it, and named by its key, which is the same
-    // in every store.
-    var object_packs: usize = 0;
-    for (first.paths.items, first.contents.items, first.families.items) |path, bytes, family| {
-        if (family != .optimized_pack) continue;
-        object_packs += 1;
-        const key_name = std.fs.path.basename(path);
-        const other = for (second.paths.items, second.contents.items, second.families.items) |other_path, other_bytes, other_family| {
-            if (other_family == .optimized_pack and std.mem.eql(u8, std.fs.path.basename(other_path), key_name)) break other_bytes;
-        } else return customFailure(allocator, timer, "optimized pack {s} was written by one store and not the other", .{key_name});
-        if (!std.mem.eql(u8, bytes, other)) {
-            return customFailure(allocator, timer, "optimized pack {s} differs between two stores", .{key_name});
+    return expectStoresShareOptimizedPacks(allocator, timer, &first, &second, "speed");
+}
+
+/// Where a pack path's key half starts: the catalog key is a 32-byte group
+/// hash followed by the 32-byte pack key, and a path is the whole key in hex.
+const pack_path_key_half_start = 32 * 2;
+
+/// One store's packs written at `opt`, by family.
+const OptimizedPackCounts = struct { program: usize = 0, package: usize = 0 };
+
+fn optimizedPackCounts(files: *const PackStoreFiles, opt: []const u8) OptimizedPackCounts {
+    const variant = artifact_store.hashBytes(opt);
+    var counts: OptimizedPackCounts = .{};
+    for (files.families.items, files.variants.items) |family, candidate| {
+        if (!std.mem.eql(u8, &candidate, &variant)) continue;
+        switch (family) {
+            .optimized_pack => counts.program += 1,
+            .package_pack => counts.package += 1,
+            .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .local_pack, .local_discovery, .package_discovery, .program_output, .scratch, .boxy_object => {},
         }
     }
-    if (object_packs == 0) return customFailure(allocator, timer, "no optimized object pack was written", .{});
+    return counts;
+}
+
+/// Two independent stores must each hold the program's optimized pack and the
+/// URL package's pack at `opt`, byte for byte. A pack's group half hashes the
+/// package's placement, which differs per store, so the stores are compared on
+/// the key half.
+fn expectStoresShareOptimizedPacks(
+    allocator: Allocator,
+    timer: *harness.Timer,
+    first: *const PackStoreFiles,
+    second: *const PackStoreFiles,
+    opt: []const u8,
+) ?TestResult {
+    const first_counts = optimizedPackCounts(first, opt);
+    const second_counts = optimizedPackCounts(second, opt);
+    if (first_counts.program == 0) return customFailure(allocator, timer, "no {s} program pack was written", .{opt});
+    if (first_counts.package == 0) return customFailure(allocator, timer, "no {s} URL package pack was written", .{opt});
+    if (first_counts.program != second_counts.program or first_counts.package != second_counts.package) {
+        return customFailure(allocator, timer, "the stores wrote different {s} packs: {d} program and {d} package, then {d} and {d}", .{ opt, first_counts.program, first_counts.package, second_counts.program, second_counts.package });
+    }
+    const variant = artifact_store.hashBytes(opt);
+    for (first.paths.items, first.contents.items, first.families.items, first.variants.items) |path, bytes, family, candidate| {
+        if (!std.mem.eql(u8, &candidate, &variant)) continue;
+        const key_half = path[pack_path_key_half_start..];
+        var written_by_second = false;
+        var identical = false;
+        for (second.paths.items, second.contents.items, second.families.items, second.variants.items) |other_path, other_bytes, other_family, other_variant| {
+            if (other_family != family or !std.mem.eql(u8, &other_variant, &variant)) continue;
+            if (!std.mem.eql(u8, other_path[pack_path_key_half_start..], key_half)) continue;
+            written_by_second = true;
+            identical = identical or std.mem.eql(u8, other_bytes, bytes);
+        }
+        if (!written_by_second) return customFailure(allocator, timer, "{s} pack {s} was written by one store and not the other", .{ opt, key_half });
+        if (!identical) return customFailure(allocator, timer, "{s} pack {s} differs between two stores", .{ opt, key_half });
+    }
     return null;
 }
 
@@ -10057,10 +10163,10 @@ fn wasmLinkedObjectPackForTarget(
         return customInfraFailure(allocator, timer, "failed to allocate staged app dir name: {}", .{err});
     const target_arg = std.fmt.allocPrint(allocator, "--target={s}", .{target_name}) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate target argument: {}", .{err});
-    const size_namespace = std.fmt.allocPrint(allocator, "{s}-size", .{target_name}) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate store namespace: {}", .{err});
-    const dev_namespace = std.fmt.allocPrint(allocator, "{s}-dev", .{target_name}) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate store namespace: {}", .{err});
+    const size_store_write = std.fmt.allocPrint(allocator, "pack store write: {s}-size\n", .{target_name}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate store write line: {}", .{err});
+    const dev_store_write = std.fmt.allocPrint(allocator, "pack store write: {s}-dev\n", .{target_name}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate store write line: {}", .{err});
     var stores: [2][]const u8 = undefined;
     var uncached_outstanding: ?i64 = null;
     var edited_uncached_outstanding: ?i64 = null;
@@ -10126,6 +10232,15 @@ fn wasmLinkedObjectPackForTarget(
             if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
                 return failureFromRun(allocator, timer, built, "wasm32 build did not succeed");
             }
+            // The wasm32 dev backend cannot splice a dev pack. Compile-time
+            // evaluation runs on the host and files its packs in the host's
+            // store.
+            if (std.mem.find(u8, built.stderr, dev_store_write) != null) {
+                return failureFromRun(allocator, timer, built, "a wasm32 build wrote a dev pack, which no wasm32 build can splice");
+            }
+            if (build.kind == .optimized and std.mem.find(u8, built.stderr, size_store_write) == null) {
+                return failureFromRun(allocator, timer, built, "the optimized build did not report writing its size-optimized store");
+            }
             // The optimized module's allocations are its own.
             if (build.kind == .optimized) continue;
             if (build.kind == .cached) {
@@ -10170,25 +10285,7 @@ fn wasmLinkedObjectPackForTarget(
     var second = PackStoreFiles.read(io, allocator, stores[1]) catch |err|
         return customInfraFailure(allocator, timer, "failed to read the second store's packs: {}", .{err});
     defer second.deinit(allocator);
-    var object_packs: usize = 0;
-    for (first.paths.items, first.contents.items) |path, bytes| {
-        if (std.mem.find(u8, path, size_namespace) == null) continue;
-        object_packs += 1;
-        const key_name = std.fs.path.basename(path);
-        const other = for (second.paths.items, second.contents.items) |other_path, other_bytes| {
-            if (std.mem.find(u8, other_path, size_namespace) != null and std.mem.eql(u8, std.fs.path.basename(other_path), key_name)) break other_bytes;
-        } else return customFailure(allocator, timer, "size-optimized pack {s} was written by one store and not the other", .{key_name});
-        if (!std.mem.eql(u8, bytes, other)) {
-            return customFailure(allocator, timer, "size-optimized pack {s} differs between two stores", .{key_name});
-        }
-    }
-    if (object_packs == 0) return customFailure(allocator, timer, "no size-optimized object pack was written", .{});
-    for (first.paths.items) |path| {
-        if (std.mem.find(u8, path, dev_namespace) != null) {
-            return customFailure(allocator, timer, "a wasm32 build wrote dev pack {s}, which no wasm32 build can splice", .{path});
-        }
-    }
-    return null;
+    return expectStoresShareOptimizedPacks(allocator, timer, &first, &second, "size");
 }
 
 /// A program of vector operations and a string pattern builds for wasm32 and
@@ -14422,11 +14519,459 @@ fn customIssue12029WasmBoxyTailCalls(
     return null;
 }
 
+fn customIssue12769WasmManyParameters(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    specialize_arg: []const u8,
+) ?TestResult {
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "many-parameters.wasm" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output path: {}", .{err});
+    defer allocator.free(output_path);
+    const output_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output argument: {}", .{err});
+    defer allocator.free(output_arg);
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--target=wasm32", "--opt=dev", specialize_arg, "--no-cache", output_arg },
+        .roc_file = "test/wasm/issue_12769_many_wasm_parameters_app.roc",
+        .exit = .success,
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+    })) |failure| return failure;
+    if (validateWasmOutput(io, allocator, timer, output_path)) |failure| return failure;
+
+    var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
+        return customFailure(allocator, timer, "failed to load the many-parameter wasm module: {}", .{err});
+    defer wasm.deinit();
+    const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
+        return customFailure(allocator, timer, "many-parameter wasm execution failed: {}", .{err});
+    const expected = "64043021 320171021 321171021 320171021 45171";
+    if (!std.mem.eql(u8, result, expected)) {
+        return customFailure(allocator, timer, "many-parameter wasm returned \"{s}\"", .{result});
+    }
+    return null;
+}
+
 /// Build generic tail-call cycles for wasm32 without specialization and run
 /// them. Their dynamic arguments and results must reach each callee after the
 /// frame that called it is gone, and whatever carries them must be released
 /// on the way, so only the result the host holds stays allocated. The
 /// interpreter's stack is far smaller than the cycles are deep.
+/// The parameters a function may declare and still load in a JS API engine.
+/// bytebox accepts more, so the tests read the limit off the module's types.
+const wasm_engine_param_limit = 1000;
+
+/// Append `count` comma-separated copies of `item`, each formatted with its
+/// position.
+fn appendWasmParamList(out: *std.ArrayList(u8), allocator: Allocator, count: usize, comptime item: []const u8) Allocator.Error!void {
+    for (0..count) |i| {
+        if (i != 0) try out.appendSlice(allocator, ", ");
+        try out.print(allocator, item, .{i});
+    }
+}
+
+/// Append `count` parameter patterns that bind only the positions in `used`.
+fn appendWasmParamPatterns(out: *std.ArrayList(u8), allocator: Allocator, count: usize, used: []const usize) Allocator.Error!void {
+    for (0..count) |i| {
+        if (i != 0) try out.appendSlice(allocator, ", ");
+        if (std.mem.findScalar(usize, used, i) != null) try out.print(allocator, "a{d}", .{i}) else try out.append(allocator, '_');
+    }
+}
+
+/// An app whose functions pass the wasm parameter limit in every way a program
+/// can: written parameters, a generic function that adds hidden ones, generic
+/// tail calls that hold their arguments between frames, and, without
+/// `--opt=speed`, hidden literal arguments alone. Each result depends on where
+/// the arguments arrive, and the arguments come from the host, so no call runs
+/// at compile time.
+fn issue12769WideApp(allocator: Allocator, platform: []const u8, literals: bool) Allocator.Error![]const u8 {
+    const count = 1100;
+    var out: std.ArrayList(u8) = .empty;
+    try out.print(allocator, "app [main!] {{ pf: platform \"{s}\" }}\n\nimport pf.FallibleHost\n\n", .{platform});
+
+    try out.appendSlice(allocator, "direct : ");
+    for (0..count) |i| try out.appendSlice(allocator, if (i == 0) "U64" else ", U64");
+    try out.appendSlice(allocator, " -> U64\n");
+    for ([_][]const u8{ "direct", "generic" }) |name| {
+        try out.print(allocator, "{s} = |", .{name});
+        try appendWasmParamPatterns(&out, allocator, count, &.{ 0, 550, 1099 });
+        try out.appendSlice(allocator, "| a0 + 1000 * a550 + 1000000 * a1099\n\n");
+    }
+
+    for ([_][2][]const u8{ .{ "ping", "pong" }, .{ "pong", "ping" } }) |names| {
+        try out.print(allocator, "{s} = |d, ", .{names[0]});
+        try appendWasmParamList(&out, allocator, count, "a{d}");
+        try out.print(allocator, "| if d == 0 a0 else {s}(d - 1, ", .{names[1]});
+        for (1..count) |i| try out.print(allocator, "a{d}, ", .{i});
+        try out.appendSlice(allocator, "a0)\n\n");
+    }
+
+    if (literals) {
+        try out.appendSlice(allocator, "literals = |n| n");
+        for (1..count + 1) |i| try out.print(allocator, " + {d}", .{i});
+        try out.appendSlice(allocator, "\n\n");
+    }
+
+    try out.appendSlice(allocator,
+        \\main! = || {
+        \\    input = FallibleHost.json_input!({})
+        \\    n = input.count_utf8_bytes()
+        \\    heap = Str.concat(input, " and a string long enough to live on the heap")
+        \\    other = Str.concat(heap, "!")
+        \\    direct_result : U64
+        \\    direct_result = direct(
+    );
+    try appendWasmParamList(&out, allocator, count, "n + {d}");
+    try out.appendSlice(allocator, ")\n    generic_result : U64\n    generic_result = generic(");
+    try appendWasmParamList(&out, allocator, count, "n + {d}");
+    try out.appendSlice(allocator, ")\n    tail_number : U64\n    tail_number = ping(n, ");
+    try appendWasmParamList(&out, allocator, count, "n + {d}");
+    try out.appendSlice(allocator, ")\n    tail_string = ping(n, ");
+    for (0..count) |i| {
+        if (i != 0) try out.appendSlice(allocator, ", ");
+        try out.appendSlice(allocator, if (i == 21) "other" else "heap");
+    }
+    try out.appendSlice(allocator, ")\n");
+    if (literals) {
+        try out.appendSlice(allocator, "    literal_result : U64\n    literal_result = literals(n)\n");
+        try out.appendSlice(allocator, "    \"${direct_result.to_str()} ${generic_result.to_str()} ${tail_number.to_str()} ${tail_string} ${literal_result.to_str()}\"\n}\n");
+    } else {
+        try out.appendSlice(allocator, "    \"${direct_result.to_str()} ${generic_result.to_str()} ${tail_number.to_str()} ${tail_string}\"\n}\n");
+    }
+    return out.items;
+}
+
+/// Fail unless the wasm module at `path` declares a function type near the
+/// limit, so that a wide signature survived to this module, and none past it.
+fn checkWasmParamLimit(io: std.Io, allocator: Allocator, timer: *harness.Timer, path: []const u8) ?TestResult {
+    const wasm_bytes = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read wasm output {s}: {}", .{ path, err });
+    defer allocator.free(wasm_bytes);
+    var module_def = bytebox.createModuleDefinition(allocator, .{ .debug_name = "cli_wasm_output" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create wasm decoder: {}", .{err});
+    defer module_def.destroy();
+    module_def.decode(wasm_bytes) catch |err|
+        return customFailure(allocator, timer, "generated invalid wasm {s}: {}", .{ path, err });
+    var widest: u32 = 0;
+    for (module_def.types.items) |func_type| widest = @max(widest, func_type.num_params);
+    if (widest > wasm_engine_param_limit) {
+        return customFailure(allocator, timer, "wasm declares a function type with {d} parameters, past the limit of {d}", .{ widest, wasm_engine_param_limit });
+    }
+    if (widest < wasm_engine_param_limit - 100) {
+        return customFailure(allocator, timer, "wasm's widest function type has {d} parameters, so nothing tested the limit", .{widest});
+    }
+    return null;
+}
+
+fn customIssue12769WasmParameterLimit(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    opt_arg: []const u8,
+    specialize_arg: []const u8,
+) ?TestResult {
+    const literals = std.mem.eql(u8, opt_arg, "--opt=dev");
+    const platform_path = absoluteFromProjectRoot(allocator, "test/wasm/platform/main.roc") catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform path: {}", .{err});
+    const platform = std.fs.path.relative(allocator, project_root_path, null, env.dirs.work_dir, platform_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to relate the platform path: {}", .{err});
+    if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, platform, '\\', '/');
+    const source = issue12769WideApp(allocator, platform, literals) catch |err|
+        return customInfraFailure(allocator, timer, "failed to generate the wide app: {}", .{err});
+    const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "wide_app.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ app_path, err });
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "wide.wasm" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output path: {}", .{err});
+    const output_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output argument: {}", .{err});
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--target=wasm32", opt_arg, specialize_arg, "--no-cache", output_arg },
+        .roc_file = app_path,
+        .exit = .success,
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+    })) |failure| return failure;
+    if (checkWasmParamLimit(io, allocator, timer, output_path)) |failure| return failure;
+
+    var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
+        return customFailure(allocator, timer, "failed to load the wide wasm module: {}", .{err});
+    defer wasm.deinit();
+    const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
+        return customFailure(allocator, timer, "wide wasm execution failed: {}", .{err});
+    const common = "1120571021 1120571021 42 {\"favoritesCount\":14} and a string long enough to live on the heap!";
+    const expected: []const u8 = if (literals) common ++ " 605571" else common;
+    if (!std.mem.eql(u8, result, expected)) {
+        return customFailure(allocator, timer, "wide wasm returned \"{s}\"", .{result});
+    }
+    const outstanding = wasmOutstandingAllocations(&wasm) catch |err|
+        return customFailure(allocator, timer, "failed to read the wide module's allocation counts: {}", .{err});
+    if (outstanding != 1) {
+        return customFailure(allocator, timer, "wide wasm left {d} allocations outstanding, not just its result", .{outstanding});
+    }
+    return null;
+}
+
+const WasmHostBoundary = enum { provides, hosted };
+
+/// Stage a platform with one boundary function of `count` wasm parameters and
+/// an app for it, and return the app's path.
+fn stageWasmBoundaryApp(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    boundary: WasmHostBoundary,
+    count: usize,
+) (Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)![]const u8 {
+    const dir = try std.fmt.allocPrint(allocator, "{s}/boundary_{s}_{d}", .{ env.dirs.work_dir, @tagName(boundary), count });
+    const platform_dir = try std.fs.path.join(allocator, &.{ dir, "platform" });
+    try std.Io.Dir.cwd().createDirPath(io, platform_dir);
+
+    var types: std.ArrayList(u8) = .empty;
+    for (0..count) |i| try types.appendSlice(allocator, if (i == 0) "U64" else ", U64");
+
+    var platform: std.ArrayList(u8) = .empty;
+    switch (boundary) {
+        .provides => {
+            try platform.appendSlice(allocator,
+                \\platform ""
+                \\    requires {} { run : U64 -> U64 }
+                \\    exposes []
+                \\    packages {}
+                \\    provides { "roc_run": run_for_host }
+                \\    hosted {}
+                \\    targets: {
+                \\        inputs_dir: "targets/",
+                \\        wasm32: { inputs: [app], output: Archive },
+                \\    }
+                \\
+                \\
+            );
+            try platform.print(allocator, "run_for_host : {s} -> U64\nrun_for_host = |", .{types.items});
+            try appendWasmParamPatterns(&platform, allocator, count, &.{ 0, 999 });
+            try platform.appendSlice(allocator, "| run(a0 + a999)\n");
+        },
+        .hosted => {
+            try platform.appendSlice(allocator,
+                \\platform ""
+                \\    requires {} { run : U64 -> U64 }
+                \\    exposes [Host]
+                \\    packages {}
+                \\    provides { "roc_run": run_for_host! }
+                \\    hosted { "roc_wide_host": Host.wide! }
+                \\    targets: {
+                \\        inputs_dir: "targets/",
+                \\        wasm32: { inputs: [app], output: Archive },
+                \\    }
+                \\
+                \\import Host
+                \\
+                \\run_for_host! : U64 => U64
+                \\run_for_host! = |n| Host.wide!(
+            );
+            try appendWasmParamList(&platform, allocator, count, "run(n) + {d}");
+            try platform.appendSlice(allocator, ")\n");
+            const host_path = try std.fs.path.join(allocator, &.{ platform_dir, "Host.roc" });
+            const host = try std.fmt.allocPrint(allocator, "Host := [].{{\n    wide! : {s} => U64\n}}\n", .{types.items});
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = host_path, .data = host });
+        },
+    }
+    const platform_path = try std.fs.path.join(allocator, &.{ platform_dir, "main.roc" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = platform_path, .data = platform.items });
+
+    const app_path = try std.fs.path.join(allocator, &.{ dir, "app.roc" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = "app [run] { pf: platform \"./platform/main.roc\" }\n\nrun : U64 -> U64\nrun = |n| n + 1\n" });
+    return app_path;
+}
+
+fn customIssue12769WasmHostParameterLimit(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    opt_arg: []const u8,
+) ?TestResult {
+    for ([_]WasmHostBoundary{ .provides, .hosted }) |boundary| {
+        const symbol = switch (boundary) {
+            .provides => "roc_run",
+            .hosted => "roc_wide_host",
+        };
+        const accepted_app = stageWasmBoundaryApp(io, allocator, env, boundary, wasm_engine_param_limit) catch |err|
+            return customInfraFailure(allocator, timer, "failed to stage the boundary app: {}", .{err});
+        const accepted_output = std.fmt.allocPrint(allocator, "{s}.a", .{accepted_app}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const accepted_arg = outputArg(allocator, accepted_output) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "build", "--target=wasm32", opt_arg, "--no-cache", accepted_arg },
+            .roc_file = accepted_app,
+            .exit = .success,
+            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        })) |failure| return failure;
+
+        const rejected_app = stageWasmBoundaryApp(io, allocator, env, boundary, wasm_engine_param_limit + 1) catch |err|
+            return customInfraFailure(allocator, timer, "failed to stage the boundary app: {}", .{err});
+        const rejected_output = std.fmt.allocPrint(allocator, "{s}.a", .{rejected_app}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const rejected_arg = outputArg(allocator, rejected_output) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+        const message = std.fmt.allocPrint(allocator, "{s} with 1001 wasm parameters", .{symbol}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate expected message: {}", .{err});
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "build", "--target=wasm32", opt_arg, "--no-cache", rejected_arg },
+            .roc_file = rejected_app,
+            .exit = .failure,
+            .contains = &.{.{ .stream = .stderr, .text = message }},
+            .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+        })) |failure| return failure;
+    }
+    return null;
+}
+
+const issue_12769_package_hash = "FakeHashAbcDefGhiJkLmNoPqRsTuVwXyZ123456789o";
+
+/// A URL package module with a wide recursive pair beside a narrow one, for an
+/// object pack to serve.
+fn issue12769WidePackage(allocator: Allocator) Allocator.Error![]const u8 {
+    const count = 1100;
+    var out: std.ArrayList(u8) = .empty;
+    try out.appendSlice(allocator, "Wide := [].{\n");
+    for ([_][3][]const u8{ .{ "wide", "weave", "1" }, .{ "weave", "wide", "2" } }) |names| {
+        try out.print(allocator, "\t{s} : U64", .{names[0]});
+        for (0..count) |_| try out.appendSlice(allocator, ", U64");
+        try out.print(allocator, " -> U64\n\t{s} = |d, ", .{names[0]});
+        try appendWasmParamList(&out, allocator, count, "a{d}");
+        try out.print(allocator, "| if d == 0 a0 + a550 + a1099 else {s} + {s}(d - 1, ", .{ names[2], names[1] });
+        for (1..count) |i| try out.print(allocator, "a{d}, ", .{i});
+        try out.appendSlice(allocator, "a0)\n\n");
+    }
+    try out.appendSlice(allocator,
+        \\    narrow : U64, U64 -> U64
+        \\    narrow = |d, x| if d == 0 x else 1 + narrower(d - 1, x)
+        \\
+        \\    narrower : U64, U64 -> U64
+        \\    narrower = |d, x| if d == 0 x else 2 + narrow(d - 1, x)
+        \\}
+        \\
+    );
+    return out.items;
+}
+
+/// An app that calls `issue12769WidePackage`'s module.
+fn issue12769WidePackageApp(allocator: Allocator, platform: []const u8) Allocator.Error![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    try out.print(allocator, "app [main!] {{\n    pf: platform \"{s}\",\n    wide: \"https://example.com/roc/wide/1.0.0/{s}.tar.zst\",\n}}\n\n", .{ platform, issue_12769_package_hash });
+    try out.appendSlice(allocator,
+        \\import pf.FallibleHost
+        \\import wide.Wide
+        \\
+        \\main! = || {
+        \\    n = FallibleHost.json_input!({}).count_utf8_bytes()
+        \\    small = Wide.narrow(n, n)
+        \\    large = Wide.wide(n,
+    );
+    try appendWasmParamList(&out, allocator, 1100, " n + {d}");
+    try out.appendSlice(allocator, ")\n    \"${large.to_str()} ${small.to_str()}\"\n}\n");
+    return out.items;
+}
+
+fn customIssue12769WasmObjectEntryParameterLimit(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const platform_path = absoluteFromProjectRoot(allocator, "test/wasm/platform/main.roc") catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform path: {}", .{err});
+    const platform = std.fs.path.relative(allocator, project_root_path, null, env.dirs.work_dir, platform_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to relate the platform path: {}", .{err});
+    if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, platform, '\\', '/');
+    const source = issue12769WidePackageApp(allocator, platform) catch |err|
+        return customInfraFailure(allocator, timer, "failed to generate the object pack app: {}", .{err});
+    const package_module = issue12769WidePackage(allocator) catch |err|
+        return customInfraFailure(allocator, timer, "failed to generate the package: {}", .{err});
+    const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "object_pack_app.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ app_path, err });
+    const cache_root = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "object_pack_cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
+    const package_dir = std.fs.path.join(allocator, &.{ cache_root, "roc", "packages", issue_12769_package_hash }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate package path: {}", .{err});
+    std.Io.Dir.cwd().createDirPath(io, package_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create {s}: {}", .{ package_dir, err });
+    for ([_][2][]const u8{ .{ "main.roc", "package [Wide] {}\n" }, .{ "Wide.roc", package_module } }) |file| {
+        const file_path = std.fs.path.join(allocator, &.{ package_dir, file[0] }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate package file path: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = file_path, .data = file[1] }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ file_path, err });
+    }
+
+    var store_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone the store environment: {}", .{err}),
+    };
+    defer store_env.env_map.deinit();
+    for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+        store_env.env_map.put(key, cache_root) catch |err|
+            return customInfraFailure(allocator, timer, "failed to set the cache root: {}", .{err});
+    }
+    store_env.env_map.put("ROC_PACK_STATS", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable pack statistics: {}", .{err});
+
+    for ([_][]const u8{ "--opt=size", "--opt=dev" }) |opt_arg| {
+        const dev = std.mem.eql(u8, opt_arg, "--opt=dev");
+        if (dev) {
+            // After an edit only the package's own pack can serve this build,
+            // which asks it for the wide pair and the narrow pair by name.
+            const edited = std.mem.replaceOwned(u8, allocator, source, "Wide.narrow(n, n)", "Wide.narrow(n, n + 1)") catch |err|
+                return customInfraFailure(allocator, timer, "failed to edit the object pack app: {}", .{err});
+            std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = edited }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ app_path, err });
+        }
+        const output_path = std.fmt.allocPrint(allocator, "{s}/object_pack{s}.wasm", .{ env.dirs.work_dir, opt_arg }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, output_path) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+        const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+        const built = runRocInEnv(io, allocator, &store_env, &.{ "build", "--target=wasm32", opt_arg, out_arg }, app_path, .absolute, &.{}, null, build_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+        if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null) {
+            return failureFromRun(allocator, timer, built, "wasm32 build did not succeed");
+        }
+        if (dev) {
+            const marker = "linked procs: ";
+            const at = std.mem.find(u8, built.stderr, marker) orelse
+                return failureFromRun(allocator, timer, built, "the dev build did not report pack statistics");
+            if (countAfterMarker(built.stderr[at + marker.len ..]) == 0) {
+                return failureFromRun(allocator, timer, built, "the dev build linked no entry of the optimized build's pack");
+            }
+        }
+        if (checkWasmParamLimit(io, allocator, timer, output_path)) |failure| return failure;
+
+        var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
+            return customFailure(allocator, timer, "failed to load the {s} module: {}", .{ opt_arg, err });
+        defer wasm.deinit();
+        const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
+            return customFailure(allocator, timer, "the {s} module failed: {}", .{ opt_arg, err });
+        if (!std.mem.eql(u8, result, if (dev) "706 53" else "706 52")) {
+            return customFailure(allocator, timer, "the {s} module returned \"{s}\"", .{ opt_arg, result });
+        }
+    }
+    return null;
+}
+
 fn customIssue12741WasmGenericTailCalls(
     io: std.Io,
     allocator: Allocator,

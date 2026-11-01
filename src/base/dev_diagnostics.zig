@@ -38,7 +38,8 @@ pub const Var = enum {
     fresh_type_analysis,
     /// Print every object cache lookup and offer.
     pack_trace,
-    /// Print how many procedures a dev build served from cached packs.
+    /// Print how many procedures a dev build served from cached packs, and
+    /// the store root behind every object cache write.
     pack_stats,
     /// Measure specialization with persistent interface replay disabled.
     disable_persistent_interfaces,

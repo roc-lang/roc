@@ -677,3 +677,56 @@ test "tag lookup finds every member of sorted composed and nominal descriptors" 
         }
     }
 }
+
+test "single-payload tag construction initializes the exact byte image and releases boxed payloads" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    var labels: [257][6]u8 = undefined;
+    var names: [257]Name = undefined;
+    var variants: [257]compose.VariantInput = undefined;
+    for (&labels, &names, 0..) |*label, *tag_name, index| {
+        const text = try std.fmt.bufPrint(label, "Tag{d:0>3}", .{index});
+        tag_name.* = .{ .id = desc_mod.labelId(text), .len = @intCast(text.len), .bytes = text.ptr };
+    }
+    const wide = compose.scalarDesc(.i128);
+    const wide_payload = [_]*const TypeDesc{wide};
+    const padded_record = recordAB(&env, compose.scalarDesc(.u8), compose.scalarDesc(.u64));
+    const boxed_int = compose.recursiveBox(&env.cache, ops, compose.scalarDesc(.i64));
+    const boxed_str = compose.recursiveBox(&env.cache, ops, compose.strDesc());
+    for ([_]*const TypeDesc{ compose.zstDesc(), compose.scalarDesc(.u8), compose.scalarDesc(.u64), wide, padded_record, boxed_int, boxed_str }) |payload| {
+        const payloads = [_]*const TypeDesc{payload};
+        // No discriminant, a one-byte discriminant, and a two-byte one.
+        for ([_]usize{ 1, 2, 257 }) |count| {
+            for (variants[0..count], 0..) |*variant, index| {
+                variant.* = .{ .name = &names[index], .payload_count = 1, .payloads = if (index + 1 == count) &payloads else &wide_payload };
+            }
+            const desc = compose.tagUnion(&env.cache, ops, variants[0..count]);
+            const allocations = env.allocations();
+            var source: Slot = .{ .bytes = @splat(0x5a) };
+            if (payload == boxed_str) source.write(0, RocStr, bigStr("a boxed payload with independently allocated string bytes", ops));
+            var actual: Slot = .{ .bytes = @splat(0xa5) };
+            compiled.buildTag(desc, &names[count - 1], actual.ptr(), &.{source.ptr()}, ops);
+
+            var expected: Slot = .{ .bytes = @splat(0xa5) };
+            @memset(expected.bytes[0..desc.size], 0);
+            if (payload.kind == .recursive_box) {
+                // The allocated pointer is unpredictable, but its entire slot
+                // and the bytes of its separately allocated payload are exact.
+                @memcpy(expected.bytes[0..payload.size], actual.bytes[0..payload.size]);
+                const contents = compiled.componentAddr(payload, actual.ptr());
+                try testing.expectEqualSlices(u8, source.bytes[0..payload.child.?.size], contents[0..payload.child.?.size]);
+            } else {
+                @memcpy(expected.bytes[0..payload.size], source.bytes[0..payload.size]);
+            }
+            for (0..desc.discriminant_size) |byte| {
+                expected.bytes[desc.discriminant_offset + byte] = @truncate(@as(u64, count - 1) >> @intCast(byte * 8));
+            }
+            // Includes padding, unused variant space, and untouched bytes
+            // beyond the destination, which started with a nonzero poison.
+            try testing.expectEqualSlices(u8, &expected.bytes, &actual.bytes);
+            walk.decref(desc, actual.ptr(), ops);
+            try testing.expectEqual(allocations, env.allocations());
+        }
+    }
+}
