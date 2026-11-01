@@ -496,6 +496,7 @@ const CustomCase = enum {
     issue_12564_package_from_numeral_cache,
     issue_12693_shared_package_cache,
     issue_12701_shared_package_codec_cache,
+    issue_12728_boxy_built_codecs,
     issue_11826_cache_ownership_variants,
     issue_12241_cached_constant_insert,
     issue_12294_cached_capturing_closures,
@@ -3298,6 +3299,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12564: a package from_numeral cached by one app's check converts another app's literal", .timeout_ms = 600_000, .body = .{ .custom = .issue_12564_package_from_numeral_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12693: a package value cached by one app's check builds in another app that shares the package", .timeout_ms = 600_000, .body = .{ .custom = .issue_12693_shared_package_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12701: a package parser cached by one app's check builds in an app that omits the module sharing its codec", .timeout_ms = 600_000, .body = .{ .custom = .issue_12701_shared_package_codec_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12728: a boxy dev executable runs derived codecs at runtime", .timeout_ms = 600_000, .body = .{ .custom = .issue_12728_boxy_built_codecs } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12701: a package parser stored from another module's generic plans its codec dictionary (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=interpreter", "--specialize=no" }, .roc_file = "test/cli/issue_12701_shared_package_codec_cache/Repro.roc", .exit = .success, .stdout_exact = "Err(InvalidJson(\"Invalid JSON\"))\n", .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: every program compiles an offered procedure to the same LIR", .timeout_ms = 600_000, .body = .{ .custom = .cache_fingerprints_agree } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12576: compatible native procedure providers elide shared bodies across libc targets", .timeout_ms = 600_000, .body = .{ .custom = .compatible_native_procedure_cache } },
@@ -5316,6 +5318,7 @@ fn runCustomCase(
         .issue_12564_package_from_numeral_cache => customIssue12564PackageFromNumeralCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12693_shared_package_cache => customIssue12693SharedPackageCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12701_shared_package_codec_cache => customIssue12701SharedPackageCodecCache(io, allocator, &env, &timer, timeout_ms),
+        .issue_12728_boxy_built_codecs => customIssue12728BoxyBuiltCodecs(io, allocator, &env, &timer, timeout_ms),
         .issue_11826_cache_ownership_variants => customIssue11826CacheOwnershipVariants(io, allocator, &env, &timer, timeout_ms),
         .issue_12241_cached_constant_insert => customIssue12241CachedConstantInsert(io, allocator, &env, &timer, timeout_ms),
         .issue_12294_cached_capturing_closures => customIssue12294CachedCapturingClosures(io, allocator, &env, &timer, timeout_ms),
@@ -11635,6 +11638,47 @@ fn customIssue12701SharedPackageCodecCache(
     return runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
         .args = &.{},
         .stdout_exact = "Err(InvalidJson(\"Invalid JSON\"))\n",
+    });
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/12728: an object file's
+// image renumbers the layouts its code passes the Boxy runtime, including the
+// worker return layouts its entry wrapper registers. A dictionary call that
+// compares a worker's registered layout with its own must see one numbering,
+// so the executable must run its derived codecs and print their results.
+// Running the file directly never builds that image, so this case builds it.
+fn customIssue12728BoxyBuiltCodecs(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const exe = std.fmt.allocPrint(allocator, "{s}/issue_12728_app", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const out_arg = outputArg(allocator, exe) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+    const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+    const built = runRocInEnv(io, allocator, env, &.{ "build", "--opt=dev", "--specialize=no", out_arg }, "test/cli/issue_12728_boxy_built_codecs/App.roc", .relative, &.{}, null, build_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+    if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
+        return failureFromRun(allocator, timer, built, "boxy dev build did not succeed");
+    }
+    return runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
+        .args = &.{},
+        .stdout_exact =
+        \\Ok(1)
+        \\Ok("1")
+        \\Err(InvalidJson("Invalid JSON"))
+        \\Ok("1")
+        \\Ok(1)
+        \\Err(InvalidJson("Invalid JSON"))
+        \\Ok(["1"])
+        \\"1"
+        \\{"a":"1"}
+        \\
+        ,
     });
 }
 

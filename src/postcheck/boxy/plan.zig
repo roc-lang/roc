@@ -18345,7 +18345,10 @@ const Builder = struct {
                             .resolution = .{ .structural = kind },
                         };
                     },
-                    .parser, .encoder, .map, .map_effectful => {},
+                    // A declared structural codec method has no callable type
+                    // of its own: the checked contract supplies the worker.
+                    .parser, .encoder => return try self.structuralDictionaryMethodEvidence(source_rep, requirement, requirement_view),
+                    .map, .map_effectful => {},
                 };
                 const source = workerSourceForMethodTarget(lookup, source_rep.source_type, null);
                 const callable_type = CheckedTypeIdentity{ .module = viewModule(lookup.view), .ty = lookup.target.callable_ty };

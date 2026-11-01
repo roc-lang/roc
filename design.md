@@ -1513,7 +1513,8 @@ layout indices and the starts of runs of erased argument layouts. A program
 numbers both in the order its lowering reached them, which depends on which
 procedures it lowered and which a pack served, so code loads each such number
 with a fixed-width instruction sequence and records it as a runtime number
-(`RuntimeNumber`) that its excerpt carries. Once the image's code is placed,
+(`RuntimeNumber`) that its excerpt carries. Once the image's code and its entry
+wrappers, which register each dictionary worker's return layout, are placed,
 each number is given its arranged one in the order the placed code first
 loads it, and every load is patched to it (`LirCodeGen.renumberRuntimeNumbers`,
 `RuntimeTables.Numbering`); the fixed layouts keep their indices. The sidecar
