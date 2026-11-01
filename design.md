@@ -14965,6 +14965,12 @@ what make open rows work in generic code: a body generic over `{ x : a }r` or
 has under the actual type, and the offset a field name has, come from the
 descriptor at runtime.
 
+Tag descriptors store variants in strict byte-wise name order (the same order
+that assigns discriminants). Runtime tag-name lookup uses binary search of that
+existing order. Immediately before searching, Debug builds assert that the
+names are strictly sorted; release builds do not walk the variants to validate
+this compiler invariant.
+
 Descriptors come from two sources and nowhere else:
 
 - *Static descriptors.* The lowerer interns a descriptor for every closed
