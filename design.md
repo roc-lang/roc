@@ -24609,6 +24609,17 @@ completed value. The `.boxy` compile-time evaluator has no Solved program;
 it orders its roots from the checked modules alone
 (`eval/checked_root_graph.zig`, see Compile-Time Evaluation Strategy).
 
+Within one checked dependency-graph build, each reached procedure template's
+direct references are decoded once into shared arrays of callee template IDs
+and compile-time root IDs. Later roots replay those exact direct references
+instead of rescanning checked bodies and dispatch evidence. Evidence visitation
+belongs to the individual summary, so evidence shared by two templates appears
+in both summaries. Per-root template visitation still terminates recursive
+calls, and each root's final dependency list is sorted, deduplicated, and excludes
+itself. These summaries cache no transitive closure, live only for this graph
+build, and never enter checked artifacts or cache identities.
+
+
 Each level is lowered as its own consumer of the Solved program once every
 level before it has run: a completed value that lowers as a construction is
 folded, any other completed value is read from a slot whose frozen bytes are

@@ -66,6 +66,15 @@ pub fn build(allocator: Allocator, modules: []const *checked.CheckedModuleArtifa
     return .{ .deps = deps };
 }
 
+/// Direct references decoded once per reached template during this graph build.
+/// Ranges share two append-only arrays; no transitive dependency sets are cached.
+const DirectDependencies = struct {
+    templates_start: u32,
+    templates_len: u32,
+    reads_start: u32,
+    reads_len: u32,
+};
+
 const Walker = struct {
     allocator: Allocator,
     modules: []const *checked.CheckedModuleArtifact,
@@ -74,19 +83,23 @@ const Walker = struct {
     root_ordinals: std.AutoHashMapUnmanaged(RootKey, u32),
     /// Per module, the walk that last reached each of its templates.
     visited: [][]u32,
-    /// Per module, the walk that last reached each of its evidence nodes.
+    /// Per module, the summary that last reached each of its evidence nodes.
     visited_nodes: [][]u32,
-    /// Per module, the walk that last reached each of its generated codec
+    /// Per module, the summary that last reached each of its generated codec
     /// derivations.
     visited_derivations: [][]u32,
     visit: u32 = 0,
+    /// Evidence stamps belong to one summary, not to a root: two templates
+    /// can share evidence, and each summary must include all its references.
+    evidence_visit: u32 = 0,
+    summaries: std.AutoHashMapUnmanaged(TemplateKey, DirectDependencies) = .empty,
+    summary_templates: std.ArrayList(TemplateKey) = .empty,
+    summary_reads: std.ArrayList(u32) = .empty,
     pending: std.ArrayList(TemplateKey) = .empty,
     reads: std.ArrayList(u32) = .empty,
     /// The evidence nodes of one module still to walk (`drainNodes`).
     nodes: std.ArrayList(static_dispatch.EvidenceNodeId) = .empty,
     derivations: std.ArrayList(static_dispatch.GeneratedCodecDerivationId) = .empty,
-    /// The root whose dependencies are being collected.
-    current: Root = undefined,
 
     fn init(allocator: Allocator, modules: []const *checked.CheckedModuleArtifact, roots: []const Root) Allocator.Error!Walker {
         var by_key = std.AutoHashMapUnmanaged([32]u8, u32).empty;
@@ -147,6 +160,9 @@ const Walker = struct {
         freeStamps(self.allocator, self.visited);
         freeStamps(self.allocator, self.visited_nodes);
         freeStamps(self.allocator, self.visited_derivations);
+        self.summaries.deinit(self.allocator);
+        self.summary_templates.deinit(self.allocator);
+        self.summary_reads.deinit(self.allocator);
         self.nodes.deinit(self.allocator);
         self.derivations.deinit(self.allocator);
         self.root_ordinals.deinit(self.allocator);
@@ -158,7 +174,6 @@ const Walker = struct {
     /// The roots `root`'s evaluation reads, in ascending order, without
     /// itself.
     fn dependencies(self: *Walker, root: Root, ordinal: u32) Allocator.Error![]const u32 {
-        self.current = root;
         self.visit += 1;
         self.reads.clearRetainingCapacity();
         self.pending.clearRetainingCapacity();
@@ -187,15 +202,22 @@ const Walker = struct {
         try self.pending.append(self.allocator, .{ .module = module, .template = ref.template });
     }
 
-    /// Walk one template, once per root: its value references and the
-    /// evidence their sites record, the method targets its dispatch plans
-    /// name, and the literal argument roots its edges demand.
+    /// Decode a template's direct references once, then replay that summary
+    /// for each root reaching it. Per-root stamps still terminate cycles.
     fn walkTemplate(self: *Walker, key: TemplateKey) Allocator.Error!void {
         const stamps = self.visited[key.module];
         const index = @backingInt(key.template);
         if (index >= stamps.len) base.invariant("compile-time finalization invariant violated: a compile-time dependency named an unknown procedure template", .{});
         if (stamps[index] == self.visit) return;
         stamps[index] = self.visit;
+        if (self.summaries.get(key)) |summary| {
+            try self.pending.appendSlice(self.allocator, self.summary_templates.items[summary.templates_start..][0..summary.templates_len]);
+            try self.reads.appendSlice(self.allocator, self.summary_reads.items[summary.reads_start..][0..summary.reads_len]);
+            return;
+        }
+        const templates_start = self.pending.items.len;
+        const reads_start = self.reads.items.len;
+        self.evidence_visit += 1;
         const module = self.modules[key.module];
         const template = module.checked_procedure_templates.get(key.template);
         const refs = template.resolved_value_refs;
@@ -226,6 +248,15 @@ const Walker = struct {
         // The literal argument roots the template's edges read (design.md
         // "Literal Arguments").
         for (module.checked_procedure_templates.templateLiteralArgumentDemand(&template)) |root| try self.readRoot(key.module, root);
+        const summary: DirectDependencies = .{
+            .templates_start = @intCast(self.summary_templates.items.len),
+            .templates_len = @intCast(self.pending.items.len - templates_start),
+            .reads_start = @intCast(self.summary_reads.items.len),
+            .reads_len = @intCast(self.reads.items.len - reads_start),
+        };
+        try self.summary_templates.appendSlice(self.allocator, self.pending.items[templates_start..]);
+        try self.summary_reads.appendSlice(self.allocator, self.reads.items[reads_start..]);
+        try self.summaries.put(self.allocator, key, summary);
     }
 
     /// Walk the evidence nodes queued for `module` (`nodes`) and the
@@ -237,8 +268,8 @@ const Walker = struct {
         while (self.nodes.items.len != 0 or self.derivations.items.len != 0) {
             if (self.derivations.pop()) |id| {
                 const stamps_of = self.visited_derivations[module];
-                if (stamps_of[@backingInt(id)] == self.visit) continue;
-                stamps_of[@backingInt(id)] = self.visit;
+                if (stamps_of[@backingInt(id)] == self.evidence_visit) continue;
+                stamps_of[@backingInt(id)] = self.evidence_visit;
                 const derivation = plans.generated_codec_derivations[@backingInt(id)];
                 for (derivation.callsSlice(plans)) |call| switch (call.resolution) {
                     .callable => |node| try self.nodes.append(self.allocator, node),
@@ -249,8 +280,8 @@ const Walker = struct {
             }
             const id = self.nodes.pop().?;
             const stamps_of = self.visited_nodes[module];
-            if (stamps_of[@backingInt(id)] == self.visit) continue;
-            stamps_of[@backingInt(id)] = self.visit;
+            if (stamps_of[@backingInt(id)] == self.evidence_visit) continue;
+            stamps_of[@backingInt(id)] = self.evidence_visit;
             const node = plans.evidenceNode(id);
             switch (node.target.kind) {
                 .procedure => |procedure| try self.pushTemplate(procedure.template),
@@ -486,4 +517,137 @@ fn typesOf(modules: []const *checked.CheckedModuleArtifact, imports: []const che
         if (import.key.digest().eql(key)) return import.checked_types;
     }
     return null;
+}
+
+fn expectSharedDependencies(source: []const u8, imports: []const @import("inspected.zig").ModuleSource) !void {
+    const allocator = std.testing.allocator;
+    var parsed = try @import("inspected.zig").parseProgram(allocator, .module, source, imports, .{ .roots = .published_only });
+    defer parsed.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), parsed.checker.problems.problems.items.len);
+    var modules = std.ArrayList(*checked.CheckedModuleArtifact).empty;
+    defer modules.deinit(allocator);
+    try modules.append(allocator, &parsed.checked_artifact);
+    for (parsed.import_artifacts) |*artifact| try modules.append(allocator, artifact);
+    var roots = std.ArrayList(Root).empty;
+    defer roots.deinit(allocator);
+    for (modules.items, 0..) |module, index| {
+        for (module.root_requests.compile_time_requests) |request| {
+            try roots.append(allocator, .{ .module = @intCast(index), .root = request.compile_time_root.?, .request = request });
+        }
+    }
+    try std.testing.expect(roots.items.len >= 3);
+    // Evidence can be shared between templates. Each summary must decode
+    // it independently even when both templates belong to one root walk.
+    var evidence_probe = try Walker.init(allocator, modules.items, roots.items);
+    defer evidence_probe.deinit();
+    evidence_probe.visit = 1;
+    var probed_evidence = false;
+    evidence: for (modules.items, 0..) |module, module_index| {
+        for (module.static_dispatch_plans.evidence_nodes, 0..) |node, node_index| {
+            if (node.target.kind != .procedure or evidence_probe.moduleOf(node.target.kind.procedure.template.artifact) == null) continue;
+            const id: static_dispatch.EvidenceNodeId = @fromBackingInt(@intCast(node_index));
+            evidence_probe.evidence_visit = 1;
+            try evidence_probe.nodes.append(allocator, id);
+            try evidence_probe.drainNodes(@intCast(module_index));
+            try std.testing.expect(evidence_probe.pending.items.len > 0);
+            const targets = try allocator.dupe(TemplateKey, evidence_probe.pending.items);
+            defer allocator.free(targets);
+            const reads = try allocator.dupe(u32, evidence_probe.reads.items);
+            defer allocator.free(reads);
+            evidence_probe.pending.clearRetainingCapacity();
+            evidence_probe.reads.clearRetainingCapacity();
+            evidence_probe.evidence_visit = 2;
+            try evidence_probe.nodes.append(allocator, id);
+            try evidence_probe.drainNodes(@intCast(module_index));
+            try std.testing.expectEqualSlices(TemplateKey, targets, evidence_probe.pending.items);
+            try std.testing.expectEqualSlices(u32, reads, evidence_probe.reads.items);
+            probed_evidence = true;
+            break :evidence;
+        }
+    }
+    try std.testing.expect(probed_evidence);
+    var shared = try Walker.init(allocator, modules.items, roots.items);
+    defer shared.deinit();
+    var expected = std.ArrayList([]const u32).empty;
+    defer {
+        for (expected.items) |deps| allocator.free(deps);
+        expected.deinit(allocator);
+    }
+    var total_reads: usize = 0;
+    for (roots.items, 0..) |root, ordinal| {
+        var isolated = try Walker.init(allocator, modules.items, roots.items);
+        defer isolated.deinit();
+        const deps = try isolated.dependencies(root, @intCast(ordinal));
+        expected.append(allocator, deps) catch |err| {
+            allocator.free(deps);
+            return err;
+        };
+        total_reads += deps.len;
+        const actual = try shared.dependencies(root, @intCast(ordinal));
+        defer allocator.free(actual);
+        try std.testing.expectEqualSlices(u32, deps, actual);
+        try std.testing.expect(std.mem.indexOfScalar(u32, actual, @intCast(ordinal)) == null);
+    }
+    try std.testing.expect(total_reads > 0);
+    const decoded = shared.summaries.count();
+    const templates_len = shared.summary_templates.items.len;
+    const reads_len = shared.summary_reads.items.len;
+    try std.testing.expect(decoded > 0);
+    // A second traversal in reverse root order must reuse complete summaries,
+    // including evidence that another template happened to visit first.
+    var ordinal = roots.items.len;
+    while (ordinal > 0) {
+        ordinal -= 1;
+        const actual = try shared.dependencies(roots.items[ordinal], @intCast(ordinal));
+        defer allocator.free(actual);
+        try std.testing.expectEqualSlices(u32, expected.items[ordinal], actual);
+    }
+    try std.testing.expectEqual(decoded, shared.summaries.count());
+    try std.testing.expectEqual(templates_len, shared.summary_templates.items.len);
+    try std.testing.expectEqual(reads_len, shared.summary_reads.items.len);
+}
+
+test "checked dependency summaries preserve shared calls, evidence and literal conversions" {
+    try expectSharedDependencies(
+        \\module [first, second]
+        \\base = 37.I64
+        \\shared : I64 -> I64
+        \\shared = |x| base + x
+        \\left = |x| shared(x)
+        \\right = |x| shared(x)
+        \\first = left(1.I64)
+        \\second = right(2.I64)
+    , &.{});
+}
+
+test "checked dependency summaries terminate mutual recursion and preserve imported reads" {
+    try expectSharedDependencies(
+        \\module [first, second]
+        \\import Helpers
+        \\first = Helpers.down(3.I64)
+        \\second = Helpers.down(4.I64)
+    , &.{.{ .name = "Helpers", .source =
+        \\module [down]
+        \\base = 37.I64
+        \\down : I64 -> I64
+        \\down = |n| if n == 0 base else bounce(n - 1)
+        \\bounce : I64 -> I64
+        \\bounce = |n| down(n)
+    }});
+}
+
+test "checked dependency summaries preserve function-valued constant reads" {
+    try expectSharedDependencies(
+        \\module [first, second]
+        \\base = 37.I64
+        \\add : I64 -> I64
+        \\add = |n| base + n
+        \\sub : I64 -> I64
+        \\sub = |n| base - n
+        \\choose : Bool -> (I64 -> I64)
+        \\choose = |pick_add| if pick_add add else sub
+        \\chosen = choose(Bool.True)
+        \\first = chosen(1.I64)
+        \\second = chosen(2.I64)
+    , &.{});
 }
