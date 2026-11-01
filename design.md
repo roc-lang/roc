@@ -23815,7 +23815,9 @@ edges the solver already walks:
   the constructed value, and payload reads link to their source—storing a
   visible value makes the container visible, and anything read out of a
   visible container is visible
-- direct-call argument-to-parameter and return-to-result relations
+- direct-call argument-to-parameter and return-to-result relations, and the
+  return-to-result relation of a read's fresh form, which that read may become
+  (see "Fresh forms of static lists")
 - low-level ops, from explicit `RcEffect` data
 
 Bidirectional containment keeps every reachable-value tree uniformly
