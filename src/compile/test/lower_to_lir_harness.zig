@@ -24,17 +24,19 @@ const ReverseCompletionExecutor = struct {
     inner_outstanding: usize = 0,
     buffered_len: usize = 0,
 
-    fn begin(context: *anyopaque) void {
+    fn begin(context: *anyopaque) std.mem.Allocator.Error!*anyopaque {
         const self: *ReverseCompletionExecutor = @ptrCast(@alignCast(context));
         std.debug.assert(self.inner_session == null);
         std.debug.assert(self.completion_buffer.len >= self.inner.worker_count);
-        self.inner_session = self.inner.begin();
+        self.inner_session = try self.inner.begin();
         self.inner_outstanding = 0;
         self.buffered_len = 0;
+        return context;
     }
 
     fn submit(
         context: *anyopaque,
+        _: *anyopaque,
         task: base.post_check_task_executor.Task,
     ) std.mem.Allocator.Error!void {
         const self: *ReverseCompletionExecutor = @ptrCast(@alignCast(context));
@@ -46,7 +48,7 @@ const ReverseCompletionExecutor = struct {
         }
     }
 
-    fn receive(context: *anyopaque) base.post_check_task_executor.Completion {
+    fn receive(context: *anyopaque, _: *anyopaque) base.post_check_task_executor.Completion {
         const self: *ReverseCompletionExecutor = @ptrCast(@alignCast(context));
         if (self.buffered_len == 0) {
             if (self.inner_session) |*session| {
@@ -66,7 +68,11 @@ const ReverseCompletionExecutor = struct {
         return self.completion_buffer[self.buffered_len];
     }
 
-    fn end(context: *anyopaque) void {
+    fn tryReceive(_: *anyopaque, _: *anyopaque) ?base.post_check_task_executor.Completion {
+        return null;
+    }
+
+    fn end(context: *anyopaque, _: *anyopaque) void {
         const self: *ReverseCompletionExecutor = @ptrCast(@alignCast(context));
         std.debug.assert(self.buffered_len == 0);
         std.debug.assert(self.inner_outstanding == 0);
@@ -82,9 +88,11 @@ const ReverseCompletionExecutor = struct {
         return .{
             .context = self,
             .worker_count = self.inner.worker_count,
+            .lane_count = self.inner.lane_count,
             .beginFn = ReverseCompletionExecutor.begin,
             .submitFn = ReverseCompletionExecutor.submit,
             .receiveFn = ReverseCompletionExecutor.receive,
+            .tryReceiveFn = ReverseCompletionExecutor.tryReceive,
             .endFn = ReverseCompletionExecutor.end,
         };
     }
@@ -953,7 +961,7 @@ fn expectPostCheckParallelismDeterministicLir(
                 try std.testing.expectEqual(@as(u64, 2), parallel.root_tasks_submitted);
                 try std.testing.expectEqual(@as(u64, 2), parallel.root_tasks_committed);
                 try std.testing.expectEqual(
-                    @as(u64, @intCast(specialization_workers)),
+                    @as(u64, @intCast(specialization_workers + 1)),
                     parallel.peak_worker_lanes_available,
                 );
                 try std.testing.expect(parallel.peak_worker_lanes_used > 0);

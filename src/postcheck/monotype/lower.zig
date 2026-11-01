@@ -1065,7 +1065,8 @@ pub const ParallelMetricsSnapshot = struct {
     specialization_tasks_discarded_ready: u64 = 0,
     /// Root batches plus ordinary-specialization streaming sessions.
     task_waves: u64 = 0,
-    /// Largest executor width represented by any aggregated lowering.
+    /// Largest executor width represented by any aggregated lowering: its
+    /// workers and the thread driving the session.
     peak_worker_lanes_available: u64 = 0,
     /// Largest number of lanes used by any one aggregated lowering.
     peak_worker_lanes_used: u64 = 0,
@@ -6162,7 +6163,7 @@ const Builder = struct {
         if (self.spec_job_lanes.len == 0) {
             const executor = self.post_check_executor orelse
                 Common.compilerBug("parallel Monotype specialization ran without an executor");
-            const lanes = try self.allocator.alloc(?*SpecJobLaneState, executor.worker_count);
+            const lanes = try self.allocator.alloc(?*SpecJobLaneState, executor.lane_count);
             @memset(lanes, null);
             self.spec_job_lanes = lanes;
         }
@@ -8106,9 +8107,11 @@ const Builder = struct {
         if (self.timing) |timing| {
             timing.parallel.root_tasks_submitted +%= @intCast(requests.len);
             timing.parallel.task_waves +%= 1;
+            // The workers and the thread driving the session, which runs
+            // tasks of it while it waits.
             timing.parallel.peak_worker_lanes_available = @max(
                 timing.parallel.peak_worker_lanes_available,
-                @as(u64, @intCast(executor.worker_count)),
+                @as(u64, @intCast(executor.worker_count + 1)),
             );
         }
         var run_error: ?Allocator.Error = null;
@@ -10204,7 +10207,7 @@ const Builder = struct {
         const capacity = executor.worker_count *| parallel_spec_jobs_per_lane;
         const buffers = try self.ensureSpecJobTaskBuffers(capacity);
         const contexts = buffers.contexts;
-        var session = executor.begin();
+        var session = try executor.begin();
         defer session.end();
         var submitted: usize = 0;
         var accepted: usize = 0;
@@ -10224,7 +10227,7 @@ const Builder = struct {
         }
         if (self.timing) |timing| {
             timing.parallel.task_waves +%= 1;
-            timing.parallel.peak_worker_lanes_available = @max(timing.parallel.peak_worker_lanes_available, @as(u64, @intCast(executor.worker_count)));
+            timing.parallel.peak_worker_lanes_available = @max(timing.parallel.peak_worker_lanes_available, @as(u64, @intCast(executor.worker_count + 1)));
         }
         while (self.pending_spec_jobs.len != 0 or accepted < submitted) {
             if (running < executor.worker_count and submitted - accepted < capacity and

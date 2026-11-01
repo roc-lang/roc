@@ -15604,39 +15604,41 @@ program as it is built, in the order the builds finish. The build of a program
 reads the checked modules and the loaded objects' symbols and writes nothing
 another thread reads; running it, which stores values and reports failures,
 stays on the evaluating thread, as do the programs of roots holding function
-values ("Stored Function Values"). A module's evaluation thus waits only for the values its roots read and the
-objects of its own import closure. The link waits for every unit after program
-evaluation. Platform-only evaluation before pairing
-joins running object tasks before publishing its values, but retains queued
-app units: their imports can still have roots that program evaluation must
-complete. This publication barrier requires no active readers, not completion
-of units whose inputs belong to the later evaluation.
-The link uses the objects this compilation built or restored without restoring them again: a
+values ("Stored Function Values"). A module's evaluation thus waits only for
+the values its roots read and the objects of its own import closure. The link
+waits for every unit after program evaluation. Platform-only evaluation before
+pairing joins running object tasks before publishing its values, but retains
+queued app units: their imports can still have roots that program evaluation
+must complete. This publication barrier requires no active readers, not
+completion of units whose inputs belong to the later evaluation. The link uses
+the objects this compilation built or restored without restoring them again: a
 build that links the objects keeps each one for the link as the scheduler
 completes it (`BoxyObjectLowering.Materializer`), so the link reads them back
 without writing them again. While checking continues, a compilation that links
 its program builds only modules reachable through import edges from the root
 package's root and the platform root, which every module the root will see is,
 and leaves one worker to checking; after it, exactly the modules the root sees.
-After checking, a unit or program that is the only task queued while nothing is
-in flight is submitted to no worker: the evaluating thread runs it itself when
-it has nothing else to do, lending it the general executor, so the parallel
-waves of its ARC and native code generation run on the otherwise idle workers,
-as the root program's do, instead of on one of them. A compilation that does
-not link its program (`roc check`) builds the modules each evaluation's program
-needs and, as a program's build does, every other module the root sees whose
-roots are complete. The scheduler's post-check session stays open across
-checking and evaluation while the general session every other post-check stage
-borrows opens and closes within it: every task names its session, and whichever
-consumer takes a completion off the worker channel files it with the session
-that submitted it. A platform module with requirements has no object of its
-own, so a module importing one runs as the whole program. Each object is filed
-with its `CodeLocations`: its line table, failure sites and source files
-(Compile-Time Failure Sites). A failure in an object's code is therefore found
-and reported exactly as one in a whole program's own code, and the two forms
-report identically. The table is read only when something fails, so the code
-that succeeds carries nothing extra. A compilation with no cache has no
-objects, and runs as the whole program.
+Every unit and program build is given the post-check executor, whichever thread
+runs it: a session may be opened on any thread, a running task included, and a
+thread waiting in a session runs that session's queued tasks itself, so the
+parallel waves of a unit's ARC and native code generation spread over the pool
+from a worker as they do from the coordinating thread, and the evaluating
+thread, waiting for the next unit or program, builds queued ones itself. A
+compilation that does not link its program (`roc check`) builds the modules
+each evaluation's program needs and, as a program's build does, every other
+module the root sees whose roots are complete. The scheduler's post-check
+session stays open across checking and evaluation while the sessions every
+other post-check stage opens come and go within it: each session queues its own
+tasks and receives its own completions, a token on the worker channel tells a
+worker a session has a task queued, and the session's owner takes completions
+it already has without waiting while checking continues. A platform module with
+requirements has no object of its own, so a module importing one runs as the
+whole program. Each object is filed with its `CodeLocations`: its line table,
+failure sites and source files (Compile-Time Failure Sites). A failure in an
+object's code is therefore found and reported exactly as one in a whole
+program's own code, and the two forms report identically. The table is read
+only when something fails, so the code that succeeds carries nothing extra. A
+compilation with no cache has no objects, and runs as the whole program.
 
 A root whose value holds a function value (anywhere in its type, or a
 callable binding) has no compile-time value slot, so it is evaluated by the
