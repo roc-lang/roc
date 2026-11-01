@@ -333,12 +333,17 @@ fn configureBackend(step: *Step.Compile, target: ResolvedTarget) void {
 /// The watch module uses real macOS FSEvents (CoreFoundation/CoreServices) when building
 /// natively for macOS, and kernel32 for directory-change notifications on Windows. Any step
 /// that compiles the watch module (the roc exe and the tests that import it) must link these.
+///
+/// The frameworks come from stubs in src/build/darwin/Frameworks, not the macOS SDK, so the
+/// dylib versions recorded in the binary don't depend on the build machine's Xcode, and a
+/// release target (which skips SDK detection, see `getReleaseTargetQuery`) can find them.
 fn linkWatchPlatformLibs(step: *Step.Compile, target: ResolvedTarget) void {
     if (target.result.os.tag == .macos and
         builtin.target.os.tag == .macos and
         target.result.cpu.arch == builtin.target.cpu.arch and
         target.result.abi == builtin.target.abi)
     {
+        step.root_module.addFrameworkPath(step.step.owner.path("src/build/darwin/Frameworks"));
         step.root_module.linkFramework("CoreFoundation", .{});
         step.root_module.linkFramework("CoreServices", .{});
     } else if (target.result.os.tag == .windows) {
@@ -471,11 +476,17 @@ fn withRocMacosDeploymentTarget(b: *std.Build, target: ResolvedTarget) ResolvedT
     return b.resolveTargetQuery(roc_target.macos_deployment.query(target.result.cpu.arch));
 }
 
+/// The oldest macOS a released roc runs on. This is Zig's default minimum and
+/// the oldest macOS the nightly tests releases on. Roc-built programs have their own, lower
+/// minimum (`macos_deployment` in src/target/mod.zig).
+const release_macos_min: std.SemanticVersion = .{ .major = 15, .minor = 0, .patch = 0 };
+
 /// Returns the target query for release builds on the current host.
 ///
 /// `-Dtarget` and `-Dcpu` select the release target, so a packager can trade
 /// portability for speed. With neither flag, the defaults are:
 /// - Linux: Uses musl for fully static binaries
+/// - macOS: Targets `release_macos_min` and links no file from the host SDK
 /// - x86_64 and aarch64: Uses the baseline CPU, so a single released binary
 ///   runs on every CPU of that architecture
 ///
@@ -509,6 +520,17 @@ fn getReleaseTargetQuery(b: *std.Build, target: ResolvedTarget) std.Target.Query
     // Use musl on Linux for static linking
     if (builtin.target.os.tag == .linux) {
         query.abi = .musl;
+    }
+
+    // Without an OS version, Zig sets the minimum macOS to the build machine's
+    // exact version, so the binary won't load on older macOS and changes with
+    // every runner update. Naming the OS and ABI also stops Zig from reading the
+    // host's Xcode SDK: it links its own libSystem.tbd and records its own SDK
+    // version instead.
+    if (builtin.target.os.tag == .macos) {
+        query.os_tag = .macos;
+        query.os_version_min = .{ .semver = release_macos_min };
+        query.abi = .none;
     }
 
     if (!explicit_cpu) {

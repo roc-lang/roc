@@ -91,7 +91,8 @@ const FSEventStreamContext = extern struct {
     copyDescription: ?*const anyopaque,
 };
 
-// Only declare real externs when we're actually using them
+// Only declare real externs when we're actually using them.
+// These link against the stubs in src/build/darwin/Frameworks; list new symbols there.
 const macos_externs = if (use_real_fsevents) struct {
     // Mark functions as weak so they're optional during cross-compilation
     extern "c" fn FSEventStreamCreate(
