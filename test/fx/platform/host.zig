@@ -1170,6 +1170,12 @@ fn hostedHostHandlePoll(handle: ?[*]u8) callconv(.c) TryU64Result {
     return .{ .payload = .{ .ok = value }, .tag = 1 };
 }
 
+fn hostedHostHandleReadExactly(handle: ?[*]u8, count: u64, timeout_nanos: u64) callconv(.c) TryU64Result {
+    const value = assertLiveHandle(handle).*;
+    builtins.utils.decrefDataPtrC(handle, @alignOf(u64), false, g_roc_ops.?);
+    return .{ .payload = .{ .ok = value + count + timeout_nanos }, .tag = 1 };
+}
+
 const TryUnitResult = extern struct {
     payload: extern union {
         err: RocStr,
@@ -1375,6 +1381,7 @@ comptime {
     @export(&hostedHostHandleNew, .{ .name = "roc_proc_handle_new", .visibility = .hidden });
     @export(&hostedHostHandlePoll, .{ .name = "roc_proc_handle_poll", .visibility = .hidden });
     @export(&hostedHostHandleClose, .{ .name = "roc_proc_handle_close", .visibility = .hidden });
+    @export(&hostedHostHandleReadExactly, .{ .name = "roc_proc_handle_read_exactly", .visibility = .hidden });
     @export(&hostedPaddedCheck, .{ .name = "roc_padded_check", .visibility = .hidden });
     @export(&hostedStderrLine, .{ .name = "roc_stderr_line", .visibility = .hidden });
     @export(&hostedStdinLine, .{ .name = "roc_stdin_line", .visibility = .hidden });

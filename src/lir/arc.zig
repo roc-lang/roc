@@ -5533,22 +5533,41 @@ const Inserter = struct {
                 try uses.append(gpa, switch_stmt.cond);
                 try uses.append(gpa, switch_stmt.payload);
             },
-            .ret => |ret_stmt| try uses.append(gpa, ret_stmt.value),
+            .ret => |ret_stmt| {
+                try uses.append(gpa, ret_stmt.value);
+                try self.appendRestitutionBoundaryUses(stmt, uses);
+            },
             .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try uses.append(gpa, message),
             .expect_err => |expect_err_stmt| try uses.append(gpa, expect_err_stmt.message),
             .decref, .decref_if_initialized, .free => return .{ .uses_every_place = true },
             inline .str_match, .str_match_set => |match| try uses.append(gpa, match.source),
             // Every operand of an opaque dynamic operation uses its place.
             .dyn => |dyn_stmt| try DynOps.Operands.of(self.store.stmtRow(dyn_stmt.data)).appendAll(self.store, gpa, uses),
+            .jump => try self.appendRestitutionBoundaryUses(stmt, uses),
             .assign_literal,
             .init_uninitialized,
             .join,
-            .jump,
             .runtime_error,
             .comptime_exhaustiveness_failed,
             => {},
         }
         return .{ .rebinds = body_clone.definedTarget(node) };
+    }
+
+    /// An emission with an outcome convention hands each restituted
+    /// parameter's exact entry unit back at a restitution boundary, so the
+    /// boundary uses that parameter's place. An emission without one releases
+    /// the parameter instead, and the boundary is no use of it.
+    fn appendRestitutionBoundaryUses(self: *const Inserter, stmt: LIR.CFStmtId, uses: *std.ArrayList(LIR.LocalId)) Allocator.Error!void {
+        if (self.current_sig.outcomes.isEmpty()) return;
+        const mask = self.solution.restitutionParamsAt(stmt);
+        if (mask == 0) return;
+        const params = self.store.getLocalSpan(self.store.getProcSpecImmediate(self.current_source_proc).args);
+        for (0..GuardedList.borrowLen(params)) |position| {
+            const bit = arc_sig.paramBit(position) orelse break;
+            if ((mask & bit) == 0) continue;
+            try uses.append(self.emission_allocator, GuardedList.at(params, position));
+        }
     }
 
     /// The statements control reaches after `stmt` for the place-use query.
@@ -15288,6 +15307,210 @@ test "RC outcome restitution keeps a field a callee passes to a hosted call insi
     // The caller lends its record to the outcome variant without a retain.
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
+}
+
+/// A stable procedure owning a record whose only refcounted field it passes to
+/// a hosted call, returning a tag chosen by the hosted result without touching
+/// the record again.
+const CompleteProjectionCallee = struct {
+    proc: LIR.LirProcSpecId,
+    handle: LIR.LocalId,
+    record_layout: layout_mod.Idx,
+    outcome_layout: layout_mod.Idx,
+
+    fn init(f: *ArcTest) Allocator.Error!CompleteProjectionCallee {
+        const outcome_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+            try f.layouts.ensureZstLayout(),
+            f.list_i64,
+        });
+        const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+            .{ .index = 0, .layout = f.list_i64 },
+            .{ .index = 1, .layout = .i64 },
+        });
+
+        const record = try f.local(record_layout);
+        const handle = try f.local(f.list_i64);
+        const status = try f.local(.i64);
+        const fresh = try f.local(f.list_i64);
+        const result = try f.local(outcome_layout);
+        const ok_ret = try f.ret(result);
+        const ok_tag = try f.assignTag(result, 1, fresh, ok_ret);
+        const ok_body = try f.assignList(fresh, &.{}, ok_tag);
+        const err_ret = try f.ret(result);
+        const err_body = try f.assignTag(result, 0, null, err_ret);
+        const choose = try f.switchStmt(status, ok_body, err_body, null);
+        const hosted = try f.assignHostedCall(status, &.{handle}, choose);
+        const project = try f.assignRefField(handle, record, 0, hosted);
+        const proc = try f.addProc(&.{record}, project, outcome_layout);
+        f.store.getProcSpecPtr(proc).stable_signature = true;
+        return .{ .proc = proc, .handle = handle, .record_layout = record_layout, .outcome_layout = outcome_layout };
+    }
+};
+
+test "RC outcome restitution retains a complete projection a callee passes to a hosted call" {
+    // The projection owns all of the record's refcounted state, so its read
+    // could move the record's unit into the hosted call. Every outcome hands
+    // that unit back to a caller that demands restitution, so the read must
+    // retain instead: certification rejects a boundary missing the unit.
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const callee = try CompleteProjectionCallee.init(&f);
+
+    const list = try f.local(f.list_i64);
+    const scalar = try f.local(.i64);
+    const input = try f.local(callee.record_layout);
+    const call_result = try f.local(callee.outcome_layout);
+    const discriminant = try f.local(.u8);
+    const ok_value = try f.local(.i64);
+    const err_value = try f.local(.i64);
+    const caller_ok_ret = try f.ret(ok_value);
+    const caller_ok_done = try f.assignI64(ok_value, 1, caller_ok_ret);
+    const caller_ok = try f.expectStmt(input, caller_ok_done);
+    const caller_err_ret = try f.ret(err_value);
+    const caller_err_done = try f.assignI64(err_value, 0, caller_err_ret);
+    const caller_err = try f.expectStmt(input, caller_err_done);
+    const refine = try f.switchStmt(discriminant, caller_ok, caller_err, null);
+    const read_discriminant = try f.assignDiscriminant(discriminant, call_result, refine);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = call_result,
+        .proc = callee.proc,
+        .args = try f.span(&.{input}),
+        .next = read_discriminant,
+    } }, .test_fixture);
+    const make_input = try f.assignStruct(input, &.{ list, scalar }, call);
+    const make_scalar = try f.assignI64(scalar, 7, make_input);
+    const caller_body = try f.assignList(list, &.{}, make_scalar);
+    const caller = try f.addProc(&.{}, caller_body, .i64);
+    f.store.getProcSpecPtr(caller).code_key = @splat(1);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{});
+
+    // The caller lends its record to the outcome variant without a retain,
+    // and that variant retains the projection for the hosted call. The base
+    // procedure, which releases its parameter, moves the unit instead.
+    try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+    try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
+    try testing.expectEqual(@as(usize, 1), f.countRc(callee.handle, .incref));
+}
+
+test "RC outcome restitution leaves a complete projection's move to a caller that lets the record die" {
+    // The caller never reads the record after the call, so it uses the base
+    // convention, whose returns are no restitution boundary: the projection
+    // read moves the record's unit into the hosted call without a retain.
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const callee = try CompleteProjectionCallee.init(&f);
+
+    const list = try f.local(f.list_i64);
+    const scalar = try f.local(.i64);
+    const input = try f.local(callee.record_layout);
+    const call_result = try f.local(callee.outcome_layout);
+    const discriminant = try f.local(.u8);
+    const ok_value = try f.local(.i64);
+    const err_value = try f.local(.i64);
+    const caller_ok_ret = try f.ret(ok_value);
+    const caller_ok = try f.assignI64(ok_value, 1, caller_ok_ret);
+    const caller_err_ret = try f.ret(err_value);
+    const caller_err = try f.assignI64(err_value, 0, caller_err_ret);
+    const refine = try f.switchStmt(discriminant, caller_ok, caller_err, null);
+    const read_discriminant = try f.assignDiscriminant(discriminant, call_result, refine);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = call_result,
+        .proc = callee.proc,
+        .args = try f.span(&.{input}),
+        .next = read_discriminant,
+    } }, .test_fixture);
+    const make_input = try f.assignStruct(input, &.{ list, scalar }, call);
+    const make_scalar = try f.assignI64(scalar, 7, make_input);
+    const caller_body = try f.assignList(list, &.{}, make_scalar);
+    const caller = try f.addProc(&.{}, caller_body, .i64);
+    f.store.getProcSpecPtr(caller).code_key = @splat(1);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{});
+
+    try testing.expectEqual(base_proc_count, f.store.procSpecCount());
+    try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(callee.handle, .incref));
+}
+
+test "RC outcome restitution keeps a parameter a callee could take fields from in the returned unit" {
+    // The inner procedure's parameter solves borrowed, but an owned variant
+    // could take its list field, which makes moving a dying argument into it
+    // an exact schedule. In the wrapper's outcome variant the argument is not
+    // dying: every outcome hands its exact entry unit back to the caller, so
+    // the wrapper keeps the unit and lends the record. Certification rejects
+    // a boundary missing the unit.
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const outcome_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.list_i64,
+    });
+
+    const inner_param = try f.local(f.pair_list);
+    const inner_field = try f.local(f.list_i64);
+    const inner_elem = try f.local(.i64);
+    const inner_appended = try f.local(f.list_i64);
+    const inner_result = try f.local(.i64);
+    const inner_ret = try f.ret(inner_result);
+    const inner_result_assign = try f.assignI64(inner_result, 1, inner_ret);
+    const inner_append = try f.assignLowLevel(inner_appended, &.{ inner_field, inner_elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), inner_result_assign);
+    const inner_elem_assign = try f.assignI64(inner_elem, 5, inner_append);
+    const inner_field_read = try f.assignRefField(inner_field, inner_param, 0, inner_elem_assign);
+    const inner = try f.addProc(&.{inner_param}, inner_field_read, .i64);
+
+    const record = try f.local(f.pair_list);
+    const status = try f.local(.i64);
+    const fresh = try f.local(f.list_i64);
+    const result = try f.local(outcome_layout);
+    const ok_ret = try f.ret(result);
+    const ok_tag = try f.assignTag(result, 1, fresh, ok_ret);
+    const ok_body = try f.assignList(fresh, &.{}, ok_tag);
+    const err_ret = try f.ret(result);
+    const err_body = try f.assignTag(result, 0, null, err_ret);
+    const choose = try f.switchStmt(status, ok_body, err_body, null);
+    const inner_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = status,
+        .proc = inner,
+        .args = try f.span(&.{record}),
+        .next = choose,
+    } }, .test_fixture);
+    const wrapper = try f.addProc(&.{record}, inner_call, outcome_layout);
+    f.store.getProcSpecPtr(wrapper).stable_signature = true;
+
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const input = try f.local(f.pair_list);
+    const call_result = try f.local(outcome_layout);
+    const discriminant = try f.local(.u8);
+    const ok_value = try f.local(.i64);
+    const err_value = try f.local(.i64);
+    const caller_ok_ret = try f.ret(ok_value);
+    const caller_ok_done = try f.assignI64(ok_value, 1, caller_ok_ret);
+    const caller_ok = try f.expectStmt(input, caller_ok_done);
+    const caller_err_ret = try f.ret(err_value);
+    const caller_err_done = try f.assignI64(err_value, 0, caller_err_ret);
+    const caller_err = try f.expectStmt(input, caller_err_done);
+    const refine = try f.switchStmt(discriminant, caller_ok, caller_err, null);
+    const read_discriminant = try f.assignDiscriminant(discriminant, call_result, refine);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = call_result,
+        .proc = wrapper,
+        .args = try f.span(&.{input}),
+        .next = read_discriminant,
+    } }, .test_fixture);
+    const make_input = try f.assignStruct(input, &.{ first, second }, call);
+    const make_second = try f.assignList(second, &.{}, make_input);
+    const caller_body = try f.assignList(first, &.{}, make_second);
+    const caller = try f.addProc(&.{}, caller_body, .i64);
+    f.store.getProcSpecPtr(caller).code_key = @splat(1);
+
+    try insert(&f.store, &f.layouts, .{});
+
+    try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(record, .incref));
 }
 
 test "ARC outcome capability rejects a stale discriminant after return-local rebind" {

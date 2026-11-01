@@ -42,8 +42,23 @@ fn recordOf(desc: *const TypeDesc, ops: *RocOps) *const TypeDesc {
 fn variantNamed(desc: *const TypeDesc, name: *const Name, ops: *RocOps) struct { union_desc: *const TypeDesc, variant: *const Variant } {
     const union_desc = backing(desc);
     if (union_desc.kind != .tag_union) invariant(ops, "a tag of a descriptor that is not a tag union");
-    for (union_desc.variants()) |*variant| {
-        if (variant.name.eql(name)) return .{ .union_desc = union_desc, .variant = variant };
+    const variants = union_desc.variants();
+    if (comptime @import("builtin").mode == .debug) {
+        for (variants, 0..) |variant, index| {
+            if (index == 0) continue;
+            std.debug.assert(std.mem.order(u8, variants[index - 1].name.text(), variant.name.text()) == .lt);
+        }
+    }
+    var low: usize = 0;
+    var high = variants.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        const variant = &variants[mid];
+        switch (std.mem.order(u8, name.text(), variant.name.text())) {
+            .lt => high = mid,
+            .gt => low = mid + 1,
+            .eq => return .{ .union_desc = union_desc, .variant = variant },
+        }
     }
     invariant(ops, "a tag that is not in its union's descriptor");
 }

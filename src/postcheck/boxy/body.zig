@@ -373,7 +373,6 @@ pub const Builder = struct {
     values: std.ArrayList(LocalId) = .empty,
     tasks: std.ArrayList(Task) = .empty,
     region: base.Region = base.Region.zero(),
-    has_dynamic_frame: bool = false,
     result_local: ?LocalId = null,
 
     pub fn init(program: *Program, id: WorkerId) Allocator.Error!Builder {
@@ -450,7 +449,6 @@ pub const Builder = struct {
     pub fn localOf(self: *Builder, ty: TypeId, storage: LIR.DynStorage) Allocator.Error!LocalId {
         if (try self.closed(ty)) return self.closedLocal(try self.program.layouts.layoutOf(ty));
         const desc = try self.descOf(ty);
-        if (storage == .frame) self.has_dynamic_frame = true;
         return self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = storage } });
     }
 
@@ -683,7 +681,6 @@ pub const Builder = struct {
                     var local = self.store.getLocal(before);
                     if (local.dyn) |*dyn| {
                         dyn.storage = .frame;
-                        self.has_dynamic_frame = true;
                     }
                     param.* = try self.addLocal(local);
                 }
@@ -761,7 +758,6 @@ pub const Builder = struct {
                 if (!params.contains(current) and (dyn == null or dyn.?.storage != .view)) continue;
                 if (dyn) |dyn_info| {
                     const staged = try self.addLocal(.{ .layout_idx = self.store.getLocal(current).layout_idx, .dyn = .{ .desc = dyn_info.desc, .storage = .frame } });
-                    self.has_dynamic_frame = true;
                     try self.emitDyn(staged, .{ .copy = .{ .src = current, .desc = dyn_info.desc } });
                     source.* = staged;
                 } else {
@@ -1432,11 +1428,21 @@ pub const Builder = struct {
         return done.get(root).?;
     }
 
+    /// Whether any local of this procedure lives in the dynamic frame region.
+    fn hasDynamicFrame(self: *const Builder) bool {
+        for (self.frame_locals.items) |local| {
+            const dyn = self.store.localDyn(local) orelse continue;
+            if (dyn.storage == .frame) return true;
+        }
+        return false;
+    }
+
     /// Link the entry chain to the body and finish the procedure.
     pub fn finishProc(self: *Builder, entry: CFStmtId, body_start: CFStmtId, args: []const LocalId, ret_layout: layout.Idx) Allocator.Error!void {
         const worker = self.currentWorker().*;
+        const has_dynamic_frame = self.hasDynamicFrame();
         // Entry chain, then the dynamic frame region, then the body.
-        if (self.has_dynamic_frame) {
+        if (has_dynamic_frame) {
             try self.emitEntry(.{ .dyn = .{ .target = null, .data = try self.store.addStmtRow(LIR.DynOp, .frame_alloc), .next = undefined } });
         }
         // The entry chain's last hole continues into the body: it becomes a
@@ -1465,7 +1471,7 @@ pub const Builder = struct {
         proc.body = proc_body;
         proc.shapes = self.store.shapes;
         self.store.shapes = .{};
-        if (self.has_dynamic_frame) self.tail_calls.self_calls = .replace_frame;
+        if (has_dynamic_frame) self.tail_calls.self_calls = .replace_frame;
         proc.tail_calls = try self.tail_calls.finish(self.store);
     }
 
@@ -2410,7 +2416,6 @@ pub const Builder = struct {
     pub fn argsRecordLocal(self: *Builder, params: []const TypeId, storage: LIR.DynStorage) Allocator.Error!LocalId {
         if (try self.allClosed(params)) return self.closedLocal(try self.argsRecordLayout(params));
         const desc = try self.argsRecordDesc(params);
-        if (storage == .frame) self.has_dynamic_frame = true;
         return self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = storage } });
     }
 
@@ -4535,7 +4540,6 @@ pub const Builder = struct {
         const desc = try self.closedLocal(.opaque_ptr);
         try self.emitEntry(.{ .dyn = .{ .target = desc, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_args = .{ .elems = try self.store.addLocalSpan(elems) } }), .next = undefined } });
         const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = .frame } });
-        self.has_dynamic_frame = true;
         const fields = try std.mem.concat(self.allocator, LocalId, &.{ words, args });
         defer self.allocator.free(fields);
         try self.emitDyn(record, .{ .record = .{ .desc = desc, .fields = try self.store.addLocalSpan(fields) } });
@@ -6347,7 +6351,9 @@ pub const Builder = struct {
     }
 
     /// When the statement emitted last is a call whose target is `value`,
-    /// a dynamic frame local, make `result` its target instead.
+    /// a dynamic frame local, make `result` its target instead. A call's
+    /// target is a local that call created, so nothing else names `value`
+    /// and it leaves the frame.
     pub fn retargetLastCall(self: *Builder, value: LocalId, result: LocalId) Allocator.Error!bool {
         const last = self.last_stmt orelse return false;
         const dyn = self.store.localDyn(value) orelse return false;
@@ -6366,6 +6372,8 @@ pub const Builder = struct {
             .init_uninitialized, .assign_ref, .assign_literal, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return false,
         }
         try self.store.replaceCFStmt(last, stmt, self.store.stmtOrigin(last));
+        const index = std.mem.lastIndexOfScalar(LocalId, self.frame_locals.items, value) orelse unreachable; // addLocal records every local a statement targets
+        _ = self.frame_locals.orderedRemove(index);
         return true;
     }
 
@@ -6959,7 +6967,6 @@ pub const Builder = struct {
         if (self.immortal_closures) invariant("a method override captures a value of an open type, which methods never capture");
         const record_desc = try self.dynamicCaptureDesc(capture_types, descs.len + dicts.len);
         const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = record_desc, .storage = .frame } });
-        self.has_dynamic_frame = true;
         const fields = try std.mem.concat(self.allocator, LocalId, &.{ &.{record_desc}, descs, dicts, captured });
         defer self.allocator.free(fields);
         try self.emitDyn(record, .{ .record = .{ .desc = record_desc, .fields = try self.store.addLocalSpan(fields) } });

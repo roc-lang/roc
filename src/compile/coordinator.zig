@@ -9753,6 +9753,37 @@ test "hoisted constants depend on their typed expressions instead of unrelated o
     }
 }
 
+test "a hoisted constant naming a block-local type is bound to its module version" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const source =
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\base = 10.I64
+        \\compute = |n| {
+        \\    Local := [First, Second]
+        \\    fixed = [Local.First, Local.Second]
+        \\    n + List.len(fixed).to_i64_wrap()
+        \\}
+        \\answer = compute(base)
+        \\
+    ;
+    try writeReuseFixture(&tmp, source);
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+    var first = try compileForReuseVerifying(allocator, cache, app, true);
+    defer first.deinit(allocator);
+    const edited = try std.mem.replaceOwned(u8, allocator, source, "base = 10.I64", "base = 11.I64");
+    defer allocator.free(edited);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = edited });
+    var current = try compileForReuseVerifying(allocator, cache, app, true);
+    defer current.deinit(allocator);
+    const text = "[Local.First, Local.Second]";
+    try std.testing.expect(!std.mem.eql(u8, &first.hoistedIdentity(text), &current.hoistedIdentity(text)));
+}
+
 test "compile-time roots that call a generated method have value identities and are reused" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
@@ -10438,6 +10469,101 @@ fn checkNominalIdentityFixture(
         count += 1;
     }
     return count;
+}
+
+/// The reuse identity the app's checked module publishes for its only nominal
+/// type named `type_name`. The app is expected to have errors.
+fn rejectedAppTypeIdentity(allocator: Allocator, app_source: []const u8, type_name: []const u8) (CheckedModuleCacheRunError || std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError || std.Io.Dir.RealPathFileAllocError)![32]u8 {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeReuseFixture(&tmp, app_source);
+    const app_path = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app_path);
+    var stderr_capture: StderrCapture = .{ .allocator = allocator };
+    defer stderr_capture.bytes.deinit(allocator);
+    var roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    roc_ctx.ctx = &stderr_capture;
+    roc_ctx.vtable.writeStderr = StderrCapture.write;
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        try sharedBuiltinModules(),
+        build_options.compiler_compatibility_id,
+        null,
+        roc_ctx,
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+    var arena_impl = base.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+    try coord.start();
+    try coord.discoverAppFromPath(arena_impl.allocator(), .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(coord.hasUserErrors());
+
+    const app = coord.appRootCheckedArtifact();
+    const types = app.checked_types.view();
+    var found: ?[32]u8 = null;
+    for (app.compile_time_root_identities.reuse_types) |row| {
+        switch (types.payload(row.ty)) {
+            .nominal => |nominal| {
+                if (!std.mem.eql(u8, app.canonical_names.typeNameText(nominal.name), type_name)) continue;
+                try std.testing.expect(found == null or std.mem.eql(u8, &found.?, &row.identity));
+                found = row.identity;
+            },
+            .alias => {},
+            .pending, .err, .empty_record, .empty_tag_union, .flex, .rigid, .record, .tuple, .function, .tag_union => return error.TestUnexpectedResult,
+        }
+    }
+    return found orelse error.TestUnexpectedResult;
+}
+
+test "a block-local type in retired code is named by its module version" {
+    const allocator = std.testing.allocator;
+    // The circular definitions are replaced by runtime errors, so no expression
+    // reaches their blocks. Swapping `P` and `Q` leaves the source of every
+    // declaration unchanged as a set, and `Sibling`, which `Local` names, changes.
+    const source =
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\first = {
+        \\    Sibling := [P]
+        \\    Local := [Wrap(Sibling)]
+        \\    _local : Local
+        \\    _local = Wrap(P)
+        \\    second
+        \\}
+        \\second = {
+        \\    Sibling := [Q]
+        \\    _sibling : Sibling
+        \\    _sibling = Q
+        \\    first
+        \\}
+        \\answer = 1.I64
+        \\
+    ;
+    const swapped =
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\first = {
+        \\    Sibling := [Q]
+        \\    Local := [Wrap(Sibling)]
+        \\    _local : Local
+        \\    _local = Wrap(Q)
+        \\    second
+        \\}
+        \\second = {
+        \\    Sibling := [P]
+        \\    _sibling : Sibling
+        \\    _sibling = P
+        \\    first
+        \\}
+        \\answer = 1.I64
+        \\
+    ;
+    const original = try rejectedAppTypeIdentity(allocator, source, "Local");
+    try std.testing.expectEqualSlices(u8, &original, &try rejectedAppTypeIdentity(allocator, source, "Local"));
+    try std.testing.expect(!std.mem.eql(u8, &original, &try rejectedAppTypeIdentity(allocator, swapped, "Local")));
 }
 
 test "nominal identity is the declaring module's content identity and statement, never the type name" {

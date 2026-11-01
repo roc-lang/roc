@@ -157,6 +157,26 @@ pub fn copy(desc: *const TypeDesc, dst: [*]u8, src: [*]const u8) void {
 /// are owned by their container's one allocation.
 pub fn incref(desc: *const TypeDesc, ptr: [*]u8, count: isize, ops: *RocOps) void {
     if (!desc.flags.contains_refcounted) return;
+    var d = desc;
+    while (true) {
+        const value = Value.at(d, ptr);
+        switch (d.kind) {
+            .zst, .scalar, .bool => return,
+            .str => return value.rocStr().incref(@intCast(count), ops),
+            .list => return value.rocList().incref(count, d.child.?.flags.contains_refcounted, ops),
+            .box, .recursive_box => {
+                if (d.child.?.size != 0) utils.increfDataPtr(value.word(), count, .atomic, ops);
+                return;
+            },
+            .erased_callable => return utils.increfDataPtr(value.word(), count, .atomic, ops),
+            .nominal => d = d.child.?,
+            .record, .tuple, .tag_union => return increfComposite(d, ptr, count, ops),
+        }
+    }
+}
+
+/// Keep the traversal's work buffer out of the direct retain path's frame.
+noinline fn increfComposite(desc: *const TypeDesc, ptr: [*]u8, count: isize, ops: *RocOps) void {
     var stack: Stack(Value, 32) = undefined;
     stack.init();
     defer stack.deinit(ops);
@@ -209,6 +229,35 @@ pub fn decref(desc: *const TypeDesc, ptr: [*]u8, ops: *RocOps) void {
     // Releasing a function's capture re-enters here through its `on_drop`.
     builtins.stack_guard.check();
     if (!desc.flags.contains_refcounted) return;
+    var d = desc;
+    while (true) {
+        const value = Value.at(d, ptr);
+        switch (d.kind) {
+            .zst, .scalar, .bool => return,
+            .str => return value.rocStr().decref(ops),
+            .list => {
+                const elem = d.child.?;
+                // Reference-containing elements must retain the traversal's
+                // ordering: release the elements before freeing their storage.
+                if (elem.flags.contains_refcounted) return decrefComposite(d, ptr, ops);
+                const alignment: u32 = if (elem.size == 0) 1 else elem.alignment;
+                return value.rocList().decref(alignment, elem.size, false, null, &builtins.list.rcNone, ops);
+            },
+            .box, .recursive_box => {
+                const payload = d.child.?;
+                if (payload.size == 0) return;
+                if (payload.flags.contains_refcounted) return decrefComposite(d, ptr, ops);
+                return utils.decrefDataPtr(value.word(), payload.alignment, false, .atomic, ops);
+            },
+            .erased_callable => return erased_callable.decref(value.word(), ops),
+            .nominal => d = d.child.?,
+            .record, .tuple, .tag_union => return decrefComposite(d, ptr, ops),
+        }
+    }
+}
+
+/// Keep the traversal's work buffer out of the direct release path's frame.
+noinline fn decrefComposite(desc: *const TypeDesc, ptr: [*]u8, ops: *RocOps) void {
     var walker: DecrefWalker = undefined;
     walker.stack.init();
     walker.ops = ops;

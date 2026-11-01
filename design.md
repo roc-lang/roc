@@ -3669,8 +3669,13 @@ hash the literal owner's artifact key or expression index. Generated literals us
 the same checked operand contract. No extra per-literal identity is persisted.
 
 For reuse across imported edits, checking also publishes exact semantic fingerprints
-of named checked type occurrences. A committed value records each occurrence's
-source placement and fingerprint alongside its old declaration and occurrence ids.
+of named checked type occurrences. Every type declaration the module holds has
+one: the explicit declaration lists supply them, because a checked type can name
+a block-local declaration in code that canonicalization or checking replaced with
+a runtime error, which no expression reaches. A block-local declaration with no
+enclosing owner is named by version-specific data, since its source alone does
+not decide what it means. A committed value records each occurrence's source
+placement and fingerprint alongside its old declaration and occurrence ids.
 Admission resolves these records against the current checked producers before
 copying anything. Every named occurrence in a value and its stored type must resolve;
 copying replaces the declaring artifact, occurrence artifact and type id, and the
@@ -9291,7 +9296,9 @@ constructor. Return-destination reuse metadata is not a tail-position proof.
 
 Boxy lowering keeps generic calls in this form. A dynamic result is written by
 the callee into the caller's result storage, and a call whose result storage
-is the procedure's own result storage returns it directly. No conversion
+is the procedure's own result storage returns it directly. The call's target
+is then the result local, so it gives the procedure no dynamic frame region
+and a self call that only passes its parameters along is a loop. No conversion
 statement ever follows a call, because caller and callee share one
 representation of every type. An erased call is written in the layout the
 callee's function type gives its arguments and result, which both sides
@@ -10026,7 +10033,9 @@ remain valid only until rewiring; variants are indexed by their explicit
 variant/discriminant pair in first-producer order. Fixed-point discovery still
 revisits surrounding joins after a rewrite, since a rejected ancestor can
 become eligible when a descendant changes. No analysis cache crosses that
-mutation boundary.
+mutation boundary, and each iteration of the fixed point gives its scratch back,
+so scratch is bounded by one procedure-sized analysis rather than growing with
+the number of fusions.
 
 Hoisting a tag consumer's enclosing continuation joins requires exclusive
 structural entry from that consumer. If an outside statement also enters a
@@ -14956,6 +14965,12 @@ what make open rows work in generic code: a body generic over `{ x : a }r` or
 has under the actual type, and the offset a field name has, come from the
 descriptor at runtime.
 
+Tag descriptors store variants in strict byte-wise name order (the same order
+that assigns discriminants). Runtime tag-name lookup uses binary search of that
+existing order. Immediately before searching, Debug builds assert that the
+names are strictly sorted; release builds do not walk the variants to validate
+this compiler invariant.
+
 Descriptors come from two sources and nowhere else:
 
 - *Static descriptors.* The lowerer interns a descriptor for every closed
@@ -18850,12 +18865,17 @@ body that consumes those parameters, and a remainder that enters the shared
 control region. The id is in scope in both body and remainder; the parameters
 are in scope only in the body. A jump names an in-scope id and supplies exactly
 one argument of the declared type for every parameter. The join body and
-remainder both produce the enclosing expression's result type. Lowering gives
-both the same consumer statement, so a value-position join's body, any join
-declared inside its remainder for the same result, and a direct arrival may all
-enter one LIR statement: LIR consumers treat such a statement as a merge of
-every edge into it, not as a body entered only through one join's jumps. These
-forms express shared control only; they do not choose layouts or ownership.
+remainder both produce the enclosing expression's result type. Lowering declares
+one consumer join around both: its parameter is the result and its body is the
+statement that consumes the result, so every path through a value-position join
+arrives by an explicit jump that tag-case fusion can see as a producer. A
+`match`, `if`, initialized-payload switch, or callable dispatch whose continuation
+is that jump delivers through the consumer rather than declaring a join of its
+own. A loop's `break`s all continue at the statement after the loop, so a join
+declared for one `break`'s value and another `break` may enter one LIR
+statement: LIR consumers treat such a statement as a merge of every edge into
+it, not as a body entered only through one join's jumps. These forms express
+shared control only; they do not choose layouts or ownership.
 
 Case-of-case and let-of-case rewrites use these forms to thread branch results
 to one continuation. They never clone that continuation into each branch. Join
@@ -19257,10 +19277,14 @@ The producers are:
 Inside Lambda Solved, the boundaries that mark every callable they reach as
 erased are hosted function signatures and platform or hosted root signatures,
 layout requests (including constants the const store materializes), runtime
-schema requests, `Box.box` and `Box.unbox` operands, and forced-dynamic
-iterator types. After solving, debug builds walk every one of those boundaries
-again and assert that each function value reached has an erased callable
-slot.
+schema requests, every `Box` type, and forced-dynamic iterator types. A `Box`
+is a boundary by its type alone: every function a box holds is erased whether
+or not the program boxes, unboxes, or passes across a boundary any value of
+that type. The object cache depends on this, because a request whose function
+types all sit inside a `Box` is closed, so its key must name one procedure in
+every program, including a program in which nothing reaches the box. After
+solving, debug builds walk every one of those boundaries again and assert that
+each function value reached has an erased callable slot.
 
 Monotype lowering carries boundary requirements as typed annotations into
 Lambda Solved IR. Lambda solving also consumes the explicit iterator
@@ -19269,7 +19293,7 @@ erased. It unifies all requirements through the same function
 `args/callable/ret` graph used for finite lambda sets. If a callable slot is
 forced to `erased`, direct LIR lowering produces packed erased callable values
 and indirect erased calls. If no explicit erased requirement reaches a callable
-slot, finite lambda-set dispatch is used.
+slot and no box holds it, finite lambda-set dispatch is used.
 
 No ordinary source expression becomes erased because direct lowering finds
 finite dispatch inconvenient. Erasure is introduced only by explicit checked
@@ -21064,9 +21088,18 @@ call between functions of different signatures, so the LLVM backend uses the
 same driver scheme there as the WebAssembly backend: a frame-replacing call
 copies its arguments into static storage, records its callee as pending and
 returns, and every ordinary call to a tail-group member is followed by a call
-to the group's driver with the address of the call's result. Both driver
-schemes hand the driver the descriptor address as well when the group's
-members return one.
+to the group's driver with the address of the call's result.
+
+Both driver schemes carry `.boxy` values the way a frame-replacing call does
+everywhere else. The call moves its dynamic arguments into one fresh carry,
+leaves their addresses and the carry in static storage for the driver to pass
+on, and releases its own carry once it has read its arguments, since they may
+live there. A dynamic result is written to the storage the entry call passed,
+so that one address reaches every member of the chain: the LLVM driver already
+has it as the address of the call's result, and the WebAssembly backend's
+frame-replacing call leaves it in the tail area, because that backend's driver
+takes a result by value. When an ordinary call's target is dynamic, the
+address given to the driver is that of the target's bytes.
 
 A procedure with a `tail_group` is never offered to the object cache. A
 program that links a cached entry has no body for it, so it would see the
@@ -21721,8 +21754,18 @@ parameter and its same-value aliases, and a field read passed to a consuming
 position retains the field under that count; a take would instead move the
 field's stored unit out of the parameter that the boundary returns. Field-take
 decisions and the uniqueness they settle are shared by every emission of a
-procedure, so the boundary constrains the base procedure's takes too. These are compile-time ownership-state transitions only. The
-post-ARC program contains ordinary calls, switches, `incref`, and `decref`
+procedure, so the boundary constrains the base procedure's takes too.
+
+The rule also covers ownership-complete field and tag-payload reads, whose
+root-unit move is decided per emission at the read. In an emission with an
+outcome convention, each restitution boundary is a use of its restituted
+parameters' ownership places, so a complete read that reaches one retains the
+projected value and leaves the root's unit in place, unless the read's own
+checked call restores that unit first. An emission without an outcome
+convention releases the parameter at the same statement, and the read may move
+its unit.
+
+These are compile-time ownership-state transitions only. The post-ARC program contains ordinary calls, switches, `incref`, and `decref`
 statements, and backends continue to follow those statements without knowing
 about conditional ownership.
 
@@ -24567,6 +24610,17 @@ levels and the runtime consumer compile their own members against the
 completed value. The `.boxy` compile-time evaluator has no Solved program;
 it orders its roots from the checked modules alone
 (`eval/checked_root_graph.zig`, see Compile-Time Evaluation Strategy).
+
+Within one checked dependency-graph build, each reached procedure template's
+direct references are decoded once into shared arrays of callee template IDs
+and compile-time root IDs. Later roots replay those exact direct references
+instead of rescanning checked bodies and dispatch evidence. Evidence visitation
+belongs to the individual summary, so evidence shared by two templates appears
+in both summaries. Per-root template visitation still terminates recursive
+calls, and each root's final dependency list is sorted, deduplicated, and excludes
+itself. These summaries cache no transitive closure, live only for this graph
+build, and never enter checked artifacts or cache identities.
+
 
 Each level is lowered as its own consumer of the Solved program once every
 level before it has run: a completed value that lowers as a construction is

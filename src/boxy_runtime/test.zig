@@ -337,6 +337,56 @@ test "decref releases nested allocations and incref keeps them alive" {
     try testing.expectEqual(baseline, env.allocations());
 }
 
+test "simple values retain multiple owners and release their allocations exactly once" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    const text_desc = compose.strDesc();
+    const nominal_text = compose.nominal(&env.cache, ops, text_desc, &name_point, null, false);
+    for ([_]*const TypeDesc{ text_desc, nominal_text }) |d| {
+        for ([_][]const u8{ "small", "a string long enough to need a separate allocation" }) |text| {
+            const baseline = env.allocations();
+            var value = RocStr.fromSlice(text, ops);
+            const held = env.allocations();
+            walk.incref(d, @ptrCast(&value), 2, ops);
+            for (0..2) |_| {
+                walk.decref(d, @ptrCast(&value), ops);
+                try testing.expectEqual(held, env.allocations());
+                try testing.expectEqualStrings(text, value.asSlice());
+            }
+            walk.decref(d, @ptrCast(&value), ops);
+            try testing.expectEqual(baseline, env.allocations());
+        }
+    }
+    const list_desc = compose.list(&env.cache, ops, compose.scalarDesc(.i64));
+    for ([_][]const i64{ &.{}, &.{ 4, 7 } }) |values| {
+        const baseline = env.allocations();
+        var value = i64List(values, ops);
+        const held = env.allocations();
+        walk.incref(list_desc, @ptrCast(&value), 2, ops);
+        for (0..2) |_| {
+            walk.decref(list_desc, @ptrCast(&value), ops);
+            try testing.expectEqual(held, env.allocations());
+        }
+        walk.decref(list_desc, @ptrCast(&value), ops);
+        try testing.expectEqual(baseline, env.allocations());
+    }
+    for ([_]*const TypeDesc{ compose.zstDesc(), compose.scalarDesc(.i64) }) |payload| {
+        const d = compose.box(&env.cache, ops, payload);
+        const baseline = env.allocations();
+        var value: ?[*]u8 = if (payload.size == 0) null else utils.allocateWithRefcount(payload.size, payload.alignment, false, ops);
+        if (value) |ptr| @memset(ptr[0..payload.size], 0);
+        const held = env.allocations();
+        walk.incref(d, @ptrCast(&value), 2, ops);
+        for (0..2) |_| {
+            walk.decref(d, @ptrCast(&value), ops);
+            try testing.expectEqual(held, env.allocations());
+        }
+        walk.decref(d, @ptrCast(&value), ops);
+        try testing.expectEqual(baseline, env.allocations());
+    }
+}
+
 test "decref of a deep recursive value keeps its work off the call stack" {
     var env = Env.init();
     defer env.deinit();
@@ -498,6 +548,11 @@ test "the shared capture drop releases a dynamic capture record" {
 
     var slot: Slot = .{};
     slot.write(0, ?[*]u8, callable);
+    walk.incref(compose.erasedCallableDesc(), slot.ptr(), 2, ops);
+    for (0..2) |_| {
+        walk.decref(compose.erasedCallableDesc(), slot.ptr(), ops);
+        try testing.expectEqual(baseline + 2, env.allocations());
+    }
     walk.decref(compose.erasedCallableDesc(), slot.ptr(), ops);
     try testing.expectEqual(baseline, env.allocations());
 }
@@ -586,4 +641,39 @@ test "boxy composition site concurrent writers publish whole operand result pair
     for (threads) |thread| thread.join();
     started = 0;
     try testing.expect(!failed.load(.monotonic));
+}
+
+test "tag lookup finds every member of sorted composed and nominal descriptors" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    var labels: [257][6]u8 = undefined;
+    var names: [257]Name = undefined;
+    var variants: [257]compose.VariantInput = undefined;
+    const payloads = [_]*const TypeDesc{compose.scalarDesc(.i64)};
+    for (&labels, &names, 0..) |*label, *tag_name, index| {
+        const text = try std.fmt.bufPrint(label, "Tag{d:0>3}", .{index});
+        tag_name.* = .{ .id = desc_mod.labelId(text), .len = @intCast(text.len), .bytes = text.ptr };
+    }
+    for ([_]usize{ 1, 2, 3, 4, 17, 257 }) |count| {
+        // Composition must establish sorted order from arbitrary input order.
+        for (variants[0..count], 0..) |*variant, index| {
+            variant.* = .{ .name = &names[count - index - 1], .payload_count = 1, .payloads = &payloads };
+        }
+        const union_desc = compose.tagUnion(&env.cache, ops, variants[0..count]);
+        const nominal = compose.nominal(&env.cache, ops, union_desc, &name_point, null, false);
+        for ([_]*const TypeDesc{ union_desc, nominal }) |desc| {
+            for (names[0..count], 0..) |tag_name, index| {
+                // A different address for the same name must work too.
+                const queried_name = tag_name;
+                const value: i64 = @intCast(index + 1);
+                var slot: Slot = .{};
+                compiled.buildTag(desc, &queried_name, slot.ptr(), &.{@ptrCast(&value)}, ops);
+                try testing.expectEqual(@as(u32, @intCast(index)), compiled.tagDiscriminantOf(desc, &queried_name, ops));
+                try testing.expectEqual(@as(u32, @intCast(index)), compiled.tagDiscriminant(desc, slot.ptr(), ops));
+                const result: *const i64 = @ptrCast(@alignCast(compiled.tagPayloadAddr(desc, slot.ptr(), &queried_name, 0, ops)));
+                try testing.expectEqual(value, result.*);
+            }
+        }
+    }
 }

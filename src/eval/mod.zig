@@ -107,6 +107,7 @@ pub const test_helpers = Inspected;
 pub const rc_conformance = @import("rc_conformance.zig");
 
 test "eval tests" {
+    std.testing.refAllDecls(@import("checked_root_graph.zig"));
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(@import("vendor_relocatable_loader"));
     std.testing.refAllDecls(@import("BuiltinModules.zig"));
