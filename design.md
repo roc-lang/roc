@@ -1515,6 +1515,17 @@ A procedure's excerpt is the same whether this program compiled it or a
 pack carried it, so the object is the same however each procedure was
 provided.
 
+A prepared data catalog owns one immutable copy of its payload bytes, names,
+and relocations. It publishes exact outgoing data and code-symbol edges once;
+excerpt capture and reachability use those edges rather than rescanning the
+payload's relocation array. Fragments carry only their reached data items,
+sharing that backing through an explicit atomic owner retained once per set.
+The catalog, workers, and copied sets can be destroyed independently. This is
+compiler-storage ownership; it changes no generated reference-count operation.
+Renaming data first gives the new set its own metadata and backing, preserving
+the catalog's immutable contents. Catalogs belong to one program's symbol
+domain; equal program-local names from other programs never establish sharing.
+
 ### Read-Only Type Analysis
 
 Read-only type analysis must not use permanent solver allocation as scratch.

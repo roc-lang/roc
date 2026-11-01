@@ -204,6 +204,7 @@ pub const ReadInputs = struct {
 pub fn plan(allocator: Allocator, module: *const checked.CheckedModuleArtifact, previous: *const Previous, inputs: *const ReadInputs) Allocator.Error!Transplant {
     var transplant = Transplant{ .allocator = allocator, .type_occurrences = .init(allocator) };
     errdefer transplant.deinit();
+    defer if (traceEnabled()) traceUnmatchedRoots(module, previous, &transplant);
     const identities = module.compile_time_root_identities.rows;
     const previous_identities = previous.identities.rows;
     if (identities.len == 0 or previous_identities.len == 0) return transplant;
@@ -305,6 +306,37 @@ pub fn plan(allocator: Allocator, module: *const checked.CheckedModuleArtifact, 
         });
     }
     return transplant;
+}
+
+/// Diagnostic only: explain whether a missed root still has the same source
+/// site and value identities. No admission or rebinding decision uses this scan.
+fn traceUnmatchedRoots(module: *const checked.CheckedModuleArtifact, previous: *const Previous, transplant: *const Transplant) void {
+    const current = module.compile_time_root_identities;
+    if (current.rows.len == 0 or previous.identities.rows.len == 0) return;
+    roots: for (module.compile_time_roots.roots) |root| {
+        if (root.payload != .pending) continue;
+        for (transplant.matches.items) |match| if (match.root == root.id) continue :roots;
+        const index = @backingInt(root.id);
+        for (previous.roots.roots) |old| {
+            const old_index = @backingInt(old.id);
+            const has_semantics = current.test_rows.len != 0 and previous.identities.test_rows.len != 0;
+            const same_site = std.meta.eql(current.rows[index].site, previous.identities.rows[old_index].site);
+            if (!same_site and !(has_semantics and std.meta.eql(current.test_rows[index].site, previous.identities.test_rows[old_index].site))) continue;
+            const same_semantics = has_semantics and
+                std.meta.eql(current.test_rows[index].value, previous.identities.test_rows[old_index].value);
+            std.debug.print("ctfe-reuse miss {s} root {d} {s}: previous {s}, portable {}, exact identity {}, semantic identity {}\n", .{
+                module.moduleEnvConst().module_name,
+                index,
+                @tagName(root.kind),
+                @tagName(old.payload),
+                previous.portability.isPortable(old.id),
+                std.meta.eql(current.rows[index].value, previous.identities.rows[old_index].value),
+                same_semantics,
+            });
+            continue :roots;
+        }
+        std.debug.print("ctfe-reuse miss {s} root {d} {s}: no previous site\n", .{ module.moduleEnvConst().module_name, index, @tagName(root.kind) });
+    }
 }
 
 fn storedRootType(previous: *const Previous, root: ComptimeRootId) ConstTypeId {
