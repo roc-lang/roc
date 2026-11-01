@@ -33,7 +33,9 @@ pub fn payload(allocator: Allocator, artifact: PA.Excerpt) Allocator.Error![]u8 
     errdefer bytes.deinit(allocator);
     try bytes.appendSlice(allocator, payload_magic);
     try appendSlice(allocator, &bytes, artifact.code);
-    for (artifact.data) |item| try appendSlice(allocator, &bytes, item.bytes);
+    const data = if (artifact.data_graph != null) try PA.materializeData(allocator, artifact) else artifact.data;
+    defer if (artifact.data_graph != null) allocator.free(data);
+    for (data) |item| try appendSlice(allocator, &bytes, item.bytes);
     return bytes.toOwnedSlice(allocator);
 }
 
@@ -270,9 +272,10 @@ pub fn encodeComponent(a: Allocator, set: *const PA.Set, graph: *const Component
             ref.binding = .absent;
         }
         artifact.symbolic_refs = symbolic;
-        const data = try scratch.dupe(PA.DataItem, artifact.data);
+        const data = try PA.materializeData(scratch, artifact.*);
         for (data) |*item| item.bytes = &.{};
         artifact.data = data;
+        artifact.data_graph = null;
     }
     const encoded_pack = try PF.writeWithNames(scratch, &.{ .arena = undefined, .excerpts = artifacts, .source_files = set.source_files }, &.{}, names);
     var out = std.ArrayList(u8).empty;
@@ -443,6 +446,9 @@ pub fn reusableComponent(set: *const PA.Set, graph: *const ComponentGraph, closu
         const origin = current.metadata_origin.?;
         if (origin.index != ordinal) return null;
         const old = origin.source.excerpts[origin.index];
+        // Metadata origins come from decoded packs, whose data is flat. Fresh
+        // graph-backed excerpts have no retained canonical metadata origin.
+        std.debug.assert(current.data_graph == null and old.data_graph == null);
         const old_payload = old.payload_record orelse return null;
         if (!std.mem.eql(u8, &payload_hashes[index], &old_payload.digest)) return null;
         if (!equal(PA.Kind, current.kind, old.kind) or current.entry != old.entry or !equal(?PA.Frame, current.frame, old.frame) or
@@ -469,4 +475,57 @@ pub fn reusableComponent(set: *const PA.Set, graph: *const ComponentGraph, closu
         }
     }
     return first.record;
+}
+
+test "indexed payloads and metadata preserve shared constant graphs" {
+    var deterministic = collections.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), testSharedGraphRecords, .{});
+}
+
+fn testSharedGraphRecords(allocator: Allocator) !void {
+    var prepared = try PA.PreparedData.init(allocator, &.{}, &.{}, &.{.{
+        .name = "roc__d0",
+        .bytes = "constant",
+        .alignment = 1,
+        .symbol_offset = 0,
+        .program_local_name = true,
+    }});
+    defer prepared.deinit();
+    const roots = [_]u32{@intCast(prepared.items.getIndex("roc__d0").?)};
+    const artifact: PA.Excerpt = .{
+        .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
+        .code = "code",
+        .entry = 0,
+        .frame = null,
+        .refs = &.{},
+        .relocations = &.{.{ .offset = 0, .name = "roc__d0", .scope = .program, .kind = .{ .data = .rel32 } }},
+        .data = &.{},
+        .data_graph = .{ .graph = prepared.graph, .roots = &roots },
+    };
+    const raw = try payload(allocator, artifact);
+    defer allocator.free(raw);
+    var flat = artifact;
+    flat.data = try PA.materializeData(allocator, artifact);
+    defer allocator.free(flat.data);
+    flat.data_graph = null;
+    const flat_raw = try payload(allocator, flat);
+    defer allocator.free(flat_raw);
+    try std.testing.expectEqualSlices(u8, flat_raw, raw);
+    const set: PA.Set = .{ .arena = undefined, .excerpts = &.{artifact} };
+    var closure = try SpliceClosure.init(allocator, &set);
+    defer closure.deinit();
+    var graph = try ComponentGraph.init(allocator, &closure);
+    defer graph.deinit();
+    var names = try PA.ContentNames.init(allocator, &set);
+    defer names.deinit();
+    const encoded = try encodeComponent(allocator, &set, &graph, &closure, 0, &.{@splat(0)}, &.{digest(raw)}, &names);
+    defer allocator.free(encoded);
+    var decoded = try decodeComponent(allocator, encoded);
+    defer decoded.pack.deinit();
+    const loaded = @constCast(&decoded.pack.set.excerpts[0]);
+    try std.testing.expectEqual(@as(usize, 1), loaded.data.len);
+    try std.testing.expectEqual(@as(usize, 0), loaded.data[0].bytes.len);
+    try materialize(loaded, raw);
+    try std.testing.expectEqualStrings("constant", loaded.data[0].bytes);
+    try std.testing.expectEqualStrings("code", loaded.code);
 }

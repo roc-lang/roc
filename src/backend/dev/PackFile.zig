@@ -244,8 +244,10 @@ pub fn writeWithNames(allocator: Allocator, set: *const CodeExcerpt.Set, specs: 
             const scope: CodeExcerpt.SymbolScope = if (names.renames(relocation.name)) .shared else relocation.scope;
             try writer.byte(@backingInt(scope));
         }
-        try writer.word(@intCast(excerpt.data.len));
-        for (excerpt.data) |item| {
+        const data = try CodeExcerpt.materializeData(allocator, excerpt);
+        defer allocator.free(data);
+        try writer.word(@intCast(data.len));
+        for (data) |item| {
             try writer.str(names.of(item.name));
             try writer.str(item.bytes);
             try writer.word(item.alignment);

@@ -1841,7 +1841,7 @@ pub const ConstStore = struct {
     }
 
     /// Push the nodes a value refers to directly.
-    fn appendValueChildren(value: ConstValue, out: *std.ArrayList(ConstNodeId), allocator: Allocator) Allocator.Error!void {
+    pub fn appendValueChildren(value: ConstValue, out: *std.ArrayList(ConstNodeId), allocator: Allocator) Allocator.Error!void {
         switch (value) {
             .pending, .zst, .scalar, .str, .crash, .checked_error, .fn_value, .boxy_fn => {},
             .box => |payload| try out.append(allocator, payload),

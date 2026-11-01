@@ -1517,9 +1517,15 @@ provided.
 
 A prepared data catalog owns one immutable copy of its payload bytes, names,
 and relocations. It publishes exact outgoing data and code-symbol edges once;
-excerpt capture and reachability use those edges rather than rescanning the
-payload's relocation array. Fragments carry only their reached data items,
-sharing that backing through an explicit atomic owner retained once per set.
+each catalog entry holds both its datum and its edges. Fragments carry only dense
+root indices into this shared graph, and an excerpt set retains each graph owner
+once. Copying, pruning and object assembly preserve these graph references.
+Collection tracks visited nodes in a per-graph bitset, so collecting many procedures
+walks each shared node once. Renaming creates one new shared graph for the image;
+per-procedure flat arrays are materialized only at the existing pack format boundary.
+The graph producer propagates the code-pointer property along reverse data edges
+once, including cycles. Pack admission consumes that exact property and the
+explicit code-relocation roots instead of scanning a flattened closure.
 The catalog, workers, and copied sets can be destroyed independently. This is
 compiler-storage ownership; it changes no generated reference-count operation.
 Renaming data first gives the new set its own metadata and backing, preserving
@@ -3642,8 +3648,24 @@ Every local occurrence in the value and its stored type must have this explicit
 correspondence before any copy is installed. The copy changes only the occurrence
 module and checked root id. A missing key rejects reuse; a type declared by the
 edited module, local defaults, functions and generated types retain their existing
-exclusions. This relocation permits ordinary full-dependency value identities;
-it does not relax the module-independent contract for reuse across imported edits.
+exclusions. This key relocation permits ordinary full-dependency value identities. Semantic
+reuse across imported edits uses the explicit producer fingerprints described below.
+
+Semantic literal-root identities hash the checked producer's existing operand:
+exact numeral digits, decoded quote bytes, or interpolation segments. They do not
+hash the literal owner's artifact key or expression index. Generated literals use
+the same checked operand contract. No extra per-literal identity is persisted.
+
+For reuse across imported edits, checking also publishes exact semantic fingerprints
+of named checked type occurrences. A committed value records each occurrence's
+source placement and fingerprint alongside its old declaration and occurrence ids.
+Admission resolves these records against the current checked producers before
+copying anything. Every named occurrence in a value and its stored type must resolve;
+copying replaces the declaring artifact, occurrence artifact and type id, and the
+stored declaration's module identity, name and statement id. Function values,
+generated named types and stored field defaults remain excluded. Matching root
+semantic identities and committed read identities remain mandatory: relocation
+never authorizes reuse after a computation's dependencies change.
 
 **Site.** Each root also carries a site (`CompileTimeRootIdentity.site`), the
 position-stable name of the root within its module: a top-level root's
@@ -3705,9 +3727,9 @@ interfaces keep exact version keys in place of source placements.
 An absent producer, changed input or missing optional read identity makes the
 candidate a cache miss. These conditions are checked against the previous
 committed result, not guessed from source syntax. Debug observations are copied
-and replayed in the ordinary root order. Values carrying version-specific references keep their entry-key
-identity contract; checked equality alone does not authorize retaining an old
-checked-type occurrence or root id. Verification builds independently evaluate
+and replayed in the ordinary root order. Values carrying version-specific references require complete relocation proofs;
+checked equality alone does not authorize retaining an old checked-type occurrence
+or root id. Verification builds independently evaluate
 and compare these transplants just like other compile-time value reuse.
 
 **Transplant.** On a checked module cache miss, before evaluation, the

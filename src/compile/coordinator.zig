@@ -4217,6 +4217,24 @@ pub const Coordinator = struct {
         return self.checkedArtifactByKey(.{ .bytes = key });
     }
 
+    fn nominalReuseIdentity(context: *anyopaque, named: check.ConstStore.NamedType) ?CheckedArtifact.ReuseNominalIdentity {
+        const self: *Coordinator = @ptrCast(@alignCast(context));
+        const owner = self.checkedArtifactByKey(.{ .bytes = named.ty_module.bytes }) orelse return null;
+        const placement = if (self.checked_artifact_index.get(owner.key.bytes)) |location|
+            checkedPlacement(location.pkg, location.module())
+        else
+            owner.key.bytes;
+        const rows = owner.compile_time_root_identities.reuse_types;
+        var lo: usize = 0;
+        var hi = rows.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (@backingInt(rows[mid].ty) < @backingInt(named.ty)) lo = mid + 1 else hi = mid;
+        }
+        if (lo == rows.len or rows[lo].ty != named.ty) return null;
+        return .{ .module = named.module.bytes, .ty_module = named.ty_module.bytes, .ty = named.ty, .placement = placement, .identity = rows[lo].identity };
+    }
+
     /// Persist the stable identities of the actual reads recorded by CTFE.
     fn publishRootReadIdentities(self: *Coordinator, artifact: *CheckedArtifact.CheckedModuleArtifact) Allocator.Error!void {
         const allocator = artifact.evaluationAllocator();
@@ -4602,6 +4620,7 @@ pub const Coordinator = struct {
             if (artifact.pairing_arena == null) {
                 if (self.cacheEnabled()) {
                     try eval.CompileTimeReuse.publishPortability(artifact);
+                    try eval.CompileTimeReuse.publishNominals(artifact, .{ .context = self, .resolve = nominalReuseIdentity });
                     try self.publishRootReadIdentities(artifact);
                 }
                 self.storeCheckedModuleInCache(mod, artifact);
@@ -9595,6 +9614,67 @@ test "a transplanted value carries no checked type occurrence of the version tha
         }
         try std.testing.expectEqual(cold.value("answer"), warm.value("answer"));
     }
+}
+
+test "imported edits reuse relocated nominal literal results and invalidate changed conversions" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const app_source =
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\import Word
+        \\import Query
+        \\answer = Word.get(check)
+        \\check : Word
+        \\check = Query.quoted({})
+        \\
+    ;
+    const word_source =
+        \\Word := { n : I64 }.{
+        \\    from_quote : Str -> Try(Word, [BadQuotedBytes(Str)])
+        \\    from_quote = |text| Ok({ n: if text == "one" 1.I64 else 2.I64 })
+        \\    get : Word -> I64
+        \\    get = |word| word.n
+        \\}
+        \\
+    ;
+    const query_source =
+        \\module [quoted]
+        \\quoted : {} -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
+        \\quoted = |{}| "one"
+        \\
+    ;
+    try writeReuseFixture(&tmp, app_source);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Word.roc", .data = word_source });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Query.roc", .data = query_source });
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+    var first = try compileForReuseWithStrategy(allocator, cache, app, true, null, .boxy);
+    defer first.deinit(allocator);
+    try std.testing.expectEqual(@as(?i64, 1), first.value("answer"));
+    // Both the nominal declaration's artifact and the literal's artifact
+    // change. Their producer-authored meaning and conversion remain identical.
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Word.roc", .data = word_source ++ "# edit\n" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Query.roc", .data = query_source ++ "# edit\n" });
+    var warm = try compileForReuseWithStrategy(allocator, cache, app, true, null, .boxy);
+    defer warm.deinit(allocator);
+    try std.testing.expectEqual(warm.stats.pending_roots, warm.stats.transplanted_roots);
+    try std.testing.expectEqual(@as(?i64, 1), warm.value("answer"));
+    const edited = try std.mem.replaceOwned(u8, allocator, word_source, "1.I64", "3.I64");
+    defer allocator.free(edited);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Word.roc", .data = edited });
+    var changed = try compileForReuseWithStrategy(allocator, cache, app, true, null, .boxy);
+    defer changed.deinit(allocator);
+    try std.testing.expectEqual(@as(?i64, 3), changed.value("answer"));
+    try std.testing.expect(changed.stats.transplanted_roots < changed.stats.pending_roots);
+    const literal_edit = try std.mem.replaceOwned(u8, allocator, query_source, "\"one\"", "\"two\"");
+    defer allocator.free(literal_edit);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Query.roc", .data = literal_edit });
+    var literal_changed = try compileForReuseWithStrategy(allocator, cache, app, false, null, .boxy);
+    defer literal_changed.deinit(allocator);
+    try std.testing.expectEqual(@as(?i64, 2), literal_changed.value("answer"));
 }
 
 test "hoisted constants depend on their typed expressions instead of unrelated owner code" {

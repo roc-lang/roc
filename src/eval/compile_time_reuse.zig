@@ -88,6 +88,7 @@ const Match = struct {
     /// version's roots.
     reads_start: u32,
     reads_len: u32,
+    semantic: bool,
 };
 
 /// The roots of one freshly checked module that its previous entry
@@ -99,9 +100,11 @@ pub const Transplant = struct {
     /// How many roots were waiting for evaluation.
     pending_roots: u32 = 0,
     type_occurrences: check.ConstStore.TypeOccurrenceMap,
+    nominals: std.AutoHashMapUnmanaged(NamedKey, NamedTarget) = .empty,
 
     pub fn deinit(self: *Transplant) void {
         self.type_occurrences.deinit();
+        self.nominals.deinit(self.allocator);
         self.matches.deinit(self.allocator);
         self.reads.deinit(self.allocator);
     }
@@ -138,29 +141,87 @@ fn reusable(previous: *const Previous, root: checked.CompileTimeRoot) bool {
     };
 }
 
-/// A value reusable under semantic dependency identities must hold no module
-/// version references. Its recorded demand is separately validated and
-/// rebound through producer-authored read identities. This is stricter than
-/// transplantation across edits of its own module: imported
-/// artifacts may have changed too. Version-bearing values retain the ordinary
-/// artifact-key contract until their producer supplies explicit rebinding data.
-fn reusableAcrossImports(previous: *const Previous, root: checked.CompileTimeRoot) Allocator.Error!bool {
+const NamedKey = struct { module: [32]u8, ty_module: [32]u8, ty: checked.CheckedTypeId };
+
+fn namedKey(named: check.ConstStore.NamedType) NamedKey {
+    return .{ .module = named.module.bytes, .ty_module = named.ty_module.bytes, .ty = named.ty };
+}
+
+const NamedTarget = struct {
+    owner: *const checked.CheckedModuleArtifact,
+    ty: checked.CheckedTypeId,
+
+    fn named(self: NamedTarget) check.ConstStore.NamedType {
+        const declaration = switch (self.owner.checked_types.view().payload(self.ty)) {
+            .nominal => |n| n.owner_module.*,
+            .alias => |a| a.owner_module.*,
+            else => base.invariant("reuse type identity names a non-named type", .{}),
+        };
+        return .{ .module = declaration, .ty_module = self.owner.key.digest(), .ty = self.ty };
+    }
+};
+
+/// Semantic equality authorizes copying only after every version-bearing
+/// occurrence has an exact current counterpart. Functions and defaults remain
+/// excluded; neither their runtime environments nor their source ids relocate.
+fn reusableAcrossImports(previous: *const Previous, root: checked.CompileTimeRoot, transplant: *const Transplant) Allocator.Error!bool {
     switch (root.payload) {
-        .const_node => |node| {
-            if (!try previous.const_store.valuePortable(node, null)) return false;
-            return switch (root.kind) {
-                .constant, .hoisted_constant => previous.const_store.type_store.typePortable(
-                    &previous.names,
-                    storedRootType(previous, root.id),
-                    null,
-                    null,
-                ),
-                .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .literal_argument => true,
-                .expect, .repl_expr => false,
-            };
-        },
         .discarded => return true,
-        .pending, .unevaluated, .fn_value, .expect, .runtime => return false,
+        .const_node => |node| {
+            var pending = std.ArrayList(check.ConstStore.ConstNodeId).empty;
+            defer pending.deinit(transplant.allocator);
+            var seen = collections.DenseMap(check.ConstStore.ConstNodeId, void).init(transplant.allocator);
+            defer seen.deinit();
+            try pending.append(transplant.allocator, node);
+            while (pending.pop()) |id| {
+                if ((try seen.getOrPut(id)).found_existing) continue;
+                const value = previous.const_store.get(id);
+                switch (value) {
+                    .fn_value, .boxy_fn => return false,
+                    .nominal => |n| if (!transplant.nominals.contains(namedKey(n.named_type))) return false,
+                    else => {},
+                }
+                try ConstStore.appendValueChildren(value, &pending, transplant.allocator);
+            }
+            switch (root.kind) {
+                .constant, .hoisted_constant => {
+                    var types = std.ArrayList(ConstTypeId).empty;
+                    defer types.deinit(transplant.allocator);
+                    var visited = collections.DenseMap(ConstTypeId, void).init(transplant.allocator);
+                    defer visited.deinit();
+                    const store = &previous.const_store.type_store;
+                    try types.append(transplant.allocator, storedRootType(previous, root.id));
+                    while (types.pop()) |ty| {
+                        if ((try visited.getOrPut(ty)).found_existing) continue;
+                        switch (store.get(ty)) {
+                            .func, .erased => return false,
+                            .primitive, .zst => {},
+                            .list, .box => |child| try types.append(transplant.allocator, child),
+                            .tuple => |span| try types.appendSlice(transplant.allocator, store.typeSpan(span)),
+                            .record => |span| for (store.fieldSpan(span)) |field| {
+                                if (field.default != null) return false;
+                                try types.append(transplant.allocator, field.ty);
+                                if (field.value_ty) |child| try types.append(transplant.allocator, child);
+                            },
+                            .tag_union => |span| for (store.tagSpan(span)) |tag| try types.appendSlice(transplant.allocator, store.typeSpan(tag.payloads)),
+                            .named => |n| {
+                                if (n.def.generated != null or !transplant.nominals.contains(namedKey(n.named_type))) return false;
+                                try types.appendSlice(transplant.allocator, store.typeSpan(n.args));
+                                for (store.declaredFieldSpan(n.declared_order)) |field| switch (field) {
+                                    .named => {},
+                                    .padding => |child| try types.append(transplant.allocator, child),
+                                };
+                                if (n.backing) |backing| try types.append(transplant.allocator, backing.ty);
+                            },
+                        }
+                    }
+                },
+                .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => {},
+                .callable_binding, .expect, .repl_expr => return false,
+            }
+            return true;
+        },
+        else => return false,
     }
 }
 
@@ -169,14 +230,20 @@ fn reusableAcrossImports(previous: *const Previous, root: checked.CompileTimeRoo
 pub const ReadInputs = struct {
     allocator: Allocator,
     roots: std.AutoHashMapUnmanaged([64]u8, Entry) = .empty,
+    types: std.AutoHashMapUnmanaged([64]u8, NamedTarget) = .empty,
 
     const Entry = struct { value: [32]u8, ref: checked.CompileTimeRootReadTable.Ref };
 
     pub fn deinit(self: *ReadInputs) void {
         self.roots.deinit(self.allocator);
+        self.types.deinit(self.allocator);
     }
 
     pub fn addModule(self: *ReadInputs, placement: [32]u8, module: *const checked.CheckedModuleArtifact) Allocator.Error!void {
+        for (module.compile_time_root_identities.reuse_types) |row| {
+            const entry = try self.types.getOrPut(self.allocator, key(placement, row.identity));
+            if (!entry.found_existing) entry.value_ptr.* = .{ .owner = module, .ty = row.ty };
+        }
         if (module.compile_time_root_identities.test_rows.len == 0) return;
         for (module.compile_time_root_identities.test_rows, module.compile_time_roots.roots) |identity, root| {
             try self.roots.put(self.allocator, key(placement, identity.site), .{
@@ -218,8 +285,17 @@ pub fn plan(allocator: Allocator, module: *const checked.CheckedModuleArtifact, 
     const semantic_rows = module.compile_time_root_identities.test_rows;
     const previous_semantics = previous.identities.test_rows;
     const has_semantics = semantic_rows.len == identities.len and previous_semantics.len == previous_identities.len;
+    for (previous.identities.reuse_nominals) |row| {
+        if (inputs.types.get(ReadInputs.key(row.placement, row.identity))) |target| {
+            try transplant.nominals.put(allocator, .{ .module = row.module, .ty_module = row.ty_module, .ty = row.ty }, target);
+        }
+    }
     var occurrences_prepared = false;
     for (previous.roots.roots) |root| {
+        if (has_semantics and try reusableAcrossImports(previous, root, &transplant)) {
+            const entry = try by_semantics.getOrPut(allocator, previous_semantics[@backingInt(root.id)].value);
+            if (!entry.found_existing) entry.value_ptr.* = root.id;
+        }
         if (!reusable(previous, root)) {
             if (root.payload != .const_node) continue;
             if (!occurrences_prepared) {
@@ -244,17 +320,13 @@ pub fn plan(allocator: Allocator, module: *const checked.CheckedModuleArtifact, 
                 .callable_binding, .expect, .repl_expr => continue,
             }
         }
-        if (has_semantics and try reusableAcrossImports(previous, root)) {
-            const entry = try by_semantics.getOrPut(allocator, previous_semantics[@backingInt(root.id)].value);
-            if (!entry.found_existing) entry.value_ptr.* = root.id;
-        }
         const identity = previous_identities[@backingInt(root.id)];
         const exact = try by_identity_and_site.getOrPut(allocator, identityKey(identity));
         if (!exact.found_existing) exact.value_ptr.* = root.id;
         const any = try by_identity.getOrPut(allocator, identity.value);
         if (!any.found_existing) any.value_ptr.* = root.id;
     }
-    if (by_identity.count() == 0) return transplant;
+    if (by_identity.count() == 0 and by_semantics.count() == 0) return transplant;
 
     var by_site = std.AutoHashMapUnmanaged([32]u8, ComptimeRootId).empty;
     defer by_site.deinit(allocator);
@@ -301,6 +373,7 @@ pub fn plan(allocator: Allocator, module: *const checked.CheckedModuleArtifact, 
         try transplant.matches.append(allocator, .{
             .root = root.id,
             .previous = source,
+            .semantic = exact_source == null,
             .reads_start = @intCast(reads_start),
             .reads_len = @intCast(transplant.reads.items.len - reads_start),
         });
@@ -355,7 +428,7 @@ const Copy = struct {
     root_type: ?ConstTypeId,
 };
 
-fn copyRoot(module: *checked.CheckedModuleArtifact, previous: *const Previous, match: Match, occurrences: *const check.ConstStore.TypeOccurrenceMap) Allocator.Error!Copy {
+fn copyRoot(module: *checked.CheckedModuleArtifact, previous: *const Previous, match: Match, transplant: *const Transplant) Allocator.Error!Copy {
     const root = module.compile_time_roots.root(match.root);
     const source = previous.roots.root(match.previous);
     const values_start = module.const_store.values.items.len;
@@ -377,10 +450,25 @@ fn copyRoot(module: *checked.CheckedModuleArtifact, previous: *const Previous, m
         .pending, .unevaluated, .fn_value, .expect, .runtime => base.invariant("a compile-time root without reusable stored data was transplanted", .{}),
     };
     for (module.const_store.values.items[values_start..]) |*value| {
-        if (value.* == .nominal) rebindOccurrence(&value.nominal.named_type, previous.key, module.key, occurrences);
+        if (value.* == .nominal) {
+            if (match.semantic) {
+                value.nominal.named_type = transplant.nominals.get(namedKey(value.nominal.named_type)).?.named();
+            } else rebindOccurrence(&value.nominal.named_type, previous.key, module.key, &transplant.type_occurrences);
+        }
     }
     for (module.const_store.type_store.named_pool.items[types_start..]) |*named| {
-        rebindOccurrence(&named.named_type, previous.key, module.key, occurrences);
+        if (match.semantic) {
+            const target = transplant.nominals.get(namedKey(named.named_type)).?;
+            named.named_type = target.named();
+            switch (target.owner.checked_types.view().payload(target.ty)) {
+                inline .nominal, .alias => |ty| {
+                    named.def.module = try module.canonical_names.internModuleIdentity(target.owner.canonical_names.moduleIdentityBytes(ty.origin_module));
+                    named.def.type_name = try module.canonical_names.internTypeName(target.owner.canonical_names.typeNameText(ty.name));
+                    named.def.source_decl = ty.source_decl;
+                },
+                else => base.invariant("relocated stored type must have a named checked occurrence", .{}),
+            }
+        } else rebindOccurrence(&named.named_type, previous.key, module.key, &transplant.type_occurrences);
     }
     return copy;
 }
@@ -396,7 +484,7 @@ fn rebindOccurrence(named: *check.ConstStore.NamedType, previous: checked.Checke
 /// roots from the store like a reopened entry's evaluated roots.
 pub fn install(module: *checked.CheckedModuleArtifact, previous: *const Previous, transplant: *const Transplant) Allocator.Error!void {
     for (transplant.matches.items) |match| {
-        const copy = try copyRoot(module, previous, match, &transplant.type_occurrences);
+        const copy = try copyRoot(module, previous, match, transplant);
         fillRoot(module, match.root, copy);
     }
     try installEvaluationRows(module, previous, transplant, transplant.matches.items);
@@ -463,7 +551,7 @@ pub fn verifyAndInstall(module: *checked.CheckedModuleArtifact, previous: *const
     for (transplant.matches.items) |match| {
         const root = module.compile_time_roots.root(match.root);
         const fresh = root.payload;
-        const copy = try copyRoot(module, previous, match, &transplant.type_occurrences);
+        const copy = try copyRoot(module, previous, match, transplant);
         try verifyNamedTypeOccurrences(module, previous, modules, copy);
         switch (fresh) {
             .unevaluated => {
@@ -683,6 +771,48 @@ fn replaceStoredConst(module: *checked.CheckedModuleArtifact, root: checked.Comp
     const const_ref = constRefForRoot(module, root);
     module.const_templates.replaceStoredConst(const_ref, stored);
     if (root.kind == .constant) module.exported_const_templates.fillStoredConst(const_ref, stored);
+}
+
+pub const NominalInputs = struct {
+    context: *anyopaque,
+    resolve: *const fn (*anyopaque, check.ConstStore.NamedType) ?checked.ReuseNominalIdentity,
+};
+
+/// Persist relocation proofs from the checked producers, never inferred from
+/// stored bytes or declaration names. Missing optional metadata prevents reuse.
+pub fn publishNominals(module: *checked.CheckedModuleArtifact, inputs: NominalInputs) Allocator.Error!void {
+    const allocator = module.evaluationAllocator();
+    var rows = std.ArrayList(checked.ReuseNominalIdentity).empty;
+    errdefer rows.deinit(allocator);
+    var seen = std.AutoHashMap(NamedKey, void).init(allocator);
+    defer seen.deinit();
+    for (module.const_store.values.items) |value| {
+        if (value == .nominal) {
+            const named = value.nominal.named_type;
+            if (!(try seen.getOrPut(namedKey(named))).found_existing) {
+                if (inputs.resolve(inputs.context, named)) |row| try rows.append(allocator, row);
+            }
+        }
+    }
+    for (module.const_store.type_store.named_pool.items) |named| {
+        if (!(try seen.getOrPut(namedKey(named.named_type))).found_existing) {
+            if (inputs.resolve(inputs.context, named.named_type)) |row| try rows.append(allocator, row);
+        }
+    }
+    const stored = try rows.toOwnedSlice(allocator);
+    if (module.freesReplacedEvaluationColumns()) allocator.free(module.compile_time_root_identities.reuse_nominals);
+    module.compile_time_root_identities.reuse_nominals = stored;
+    if (traceEnabled()) std.debug.print("ctfe-reuse storage {s}: requirements {d}, roots {d}, site size {d}, root size {d}, type rows {d} bytes {d}, nominal rows {d} bytes {d}\n", .{
+        module.moduleEnvConst().module_name,
+        module.checked_procedure_templates.literal_requirements_pool.len,
+        module.compile_time_roots.roots.len,
+        @sizeOf(checked.LiteralSite),
+        @sizeOf(checked.CompileTimeRoot),
+        module.compile_time_root_identities.reuse_types.len,
+        module.compile_time_root_identities.reuse_types.len * @sizeOf(@typeInfo(@TypeOf(module.compile_time_root_identities.reuse_types)).pointer.child),
+        stored.len,
+        stored.len * @sizeOf(checked.ReuseNominalIdentity),
+    });
 }
 
 /// Classify every root's stored data after finalization (design.md

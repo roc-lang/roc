@@ -9492,20 +9492,7 @@ fn closureConvertsLiteral(converting_excerpts: *const std.DynamicBitSetUnmanaged
 /// holding a code pointer.
 fn closureNamesProgramLocalSymbols(set: *const backend.dev.CodeExcerpt.Set, placed: []const u32) bool {
     for (placed) |index| {
-        const excerpt = set.excerpts[index];
-        for (excerpt.relocations) |relocation| {
-            if (relocation.scope == .program and !carriesData(excerpt, relocation.name)) return true;
-        }
-        for (excerpt.data) |item| {
-            for (item.relocations) |relocation| if (relocation.function) return true;
-        }
-    }
-    return false;
-}
-
-fn carriesData(excerpt: backend.dev.CodeExcerpt.Excerpt, name: []const u8) bool {
-    for (excerpt.data) |item| {
-        if (std.mem.eql(u8, item.name, name)) return true;
+        if (backend.dev.CodeExcerpt.namesProgramLocalSymbols(set.excerpts[index])) return true;
     }
     return false;
 }
