@@ -917,10 +917,7 @@ pub const LowLevel = enum(u16) {
     /// reads them, every lowerer drops them unevaluated, and no later stage
     /// sees them.
     pub fn typeOnlyOperands(self: LowLevel) u32 {
-        return switch (self) {
-            .list_map_extract_unsafe => 1,
-            else => 0,
-        };
+        return op_info[@backingInt(self)].type_only_operands;
     }
 
     /// Return the explicit RC metadata for this primitive. The masks identify
@@ -962,17 +959,26 @@ pub const LowLevel = enum(u16) {
     const ElementDemands = [max_element_demand_args]ElementDemand;
 
     /// The per-operation properties behind `procedureKeyedByLayout`,
-    /// `rcEffect`, and `elementDemand`.
+    /// `rcEffect`, `elementDemand`, and `typeOnlyOperands`.
     const OpInfo = struct {
         keyed_by_layout: bool,
         rc_effect: RcEffect,
         element_demands: ElementDemands = @splat(.full),
+        type_only_operands: u32 = 0,
 
         /// This operation with the given argument demands, in argument
         /// order; arguments past the end stay `full`.
         fn elements(self: OpInfo, comptime demands: []const ElementDemand) OpInfo {
             var out = self;
             for (demands, 0..) |demand, index| out.element_demands[index] = demand;
+            return out;
+        }
+
+        /// This operation with its last `count` operands existing only for
+        /// their types.
+        fn typeOnly(self: OpInfo, comptime count: u32) OpInfo {
+            var out = self;
+            out.type_only_operands = count;
             return out;
         }
     };
@@ -1149,7 +1155,7 @@ pub const LowLevel = enum(u16) {
         // stores the replacement; the op itself performs no RC work.
         // Its `transform` operand puts a function in every request's type,
         // and a function's type is program-specific, so it is not layout-keyed.
-        .list_map_extract_unsafe = byType(.none()).elements(&.{ .layout, .none, .none }),
+        .list_map_extract_unsafe = byType(.none()).elements(&.{ .layout, .none, .none }).typeOnly(1),
 
         // The move `list_map_extract_unsafe` performs, on a list whose item
         // type does not change.

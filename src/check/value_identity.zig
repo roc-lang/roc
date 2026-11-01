@@ -161,7 +161,7 @@ fn literalIdentity(env: *const ModuleEnv, bodies: checked_artifact.CheckedBodySt
                 hashBytes(&hash, bodies.stringLiteral(data.str_segment));
             }
         },
-        else => base.invariant("literal identity producer received a non-literal", .{}),
+        .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => base.invariant("literal identity producer received a non-literal", .{}),
     }
     return hash.finalResult();
 }
@@ -257,7 +257,7 @@ pub fn compute(allocator: Allocator, inputs: Inputs) Allocator.Error!ModuleIdent
                     hash.update(&try state.type_walk.digest(ty));
                     try reuse_types.append(allocator, .{ .ty = ty, .identity = hash.finalResult() });
                 },
-                else => {},
+                .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => {},
             }
         }
     }
@@ -635,7 +635,7 @@ const State = struct {
             try self.type_walk.writeNode(&scratch, ty, &pending);
             const nominal = switch (self.inputs.types.payload(ty)) {
                 .nominal => |nominal| nominal,
-                else => continue,
+                .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => continue,
             };
             if (self.type_walk.isOwn(nominal.origin_module)) {
                 const statement: CIR.Statement.Idx = @fromBackingInt(nominal.source_decl);

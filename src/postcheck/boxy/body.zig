@@ -6353,7 +6353,7 @@ pub const Builder = struct {
     /// in the scope that holds the frame's edge.
     fn frameDictionary(self: *Builder, position: usize, param: u32) Allocator.Error!LocalId {
         const scope = self.alias_scopes.items[position];
-        const slot = std.mem.indexOfScalar(u32, scope.params, param) orelse invariant("evidence named a dictionary parameter its alias scope does not have");
+        const slot = std.mem.findScalar(u32, scope.params, param) orelse invariant("evidence named a dictionary parameter its alias scope does not have");
         const deferred = scope.deferred_dicts orelse return scope.dicts[slot];
         if (deferred.composed[slot]) |dictionary| return dictionary;
         const saved_module = self.module;
@@ -6453,14 +6453,14 @@ pub const Builder = struct {
                         // must remain an explicit operation.
                         if (dyn.desc != self.store.localDyn(result).?.desc) return false;
                     },
-                    else => return false,
+                    .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_compose, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record_update, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .closure, .view, .adapt => return false,
                 }
                 op.target = result;
             },
             .init_uninitialized, .assign_ref, .assign_literal, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return false,
         }
         try self.store.replaceCFStmt(last, stmt, self.store.stmtOrigin(last));
-        const index = std.mem.lastIndexOfScalar(LocalId, self.frame_locals.items, value) orelse unreachable; // addLocal records every local a statement targets
+        const index = std.mem.findScalarLast(LocalId, self.frame_locals.items, value) orelse unreachable; // addLocal records every local a statement targets
         _ = self.frame_locals.orderedRemove(index);
         return true;
     }

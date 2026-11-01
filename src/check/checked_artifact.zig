@@ -35254,7 +35254,7 @@ pub const CompileTimeRootIdentityTable = struct {
             if (@backingInt(row.ty) >= payloads.len) return error.CorruptArtifact;
             switch (payloads[@backingInt(row.ty)]) {
                 .nominal, .alias => {},
-                else => return error.CorruptArtifact,
+                .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return error.CorruptArtifact,
             }
         }
     }
@@ -42721,6 +42721,6 @@ test "cached nominal fingerprints reject invalid checked type references" {
     const payloads = [_]StoredCheckedTypePayload{.empty_record};
     const out_of_range: CompileTimeRootIdentityTable = .{ .reuse_types = &.{.{ .ty = @fromBackingInt(1), .identity = @splat(0) }} };
     try std.testing.expectError(error.CorruptArtifact, out_of_range.validateTypes(&payloads));
-    const not_named: CompileTimeRootIdentityTable = .{ .reuse_types = &.{.{ .ty = @fromBackingInt(0), .identity = @splat(0) }} };
+    const not_named: CompileTimeRootIdentityTable = .{ .reuse_types = &.{.{ .ty = @fromBackingInt(payloads.len - 1), .identity = @splat(0) }} };
     try std.testing.expectError(error.CorruptArtifact, not_named.validateTypes(&payloads));
 }

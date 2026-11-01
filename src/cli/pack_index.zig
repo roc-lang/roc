@@ -482,7 +482,7 @@ test "indexed payloads and metadata preserve shared constant graphs" {
     try std.testing.checkAllAllocationFailures(deterministic.allocator(), testSharedGraphRecords, .{});
 }
 
-fn testSharedGraphRecords(allocator: Allocator) !void {
+fn testSharedGraphRecords(allocator: Allocator) (Error || Allocator.Error || error{TestExpectedEqual})!void {
     var prepared = try PA.PreparedData.init(allocator, &.{}, &.{}, &.{.{
         .name = "roc__d0",
         .bytes = "constant",

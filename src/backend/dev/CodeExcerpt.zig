@@ -925,6 +925,8 @@ const DataGraph = struct {
     code_reachable: []const bool,
 };
 
+/// One excerpt's view of a shared data graph: the graph and the excerpt's
+/// root items in it.
 pub const DataGraphView = struct {
     graph: *const DataGraph,
     roots: []const u32,
@@ -3337,7 +3339,7 @@ test "shared constant graphs visit each node once and survive independent owners
     try std.testing.checkAllAllocationFailures(deterministic.allocator(), testSharedGraphs, .{});
 }
 
-fn testSharedGraphs(allocator: Allocator) !void {
+fn testSharedGraphs(allocator: Allocator) (@import("PackFile.zig").ReadError || Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const refs = [_]NamedRelocation{.{ .offset = 0, .name = "roc__d0", .scope = .program, .kind = .{ .data = .rel32 } }};
     const edges = [_]DataRelocation{
         .{ .offset = 0, .name = "roc__d1", .addend = 0, .function = false },

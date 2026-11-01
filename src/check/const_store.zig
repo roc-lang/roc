@@ -1949,7 +1949,7 @@ pub const ConstStore = struct {
         const slot = &self.values.items[@backingInt(node)];
         const function = switch (slot.*) {
             .boxy_fn => |function| function,
-            else => constStoreInvariant("a recipe relocation reached a node that is no stored function"),
+            .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => constStoreInvariant("a recipe relocation reached a node that is no stored function"),
         };
         const recipe = self.blobBytes(function.recipe);
         const keys = recipeModuleKeys(recipe);
