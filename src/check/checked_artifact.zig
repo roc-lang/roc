@@ -35162,6 +35162,15 @@ pub const CompileTimeRootIdentity = value_identity.CompileTimeRootIdentity;
 /// A relocatable test observation site and its current source span.
 pub const TestReportSite = value_identity.TestReportSite;
 
+/// Persisted relocation proof for one named occurrence held by a cached value.
+pub const ReuseNominalIdentity = extern struct {
+    module: [32]u8,
+    ty_module: [32]u8,
+    ty: CheckedTypeId,
+    placement: [32]u8,
+    identity: [32]u8,
+};
+
 /// Every compile-time root's value identity and site, dense by root id, and
 /// the module's value context, computed when the module is published.
 pub const CompileTimeRootIdentityTable = struct {
@@ -35193,6 +35202,8 @@ pub const CompileTimeRootIdentityTable = struct {
     test_definitions: []const value_identity.DefinitionIdentity = &.{},
     test_report_sites: []const value_identity.TestReportSite = &.{},
     test_declarations: []const value_identity.DeclarationIdentity = &.{},
+    reuse_types: []const value_identity.ReuseTypeIdentity = &.{},
+    reuse_nominals: []const ReuseNominalIdentity = &.{},
     /// The module's value context (`value_identity.ModuleIdentities.context`):
     /// one digest in every published module, none in a table that was never
     /// computed.
@@ -35213,6 +35224,8 @@ pub const CompileTimeRootIdentityTable = struct {
         test_definitions: SerializedSlice(value_identity.DefinitionIdentity) = .{},
         test_report_sites: SerializedSlice(value_identity.TestReportSite) = .{},
         test_declarations: SerializedSlice(value_identity.DeclarationIdentity) = .{},
+        reuse_types: SerializedSlice(value_identity.ReuseTypeIdentity) = .{},
+        reuse_nominals: SerializedSlice(ReuseNominalIdentity) = .{},
         context: SerializedSlice([32]u8) = .{},
         exports: SerializedSlice(value_identity.ExportIdentity) = .{},
         method_requires: SerializedSlice([32]u8) = .{},
@@ -35228,8 +35241,21 @@ pub const CompileTimeRootIdentityTable = struct {
         if (self.test_rows.len != 0 and self.test_rows.len != root_count) return error.CorruptArtifact;
         if (self.test_context.len > 1) return error.CorruptArtifact;
         for (self.test_report_sites) |site| if (site.start > site.end) return error.CorruptArtifact;
+        for (self.reuse_types, 0..) |row, i| {
+            if (i > 0 and @backingInt(self.reuse_types[i - 1].ty) >= @backingInt(row.ty)) return error.CorruptArtifact;
+        }
         for (self.test_declarations, 0..) |declaration, i| {
             if (i > 0 and @backingInt(self.test_declarations[i - 1].statement) >= @backingInt(declaration.statement)) return error.CorruptArtifact;
+        }
+    }
+
+    pub fn validateTypes(self: CompileTimeRootIdentityTable, payloads: []const StoredCheckedTypePayload) error{CorruptArtifact}!void {
+        for (self.reuse_types) |row| {
+            if (@backingInt(row.ty) >= payloads.len) return error.CorruptArtifact;
+            switch (payloads[@backingInt(row.ty)]) {
+                .nominal, .alias => {},
+                else => return error.CorruptArtifact,
+            }
         }
     }
 
@@ -35592,7 +35618,8 @@ pub const CheckedModuleArtifact = struct {
             // two pools of their own. Template demand vectors add one. Test outcome
             // identities add roots, context, definition summaries, report sites and declaration identities.
             // Literal arguments add the literal requirement pool, the demand pool, and the root lookup table.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 256);
+            // Nominal relocation adds checked type fingerprints and committed occurrence identities.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 258);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -35654,6 +35681,7 @@ pub const CheckedModuleArtifact = struct {
             try observations.validate(roots.roots.len);
             try self.compile_time_root_reads.deserialize(base_addr).validate(roots.roots.len);
             try self.compile_time_root_identities.deserialize(base_addr).validate(roots.roots.len);
+            try self.compile_time_root_identities.deserialize(base_addr).validateTypes(self.checked_types.payloads.deserialize(base_addr));
             try self.compile_time_root_portability.deserialize(base_addr).validate(roots.roots.len);
         }
 
@@ -39310,6 +39338,7 @@ pub fn publishFromTypedModule(
     plan_build_data.deinit(allocator);
 
     const module_identities = try value_identity.compute(allocator, .{
+        .own_key = artifact_key,
         .env = module.moduleEnvConst(),
         .names = &canonical_names,
         .types = checked_types.view(),
@@ -39330,6 +39359,7 @@ pub fn publishFromTypedModule(
     defer allocator.free(module_identities.definitions);
     defer allocator.free(module_identities.report_sites);
     defer allocator.free(module_identities.declarations);
+    defer allocator.free(module_identities.reuse_types);
     var compile_time_root_identities = CompileTimeRootIdentityTable{
         .rows = module_identities.roots,
         .exports = module_identities.exports,
@@ -39346,6 +39376,7 @@ pub fn publishFromTypedModule(
     var test_checking_context = checking_context_identity;
     test_checking_context.imports = test_import_names;
     const test_identities = try value_identity.compute(allocator, .{
+        .own_key = artifact_key,
         .env = module.moduleEnvConst(),
         .names = &canonical_names,
         .types = checked_types.view(),
@@ -39364,6 +39395,7 @@ pub fn publishFromTypedModule(
         .available = inputs.available_artifacts,
         .relations = inputs.relation_artifacts,
     });
+    compile_time_root_identities.reuse_types = test_identities.reuse_types;
     compile_time_root_identities.test_declarations = test_identities.declarations;
     compile_time_root_identities.test_report_sites = test_identities.report_sites;
     compile_time_root_identities.test_rows = test_identities.roots;
@@ -42683,4 +42715,12 @@ test "checked polarity alias publication erases hidden arguments and preserves b
     const loaded_alias = roundtrip.loaded.payload(root).alias;
     try std.testing.expectEqual(@as(usize, 1), loaded_alias.args.len);
     try std.testing.expectEqual(row.ext, roundtrip.loaded.payload(loaded_alias.backing).tag_union.ext);
+}
+
+test "cached nominal fingerprints reject invalid checked type references" {
+    const payloads = [_]StoredCheckedTypePayload{.empty_record};
+    const out_of_range: CompileTimeRootIdentityTable = .{ .reuse_types = &.{.{ .ty = @fromBackingInt(1), .identity = @splat(0) }} };
+    try std.testing.expectError(error.CorruptArtifact, out_of_range.validateTypes(&payloads));
+    const not_named: CompileTimeRootIdentityTable = .{ .reuse_types = &.{.{ .ty = @fromBackingInt(0), .identity = @splat(0) }} };
+    try std.testing.expectError(error.CorruptArtifact, not_named.validateTypes(&payloads));
 }

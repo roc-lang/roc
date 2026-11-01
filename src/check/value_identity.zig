@@ -54,6 +54,7 @@ pub const TestReportSite = extern struct {
 
 /// What the identities of one module's roots are computed from.
 pub const Inputs = struct {
+    own_key: checked_artifact.CheckedModuleArtifactKey,
     env: *const ModuleEnv,
     names: *const canonical.CanonicalNameStore,
     types: CheckedTypeStoreView,
@@ -128,7 +129,42 @@ pub const ModuleIdentities = struct {
     definitions: []DefinitionIdentity,
     report_sites: []TestReportSite,
     declarations: []DeclarationIdentity,
+    reuse_types: []ReuseTypeIdentity,
 };
+
+/// Exact checked type identity for relocating stored nominal occurrences.
+pub const ReuseTypeIdentity = extern struct {
+    ty: CheckedTypeId,
+    identity: [32]u8,
+};
+
+/// Hash the checked producer's actual operand, including generated literals.
+/// Imported artifact versions and expression numbering are absent.
+fn literalIdentity(env: *const ModuleEnv, bodies: checked_artifact.CheckedBodyStoreView, expr: checked_artifact.CheckedExprId) [32]u8 {
+    var hash = Sha256.init(.{});
+    hashTag(&hash, "roc.literal-operand.v1");
+    hashBytes(&hash, env.module_name);
+    const literal = bodies.expr(expr);
+    hashBytes(&hash, @tagName(literal.data));
+    switch (literal.data) {
+        .numeral => |number| {
+            hashBytes(&hash, env.numeralDigitsBefore(number.literal));
+            hashBytes(&hash, env.numeralDigitsAfter(number.literal));
+            hashValue(&hash, number.literal.flags);
+            hashValue(&hash, number.literal.after_decimal_digit_count);
+        },
+        .str_from_quote => |quote| hashBytes(&hash, bodies.stringLiteral(quote.literal)),
+        .interpolation => |interpolation| {
+            hashU32(&hash, @intCast(interpolation.segments.len));
+            for (interpolation.segments) |segment| {
+                const data = bodies.expr(segment).data;
+                hashBytes(&hash, bodies.stringLiteral(data.str_segment));
+            }
+        },
+        else => base.invariant("literal identity producer received a non-literal", .{}),
+    }
+    return hash.finalResult();
+}
 
 /// Compute the module's value context and every root's identity.
 pub fn compute(allocator: Allocator, inputs: Inputs) Allocator.Error!ModuleIdentities {
@@ -208,7 +244,28 @@ pub fn compute(allocator: Allocator, inputs: Inputs) Allocator.Error!ModuleIdent
     }
     const report_sites = if (inputs.test_dependencies) try state.reportSites() else try allocator.alloc(TestReportSite, 0);
     errdefer allocator.free(report_sites);
+    var reuse_types = std.ArrayList(ReuseTypeIdentity).empty;
+    errdefer reuse_types.deinit(allocator);
+    if (inputs.test_dependencies) {
+        for (0..inputs.types.payloadCount()) |index| {
+            const ty: CheckedTypeId = @fromBackingInt(@as(u32, @intCast(index)));
+            switch (inputs.types.payload(ty)) {
+                .nominal, .alias => {
+                    var hash = Sha256.init(.{});
+                    hashTag(&hash, "roc.relocatable-type.v1");
+                    hash.update(&value_context);
+                    hash.update(&try state.type_walk.digest(ty));
+                    try reuse_types.append(allocator, .{ .ty = ty, .identity = hash.finalResult() });
+                },
+                else => {},
+            }
+        }
+    }
+    const owned_reuse_types = try reuse_types.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_reuse_types);
+    const owned_definitions = try definitions.toOwnedSlice(allocator);
     return .{
+        .reuse_types = owned_reuse_types,
         .report_sites = report_sites,
         .declarations = declarations,
         .context = value_context,
@@ -216,7 +273,7 @@ pub fn compute(allocator: Allocator, inputs: Inputs) Allocator.Error!ModuleIdent
         .method_requires = method_requires,
         .export_requires = export_requires,
         .roots = identities,
-        .definitions = try definitions.toOwnedSlice(allocator),
+        .definitions = owned_definitions,
     };
 }
 
@@ -1477,8 +1534,18 @@ const State = struct {
                     const argument = root.literal_argument orelse base.invariant("value identity invariant violated: a literal argument root names no literal", .{});
                     var class = Sha256.init(.{});
                     hashTag(&class, "literal-argument");
-                    class.update(&argument.site.module.bytes);
-                    hashU32(&class, @backingInt(argument.site.expr));
+                    if (self.inputs.test_dependencies) {
+                        const operand = if (std.meta.eql(argument.site.module.bytes, self.inputs.own_key.bytes))
+                            literalIdentity(env, self.inputs.bodies.view(), argument.site.expr)
+                        else imported: {
+                            const owner = self.type_walk.importedView(argument.site.module.bytes, true);
+                            break :imported literalIdentity(owner.module_env, owner.checked_bodies, argument.site.expr);
+                        };
+                        class.update(&operand);
+                    } else {
+                        class.update(&argument.site.module.bytes);
+                        hashU32(&class, @backingInt(argument.site.expr));
+                    }
                     hashBytes(&class, @tagName(argument.site.kind));
                     class.update(&type_digest);
                     const class_digest = class.finalResult();
