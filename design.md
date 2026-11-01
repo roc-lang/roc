@@ -8572,7 +8572,7 @@ Boxy resolves a stored function's codec dictionary edge from the same module,
 and builds the generated codec worker in it: the dictionary's requirement comes
 from the template's module and the shape from the use's module, and neither
 need hold the contract. A generic method selected for that dictionary, such as
-`List.encoder_for`, names its element and its format only in the encoder it
+`List.encoder_for`, names its item and its format only in the encoder it
 returns, so Boxy relates the method to the requirement's position at the call,
 and the method's own codec requirements are read at what that relation binds. A
 generated codec runtime body reads its edge in that
