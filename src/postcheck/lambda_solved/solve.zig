@@ -23,10 +23,13 @@
 //!   order for a given member set, whatever order unification met it in.
 //! - Erasure comes from explicit boundaries: hosted and platform function
 //!   signatures, layout and runtime-schema requests (including constants the
-//!   const store materializes), box and unbox operations, and forced-dynamic
-//!   iterators. Debug builds re-walk every boundary after solving
-//!   (`verifyErasedBoundaries`) and require each callable it reaches to be
-//!   erased.
+//!   const store materializes), and forced-dynamic iterators. A `Box` is a
+//!   boundary by its type alone: every function a box holds is erased
+//!   (`eraseCallablesHeldByBoxes`), whether or not the program boxes a value
+//!   of that type, so a closed specialization key determines the solved types
+//!   of its procedure in every program. Debug builds re-walk every boundary
+//!   after solving (`verifyErasedBoundaries`) and require each callable it
+//!   reaches to be erased.
 //!
 //! Definitions are output in `FnId` order. No consumer reads them in
 //! dependency order: Lambda Mono and LIR lowering reach functions only through
@@ -348,9 +351,6 @@ const Solver = struct {
     loop_params: std.ArrayList(Type.Span),
     join_points: std.ArrayList(ActiveJoinPoint),
     return_contexts: std.ArrayList(ReturnContext),
-    /// Debug builds only: the operand types of every box and unbox
-    /// operation, which `verifyErasedBoundaries` re-walks after solving.
-    box_boundaries: std.ArrayList(Type.TypeVarId),
     /// Child types gathered for one expression's low-level binding; a use
     /// keeps its own suffix, from the length it found to the end.
     span_scratch: std.ArrayList(Type.TypeVarId) = .empty,
@@ -580,7 +580,6 @@ const Solver = struct {
             .loop_params = .empty,
             .join_points = .empty,
             .return_contexts = .empty,
-            .box_boundaries = .empty,
             .active_unifications = .{},
             .unify_stack = .empty,
             .active_private_evidence_relations = .{},
@@ -666,7 +665,6 @@ const Solver = struct {
         self.unify_stack.deinit(self.allocator);
         self.active_unifications.deinit(self.allocator);
         self.return_contexts.deinit(self.allocator);
-        self.box_boundaries.deinit(self.allocator);
         self.span_scratch.deinit(self.allocator);
         self.join_points.deinit(self.allocator);
         self.loop_params.deinit(self.allocator);
@@ -763,6 +761,7 @@ const Solver = struct {
         }
 
         try self.finalizeMonoLeaves();
+        try self.eraseCallablesHeldByBoxes();
         // After finalization so the materialized clones' callable slots close
         // exactly as their eager counterparts always did.
         try self.closeUnfilledCallableSlots();
@@ -844,7 +843,6 @@ const Solver = struct {
 
         for (self.program.layout_requests.items) |request| try pending.append(self.allocator, request.ty);
         for (self.program.runtime_schema_requests.items) |request| try pending.append(self.allocator, request.ty);
-        try pending.appendSlice(self.allocator, self.box_boundaries.items);
         for (self.lifted.fns, 0..) |fn_, index| {
             if (fn_.body == .hosted) try self.appendFunctionBoundary(self.program.fn_tys.items[index], &pending);
         }
@@ -856,6 +854,7 @@ const Solver = struct {
             const ty: Type.TypeVarId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             const content = self.program.types.get(ty);
             if (content == .named and content.named.def.iterator_representation == .forced_dynamic) try pending.append(self.allocator, ty);
+            if (content == .box) try pending.append(self.allocator, ty);
         }
 
         const types = &self.program.types;
@@ -1932,6 +1931,25 @@ const Solver = struct {
         }
     }
 
+    /// Erase every function any box holds, including a box whose type no
+    /// operation of this program touches and whose callable slots would
+    /// otherwise close as empty lambda sets. A specialization request whose
+    /// function types all sit inside a `Box` is closed, so its key must name
+    /// the same solved types in every program. One traversal covers every box:
+    /// marking a root twice changes nothing, and a callable-free leaf ends
+    /// the walk where it stands. Expanding a leaf appends fresh vars, so the
+    /// bound is re-read every iteration.
+    fn eraseCallablesHeldByBoxes(self: *Solver) Allocator.Error!void {
+        var visited = self.solved_set_pool.acquire();
+        defer self.solved_set_pool.release(&visited);
+        var index: usize = 0;
+        while (index < self.program.types.varCount()) : (index += 1) {
+            const ty: Type.TypeVarId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+            const content = self.program.types.get(ty);
+            if (std.meta.activeTag(content) == .box) try self.markErasedCallablesReachedByTypeInner(content.box, &visited);
+        }
+    }
+
     /// Marking a root erases every callable it reaches, and marking it again
     /// in the same traversal changes nothing, so each root is visited once.
     /// Types are visited in preorder on an explicit stack.
@@ -2182,9 +2200,10 @@ const Solver = struct {
 
     /// Replace every output-reachable lazy leaf with a link to a materialized
     /// clone so program views never observe one. A leaf that survived solving
-    /// was never unified: its clone's callable slots all close empty, and its
-    /// forced-dynamic marks depend only on its Monotype, so every untouched
-    /// leaf of one Monotype shares one clone, callable-bearing or not.
+    /// was never unified: its clone's callable slots are erased under a box
+    /// and otherwise close empty, and its forced-dynamic marks depend only on
+    /// its Monotype, so every untouched leaf of one Monotype shares one
+    /// clone, callable-bearing or not.
     fn finalizeMonoLeaves(self: *Solver) Allocator.Error!void {
         var visited = collections.DenseMap(Type.TypeVarId, void).init(self.allocator);
         defer visited.deinit();
@@ -2555,13 +2574,11 @@ const Solver = struct {
                 expectLowLevelArity(op, args, 1);
                 try self.unify(args[0], try self.boxElem(expected));
                 try self.markErasedCallablesReachedByType(args[0]);
-                if (@import("builtin").mode == .debug) try self.box_boundaries.append(self.allocator, args[0]);
             },
             .box_unbox => {
                 expectLowLevelArity(op, args, 1);
                 try self.unify(expected, try self.boxElem(args[0]));
                 try self.markErasedCallablesReachedByType(expected);
-                if (@import("builtin").mode == .debug) try self.box_boundaries.append(self.allocator, expected);
             },
             .list_get_unsafe => {
                 expectLowLevelArity(op, args, 2);
