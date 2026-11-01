@@ -6,7 +6,19 @@ import pf.Stdout
 # entry wrapper. Every input below depends on the command line, so these codecs
 # run in the executable rather than at compile time. The stored values take
 # their codecs from the evidence they were produced with, whether the shape has
-# no method owner, declares a structural method, or is a generic container.
+# no method owner, declares a structural method, or is a generic container. A
+# generic method that returns its encoder names its element only inside that
+# function, so the stored value's type is what binds the element.
+
+Wrap(a) := { inner : a }.{
+	encoder_for : encoding -> (Wrap(a), state -> Try(state, err))
+		where [a.encoder_for : encoding -> (a, state -> Try(state, err))]
+	encoder_for = |encoding| {
+		Inner : a
+		encode_inner = Inner.encoder_for(encoding)
+		|self, state| encode_inner(self.inner, state)
+	}
+}
 
 parser : {} -> (Str -> Try(a, [InvalidJson(Str)])) where [a.Json.Parseable([InvalidJson(Str)])]
 parser = |{}| |text| Json.parse(text)
@@ -32,6 +44,15 @@ stored_str_encoder = encoder({})
 stored_record_encoder : { a : Str } -> Str
 stored_record_encoder = encoder({})
 
+stored_list_encoder : List(I64) -> Str
+stored_list_encoder = encoder({})
+
+stored_nested_list_encoder : List(List(Str)) -> Str
+stored_nested_list_encoder = encoder({})
+
+stored_wrap_encoder : Wrap(List(Str)) -> Str
+stored_wrap_encoder = encoder({})
+
 main! = |args| {
 	count = Str.inspect(args.len())
 	quoted = Str.inspect(count)
@@ -54,5 +75,8 @@ main! = |args| {
 	Stdout.line!(Str.inspect(stored_list_parser("[${quoted}]")))
 	Stdout.line!(stored_str_encoder(count))
 	Stdout.line!(stored_record_encoder({ a: count }))
+	Stdout.line!(stored_list_encoder([args.len().to_i64_wrap()]))
+	Stdout.line!(stored_nested_list_encoder([[count]]))
+	Stdout.line!(stored_wrap_encoder(Wrap.{ inner: [count] }))
 	Ok({})
 }
