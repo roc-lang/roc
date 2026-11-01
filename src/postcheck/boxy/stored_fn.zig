@@ -9,9 +9,14 @@
 //! of the constant store. Restoring it rebuilds the worker from the recipe
 //! and packs the same captures, so nothing is inferred about the value.
 //!
-//! The recipe is bytes the constant store keeps opaque: a table of the types
-//! it names, generic where the worker's own types are, then the worker, then
-//! the closed type each captured descriptor describes.
+//! The recipe is bytes the constant store keeps opaque but for its first
+//! table: the modules it names, by checked key, each once, which the store
+//! reads to name a stored function in an identity by its modules' link names
+//! and to move it to the modules' current versions
+//! (`ConstStore.recipeModuleKeys`). Then come a table of the types the recipe
+//! names, generic where the worker's own types are, then the worker, then
+//! the closed type each captured descriptor describes; a module in those is
+//! an index into the first table.
 
 const std = @import("std");
 const collections = @import("collections");
@@ -271,6 +276,9 @@ const no_type = std.math.maxInt(u32);
 const Encoder = struct {
     allocator: Allocator,
     program: *Program,
+    /// The table of modules, by checked key, each once.
+    modules: std.ArrayList([32]u8) = .empty,
+    module_index: std.AutoHashMapUnmanaged([32]u8, u32) = .empty,
     /// The table of types: each is a `types.Node` whose components are
     /// earlier entries, so a type shared across the recipe is written once.
     table: std.ArrayList(u8) = .empty,
@@ -279,6 +287,8 @@ const Encoder = struct {
     bytes: std.ArrayList(u8) = .empty,
 
     fn deinit(self: *Encoder) void {
+        self.modules.deinit(self.allocator);
+        self.module_index.deinit(self.allocator);
         self.table.deinit(self.allocator);
         self.table_index.deinit(self.allocator);
         self.bytes.deinit(self.allocator);
@@ -287,10 +297,23 @@ const Encoder = struct {
     fn finish(self: *Encoder) Allocator.Error![]const u8 {
         var out: std.ArrayList(u8) = .empty;
         errdefer out.deinit(self.allocator);
+        try appendWord(self.allocator, &out, @intCast(self.modules.items.len));
+        for (self.modules.items) |key| try out.appendSlice(self.allocator, &key);
         try appendWord(self.allocator, &out, self.table_len);
         try out.appendSlice(self.allocator, self.table.items);
         try out.appendSlice(self.allocator, self.bytes.items);
         return try out.toOwnedSlice(self.allocator);
+    }
+
+    /// `index`'s entry of the module table.
+    fn moduleEntry(self: *Encoder, index: types.ModuleIndex) Allocator.Error!u32 {
+        const key = self.program.module(index).key.bytes;
+        const entry = try self.module_index.getOrPut(self.allocator, key);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = @intCast(self.modules.items.len);
+            try self.modules.append(self.allocator, key);
+        }
+        return entry.value_ptr.*;
     }
 
     fn word(self: *Encoder, value: u32) Allocator.Error!void {
@@ -302,7 +325,7 @@ const Encoder = struct {
     }
 
     fn module(self: *Encoder, index: types.ModuleIndex) Allocator.Error!void {
-        try self.bytes.appendSlice(self.allocator, &self.program.module(index).key.bytes);
+        try self.word(try self.moduleEntry(index));
     }
 
     fn typeOf(self: *Encoder, ty: TypeId) Allocator.Error!void {
@@ -389,7 +412,7 @@ const Encoder = struct {
             },
             .list, .box => |child| try self.tableType(child),
             .nominal => |nominal| {
-                try self.table.appendSlice(self.allocator, &self.program.module(nominal.decl.module).key.bytes);
+                try self.tableWord(try self.moduleEntry(nominal.decl.module));
                 try self.tableWord(@backingInt(nominal.decl.decl));
                 try self.tableTypes(store.nominalArgs(nominal));
                 try self.tableName(nominal.name);
@@ -523,6 +546,7 @@ const Decoder = struct {
     b: *body.Builder,
     bytes: []const u8,
     at: usize = 0,
+    modules: []const [32]u8 = &.{},
     table: []TypeId = &.{},
 
     fn take(self: *Decoder, len: usize) []const u8 {
@@ -539,7 +563,14 @@ const Decoder = struct {
     }
 
     fn module(self: *Decoder) types.ModuleIndex {
-        return self.b.program.moduleByKey(.{ .bytes = self.take(32)[0..32].* }).index;
+        return self.b.program.moduleByKey(.{ .bytes = self.modules[self.word()] }).index;
+    }
+
+    /// The table of modules, which `module` indexes.
+    fn readModules(self: *Decoder) void {
+        const count = self.word();
+        const bytes = self.take(count * 32);
+        self.modules = @as([*]const [32]u8, @ptrCast(bytes.ptr))[0..count];
     }
 
     fn typeOf(self: *Decoder) TypeId {
@@ -720,6 +751,7 @@ pub const Decoded = struct { worker: WorkerId, bound: []const TypeId };
 /// Read a stored function's recipe.
 pub fn decode(b: *body.Builder, recipe: []const u8) Allocator.Error!Decoded {
     var decoder = Decoder{ .b = b, .bytes = recipe };
+    decoder.readModules();
     try decoder.readTable();
     defer b.allocator.free(decoder.table);
     const worker = try decoder.worker();

@@ -3704,27 +3704,29 @@ A completed value may also reuse the checked producer's module-independent
 identity (`test_rows`) when an imported entry changes. This identity includes
 the referenced implementations and dispatch targets, checked type contexts,
 checking policy, and file inputs. Admission requires the value and its stored
-type to hold no function value, erased or generated type or field default, and
-every named type they hold to name module versions the compilation can bind to
-the current ones (`CompileTimeReuse.Relocations`): a module the compilation
-re-checked from an unchanged source succeeds its previous entry, which the
-coordinator records before planning that module's reuse, imports first, so a
-stored named type's `module` moves to the successor and its occurrence moves
-through the successor's type roots by canonical key; every other module of the
-compilation is named as it is; a module whose source changed has no successor,
-so a value naming a type it declares stays with its version. Every recorded
-root read must also retain its producer-authored value identity.
-When committing a checked module, the coordinator records each read's source
-placement, source root site and producer-authored value identity beside its exact
-module key and root id. Reuse resolves these placements and sites in the current
-checked program, checks every value identity, and installs the reads under the
-current module keys and root ids. This includes reads of roots in the same
-module, imported constants and transitive reads. Builtins and retained platform
-interfaces keep exact version keys in place of source placements.
-An absent producer, changed input or missing optional read identity makes the
-candidate a cache miss. These conditions are checked against the previous
-committed result, not guessed from source syntax. Debug observations are copied
-and replayed in the ordinary root order. Values carrying version-specific references keep their entry-key
+type to hold no Monotype function value, erased or generated type or field
+default, and every named type they hold, and every module a `.boxy` function
+value's recipe names, to name module versions the compilation can bind to the
+current ones (`CompileTimeReuse.Relocations`), under which a copied recipe
+names the current versions: a module the compilation re-checked from an
+unchanged source succeeds its previous entry, which the coordinator records
+before planning that module's reuse, imports first, so a stored named type's
+`module` moves to the successor and its occurrence moves through the
+successor's type roots by canonical key; every other module of the compilation
+is named as it is; a module whose source changed has no successor, so a value
+naming a type it declares stays with its version. Every recorded root read must
+also retain its producer-authored value identity. When committing a checked
+module, the coordinator records each read's source placement, source root site
+and producer-authored value identity beside its exact module key and root id.
+Reuse resolves these placements and sites in the current checked program,
+checks every value identity, and installs the reads under the current module
+keys and root ids. This includes reads of roots in the same module, imported
+constants and transitive reads. Builtins and retained platform interfaces keep
+exact version keys in place of source placements. An absent producer, changed
+input or missing optional read identity makes the candidate a cache miss. These
+conditions are checked against the previous committed result, not guessed from
+source syntax. Debug observations are copied and replayed in the ordinary root
+order. Values carrying version-specific references keep their entry-key
 identity contract; checked equality alone does not authorize retaining an old
 checked-type occurrence or root id. Verification builds independently evaluate
 and compare these transplants just like other compile-time value reuse.
@@ -15482,7 +15484,8 @@ and Per-Module Output is the invariant that makes it possible:
   position among its module's defaults, and a nominal type's is its position
   among the declarations sharing its name. A lambda's worker is named by its
   expression, which only a function value stored in a constant reaches across
-  modules, and a stored function value's digest is its module's checked key.
+  modules; a stored function value's recipe names its modules by checked key,
+  and its digest names them by link name.
 - The root program's key adds the code-generation keys of its platform modules,
   including their exact app binding environments: the root unit lowers their
   implementations at the app's types and calls the supplied app workers. The
@@ -15630,7 +15633,11 @@ captured values and dictionaries as nodes of the constant store. Restoring
 the value rebuilds the worker from the recipe and packs the same captures, so
 nothing is inferred about the value and no checked evidence is consulted.
 
-The recipe holds its own table of types rather than ids of stored types. A
+The recipe begins with the table of the modules it names, by checked key, each
+once, which the constant store reads to name a stored function in an identity
+by its modules' link names and to move a reused value to the modules' current
+versions; a module elsewhere in the recipe is an index into that table. The
+recipe then holds its own table of types rather than ids of stored types. A
 generated codec worker's signature is generic, so a recipe type can name
 variables, which no stored type does, and a table keeps a block-local nominal's
 outer arguments, which a stored type leaves to its reader's scope. Workers are
