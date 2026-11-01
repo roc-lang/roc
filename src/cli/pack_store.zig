@@ -163,7 +163,12 @@ pub const Store = struct {
         };
     }
 
+    fn reportStoreWrite(self: *const Store) void {
+        if (base.dev_diagnostics.isSet(.pack_stats)) std.debug.print("pack store write: {s}\n", .{self.root});
+    }
+
     fn writeEntry(self: *const Store, id: compile.artifacts.Identity, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
+        self.reportStoreWrite();
         self.native.write(id, bytes, self.native.now()) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.Busy => return,
@@ -438,6 +443,7 @@ pub const Store = struct {
                 return false;
             }
         }
+        self.reportStoreWrite();
         self.native.write(id, bytes, self.native.now()) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return error.PackWriteFailed,

@@ -6070,6 +6070,7 @@ const Pass = struct {
             .list_map_can_reuse,
             .list_item_size_at_most,
             .list_map_extract_unsafe,
+            .list_move_out_unsafe,
             .dict_pseudo_seed,
             .hasher_finish,
             .hasher_write_bool,

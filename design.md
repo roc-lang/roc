@@ -19056,6 +19056,28 @@ The solver:
 - propagates erased callable requirements through the same type graph
 - verifies each lifted jump is lexically scoped and unifies its arguments with
   the corresponding join-point parameter types
+- relates the types of every low-level operation that moves a value
+
+A low-level operation has no body for callable flow to pass through, so
+`bindLowLevelTypes` states each operation's flow, in a switch that names every
+operation. A value's callable set comes from where the value was produced, and
+inlining removes the calls that consume it, so an operation whose result holds
+an operand's value must relate the two itself. A result with no relation to its
+source closes with an empty callable set, which is zero-sized and cannot be
+called. The switch's arms are the operations that relate types, the operations
+whose results hold no function (numbers, strings, byte lists, answers about an
+operand), and the operations later stages build from LIR, which solving never
+sees.
+
+`list_map_extract_unsafe` is the one operation that reads a value its operand
+types do not describe: `List.map`'s buffer is typed by the output item while
+its unwritten slots hold input items. Its third operand is the map's transform,
+whose parameter is the input item (`list_map_can_reuse` relates that parameter
+to the input list). The operand exists for its type alone
+(`LowLevel.typeOnlyOperands`): Lambda Solved reads it, and both lowerers drop it
+unevaluated, so LIR carries the operation's two runtime operands. Adding the
+item's type to the buffer's instead would give every in-place operation a
+second type parameter for what this operand states directly.
 
 Solving is monomorphic. Every lifted function's type is registered before any
 body is solved, and all of a function's call sites unify with those same type
@@ -19634,6 +19656,7 @@ the explicit allow list of operations whose lowering is layout-only; a new
 operation is not on it until someone adds it after checking its lowering. An
 operation stays off the list when its lowering reads anything but operand and
 result layouts: `list_map_can_reuse` reads its transform's solved function type,
+`list_map_extract_unsafe` takes a function for its type,
 `dict_pseudo_seed` reads the program's seed mode, and operations over fixed
 types gain nothing from the key and are not listed. A template carries its
 operation explicitly: the Builtin low-level transform records the operation
@@ -23085,10 +23108,14 @@ Inside an eligible in-place loop, `list_map_extract_unsafe` moves one item's
 ownership out of the buffer and `list_map_write_unsafe` moves the transform's
 result into the vacated slot. Neither performs RC work: the extracted item is an
 ordinary owned local, so ARC places its release according to the transform's
-solved convention, and the certifier checks the loop like any other code.
-`list_move_out_unsafe` and `list_move_in_unsafe` are the same two operations
-declared for a list whose item type does not change; the list sort below is
-built from them.
+solved convention, and the certifier checks the loop like any other code. The
+extract also takes the transform, for its type only: the buffer's type names the
+output item, so the transform's parameter is what tells Lambda Solved which
+callable set the extracted item has (see Lambda Solving).
+`list_move_out_unsafe` is the same move as an operation of its own, for a list
+whose item type does not change: its result is an item of the list's type.
+`list_move_in_unsafe` declares `list_map_write_unsafe` for such a list. `List.update`
+and the list sort below are built from these two.
 Between the two ops the slot holds stale bytes and the buffer is typed by the
 output item while later slots still hold input items. For
 descriptor-governed items, the descriptor representation condition

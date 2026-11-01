@@ -64,7 +64,7 @@ fn countReachableOps(
                 if (op == .list_replace_unsafe) counts.list_replace += 1;
                 if (op == .list_map_prepare_reuse) counts.prepare_reuse += 1;
                 if (op == .list_map_can_reuse) counts.can_reuse += 1;
-                if (op == .list_map_extract_unsafe) counts.extract += 1;
+                if (op == .list_move_out_unsafe) counts.extract += 1;
                 if (op == .list_map_write_unsafe) counts.write += 1;
             } else if (stmt == .incref) {
                 const retained = store.getLocal(stmt.incref.value);

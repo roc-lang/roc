@@ -9447,7 +9447,9 @@ const Lowerer = struct {
     }
 
     fn lowLevelStep(self: *Lowerer, where: LowerSite, target: LIR.LocalId, op: can.CIR.Expr.LowLevel, span: Lifted.Span(Lifted.ExprId), next: LIR.CFStmtId) Common.LowerError!LowerStep {
-        const args = self.solved.lifted.exprSpan(span);
+        var runtime_span = span;
+        runtime_span.len -= op.typeOnlyOperands();
+        const args = self.solved.lifted.exprSpan(runtime_span);
         if (op == .crash) {
             if (args.len != 1) Common.invariant("crash low-level operation received the wrong number of arguments");
             const lowered = try self.lowerExprsToTemps(args);

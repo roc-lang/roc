@@ -308,6 +308,7 @@ pub fn lowLevelAccess(op: LowLevel) OpAccess {
         .list_map_can_reuse,
         .list_map_cast_unsafe,
         .list_map_extract_unsafe,
+        .list_move_out_unsafe,
         .list_map_write_unsafe,
         .list_item_size_at_most,
         .dict_pseudo_seed,
