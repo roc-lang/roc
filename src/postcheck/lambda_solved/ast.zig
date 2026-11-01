@@ -90,6 +90,20 @@ pub const Program = struct {
         self.lifted.deinit();
     }
 
+    /// Drop every solved type and table, keeping the lifted program, so the
+    /// program can be solved again from the start.
+    pub fn resetSolution(self: *Program) void {
+        self.types.deinit();
+        self.types = Type.Store.init(self.allocator);
+        self.defs.clearRetainingCapacity();
+        self.local_tys.clearRetainingCapacity();
+        self.expr_tys.clearRetainingCapacity();
+        self.pat_tys.clearRetainingCapacity();
+        self.fn_tys.clearRetainingCapacity();
+        self.layout_requests.clearRetainingCapacity();
+        self.runtime_schema_requests.clearRetainingCapacity();
+    }
+
     pub fn view(self: *const Program) ProgramView {
         return .{
             .lifted = self.lifted.view(),

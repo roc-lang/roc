@@ -2601,6 +2601,18 @@ pub const InstGraph = struct {
     /// every reset.
     proven_uninhabited_types: [3]collections.DenseMapUnmanaged(Type.TypeId, bool) = .{ .empty, .empty, .empty },
     type_uninhabited_scratch: TypeUninhabitedScan.Eval.Scratch = .{},
+    /// Proven-uninhabited answers for class roots whose whole reachable
+    /// structure was settled when scanned, one map for each policy
+    /// `nodeProvenUninhabited` takes. Nothing can change such an answer
+    /// until the graph resets.
+    settled_node_uninhabited: [2]collections.DenseMapUnmanaged(NodeId, bool) = .{ .empty, .empty },
+    /// The class roots on the running node scan's path. Each scan unsets
+    /// what it sets, so the set is empty between scans.
+    node_uninhabited_visiting: std.DynamicBitSetUnmanaged = .{},
+    /// Each node being expanded by the running node scan, with the scan's
+    /// count of unsettled encounters when it was entered.
+    node_uninhabited_entered: collections.DenseMapUnmanaged(NodeId, usize) = .empty,
+    node_uninhabited_scratch: NodeUninhabitedScan.Eval.Scratch = .{},
     /// At least how many times a node received a generated-private backing.
     /// While zero, no class can reach one and the containment query answers
     /// at once.
@@ -2738,6 +2750,8 @@ pub const InstGraph = struct {
         self.resolved_roots.clearRetainingCapacity();
         self.pure_instances.clearRetainingCapacity();
         self.never_uninhabited.clearRetainingCapacity();
+        for (&self.settled_node_uninhabited) |*answers| answers.clearRetainingCapacity();
+        self.node_uninhabited_visiting.unsetAll();
         self.resolved_epoch = 0;
         self.structure_epoch = 0;
         self.generated_private_nodes = 0;
@@ -2810,6 +2824,10 @@ pub const InstGraph = struct {
         self.snapshot_free_types.deinit();
         for (&self.proven_uninhabited_types) |*answers| answers.deinit(self.allocator);
         self.type_uninhabited_scratch.deinit(self.allocator);
+        for (&self.settled_node_uninhabited) |*answers| answers.deinit(self.allocator);
+        self.node_uninhabited_visiting.deinit(self.allocator);
+        self.node_uninhabited_entered.deinit(self.allocator);
+        self.node_uninhabited_scratch.deinit(self.allocator);
         self.resolved_roots.deinit();
         self.pure_instances.deinit(self.allocator);
         self.node_set_pool.deinit();
@@ -3931,6 +3949,15 @@ pub const InstGraph = struct {
         const result = try TypeUninhabitedScan.Eval.runWith(self.allocator, &self.type_uninhabited_scratch, &scan, ty);
         try answers.put(self.allocator, ty, result);
         return result;
+    }
+
+    /// Whether this node's structure proves that no value can inhabit it,
+    /// under `.inspectable_only` or `.runtime_layout`.
+    pub fn nodeProvenUninhabited(self: *InstGraph, node: NodeId, policy: UninhabitedPolicy) Allocator.Error!bool {
+        std.debug.assert(policy != .may);
+        self.node_uninhabited_entered.clearRetainingCapacity();
+        var scan = NodeUninhabitedScan{ .graph = self, .policy = policy };
+        return try NodeUninhabitedScan.Eval.runWith(self.allocator, &self.node_uninhabited_scratch, &scan, node);
     }
 
     /// An empty arena, reusing a released arena's buffers when one is spare.
@@ -8985,6 +9012,105 @@ const TypeUninhabitedScan = struct {
     }
 };
 
+/// Decides whether a graph node is proven uninhabited under a policy. An
+/// unread leaf answers as its finished type does.
+const NodeUninhabitedScan = struct {
+    graph: *InstGraph,
+    policy: UninhabitedPolicy,
+    /// Encounters whose answer later graph work can change: an unresolved
+    /// node, a named node's backing, or a node already on the path. A node
+    /// whose expansion saw none has a settled answer.
+    unsettled_hits: usize = 0,
+
+    const Eval = AnyAll.Evaluation(NodeId, NodeUninhabitedScan);
+
+    fn settled(self: *NodeUninhabitedScan) *collections.DenseMapUnmanaged(NodeId, bool) {
+        return &self.graph.settled_node_uninhabited[@backingInt(self.policy)];
+    }
+
+    pub fn enter(self: *NodeUninhabitedScan, items: Eval.Items, node: NodeId) Allocator.Error!Eval.Expansion {
+        const graph = self.graph;
+        const root = graph.rootNode(node);
+        const root_index = @backingInt(root);
+        const visiting = &graph.node_uninhabited_visiting;
+        if (visiting.bit_length <= root_index) {
+            try visiting.resize(graph.allocator, @max(root_index + 1, graph.nodes.items.len), false);
+        }
+        if (visiting.isSet(root_index)) {
+            self.unsettled_hits += 1;
+            return .{ .value = false };
+        }
+        if (self.settled().get(root)) |answer| return .{ .value = answer };
+        // An unread leaf is exactly its finished type, whose answer is
+        // settled.
+        if (graph.leafType(root)) |ty| return .{ .value = try graph.typeProvenUninhabited(ty, self.policy) };
+
+        const expansion: Eval.Expansion = switch ((try graph.content(root))) {
+            .redirect => |target| blk: {
+                try items.add(target);
+                break :blk .{ .group = .any };
+            },
+            .leaf => unreachable, // graph.content reads a class root and expands its leaf, so it never returns a leaf
+            .empty_tag_union => .{ .value = true },
+            .named => |named| blk: {
+                self.unsettled_hits += 1;
+                const backing = named.backing orelse break :blk .{ .value = false };
+                if (backing.use != .inspectable and self.policy != .runtime_layout) break :blk .{ .value = false };
+                try items.add(backing.node);
+                break :blk .{ .group = .any };
+            },
+            .box => |payload| blk: {
+                try items.add(payload);
+                break :blk .{ .group = .any };
+            },
+            .tuple => |elems| blk: {
+                for (elems) |elem| try items.add(elem);
+                break :blk .{ .group = .any };
+            },
+            .record => |record| blk: {
+                for (record.fields) |field| try items.add(field.ty);
+                break :blk .{ .group = .any };
+            },
+            // Uninhabited when its extension is and every tag has an
+            // uninhabited payload.
+            .tag_union => |tag_union| blk: {
+                try items.add(tag_union.ext);
+                for (tag_union.tags) |tag| {
+                    try items.group(.any, tag.payloads.len);
+                    for (tag.payloads) |payload| try items.add(payload);
+                }
+                break :blk .{ .group = .all };
+            },
+            .unresolved => blk: {
+                self.unsettled_hits += 1;
+                break :blk .{ .value = false };
+            },
+            .primitive,
+            .list,
+            .func,
+            .empty_record,
+            .erased,
+            .zst,
+            .hole,
+            => .{ .value = false },
+        };
+        if (expansion == .group) {
+            visiting.set(root_index);
+            try graph.node_uninhabited_entered.put(graph.allocator, root, self.unsettled_hits);
+        }
+        return expansion;
+    }
+
+    pub fn exit(self: *NodeUninhabitedScan, node: NodeId, result: ?bool) Allocator.Error!void {
+        const graph = self.graph;
+        const root = graph.rootNode(node);
+        graph.node_uninhabited_visiting.unset(@backingInt(root));
+        const hits_before = (graph.node_uninhabited_entered.fetchRemove(root) orelse return).value;
+        const answer = result orelse return;
+        if (self.unsettled_hits == hits_before) try self.settled().put(graph.allocator, root, answer);
+    }
+};
+
 /// Shared finalization state for materializing graph nodes into immutable
 /// Monotype type ids.
 pub const GraphTypeFinals = struct {
@@ -12395,6 +12521,32 @@ test "explicit empty tag union imports as closed uninhabited row" {
     const imported = try graph.importMono(explicit_empty);
 
     try std.testing.expectEqual(InstNode.empty_tag_union, (try graph.content(imported)));
+}
+
+test "a settled node uninhabitedness answer is kept by the graph until it resets" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const empty = try graph.newNode(.empty_tag_union);
+    const item = try graph.newNode(.{ .primitive = .u64 });
+    const pair = try graph.newNode(.{ .tuple = try graph.arena().dupe(NodeId, &.{ item, empty }) });
+    try std.testing.expect(try graph.nodeProvenUninhabited(pair, .inspectable_only));
+    try std.testing.expect(!try graph.nodeProvenUninhabited(item, .inspectable_only));
+
+    const settled = &graph.settled_node_uninhabited[@backingInt(UninhabitedPolicy.inspectable_only)];
+    try std.testing.expectEqual(@as(?bool, true), settled.get(graph.rootNode(pair)));
+    try std.testing.expectEqual(@as(usize, 0), graph.settled_node_uninhabited[@backingInt(UninhabitedPolicy.runtime_layout)].count());
+
+    graph.reset();
+    try std.testing.expectEqual(@as(usize, 0), settled.count());
 }
 
 test "finished Monotype detection includes imported structural descendants" {

@@ -22376,19 +22376,7 @@ const BodyContext = struct {
     /// This specialization's type solver, shared by every instantiation
     /// context created while lowering the same specialization.
     graph: *InstGraph,
-    /// Reusable recursion-path scratch for exact graph inhabitation walks.
-    /// Node IDs are dense, and each walk unsets on exit, so this replaces a
-    /// fresh visitation hash table per query.
-    inhabitation_visiting: std.bit_set.DynamicBitSetUnmanaged,
-    /// Each node being expanded by the running uninhabitedness scan, with the
-    /// scan's count of unsettled encounters when it was entered.
-    inhabitation_entered: collections.DenseMapUnmanaged(NodeId, usize) = .empty,
-    /// Uninhabitedness of graph roots whose whole reachable structure was
-    /// settled when scanned, per backing access. Nothing can change such an
-    /// answer.
-    settled_node_uninhabited: [2]collections.DenseMapUnmanaged(NodeId, bool) = .{ .empty, .empty },
-    /// The stacks the uninhabitedness scans run on, kept between scans.
-    node_uninhabited_scratch: NodeUninhabitedScan.Evaluation.Scratch = .{},
+    /// The stack the pattern uninhabitedness scans run on, kept between scans.
     pattern_uninhabited_scratch: PatternUninhabitedScan.Evaluation.Scratch = .{},
     /// Draft body output owned by this specialization graph.
     draft: *BodyDraftStore,
@@ -23293,7 +23281,6 @@ const BodyContext = struct {
             .typed_binders = TypedBinders.init(allocator),
             .local_proc_contexts = LocalProcContexts.init(allocator),
             .graph = graph,
-            .inhabitation_visiting = .{},
             .draft = draft,
             .evidence = rootEvidence(owner_template, &.{}),
             .restore_evidence = rootEvidence(owner_template, &.{}),
@@ -23338,9 +23325,7 @@ const BodyContext = struct {
         self.pattern_literal_guards.deinit(self.allocator);
         self.optional_destruct_binds.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
-        self.inhabitation_visiting.deinit(self.allocator);
         self.releaseMemos();
-        self.node_uninhabited_scratch.deinit(self.allocator);
         self.pattern_uninhabited_scratch.deinit(self.allocator);
         self.instantiation.deinit();
         self.local_proc_contexts.deinit();
@@ -26570,8 +26555,6 @@ const BodyContext = struct {
 
     /// The per-body memo maps the builder pools across body contexts.
     const Memos = struct {
-        inhabitation_entered: collections.DenseMapUnmanaged(NodeId, usize) = .empty,
-        settled_node_uninhabited: [2]collections.DenseMapUnmanaged(NodeId, bool) = .{ .empty, .empty },
         explicit_binding_memo: collections.DenseMapUnmanaged(checked.CheckedPatternId, bool) = .empty,
 
         /// The chunk-directory span past which a released map gives up its
@@ -26579,30 +26562,22 @@ const BodyContext = struct {
         const retained_chunks = 256;
 
         fn deinit(self: *Memos, allocator: Allocator) void {
-            self.inhabitation_entered.deinit(allocator);
-            for (&self.settled_node_uninhabited) |*settled| settled.deinit(allocator);
             self.explicit_binding_memo.deinit(allocator);
         }
     };
 
     fn installMemos(self: *BodyContext, memos: Memos) void {
-        self.inhabitation_entered = memos.inhabitation_entered;
-        self.settled_node_uninhabited = memos.settled_node_uninhabited;
         self.explicit_binding_memo = memos.explicit_binding_memo;
     }
 
     /// Empty this body's memo maps and return them to the builder's pool.
     fn releaseMemos(self: *BodyContext) void {
         var memos: Memos = .{
-            .inhabitation_entered = self.inhabitation_entered,
-            .settled_node_uninhabited = self.settled_node_uninhabited,
             .explicit_binding_memo = self.explicit_binding_memo,
         };
         // A pooled map keeps the pages of a body-sized key range, not every
         // page any body ever touched.
         const allocator = self.builder.allocator;
-        memos.inhabitation_entered.clearRetainingAtMost(allocator, Memos.retained_chunks);
-        for (&memos.settled_node_uninhabited) |*settled| settled.clearRetainingAtMost(allocator, Memos.retained_chunks);
         memos.explicit_binding_memo.clearRetainingAtMost(allocator, Memos.retained_chunks);
         self.builder.body_memo_pool.append(self.builder.allocator, memos) catch memos.deinit(self.builder.allocator);
     }
@@ -37265,9 +37240,10 @@ const BodyContext = struct {
         node: NodeId,
         backing_access: UninhabitedBackingAccess,
     ) Allocator.Error!bool {
-        self.inhabitation_entered.clearRetainingCapacity();
-        var scan = NodeUninhabitedScan{ .body = self, .backing_access = backing_access };
-        return try NodeUninhabitedScan.Evaluation.runWith(self.allocator, &self.node_uninhabited_scratch, &scan, node);
+        return try self.graph.nodeProvenUninhabited(node, switch (backing_access) {
+            .inspectable_only => .inspectable_only,
+            .runtime_layout => .runtime_layout,
+        });
     }
 
     fn typeIsProvenUninhabited(self: *BodyContext, ty: Type.TypeId) Allocator.Error!bool {
@@ -66704,14 +66680,6 @@ test "completion relation preserves recursive and shared DAG outcomes" {
     ctx.allocator = allocator;
     ctx.builder = &builder;
     ctx.graph = graph;
-    ctx.inhabitation_visiting = .{};
-    defer ctx.inhabitation_visiting.deinit(allocator);
-    ctx.inhabitation_entered = .empty;
-    defer ctx.inhabitation_entered.deinit(allocator);
-    ctx.settled_node_uninhabited = .{ .empty, .empty };
-    defer for (&ctx.settled_node_uninhabited) |*memo| memo.deinit(allocator);
-    ctx.node_uninhabited_scratch = .{};
-    defer ctx.node_uninhabited_scratch.deinit(allocator);
 
     for ([_]BodyContext.RequestCompletion{ .unchanged, .completed, .mismatch }) |expected| {
         // Each side is a recursive list of pairs. Repeated tuple edges below
@@ -69140,102 +69108,6 @@ fn methodOwnerFromType(types: *const Type.Store, ty: Type.TypeId) ?static_dispat
 
 /// Decides whether a graph node is proven uninhabited. A node on the active
 /// path is not.
-const NodeUninhabitedScan = struct {
-    body: *BodyContext,
-    backing_access: BodyContext.UninhabitedBackingAccess,
-    /// Encounters whose answer later graph work can change: an unresolved
-    /// node, a named node's backing, or a node already on the path. A node
-    /// whose expansion saw none has a settled answer.
-    unsettled_hits: usize = 0,
-
-    const Evaluation = AnyAll.Evaluation(NodeId, NodeUninhabitedScan);
-
-    fn settled(self: *NodeUninhabitedScan) *collections.DenseMapUnmanaged(NodeId, bool) {
-        return &self.body.settled_node_uninhabited[@backingInt(self.backing_access)];
-    }
-
-    pub fn enter(self: *NodeUninhabitedScan, items: Evaluation.Items, node: NodeId) Allocator.Error!Evaluation.Expansion {
-        const body = self.body;
-        const root = body.graph.rootNode(node);
-        const root_index = @backingInt(root);
-        if (body.inhabitation_visiting.bit_length <= root_index) {
-            try body.inhabitation_visiting.resize(body.allocator, root_index + 1, false);
-        }
-        if (body.inhabitation_visiting.isSet(root_index)) {
-            self.unsettled_hits += 1;
-            return .{ .value = false };
-        }
-        if (self.settled().get(root)) |answer| return .{ .value = answer };
-        // An unread leaf is exactly its finished type, whose answer is
-        // settled.
-        if (body.graph.leafType(root)) |ty| return .{ .value = try body.typeIsProvenUninhabitedWith(ty, self.backing_access) };
-
-        const expansion: Evaluation.Expansion = switch ((try body.graph.content(root))) {
-            .redirect => |target| blk: {
-                try items.add(target);
-                break :blk .{ .group = .any };
-            },
-            .leaf => unreachable, // graph.content reads a class root and expands its leaf, so it never returns a leaf
-            .empty_tag_union => .{ .value = true },
-            .named => |named| blk: {
-                self.unsettled_hits += 1;
-                const backing = named.backing orelse break :blk .{ .value = false };
-                if (backing.use != .inspectable and self.backing_access != .runtime_layout) break :blk .{ .value = false };
-                try items.add(backing.node);
-                break :blk .{ .group = .any };
-            },
-            .box => |payload| blk: {
-                try items.add(payload);
-                break :blk .{ .group = .any };
-            },
-            .tuple => |elems| blk: {
-                for (elems) |elem| try items.add(elem);
-                break :blk .{ .group = .any };
-            },
-            .record => |record| blk: {
-                for (record.fields) |field| try items.add(field.ty);
-                break :blk .{ .group = .any };
-            },
-            // Uninhabited when its extension is and every tag has an
-            // uninhabited payload.
-            .tag_union => |tag_union| blk: {
-                try items.add(tag_union.ext);
-                for (tag_union.tags) |tag| {
-                    try items.group(.any, tag.payloads.len);
-                    for (tag.payloads) |payload| try items.add(payload);
-                }
-                break :blk .{ .group = .all };
-            },
-            .unresolved => blk: {
-                self.unsettled_hits += 1;
-                break :blk .{ .value = false };
-            },
-            .primitive,
-            .list,
-            .func,
-            .empty_record,
-            .erased,
-            .zst,
-            .hole,
-            => .{ .value = false },
-        };
-        if (expansion == .group) {
-            body.inhabitation_visiting.set(root_index);
-            try body.inhabitation_entered.put(body.allocator, root, self.unsettled_hits);
-        }
-        return expansion;
-    }
-
-    pub fn exit(self: *NodeUninhabitedScan, node: NodeId, result: ?bool) std.mem.Allocator.Error!void {
-        const body = self.body;
-        const root = body.graph.rootNode(node);
-        body.inhabitation_visiting.unset(@backingInt(root));
-        const hits_before = (body.inhabitation_entered.fetchRemove(root) orelse return).value;
-        const answer = result orelse return;
-        if (self.unsettled_hits == hits_before) try self.settled().put(body.allocator, root, answer);
-    }
-};
-
 /// Decides whether a checked pattern is proven uninhabited: its own type is,
 /// or one of its subpatterns is.
 const PatternUninhabitedScan = struct {

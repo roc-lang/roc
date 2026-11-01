@@ -193,11 +193,68 @@ pub fn run(
     var program = Ast.Program.init(allocator, lifted);
     errdefer program.deinit();
 
-    var solver = try Solver.init(allocator, &program);
+    var row_joined = try findRowJoinedTypes(allocator, &program);
+    var solver = Solver.init(allocator, &program) catch |err| {
+        row_joined.deinit(allocator);
+        return err;
+    };
     defer solver.deinit();
+    solver.setRowJoined(row_joined);
     try solver.solve();
 
     return program;
+}
+
+/// The lifted Monotypes whose rows a row join can change (design.md "Row
+/// Joins"), closed over structurally equal Monotypes and over every type
+/// containing one. Every other callable-free type solves to its Monotype's
+/// own rows wherever it occurs, so one clone serves all of its occurrences.
+///
+/// An analysis solve finds them: it relates every body exactly as solving
+/// does, but with one clone for every callable-free Monotype, and records
+/// both sides of every unification whose two types were instantiated from
+/// different Monotypes. Sharing a clone only adds relations, so every pair
+/// of different Monotypes the real solve relates, the analysis relates too.
+fn findRowJoinedTypes(allocator: Allocator, program: *Ast.Program) Common.LowerError!std.DynamicBitSetUnmanaged {
+    var found = blk: {
+        var analysis = try Solver.init(allocator, program);
+        defer analysis.deinit();
+        analysis.join_sides = try std.DynamicBitSetUnmanaged.initEmpty(allocator, analysis.lifted.types.types.len);
+        try analysis.solveBodies();
+        var sides = analysis.join_sides.?;
+        analysis.join_sides = null;
+        // Only a row can change under a join; a row-free type is one clone
+        // wherever it occurs whatever it meets.
+        sides.setIntersection(analysis.contains_tag_row);
+        break :blk sides;
+    };
+    errdefer found.deinit(allocator);
+    program.resetSolution();
+
+    const lifted_types = &program.lifted.types;
+    const view = lifted_types.view();
+    var rows = try computeReachabilityMasks(allocator, view);
+    defer rows.deinit(allocator);
+
+    // A structurally equal Monotype under another id is the same type to
+    // unification, so it joins exactly where this one does.
+    var joined_digests = std.AutoHashMap(names.TypeDigest, void).init(allocator);
+    defer joined_digests.deinit();
+    var joined = found.iterator(.{});
+    while (joined.next()) |index| {
+        try joined_digests.put(lifted_types.equalityDigest(&program.lifted.names, @fromBackingInt(@intCast(index))), {});
+    }
+    var row_types = rows.contains_tag_row.iterator(.{});
+    while (row_types.next()) |index| {
+        if (found.isSet(index)) continue;
+        if (joined_digests.contains(lifted_types.equalityDigest(&program.lifted.names, @fromBackingInt(@intCast(index))))) found.set(index);
+    }
+
+    // One clone of a container is one clone of everything inside it.
+    var parents = try ParentIndex.build(allocator, view);
+    defer parents.deinit(allocator);
+    try parents.markAncestors(allocator, &found);
+    return found;
 }
 
 const Solver = struct {
@@ -234,10 +291,18 @@ const Solver = struct {
     contains_forced_dynamic: std.DynamicBitSetUnmanaged,
     /// Per lifted Monotype: whether a structural tag union is reachable from
     /// it. Rows join where values flow (design.md "Row Joins"), so a clone of
-    /// such a type is mutable state of the uses it was made for, and every use
-    /// materializes its own; sharing one clone would join every row of that
-    /// Monotype across the program by type identity rather than by flow.
+    /// such a type whose rows a join can change (`row_joined`) is mutable
+    /// state of the uses it was made for, and every use materializes its own;
+    /// sharing one clone would join every row of that Monotype across the
+    /// program by type identity rather than by flow.
     contains_tag_row: std.DynamicBitSetUnmanaged,
+    /// Per lifted Monotype: whether a row join can change a row reachable
+    /// from it (`findRowJoinedTypes`). A callable-free type holding a tag row
+    /// is clone-invariant exactly when no row join can change it.
+    row_joined: std.DynamicBitSetUnmanaged,
+    /// Set only for the analysis solve of `findRowJoinedTypes`: the
+    /// Monotypes a unification related to a different Monotype.
+    join_sides: ?std.DynamicBitSetUnmanaged = null,
     /// Finalization's clone of each lifted Monotype, shared by every
     /// untouched leaf of it.
     shared_clones: collections.DenseMap(MonoType.TypeId, Type.TypeVarId),
@@ -425,6 +490,8 @@ const Solver = struct {
         var masks = try computeReachabilityMasks(allocator, lifted.types);
         errdefer masks.deinit(allocator);
 
+        const row_joined = try std.DynamicBitSetUnmanaged.initEmpty(allocator, lifted.types.types.len);
+
         return .{
             .allocator = allocator,
             .program = program,
@@ -446,6 +513,7 @@ const Solver = struct {
             .contains_callable = masks.contains_callable,
             .contains_forced_dynamic = masks.contains_forced_dynamic,
             .contains_tag_row = masks.contains_tag_row,
+            .row_joined = row_joined,
             .shared_clones = collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(allocator),
             .leaf_origins = collections.DenseMap(Type.TypeVarId, MonoType.TypeId).init(allocator),
             .leaf_contexts = .empty,
@@ -503,6 +571,8 @@ const Solver = struct {
         self.reaches_cycle.deinit(self.allocator);
         self.shared_clones.deinit();
         self.leaf_origins.deinit();
+        if (self.join_sides) |*sides| sides.deinit(self.allocator);
+        self.row_joined.deinit(self.allocator);
         self.contains_tag_row.deinit(self.allocator);
         self.contains_forced_dynamic.deinit(self.allocator);
         self.contains_callable.deinit(self.allocator);
@@ -524,7 +594,19 @@ const Solver = struct {
         self.allocator.free(self.local_tys);
     }
 
+    /// Take ownership of the Monotypes whose rows a row join can change.
+    fn setRowJoined(self: *Solver, row_joined: std.DynamicBitSetUnmanaged) void {
+        self.row_joined.deinit(self.allocator);
+        self.row_joined = row_joined;
+    }
+
     fn solve(self: *Solver) Allocator.Error!void {
+        try self.solveBodies();
+        try self.finishSolve();
+    }
+
+    /// Relate every function's signature and body.
+    fn solveBodies(self: *Solver) Allocator.Error!void {
         if (@import("builtin").mode == .debug) try self.verifyDistinctFnSymbols();
 
         for (self.lifted.locals, 0..) |local, index| {
@@ -551,7 +633,10 @@ const Solver = struct {
             const fn_id: Lifted.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             try self.solveFn(fn_id, fn_);
         }
+    }
 
+    /// Seed erasure boundaries, then publish and finalize every solved type.
+    fn finishSolve(self: *Solver) Allocator.Error!void {
         try self.markAbiBoundaryCallables();
 
         try self.program.layout_requests.ensureTotalCapacity(self.allocator, self.lifted.layout_requests.len);
@@ -1890,10 +1975,17 @@ const Solver = struct {
     }
 
     /// Whether every clone of this Monotype solves identically: it is
-    /// callable-free and holds no tag row, so unification never changes it
-    /// and one shared clone serves every use.
+    /// callable-free and no row join can change a row it holds, so
+    /// unification never changes it and one shared clone serves every use.
     fn isCloneInvariant(self: *const Solver, ty: MonoType.TypeId) bool {
-        return self.isCallableFree(ty) and !self.contains_tag_row.isSet(@backingInt(ty));
+        const raw_id = @backingInt(ty);
+        return self.isCallableFree(ty) and (!self.contains_tag_row.isSet(raw_id) or !self.row_joined.isSet(raw_id));
+    }
+
+    /// A shared clone that holds a tag row: one var stands for every
+    /// occurrence, so it must only ever meet instances of its own Monotype.
+    fn isSharedRowClone(self: *const Solver, ty: MonoType.TypeId) bool {
+        return self.contains_tag_row.isSet(@backingInt(ty)) and self.isCloneInvariant(ty);
     }
 
     /// How the lazy leaves of one Monotype relate to each other.
@@ -1901,7 +1993,8 @@ const Solver = struct {
         /// Clone-invariant: one clone, in the shared context, serves every
         /// occurrence in the program.
         shared,
-        /// Callable-free, holding a tag row, and reaching no cycle: each
+        /// Callable-free, holding a tag row a row join can change, and
+        /// reaching no cycle: each
         /// occurrence is its own clone, in no context, and its own expansion
         /// opens a context of its own. Rows join where values flow (design.md
         /// "Row Joins"), and two occurrences of one Monotype are two positions
@@ -2462,7 +2555,7 @@ const Solver = struct {
         // rows are one row (design.md "Row Joins"), so a read at a wider row
         // widens the root's type in this program, and the root's slot is laid
         // out at that joined type.
-        if (self.isCloneInvariant(read_mono)) return;
+        if (self.isCallableFree(read_mono) and !self.contains_tag_row.isSet(@backingInt(read_mono))) return;
         const root_ty = self.inferredExpr(initializer);
         const initializer_expr = self.lifted.exprs[@backingInt(initializer)];
         if (initializer_expr.data != .call_proc) return self.unify(read_ty, root_ty);
@@ -2566,6 +2659,7 @@ const Solver = struct {
         var a = self.program.types.rootCompressed(lhs);
         var b = self.program.types.rootCompressed(rhs);
         if (a == b) return;
+        if (self.join_sides != null or @import("builtin").mode == .debug) try self.noteMonotypePair(a, b);
 
         const raw_left = self.program.types.get(a);
         const raw_right = self.program.types.get(b);
@@ -2609,6 +2703,27 @@ const Solver = struct {
         const finish_index = stack.items.len;
         try stack.append(self.allocator, .{ .finish = .{ .pair = pair, .action = .none, .structural_isolated = structural_isolated, .lifts_before = self.lift_count } });
         try self.unifyRoots(stack, finish_index, a, b, left, right, structural_isolated);
+    }
+
+    /// Two classes instantiated from different Monotypes are a row join's
+    /// two sides. The analysis solve records both; the real solve never
+    /// relates a shared row-bearing clone that way, since the analysis
+    /// relates every pair the real solve does.
+    fn noteMonotypePair(self: *Solver, a: Type.TypeVarId, b: Type.TypeVarId) Allocator.Error!void {
+        const left = self.leaf_origins.get(a) orelse return;
+        const right = self.leaf_origins.get(b) orelse return;
+        if (left == right) return;
+        if (self.join_sides) |*sides| {
+            if (sides.isSet(@backingInt(left)) and sides.isSet(@backingInt(right))) return;
+            if (try self.sameMonoType(left, right)) return;
+            sides.set(@backingInt(left));
+            sides.set(@backingInt(right));
+            return;
+        }
+        if (!self.isSharedRowClone(left) and !self.isSharedRowClone(right)) return;
+        if (!try self.sameMonoType(left, right)) {
+            Common.invariant("a shared row-bearing clone met a different Monotype in unification");
+        }
     }
 
     /// An unexpanded leaf whose expansion nothing else can observe stands for
@@ -4061,24 +4176,15 @@ const ReachabilityMasks = struct {
     }
 };
 
-/// Reverse-reachability over the lifted Monotype store: from `func` and
-/// `erased` nodes (types whose clones need fresh callable slots), from
-/// forced-dynamic iterator named nodes (leaves the forced-dynamic scan must
-/// materialize), and from structural tag unions (types whose clones join
-/// where their values flow).
-fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Error!ReachabilityMasks {
-    const count = types.types.len;
-    var flags = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
-    errdefer flags.deinit(allocator);
-    var forced = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
-    errdefer forced.deinit(allocator);
-
-    const edge_counts = try allocator.alloc(u32, count);
-    defer allocator.free(edge_counts);
-    @memset(edge_counts, 0);
+/// Every lifted Monotype's parents: the types that hold it as a direct
+/// component.
+const ParentIndex = struct {
+    /// `parents[starts[child]..starts[child + 1]]` are `child`'s parents.
+    parents: []u32,
+    starts: []u32,
 
     const Walk = struct {
-        fn children(store: @TypeOf(types), content: MonoType.Content, callback: anytype) void {
+        fn children(store: MonoType.Store.View, content: MonoType.Content, callback: anytype) void {
             switch (content) {
                 .primitive, .zst, .hole, .erased => {},
                 .list, .box => |elem| callback.child(elem),
@@ -4106,103 +4212,103 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
         }
     };
 
-    for (0..types.types.len) |content_index| {
-        const content = types.get(@fromBackingInt(@intCast(content_index)));
-        const Counter = struct {
-            counts: []u32,
-            fn child(self: @This(), ty: MonoType.TypeId) void {
-                self.counts[@backingInt(ty)] += 1;
-            }
-        };
-        Walk.children(types, content, Counter{ .counts = edge_counts });
+    fn build(allocator: Allocator, types: MonoType.Store.View) Allocator.Error!ParentIndex {
+        const count = types.types.len;
+        const edge_counts = try allocator.alloc(u32, count);
+        defer allocator.free(edge_counts);
+        @memset(edge_counts, 0);
+        for (0..count) |content_index| {
+            const content = types.get(@fromBackingInt(@intCast(content_index)));
+            const Counter = struct {
+                counts: []u32,
+                fn child(self: @This(), ty: MonoType.TypeId) void {
+                    self.counts[@backingInt(ty)] += 1;
+                }
+            };
+            Walk.children(types, content, Counter{ .counts = edge_counts });
+        }
+
+        const starts = try allocator.alloc(u32, count + 1);
+        errdefer allocator.free(starts);
+        starts[0] = 0;
+        for (edge_counts, 0..) |edge_count, index| {
+            starts[index + 1] = starts[index] + edge_count;
+        }
+        const parents = try allocator.alloc(u32, starts[count]);
+        errdefer allocator.free(parents);
+        const parent_writes = try allocator.dupe(u32, starts[0..count]);
+        defer allocator.free(parent_writes);
+        for (0..count) |parent_index| {
+            const content = types.get(@fromBackingInt(@intCast(parent_index)));
+            const Filler = struct {
+                parents: []u32,
+                writes: []u32,
+                parent: u32,
+                fn child(self: @This(), ty: MonoType.TypeId) void {
+                    const child_index = @backingInt(ty);
+                    self.parents[self.writes[child_index]] = self.parent;
+                    self.writes[child_index] += 1;
+                }
+            };
+            Walk.children(types, content, Filler{ .parents = parents, .writes = parent_writes, .parent = @intCast(parent_index) });
+        }
+        return .{ .parents = parents, .starts = starts };
     }
 
-    var parent_starts = try allocator.alloc(u32, count + 1);
-    defer allocator.free(parent_starts);
-    parent_starts[0] = 0;
-    for (edge_counts, 0..) |edge_count, index| {
-        parent_starts[index + 1] = parent_starts[index] + edge_count;
-    }
-    const parents = try allocator.alloc(u32, parent_starts[count]);
-    defer allocator.free(parents);
-    const parent_writes = try allocator.dupe(u32, parent_starts[0..count]);
-    defer allocator.free(parent_writes);
-    for (0..types.types.len) |parent_index| {
-        const content = types.get(@fromBackingInt(@intCast(parent_index)));
-        const Filler = struct {
-            parents: []u32,
-            writes: []u32,
-            parent: u32,
-            fn child(self: @This(), ty: MonoType.TypeId) void {
-                const child_index = @backingInt(ty);
-                self.parents[self.writes[child_index]] = self.parent;
-                self.writes[child_index] += 1;
-            }
-        };
-        Walk.children(types, content, Filler{ .parents = parents, .writes = parent_writes, .parent = @intCast(parent_index) });
+    fn deinit(self: *ParentIndex, allocator: Allocator) void {
+        allocator.free(self.parents);
+        allocator.free(self.starts);
     }
 
-    var work = std.ArrayList(u32).empty;
-    defer work.deinit(allocator);
-    for (0..types.types.len) |index| {
-        const content = types.get(@fromBackingInt(@intCast(index)));
-        const tag = std.meta.activeTag(content);
-        if (tag == .func or tag == .erased) {
-            flags.set(index);
-            try work.append(allocator, @intCast(index));
-        }
-    }
-    while (work.pop()) |index| {
-        for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
-            if (flags.isSet(parent)) continue;
-            flags.set(parent);
-            try work.append(allocator, parent);
-        }
-    }
-    for (0..types.types.len) |index| {
-        const content = types.get(@fromBackingInt(@intCast(index)));
-        if (std.meta.activeTag(content) == .named) {
-            if (content.named.def.iterator_representation == .forced_dynamic) {
-                forced.set(index);
-                try work.append(allocator, @intCast(index));
+    /// Add to `set` every type that reaches a type already in it.
+    fn markAncestors(self: *const ParentIndex, allocator: Allocator, set: *std.DynamicBitSetUnmanaged) Allocator.Error!void {
+        var work = std.ArrayList(u32).empty;
+        defer work.deinit(allocator);
+        var members = set.iterator(.{});
+        while (members.next()) |index| try work.append(allocator, @intCast(index));
+        while (work.pop()) |index| {
+            for (self.parents[self.starts[index]..self.starts[index + 1]]) |parent| {
+                if (set.isSet(parent)) continue;
+                set.set(parent);
+                try work.append(allocator, parent);
             }
         }
     }
-    while (work.pop()) |index| {
-        for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
-            if (forced.isSet(parent)) continue;
-            forced.set(parent);
-            try work.append(allocator, parent);
-        }
-    }
+};
+
+/// Reverse-reachability over the lifted Monotype store: from `func` and
+/// `erased` nodes (types whose clones need fresh callable slots), from
+/// forced-dynamic iterator named nodes (leaves the forced-dynamic scan must
+/// materialize), and from structural tag unions (types whose clones join
+/// where their values flow).
+fn computeReachabilityMasks(allocator: Allocator, types: MonoType.Store.View) Allocator.Error!ReachabilityMasks {
+    const count = types.types.len;
+    var index_ = try ParentIndex.build(allocator, types);
+    defer index_.deinit(allocator);
+
+    var flags = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
+    errdefer flags.deinit(allocator);
+    var forced = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
+    errdefer forced.deinit(allocator);
     var rows = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
     errdefer rows.deinit(allocator);
-    for (0..types.types.len) |index| {
+    for (0..count) |index| {
         const content = types.get(@fromBackingInt(@intCast(index)));
-        if (std.meta.activeTag(content) == .tag_union) {
-            rows.set(index);
-            try work.append(allocator, @intCast(index));
+        switch (std.meta.activeTag(content)) {
+            .func, .erased => flags.set(index),
+            .named => if (content.named.def.iterator_representation == .forced_dynamic) forced.set(index),
+            .tag_union => rows.set(index),
+            .primitive, .zst, .hole, .list, .box, .tuple, .record => {},
         }
     }
-    while (work.pop()) |index| {
-        for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
-            if (rows.isSet(parent)) continue;
-            rows.set(parent);
-            try work.append(allocator, parent);
-        }
-    }
+    try index_.markAncestors(allocator, &flags);
+    try index_.markAncestors(allocator, &forced);
+    try index_.markAncestors(allocator, &rows);
+
     var cycle = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
     errdefer cycle.deinit(allocator);
-    try markCycleMembers(allocator, parents, parent_starts, &cycle);
-    var on_cycle = cycle.iterator(.{});
-    while (on_cycle.next()) |index| try work.append(allocator, @intCast(index));
-    while (work.pop()) |index| {
-        for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
-            if (cycle.isSet(parent)) continue;
-            cycle.set(parent);
-            try work.append(allocator, parent);
-        }
-    }
+    try markCycleMembers(allocator, index_.parents, index_.starts, &cycle);
+    try index_.markAncestors(allocator, &cycle);
     return .{ .contains_callable = flags, .contains_forced_dynamic = forced, .contains_tag_row = rows, .reaches_cycle = cycle };
 }
 
@@ -5899,6 +6005,59 @@ test "issue 12505 tag compatibility preserves lazy wide payloads for unification
     }
 }
 
+// repro for https://github.com/roc-lang/roc/issues/12630
+test "every occurrence of a callable-free recursive nominal that no row join reaches shares one clone" {
+    const allocator = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(allocator);
+    var lifted_owned = true;
+    errdefer if (lifted_owned) lifted.deinit();
+    // Node := [Big({ count : U64, label : Str }), Branch(List(Node)), Leaf]
+    const module = try lifted.names.internModuleIdentity(&(@as([32]u8, @splat(0x12))));
+    const node_name = try lifted.names.internTypeName("Node");
+    const slot = try lifted.types.beginRecursive();
+    const u64_ty = try lifted.types.add(.{ .primitive = .u64 });
+    const str_ty = try lifted.types.add(.{ .primitive = .str });
+    const children = try lifted.types.add(.{ .list = slot.ty });
+    const big = try lifted.types.add(.{ .record = try lifted.types.addRecordFields(&lifted.names, &.{
+        .{ .name = try lifted.names.internRecordFieldLabel("count"), .ty = u64_ty, .default = null },
+        .{ .name = try lifted.names.internRecordFieldLabel("label"), .ty = str_ty, .default = null },
+    }) });
+    const big_name = try lifted.names.internTagLabel("Big");
+    const branch_name = try lifted.names.internTagLabel("Branch");
+    const leaf_name = try lifted.names.internTagLabel("Leaf");
+    const row = try lifted.types.add(.{ .tag_union = try lifted.types.addTags(&.{
+        .{ .name = big_name, .checked_name = big_name, .payloads = try lifted.types.addSpan(&.{big}) },
+        .{ .name = branch_name, .checked_name = branch_name, .payloads = try lifted.types.addSpan(&.{children}) },
+        .{ .name = leaf_name, .checked_name = leaf_name, .payloads = .empty() },
+    }) });
+    lifted.types.finishRecursive(slot, .{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
+        .def = .{ .module = module, .type_name = node_name },
+        .kind = .nominal,
+        .args = .empty(),
+        .backing = .{ .ty = row, .use = .inspectable },
+    } });
+    const node = slot.ty;
+    var program = Ast.Program.init(allocator, lifted);
+    lifted_owned = false;
+    defer program.deinit();
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+
+    // The program has no expression, so no row join reaches `Node`'s row:
+    // unification can never change it, and every occurrence of `Node` is
+    // one solved type rather than a copy of its whole row per occurrence.
+    const first = try solver.lowerTypeFresh(node);
+    const first_backing = (try solver.resolvedContent(first)).named.backing.?.ty;
+    try std.testing.expectEqual(@as(usize, 3), (try solver.resolvedContent(first_backing)).tag_union.count());
+
+    const second = try solver.lowerTypeFresh(node);
+    const before = program.types.vars.items.len;
+    const second_backing = (try solver.resolvedContent(second)).named.backing.?.ty;
+    try std.testing.expectEqual(@as(usize, 3), (try solver.resolvedContent(second_backing)).tag_union.count());
+    try std.testing.expectEqual(before, program.types.vars.items.len);
+}
+
 test "issue 12505 scoped positional payloads only expand for reachable argument bindings" {
     const allocator = std.testing.allocator;
     for ([_]bool{ false, true }) |reachable_binding| {
@@ -5927,6 +6086,9 @@ test "issue 12505 scoped positional payloads only expand for reachable argument 
         defer program.deinit();
         var solver = try Solver.init(allocator, &program);
         defer solver.deinit();
+        // Every row here is one some row join reaches, so `state`'s
+        // occurrences keep positional rows.
+        solver.row_joined.setUnion(solver.contains_tag_row);
         const left = try solver.lowerTypeFresh(state);
         const right = try solver.lowerTypeFresh(state);
         _ = try solver.resolvedContent(right);
