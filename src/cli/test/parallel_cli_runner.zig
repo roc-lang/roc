@@ -14766,33 +14766,49 @@ fn customIssue12769WasmHostParameterLimit(
     return null;
 }
 
-/// A wide recursive pair beside a narrow one, for an object pack to serve.
-fn issue12769ObjectPackApp(allocator: Allocator, platform: []const u8) Allocator.Error![]const u8 {
+const issue_12769_package_hash = "FakeHashAbcDefGhiJkLmNoPqRsTuVwXyZ123456789o";
+
+/// A URL package module with a wide recursive pair beside a narrow one, for an
+/// object pack to serve.
+fn issue12769WidePackage(allocator: Allocator) Allocator.Error![]const u8 {
     const count = 1100;
     var out: std.ArrayList(u8) = .empty;
-    try out.print(allocator, "app [main!] {{ pf: platform \"{s}\" }}\n\nimport pf.FallibleHost\n\n", .{platform});
+    try out.appendSlice(allocator, "Wide := [].{\n");
     for ([_][3][]const u8{ .{ "wide", "weave", "1" }, .{ "weave", "wide", "2" } }) |names| {
-        try out.print(allocator, "{s} : U64", .{names[0]});
+        try out.print(allocator, "\t{s} : U64", .{names[0]});
         for (0..count) |_| try out.appendSlice(allocator, ", U64");
-        try out.print(allocator, " -> U64\n{s} = |d, ", .{names[0]});
+        try out.print(allocator, " -> U64\n\t{s} = |d, ", .{names[0]});
         try appendWasmParamList(&out, allocator, count, "a{d}");
         try out.print(allocator, "| if d == 0 a0 + a550 + a1099 else {s} + {s}(d - 1, ", .{ names[2], names[1] });
         for (1..count) |i| try out.print(allocator, "a{d}, ", .{i});
         try out.appendSlice(allocator, "a0)\n\n");
     }
     try out.appendSlice(allocator,
-        \\narrow : U64, U64 -> U64
-        \\narrow = |d, x| if d == 0 x else 1 + narrower(d - 1, x)
+        \\    narrow : U64, U64 -> U64
+        \\    narrow = |d, x| if d == 0 x else 1 + narrower(d - 1, x)
         \\
-        \\narrower : U64, U64 -> U64
-        \\narrower = |d, x| if d == 0 x else 2 + narrow(d - 1, x)
+        \\    narrower : U64, U64 -> U64
+        \\    narrower = |d, x| if d == 0 x else 2 + narrow(d - 1, x)
+        \\}
+        \\
+    );
+    return out.items;
+}
+
+/// An app that calls `issue12769WidePackage`'s module.
+fn issue12769WidePackageApp(allocator: Allocator, platform: []const u8) Allocator.Error![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    try out.print(allocator, "app [main!] {{\n    pf: platform \"{s}\",\n    wide: \"https://example.com/roc/wide/1.0.0/{s}.tar.zst\",\n}}\n\n", .{ platform, issue_12769_package_hash });
+    try out.appendSlice(allocator,
+        \\import pf.FallibleHost
+        \\import wide.Wide
         \\
         \\main! = || {
         \\    n = FallibleHost.json_input!({}).count_utf8_bytes()
-        \\    small = narrow(n, n)
-        \\    large = wide(n,
+        \\    small = Wide.narrow(n, n)
+        \\    large = Wide.wide(n,
     );
-    try appendWasmParamList(&out, allocator, count, " n + {d}");
+    try appendWasmParamList(&out, allocator, 1100, " n + {d}");
     try out.appendSlice(allocator, ")\n    \"${large.to_str()} ${small.to_str()}\"\n}\n");
     return out.items;
 }
@@ -14809,14 +14825,26 @@ fn customIssue12769WasmObjectEntryParameterLimit(
     const platform = std.fs.path.relative(allocator, project_root_path, null, env.dirs.work_dir, platform_path) catch |err|
         return customInfraFailure(allocator, timer, "failed to relate the platform path: {}", .{err});
     if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, platform, '\\', '/');
-    const source = issue12769ObjectPackApp(allocator, platform) catch |err|
+    const source = issue12769WidePackageApp(allocator, platform) catch |err|
         return customInfraFailure(allocator, timer, "failed to generate the object pack app: {}", .{err});
+    const package_module = issue12769WidePackage(allocator) catch |err|
+        return customInfraFailure(allocator, timer, "failed to generate the package: {}", .{err});
     const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "object_pack_app.roc" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = source }) catch |err|
         return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ app_path, err });
     const cache_root = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "object_pack_cache" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
+    const package_dir = std.fs.path.join(allocator, &.{ cache_root, "roc", "packages", issue_12769_package_hash }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate package path: {}", .{err});
+    std.Io.Dir.cwd().createDirPath(io, package_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create {s}: {}", .{ package_dir, err });
+    for ([_][2][]const u8{ .{ "main.roc", "package [Wide] {}\n" }, .{ "Wide.roc", package_module } }) |file| {
+        const file_path = std.fs.path.join(allocator, &.{ package_dir, file[0] }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate package file path: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = file_path, .data = file[1] }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ file_path, err });
+    }
 
     var store_env = CaseEnv{
         .dirs = env.dirs,
@@ -14832,6 +14860,15 @@ fn customIssue12769WasmObjectEntryParameterLimit(
         return customInfraFailure(allocator, timer, "failed to enable pack statistics: {}", .{err});
 
     for ([_][]const u8{ "--opt=size", "--opt=dev" }) |opt_arg| {
+        const dev = std.mem.eql(u8, opt_arg, "--opt=dev");
+        if (dev) {
+            // After an edit only the package's own pack can serve this build,
+            // which asks it for the wide pair and the narrow pair by name.
+            const edited = std.mem.replaceOwned(u8, allocator, source, "Wide.narrow(n, n)", "Wide.narrow(n, n + 1)") catch |err|
+                return customInfraFailure(allocator, timer, "failed to edit the object pack app: {}", .{err});
+            std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = edited }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ app_path, err });
+        }
         const output_path = std.fmt.allocPrint(allocator, "{s}/object_pack{s}.wasm", .{ env.dirs.work_dir, opt_arg }) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
         const out_arg = outputArg(allocator, output_path) catch |err|
@@ -14843,7 +14880,7 @@ fn customIssue12769WasmObjectEntryParameterLimit(
         if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null) {
             return failureFromRun(allocator, timer, built, "wasm32 build did not succeed");
         }
-        if (std.mem.eql(u8, opt_arg, "--opt=dev")) {
+        if (dev) {
             const marker = "linked procs: ";
             const at = std.mem.find(u8, built.stderr, marker) orelse
                 return failureFromRun(allocator, timer, built, "the dev build did not report pack statistics");
@@ -14858,7 +14895,7 @@ fn customIssue12769WasmObjectEntryParameterLimit(
         defer wasm.deinit();
         const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
             return customFailure(allocator, timer, "the {s} module failed: {}", .{ opt_arg, err });
-        if (!std.mem.eql(u8, result, "706 52")) {
+        if (!std.mem.eql(u8, result, if (dev) "706 53" else "706 52")) {
             return customFailure(allocator, timer, "the {s} module returned \"{s}\"", .{ opt_arg, result });
         }
     }
