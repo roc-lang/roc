@@ -10026,7 +10026,9 @@ remain valid only until rewiring; variants are indexed by their explicit
 variant/discriminant pair in first-producer order. Fixed-point discovery still
 revisits surrounding joins after a rewrite, since a rejected ancestor can
 become eligible when a descendant changes. No analysis cache crosses that
-mutation boundary.
+mutation boundary, and each iteration of the fixed point gives its scratch back,
+so scratch is bounded by one procedure-sized analysis rather than growing with
+the number of fusions.
 
 Hoisting a tag consumer's enclosing continuation joins requires exclusive
 structural entry from that consumer. If an outside statement also enters a
