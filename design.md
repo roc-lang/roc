@@ -24634,10 +24634,11 @@ The dev backend's shared driver (`LirCodeGen`, `FrameBuilder`,
 `backend/dev/isa.zig`'s `Isa`. Each component computes its `Isa` once from the
 target with `isaOf`, and every instruction-set choice is an exhaustive
 `switch (isa)` that names each instruction set's answer. The driver never
-compares `isa` with `==` or `!=`, and never caches such a test in a `bool`:
-adding an instruction set must make every choice a compile error until it has
-an answer for the new one. Code that builds a backend for a specific target asks
-`isaOfOrNull`, so the list of instruction sets lives only in `isa.zig`.
+compares `isa` with `==` or `!=`, never caches such a test in a `bool`, and
+never gives a `switch (isa)` an `else` prong: adding an instruction set must
+make every choice a compile error until it has an answer for the new one. Code
+that builds a backend for a specific target asks `isaOfOrNull`, so the list of
+instruction sets lives only in `isa.zig`.
 
 ## Dev Backend Register Lifetimes
 
