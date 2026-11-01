@@ -4505,7 +4505,7 @@ Builtin :: [].{
 				prepared_list = list_map_prepare_reuse(list)
 				match list_map_can_reuse(prepared_list, func) {
 					1 => {
-						item = list_map_extract_unsafe(prepared_list, index)
+						item = list_move_out_unsafe(prepared_list, index)
 						Ok(list_map_write_unsafe(prepared_list, index, func(item)))
 					}
 					_ => Ok(list_replace_unsafe(prepared_list, index, func(list_get_unsafe(prepared_list, index))).list)
@@ -4594,7 +4594,7 @@ Builtin :: [].{
 					var $out = list_map_cast_unsafe(prepared_list)
 					var $index = 0
 					while $index < len {
-						item = list_map_extract_unsafe($out, $index)
+						item = list_map_extract_unsafe($out, $index, transform)
 						$out = list_map_write_unsafe($out, $index, transform(item))
 						$index = $index + 1
 					}
@@ -27872,15 +27872,17 @@ list_map_cast_unsafe : List(input) -> List(output)
 
 # Implemented by the compiler. Moves ownership of the item at the given
 # index out of the list's buffer; the slot keeps stale bytes until
-# list_map_write_unsafe stores its replacement. No bounds checks.
-list_map_extract_unsafe : List(output), U64 -> input
+# list_map_write_unsafe stores its replacement. No bounds checks. The
+# transform is never evaluated: the list's type names only the output item,
+# so the transform's type is what says the slot holds an input item.
+list_map_extract_unsafe : List(output), U64, (input -> output) -> input
 
 # Implemented by the compiler. Stores an owned item into the slot at the
 # given index, which must have been vacated by list_map_extract_unsafe.
 # No bounds checks.
 list_map_write_unsafe : List(output), U64, output -> List(output)
 
-# Implemented by the compiler: the same operation as list_map_extract_unsafe
+# Implemented by the compiler: the same move as list_map_extract_unsafe
 # for a list whose item type does not change. Moves the item at the index out
 # of a uniquely owned list's buffer, doing no refcount work; the slot keeps
 # stale bytes until list_move_in_unsafe refills it. No bounds checks.

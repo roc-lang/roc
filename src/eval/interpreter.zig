@@ -5628,7 +5628,7 @@ pub const Interpreter = struct {
                 const rl = self.listValue(list_elems, args[0]);
                 break :blk self.listResult(ll, rl);
             },
-            .list_map_extract_unsafe => blk: {
+            .list_map_extract_unsafe, .list_move_out_unsafe => blk: {
                 // Same data movement as list_get_unsafe; ownership of the
                 // element transfers out of the buffer, which is RC metadata
                 // rather than runtime behavior.

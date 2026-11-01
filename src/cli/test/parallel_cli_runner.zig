@@ -3223,6 +3223,14 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11344: concrete callable roots and generic aliases (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue_11344_shared_ctfe/callable.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (6) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11344: concrete callable roots and generic aliases (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/issue_11344_shared_ctfe/callable.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (6) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11344: concrete callable roots and generic aliases (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "test", "--opt=size", "--no-cache" }, .roc_file = "test/cli/issue_11344_shared_ctfe/callable.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (6) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "in-place List.map and List.update keep function items (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/ListInPlaceFunctionItems.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "in-place List.map and List.update keep function items (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/ListInPlaceFunctionItems.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "in-place List.map and List.update keep function items (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "test", "--opt=size", "--no-cache" }, .roc_file = "test/cli/ListInPlaceFunctionItems.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "in-place List.map and List.update keep function items (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/ListInPlaceFunctionItems.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "List.append_sublist keeps function items (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/ListAppendSublistFunctionItems.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "List.append_sublist keeps function items (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/ListAppendSublistFunctionItems.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "List.append_sublist keeps function items (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "test", "--opt=size", "--no-cache" }, .roc_file = "test/cli/ListAppendSublistFunctionItems.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "List.append_sublist keeps function items (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/ListAppendSublistFunctionItems.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "pipeline parity: check/build/run/test share one checked-module cache (issue 9788)", .body = .{ .custom = .pipeline_parity_shared_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9509: run renders each diagnostic exactly once (PR 9759)", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/pipeline_parity/error_app/main.roc", .exit = .{ .code = 1 }, .occurrences = &.{.{ .stream = .stderr, .text = "type mismatch", .count = 1 }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "transitive package dependency runs exactly when it builds", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/pipeline_parity/app/main.roc", .contains = &.{.{ .stream = .stdout, .text = "alpha[beta:parity]" }} } } },
@@ -5468,7 +5476,7 @@ fn runCustomCase(
             .roc_file = "test/echo/issue_11355_platform_codec_root.roc",
             .output_name = "issue_11355_platform_codec_root",
             .exit = .{ .code = 1 },
-            .stdout_exact = "",
+            .stdout_exact = "Program exited with error: InvalidJson(\"Invalid JSON\")\n",
         }),
         .issue_11355_boxy_built_try_low_levels => customBoxyBuiltEchoApp(io, allocator, &env, &timer, timeout_ms, .{
             .roc_file = "test/echo/boxy_try_low_levels.roc",
@@ -9237,6 +9245,8 @@ const PackStoreFiles = struct {
     contents: std.ArrayList([]u8) = .empty,
     /// Each pack's cache family, parallel to `paths`.
     families: std.ArrayList(artifact_store.Family) = .empty,
+    /// Each pack's store variant, parallel to `paths`.
+    variants: std.ArrayList([32]u8) = .empty,
 
     fn deinit(self: *PackStoreFiles, allocator: Allocator) void {
         for (self.paths.items) |path| allocator.free(path);
@@ -9244,6 +9254,7 @@ const PackStoreFiles = struct {
         self.paths.deinit(allocator);
         self.contents.deinit(allocator);
         self.families.deinit(allocator);
+        self.variants.deinit(allocator);
     }
 
     fn read(io: std.Io, allocator: Allocator, cache_root: []const u8) CliRunnerError!PackStoreFiles {
@@ -9270,6 +9281,7 @@ const PackStoreFiles = struct {
                 continue;
             }
             try result.families.append(allocator, entry.family);
+            try result.variants.append(allocator, entry.variant);
             const path = try allocator.dupe(u8, &std.fmt.bytesToHex(entry.key, .lower));
             result.paths.append(allocator, path) catch |err| {
                 allocator.free(path);
@@ -9996,22 +10008,63 @@ fn customLinkedObjectPack(
     var second = PackStoreFiles.read(io, allocator, stores[1]) catch |err|
         return customInfraFailure(allocator, timer, "failed to read the second store's packs: {}", .{err});
     defer second.deinit(allocator);
-    // A pack is filed under its module's placement, which names the package
-    // by where this store keeps it, and named by its key, which is the same
-    // in every store.
-    var object_packs: usize = 0;
-    for (first.paths.items, first.contents.items, first.families.items) |path, bytes, family| {
-        if (family != .optimized_pack) continue;
-        object_packs += 1;
-        const key_name = std.fs.path.basename(path);
-        const other = for (second.paths.items, second.contents.items, second.families.items) |other_path, other_bytes, other_family| {
-            if (other_family == .optimized_pack and std.mem.eql(u8, std.fs.path.basename(other_path), key_name)) break other_bytes;
-        } else return customFailure(allocator, timer, "optimized pack {s} was written by one store and not the other", .{key_name});
-        if (!std.mem.eql(u8, bytes, other)) {
-            return customFailure(allocator, timer, "optimized pack {s} differs between two stores", .{key_name});
+    return expectStoresShareOptimizedPacks(allocator, timer, &first, &second, "speed");
+}
+
+/// Where a pack path's key half starts: the catalog key is a 32-byte group
+/// hash followed by the 32-byte pack key, and a path is the whole key in hex.
+const pack_path_key_half_start = 32 * 2;
+
+/// One store's packs written at `opt`, by family.
+const OptimizedPackCounts = struct { program: usize = 0, package: usize = 0 };
+
+fn optimizedPackCounts(files: *const PackStoreFiles, opt: []const u8) OptimizedPackCounts {
+    const variant = artifact_store.hashBytes(opt);
+    var counts: OptimizedPackCounts = .{};
+    for (files.families.items, files.variants.items) |family, candidate| {
+        if (!std.mem.eql(u8, &candidate, &variant)) continue;
+        switch (family) {
+            .optimized_pack => counts.program += 1,
+            .package_pack => counts.package += 1,
+            .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .local_pack, .local_discovery, .package_discovery, .program_output, .scratch, .boxy_object => {},
         }
     }
-    if (object_packs == 0) return customFailure(allocator, timer, "no optimized object pack was written", .{});
+    return counts;
+}
+
+/// Two independent stores must each hold the program's optimized pack and the
+/// URL package's pack at `opt`, byte for byte. A pack's group half hashes the
+/// package's placement, which differs per store, so the stores are compared on
+/// the key half.
+fn expectStoresShareOptimizedPacks(
+    allocator: Allocator,
+    timer: *harness.Timer,
+    first: *const PackStoreFiles,
+    second: *const PackStoreFiles,
+    opt: []const u8,
+) ?TestResult {
+    const first_counts = optimizedPackCounts(first, opt);
+    const second_counts = optimizedPackCounts(second, opt);
+    if (first_counts.program == 0) return customFailure(allocator, timer, "no {s} program pack was written", .{opt});
+    if (first_counts.package == 0) return customFailure(allocator, timer, "no {s} URL package pack was written", .{opt});
+    if (first_counts.program != second_counts.program or first_counts.package != second_counts.package) {
+        return customFailure(allocator, timer, "the stores wrote different {s} packs: {d} program and {d} package, then {d} and {d}", .{ opt, first_counts.program, first_counts.package, second_counts.program, second_counts.package });
+    }
+    const variant = artifact_store.hashBytes(opt);
+    for (first.paths.items, first.contents.items, first.families.items, first.variants.items) |path, bytes, family, candidate| {
+        if (!std.mem.eql(u8, &candidate, &variant)) continue;
+        const key_half = path[pack_path_key_half_start..];
+        var written_by_second = false;
+        var identical = false;
+        for (second.paths.items, second.contents.items, second.families.items, second.variants.items) |other_path, other_bytes, other_family, other_variant| {
+            if (other_family != family or !std.mem.eql(u8, &other_variant, &variant)) continue;
+            if (!std.mem.eql(u8, other_path[pack_path_key_half_start..], key_half)) continue;
+            written_by_second = true;
+            identical = identical or std.mem.eql(u8, other_bytes, bytes);
+        }
+        if (!written_by_second) return customFailure(allocator, timer, "{s} pack {s} was written by one store and not the other", .{ opt, key_half });
+        if (!identical) return customFailure(allocator, timer, "{s} pack {s} differs between two stores", .{ opt, key_half });
+    }
     return null;
 }
 
@@ -10057,10 +10110,10 @@ fn wasmLinkedObjectPackForTarget(
         return customInfraFailure(allocator, timer, "failed to allocate staged app dir name: {}", .{err});
     const target_arg = std.fmt.allocPrint(allocator, "--target={s}", .{target_name}) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate target argument: {}", .{err});
-    const size_namespace = std.fmt.allocPrint(allocator, "{s}-size", .{target_name}) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate store namespace: {}", .{err});
-    const dev_namespace = std.fmt.allocPrint(allocator, "{s}-dev", .{target_name}) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate store namespace: {}", .{err});
+    const size_store_write = std.fmt.allocPrint(allocator, "pack store write: {s}-size\n", .{target_name}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate store write line: {}", .{err});
+    const dev_store_write = std.fmt.allocPrint(allocator, "pack store write: {s}-dev\n", .{target_name}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate store write line: {}", .{err});
     var stores: [2][]const u8 = undefined;
     var uncached_outstanding: ?i64 = null;
     var edited_uncached_outstanding: ?i64 = null;
@@ -10126,6 +10179,15 @@ fn wasmLinkedObjectPackForTarget(
             if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
                 return failureFromRun(allocator, timer, built, "wasm32 build did not succeed");
             }
+            // The wasm32 dev backend cannot splice a dev pack. Compile-time
+            // evaluation runs on the host and files its packs in the host's
+            // store.
+            if (std.mem.find(u8, built.stderr, dev_store_write) != null) {
+                return failureFromRun(allocator, timer, built, "a wasm32 build wrote a dev pack, which no wasm32 build can splice");
+            }
+            if (build.kind == .optimized and std.mem.find(u8, built.stderr, size_store_write) == null) {
+                return failureFromRun(allocator, timer, built, "the optimized build did not report writing its size-optimized store");
+            }
             // The optimized module's allocations are its own.
             if (build.kind == .optimized) continue;
             if (build.kind == .cached) {
@@ -10170,25 +10232,7 @@ fn wasmLinkedObjectPackForTarget(
     var second = PackStoreFiles.read(io, allocator, stores[1]) catch |err|
         return customInfraFailure(allocator, timer, "failed to read the second store's packs: {}", .{err});
     defer second.deinit(allocator);
-    var object_packs: usize = 0;
-    for (first.paths.items, first.contents.items) |path, bytes| {
-        if (std.mem.find(u8, path, size_namespace) == null) continue;
-        object_packs += 1;
-        const key_name = std.fs.path.basename(path);
-        const other = for (second.paths.items, second.contents.items) |other_path, other_bytes| {
-            if (std.mem.find(u8, other_path, size_namespace) != null and std.mem.eql(u8, std.fs.path.basename(other_path), key_name)) break other_bytes;
-        } else return customFailure(allocator, timer, "size-optimized pack {s} was written by one store and not the other", .{key_name});
-        if (!std.mem.eql(u8, bytes, other)) {
-            return customFailure(allocator, timer, "size-optimized pack {s} differs between two stores", .{key_name});
-        }
-    }
-    if (object_packs == 0) return customFailure(allocator, timer, "no size-optimized object pack was written", .{});
-    for (first.paths.items) |path| {
-        if (std.mem.find(u8, path, dev_namespace) != null) {
-            return customFailure(allocator, timer, "a wasm32 build wrote dev pack {s}, which no wasm32 build can splice", .{path});
-        }
-    }
-    return null;
+    return expectStoresShareOptimizedPacks(allocator, timer, &first, &second, "size");
 }
 
 /// A program of vector operations and a string pattern builds for wasm32 and
