@@ -53,6 +53,9 @@ pub const Objects = struct {
     scratch: []const u8,
     lease: std.Io.File,
     counters: Counters = .{},
+    /// Serializes the arena and the counters: units materialize their
+    /// objects from the post-check workers.
+    mutex: std.Io.Mutex = .init,
 
     /// Why taking the link lease can fail.
     pub const InitError = Allocator.Error || std.Io.File.OpenError;
@@ -84,6 +87,8 @@ pub const Objects = struct {
             else => return null,
         }) orelse return null;
         defer artifact.deinit();
+        self.mutex.lockUncancelable(self.core.std_io);
+        defer self.mutex.unlock(self.core.std_io);
         return try self.arena.dupe(u8, artifact.path);
     }
 
@@ -101,7 +106,7 @@ pub const Objects = struct {
             else => return null,
         }) orelse return null;
         defer artifact.deinit();
-        const path = try std.fs.path.join(self.arena, &.{ self.scratch, try self.name(id) });
+        const path = try self.scratchPath(id);
         self.core.hardLink(artifact.path, path) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return null,
@@ -110,8 +115,25 @@ pub const Objects = struct {
             self.core.deleteFile(path) catch {};
             return null;
         }
-        self.counters.reused += id.size;
+        self.addCount(.reused, id.size);
         return path;
+    }
+
+    /// The object's scratch path, allocated under the mutex.
+    fn scratchPath(self: *Objects, id: Identity) Allocator.Error![]const u8 {
+        self.mutex.lockUncancelable(self.core.std_io);
+        defer self.mutex.unlock(self.core.std_io);
+        return try std.fs.path.join(self.arena, &.{ self.scratch, try self.name(id) });
+    }
+
+    fn addCount(self: *Objects, comptime counter: enum { written, reused, validated }, bytes: u64) void {
+        self.mutex.lockUncancelable(self.core.std_io);
+        defer self.mutex.unlock(self.core.std_io);
+        switch (counter) {
+            .written => self.counters.written += bytes,
+            .reused => self.counters.reused += bytes,
+            .validated => self.counters.validated += bytes,
+        }
     }
 
     fn validate(self: *Objects, path: []const u8, id: Identity, expected: ?[]const u8) bool {
@@ -125,7 +147,7 @@ pub const Objects = struct {
         while (offset < id.size) {
             const size: usize = @intCast(@min(buffer.len, id.size - offset));
             const count = file.readPositionalAll(self.core.std_io, buffer[0..size], offset) catch return false;
-            self.counters.validated += count;
+            self.addCount(.validated, count);
             if (count != size) return false;
             if (expected) |bytes| {
                 const start: usize = @intCast(offset);
@@ -151,7 +173,7 @@ pub const Objects = struct {
     pub fn materializeKnown(self: *Objects, bytes: []const u8, id: Identity) MaterializeError![]const u8 {
         std.debug.assert(bytes.len == id.size);
         if (try self.findKnown(id, bytes)) |path| return path;
-        const path = try std.fs.path.join(self.arena, &.{ self.scratch, try self.name(id) });
+        const path = try self.scratchPath(id);
         // A failed lookup removed any invalid pin. Never truncate an inode
         // which another invocation could be linking.
         self.core.deleteFile(path) catch |err| switch (err) {
@@ -159,7 +181,7 @@ pub const Objects = struct {
             else => return err,
         };
         try backend.writeFileWindowsAvSafe(self.core.std_io, path, bytes);
-        self.counters.written += bytes.len;
+        self.addCount(.written, bytes.len);
         if (self.root) |cache| {
             const session = &self.session.?;
             var staging = session.reserve(cache.key(id), bytes.len, session.now()) catch |err| switch (err) {

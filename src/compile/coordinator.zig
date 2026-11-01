@@ -1880,10 +1880,22 @@ const BoxyObjects = struct {
         /// The imports whose objects are not known yet.
         remaining: u32,
         outcome: union(enum) { pending, failed: Error, done: boxy_unit.Built } = .pending,
+        /// Where the link keeps the object, when the build's link links it:
+        /// materialized by the task itself, so the hashing and validation
+        /// that takes runs beside the other units.
+        materializer: ?BoxyObjectLowering.Materializer = null,
+        path: ?[]const u8 = null,
 
         fn run(context: *anyopaque, _: post_check_executor.Worker) ?*anyopaque {
             const self: *UnitTask = @ptrCast(@alignCast(context));
             self.outcome = if (self.prepared.build()) |built| .{ .done = built } else |err| .{ .failed = err };
+            if (self.outcome == .done) if (self.materializer) |materializer| {
+                self.path = materializer.materialize(materializer.context, self.outcome.done.object) catch |err| {
+                    self.outcome.done.deinit(self.prepared.unit.gpa);
+                    self.outcome = .{ .failed = err };
+                    return null;
+                };
+            };
             return null;
         }
 
@@ -1919,7 +1931,7 @@ const BoxyObjects = struct {
         }
         const task = try gpa.create(UnitTask);
         errdefer gpa.destroy(task);
-        task.* = .{ .artifact = artifact, .prepared = try self.prepare(artifact), .remaining = 0 };
+        task.* = .{ .artifact = artifact, .prepared = try self.prepare(artifact), .remaining = 0, .materializer = self.lowering.materializer };
         errdefer task.prepared.deinit(gpa);
         try self.units.put(gpa, artifact.key.bytes, task);
         errdefer _ = self.units.remove(artifact.key.bytes);
@@ -2098,8 +2110,7 @@ const BoxyObjects = struct {
             .done => |built| {
                 task.outcome = .pending;
                 const object = try self.record(artifact, built);
-                const path = if (self.lowering.materializer) |materializer| try materializer.materialize(materializer.context, object.object) else null;
-                try self.records.put(gpa, artifact.key.bytes, .{ .object = object, .key = task.prepared.unit.key, .restored = built.restored, .path = path });
+                try self.records.put(gpa, artifact.key.bytes, .{ .object = object, .key = task.prepared.unit.key, .restored = built.restored, .path = task.path });
             },
         }
         try self.release(artifact.key.bytes);
@@ -3126,7 +3137,10 @@ pub const Coordinator = struct {
                 if (platform.root_requests.compile_time_requests.len == 0) {
                     // No evaluator is needed to finish this parametric module.
                     // App checking and runtime roots still share one program.
-                    try self.commitPreparedModule(platform_root.pkg, platform_root.mod);
+                    var stores = std.ArrayList(PendingStore).empty;
+                    defer stores.deinit(self.gpa);
+                    try self.commitPreparedModule(platform_root.pkg, platform_root.mod, &stores);
+                    try self.writePendingStores(stores.items);
                 } else {
                     const runtime = self.runtime_lowering;
                     self.runtime_lowering = null;
@@ -4216,7 +4230,10 @@ pub const Coordinator = struct {
         }
         for (transplants.items) |*pending| try eval.CompileTimeReuse.verifyAndInstall(pending.module, &pending.previous, &pending.transplant, checked_modules, &relocations);
         if (literal_values) |entry| try self.storeProgramLiteralValues(entry, literal_records_before);
-        for (entries.items) |entry| try self.commitPreparedModule(entry.pkg, entry.mod);
+        var stores = std.ArrayList(PendingStore).empty;
+        defer stores.deinit(self.gpa);
+        for (entries.items) |entry| try self.commitPreparedModule(entry.pkg, entry.mod, &stores);
+        try self.writePendingStores(stores.items);
         try unfinalized.commit();
         if (!self.hasUserErrors() and self.program_session.?.discovery_silent) {
             try discovery_cache.publish();
@@ -4629,7 +4646,48 @@ pub const Coordinator = struct {
         }
     };
 
-    fn commitPreparedModule(self: *Coordinator, pkg: *const PackageState, mod: *ModuleState) CoordinatorError!void {
+    /// A finalized module's checked entry, written by a worker after commit.
+    const PendingStore = struct {
+        coordinator: *Coordinator,
+        mod: *ModuleState,
+        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        staged_env: ?CacheManager.StagedPart,
+        /// The module's placement, filed as pointing at the entry once the
+        /// entry is written, for a module with compile-time roots.
+        placement: ?[32]u8,
+        fn run(context: *anyopaque, _: post_check_executor.Worker) ?*anyopaque {
+            const self: *PendingStore = @ptrCast(@alignCast(context));
+            self.coordinator.storeCheckedModuleInCache(self.mod, self.artifact, self.staged_env);
+            return null;
+        }
+    };
+
+    /// Write every pending store, on the post-check workers where the
+    /// coordinator has them, then file the placements.
+    fn writePendingStores(self: *Coordinator, stores: []PendingStore) CoordinatorError!void {
+        if (stores.len == 0) return;
+        if (self.hasWorkers()) {
+            var session = try self.postCheckExecutor().begin();
+            defer session.end();
+            var next: usize = 0;
+            var received: usize = 0;
+            while (received < stores.len) {
+                while (next < stores.len and session.canSubmit()) : (next += 1) {
+                    try session.submit(.{ .id = next, .context = &stores[next], .run = PendingStore.run });
+                }
+                _ = session.receive();
+                received += 1;
+            }
+        } else {
+            for (stores) |*store| _ = PendingStore.run(store, undefined);
+        }
+        const manager = self.cache_manager orelse return;
+        for (stores) |store| {
+            if (store.placement) |placement| manager.storePlacementPointer(placement, store.artifact.key.bytes);
+        }
+    }
+
+    fn commitPreparedModule(self: *Coordinator, pkg: *const PackageState, mod: *ModuleState, stores: *std.ArrayList(PendingStore)) CoordinatorError!void {
         const state = mod.pending_evaluation.?;
         const artifact = mod.checkedArtifact().?;
         try eval.CompileTimeFinalization.finishPendingExhaustiveness(artifact, &state.problems);
@@ -4668,9 +4726,16 @@ pub const Coordinator = struct {
                     try eval.CompileTimeReuse.publishNominals(artifact, .{ .context = self, .resolve = nominalReuseIdentity });
                     try self.publishRootReadIdentities(artifact);
                 }
-                self.storeCheckedModuleInCache(mod, artifact);
-                if (artifact.compile_time_roots.roots.len != 0) {
-                    if (self.cache_manager) |manager| manager.storePlacementPointer(checkedPlacement(pkg, mod), artifact.key.bytes);
+                if (self.cacheEnabled()) {
+                    const staged_env = mod.staged_checked_env;
+                    mod.staged_checked_env = null;
+                    try stores.append(self.gpa, .{
+                        .coordinator = self,
+                        .mod = mod,
+                        .artifact = artifact,
+                        .staged_env = staged_env,
+                        .placement = if (artifact.compile_time_roots.roots.len != 0) checkedPlacement(pkg, mod) else null,
+                    });
                 }
             } else self.storePlatformPairingInCache(artifact);
         }
@@ -5380,11 +5445,12 @@ pub const Coordinator = struct {
         return header.install(platform, arena);
     }
 
-    fn storeCheckedModuleInCache(self: *Coordinator, mod: *ModuleState, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) void {
+    /// Write `artifact`'s checked entry. `staged_env` is the module's staged
+    /// source environment, taken from the module by the caller; this reads
+    /// nothing else of the module's mutable state, so it runs on any thread.
+    fn storeCheckedModuleInCache(self: *Coordinator, mod: *const ModuleState, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, staged_env: ?CacheManager.StagedPart) void {
         const manager = self.cache_manager orelse return;
         if (!manager.config.enabled) return;
-        const staged_env = mod.staged_checked_env;
-        mod.staged_checked_env = null;
         defer if (staged_env) |part| manager.discardStagedPart(part);
         // A released solver type store survives only in its staged part; a
         // staging failure was already counted when it happened.
