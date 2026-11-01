@@ -12767,6 +12767,13 @@ pub const CheckedBodyStore = struct {
     /// error rather than a silently-dropped field.
     pub const serde_transient_fields = [_][]const u8{ "source_node_map", "literal_pattern_exprs" };
 
+    /// The checked expression of source node `raw_node`, while the store is
+    /// being published from its typed module (`source_node_map` is not
+    /// serialized).
+    pub fn checkedExprAtSourceNode(self: *const CheckedBodyStore, raw_node: u32) ?CheckedExprId {
+        return self.source_node_map.exprAtRawNode(raw_node);
+    }
+
     pub const LiteralPatternExprs = struct {
         raw_node: u32,
         expr: CheckedExprId,
@@ -35167,6 +35174,25 @@ pub const ReuseNominalIdentity = extern struct {
 /// Every compile-time root's value identity and site, dense by root id, and
 /// the module's value context, computed when the module is published.
 pub const CompileTimeRootIdentityTable = struct {
+    /// The module-independent identity of definition `def`
+    /// (`test_definitions`), if the module published one.
+    pub fn definitionIdentity(self: *const CompileTimeRootIdentityTable, def: CIR.Def.Idx) ?[32]u8 {
+        var lo: usize = 0;
+        var hi = self.test_definitions.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            const entry = self.test_definitions[mid];
+            if (@backingInt(entry.def) < @backingInt(def)) {
+                lo = mid + 1;
+            } else if (@backingInt(entry.def) > @backingInt(def)) {
+                hi = mid;
+            } else {
+                return entry.value;
+            }
+        }
+        return null;
+    }
+
     rows: []const CompileTimeRootIdentity = &.{},
     /// Root semantic dependencies for outcome reuse, independent of CTFE reuse.
     test_rows: []const CompileTimeRootIdentity = &.{},
@@ -39319,6 +39345,8 @@ pub fn publishFromTypedModule(
         .roots = compile_time_roots.roots,
         .bodies = checked_bodies,
         .top_level_values = &top_level_values,
+        .plans = &static_dispatch_plans,
+        .module_idx = module.moduleIndex(),
         .context = .{
             .checking_context = hashCheckingContextIdentity(checking_context_identity),
             .direct_import_keys = hashDirectImportArtifactKeys(direct_import_module_keys),
@@ -39355,6 +39383,8 @@ pub fn publishFromTypedModule(
         .roots = compile_time_roots.roots,
         .bodies = checked_bodies,
         .top_level_values = &top_level_values,
+        .plans = &static_dispatch_plans,
+        .module_idx = module.moduleIndex(),
         .context = .{
             .checking_context = hashCheckingContextIdentity(test_checking_context),
             .direct_import_keys = undefined, // Test identities consume explicit imported summaries.

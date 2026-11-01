@@ -1145,6 +1145,45 @@ pub const ConstTypeStore = struct {
         return self.typePortableWithOccurrences(type_names, root, own, own_identity, null);
     }
 
+    /// Whether the type graph at `root` can move into the current versions
+    /// of the modules it names: it holds no function or erased type, no
+    /// field default and no generated type, and `relocations.nominalRelocatable`
+    /// admits every named type it holds.
+    pub fn typeRelocatable(self: *const ConstTypeStore, root: ConstTypeId, relocations: anytype) Allocator.Error!bool {
+        var seen = collections.DenseMap(ConstTypeId, void).init(self.allocator);
+        defer seen.deinit();
+        var pending = std.ArrayList(ConstTypeId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |ty| {
+            const entry = try seen.getOrPut(ty);
+            if (entry.found_existing) continue;
+            switch (self.get(ty)) {
+                .func, .erased => return false,
+                .primitive, .zst => {},
+                .list, .box => |elem| try pending.append(self.allocator, elem),
+                .tuple => |span| try pending.appendSlice(self.allocator, self.typeSpan(span)),
+                .record => |span| for (self.fieldSpan(span)) |field| {
+                    if (field.default != null) return false;
+                    try pending.append(self.allocator, field.ty);
+                    if (field.value_ty) |value_ty| try pending.append(self.allocator, value_ty);
+                },
+                .tag_union => |span| for (self.tagSpan(span)) |tag| try pending.appendSlice(self.allocator, self.typeSpan(tag.payloads)),
+                .named => |named| {
+                    if (named.def.generated != null) return false;
+                    if (!relocations.nominalRelocatable(named.named_type)) return false;
+                    try pending.appendSlice(self.allocator, self.typeSpan(named.args));
+                    for (self.declaredFieldSpan(named.declared_order)) |declared| switch (declared) {
+                        .named => {},
+                        .padding => |padding| try pending.append(self.allocator, padding),
+                    };
+                    if (named.backing) |backing| try pending.append(self.allocator, backing.ty);
+                },
+            }
+        }
+        return true;
+    }
+
     pub fn typePortableWithOccurrences(
         self: *const ConstTypeStore,
         type_names: *const names.NameStore,
@@ -1841,7 +1880,7 @@ pub const ConstStore = struct {
     }
 
     /// Push the nodes a value refers to directly.
-    pub fn appendValueChildren(value: ConstValue, out: *std.ArrayList(ConstNodeId), allocator: Allocator) Allocator.Error!void {
+    fn appendValueChildren(value: ConstValue, out: *std.ArrayList(ConstNodeId), allocator: Allocator) Allocator.Error!void {
         switch (value) {
             .pending, .zst, .scalar, .str, .crash, .checked_error, .fn_value, .boxy_fn => {},
             .box => |payload| try out.append(allocator, payload),
@@ -1889,6 +1928,34 @@ pub const ConstStore = struct {
             try appendValueChildren(value, &pending, self.allocator);
         }
         return true;
+    }
+
+    /// Whether the value graph at `root` can move into other versions of the
+    /// modules it names (design.md "Compile-Time Value Reuse Across Edits").
+    pub const Relocatability = enum { relocatable, holds_function, names_version };
+
+    /// Whether the value graph at `root` can move into the current versions
+    /// of the modules it names: it holds no function value, and
+    /// `relocations.nominalRelocatable` admits every named type it holds.
+    pub fn valueRelocatability(self: *const ConstStore, root: ConstNodeId, relocations: anytype) Allocator.Error!Relocatability {
+        var seen = collections.DenseMap(ConstNodeId, void).init(self.allocator);
+        defer seen.deinit();
+        var pending = std.ArrayList(ConstNodeId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |node| {
+            const entry = try seen.getOrPut(node);
+            if (entry.found_existing) continue;
+            const value = self.get(node);
+            switch (value) {
+                .pending => constStoreInvariant("a pending node reached a relocatability walk"),
+                .fn_value, .boxy_fn => return .holds_function,
+                .nominal => |nominal| if (!relocations.nominalRelocatable(nominal.named_type)) return .names_version,
+                .zst, .scalar, .str, .crash, .checked_error, .box, .list, .tuple, .record, .tag => {},
+            }
+            try appendValueChildren(value, &pending, self.allocator);
+        }
+        return .relocatable;
     }
 
     /// Whether the value graph at `root` of a store read from outside the

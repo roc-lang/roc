@@ -7453,6 +7453,23 @@ const Builder = struct {
                         hasher.update(&module_context);
                         hashU32(&hasher, @intCast(text.len));
                         hasher.update(text);
+                        // The conversion runs the type's methods as the
+                        // evidence of its requirements.
+                        var methods = std.ArrayList([32]u8).empty;
+                        defer methods.deinit(self.allocator);
+                        for (declaring.module_env.method_defs.entries.items) |method| {
+                            if (@backingInt(method.key.owner) != statement) continue;
+                            const identity = declaring.compile_time_root_identities.definitionIdentity(method.value.def_idx) orelse return null;
+                            try methods.append(self.allocator, identity);
+                        }
+                        std.mem.sort([32]u8, methods.items, {}, struct {
+                            fn lessThan(_: void, a: [32]u8, b: [32]u8) bool {
+                                return std.mem.order(u8, &a, &b) == .lt;
+                            }
+                        }.lessThan);
+                        hasher.update("methods");
+                        hashU32(&hasher, @intCast(methods.items.len));
+                        for (methods.items) |identity| hasher.update(&identity);
                     } else {
                         hasher.update(&named.named_type.module.bytes);
                         hasher.update(module);

@@ -1538,6 +1538,10 @@ const BoxyObjects = struct {
     closures_known: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
     session: post_check_executor.Session,
     first_error: ?Error = null,
+    /// Whether a task finished since `progress` last reported, whichever
+    /// call took its completion. A finished task can make a program waiting
+    /// on the evaluation's loop runnable, with nothing left in flight.
+    finished_since_progress: bool = false,
     /// Whether `settleNames` ran.
     names_settled: bool = false,
 
@@ -1854,7 +1858,9 @@ const BoxyObjects = struct {
     fn offer(self: *BoxyObjects, artifact: *const Artifact) Error!void {
         const gpa = self.coordinator.gpa;
         if (self.records.contains(artifact.key.bytes) or self.units.contains(artifact.key.bytes)) return;
-        switch (self.eligibility(artifact)) {
+        const eligible = self.eligibility(artifact);
+        if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: offer {s}: {s}\n", .{ artifact.moduleEnvConst().module_name, @tagName(eligible) });
+        switch (eligible) {
             .never => {
                 try self.records.put(gpa, artifact.key.bytes, .{ .object = null });
                 try self.release(artifact.key.bytes);
@@ -1977,13 +1983,19 @@ const BoxyObjects = struct {
         return self.program_completions.pop();
     }
 
-    /// Wait for the next unit or program to finish, or run the one held
-    /// task with the workers lent to it. False when none is running or
-    /// held: nothing the evaluation waits for will happen.
+    /// Whether a unit or program finished since the last call, through
+    /// whichever call recorded it; otherwise wait for the next one to
+    /// finish, or run the one held task with the workers lent to it. False
+    /// when none finished and none is running or held: nothing the
+    /// evaluation waits for will happen.
     fn progress(context: *anyopaque) Error!bool {
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
         try self.drain();
         if (self.first_error) |err| return err;
+        if (self.finished_since_progress) {
+            self.finished_since_progress = false;
+            return true;
+        }
         if (self.session.outstanding == 0) return self.runAlone();
         self.coordinator.pumpPostCheckResult();
         try self.drain();
@@ -2055,7 +2067,9 @@ const BoxyObjects = struct {
         }
     }
 
-    /// Record the completions filed with the scheduler's session.
+    /// Record the completions filed with the scheduler's session. A
+    /// completion may submit the next task, which a coordinator without
+    /// workers runs and files at once.
     fn drain(self: *BoxyObjects) Error!void {
         const state = self.coordinator.post_check_sessions.getPtr(.boxy_objects);
         while (state.stash.items.len != 0) try self.complete(self.session.receive());
@@ -2063,6 +2077,7 @@ const BoxyObjects = struct {
 
     fn complete(self: *BoxyObjects, completion: post_check_executor.Completion) Error!void {
         const gpa = self.coordinator.gpa;
+        self.finished_since_progress = true;
         if (self.program_ids.remove(completion.id)) {
             try self.program_completions.append(gpa, completion);
             try self.submitReady();
@@ -3958,10 +3973,15 @@ pub const Coordinator = struct {
                 try read_inputs.addModule(retired.artifact.key.bytes, retired.artifact);
             }
         }
-        for (entries.items) |entry| try self.transplantPreviousValues(entry.pkg, entry.mod, &transplants, &read_inputs);
         const order = try self.gpa.alloc(usize, entries.items.len);
         defer self.gpa.free(order);
         try dependencyPostOrder(self.gpa, PreparedModuleGraph{ .entries = entries.items, .by_key = &indices }, order);
+        const checked_modules: eval.CompileTimeReuse.CheckedModules = .{ .context = self, .find = findCheckedModule };
+        // Imports first: a module's copied values name its imports' current
+        // versions through the successors recorded for them.
+        var relocations = eval.CompileTimeReuse.Relocations.init(self.gpa, checked_modules);
+        defer relocations.deinit();
+        for (order) |index| try self.transplantPreviousValues(entries.items[index].pkg, entries.items[index].mod, &transplants, &read_inputs, &relocations);
         var ordered_modules = std.ArrayList(eval.CompileTimeFinalization.ProgramModule).empty;
         defer ordered_modules.deinit(self.gpa);
         try ordered_modules.ensureTotalCapacity(self.gpa, order.len);
@@ -4182,8 +4202,7 @@ pub const Coordinator = struct {
                 try objects.waitAll();
             }
         }
-        const checked_modules: eval.CompileTimeReuse.CheckedModules = .{ .context = self, .find = findCheckedModule };
-        for (transplants.items) |*pending| try eval.CompileTimeReuse.verifyAndInstall(pending.module, &pending.previous, &pending.transplant, checked_modules);
+        for (transplants.items) |*pending| try eval.CompileTimeReuse.verifyAndInstall(pending.module, &pending.previous, &pending.transplant, checked_modules, &relocations);
         if (literal_values) |entry| try self.storeProgramLiteralValues(entry, literal_records_before);
         for (entries.items) |entry| try self.commitPreparedModule(entry.pkg, entry.mod);
         try unfinalized.commit();
@@ -4275,12 +4294,12 @@ pub const Coordinator = struct {
         mod: *ModuleState,
         pending: *std.ArrayList(PendingTransplant),
         read_inputs: *const eval.CompileTimeReuse.ReadInputs,
+        relocations: *eval.CompileTimeReuse.Relocations,
     ) CoordinatorError!void {
         const manager = self.cache_manager orelse return;
         if (!manager.config.enabled or mod.reopened_unevaluated != null) return;
         const artifact = mod.checkedArtifact().?;
         if (artifact.evaluation_state != .prepared or artifact.pairing_arena != null) return;
-        if (artifact.compile_time_root_identities.rows.len == 0) return;
         const previous_key = manager.loadPlacementPointer(checkedPlacement(pkg, mod)) orelse return;
         if (std.mem.eql(u8, &previous_key, &artifact.key.bytes)) return;
         const data = manager.loadCheckedEntryUncounted(previous_key) orelse return;
@@ -4296,6 +4315,10 @@ pub const Coordinator = struct {
         var previous = eval.CompileTimeReuse.Previous.fromSerialized(serialized, self.gpa);
         var previous_owned = true;
         defer if (previous_owned) previous.deinit();
+        // Importers' copied values name this module's types through the
+        // previous entry, whatever the module's own roots.
+        try relocations.add(artifact, &previous);
+        if (artifact.compile_time_root_identities.rows.len == 0) return;
         var transplant = try eval.CompileTimeReuse.plan(self.gpa, artifact, &previous, read_inputs);
         var transplant_owned = true;
         defer if (transplant_owned) transplant.deinit();
@@ -4312,7 +4335,7 @@ pub const Coordinator = struct {
             transplant_owned = false;
             return;
         }
-        try eval.CompileTimeReuse.install(artifact, &previous, &transplant);
+        try eval.CompileTimeReuse.install(artifact, &previous, &transplant, relocations);
     }
 
     /// The literal values of the program `lowering` names, loaded from the
@@ -4438,11 +4461,21 @@ pub const Coordinator = struct {
         var out = std.Io.Writer.Allocating.init(self.gpa);
         defer out.deinit();
         const writer = &out.writer;
-        writer.print("ctfe-reuse {s}: {d} of {d} pending roots from previous entry {x}\n", .{
+        const identities = &artifact.compile_time_root_identities;
+        writer.print("ctfe-reuse {s}: {d} of {d} pending roots from previous entry {x} (value context {x} / semantic {x}; previous {x} / {x}; {d} without an identity match, {d} with unresolved reads; previous roots: {d} bound to their version, {d} holding a function, {d} naming a module version)\n", .{
             module_name,
             transplant.count(),
             transplant.pending_roots,
             previous_key[0..4],
+            if (identities.context.len != 0) identities.context[0][0..4] else "none",
+            if (identities.test_context.len != 0) identities.test_context[0][0..4] else "none",
+            if (transplant.previous_context) |context| context[0..4] else "none",
+            if (transplant.previous_semantic_context) |context| context[0..4] else "none",
+            transplant.misses.no_identity,
+            transplant.misses.unresolved_reads,
+            transplant.misses.previous_bound,
+            transplant.misses.previous_functions,
+            transplant.misses.previous_versioned,
         }) catch return;
         const env = artifact.moduleEnvConst();
         for (0..transplant.count()) |index| {
