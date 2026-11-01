@@ -17822,3 +17822,22 @@ test "ARC outcome capability excludes conventions that return no ownership units
         try testing.expect(!f.store.getProcSpec(proc).rc_variant_demandable);
     }
 }
+
+test "ARC unary erased calls retain a directly passed value only when the caller reuses it" {
+    for ([_]bool{ false, true }) |reuse| {
+        var d = try DynFixture.init();
+        defer d.deinit();
+        const desc = try d.desc();
+        const param = try d.value(desc, .param);
+        const closure = try d.f.local(try d.f.layouts.insertErasedCallable());
+        const result = try d.value(desc, .result);
+        const called = if (reuse) try d.value(desc, .frame) else result;
+        var next = try d.f.ret(result);
+        if (reuse) next = try d.op(result, .{ .copy = .{ .src = param, .desc = desc } }, next);
+        const body = try d.op(called, .{ .call_erased = .{ .closure = closure, .args = param } }, next);
+        const proc = try d.proc(&.{ desc, param, closure }, body, d.dynamic, result);
+        try d.run(&.{proc});
+        try d.f.expectRc(param, if (reuse) 1 else 0, 0, 0);
+        try d.expectDynamicRcShape();
+    }
+}

@@ -58,3 +58,19 @@ test "erased call argument plans pack adjacent sub-word fields" {
     try std.testing.expectEqual(@as(u32, 16), metrics.size);
     try std.testing.expectEqual(@as(u32, 8), metrics.alignment);
 }
+
+test "one complete erased argument has exactly its value's storage on either pointer width" {
+    for ([_]@import("base").target.TargetUsize{ .u32, .u64 }) |width| {
+        var store = try Store.init(std.testing.allocator, width);
+        defer store.deinit();
+        const padded = try store.putTuple(&.{ store.getLayout(.u8), store.getLayout(.u64) });
+        for ([_]layout.Idx{ .zst, .u8, .u64, .str, .opaque_ptr, padded }) |arg| {
+            var offsets: [1]u32 = undefined;
+            const metrics = plan(&store, &.{arg}, &offsets);
+            const expected = store.layoutSizeAlign(store.getLayout(arg));
+            try std.testing.expectEqual(@as(u32, 0), offsets[0]);
+            try std.testing.expectEqual(expected.size, metrics.size);
+            try std.testing.expectEqual(expected.alignment.toByteUnits(), metrics.alignment);
+        }
+    }
+}

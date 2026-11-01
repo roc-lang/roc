@@ -544,15 +544,29 @@ pub const StaticDescs = struct {
         if (storage.len == 0) return;
         const layouts = self.layouts.layouts;
         const field_layout = desc_format.Field.layout(self.width);
+        var refcounted_count: u32 = 0;
+        if (committed_layout.tag == .struct_) {
+            const struct_idx = committed_layout.getStruct().idx;
+            const memory_count = layouts.getStructData(struct_idx).fields.count;
+            var position: u32 = 0;
+            while (position < memory_count) : (position += 1) {
+                const field = layouts.getStructField(struct_idx, position);
+                if (!field.is_padding and layouts.layoutContainsRefcounted(layouts.getLayout(field.layout))) refcounted_count += 1;
+            }
+        }
+        const fields_size = field_layout.size * @as(u32, @intCast(storage.len));
+        const trailer_size = if (refcounted_count == 0) 0 else (refcounted_count + 1) * @sizeOf(u32);
         const owner_slot = self.slotOfNode(owner);
         const entries = try self.addExport(
             try LirProgram.staticDataNodeSymbolName(self.allocator, @backingInt(owner_slot), 2),
-            field_layout.size * @as(u32, @intCast(storage.len)),
+            fields_size + trailer_size,
             field_layout.alignment,
             null,
         );
         var entry_pointers: std.ArrayList(Pointer) = .empty;
         defer entry_pointers.deinit(self.allocator);
+        if (refcounted_count != 0) writeU32(@constCast(self.exports.items[entries].bytes), fields_size, refcounted_count);
+        var next_refcounted: u32 = 1;
         if (committed_layout.tag == .struct_) {
             const struct_idx = committed_layout.getStruct().idx;
             const memory_count = layouts.getStructData(struct_idx).fields.count;
@@ -565,6 +579,10 @@ pub const StaticDescs = struct {
                 writeU32(bytes, base_offset + field_layout.of(.field_index), field.index);
                 writeU32(bytes, base_offset + field_layout.of(.offset), layouts.getStructFieldOffset(struct_idx, position));
                 writeU32(bytes, base_offset + field_layout.of(.is_padding), @intFromBool(field.is_padding));
+                if (!field.is_padding and layouts.layoutContainsRefcounted(layouts.getLayout(field.layout))) {
+                    writeU32(bytes, fields_size + next_refcounted * @sizeOf(u32), position);
+                    next_refcounted += 1;
+                }
                 // The entry at memory position `field.index` names this slot.
                 writeU32(bytes, field.index * field_layout.size + field_layout.of(.field_slot), position);
                 const component = storage[field.index];
@@ -665,4 +683,45 @@ fn scalarOf(primitive: types.Primitive) desc_format.Scalar {
         .i64x2 => .i64x2,
         .bool, .str => unreachable, // `fill` gives Bool and Str their own kinds
     };
+}
+
+test "static reference field trailers use target width and physical field order" {
+    const allocator = std.testing.allocator;
+    for ([_]base.target.TargetUsize{ .u32, .u64 }) |width| {
+        var store = types.Store.init(allocator);
+        defer store.deinit();
+        var modules: types.Modules = .{ .allocator = allocator };
+        defer modules.deinit();
+        var result = try LirProgram.Result.init(allocator, width);
+        defer result.deinit();
+        var layouts: Layouts = .{
+            .allocator = allocator,
+            .store = &store,
+            .converter = .{ .store = &store, .modules = &modules },
+            .layouts = &result.layouts,
+        };
+        defer layouts.deinit();
+        var descs = StaticDescs.init(allocator, &store, &layouts, &result, width);
+        defer descs.deinit();
+        const text = try store.primitive(.str);
+        const number = try store.primitive(.u64);
+        for ([_]bool{ false, true }) |has_refs| {
+            const ty = try store.intern(.{ .tuple = if (has_refs) &.{ text, number, text } else &.{ number, number, number } });
+            _ = try descs.descriptorSlot(ty);
+            const descriptor = descs.exports.items[descs.desc_slots.get(.{ .ty = ty, .recursive_box = false }).?.node];
+            const desc_layout = desc_format.TypeDesc.layout(descs.width);
+            const fields_node = for (descriptor.relocations) |relocation| {
+                if (relocation.offset == desc_layout.of(.entries)) break @backingInt(relocation.target.data_symbol);
+            } else return error.TestUnexpectedResult;
+            const fields = descs.exports.items[fields_node];
+            const fields_size = 3 * desc_format.Field.layout(descs.width).size;
+            try std.testing.expectEqual(@as(usize, fields_size + @as(u32, if (has_refs) 12 else 0)), fields.bytes.len);
+            try std.testing.expectEqual(@as(usize, 3), fields.relocations.len);
+            if (has_refs) {
+                try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, fields.bytes[fields_size..][0..4], .little));
+                try std.testing.expectEqual(@as(u32, 1), std.mem.readInt(u32, fields.bytes[fields_size + 4 ..][0..4], .little));
+                try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, fields.bytes[fields_size + 8 ..][0..4], .little));
+            }
+        }
+    }
 }

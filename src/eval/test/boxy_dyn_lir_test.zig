@@ -1092,3 +1092,79 @@ test "boxy wasm dynamic returns preserve a heap string in either result storage"
         try expectWasmStr(&b, program.root, "a returned record containing a heap string, still owned after returning");
     }
 }
+
+/// The worker still reads a one-field argument record; the caller supplies
+/// the string itself. Exercise dynamic and closed storage, caller reuse, and
+/// the deferred runtime's copy out of the caller's frame.
+fn buildUnaryArgumentProgram(b: *Builder, dynamic: bool, reuse: bool, deferred: bool) TestError!LirProcSpecId {
+    const capture = try b.local(.opaque_ptr);
+    const elem_desc = try b.local(.opaque_ptr);
+    const args_desc = try b.local(.opaque_ptr);
+    const args = try b.dynLocal(args_desc, .param);
+    const x = try b.dynLocal(elem_desc, .view);
+    const result = try b.dynLocal(elem_desc, .result);
+    const worker_body = try b.lowLevel(elem_desc, .erased_capture_load, &.{capture}, false, try b.dyn(args_desc, .{ .desc_args = .{ .elems = try b.span(&.{elem_desc}) } }, try b.dyn(x, .{ .field_addr = .{ .base = args, .desc = args_desc, .field_index = 0 } }, try b.ret(x))));
+    const worker = try b.proc(&.{ args, capture }, worker_body, b.dynamic, .{ .dyn_result = result, .abi = .erased_record, .erased_capture_arg = capture });
+
+    const desc = try b.local(.opaque_ptr);
+    const closure = try b.local(try b.layouts.insertErasedCallable());
+    const left = try b.local(.str);
+    const right = try b.local(.str);
+    const joined = try b.local(.str);
+    const arg = if (dynamic) try b.dynLocal(desc, .frame) else joined;
+    const out = try b.local(.str);
+    const final = if (reuse) try b.local(.str) else out;
+    var next = try b.ret(final);
+    if (reuse) next = try b.lowLevel(final, .str_concat, &.{ out, joined }, false, try b.decref(joined, next));
+    next = try b.dyn(out, .{ .call_erased = .{
+        .closure = closure,
+        .args = arg,
+        .deferred = deferred,
+        .drive = if (deferred) .always else .none,
+    } }, next);
+    if (reuse) next = try b.store.addCFStmt(.{ .incref = .{
+        .value = arg,
+        .count = 1,
+        .rc = .{ .concrete = .{ .op = .incref, .layout_idx = b.store.getLocal(arg).layout_idx } },
+        .next = next,
+    } }, .test_fixture);
+    if (dynamic) next = try b.dyn(arg, .{ .copy = .{ .src = joined, .desc = desc } }, next);
+    next = try b.str(left, "a heap string passed ", try b.str(right, "without a temporary argument record", try b.lowLevel(joined, .str_concat, &.{ left, right }, false, try b.decref(right, next))));
+    next = try b.dyn(null, .frame_alloc, next);
+    next = try b.dyn(closure, .{ .dict_compose = .{ .worker = worker, .captures = try b.span(&.{desc}) } }, next);
+    next = try b.static(desc, .{ .desc = boxy.compose.strDesc() }, next);
+    return b.proc(&.{}, next, .str, .{});
+}
+
+const unary_text = "a heap string passed without a temporary argument record";
+
+test "boxy unary argument storage supports caller reuse and deferred calls" {
+    for ([_]bool{ false, true }) |dynamic| {
+        for ([_]bool{ false, true }) |reuse| {
+            for ([_]bool{ false, true }) |deferred| {
+                var b = try Builder.init(.native);
+                defer b.deinit();
+                const root = try buildUnaryArgumentProgram(&b, dynamic, reuse, deferred);
+                var run: Run = undefined;
+                try run.init(&b);
+                defer run.deinit();
+                const result = try run.eval(root, .str);
+                try std.testing.expectEqualStrings(if (reuse) unary_text ++ unary_text else unary_text, readStr(result.value));
+                run.interpreter.dropValue(result.value, .str);
+                try run.env.checkForLeaks();
+            }
+        }
+    }
+}
+
+test "boxy wasm unary argument storage supports caller reuse and deferred calls" {
+    for ([_]bool{ false, true }) |dynamic| {
+        for ([_]bool{ false, true }) |reuse| {
+            for ([_]bool{ false, true }) |deferred| {
+                var b = try Builder.init(.u32);
+                defer b.deinit();
+                try expectWasmStr(&b, try buildUnaryArgumentProgram(&b, dynamic, reuse, deferred), if (reuse) unary_text ++ unary_text else unary_text);
+            }
+        }
+    }
+}

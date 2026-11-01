@@ -1452,9 +1452,12 @@ pub const DynOp = union(enum) {
     /// `Str.inspect` rendering (target: `Str`) honoring nominal overrides.
     inspect: struct { value: LocalId, desc: LocalId },
     /// Call the erased callable `closure` in the uniform erased-callable ABI:
-    /// `args` is the packed argument record (a closed struct local or a
-    /// dynamic local), or null for no arguments; the result is written to the
-    /// target.
+    /// `args` holds the complete packed argument block, or is null for no
+    /// arguments. A single argument may supply the block directly: its bytes
+    /// have the same size and alignment, at offset zero. Such an operand must
+    /// have frame or caller-provided storage, not be a dynamic view that a
+    /// deferred call's pre-call releases can invalidate. ARC consumes that
+    /// operand's ownership unit as usual. The result is written to the target.
     call_erased: struct {
         closure: LocalId,
         args: ?LocalId,

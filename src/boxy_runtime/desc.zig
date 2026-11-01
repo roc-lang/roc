@@ -209,6 +209,9 @@ pub const TypeDesc = extern struct {
     /// List element, box payload, nominal backing, or recursive box payload.
     child: ?*const TypeDesc,
     /// `[*]const Field` (record, tuple) or `[*]const Variant` (tag union).
+    /// A reference-containing record/tuple's fields are immediately followed
+    /// by a u32 count and that many u32 memory-slot indices, in ascending
+    /// order, naming exactly its non-padding reference-containing fields.
     entries: ?*const anyopaque,
     /// A nominal's name.
     name: ?*const Name,
@@ -220,6 +223,28 @@ pub const TypeDesc = extern struct {
         if (self.count == 0) return &.{};
         const first: [*]const Field = @ptrCast(@alignCast(self.entries.?));
         return first[0..self.count];
+    }
+
+    /// The exact fields reference counting visits, in memory order. This
+    /// trailer shares the field table's allocation; other descriptors and
+    /// reference-free records carry no additional storage.
+    pub fn refcountedFieldSlots(self: *const TypeDesc) []const u32 {
+        std.debug.assert(self.kind == .record or self.kind == .tuple);
+        if (!self.flags.contains_refcounted) return &.{};
+        const all = self.fields();
+        const trailer: [*]const u32 = @ptrCast(@alignCast(all.ptr + all.len));
+        const slots = trailer[1..][0..trailer[0]];
+        if (@import("builtin").mode == .debug) {
+            var next: usize = 0;
+            for (all, 0..) |field, index| {
+                if (field.is_padding == 0 and field.desc.flags.contains_refcounted) {
+                    std.debug.assert(next < slots.len and slots[next] == index);
+                    next += 1;
+                }
+            }
+            std.debug.assert(next == slots.len);
+        }
+        return slots;
     }
 
     pub fn variants(self: *const TypeDesc) []const Variant {
