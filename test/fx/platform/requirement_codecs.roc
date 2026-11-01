@@ -28,6 +28,7 @@ platform ""
         "roc_proc_handle_new": Proc.handle_new!,
         "roc_proc_handle_poll": Proc.handle_poll!,
         "roc_proc_handle_close": Proc.handle_close!,
+        "roc_proc_handle_read_exactly": Proc.handle_read_exactly!,
         "roc_padded_check": Padded.check!,
         "roc_stderr_line": Stderr.line!,
         "roc_stdin_line": Stdin.line!,

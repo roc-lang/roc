@@ -444,6 +444,7 @@ static inline RocStr ProcHandleCloseResult_payload_err(const ProcHandleCloseResu
 // Platform Type Aliases
 
 typedef HostTree HostTreeNode;
+typedef ProcHandlePollResult ProcHandleReadExactlyResult;
 
 // Hosted Function Infrastructure
 
@@ -454,7 +455,7 @@ typedef void (*HostedFn)(void);
 
 // Hosted Function Count
 
-#define HOSTED_FUNCTION_COUNT 25
+#define HOSTED_FUNCTION_COUNT 26
 
 
 #define HOSTED_IDX_BUILDER_PRINT_VALUE 0
@@ -478,10 +479,11 @@ typedef void (*HostedFn)(void);
 #define HOSTED_IDX_PROC_HANDLE_NEW 18
 #define HOSTED_IDX_PROC_HANDLE_POLL 19
 #define HOSTED_IDX_PROC_HANDLE_CLOSE 20
-#define HOSTED_IDX_PADDED_CHECK 21
-#define HOSTED_IDX_STDERR_LINE 22
-#define HOSTED_IDX_STDIN_LINE 23
-#define HOSTED_IDX_STDOUT_LINE 24
+#define HOSTED_IDX_PROC_HANDLE_READ_EXACTLY 21
+#define HOSTED_IDX_PADDED_CHECK 22
+#define HOSTED_IDX_STDERR_LINE 23
+#define HOSTED_IDX_STDIN_LINE 24
+#define HOSTED_IDX_STDOUT_LINE 25
 
 // Argument Structures
 
@@ -664,6 +666,17 @@ typedef struct {
 } ProcHandleCloseArgs;
 
 /**
+ * Arguments for Proc.handle_read_exactly!
+ * Roc signature: Box(U64), U64, U64 => Try(U64, [HostErr(Str)])
+ * Refcounted fields are owned by the hosted function.
+ */
+typedef struct {
+    uint64_t* arg0;
+    uint64_t arg1;
+    uint64_t arg2;
+} ProcHandleReadExactlyArgs;
+
+/**
  * Arguments for Padded.check!
  * Roc signature: Padded => Str
  * Refcounted fields are owned by the hosted function.
@@ -791,6 +804,9 @@ extern ProcHandlePollResult roc_proc_handle_poll(uint64_t* arg0);
 /* Proc.handle_close!: Box(U64) => Try({}, [HostErr(Str)]) */
 extern ProcHandleCloseResult roc_proc_handle_close(uint64_t* arg0);
 
+/* Proc.handle_read_exactly!: Box(U64), U64, U64 => Try(U64, [HostErr(Str)]) */
+extern ProcHandlePollResult roc_proc_handle_read_exactly(uint64_t* arg0, uint64_t arg1, uint64_t arg2);
+
 /* Padded.check!: Padded => Str */
 extern RocStr roc_padded_check(Padded arg0);
 
@@ -838,10 +854,11 @@ typedef struct {
     HostedFn proc_handle_new_bang;  /* index 18, C name: proc_handle_new */
     HostedFn proc_handle_poll_bang;  /* index 19, C name: proc_handle_poll */
     HostedFn proc_handle_close_bang;  /* index 20, C name: proc_handle_close */
-    HostedFn padded_check_bang;  /* index 21, C name: padded_check */
-    HostedFn stderr_line_bang;  /* index 22, C name: stderr_line */
-    HostedFn stdin_line_bang;  /* index 23, C name: stdin_line */
-    HostedFn stdout_line_bang;  /* index 24, C name: stdout_line */
+    HostedFn proc_handle_read_exactly_bang;  /* index 21, C name: proc_handle_read_exactly */
+    HostedFn padded_check_bang;  /* index 22, C name: padded_check */
+    HostedFn stderr_line_bang;  /* index 23, C name: stderr_line */
+    HostedFn stdin_line_bang;  /* index 24, C name: stdin_line */
+    HostedFn stdout_line_bang;  /* index 25, C name: stdout_line */
 } HostedFunctions;
 
 

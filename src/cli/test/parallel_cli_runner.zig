@@ -503,6 +503,8 @@ const CustomCase = enum {
     issue_12564_package_from_numeral_cache,
     issue_12693_shared_package_cache,
     issue_12701_shared_package_codec_cache,
+    issue_12747_check_then_build,
+    issue_12747_shared_package,
     issue_11826_cache_ownership_variants,
     issue_12241_cached_constant_insert,
     issue_12294_cached_capturing_closures,
@@ -2873,6 +2875,11 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10221: aliased import after nominal block resolves inside associated method", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10221_import_after_nominal/Main.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10154: hosted effect forwarded through a function argument checks cleanly", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10154_hosted_effect_forwarded.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10323: nested associated annotation reports errors without corrupting its nominal", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10323_nested_associated_annotation.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "undeclared type" }, .{ .stream = .stderr, .text = "unbound where receiver" }, .{ .stream = .stderr, .text = "declaration has no value" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "checked artifact invariant violated" }, .{ .stream = .stderr, .text = "reached unreachable code" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    // Repro for https://github.com/roc-lang/roc/issues/12767: a block-local type
+    // survives in a checked module after the code around it becomes a runtime error.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12767: block-local type under a rejected return reports the error", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_12767_local_type_rejected_return.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "return outside function" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12767: block-local type in a circular definition reports the error", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_12767_local_type_circular_value.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "circular value definition" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12767: nested block-local types in valid code check cleanly", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_12767_nested_local_types_valid.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12404: roc check accepts a platform function constrained by both Json.Encodable and Json.Parseable called with two record types", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_12404_combined_json_constraints/Main.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &no_panic_or_invariant_needles } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10062: where-clause type dispatch checks without postcheck panic", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10062_where_clause_segfault/main.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "dispatch plan reached monotype lowering without a resolution" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10424: record graph constructor child checks without panic", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10424_record_graph_constructor_child.roc", .exit = .failure, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "record graph constructor child differed" } } } } },
@@ -3354,6 +3361,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12220: shared object cache keeps each module's list literals in a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_12220_shared_object_cache_literals } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12564: a package from_numeral cached by one app's check converts another app's literal", .timeout_ms = 600_000, .body = .{ .custom = .issue_12564_package_from_numeral_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12693: a package value cached by one app's check builds in another app that shares the package", .timeout_ms = 600_000, .body = .{ .custom = .issue_12693_shared_package_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12747: a dev build erasing a boxed function succeeds against the cache a roc check wrote without erasing it", .timeout_ms = 600_000, .body = .{ .custom = .issue_12747_check_then_build } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12747: an app boxing a function shares a package function with an app that boxes none", .timeout_ms = 600_000, .body = .{ .custom = .issue_12747_shared_package } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12701: a package parser cached by one app's check builds in an app that omits the module sharing its codec", .timeout_ms = 600_000, .body = .{ .custom = .issue_12701_shared_package_codec_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12701: a package parser stored from another module's generic plans its codec dictionary (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=interpreter", "--specialize=no" }, .roc_file = "test/cli/issue_12701_shared_package_codec_cache/Repro.roc", .exit = .success, .stdout_exact = "Err(InvalidJson(\"Invalid JSON\"))\n", .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: every program compiles an offered procedure to the same LIR", .timeout_ms = 600_000, .body = .{ .custom = .cache_fingerprints_agree } },
@@ -5400,6 +5409,8 @@ fn runCustomCase(
         .issue_12564_package_from_numeral_cache => customIssue12564PackageFromNumeralCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12693_shared_package_cache => customIssue12693SharedPackageCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12701_shared_package_codec_cache => customIssue12701SharedPackageCodecCache(io, allocator, &env, &timer, timeout_ms),
+        .issue_12747_check_then_build => customIssue12747CheckThenBuild(io, allocator, &env, &timer, timeout_ms),
+        .issue_12747_shared_package => customIssue12747SharedPackage(io, allocator, &env, &timer, timeout_ms),
         .issue_11826_cache_ownership_variants => customIssue11826CacheOwnershipVariants(io, allocator, &env, &timer, timeout_ms),
         .issue_12241_cached_constant_insert => customIssue12241CachedConstantInsert(io, allocator, &env, &timer, timeout_ms),
         .issue_12294_cached_capturing_closures => customIssue12294CachedCapturingClosures(io, allocator, &env, &timer, timeout_ms),
@@ -12311,6 +12322,90 @@ fn customIssue12701SharedPackageCodecCache(
     return runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
         .args = &.{},
         .stdout_exact = "Err(InvalidJson(\"Invalid JSON\"))\n",
+    });
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/12747: `roc check` evaluates
+// `baseline`, and the compile-time pack it writes offers the closed
+// `Flow.score`, in a program where no boundary reaches the boxed function in
+// its signature. The app's dev build boxes a function of that type and passes
+// it to `Flow.score`, so the same specialization key must name the same
+// procedure there: the build must succeed on the warm cache and the program
+// must behave as it does from an empty cache, printing the same output and
+// releasing the boxed function it passed to `Flow.score`.
+fn customIssue12747CheckThenBuild(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const app = "test/cli/issue_12747_check_then_build/main.roc";
+    const check_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a check");
+    const checked = runRocInEnv(io, allocator, env, &.{"check"}, app, .relative, &.{}, null, check_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "check spawn error: {}", .{err});
+    if (!processSucceeded(checked.term) or std.mem.find(u8, checked.stdout, "No errors found") == null or std.mem.find(u8, checked.stderr, "panic") != null) {
+        return failureFromRun(allocator, timer, checked, "check did not succeed");
+    }
+    const exe = std.fmt.allocPrint(allocator, "{s}/issue_12747_app", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const out_arg = outputArg(allocator, exe) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+    const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+    const built = runRocInEnv(io, allocator, env, &.{ "build", "--opt=dev", out_arg }, app, .relative, &.{}, null, build_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+    if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
+        return failureFromRun(allocator, timer, built, "dev build did not succeed on the cache the check wrote");
+    }
+    return runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
+        .args = &.{},
+        .stdout_exact = "42 0 44\n",
+        .not_contains = &.{.{ .stream = .stderr, .text = "Memory leak detected" }},
+    });
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/12747 with no `roc check`:
+// Primer's dev build offers the closed package function `Flow.score`, and
+// nothing in Primer boxes a function. Repro shares the package, boxes a
+// function, and passes it to `Flow.score` under the same specialization key,
+// so the entry Primer wrote must be the procedure Repro lowers.
+fn customIssue12747SharedPackage(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const primer = "test/cli/issue_12747_shared_package/Primer.roc";
+    const repro = "test/cli/issue_12747_shared_package/Repro.roc";
+    const primer_exe = std.fmt.allocPrint(allocator, "{s}/issue_12747_primer", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const primer_out = outputArg(allocator, primer_exe) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+    const primer_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before the first build");
+    const primed = runRocInEnv(io, allocator, env, &.{ "build", "--opt=dev", primer_out }, primer, .relative, &.{}, null, primer_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+    if (!processSucceeded(primed.term) or std.mem.find(u8, primed.stdout, "successfully building") == null or std.mem.find(u8, primed.stderr, "panic") != null) {
+        return failureFromRun(allocator, timer, primed, "dev build of the first app did not succeed");
+    }
+    const exe = std.fmt.allocPrint(allocator, "{s}/issue_12747_repro", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const out_arg = outputArg(allocator, exe) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+    const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+    const built = runRocInEnv(io, allocator, env, &.{ "build", "--opt=dev", out_arg }, repro, .relative, &.{}, null, build_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+    if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
+        return failureFromRun(allocator, timer, built, "dev build did not succeed on the cache the first app wrote");
+    }
+    return runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
+        .args = &.{},
+        .stdout_exact = "0 2\n",
+        .not_contains = &.{.{ .stream = .stderr, .text = "Memory leak detected" }},
     });
 }
 
