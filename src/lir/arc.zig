@@ -808,7 +808,7 @@ fn runArcTasks(comptime Context: type, contexts: []Context, phase: ArcTaskPhase,
                 });
             }
         };
-        var session = executor.begin();
+        var session = try executor.begin();
         var submitted: usize = 0;
         var received: usize = 0;
         var failed = false;
@@ -827,7 +827,7 @@ fn runArcTasks(comptime Context: type, contexts: []Context, phase: ArcTaskPhase,
             }
             if (received < submitted) {
                 const completion = session.receive();
-                if (completion.id >= submitted or completion.worker_id >= executor.worker_count) arcInvariant("ARC received invalid task identity");
+                if (completion.id >= submitted or completion.worker_id >= executor.lane_count) arcInvariant("ARC received invalid task identity");
                 const context = &contexts[completion.id];
                 if (context.completed or completion.value != @as(*anyopaque, @ptrCast(context))) arcInvariant("ARC received invalid task completion");
                 context.completed = true;

@@ -2512,7 +2512,7 @@ fn collectStatementFacts(
         for (ranges) |*range| try range.collect(gpa);
         return;
     };
-    var session = executor.begin();
+    var session = try executor.begin();
     var submitted: usize = 0;
     var received: usize = 0;
     var failed = false;
@@ -2527,7 +2527,7 @@ fn collectStatementFacts(
         }
         if (received < submitted) {
             const completion = session.receive();
-            if (completion.id >= submitted or completion.worker_id >= executor.worker_count) {
+            if (completion.id >= submitted or completion.worker_id >= executor.lane_count) {
                 dismantleInvariant("ARC dismantle received invalid task identity");
             }
             const range = &ranges[completion.id];

@@ -642,3 +642,38 @@ test "boxy composition site concurrent writers publish whole operand result pair
     started = 0;
     try testing.expect(!failed.load(.monotonic));
 }
+
+test "tag lookup finds every member of sorted composed and nominal descriptors" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    var labels: [257][6]u8 = undefined;
+    var names: [257]Name = undefined;
+    var variants: [257]compose.VariantInput = undefined;
+    const payloads = [_]*const TypeDesc{compose.scalarDesc(.i64)};
+    for (&labels, &names, 0..) |*label, *tag_name, index| {
+        const text = try std.fmt.bufPrint(label, "Tag{d:0>3}", .{index});
+        tag_name.* = .{ .id = desc_mod.labelId(text), .len = @intCast(text.len), .bytes = text.ptr };
+    }
+    for ([_]usize{ 1, 2, 3, 4, 17, 257 }) |count| {
+        // Composition must establish sorted order from arbitrary input order.
+        for (variants[0..count], 0..) |*variant, index| {
+            variant.* = .{ .name = &names[count - index - 1], .payload_count = 1, .payloads = &payloads };
+        }
+        const union_desc = compose.tagUnion(&env.cache, ops, variants[0..count]);
+        const nominal = compose.nominal(&env.cache, ops, union_desc, &name_point, null, false);
+        for ([_]*const TypeDesc{ union_desc, nominal }) |desc| {
+            for (names[0..count], 0..) |tag_name, index| {
+                // A different address for the same name must work too.
+                const queried_name = tag_name;
+                const value: i64 = @intCast(index + 1);
+                var slot: Slot = .{};
+                compiled.buildTag(desc, &queried_name, slot.ptr(), &.{@ptrCast(&value)}, ops);
+                try testing.expectEqual(@as(u32, @intCast(index)), compiled.tagDiscriminantOf(desc, &queried_name, ops));
+                try testing.expectEqual(@as(u32, @intCast(index)), compiled.tagDiscriminant(desc, slot.ptr(), ops));
+                const result: *const i64 = @ptrCast(@alignCast(compiled.tagPayloadAddr(desc, slot.ptr(), &queried_name, 0, ops)));
+                try testing.expectEqual(value, result.*);
+            }
+        }
+    }
+}

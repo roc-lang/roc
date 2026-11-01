@@ -11459,7 +11459,7 @@ fn buildBoxyLibraryObjects(
         }
     }
     var first_error: ?CliMainError = null;
-    var executor_session: ?base.post_check_task_executor.Session = if (build_env.postCheckExecutor()) |executor| executor.begin() else null;
+    var executor_session: ?base.post_check_task_executor.Session = if (build_env.postCheckExecutor()) |executor| try executor.begin() else null;
     defer if (executor_session) |*open| open.end();
     while (done < tasks.len) {
         var completed: ?u32 = null;

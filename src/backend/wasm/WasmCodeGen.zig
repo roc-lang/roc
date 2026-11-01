@@ -17414,15 +17414,17 @@ const ReversingTestExecutor = struct {
     len: usize = 0,
 
     fn executor(self: *ReversingTestExecutor) tasks.Executor {
-        return .{ .context = self, .worker_count = self.lanes, .beginFn = begin, .submitFn = submit, .receiveFn = receive, .endFn = end };
+        return .{ .context = self, .worker_count = self.lanes, .lane_count = self.lanes, .beginFn = begin, .submitFn = submit, .receiveFn = receive, .tryReceiveFn = tryReceive, .endFn = end };
     }
-    fn begin(_: *anyopaque) void {}
-    fn submit(context: *anyopaque, task: tasks.Task) Allocator.Error!void {
+    fn begin(context: *anyopaque) std.mem.Allocator.Error!*anyopaque {
+        return context;
+    }
+    fn submit(context: *anyopaque, _: *anyopaque, task: tasks.Task) Allocator.Error!void {
         const self: *ReversingTestExecutor = @ptrCast(@alignCast(context));
         self.pending[self.len] = task;
         self.len += 1;
     }
-    fn receive(context: *anyopaque) tasks.Completion {
+    fn receive(context: *anyopaque, _: *anyopaque) tasks.Completion {
         const self: *ReversingTestExecutor = @ptrCast(@alignCast(context));
         self.len -= 1;
         const task = self.pending[self.len];
@@ -17431,7 +17433,10 @@ const ReversingTestExecutor = struct {
         const value = task.run(task.context, .{ .id = 0, .allocator = self.allocator, .scratch = scratch.allocator(), .lane_state = &self.lane });
         return .{ .id = task.id, .worker_id = 0, .value = value };
     }
-    fn end(context: *anyopaque) void {
+    fn tryReceive(_: *anyopaque, _: *anyopaque) ?tasks.Completion {
+        return null;
+    }
+    fn end(context: *anyopaque, _: *anyopaque) void {
         const self: *ReversingTestExecutor = @ptrCast(@alignCast(context));
         std.debug.assert(self.len == 0);
     }

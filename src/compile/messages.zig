@@ -235,32 +235,10 @@ pub const WorkerTask = union(enum) {
     canonicalize: CanonicalizeTask,
     /// Type-check a canonicalized module
     type_check: TypeCheckTask,
-    /// Type-erased post-check work whose context owns all persistent task state.
-    post_check: PostCheckTask,
-};
-
-/// The post-check sessions the coordinator's workers serve. Each session is
-/// one consumer of its own completions, so two can be open at once: the
-/// general session every post-check stage borrows in turn, and the Boxy unit
-/// scheduler's, open across checking and compile-time evaluation.
-pub const PostCheckSession = enum(u8) {
-    general,
-    boxy_objects,
-};
-
-/// A post-check task and the session that receives its completion.
-pub const PostCheckTask = struct {
-    session: PostCheckSession,
-    /// The work the session's owner was doing when the session began, if it
-    /// recorded any: a crash on a worker names the stage it was working for.
-    frame: ?base.ice_context.Frame,
-    task: post_check_executor.Task,
-};
-
-/// A post-check completion, for the session that submitted its task.
-pub const PostCheckCompletion = struct {
-    session: PostCheckSession,
-    completion: post_check_executor.Completion,
+    /// A token of a post-check session with a task queued: the worker
+    /// taking it runs a task of that session, if one is still queued, and
+    /// delivers the completion to the session itself.
+    post_check: *anyopaque,
 };
 
 /// Result of successfully parsing a module
@@ -461,8 +439,6 @@ pub const WorkerResult = union(enum) {
     operation_failed: WorkerOperationFailure,
     /// A worker stage ran out of memory
     worker_oom: WorkerOom,
-    /// Returned in worker arrival order; `Completion.id` identifies the task.
-    post_check: PostCheckCompletion,
 
     /// Release a result that shutdown prevented the coordinator from accepting.
     /// Parsed environments have no coordinator owner yet; later stages borrow
@@ -478,7 +454,7 @@ pub const WorkerResult = union(enum) {
                 var storage: CheckedArtifact.ModuleEnvStorage = .{ .checked_source = r.module_env };
                 storage.deinit();
             },
-            .canonicalized, .type_checked, .operation_failed, .worker_oom, .post_check => {},
+            .canonicalized, .type_checked, .operation_failed, .worker_oom => {},
         }
         self.deinit(gpa);
     }
@@ -486,7 +462,6 @@ pub const WorkerResult = union(enum) {
     /// Free any owned memory in the result
     pub fn deinit(self: *WorkerResult, gpa: Allocator) void {
         switch (self.*) {
-            .post_check => {},
             inline .parsed, .canonicalized => |*r| {
                 for (r.discovered_local_imports.items) |imp| {
                     gpa.free(imp.import_name);

@@ -36,7 +36,7 @@ pub fn execute(
 ) Allocator.Error!void {
     var failed = false;
     if (executor) |exec| {
-        var session = exec.begin();
+        var session = try exec.begin();
         var next: usize = 0;
         var accepted: usize = 0;
         while (next < jobs.len or session.outstanding != 0) {

@@ -256,7 +256,7 @@ optimized builds, which leave out inline `expect`s. (See
 
 ### `[…]` (subscript operator)
 
-⚠️ (This has not been implemented yet.)
+⚠️ Subscript syntax is planned for after 0.1.0 and has not been implemented yet.
 
 Writing `[` and `]` directly after an expression, with another expression in between them (for example, `list[index]`), will call the `subscript` method on the first expression, passing the second expression as its argument. In other words, `collection[key]` will desugar to `collection.subscript(key)`.
 

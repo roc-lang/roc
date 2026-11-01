@@ -2129,8 +2129,8 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// Where a pending frame-replacing call keeps each of its callee's
-    /// arguments in the static argument storage, and the storage one such
-    /// call needs.
+    /// arguments in the static argument storage, and where those arguments
+    /// end, which is where it keeps the callee's tail carry.
     fn tailArgOffsets(self: *MonoLlvmCodeGen, arg_layouts: []const layout.Idx, offsets: ?[]u32) u32 {
         var offset: u32 = 0;
         for (arg_layouts, 0..) |arg_layout, i| {
@@ -2149,8 +2149,10 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Declare and define every tail driver. A driver takes the address of
     /// the result an ordinary call into its group produced. While a member
-    /// has left a call pending, it calls that callee with the arguments in
-    /// static storage and has it write to the same address.
+    /// has left a call pending, it calls that callee with the arguments and
+    /// tail carry in static storage and has it write to the same address,
+    /// which is also the address of a dynamic result: a frame-replacing call
+    /// passes its callee the result storage its own caller passed.
     fn emitTailDrivers(self: *MonoLlvmCodeGen, procs: []const LirProcSpec, order: []const u32) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
@@ -2160,7 +2162,8 @@ pub const MonoLlvmCodeGen = struct {
             if (!isTailDriverMember(proc)) continue;
             const arg_layouts = try self.procArgLayouts(proc, .explicit);
             defer self.allocator.free(arg_layouts);
-            area_size = @max(area_size, self.tailArgOffsets(arg_layouts, null));
+            const carry_size: u32 = if (procCarriesTailArgs(self.store, proc)) @intCast(self.target.ptrBitWidth() / 8) else 0;
+            area_size = @max(area_size, self.tailArgOffsets(arg_layouts, null) + carry_size);
             const driver = self.tailDriverFor(proc) orelse blk: {
                 const fn_ty = builder.fnType(.void, &.{ptr_ty}, .normal) catch return error.OutOfMemory;
                 const name = builder.strtabStringFmt("{s}roc_tail_driver.{d}", .{ self.static_symbol_prefix, self.tail_drivers.items.len }) catch return error.OutOfMemory;
@@ -2249,10 +2252,9 @@ pub const MonoLlvmCodeGen = struct {
             const proc = self.store.getProcSpec(member);
             const fast = self.fast_registry.get(@backingInt(member)) orelse return error.CompilationFailed;
             const sig = self.fastSignatureOf(member);
-            if (sig.dyn_result_index != null or sig.carry_index != null) llvmInvariantFmt("tail-driven procedure {d} passes dynamic values", .{@backingInt(member)});
             const offsets = try self.allocator.alloc(u32, sig.arg_layouts.len);
             defer self.allocator.free(offsets);
-            _ = self.tailArgOffsets(sig.arg_layouts, offsets);
+            const carry_offset = self.tailArgOffsets(sig.arg_layouts, offsets);
 
             var param_types = std.ArrayList(LlvmBuilder.Type).empty;
             defer param_types.deinit(self.allocator);
@@ -2275,6 +2277,14 @@ pub const MonoLlvmCodeGen = struct {
                     .registers => |registers| try self.appendCAbiRegisterCallArg(builder, &attrs_wip, &param_types, &call_args, registers, .{ .memory = try self.offsetPtr(args_ptr, offset) }, arg_layout),
                 }
             }
+            if (sig.dyn_result_index != null) {
+                try param_types.append(self.allocator, ptr_ty);
+                try call_args.append(self.allocator, result_ptr);
+            }
+            if (sig.carry_index != null) {
+                try param_types.append(self.allocator, ptr_ty);
+                try call_args.append(self.allocator, try self.loadPointer(try self.offsetPtr(args_ptr, carry_offset)));
+            }
             const result = wip.call(.normal, self.fastCallConv(proc), attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
             if (sig.lowered.ret == .registers) {
                 try self.storeCAbiRegisterResult(builder, sig.lowered.ret.registers, result, result_ptr, proc.ret_layout);
@@ -2295,13 +2305,15 @@ pub const MonoLlvmCodeGen = struct {
     /// The WebAssembly form of a frame-replacing call: leave the callee and
     /// its arguments pending for the group's driver and return. The value
     /// returned is never read; the driver writes the callee's result over it.
+    /// Dynamic arguments move into a carry the callee owns, because their
+    /// bytes may live in the frame being replaced or in this procedure's own
+    /// carry, which is released once nothing here reads it.
     fn emitPendingTailCall(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, args: LocalSpan) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const proc = self.store.getProcSpec(proc_id);
         const driver = self.tailDriverFor(proc) orelse
             llvmInvariantFmt("frame-replacing call to proc {d} outside a tail group", .{@backingInt(proc_id)});
-        if (proc.dyn_result != null or procCarriesTailArgs(self.store, proc)) llvmInvariantFmt("tail-driven call to proc {d} passes dynamic values", .{@backingInt(proc_id)});
         const arg_locals = self.store.getLocalSpan(args);
         try self.materializeLocalSpanIfDeferred(arg_locals);
         const arg_layouts = try self.procArgLayouts(proc, .explicit);
@@ -2309,12 +2321,27 @@ pub const MonoLlvmCodeGen = struct {
         if (arg_layouts.len != arg_locals.len) return error.CompilationFailed;
         const offsets = try self.allocator.alloc(u32, arg_layouts.len);
         defer self.allocator.free(offsets);
-        _ = self.tailArgOffsets(arg_layouts, offsets);
+        const carry_offset = self.tailArgOffsets(arg_layouts, offsets);
+        const moved = try self.allocator.alloc(LlvmBuilder.Value, arg_locals.len);
+        defer self.allocator.free(moved);
+        const carry: ?LlvmBuilder.Value = if (procCarriesTailArgs(self.store, proc)) try self.emitTailCarry(proc, arg_locals, moved) else null;
+        const param_locals = self.store.getLocalSpan(proc.args);
         for (arg_layouts, offsets, 0..) |arg_layout, offset, i| {
+            const dst = try self.offsetPtr(self.tail_args_ptr.?, offset);
+            const arg_local = GuardedList.at(arg_locals, i);
+            if (self.localDyn(GuardedList.at(param_locals, i)) != null) {
+                try self.storePointer(dst, moved[i]);
+                continue;
+            }
+            if (self.localDyn(arg_local) != null) {
+                llvmInvariantFmt("dynamic local {d} passed to a closed parameter of proc {d}", .{ @backingInt(arg_local), @backingInt(proc_id) });
+            }
             const size = self.layoutDataSize(arg_layout);
             if (size == 0) continue;
-            try self.storeLocalToMemory(try self.offsetPtr(self.tail_args_ptr.?, offset), GuardedList.at(arg_locals, i), size, self.alignmentForLayout(arg_layout));
+            try self.storeLocalToMemory(dst, arg_local, size, self.alignmentForLayout(arg_layout));
         }
+        if (carry) |storage| try self.storePointer(try self.offsetPtr(self.tail_args_ptr.?, carry_offset), storage);
+        try self.emitFreeCarry();
         _ = wip.store(.normal, try self.intValue(.i32, tailMemberNumber(driver, proc_id)), self.tail_pending_ptr.?, LlvmBuilder.Alignment.fromByteUnits(4)) catch return error.OutOfMemory;
         if (self.fast_ret_registers) |registers| {
             const ret_ty = try self.cAbiRegisterCarrierType(builder, registers);
@@ -4689,7 +4716,7 @@ pub const MonoLlvmCodeGen = struct {
                 try self.storeCAbiRegisterResult(builder, sig.lowered.ret.registers, result, target_storage orelse self.slot(target).ptr, proc.ret_layout);
             }
         }
-        if (self.tailDriverFor(proc) != null) try self.emitTailDrive(proc, self.slot(target).ptr);
+        if (self.tailDriverFor(proc) != null) try self.emitTailDrive(proc, target_storage orelse self.slot(target).ptr);
     }
 
     /// A direct call whose callee returns on this procedure's behalf. Every
