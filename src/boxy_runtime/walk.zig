@@ -84,12 +84,20 @@ pub fn zeroSizedPtr() [*]u8 {
 /// through `ops` past that, so walks never recurse.
 pub fn Stack(comptime T: type, comptime inline_count: usize) type {
     return struct {
-        inline_items: [inline_count]T = undefined,
-        heap: ?[*]T = null,
-        capacity: usize = inline_count,
-        len: usize = 0,
+        inline_items: [inline_count]T,
+        heap: ?[*]T,
+        capacity: usize,
+        len: usize,
 
         const Self = @This();
+
+        /// Initialize a fresh stack in place. Entries are written by push
+        /// before being read; initializing them here would copy unused storage.
+        pub fn init(self: *Self) void {
+            self.heap = null;
+            self.capacity = inline_count;
+            self.len = 0;
+        }
 
         fn items(self: *Self) [*]T {
             return self.heap orelse &self.inline_items;
@@ -149,7 +157,8 @@ pub fn copy(desc: *const TypeDesc, dst: [*]u8, src: [*]const u8) void {
 /// are owned by their container's one allocation.
 pub fn incref(desc: *const TypeDesc, ptr: [*]u8, count: isize, ops: *RocOps) void {
     if (!desc.flags.contains_refcounted) return;
-    var stack: Stack(Value, 32) = .{};
+    var stack: Stack(Value, 32) = undefined;
+    stack.init();
     defer stack.deinit(ops);
     stack.push(.at(desc, ptr), ops);
     while (stack.pop()) |value| {
@@ -183,7 +192,7 @@ const DecrefWork = union(enum) {
 };
 
 const DecrefWalker = struct {
-    stack: Stack(DecrefWork, 32) = .{},
+    stack: Stack(DecrefWork, 32),
     ops: *RocOps,
     element_desc: *const TypeDesc,
 
@@ -200,7 +209,10 @@ pub fn decref(desc: *const TypeDesc, ptr: [*]u8, ops: *RocOps) void {
     // Releasing a function's capture re-enters here through its `on_drop`.
     builtins.stack_guard.check();
     if (!desc.flags.contains_refcounted) return;
-    var walker: DecrefWalker = .{ .ops = ops, .element_desc = desc };
+    var walker: DecrefWalker = undefined;
+    walker.stack.init();
+    walker.ops = ops;
+    walker.element_desc = desc;
     defer walker.stack.deinit(ops);
     walker.stack.push(.{ .value = .at(desc, ptr) }, ops);
     while (walker.stack.pop()) |work| switch (work) {
@@ -740,7 +752,8 @@ pub fn inspect(desc: *const TypeDesc, ptr: [*]u8, ops: *RocOps) RocStr {
     const ctx: InspectCtx = .{ .ops = ops };
     const Spec = InspectCtx.Spec;
     var out: Output = .{};
-    var stack: Stack(InspectWork, 32) = .{};
+    var stack: Stack(InspectWork, 32) = undefined;
+    stack.init();
     defer stack.deinit(ops);
     var sink: PartsSink = .{ .stack = &stack, .ops = ops };
     stack.push(.{ .child = .at(desc, ptr) }, ops);

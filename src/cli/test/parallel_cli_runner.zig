@@ -11658,16 +11658,17 @@ fn customBoxyModuleObjectCache(
     // of the app rebuilds Main's unit and the root unit, whose key covers the
     // app the platform is paired with. An edit of Tree that leaves its
     // interface alone rebuilds Tree's unit and no module compiled against
-    // that interface; Main's unit and the root unit follow only because the
-    // app stores a closure, whose digest is its module's checked key. The builds of
-    // unedited sources produce the same bytes whatever the cache held; an
-    // edit's executable is only required to run.
+    // that interface, the closure the app stores included, since a stored
+    // function names its modules by link name; the root unit follows because
+    // its key covers the app's checked key. The builds of unedited sources
+    // produce the same bytes whatever the cache held; an edit's executable is
+    // only required to run.
     const builds = [_]Build{
         .{ .name = "cold", .no_cache = false, .objects = "Boxy objects: 0 cached, 6 built", .identical = true },
         .{ .name = "warm", .no_cache = false, .objects = "Boxy objects: 6 cached, 0 built", .identical = true },
         .{ .name = "nocache", .no_cache = true, .objects = "", .identical = true },
         .{ .name = "app_edit", .no_cache = false, .objects = "Boxy objects: 4 cached, 2 built", .identical = false },
-        .{ .name = "lib_edit", .no_cache = false, .objects = "Boxy objects: 3 cached, 3 built", .identical = false },
+        .{ .name = "lib_edit", .no_cache = false, .objects = "Boxy objects: 4 cached, 2 built", .identical = false },
     };
     var first_bytes: ?[]const u8 = null;
     for (builds) |build| {

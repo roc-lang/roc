@@ -106,6 +106,9 @@ pub const Transplant = struct {
     previous_semantic_context: ?[32]u8 = null,
     type_occurrences: check.ConstStore.TypeOccurrenceMap,
     nominals: std.AutoHashMapUnmanaged(NamedKey, NamedTarget) = .empty,
+    /// The current versions of the modules a stored function's recipe
+    /// names, for semantic admission.
+    relocations: *const Relocations,
 
     /// Why roots were not reused, for the reuse trace.
     pub const Misses = struct {
@@ -137,6 +140,12 @@ pub const Transplant = struct {
     /// Every named occurrence is admitted by its checked producer fingerprint.
     pub fn nominalRelocatable(self: *const Transplant, named: check.ConstStore.NamedType) bool {
         return self.nominals.contains(namedKey(named));
+    }
+
+    /// The current key of the module `key` names, for a stored function's
+    /// recipe.
+    pub fn currentKey(self: *const Transplant, key: [32]u8) ?[32]u8 {
+        return self.relocations.currentKey(key);
     }
 
     pub fn count(self: *const Transplant) usize {
@@ -192,12 +201,24 @@ const NamedTarget = struct {
 };
 
 /// Semantic equality authorizes copying only after every version-bearing
-/// occurrence has an exact current counterpart. Functions and defaults remain
-/// excluded; neither their runtime environments nor their source ids relocate.
+/// occurrence has an exact current counterpart. Monotype function values
+/// and defaults remain excluded; neither their runtime environments nor
+/// their source ids relocate. A `.boxy` function value moves when every
+/// module its recipe names has a current version.
 const AcrossImports = enum { reusable, holds_function, names_version };
 
 fn reusableAcrossImports(previous: *const Previous, root: checked.CompileTimeRoot, transplant: *const Transplant) Allocator.Error!AcrossImports {
     switch (root.payload) {
+        // A `.boxy` function value stays beside an unevaluated payload.
+        .unevaluated => {
+            const stored = root.boxy_value orelse return .holds_function;
+            switch (try previous.const_store.valueRelocatability(stored.node, transplant)) {
+                .relocatable => {},
+                .holds_function => return .holds_function,
+                .names_version => return .names_version,
+            }
+            return if (try previous.const_store.type_store.typeRelocatable(stored.root_type, transplant)) .reusable else .names_version;
+        },
         .const_node => |node| {
             switch (try previous.const_store.valueRelocatability(node, transplant)) {
                 .relocatable => {},
@@ -211,7 +232,7 @@ fn reusableAcrossImports(previous: *const Previous, root: checked.CompileTimeRoo
             };
         },
         .discarded => return .reusable,
-        .pending, .unevaluated, .fn_value, .expect, .runtime => return .holds_function,
+        .pending, .fn_value, .expect, .runtime => return .holds_function,
     }
 }
 
@@ -258,8 +279,8 @@ pub const ReadInputs = struct {
 };
 
 /// Find the previous root each pending root of `module` copies.
-pub fn plan(allocator: Allocator, module: *const checked.CheckedModuleArtifact, previous: *const Previous, inputs: *const ReadInputs) Allocator.Error!Transplant {
-    var transplant = Transplant{ .allocator = allocator, .type_occurrences = .init(allocator) };
+pub fn plan(allocator: Allocator, module: *const checked.CheckedModuleArtifact, previous: *const Previous, inputs: *const ReadInputs, relocations: *const Relocations) Allocator.Error!Transplant {
+    var transplant = Transplant{ .allocator = allocator, .type_occurrences = .init(allocator), .relocations = relocations };
     errdefer transplant.deinit();
     if (previous.identities.context.len != 0) transplant.previous_context = previous.identities.context[0];
     if (previous.identities.test_context.len != 0) transplant.previous_semantic_context = previous.identities.test_context[0];
@@ -432,6 +453,23 @@ fn storedRootType(previous: *const Previous, root: ComptimeRootId) ConstTypeId {
 const Copy = struct {
     payload: checked.CompileTimeRootPayload,
     root_type: ?ConstTypeId,
+    /// The `.boxy` function value copied beside an unevaluated payload.
+    boxy_value: ?checked.StoredConstTemplate = null,
+
+    /// The copied value's node, if it holds one.
+    fn node(self: Copy) ?check.ConstStore.ConstNodeId {
+        return switch (self.payload) {
+            .const_node => |id| id,
+            .unevaluated => if (self.boxy_value) |stored| stored.node else null,
+            .discarded, .pending, .fn_value, .expect, .runtime => null,
+        };
+    }
+
+    /// The copied value's stored type, if it holds one.
+    fn storedType(self: Copy) ?ConstTypeId {
+        if (self.root_type) |root_type| return root_type;
+        return if (self.boxy_value) |stored| stored.root_type else null;
+    }
 };
 
 fn copyRoot(module: *checked.CheckedModuleArtifact, previous: *const Previous, match: Match, transplant: *const Transplant, relocations: *const Relocations) Allocator.Error!Copy {
@@ -453,13 +491,34 @@ fn copyRoot(module: *checked.CheckedModuleArtifact, previous: *const Previous, m
             },
         },
         .discarded => .{ .payload = .discarded, .root_type = null },
-        .pending, .unevaluated, .fn_value, .expect, .runtime => base.invariant("a compile-time root without reusable stored data was transplanted", .{}),
+        .unevaluated => blk: {
+            const stored = source.boxy_value orelse base.invariant("a compile-time root without reusable stored data was transplanted", .{});
+            break :blk .{
+                .payload = .unevaluated,
+                .root_type = null,
+                .boxy_value = .{
+                    .node = try module.const_store.cloneValueFrom(&previous.const_store, stored.node),
+                    .root = match.root,
+                    .root_type = try module.const_store.type_store.cloneTypeFromTranslated(
+                        &previous.const_store.type_store,
+                        &previous.names,
+                        &module.canonical_names,
+                        stored.root_type,
+                    ),
+                },
+            };
+        },
+        .pending, .fn_value, .expect, .runtime => base.invariant("a compile-time root without reusable stored data was transplanted", .{}),
     };
-    for (module.const_store.values.items[values_start..]) |*value| {
-        if (value.* == .nominal) {
-            if (match.semantic) {
-                value.nominal.named_type = transplant.nominals.get(namedKey(value.nominal.named_type)).?.named();
-            } else rebindOccurrence(&value.nominal.named_type, previous.key, module.key, &transplant.type_occurrences, relocations);
+    for (module.const_store.values.items[values_start..], values_start..) |*value, index| {
+        switch (value.*) {
+            .nominal => |*nominal| if (match.semantic) {
+                nominal.named_type = transplant.nominals.get(namedKey(nominal.named_type)).?.named();
+            } else rebindOccurrence(&nominal.named_type, previous.key, module.key, &transplant.type_occurrences, relocations),
+            // Only semantic admission copies a stored function, after
+            // `valueRelocatability` found every module it names current.
+            .boxy_fn => try module.const_store.relocateRecipe(@fromBackingInt(@intCast(index)), relocations),
+            else => {},
         }
     }
     for (module.const_store.type_store.named_pool.items[types_start..]) |*named| {
@@ -505,6 +564,10 @@ pub fn install(module: *checked.CheckedModuleArtifact, previous: *const Previous
 
 fn fillRoot(module: *checked.CheckedModuleArtifact, root_id: ComptimeRootId, copy: Copy) void {
     module.compile_time_roots.fillPayload(root_id, copy.payload);
+    if (copy.boxy_value) |stored| {
+        module.compile_time_roots.fillBoxyValue(root_id, stored);
+        return;
+    }
     CompileTimeFinalization.finishConstRoot(module, module.compile_time_roots.root(root_id), copy.payload, copy.root_type);
 }
 
@@ -596,7 +659,7 @@ pub const Relocations = struct {
 
     /// The current key of the module `key` names, if it is in the
     /// compilation as it is or through a successor.
-    fn currentKey(self: *const Relocations, key: [32]u8) ?[32]u8 {
+    pub fn currentKey(self: *const Relocations, key: [32]u8) ?[32]u8 {
         if (self.successors.get(key)) |successor| return successor.key;
         if (self.modules.find(self.modules.context, key) != null) return key;
         return null;
@@ -639,7 +702,7 @@ pub fn verifyAndInstall(module: *checked.CheckedModuleArtifact, previous: *const
         const copy = try copyRoot(module, previous, match, transplant, relocations);
         try verifyNamedTypeOccurrences(module, previous, modules, copy);
         switch (fresh) {
-            .unevaluated => {
+            .unevaluated => if (root.boxy_value == null) {
                 fillRoot(module, match.root, copy);
                 try unevaluated.append(transplant.allocator, match);
                 continue;
@@ -647,7 +710,7 @@ pub fn verifyAndInstall(module: *checked.CheckedModuleArtifact, previous: *const
             .pending => base.invariant("a transplanted compile-time root was still pending after finalization", .{}),
             .const_node, .discarded, .fn_value, .expect, .runtime => {},
         }
-        if (!try sameEvaluation(module, previous, transplant, match, fresh, copy)) {
+        if (!try sameEvaluation(module, previous, transplant, match, root, copy)) {
             base.invariant("a transplanted compile-time root differs from its evaluation (module {s}, root {d}); its value identity missed an input", .{
                 module.moduleEnvConst().module_name,
                 @backingInt(match.root),
@@ -666,37 +729,34 @@ pub fn verifyAndInstall(module: *checked.CheckedModuleArtifact, previous: *const
 fn verifyNamedTypeOccurrences(module: *const checked.CheckedModuleArtifact, previous: *const Previous, modules: CheckedModules, copy: Copy) Allocator.Error!void {
     const allocator = module.canonical_names.allocator;
     const store = &module.const_store;
-    switch (copy.payload) {
-        .const_node => |root| {
-            var seen = collections.DenseMap(check.ConstStore.ConstNodeId, void).init(allocator);
-            defer seen.deinit();
-            var pending = std.ArrayList(check.ConstStore.ConstNodeId).empty;
-            defer pending.deinit(allocator);
-            try pending.append(allocator, root);
-            while (pending.pop()) |node| {
-                const entry = try seen.getOrPut(node);
-                if (entry.found_existing) continue;
-                switch (store.get(node)) {
-                    .pending, .fn_value, .boxy_fn => base.invariant("a transplanted value held a pending node or a function value", .{}),
-                    .zst, .scalar, .str, .crash, .checked_error => {},
-                    .box => |payload| try pending.append(allocator, payload),
-                    .nominal => |nominal| {
-                        verifyNamedTypeOccurrence(module, previous, modules, nominal.named_type, null);
-                        try pending.append(allocator, nominal.backing);
-                    },
-                    .list => |list| switch (list) {
-                        .nodes => |items| try pending.appendSlice(allocator, items),
-                        .packed_bytes, .empty => {},
-                    },
-                    .tuple, .record => |items| try pending.appendSlice(allocator, items),
-                    .tag => |tag| try pending.appendSlice(allocator, tag.payloads),
-                }
+    if (copy.node()) |root| {
+        var seen = collections.DenseMap(check.ConstStore.ConstNodeId, void).init(allocator);
+        defer seen.deinit();
+        var pending = std.ArrayList(check.ConstStore.ConstNodeId).empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |node| {
+            const entry = try seen.getOrPut(node);
+            if (entry.found_existing) continue;
+            switch (store.get(node)) {
+                .pending, .fn_value => base.invariant("a transplanted value held a pending node or a Monotype function value", .{}),
+                .boxy_fn => |function| try pending.appendSlice(allocator, function.captures),
+                .zst, .scalar, .str, .crash, .checked_error => {},
+                .box => |payload| try pending.append(allocator, payload),
+                .nominal => |nominal| {
+                    verifyNamedTypeOccurrence(module, previous, modules, nominal.named_type, null);
+                    try pending.append(allocator, nominal.backing);
+                },
+                .list => |list| switch (list) {
+                    .nodes => |items| try pending.appendSlice(allocator, items),
+                    .packed_bytes, .empty => {},
+                },
+                .tuple, .record => |items| try pending.appendSlice(allocator, items),
+                .tag => |tag| try pending.appendSlice(allocator, tag.payloads),
             }
-        },
-        .discarded => {},
-        .pending, .unevaluated, .fn_value, .expect, .runtime => base.invariant("a compile-time root without reusable stored data was transplanted", .{}),
+        }
     }
-    const root_type = copy.root_type orelse return;
+    const root_type = copy.storedType() orelse return;
     const types = &store.type_store;
     var seen = collections.DenseMap(ConstTypeId, void).init(allocator);
     defer seen.deinit();
@@ -762,14 +822,21 @@ fn sameEvaluation(
     previous: *const Previous,
     transplant: *const Transplant,
     match: Match,
-    fresh: checked.CompileTimeRootPayload,
+    fresh_root: checked.CompileTimeRoot,
     copy: Copy,
 ) Allocator.Error!bool {
+    const fresh = fresh_root.payload;
     if (std.meta.activeTag(fresh) != std.meta.activeTag(copy.payload)) return false;
     switch (fresh) {
         .const_node => |node| if (!try module.const_store.graphEql(node, &module.const_store, copy.payload.const_node)) return false,
+        .unevaluated => {
+            const fresh_stored = fresh_root.boxy_value orelse return false;
+            const copied = copy.boxy_value orelse return false;
+            if (!try module.const_store.graphEql(fresh_stored.node, &module.const_store, copied.node)) return false;
+            if (!try module.const_store.type_store.graphEql(&module.canonical_names, fresh_stored.root_type, &module.const_store.type_store, &module.canonical_names, copied.root_type)) return false;
+        },
         .discarded => {},
-        .pending, .unevaluated, .fn_value, .expect, .runtime => return false,
+        .pending, .fn_value, .expect, .runtime => return false,
     }
     if (copy.root_type) |root_type| {
         const fresh_type = storedTemplateType(module, module.compile_time_roots.root(match.root));
