@@ -1536,6 +1536,9 @@ const BoxyObjects = struct {
     unbound_hosted: std.ArrayList(*const Artifact) = .empty,
     /// The modules whose import closures are known (`closureKnown`).
     closures_known: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
+    /// The units and programs recorded since `progress` last reported
+    /// progress, through whichever call drained them.
+    completed_since_progress: usize = 0,
     session: post_check_executor.Session,
     first_error: ?Error = null,
     /// Whether `settleNames` ran.
@@ -1854,7 +1857,9 @@ const BoxyObjects = struct {
     fn offer(self: *BoxyObjects, artifact: *const Artifact) Error!void {
         const gpa = self.coordinator.gpa;
         if (self.records.contains(artifact.key.bytes) or self.units.contains(artifact.key.bytes)) return;
-        switch (self.eligibility(artifact)) {
+        const eligible = self.eligibility(artifact);
+        if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: offer {s}: {s}\n", .{ artifact.moduleEnvConst().module_name, @tagName(eligible) });
+        switch (eligible) {
             .never => {
                 try self.records.put(gpa, artifact.key.bytes, .{ .object = null });
                 try self.release(artifact.key.bytes);
@@ -1977,13 +1982,19 @@ const BoxyObjects = struct {
         return self.program_completions.pop();
     }
 
-    /// Wait for the next unit or program to finish, or run the one held
-    /// task with the workers lent to it. False when none is running or
-    /// held: nothing the evaluation waits for will happen.
+    /// Whether a unit or program finished since the last call, through
+    /// whichever call recorded it; otherwise wait for the next one to
+    /// finish, or run the one held task with the workers lent to it. False
+    /// when none finished and none is running or held: nothing the
+    /// evaluation waits for will happen.
     fn progress(context: *anyopaque) Error!bool {
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
         try self.drain();
         if (self.first_error) |err| return err;
+        if (self.completed_since_progress != 0) {
+            self.completed_since_progress = 0;
+            return true;
+        }
         if (self.session.outstanding == 0) return self.runAlone();
         self.coordinator.pumpPostCheckResult();
         try self.drain();
@@ -2055,7 +2066,9 @@ const BoxyObjects = struct {
         }
     }
 
-    /// Record the completions filed with the scheduler's session.
+    /// Record the completions filed with the scheduler's session. A
+    /// completion may submit the next task, which a coordinator without
+    /// workers runs and files at once.
     fn drain(self: *BoxyObjects) Error!void {
         const state = self.coordinator.post_check_sessions.getPtr(.boxy_objects);
         while (state.stash.items.len != 0) try self.complete(self.session.receive());
@@ -2063,6 +2076,7 @@ const BoxyObjects = struct {
 
     fn complete(self: *BoxyObjects, completion: post_check_executor.Completion) Error!void {
         const gpa = self.coordinator.gpa;
+        self.completed_since_progress += 1;
         if (self.program_ids.remove(completion.id)) {
             try self.program_completions.append(gpa, completion);
             try self.submitReady();
