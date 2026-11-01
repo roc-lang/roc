@@ -5342,17 +5342,19 @@ pub const InstGraph = struct {
         defer self.node_set_pool.release(&seen);
         var current = self.find(raw_root);
         while (true) {
-            // A row is recorded as it is left, so reaching one again is a
-            // cyclic chain.
             switch (try self.rootContent(current)) {
                 .tag_union => |row| {
                     if (kind != .tag_union) return false;
-                    if ((try seen.getOrPut(current)).found_existing) return false;
+                    if (check_row_chains_finite and (try seen.getOrPut(current)).found_existing) {
+                        Common.invariant("instantiation tag row has a cyclic extension chain");
+                    }
                     current = self.find(row.ext);
                 },
                 .record => |row| {
                     if (kind != .record) return false;
-                    if ((try seen.getOrPut(current)).found_existing) return false;
+                    if (check_row_chains_finite and (try seen.getOrPut(current)).found_existing) {
+                        Common.invariant("instantiation record row has a cyclic extension chain");
+                    }
                     current = self.find(row.ext);
                 },
                 .empty_tag_union => return kind == .tag_union,
@@ -11117,21 +11119,6 @@ test "open function interface shape includes producer-owned graph evidence" {
     const private_left_shape = try graph.openFunctionInterfaceShape(private_left_request);
     const private_right_shape = try graph.openFunctionInterfaceShape(private_right_request);
     try std.testing.expect(!std.mem.eql(u8, private_left_shape.bytes, private_right_shape.bytes));
-}
-
-test "cyclic row extension is not a resolved graph type" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const row = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-    try graph.setContent(row, .{ .tag_union = .{ .tags = &.{}, .ext = row } });
-    try std.testing.expect(!try graph.typeIsResolved(row));
 }
 
 fn assertNoNodeId(comptime T: type, comptime path: []const u8) void {
