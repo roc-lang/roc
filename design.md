@@ -3669,8 +3669,13 @@ hash the literal owner's artifact key or expression index. Generated literals us
 the same checked operand contract. No extra per-literal identity is persisted.
 
 For reuse across imported edits, checking also publishes exact semantic fingerprints
-of named checked type occurrences. A committed value records each occurrence's
-source placement and fingerprint alongside its old declaration and occurrence ids.
+of named checked type occurrences. Every type declaration the module holds has
+one: the explicit declaration lists supply them, because a checked type can name
+a block-local declaration in code that canonicalization or checking replaced with
+a runtime error, which no expression reaches. A block-local declaration with no
+enclosing owner is named by version-specific data, since its source alone does
+not decide what it means. A committed value records each occurrence's source
+placement and fingerprint alongside its old declaration and occurrence ids.
 Admission resolves these records against the current checked producers before
 copying anything. Every named occurrence in a value and its stored type must resolve;
 copying replaces the declaring artifact, occurrence artifact and type id, and the
