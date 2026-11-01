@@ -52,8 +52,8 @@ other modules can flatten out the nesting using `import` with the [`as` keyword]
 
 ### Alias modules
 
-⚠️ (Note: alias modules have not been implemented yet. Currently, the compiler requires a type
-module's type to be nominal, and reports an error if it's a type alias.)
+⚠️ Alias modules are planned for after 0.1.0 and have not been implemented yet. Currently, the compiler requires a type
+module's type to be nominal, and reports an error if it's a type alias.
 
 The proposed design would let you make these nested modules easier to import by creating an "alias module" whose
 type is an alias of another type. For example, you could make `ParseErr.roc` and have its
@@ -354,7 +354,7 @@ At this point you can `import FooBar` and then reference `FooBar.Foo` and `FooBa
 or you could `import FooBar.Foo` and `import FooBar.Bar` to bring `Foo` and `Bar` into
 scope unqualified.
 
-⚠️ Once [alias modules](#alias-modules) are implemented, you could also make separate modules for `Foo` and `Bar`:
+⚠️ Once [alias modules](#alias-modules) are implemented (after 0.1.0), you could also make separate modules for `Foo` and `Bar`:
 
 ```roc
 # Foo.roc

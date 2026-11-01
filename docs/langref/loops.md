@@ -190,7 +190,7 @@ If nothing ever exits the loop, it will run forever. For example, a server might
 that waits for a request, handles it, and then goes back to waiting for the next request.
 
 ⚠️ A loop that runs forever during [compile-time evaluation](compile-time) will currently hang the compiler, as
-noted in [Pure Functions](functions#pure-functions).
+noted in [Pure Functions](functions#pure-functions). Improvements to this behavior are planned for after 0.1.0.
 
 ## Performance
 
