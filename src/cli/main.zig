@@ -16867,7 +16867,7 @@ test "watch child argv forwards every dependency replacement" {
             .check => |args| args.resolve_limits,
             .build => |args| args.resolve_limits,
             .test_cmd => |args| args.resolve_limits,
-            .run, .docs, .deps, .help, .problem, .fmt, .bundle, .unbundle, .repl, .glue, .version, .bump, .install, .experimental_lsp, .licenses => return error.TestUnexpectedResult,
+            .run, .docs, .deps, .help, .problem, .fmt, .bundle, .unbundle, .repl, .glue, .version, .bump, .install, .loc, .experimental_lsp, .licenses => return error.TestUnexpectedResult,
         };
         try std.testing.expectEqual(@as(usize, 2), limits.replace_deps.len);
         try std.testing.expectEqualStrings(url, limits.replace_deps.slice()[0].old);

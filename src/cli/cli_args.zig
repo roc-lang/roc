@@ -3013,6 +3013,7 @@ test "golden help: roc --help" {
         \\  version          Print the Roc compiler's version
         \\  check            Check the code for problems, but don't build or run it
         \\  docs             Generate documentation for a Roc package or platform
+        \\  loc              Count lines of Roc source across the import graph
         \\  deps             Print the dependency tree of a Roc app, package, or platform
         \\  bump             Compare a package's public API against a previous version and report the required semver bump
         \\  experimental-lsp Start the experimental language server (LSP) implementation
