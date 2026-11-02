@@ -5890,7 +5890,7 @@ pub const Builder = struct {
                         const hidden = try self.allocator.alloc(LocalId, bound.len + target.instance.requirements.len + worker.literal_params);
                         errdefer self.allocator.free(hidden);
                         for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
-                        try self.derivedLiteralArgs(target.target, bound, hidden[bound.len + target.instance.requirements.len..]);
+                        try self.derivedLiteralArgs(target.target, bound, hidden[bound.len + target.instance.requirements.len ..]);
                         try frames.append(self.allocator, .{ .node = index, .hidden = hidden, .next = 0, .patching = false, .composed = null });
                     },
                 }

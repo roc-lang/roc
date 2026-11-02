@@ -319,8 +319,8 @@ const Order = struct {
 
 /// The method names lowering looks up on a type by name rather than through
 /// a dispatch plan: a structural derivation uses a type's own override.
-fn isOverrideMethodName(name: []const u8) bool {
-    return std.mem.eql(u8, name, "is_eq") or std.mem.eql(u8, name, "to_hash") or std.mem.eql(u8, name, "to_inspect");
+fn isOverrideMethodName(env: *const ModuleEnv, name: base.Ident.Idx) bool {
+    return name.eql(env.idents.is_eq) or name.eql(env.idents.to_hash) or name.eql(env.idents.to_inspect);
 }
 
 const State = struct {
@@ -1261,7 +1261,7 @@ const State = struct {
         defer methods.deinit(self.allocator);
         for (env.method_defs.entries.items) |entry| {
             const ident: base.Ident.Idx = @bitCast(entry.key.method_ident_bits);
-            if (!isOverrideMethodName(env.getIdentText(ident))) continue;
+            if (!isOverrideMethodName(env, ident)) continue;
             try methods.append(self.allocator, try self.methodIdentity(entry.value.def_idx));
         }
         sortDigests(methods.items);

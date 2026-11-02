@@ -586,7 +586,7 @@ fn expectSharedDependencies(source: []const u8, imports: []const @import("inspec
         const actual = try shared.dependencies(root, @intCast(ordinal));
         defer allocator.free(actual);
         try std.testing.expectEqualSlices(u32, deps, actual);
-        try std.testing.expect(std.mem.findScalar(u32, actual, @intCast(ordinal)) == null);
+        for (actual) |dependency| try std.testing.expect(dependency != ordinal);
     }
     try std.testing.expect(total_reads > 0);
     const decoded = shared.summaries.count();

@@ -901,7 +901,7 @@ fn foldsTo(member: *const TypeDesc, composed: *const TypeDesc, ops: *RocOps) boo
             if (a.name) |name| if (!name.eql(b.name.?)) return false;
             if (!slotMatches(a.desc, b.desc, &boxed, &assumed, ops)) return false;
         },
-        else => return false,
+        .zst, .scalar, .str, .bool, .list, .box, .erased_callable, .nominal, .recursive_box => return false,
     }
     return boxed;
 }

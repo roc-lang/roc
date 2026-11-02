@@ -1389,13 +1389,13 @@ test "markRegisterOverflow spends wasm's parameter limit in order" {
 
     const within = args[0 .. wasm_max_function_params + 1];
     markRegisterOverflow(.wasm32, .{ .leading_ops = false, .ret = .none, .args = within }, 0, overflow[0..within.len]);
-    try std.testing.expectEqual(null, std.mem.findScalar(bool, overflow[0..within.len], true));
+    for (overflow[0..within.len]) |overflowed| try std.testing.expect(!overflowed);
     try std.testing.expectEqual(@as(u32, wasm_max_function_params), wasmCAbiParamCount(.{ .leading_ops = false, .ret = .none, .args = within }));
 
     const lowered: LoweredCall = .{ .leading_ops = false, .ret = .indirect, .args = &args };
     try std.testing.expectEqual(@as(u32, wasm_max_function_params + 2), wasmCAbiParamCount(lowered));
     markRegisterOverflow(.wasm32, lowered, 1, &overflow);
-    try std.testing.expectEqual(@as(?usize, wasm_max_function_params - 1), std.mem.findScalar(bool, &overflow, true));
+    for (overflow, 0..) |overflowed, index| try std.testing.expectEqual(index >= wasm_max_function_params - 1, overflowed);
 }
 
 test "markRegisterOverflow leaves trailing pointers their registers" {
