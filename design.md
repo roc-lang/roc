@@ -20140,7 +20140,12 @@ types are one value in two memory orders, so where a value crosses between them
 it is rebuilt by the descriptor-driven `adapt` (Dynamic Values In LIR), which
 matches fields by name at any depth: `StorageDifference.record_order` on a
 result or a read, and the check of each explicit argument at a direct call. A
-specialized program has one type for both and needs no conversion.
+function value converts by an adapter around it, like one a row widening reaches.
+A specialized program has one type for both and needs no conversion.
+
+A function value stored inside data whose signature differs by a padded record's
+order is not converted: `adapt` copies an erased callable as it is, so
+`StorageDifference` holds this as its invariant for nested function signatures.
 
 The declared order and the padding types are part of the module's checking
 interface, so an edit to either rebuilds the importers that compiled offsets
