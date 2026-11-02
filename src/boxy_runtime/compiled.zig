@@ -461,6 +461,14 @@ pub fn dictCompose(callable_fn: erased_callable.CallableFnPtr, capture_prefix: u
     return @ptrCast(@constCast(dictionaryCache().intern(key, @ptrCast(@alignCast(data)), immortal_ops)));
 }
 
+/// Fill capture word `index` of `dict` (a `dictCompose` result that held a
+/// null word there) with `value`.
+pub fn dictPatch(dict: [*]u8, capture_prefix: u32, index: u32, value: usize) [*]u8 {
+    const words: [*]align(1) usize = @ptrCast(dict + erased_callable.capture_offset + capture_prefix);
+    words[index] = value;
+    return dict;
+}
+
 /// An immortal record of method callables, interned by its callables.
 pub fn dictRecord(methods: []const usize, immortal_ops: *RocOps) [*]const usize {
     var key_buffer: [16]u64 = undefined;

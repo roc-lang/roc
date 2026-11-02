@@ -17407,6 +17407,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.callBoxyRuntime(&builder, "roc_desc_dict_compose");
                     try self.bindReturnedScalar(dst_local, 8);
                 },
+                .dict_patch => |d| {
+                    try self.addWordArg(&builder, d.dict);
+                    try builder.addImmArg(self.erased_capture_prefix);
+                    try builder.addImmArg(@intCast(d.index));
+                    try self.addWordArg(&builder, d.value);
+                    try self.callBoxyRuntime(&builder, "roc_desc_dict_patch");
+                    try self.bindReturnedScalar(dst_local, 8);
+                },
                 .dict_record => |d| {
                     const methods = try self.emitLocalArray(d.methods, .words);
                     try builder.addImmArg(@intCast(self.store.getLocalSpan(d.methods).len));

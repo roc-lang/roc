@@ -8906,6 +8906,15 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             try self.emitBoxyRuntimeCall(.dict_compose);
             try self.bindReturnedScalar(dst, .i32);
         },
+        .dict_patch => |d| {
+            try self.emitProcLocal(d.dict);
+            // No hot-reload header precedes a wasm capture.
+            try self.emitI32Const(0);
+            try self.emitI32Const(@intCast(d.index));
+            try self.emitProcLocal(d.value);
+            try self.emitBoxyRuntimeCall(.dict_patch);
+            try self.bindReturnedScalar(dst, .i32);
+        },
         .dict_record => |d| {
             const methods = try self.emitLocalArray(d.methods, .words);
             try self.emitI32Const(@intCast(self.store.getLocalSpan(d.methods).len));

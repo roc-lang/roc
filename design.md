@@ -12807,11 +12807,16 @@ relation it has already consumed on behalf of the same failure expression
 rather than validating that use twice. An entry attributing a failure to a
 different use still runs, so that use is poisoned too.
 
-Dispatch-cycle termination is structural. An exact repeated solver state along
-its derivation lineage—the same alpha-normalized receiver plus callable digest
-and exact method binding—can close a recursive implementation when its receiver
-and callable are concrete and the target's evidence parameters are all
-determined by its callable. A parameter is determined when its receiver has a
+Dispatch-cycle termination is structural. A dispatch state's digest is its
+alpha-normalized receiver and callable with the constraints attached to their
+variables left out: each constraint is a separate relation settled on its own
+receiver, none can change which method the state selects, and a chain that only
+accumulates them repeats one selection. A repeated solver state along its
+derivation lineage—an equal digest and exact method binding—over the ancestor's
+very variables restates the obligation the ancestor is discharging, so it can
+close a recursive implementation whether or not those variables have resolved
+yet, because whatever inference learns about one applies to the other. It closes
+when the target's evidence parameters are all determined by its callable. A parameter is determined when its receiver has a
 path over the callable, or over the callable of a requirement whose receiver is
 itself determined: at the concrete repeated state, selecting that requirement's
 target is deterministic and fixes its callable, and with it the receiver. So a
@@ -12823,14 +12828,22 @@ this recursive target explicitly, and CheckedModule construction emits a finite
 callable-based evidence recipe; Monotype derives the target's evidence from the
 concrete callable, relating each selected requirement target to its constraint
 callable to a fixpoint, which binds the receivers reached through those
-callables. The ancestor's other requirements must still check successfully.
+callables. The ancestor's other requirements must still check successfully. A
+state equal to an ancestor's only up to renaming holds other variables, which
+inference may yet separate from the ancestor's, so its selection waits for them
+on the deferred queue: once they resolve, it is a new state or a concrete
+repeat.
 Rejection reports the cycle and poisons only the failing use: it never writes
 the receiver's solved class, which a concrete receiver shares with every
 definition that mentions its type.
 This admits ordinary recursive equality without making acceptance depend on
 which operand first identifies the named type. A repeated state that still needs
-type inference, or needs evidence not determined by its callable, remains a
-recursive-dispatch error. Target selection is also rejected when it re-enters an
+type inference when inference finishes, or needs evidence not determined by its
+callable, remains a recursive-dispatch error: `settleDispatchRepeats` rejects
+each repeat still waiting and each closed state with a variable neither concrete
+nor quantified. A quantified variable needs no more inference, since each
+instantiation supplies it, so a method that never returns closes with its result
+quantified, as a plain `loop = |x| loop(x)` does. Target selection is also rejected when it re-enters an
 ancestor edge's exact binding with a settled receiver that strictly structurally
 contains that ancestor's settled receiver. Every child constraint minted by
 selecting a target records its parent edge, so the parent graph is
@@ -13041,8 +13054,8 @@ acquire that lineage. Before selecting a target for a derived child, the
 checker computes an alpha-normalized digest of the receiver plus callable
 relation and compares it with the child's ancestor chain. Reaching the same
 digest, method name, owner environment, and exact method binding is the same
-solver state: it closes the concrete callable recursion described above, or is
-rejected as recursive dispatch; a chain whose concrete
+solver state: it closes the callable recursion described above, waits for its
+variables, or is rejected as recursive dispatch; a chain whose concrete
 type structure changes has a different digest and continues unless the
 growth rule catches it re-entering the same exact binding with a strictly
 grown settled receiver. Rejection settles only that cyclic relation and
@@ -14493,13 +14506,15 @@ Other solved-graph mutations:
   validation contributes only ordinary unification constraints. The selected
   calls and live contract roots freeze at final type settlement without a
   second validation. Unsettled inputs retain complete scheme requirements.
-- `closeConcreteRecursiveDispatch`—policy: Pending Dispatch Requirements In
-  Type Schemes (above). A concrete repeated receiver/callable state with an
-  exact ancestor target and callable-determined evidence (a path over the
-  callable, or over the callable of a determined requirement) reuses that
-  selected method instance through ordinary unification. A dedicated scheme-use record
-  authorizes its finite recursive evidence recipe. Unresolved repeated states,
-  hidden requirements, and growing states do not qualify.
+- `closeRecursiveDispatch`—policy: Pending Dispatch Requirements In
+  Type Schemes (above). A repeated receiver/callable state over its ancestor's
+  variables with an exact ancestor target and callable-determined evidence (a
+  path over the callable, or over the callable of a determined requirement)
+  reuses that selected method instance through ordinary unification. A dedicated
+  scheme-use record authorizes its finite recursive evidence recipe. States equal
+  only up to renaming, hidden requirements, and growing states do not qualify,
+  and a closed state whose variables finish neither concrete nor quantified is
+  rejected.
 - structural-origin retirement (`retiredRequirementCallableUnified`,
   `unifyEquivalentGeneralizedCallables` committed probe)—policy: Pending
   Dispatch Requirements In Type Schemes (above). A copied requirement whose
@@ -15035,7 +15050,13 @@ placeholder otherwise. The boxed slots compose as `desc_recursive_box` over
 the placeholder, a list or box composes over the placeholder directly, and
 neither reads anything from it; once the member's own composition is done
 `desc_recursive_close` fills the placeholder and interns it. A composed recursive type therefore has the layout its closed instances
-commit. Component addressing and construction see through recursion boxes: a
+commit. A type written over variables can also close into a recursive type only
+once the variables have types: `[Leaf(a), Next(b)]` with `b` a nominal over
+`[Leaf(U64), Next(b)]` is that nominal's backing, though nothing in the written
+type says so, and a value of the nominal reaches such a parameter unconverted.
+Composing a record, tuple, or tag union therefore searches its components along
+size edges for a member with its structure behind recursion boxes, and yields
+that member, so a closed type has one layout however it was composed. Component addressing and construction see through recursion boxes: a
 field or payload address is the boxed value's, and building a value boxes
 the components its descriptor's slots box.
 
@@ -15192,6 +15213,16 @@ immortal data. One whose captures mention the enclosing worker's hidden
 parameters is composed at runtime, hoisted to entry like a descriptor, and
 interned in the same immortal cache keyed by the target worker and its capture
 identities, so composition allocates nothing after the first evaluation.
+
+A method whose scheme requires itself has a dictionary that captures itself,
+directly or through other dictionaries: resolving a requirement can reach a
+target instance already on the path from the root (`Program.dictionaryTree`),
+and the checker keeps those instances finite. Static dictionaries reserve every
+callable before filling any, so a capture relocates to its target like a
+recursive descriptor's. At runtime, the target a back edge returns to composes
+first, with a null word in each capture slot whose dictionary reaches it, so
+those slots are no part of its identity; `dict_patch` then fills them. Equal
+compositions fill a slot with the same dictionary.
 
 Compiler-derived structural evidence (equality, hashing, inspection) is a
 callable over the dispatcher's descriptor: the dictionary for `[a.is_eq]` with
@@ -15385,7 +15416,11 @@ has that field's size and alignment and offset zero. The call consumes the
 argument's ownership unit; ARC retains it when the caller also needs it.
 Closed locals and dynamic frame or caller-provided storage survive the
 pre-call releases of a deferred call. A dynamic view into another value does
-not have that guarantee and is still packed into separate frame storage.
+not have that guarantee and is still packed into separate frame storage. A view
+is an address in its base's storage, which can be a recursion box or a list's
+bytes, and a reference count on the viewed value keeps its contents alive but not
+those bytes. ARC therefore keeps a view borrowed from its base until its last
+read, and each owning use retains what it reads.
 Deferred calls copy the argument block before returning from the invocation,
 as they do for multi-field blocks. No backend infers ownership or elides a
 copy on its own.

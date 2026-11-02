@@ -429,6 +429,44 @@ pub const RequirementResolution = union(enum) {
 /// scheme takes and the requirements of its dictionaries.
 pub const TargetInstance = struct { bound: []const TypeId, requirements: []const DictRequirement };
 
+/// One entry of a dictionary's requirement tree (`Program.dictionaryTree`).
+pub const DictionaryNode = struct {
+    /// The requirement this entry resolves; null for a tree's root target.
+    requirement: ?DictRequirement,
+    kind: Kind,
+    /// The shallowest target on this entry's path that some back edge below
+    /// it returns to, or `no_reach`.
+    reaches: u32 = no_reach,
+
+    pub const no_reach = std.math.maxInt(u32);
+
+    pub const Kind = union(enum) {
+        /// A requirement no method target resolves.
+        resolved: RequirementResolution,
+        target: Target,
+        /// A requirement resolving to the target instance at this node, which
+        /// is on the path from the root: the dictionaries capture one another.
+        back_edge: u32,
+    };
+
+    pub const Target = struct {
+        target: WorkerId,
+        instance: TargetInstance,
+        /// The node of each of `instance.requirements`.
+        children: []const u32,
+        /// How many targets are above this one on its path.
+        depth: u32,
+        /// Whether a back edge returns to this target.
+        recursive: bool = false,
+    };
+};
+
+/// Where a dictionary's requirement tree starts.
+pub const DictionaryRoot = union(enum) {
+    requirement: DictRequirement,
+    target: struct { target: WorkerId, instance: TargetInstance },
+};
+
 /// The overrides of a nominal type, in `Methods` order.
 pub const NominalOverrides = [3]?NominalOverride;
 
@@ -1428,6 +1466,93 @@ pub const Program = struct {
         return .{ .bound = bound, .requirements = requirements };
     }
 
+    /// The requirements of the dictionary `root`, each method target's own
+    /// requirements resolved the same way, as a tree in pre-order. A target
+    /// instance appears once on a path: a requirement that resolves to one
+    /// already on its path is a back edge. Checking keeps the instances a
+    /// chain of requirements reaches finite, so the tree is too.
+    pub fn dictionaryTree(self: *Program, root: DictionaryRoot) Allocator.Error![]const DictionaryNode {
+        var walk: DictionaryWalk = .{ .program = self };
+        defer walk.frames.deinit(self.allocator);
+        switch (root) {
+            .requirement => |requirement| try walk.visit(requirement),
+            .target => |target| try walk.enter(null, target.target, target.instance),
+        }
+        while (walk.frames.items.len > 0) {
+            const frame = &walk.frames.items[walk.frames.items.len - 1];
+            const requirements = walk.nodes.items[frame.node].kind.target.instance.requirements;
+            if (frame.next < requirements.len) {
+                const requirement = requirements[frame.next];
+                frame.next += 1;
+                try walk.visit(requirement);
+                continue;
+            }
+            const done = walk.frames.pop().?;
+            const entry = &walk.nodes.items[done.node];
+            entry.kind.target.children = done.children.items;
+            entry.reaches = done.reaches;
+            if (walk.frames.items.len > 0) walk.reach(done.reaches);
+        }
+        return walk.nodes.items;
+    }
+
+    const DictionaryWalk = struct {
+        program: *Program,
+        nodes: std.ArrayList(DictionaryNode) = .empty,
+        frames: std.ArrayList(Frame) = .empty,
+
+        const Frame = struct {
+            node: u32,
+            next: usize = 0,
+            reaches: u32 = DictionaryNode.no_reach,
+            children: std.ArrayList(u32) = .empty,
+        };
+
+        fn arena(self: *DictionaryWalk) Allocator {
+            return self.program.arena.allocator();
+        }
+
+        /// Add `node`, a child of the target on top of the path.
+        fn add(self: *DictionaryWalk, node: DictionaryNode) Allocator.Error!u32 {
+            const index: u32 = @intCast(self.nodes.items.len);
+            try self.nodes.append(self.arena(), node);
+            if (self.frames.items.len > 0) try self.frames.items[self.frames.items.len - 1].children.append(self.arena(), index);
+            return index;
+        }
+
+        fn reach(self: *DictionaryWalk, depth: u32) void {
+            const top = &self.frames.items[self.frames.items.len - 1];
+            top.reaches = @min(top.reaches, depth);
+        }
+
+        fn visit(self: *DictionaryWalk, requirement: DictRequirement) Allocator.Error!void {
+            const resolution = try self.program.resolveRequirement(requirement);
+            switch (resolution) {
+                .target => |target| try self.enter(requirement, target, try self.program.targetAt(target, requirement.callable)),
+                .structural, .crash, .scope_variable, .derived => _ = try self.add(.{ .requirement = requirement, .kind = .{ .resolved = resolution } }),
+            }
+        }
+
+        fn enter(self: *DictionaryWalk, requirement: ?DictRequirement, target: WorkerId, instance: TargetInstance) Allocator.Error!void {
+            for (self.frames.items) |frame| {
+                const on_path = &self.nodes.items[frame.node].kind.target;
+                if (on_path.target != target or !std.mem.eql(TypeId, on_path.instance.bound, instance.bound)) continue;
+                on_path.recursive = true;
+                const depth = on_path.depth;
+                _ = try self.add(.{ .requirement = requirement, .kind = .{ .back_edge = frame.node }, .reaches = depth });
+                return self.reach(depth);
+            }
+            const depth: u32 = @intCast(self.frames.items.len);
+            const node = try self.add(.{ .requirement = requirement, .kind = .{ .target = .{
+                .target = target,
+                .instance = instance,
+                .children = &.{},
+                .depth = depth,
+            } } });
+            try self.frames.append(self.program.allocator, .{ .node = node });
+        }
+    };
+
     /// `target` instantiated at the callable `callable` its requirement
     /// names (`instantiateTarget`).
     pub fn targetAt(self: *Program, target: WorkerId, callable: TypeId) Allocator.Error!TargetInstance {
@@ -1454,21 +1579,27 @@ pub const Program = struct {
         const count = target_worker.scheme_vars.len;
         const related = try self.relateVariablesPartial(self.allocator, &.{.{ formal, actual }}, count);
         defer self.allocator.free(related);
-        if (target_worker.dictionary_params.len != 0) {
-            const key = switch (target_worker.key) {
-                .template => |key| key,
-                .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a worker with dictionary parameters is not a template's"),
-            };
-            const templates = self.module(key.module).view.checked_procedure_templates;
-            const all_params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
-            const params = try self.allocator.alloc(static_dispatch.EvidenceParamRecord, target_worker.dictionary_params.len);
-            defer self.allocator.free(params);
-            for (target_worker.dictionary_params, params) |param_index, *param| param.* = all_params[param_index];
-            try self.relateThroughRequirements(key.module, target_worker.scheme_vars, params, related);
-        }
+        try self.relateThroughTargetRequirements(target, related);
         const bound = try self.arena.allocator().alloc(TypeId, count);
         for (related, bound, target_worker.scheme_vars) |ty, *slot, variable| slot.* = ty orelse try self.converter().sealedScheme(target_worker.module, variable);
         return try self.targetRequirements(target, bound);
+    }
+
+    /// Fill the scheme variables of `target` that `related` leaves unrelated
+    /// from the requirements of its own evidence parameters.
+    pub fn relateThroughTargetRequirements(self: *Program, target: WorkerId, related: []?TypeId) Allocator.Error!void {
+        const target_worker = self.worker(target).*;
+        if (target_worker.dictionary_params.len == 0) return;
+        const key = switch (target_worker.key) {
+            .template => |key| key,
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a worker with dictionary parameters is not a template's"),
+        };
+        const templates = self.module(key.module).view.checked_procedure_templates;
+        const all_params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
+        const params = try self.allocator.alloc(static_dispatch.EvidenceParamRecord, target_worker.dictionary_params.len);
+        defer self.allocator.free(params);
+        for (target_worker.dictionary_params, params) |param_index, *param| param.* = all_params[param_index];
+        try self.relateThroughRequirements(key.module, target_worker.scheme_vars, params, related);
     }
 
     /// Fill the variables of `vars` (of `module`) that `related` leaves

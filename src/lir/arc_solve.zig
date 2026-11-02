@@ -2156,11 +2156,20 @@ fn paramIsBorrowed(solver: *const Solver, local_index: u32) bool {
 }
 
 fn borrowQualifies(solver: *const Solver, index: u32) bool {
-    if (solver.demand[index]) return false;
     return switch (solver.defs[index]) {
-        .borrow_capable => true,
+        .borrow_capable => !solver.demand[index] or isDynamicView(solver, index),
         .none, .multi, .fresh => false,
     };
+}
+
+/// A dynamic view is an address inside its base's storage, which may be a
+/// recursion box or a list's bytes. Holding a unit of the viewed value keeps
+/// that value's contents alive, not those bytes, so a view stays borrowed
+/// until its last read and each owning use retains what it reads.
+fn isDynamicView(solver: *const Solver, index: u32) bool {
+    const local: LIR.LocalId = @fromBackingInt(solver.domain.localAt(index));
+    const dyn = solver.store.getLocal(local).dyn orelse return false;
+    return dyn.storage == .view;
 }
 
 /// A join parameter carries exactly one ownership unit into the join body at

@@ -4003,7 +4003,7 @@ pub const MonoLlvmCodeGen = struct {
                     // its composition takes.
                     .dyn => |dyn_stmt| switch (self.store.stmtRow(dyn_stmt.data)) {
                         .dict_compose => |compose| needs[@backingInt(compose.worker)] = true,
-                        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => {},
+                        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => {},
                     },
                     .init_uninitialized, .assign_ref, .assign_call_erased, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
                 }
@@ -11913,6 +11913,14 @@ pub const MonoLlvmCodeGen = struct {
                     captures,
                 }));
             },
+            // Generated code reserves no bytes before an erased callable's
+            // captures.
+            .dict_patch => |d| try self.bindWord(target, try self.callBoxyRuntime("roc_desc_dict_patch", ptr_ty, &.{ ptr_ty, .i32, .i32, ptr_ty }, &.{
+                try self.wordValue(d.dict),
+                try self.intValue(.i32, 0),
+                try self.intValue(.i32, d.index),
+                try self.wordValue(d.value),
+            })),
             .dict_record => |d| {
                 const methods = try self.dynLocalArray(d.methods, .words);
                 try self.bindWord(target, try self.callBoxyRuntime("roc_desc_dict_record", ptr_ty, &.{ .i32, ptr_ty }, &.{ try self.intValue(.i32, d.methods.len), methods }));

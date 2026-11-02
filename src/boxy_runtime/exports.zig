@@ -259,6 +259,11 @@ pub fn roc_desc_dict_compose(callable_fn: builtins.erased_callable.CallableFnPtr
     return compiled.dictCompose(callable_fn, capture_prefix, items(usize, count, captures), composeOps());
 }
 
+/// The C-ABI form of `compiled.dictPatch`.
+pub fn roc_desc_dict_patch(dict: [*]u8, capture_prefix: u32, index: u32, value: usize) callconv(.c) [*]u8 {
+    return compiled.dictPatch(dict, capture_prefix, index, value);
+}
+
 /// The C-ABI form of `compiled.dictRecord`.
 pub fn roc_desc_dict_record(count: u32, methods: ?[*]const usize) callconv(.c) [*]const usize {
     return compiled.dictRecord(items(usize, count, methods), composeOps());

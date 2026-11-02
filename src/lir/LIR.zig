@@ -1334,7 +1334,7 @@ pub const PackedErasedFnData = struct {
 /// `eq`, `hash`, `inspect`, and `tag_discriminant` borrow their value
 /// operands; `call_erased` consumes `args` and borrows `closure`;
 /// `dict_compose` and `dict_record` hold their operands as an aggregate
-/// holds its fields.
+/// holds its fields; `dict_patch` borrows its immortal operands.
 pub const DynOp = union(enum) {
     /// Allocate the procedure's dynamic frame region and set the address of
     /// every `frame` dynamic local. Exactly one per procedure with such
@@ -1393,6 +1393,12 @@ pub const DynOp = union(enum) {
     /// of `worker` capturing `captures` (descriptors and dictionaries, in the
     /// worker's capture order), interned by worker and capture identities.
     dict_compose: struct { worker: LirProcSpecId, captures: LocalSpan },
+    /// Fill capture word `index` of `dict`, a `dict_compose` result that held
+    /// a null word there, with `value`, a dictionary that captures `dict`: a
+    /// recursive requirement's dictionaries capture one another. The word
+    /// isn't part of `dict`'s identity, and the same composition always fills
+    /// it with the same value. Target: `dict`.
+    dict_patch: struct { dict: LocalId, index: u32, value: LocalId },
     /// A dictionary record of several method callables, interned.
     dict_record: struct { methods: LocalSpan },
     /// The callable of method `index` of a dictionary record. Target:

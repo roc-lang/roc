@@ -864,6 +864,43 @@ test "reference field tables select physical slots and exclude scalars and paddi
     try testing.expectEqual(@as(usize, 0), empty.refcountedFieldSlots().len);
 }
 
+test "a composed union equal to a recursive member is that member" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    // `Expr := [Leaf(Str), Next(Expr)]`, then `[Leaf(a), Next(b)]` at the same
+    // types, composed from `b`'s descriptor as a generic body does.
+    const leaf = name("Leaf");
+    const next = name("Next");
+    const expr_name = name("Expr");
+    var key: u8 = 0;
+    const shell = compose.recursiveOpen(&env.cache, ops, &key, &.{});
+    const box = compose.recursiveBox(&env.cache, ops, shell);
+    const str_payload = [_]*const TypeDesc{compose.strDesc()};
+    const boxed_payload = [_]*const TypeDesc{box};
+    const member = compose.tagUnion(&env.cache, ops, &.{
+        .{ .name = &leaf, .payload_count = 1, .payloads = &str_payload },
+        .{ .name = &next, .payload_count = 1, .payloads = &boxed_payload },
+    });
+    const backed = compose.nominal(&env.cache, ops, member, &expr_name, null, false);
+    const expr = compose.recursiveClose(&env.cache, ops, shell, backed, &key, &.{});
+    const expr_payload = [_]*const TypeDesc{expr};
+    const composed = compose.tagUnion(&env.cache, ops, &.{
+        .{ .name = &leaf, .payload_count = 1, .payloads = &str_payload },
+        .{ .name = &next, .payload_count = 1, .payloads = &expr_payload },
+    });
+    try testing.expectEqual(member, composed);
+
+    // A union with other payloads is a type of its own, stored inline.
+    const u64_payload = [_]*const TypeDesc{compose.scalarDesc(.u64)};
+    const other = compose.tagUnion(&env.cache, ops, &.{
+        .{ .name = &leaf, .payload_count = 1, .payloads = &u64_payload },
+        .{ .name = &next, .payload_count = 1, .payloads = &expr_payload },
+    });
+    try testing.expect(other != member);
+    try testing.expectEqual(expr, other.variants()[1].payload);
+}
+
 test "reference field tables remain exact when recursive placeholders close" {
     var env = Env.init();
     defer env.deinit();

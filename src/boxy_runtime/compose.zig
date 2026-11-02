@@ -549,7 +549,7 @@ pub fn record(cache: *Cache, ops: *RocOps, fields: []const FieldInput) *const Ty
         members[input_index] = .{ .name = field.name, .desc = field.desc, .field_index = @intCast(rank), .is_padding = false };
     }
     const built = buildStruct(ops, .record, .structural, members);
-    return cache.intern(key, built, ops);
+    return cache.intern(key, recursiveMemberOf(built, ops) orelse built, ops);
 }
 
 /// A record of `fields` together with the fields of the record `ext`
@@ -714,7 +714,8 @@ fn positional(cache: *Cache, ops: *RocOps, comptime tag: KeyTag, descs: []const 
     for (descs, 0..) |d, index| members[index] = .{ .name = null, .desc = d, .field_index = @intCast(index), .is_padding = false };
     const order: Order = if (tag == .args) .declared else .structural;
     const built = buildStruct(ops, .tuple, order, members);
-    return cache.intern(key, built, ops);
+    if (tag == .args) return cache.intern(key, built, ops);
+    return cache.intern(key, recursiveMemberOf(built, ops) orelse built, ops);
 }
 
 /// An optional record field's presence slot over `payload`: the tag union
@@ -804,7 +805,140 @@ pub fn tagUnion(cache: *Cache, ops: *RocOps, variants: []const VariantInput) *co
         .name = null,
         .methods = null,
     };
-    return cache.intern(key, block.desc, ops);
+    return cache.intern(key, recursiveMemberOf(block.desc, ops) orelse block.desc, ops);
+}
+
+/// A growable list of descriptors for a walk, allocated through `ops`.
+fn DescWalk(comptime Item: type) type {
+    return struct {
+        items: []Item = &.{},
+        len: usize = 0,
+
+        const Self = @This();
+
+        fn append(self: *Self, item: Item, ops: *RocOps) void {
+            if (self.len == self.items.len) {
+                const capacity = @max(16, self.items.len * 2);
+                const grown: [*]Item = @ptrCast(@alignCast(ops.allocRaw(capacity * @sizeOf(Item), @alignOf(Item))));
+                @memcpy(grown[0..self.len], self.items[0..self.len]);
+                self.free(ops);
+                self.items = grown[0..capacity];
+            }
+            self.items[self.len] = item;
+            self.len += 1;
+        }
+
+        fn pop(self: *Self) ?Item {
+            if (self.len == 0) return null;
+            self.len -= 1;
+            return self.items[self.len];
+        }
+
+        fn free(self: *Self, ops: *RocOps) void {
+            if (self.items.len != 0) ops.dealloc(@ptrCast(self.items.ptr), @alignOf(Item));
+        }
+    };
+}
+
+/// The descriptors `d` stores inline or through a recursion box: the edges a
+/// recursive type's size cycle runs along.
+fn pushSizeComponents(d: *const TypeDesc, out: *DescWalk(*const TypeDesc), ops: *RocOps) void {
+    // An open placeholder's components aren't known until it closes.
+    if (recursiveIsOpen(d)) return;
+    switch (d.kind) {
+        .nominal, .recursive_box => out.append(d.child.?, ops),
+        .record, .tuple => for (d.fields()) |field| {
+            if (field.is_padding == 0) out.append(field.desc, ops);
+        },
+        .tag_union => for (d.variants()) |variant| out.append(variant.payload, ops),
+        .scalar, .bool, .str, .list, .box, .erased_callable, .zst => {},
+    }
+}
+
+/// The member of a recursive type whose structure `composed` has, or null
+/// when there is none. A type written over variables can close into a
+/// recursive type only once they have types: `[Leaf(a), Next(b)]` with `b` a
+/// nominal over `[Leaf(U64), Next(b)]` is that nominal's backing. The closed
+/// type has one representation, whose slots on the cycle are boxed, and the
+/// member is reachable from `composed`'s own components, since the cycle runs
+/// through them.
+fn recursiveMemberOf(composed: *const TypeDesc, ops: *RocOps) ?*const TypeDesc {
+    var pending: DescWalk(*const TypeDesc) = .{};
+    defer pending.free(ops);
+    var seen: DescWalk(*const TypeDesc) = .{};
+    defer seen.free(ops);
+    pushSizeComponents(composed, &pending, ops);
+    visit: while (pending.pop()) |candidate| {
+        for (seen.items[0..seen.len]) |visited| if (visited == candidate) continue :visit;
+        seen.append(candidate, ops);
+        if (candidate.kind == composed.kind and foldsTo(candidate, composed, ops)) return candidate;
+        pushSizeComponents(candidate, &pending, ops);
+    }
+    return null;
+}
+
+/// Whether `member` is `composed` with some slots behind recursion boxes.
+fn foldsTo(member: *const TypeDesc, composed: *const TypeDesc, ops: *RocOps) bool {
+    if (member.count != composed.count) return false;
+    var assumed: DescWalk(DescPair) = .{};
+    defer assumed.free(ops);
+    var boxed = false;
+    switch (member.kind) {
+        .tag_union => for (member.variants(), composed.variants()) |a, b| {
+            if (!a.name.eql(b.name) or a.payload_count != b.payload_count) return false;
+            if (!slotMatches(a.payload, b.payload, &boxed, &assumed, ops)) return false;
+        },
+        .record, .tuple => for (0..member.count) |index| {
+            const a = member.fieldBySemanticIndex(@intCast(index));
+            const b = composed.fieldBySemanticIndex(@intCast(index));
+            if ((a.is_padding != 0) != (b.is_padding != 0)) return false;
+            if (a.is_padding != 0) continue;
+            if ((a.name == null) != (b.name == null)) return false;
+            if (a.name) |name| if (!name.eql(b.name.?)) return false;
+            if (!slotMatches(a.desc, b.desc, &boxed, &assumed, ops)) return false;
+        },
+        else => return false,
+    }
+    return boxed;
+}
+
+fn slotMatches(member: *const TypeDesc, composed: *const TypeDesc, boxed: *bool, assumed: *DescWalk(DescPair), ops: *RocOps) bool {
+    if (member.kind == .recursive_box and composed.kind != .recursive_box) {
+        boxed.* = true;
+        return sameDesc(member.child.?, composed, assumed, ops);
+    }
+    return sameDesc(member, composed, assumed, ops);
+}
+
+const DescPair = struct { a: *const TypeDesc, b: *const TypeDesc };
+
+/// Whether two descriptors describe one type. A pair met again while it is
+/// being compared holds if nothing else differs.
+fn sameDesc(a: *const TypeDesc, b: *const TypeDesc, assumed: *DescWalk(DescPair), ops: *RocOps) bool {
+    if (a == b) return true;
+    if (a.kind != b.kind or a.scalar != b.scalar or a.size != b.size or a.alignment != b.alignment or a.count != b.count) return false;
+    for (assumed.items[0..assumed.len]) |pair| {
+        if (pair.a == a and pair.b == b) return true;
+    }
+    assumed.append(.{ .a = a, .b = b }, ops);
+    if ((a.name == null) != (b.name == null)) return false;
+    if (a.name) |name| if (!name.eql(b.name.?)) return false;
+    switch (a.kind) {
+        .nominal, .recursive_box, .list, .box => return sameDesc(a.child.?, b.child.?, assumed, ops),
+        .record, .tuple => for (a.fields(), b.fields()) |x, y| {
+            if (x.is_padding != y.is_padding or x.offset != y.offset) return false;
+            if (x.is_padding != 0) continue;
+            if ((x.name == null) != (y.name == null)) return false;
+            if (x.name) |name| if (!name.eql(y.name.?)) return false;
+            if (!sameDesc(x.desc, y.desc, assumed, ops)) return false;
+        },
+        .tag_union => for (a.variants(), b.variants()) |x, y| {
+            if (!x.name.eql(y.name) or x.payload_count != y.payload_count) return false;
+            if (!sameDesc(x.payload, y.payload, assumed, ops)) return false;
+        },
+        .scalar, .bool, .str, .erased_callable, .zst => {},
+    }
+    return true;
 }
 
 /// A nominal type over `backing`, whose layout it shares.

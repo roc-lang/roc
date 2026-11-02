@@ -8746,6 +8746,13 @@ pub const Interpreter = struct {
                 const callable = try self.internDictionary(key, DictCallableBuild{ .worker = d.worker, .captures = key[2..] }, DictCallableBuild.build);
                 try self.setWordTarget(frame, stmt_id, target, @intFromPtr(callable));
             },
+            .dict_patch => |d| {
+                const dict = try self.localWord(frame, d.dict);
+                const data: [*]u8 = @ptrFromInt(dict);
+                const values: [*]usize = @ptrCast(@alignCast(erasedCallableInterpreterCaptureValuePtr(data)));
+                values[d.index] = @intCast(try self.localWord(frame, d.value));
+                try self.setWordTarget(frame, stmt_id, target, dict);
+            },
             .dict_record => |d| {
                 const methods = self.store.getLocalSpan(d.methods);
                 const key = try self.evalAllocator().alloc(u64, 1 + methods.len);

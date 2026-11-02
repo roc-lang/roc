@@ -3499,6 +3499,11 @@ pub const Builder = struct {
     /// arguments of its edges that name scopes outside them are read by no
     /// body the thunk lowers.
     fn unreachableWord(self: *Builder) Allocator.Error!LocalId {
+        return try self.nullWord();
+    }
+
+    /// A word holding null.
+    fn nullWord(self: *Builder) Allocator.Error!LocalId {
         const local = try self.closedLocal(try self.erasedLayout());
         try self.emitEntry(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = try self.program.static_descs.nullWordSlot() } }, .next = undefined } });
         return local;
@@ -5626,6 +5631,9 @@ pub const Builder = struct {
             break :blk try self.program.relateVariablesRows(self.allocator, &.{.{ formal, actual }}, target.scheme_vars.len, row_vars);
         } else try self.allocator.alloc(?TypeId, 0);
         defer self.allocator.free(related);
+        // Without a recorded instantiation, a variable the function type
+        // doesn't mention is one the target's own requirements fix.
+        if (!recorded and related.len != 0) try self.program.relateThroughTargetRequirements(callee, related);
         for (bound, 0..) |*slot, index| {
             const ty = if (index < related.len) related[index] else null;
             if (row_vars[index] and ty != null) {
@@ -5806,57 +5814,111 @@ pub const Builder = struct {
 
     /// The dictionary of `root`, resolved from its dispatcher's type
     /// (`Program.resolveRequirement`), with each method target's own
-    /// requirements resolved the same way. Nested requirements are resolved
-    /// with an explicit stack.
+    /// requirements resolved the same way (`Program.dictionaryTree`). A target
+    /// a back edge returns to composes before the dictionaries that reach it,
+    /// a null word in each of their capture slots, which `dict_patch` then
+    /// fills, so its identity is what remains. Nested requirements are
+    /// resolved with an explicit stack.
     pub fn dictionaryFromType(self: *Builder, root: lower.DictRequirement) Allocator.Error!LocalId {
         const Frame = struct {
-            target: WorkerId,
-            callable: TypeId,
-            instance: lower.TargetInstance,
-            hidden: std.ArrayList(LocalId),
+            node: u32,
+            /// The entry's captures: descriptors, dictionaries, literals.
+            hidden: []LocalId,
+            /// The next dictionary to compose, once through the requirements
+            /// the composition captures, then through those it is patched
+            /// with.
             next: usize,
+            patching: bool,
+            /// The latest of the composition and its patches.
+            composed: ?LocalId,
         };
+        const tree = try self.program.dictionaryTree(.{ .requirement = root });
+        const composed = try self.allocator.alloc(?LocalId, tree.len);
+        defer self.allocator.free(composed);
+        @memset(composed, null);
         var frames: std.ArrayList(Frame) = .empty;
         defer {
-            for (frames.items) |*frame| frame.hidden.deinit(self.allocator);
+            for (frames.items) |frame| self.allocator.free(frame.hidden);
             frames.deinit(self.allocator);
         }
-        var pending: ?lower.DictRequirement = root;
+        var pending: ?u32 = 0;
         var delivered: ?LocalId = null;
         while (true) {
-            if (pending) |requirement| {
+            if (pending) |index| {
                 pending = null;
-                switch (try self.program.resolveRequirement(requirement)) {
-                    .structural => |structural| delivered = try self.composeDictionary(try self.program.structuralWorker(self.module, structural.method), &.{try self.descOf(structural.over)}),
-                    .crash => |kind| delivered = try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, kind), &.{}),
-                    .scope_variable => |index| delivered = self.variableDictionary(index, self.program.module(requirement.module).nameStore().methodNameText(requirement.method)),
-                    .derived => invariant("a derived codec or map dictionary is resolved from a type alone, but checking records each with its plan at the dispatch it serves"),
+                const node = tree[index];
+                switch (node.kind) {
+                    .resolved => |resolution| switch (resolution) {
+                        .structural => |structural| delivered = try self.composeDictionary(try self.program.structuralWorker(self.module, structural.method), &.{try self.descOf(structural.over)}),
+                        .crash => |kind| delivered = try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, kind), &.{}),
+                        .scope_variable => |variable| delivered = self.variableDictionary(variable, self.program.module(node.requirement.?.module).nameStore().methodNameText(node.requirement.?.method)),
+                        .derived => invariant("a derived codec or map dictionary is resolved from a type alone, but checking records each with its plan at the dispatch it serves"),
+                        .target => invariant("a dictionary's target requirement is not a resolved node"),
+                    },
+                    .back_edge => |head| delivered = try self.adaptTargetDictionary(composed[head].?, tree[head].kind.target, node.requirement.?.callable),
                     .target => |target| {
-                        const instance = try self.program.targetAt(target, requirement.callable);
-                        var hidden: std.ArrayList(LocalId) = .empty;
-                        for (instance.bound) |ty| try hidden.append(self.allocator, try self.descOf(ty));
-                        try frames.append(self.allocator, .{ .target = target, .callable = requirement.callable, .instance = instance, .hidden = hidden, .next = 0 });
+                        const worker = self.program.worker(target.target).*;
+                        const bound = target.instance.bound;
+                        const hidden = try self.allocator.alloc(LocalId, bound.len + target.instance.requirements.len + worker.literal_params);
+                        errdefer self.allocator.free(hidden);
+                        for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
+                        try self.derivedLiteralArgs(target.target, bound, hidden[bound.len + target.instance.requirements.len..]);
+                        try frames.append(self.allocator, .{ .node = index, .hidden = hidden, .next = 0, .patching = false, .composed = null });
                     },
                 }
             }
+            const frame = if (frames.items.len > 0) &frames.items[frames.items.len - 1] else return delivered.?;
+            const target = tree[frame.node].kind.target;
+            const dictionaries = frame.hidden[target.instance.bound.len..][0..target.children.len];
             if (delivered) |dictionary| {
                 delivered = null;
-                if (frames.items.len == 0) return dictionary;
-                try frames.items[frames.items.len - 1].hidden.append(self.allocator, dictionary);
+                const slot = frame.next - 1;
+                if (frame.patching) {
+                    const local = try self.closedLocal(try self.erasedLayout());
+                    try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .dict_patch = .{
+                        .dict = frame.composed.?,
+                        .index = @intCast(target.instance.bound.len + slot),
+                        .value = dictionary,
+                    } }), .next = undefined } });
+                    frame.composed = local;
+                } else {
+                    dictionaries[slot] = dictionary;
+                }
             }
-            const frame = &frames.items[frames.items.len - 1];
-            if (frame.next < frame.instance.requirements.len) {
-                pending = frame.instance.requirements[frame.next];
+            while (frame.next < target.children.len) {
+                const slot = frame.next;
+                const child = target.children[slot];
+                const waits = target.recursive and tree[child].reaches <= target.depth;
                 frame.next += 1;
-                continue;
+                if (waits == frame.patching) {
+                    pending = child;
+                    break;
+                }
+                if (waits) dictionaries[slot] = try self.nullWord();
             }
-            var done = frames.pop().?;
-            defer done.hidden.deinit(self.allocator);
-            const target_worker = self.program.worker(done.target).*;
-            const dictionary = try self.composeDictionary(try self.program.methodEntryWorker(done.target), done.hidden.items);
-            const own_fn = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
-            delivered = try self.adaptDictionary(dictionary, try self.program.substitute(self.allocator, own_fn, done.instance.bound), done.callable);
+            if (pending != null) continue;
+            if (!frame.patching) {
+                const dictionary = try self.composeDictionary(try self.program.methodEntryWorker(target.target), frame.hidden);
+                frame.composed = dictionary;
+                composed[frame.node] = dictionary;
+                if (target.recursive) {
+                    frame.patching = true;
+                    frame.next = 0;
+                    continue;
+                }
+            }
+            const dictionary = frame.composed.?;
+            const node = tree[frame.node];
+            self.allocator.free(frames.pop().?.hidden);
+            delivered = if (node.requirement) |requirement| try self.adaptTargetDictionary(dictionary, target, requirement.callable) else dictionary;
         }
+    }
+
+    /// `dictionary`, of `target`'s method entry, at the method's `callable`.
+    fn adaptTargetDictionary(self: *Builder, dictionary: LocalId, target: lower.DictionaryNode.Target, callable: TypeId) Allocator.Error!LocalId {
+        const worker = self.program.worker(target.target).*;
+        const own_fn = try self.program.store.intern(.{ .function = .{ .args = worker.params, .ret = worker.ret, .effectful = false } });
+        return try self.adaptDictionary(dictionary, try self.program.substitute(self.allocator, own_fn, target.instance.bound), callable);
     }
 
     /// The dictionary this body's scopes hold for method `method_text` on
@@ -6503,7 +6565,7 @@ pub const Builder = struct {
                         // must remain an explicit operation.
                         if (dyn.desc != self.store.localDyn(result).?.desc) return false;
                     },
-                    .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_compose, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record_update, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .closure, .view, .adapt => return false,
+                    .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_compose, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record_update, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .closure, .view, .adapt => return false,
                 }
                 op.target = result;
             },
