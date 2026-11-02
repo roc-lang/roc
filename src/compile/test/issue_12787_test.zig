@@ -89,16 +89,18 @@ test "issue 12787: a boxy derived parser's longest block grows with fields as a 
     const added_fields = large_record - small_record;
     const lss_per_field = (lss_large -| lss_small) / added_fields;
     const boxy_per_field = (boxy_large -| boxy_small) / added_fields;
-    std.debug.print("longest block per field: boxy {d} ({d} to {d}), specialized {d} ({d} to {d})\n", .{
-        boxy_per_field,
-        boxy_small,
-        boxy_large,
-        lss_per_field,
-        lss_small,
-        lss_large,
-    });
     try std.testing.expect(lss_per_field > 0);
     // A closed record lowers to the same kind of code under both strategies,
     // so the per-field growth of the longest block is of one order.
-    try std.testing.expect(boxy_per_field <= 2 * lss_per_field);
+    if (boxy_per_field > 2 * lss_per_field) {
+        std.debug.print("longest block per field: boxy {d} ({d} to {d}), specialized {d} ({d} to {d})\n", .{
+            boxy_per_field,
+            boxy_small,
+            boxy_large,
+            lss_per_field,
+            lss_small,
+            lss_large,
+        });
+        return error.TestUnexpectedResult;
+    }
 }
