@@ -40,6 +40,7 @@ const TypeId = types.TypeId;
 const ModuleIndex = types.ModuleIndex;
 const Program = lower.Program;
 const Layouts = @import("layouts.zig").Layouts;
+const StaticDescs = @import("static_descs.zig").StaticDescs;
 const WorkerId = lower.WorkerId;
 const invariant = types.invariant;
 const invariantFmt = types.invariantFmt;
@@ -397,6 +398,9 @@ pub const Builder = struct {
     /// name the exact ordered descriptor locals, not an approximation of types.
     args_descs: std.HashMapUnmanaged(ArgsDescKey, LocalId, ArgsDescContext, std.hash_map.default_max_load_percentage) = .empty,
 
+    /// What each local holding static data holds, for a dictionary that
+    /// captures it.
+    static_words: collections.DenseMapUnmanaged(LocalId, StaticDescs.CaptureWord) = .empty,
     /// Each type's descriptor once noted (`Input.stored_functions`).
     noted_descs: collections.DenseMapUnmanaged(TypeId, LocalId) = .empty,
     /// The locals the entry chain defines, which every statement of the
@@ -476,6 +480,7 @@ pub const Builder = struct {
         while (args_keys.next()) |key| self.allocator.free(key.descs);
         self.args_descs.deinit(self.allocator);
         self.noted_descs.deinit(self.allocator);
+        self.static_words.deinit(self.allocator);
         self.entry_locals.deinit(self.allocator);
         self.opened_components.deinit(self.allocator);
         self.open_members.deinit(self.allocator);
@@ -601,7 +606,7 @@ pub const Builder = struct {
     /// Replace `hole` with `stmt`.
     pub fn fill(self: *Builder, hole: CFStmtId, stmt: LIR.CFStmt, kind: LIR.OriginKind) Allocator.Error!void {
         var emitted = stmt;
-        if (emitted == .dyn and lir_core.DynOps.isComposition(self.store.stmtRow(emitted.dyn.data))) {
+        if (self.program.input.composition_sites and emitted == .dyn and lir_core.DynOps.isComposition(self.store.stmtRow(emitted.dyn.data))) {
             std.debug.assert(emitted.dyn.composition_cache == null);
             const site = self.composition_site_count;
             self.composition_site_count = std.math.add(u32, site, 1) catch return error.OutOfMemory;
@@ -1068,6 +1073,7 @@ pub const Builder = struct {
         const local = try self.closedLocal(.opaque_ptr);
         try self.emitEntry(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = slot } }, .next = undefined } });
         try self.type_descs.put(self.allocator, ty, local);
+        try self.static_words.put(self.allocator, local, .{ .desc = ty });
         return local;
     }
 
@@ -3596,10 +3602,13 @@ pub const Builder = struct {
     /// arguments of its edges that name scopes outside them are read by no
     /// body the thunk lowers.
     fn unreachableWord(self: *Builder) Allocator.Error!LocalId {
-        return try self.nullWord();
+        const local = try self.nullWord();
+        try self.static_words.put(self.allocator, local, .zero);
+        return local;
     }
 
-    /// A word holding null.
+    /// A word holding null. A recursive dictionary's placeholder is one, which
+    /// keeps that dictionary composed: `dict_patch` fills it at runtime.
     fn nullWord(self: *Builder) Allocator.Error!LocalId {
         const local = try self.closedLocal(.opaque_ptr);
         try self.emitEntry(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = try self.program.static_descs.nullWordSlot() } }, .next = undefined } });
@@ -6758,11 +6767,27 @@ pub const Builder = struct {
     }
 
     pub fn composeDictionary(self: *Builder, entry: WorkerId, captures: []const LocalId) Allocator.Error!LocalId {
+        if (try self.staticDictionary(entry, captures)) |local| return local;
         const local = try self.closedLocal(try self.erasedLayout());
         try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .dict_compose = .{
             .worker = self.program.worker(entry).proc,
             .captures = try self.store.addLocalSpan(captures),
         } }), .next = undefined } });
+        return local;
+    }
+
+    /// The dictionary of `entry` as static data, when all of `captures` are
+    /// themselves static. A compile-time program reads its function values'
+    /// types back from what its compositions noted, so it composes them.
+    fn staticDictionary(self: *Builder, entry: WorkerId, captures: []const LocalId) Allocator.Error!?LocalId {
+        if (self.program.input.stored_functions) return null;
+        const words = try self.allocator.alloc(StaticDescs.CaptureWord, captures.len);
+        defer self.allocator.free(words);
+        for (captures, words) |capture, *word| word.* = self.static_words.get(capture) orelse return null;
+        const dictionary = try self.program.static_descs.dictionary(self.program.worker(entry).proc, words);
+        const local = try self.closedLocal(try self.erasedLayout());
+        try self.emitEntry(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = dictionary.slot } }, .next = undefined } });
+        try self.static_words.put(self.allocator, local, .{ .callable = dictionary.node });
         return local;
     }
 

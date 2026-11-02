@@ -67,6 +67,9 @@ pub const Input = struct {
     /// each descriptor came from (`LIR.DynOp.desc_note`), and the lowering
     /// keeps the program for reading those values (`Output.retained`).
     stored_functions: bool = false,
+    /// The consumer reads composition sites, so each composition statement
+    /// gets a slot (design.md "Runtime").
+    composition_sites: bool = true,
     /// What this lowering emits: one program, or one module's object.
     unit: Unit = .program,
 };
