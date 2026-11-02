@@ -90,11 +90,9 @@ pub const ServerCapabilities = struct {
     };
 };
 
-/// Returns the capabilities for a session. Untrusted sessions only advertise the
-/// parse-only features, so clients don't send requests the server would refuse.
-/// Keep this in sync with `requires_trust` in `server.zig`.
-pub fn buildCapabilities(trusted_workspace: bool) ServerCapabilities {
-    const parse_only: ServerCapabilities = .{
+/// Returns all capabilities supported by the server.
+pub fn buildCapabilities() ServerCapabilities {
+    return .{
         .textDocumentSync = .{
             .openClose = true,
             .change = @backingInt(ServerCapabilities.TextDocumentSyncKind.incremental),
@@ -102,25 +100,21 @@ pub fn buildCapabilities(trusted_workspace: bool) ServerCapabilities {
         .documentFormattingProvider = true,
         .foldingRangeProvider = true,
         .selectionRangeProvider = true,
-    };
-    if (!trusted_workspace) return parse_only;
-
-    var all = parse_only;
-    all.semanticTokensProvider = .{
-        .legend = .{
-            .tokenTypes = &TOKEN_TYPES,
-            .tokenModifiers = &TOKEN_MODIFIERS,
+        .semanticTokensProvider = .{
+            .legend = .{
+                .tokenTypes = &TOKEN_TYPES,
+                .tokenModifiers = &TOKEN_MODIFIERS,
+            },
+            .full = true,
         },
-        .full = true,
+        .hoverProvider = true,
+        .definitionProvider = true,
+        .documentSymbolProvider = true,
+        .documentHighlightProvider = true,
+        .completionProvider = .{},
+        .referencesProvider = true,
+        .inlayHintProvider = true,
+        .codeActionProvider = .{},
+        .renameProvider = .{},
     };
-    all.hoverProvider = true;
-    all.definitionProvider = true;
-    all.documentSymbolProvider = true;
-    all.documentHighlightProvider = true;
-    all.completionProvider = .{};
-    all.referencesProvider = true;
-    all.inlayHintProvider = true;
-    all.codeActionProvider = .{};
-    all.renameProvider = .{};
-    return all;
 }
