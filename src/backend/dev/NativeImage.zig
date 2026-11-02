@@ -181,7 +181,7 @@ test "native CTFE image binds pointers and resets only mutable data" {
         .relocations = &.{},
         .data_relocations = &.{.{ .offset = 0, .symbol = @fromBackingInt(0) }},
         .unwind = &.{},
-    }, .{ .context = &code, .resolve = Never.resolve });
+    }, .{ .context = @ptrCast(&code), .resolve = Never.resolve });
     defer image.deinit();
     const pointer: *const usize = @ptrFromInt(image.symbols.get("pointer").?);
     try std.testing.expectEqual(image.symbols.get("answer").?, pointer.*);
@@ -217,7 +217,7 @@ test "native CTFE image binds external calls through nearby stubs" {
         .relocations = &.{.{ .linked_function = .{ .offset = if (isa == .x86_64) 5 else 4, .symbol = @fromBackingInt(0), .kind = if (isa == .x86_64) .x86_call_rel32 else .aarch64_call26 } }},
         .data_relocations = &.{},
         .unwind = &.{},
-    }, .{ .context = &code, .resolve = Host.resolve });
+    }, .{ .context = @ptrCast(&code), .resolve = Host.resolve });
     defer image.deinit();
     const answer: *const fn () callconv(.c) u64 = @ptrCast(image.code().ptr);
     try std.testing.expectEqual(@as(u64, 37), answer());
