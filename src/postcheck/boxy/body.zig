@@ -306,8 +306,9 @@ const AliasStep = struct {
 /// Where the literal arguments of the procedure an alias chain reaches come
 /// from.
 const AliasLiterals = union(enum) {
-    /// The edge names the target's instantiation composed through the chain.
-    edge: checked.LiteralEdge,
+    /// The arguments of the edge naming the target's instantiation composed
+    /// through the chain, resolved in the scope holding the edge.
+    edge: []const LocalId,
     /// Each alias's forwarded lookup is the edge of the scheme it names, read
     /// in that alias's scope, whose own literal arguments the edge before it
     /// supplies.
@@ -6136,6 +6137,15 @@ pub const Builder = struct {
         const bound = try self.program.arena.allocator().alloc(TypeId, node_subst.len);
         for (node_subst, bound) |checked_ty, *ty| ty.* = try self.convert(checked_ty);
         const evidence = table.aliasScopeEvidence(node);
+        // The module holding the alias chain records the target's
+        // instantiation composed through it (design.md "Literal Arguments").
+        // A dispatch through another module's alias derives the literal
+        // arguments from that instantiation.
+        const literal_source: AliasLiterals = if (alias_module == self.module) blk: {
+            const literals = try self.program.arena.allocator().alloc(LocalId, self.program.worker(callee).literal_params);
+            try self.fillLiteralArgs(null, edge, literals);
+            break :blk .{ .edge = literals };
+        } else .derived;
         return try self.aliasChainInstance(.{
             .callee = callee,
             .first = first,
@@ -6143,11 +6153,7 @@ pub const Builder = struct {
             .dicts = if (chain_frame) &.{} else try self.scopeDictionaries(first, bound, evidence),
             .literals = &.{},
             .evidence = evidence,
-            // The module holding the alias chain records the target's
-            // instantiation composed through it (design.md "Literal
-            // Arguments"). A dispatch through another module's alias derives
-            // the literal arguments from that instantiation.
-            .literal_source = if (alias_module == self.module) .{ .edge = edge } else .derived,
+            .literal_source = literal_source,
             .chain_frame = chain_frame,
             .call_fn = null,
         });
@@ -6342,7 +6348,7 @@ pub const Builder = struct {
                     }
                     const target_literals = hidden[target_bound.len + target.dictionary_params.len ..];
                     switch (literal_source) {
-                        .edge => |edge| try self.fillLiteralArgs(null, edge, target_literals),
+                        .edge => |literal_args| @memcpy(target_literals, literal_args),
                         .scopes => try self.fillLiteralArgs(null, .{ .use = alias_step.lookup }, target_literals),
                         .derived => try self.derivedLiteralArgs(callee, target_bound, target_literals),
                     }
