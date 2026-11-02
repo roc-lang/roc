@@ -70,6 +70,8 @@ var name_ok = testName("Ok");
 const StaticObject = union(enum) {
     desc: *const TypeDesc,
     name: *const Name,
+    /// A composition site's slot, which holds its entry and addresses nothing.
+    site,
 };
 
 /// Builds procedures statement by statement, last statement first.
@@ -179,6 +181,7 @@ const Builder = struct {
         cell.* = switch (object) {
             .desc => |desc| @intFromPtr(desc),
             .name => |name| @intFromPtr(name),
+            .site => 0,
         };
         try self.cells.append(allocator, cell);
         try self.statics.append(allocator, @intFromPtr(cell));
@@ -197,12 +200,28 @@ const Builder = struct {
         }
         for (self.objects.items, 0..) |object, slot| {
             const id: LIR.StaticDataId = @fromBackingInt(@intCast(slot));
+            if (object == .site) {
+                const bytes = try allocator.alloc(u8, wasm_word_size);
+                errdefer allocator.free(bytes);
+                @memset(bytes, 0);
+                try exports.append(allocator, .{
+                    .symbol_name = try std.fmt.allocPrint(allocator, "roc__boxy_site_test_{d}", .{slot}),
+                    .value_id = id,
+                    .bytes = bytes,
+                    .alignment = wasm_word_size,
+                    .is_exported = false,
+                    .is_mutable = true,
+                    .relocations = try allocator.alloc(StaticDataRelocation, 0),
+                });
+                continue;
+            }
             const slot_name = try lir.Program.staticDataSymbolName(allocator, id);
             errdefer allocator.free(slot_name);
             const object_name = try std.fmt.allocPrint(allocator, "roc__d{d}_1", .{slot});
             errdefer allocator.free(object_name);
             try exports.append(allocator, try wordExport(slot_name, object_name));
             switch (object) {
+                .site => unreachable, // sites have no slot word, and are exported above
                 .desc => |desc| try exports.append(allocator, try descExport(object_name, desc)),
                 .name => |name| {
                     const text_name = try std.fmt.allocPrint(allocator, "roc__d{d}_2", .{slot});
@@ -467,6 +486,7 @@ fn runWasm(b: *Builder, proc_id: LirProcSpecId, ret_layout: layout_mod.Idx) Test
     defer codegen.deinit();
     const exports = try b.wasmStaticData();
     defer Builder.freeStaticData(exports);
+    try codegen.setCompositionSites(exports);
     try codegen.module.addStaticDataExports(exports);
     const generated = try codegen.generateModule(proc_id, ret_layout, wasm32_builtins.bytes, wasm32_builtins.boxy_runtime_bytes);
     defer allocator.free(generated.wasm_bytes);
@@ -1026,6 +1046,26 @@ test "boxy composition site hits bypass the interner and operand changes replace
     try std.testing.expectEqual(interpreted_count, interpreter_cache.len);
     interpreter_cache.table.store(interpreted_table, .release);
     try run.env.checkForLeaks();
+}
+
+test "boxy wasm composition site publishes its composition" {
+    var b = try Builder.init(.u32);
+    defer b.deinit();
+    const elem = try b.local(.opaque_ptr);
+    const result = try b.local(.opaque_ptr);
+    const entry = try b.local(.u32);
+    const read = try b.static(entry, .site, try b.ret(entry));
+    const compose_stmt = try b.store.addCFStmt(.{ .dyn = .{
+        .target = result,
+        .data = try b.store.addStmtRow(DynOp, .{ .desc_list = .{ .elem = elem } }),
+        .composition_cache = @fromBackingInt(@intCast(b.statics.items.len - 1)),
+        .next = read,
+    } }, .test_fixture);
+    const body = try b.static(elem, .{ .desc = boxy.compose.scalarDesc(.i64) }, compose_stmt);
+    const root = try b.proc(&.{}, body, .u32, .{});
+    const bytes = try runWasm(&b, root, .u32);
+    defer allocator.free(bytes);
+    try std.testing.expect(std.mem.readInt(u32, bytes[0..4], .little) != 0);
 }
 
 /// The word a pointer-sized result holds, released.
