@@ -406,6 +406,7 @@ const Encoder = struct {
                     try self.tableName(field.name);
                     try self.tableType(field.ty);
                     try self.table.append(self.allocator, @backingInt(field.kind));
+                    try self.tableWord(field.slot_variable);
                 }
                 try self.tableExt(record.ext);
             },
@@ -617,7 +618,8 @@ const Decoder = struct {
                 for (fields) |*field| {
                     const field_name = try self.name();
                     const ty = self.typeOf();
-                    field.* = .{ .name = field_name, .ty = ty, .kind = @fromBackingInt(@intCast(self.byte())) };
+                    const kind: types.FieldKind = @fromBackingInt(@intCast(self.byte()));
+                    field.* = .{ .name = field_name, .ty = ty, .kind = kind, .slot_variable = self.word() };
                 }
                 break :blk try store.intern(.{ .record = .{ .fields = fields, .ext = self.ext() } });
             },

@@ -165,6 +165,7 @@ pub fn constTypeOf(program: *Program, ty: TypeId) Allocator.Error!const_store.Co
                     .value_ty = switch (field.kind) {
                         .inline_slot => null,
                         .presence_slot => try constTypeOf(program, field.ty),
+                        .variable_slot => unreachable, // a compile-time value's type is closed
                     },
                     .default = null,
                 };

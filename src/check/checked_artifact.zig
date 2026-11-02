@@ -1737,7 +1737,7 @@ const ConcreteRootScan = struct {
         }
         switch (checked_types.payload(@fromBackingInt(@intCast(index)))) {
             .pending => checkedArtifactInvariant("compile-time root checked type was pending", .{}),
-            .err => return .{ .value = false },
+            .field_kind, .err => return .{ .value = false },
             .flex => return .{ .value = false },
             .rigid => return .{ .value = walk == .decl_template },
             .empty_record,
@@ -1880,7 +1880,7 @@ const CheckedTypeErrorScan = struct {
         }
         switch (self.checked_types.payload(root)) {
             .pending => checkedArtifactInvariant("checked error-type scan reached pending payload", .{}),
-            .err => return true,
+            .field_kind, .err => return true,
             .empty_record, .empty_tag_union => return false,
             .flex, .rigid => |variable| for (variable.constraints) |constraint| try children.add(constraint.fn_ty),
             .alias => |alias| {
@@ -2537,6 +2537,10 @@ pub const CheckedRecordOmittedDefault = extern struct {
     default: CheckedFieldDefault,
 };
 
+/// A field kind a quantified kind variable was instantiated at, by storage: a
+/// `defaulted` field is stored as a `required` one.
+pub const CheckedCommittedKind = enum(u8) { required, optional };
+
 /// Published field-kind axis. `required` and `defaulted` use inline slots;
 /// `optional` uses the tagged slot defined in design.md "Field Kinds".
 pub const CheckedFieldKind = extern struct {
@@ -3044,6 +3048,9 @@ pub const CheckedTypePayload = union(enum) {
     empty_record,
     tag_union: CheckedTagUnionType,
     empty_tag_union,
+    /// The field kind a quantified kind variable was instantiated at
+    /// (design.md "Field Kinds"): a substitution entry, never part of a type.
+    field_kind: CheckedCommittedKind,
 
     /// Whether this variable payload stands for no specialization input of
     /// its own: an unconstrained flex row tail carrying a row default and no
@@ -3062,6 +3069,7 @@ pub const CheckedTypePayload = union(enum) {
                 variable.row_default != null,
             .rigid => false,
             .pending,
+            .field_kind,
             .err,
             .alias,
             .record,
@@ -3092,6 +3100,7 @@ pub const CheckedTypePayloadBuild = union(enum) {
     empty_record,
     tag_union: CheckedTagUnionTypeBuild,
     empty_tag_union,
+    field_kind: CheckedCommittedKind,
 };
 
 /// POD form of `CheckedTypeVariable`: `name` is an optional `var_names`
@@ -3167,6 +3176,7 @@ pub const StoredCheckedTypePayload = union(enum) {
     empty_record,
     tag_union: StoredTagUnion,
     empty_tag_union,
+    field_kind: CheckedCommittedKind,
 };
 
 /// A row of a type store's `alias_row_pool`. Alias and nominal payloads are
@@ -3328,7 +3338,7 @@ pub const CheckedTypeStoreView = struct {
         }
         return switch (self.stored_payloads[index]) {
             .alias, .nominal => true,
-            .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => false,
+            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => false,
         };
     }
 
@@ -3373,6 +3383,7 @@ pub const CheckedTypeStoreView = struct {
             switch (self.payload(root)) {
                 .alias => |alias| root = alias.backing,
                 .pending,
+                .field_kind,
                 .err,
                 .flex,
                 .rigid,
@@ -3457,7 +3468,7 @@ pub const CheckedTypeStoreView = struct {
         std.hash.autoHash(&hasher, std.meta.activeTag(root_payload));
         switch (root_payload) {
             .alias => unreachable, // checkedTypeEqualityRoot(.transparent) resolves past every alias
-            .pending, .err, .empty_record, .empty_tag_union => {},
+            .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
             .flex, .rigid => std.hash.autoHash(&hasher, root),
             .record => |record| {
                 std.hash.autoHash(&hasher, record.fields.len);
@@ -3514,7 +3525,7 @@ pub const CheckedTypeStoreView = struct {
     pub fn nominalDeclarationName(self: CheckedTypeStoreView, declaration: CheckedNominalDeclaration) canonical.TypeNameId {
         return switch (self.payload(declaration.declaration_root)) {
             .nominal => |nominal| nominal.name,
-            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => base.invariant("a nominal declaration's root is no nominal type", .{}),
+            .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => base.invariant("a nominal declaration's root is no nominal type", .{}),
         };
     }
 
@@ -3633,6 +3644,7 @@ fn checkedTypeEqualityRoot(
     while (true) switch (view.payload(current)) {
         .alias => |alias| current = alias.backing,
         .pending,
+        .field_kind,
         .err,
         .flex,
         .rigid,
@@ -3724,6 +3736,7 @@ fn checkedTypePairEqlStep(
             .flex => |left_variable| return try checkedTypeVariableAlphaStep(left, left_variable, right, right_payload.flex, scratch),
             .rigid => |left_variable| return try checkedTypeVariableAlphaStep(left, left_variable, right, right_payload.rigid, scratch),
             .pending,
+            .field_kind,
             .err,
             .empty_record,
             .empty_tag_union,
@@ -3741,7 +3754,7 @@ fn checkedTypePairEqlStep(
     if (mode == .exact and std.meta.activeTag(left_payload) != std.meta.activeTag(right_payload)) return false;
 
     switch (left_payload) {
-        .pending, .err, .empty_record, .empty_tag_union => return true,
+        .pending, .field_kind, .err, .empty_record, .empty_tag_union => return true,
         // Distinct published variable ids are distinct checker identities;
         // equality-by-id returned above handles repeated references to one.
         .flex, .rigid => switch (mode) {
@@ -4258,6 +4271,7 @@ pub const CheckedTypeStore = struct {
                 } };
             },
             .pending,
+            .field_kind,
             .err,
             .flex,
             .rigid,
@@ -4618,7 +4632,7 @@ pub const CheckedTypeStore = struct {
         out: *std.ArrayList(CheckedTypeId),
     ) Allocator.Error!void {
         switch (self.payload(root)) {
-            .pending, .err, .empty_record, .empty_tag_union => {},
+            .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
             .flex, .rigid => |variable| for (variable.constraints) |constraint| {
                 try out.append(allocator, constraint.fn_ty);
             },
@@ -5424,6 +5438,7 @@ pub const CheckedTypeStore = struct {
             .alias => |a| return .{ .alias = try dupeOwned(allocator, a.toBuild()) },
             .nominal => |n| return .{ .nominal = try dupeOwned(allocator, n.toBuild()) },
             inline .pending,
+            .field_kind,
             .err,
             .flex,
             .rigid,
@@ -5481,7 +5496,7 @@ fn appendCheckedTypeBuildChildren(
     payload: CheckedTypePayloadBuild,
 ) Allocator.Error!void {
     switch (payload) {
-        .pending, .err, .empty_record, .empty_tag_union => {},
+        .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
         .flex, .rigid => |variable| for (variable.constraints) |constraint| try children.append(allocator, constraint.fn_ty),
         .alias => |alias| {
             try children.append(allocator, alias.backing);
@@ -5520,6 +5535,7 @@ fn cloneCheckedTypeBuildPayload(
     return switch (payload) {
         .pending => unreachable, // enterSubstitutingClone rejects pending snapshots before they are cloned
         .err => .err,
+        .field_kind => |kind| .{ .field_kind = kind },
         .empty_record => .empty_record,
         .empty_tag_union => .empty_tag_union,
         .flex => |flex| .{ .flex = try cloneCheckedTypeBuildVariable(allocator, flex, cloned) },
@@ -6574,6 +6590,7 @@ fn appendInstantiatedNamedApplicationFromTemplate(
             } });
         },
         .pending,
+        .field_kind,
         .err,
         .flex,
         .rigid,
@@ -7002,7 +7019,7 @@ fn checkedTypePayloadBuildContainsIdentityVariables(
     return switch (payload) {
         .pending => true,
         .flex, .rigid => true,
-        .err, .empty_record, .empty_tag_union => false,
+        .field_kind, .err, .empty_record, .empty_tag_union => false,
         .alias => |alias| blk: {
             if (store.rootContainsIdentityVariables(alias.backing)) break :blk true;
             for (alias.args) |arg| {
@@ -7083,6 +7100,7 @@ fn checkedTypePayloadBuildEqlStored(
     return switch (build) {
         .pending => stored == .pending,
         .err => stored == .err,
+        .field_kind => |kind| stored == .field_kind and stored.field_kind == kind,
         .empty_record => stored == .empty_record,
         .empty_tag_union => stored == .empty_tag_union,
         .flex, .rigid => checkedArtifactInvariant(
@@ -7566,6 +7584,7 @@ const CheckedTypeKeyAdapter = struct {
                 break :blk .content;
             },
             inline .pending,
+            .field_kind,
             .err,
             .alias,
             .tuple,
@@ -7597,6 +7616,7 @@ const CheckedTypeKeyAdapter = struct {
             .alias => |*alias| return try self.describeContent(sink, .{ .alias = alias.asRead() }),
             .nominal => |*nominal| return try self.describeContent(sink, .{ .nominal = nominal.asRead() }),
             inline .pending,
+            .field_kind,
             .err,
             .tuple,
             .function,
@@ -7616,6 +7636,10 @@ const CheckedTypeKeyAdapter = struct {
             .tag_union,
             => unreachable, // describe and describeBuild handle flex, rigid, record and tag_union before delegating here
             .err => try tag(sink, .err),
+            .field_kind => |kind| switch (kind) {
+                .required => try tag(sink, .presence_required),
+                .optional => try tag(sink, .presence_optional),
+            },
             .alias => |alias| {
                 try tag(sink, .alias);
                 try self.namedSourceIdentity(sink, alias.origin_module, alias.name, alias.source_decl);
@@ -7725,6 +7749,7 @@ const CheckedTypeKeyAdapter = struct {
                     tail = self.substitutedRoot(tag_union.ext);
                 },
                 .pending,
+                .field_kind,
                 .err,
                 .flex,
                 .rigid,
@@ -8592,10 +8617,13 @@ const CheckedTypePublisher = struct {
         const build = &builds.items[task.build];
         switch (task.content) {
             .err => return payloadResult(build, .err),
-            // The checked artifact models required fields only, so a presence
-            // variable never becomes a standalone checked type. Poison to err if one
-            // is ever reached rather than inventing an unrepresentable payload.
-            .field_presence => return payloadResult(build, .err),
+            // A presence variable is published on its own only as the
+            // instantiation of a quantified kind variable: a substitution
+            // entry naming the kind the instantiation committed to.
+            .field_presence => |presence| return payloadResult(build, .{ .field_kind = switch (presence) {
+                .required, .defaulted => .required,
+                .optional => .optional,
+            } }),
             .flex => |flex| switch (cursor) {
                 0 => {
                     const name = try copyOptionalIdentText(self.allocator, module, flex.name);
@@ -8962,6 +8990,7 @@ fn applyCheckedTypeRowDefault(
         .pending => {},
         .flex => |*variable| setStoredTypeVariableRowDefault(variable, default),
         .rigid => |*variable| setStoredTypeVariableRowDefault(variable, default),
+        .field_kind,
         .err,
         .alias,
         .record,
@@ -9806,7 +9835,7 @@ test "optional record fields publish through solver-side record copy" {
     const checked_record = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, record_var);
     const fields = switch (store.payload(checked_record)) {
         .record => |record| record.fields,
-        .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
+        .pending, .field_kind, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
     };
     try testing.expectEqual(@as(usize, 1), fields.len);
     try testing.expectEqualStrings("world", names.recordFieldLabelText(fields[0].name));
@@ -9943,7 +9972,7 @@ test "poisoned record field presence preserves its value type and canonical key"
     const checked_value = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, value_var);
     const fields = switch (store.payload(checked_record)) {
         .record => |record| record.fields,
-        .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
+        .pending, .field_kind, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
     };
     try testing.expectEqual(@as(usize, 1), fields.len);
     try testing.expectEqual(checked_value, fields[0].ty);
@@ -16308,6 +16337,7 @@ fn checkedConcreteBuiltinForLiteralTarget(view: CheckedTypeStoreView, root: Chec
             .nominal => |nominal| return nominal.builtin,
             .flex, .rigid => return null,
             .pending => checkedArtifactInvariant("checked builtin lookup reached a pending type payload", .{}),
+            .field_kind,
             .err,
             .record,
             .tuple,
@@ -20754,7 +20784,7 @@ const EvidencePass = struct {
                 checkedArtifactInvariant("inspect override entry had no checked use", .{});
             const function = switch (self.checked_types.store.payload(callable_ty)) {
                 .function => |function| function,
-                .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => checkedArtifactInvariant("inspect override instance was not a function", .{}),
+                .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => checkedArtifactInvariant("inspect override instance was not a function", .{}),
             };
             if (function.args.len != 1) checkedArtifactInvariant("inspect override instance did not take one argument", .{});
             entry.inspect_evidence = try self.evidenceNodeForTarget(target, function.args[0], use_var, null, .dispatch_edge);
@@ -22980,6 +23010,7 @@ fn checkedTypeIsClosedTagRow(
             .empty_tag_union => return true,
             .flex, .rigid => |variable| return variable.row_default == .empty_tag_union,
             .pending,
+            .field_kind,
             .err,
             .record,
             .tuple,
@@ -25635,7 +25666,7 @@ fn callableIdentityIsSpecializationIndependent(
         const payload = store.payload(root);
         switch (payload) {
             .pending => checkedArtifactInvariant("direct dispatch classification reached a pending checked type", .{}),
-            .err, .empty_record, .empty_tag_union => {},
+            .field_kind, .err, .empty_record, .empty_tag_union => {},
             .flex, .rigid => if (!payload.variableSealsToRowDefault() or try enclosing.quantifies(root)) return false,
             .alias => |alias| {
                 try pending.appendSlice(allocator, alias.args);
@@ -27124,7 +27155,7 @@ fn checkedTypeHoldsFunction(
         if (seen_entry.found_existing) continue;
         switch (item.types.payload(item.ty)) {
             .function => return true,
-            .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+            .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
             .alias => |alias| {
                 try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = alias.backing });
                 for (alias.args) |arg| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = arg });
@@ -27553,6 +27584,7 @@ fn dispatchSubstitutionStep(
             const plan_fn = switch (plan_payload) {
                 .function => |function| function,
                 .pending,
+                .field_kind,
                 .err,
                 .flex,
                 .rigid,
@@ -27575,6 +27607,7 @@ fn dispatchSubstitutionStep(
             const plan_nominal = switch (plan_payload) {
                 .nominal => |nominal| nominal,
                 .pending,
+                .field_kind,
                 .err,
                 .flex,
                 .rigid,
@@ -27615,6 +27648,7 @@ fn dispatchSubstitutionStep(
             const plan_items = switch (plan_payload) {
                 .tuple => |items| items,
                 .pending,
+                .field_kind,
                 .err,
                 .flex,
                 .rigid,
@@ -27673,7 +27707,7 @@ fn dispatchSubstitutionStep(
                 }
             }
         },
-        .pending, .err, .flex, .rigid, .alias => {},
+        .pending, .field_kind, .err, .flex, .rigid, .alias => {},
     }
 }
 
@@ -28489,6 +28523,7 @@ fn flattenPlatformRequirementRecordRow(
             },
             .alias => |alias| tail = alias.backing,
             .pending,
+            .field_kind,
             .err,
             .flex,
             .rigid,
@@ -28541,6 +28576,7 @@ fn flattenPlatformRequirementTagRow(
             },
             .alias => |alias| tail = alias.backing,
             .pending,
+            .field_kind,
             .err,
             .flex,
             .rigid,
@@ -28573,6 +28609,7 @@ fn tagUnionParts(payload: CheckedTypePayload) ?RelationTagUnionParts {
         .tag_union => |tag_union| .{ .tags = tag_union.tags, .ext = tag_union.ext },
         .empty_tag_union => .{ .tags = &.{}, .ext = null },
         .pending,
+        .field_kind,
         .err,
         .flex,
         .rigid,
@@ -28608,6 +28645,7 @@ fn recordParts(payload: CheckedTypePayload) ?RelationRecordParts {
         .record => |record| .{ .fields = record.fields, .ext = record.ext },
         .empty_record => .{ .fields = &.{}, .ext = null },
         .pending,
+        .field_kind,
         .err,
         .flex,
         .rigid,
@@ -29195,7 +29233,7 @@ fn checkedTypeHasNoReachableCallableSlots(
 
         switch (checked_types.payload(@fromBackingInt(@intCast(index)))) {
             .pending => checkedArtifactInvariant("callable-slot proof reached pending checked type", .{}),
-            .err => {},
+            .field_kind, .err => {},
             .flex,
             .rigid,
             .function,
@@ -30059,7 +30097,7 @@ const TypeVarMentions = struct {
                 }
                 try expandRowExtension(checked_types, tag_union.ext, step.flags, sink);
             },
-            .empty_record, .empty_tag_union, .err, .pending => {},
+            .empty_record, .empty_tag_union, .field_kind, .err, .pending => {},
         }
     }
 
@@ -30070,7 +30108,7 @@ const TypeVarMentions = struct {
                 ext_flags.row_extension = true;
                 try sink.noteMention(ext, ext_flags);
             },
-            .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => try sink.push(ext, flags),
+            .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => try sink.push(ext, flags),
         }
     }
 
@@ -30241,7 +30279,7 @@ const TemplateDemandPass = struct {
                 .flex, .rigid => |variable| {
                     if (variable.constraints.len != 0 or variable.numeric_default_phase != null) demand.* = .full;
                 },
-                .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => demand.* = .full,
+                .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => demand.* = .full,
             }
         }
 
@@ -30298,7 +30336,7 @@ const TemplateDemandPass = struct {
             switch (self.checked_types.payload(current)) {
                 .alias => |alias| current = alias.backing,
                 .function => |function| return function,
-                .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
+                .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
             }
         }
         checkedArtifactInvariant("procedure template root alias chain was cyclic", .{});
@@ -32996,7 +33034,7 @@ fn appendPublicApiTypeDependencies(
         const start = pending.items.len;
         switch (checked_types.payload(@fromBackingInt(@intCast(index)))) {
             .pending => checkedArtifactInvariant("public API dependency scan reached pending checked type payload", .{}),
-            .err, .empty_record, .empty_tag_union => {},
+            .field_kind, .err, .empty_record, .empty_tag_union => {},
             .flex, .rigid => |variable| for (variable.constraints) |constraint| {
                 try pending.append(allocator, constraint.fn_ty);
             },
@@ -33543,7 +33581,7 @@ const LoweringVisibilityBuilder = struct {
         }
         switch (store.payload(root)) {
             .pending => checkedArtifactInvariant("lowering visibility type traversal reached pending payload", .{}),
-            .err, .empty_record, .empty_tag_union => {},
+            .field_kind, .err, .empty_record, .empty_tag_union => {},
             .flex, .rigid => |variable| for (variable.constraints) |constraint| try pending.append(gpa, constraint.fn_ty),
             .alias => |alias| {
                 try self.appendKey(alias.owner_module.*);
@@ -35254,7 +35292,7 @@ pub const CompileTimeRootIdentityTable = struct {
             if (@backingInt(row.ty) >= payloads.len) return error.CorruptArtifact;
             switch (payloads[@backingInt(row.ty)]) {
                 .nominal, .alias => {},
-                .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return error.CorruptArtifact,
+                .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return error.CorruptArtifact,
             }
         }
     }
@@ -35740,7 +35778,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 110;
+    const serialized_layout_version: u32 = 111;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -35872,6 +35910,7 @@ pub const CheckedModuleArtifact = struct {
         for (self.checked_types.payloads.items, 0..) |payload, i| {
             switch (payload) {
                 .pending => base.invariant("checked artifact invariant violated: checked type payload {d} was not filled before compile-time lowering", .{i}),
+                .field_kind,
                 .err,
                 .flex,
                 .rigid,
@@ -36041,6 +36080,7 @@ pub const CheckedModuleArtifact = struct {
                     current = record.ext;
                 },
                 .pending,
+                .field_kind,
                 .err,
                 .flex,
                 .rigid,
@@ -36080,6 +36120,7 @@ pub const CheckedModuleArtifact = struct {
                     current = tag_union.ext;
                 },
                 .pending,
+                .field_kind,
                 .err,
                 .flex,
                 .rigid,
@@ -37068,6 +37109,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(self.checked_types.payloads.items.len == self.checked_types.roots.items.len);
             switch (self.checked_types.payloads.items[i]) {
                 .pending => base.invariant("checked artifact invariant violated: checked type payload {d} was not filled", .{i}),
+                .field_kind,
                 .err,
                 .flex,
                 .rigid,
@@ -37902,7 +37944,7 @@ const CheckedTypeStoreImportProjector = struct {
         const gpa = self.allocator;
         switch (payload) {
             .pending => checkedArtifactInvariant("platform for-clause projection reached pending app checked type payload", .{}),
-            .err, .empty_record, .empty_tag_union => {},
+            .field_kind, .err, .empty_record, .empty_tag_union => {},
             .flex, .rigid => |variable| for (variable.constraints) |constraint| {
                 try ops.append(gpa, .{ .method_name = constraint.fn_name });
                 try ops.append(gpa, .{ .child = constraint.fn_ty });
@@ -38016,6 +38058,7 @@ const CheckedTypeStoreImportProjector = struct {
         return switch (payload) {
             .pending => unreachable, // appendPayloadOps rejects pending payloads before any frame finishes
             .err => .err,
+            .field_kind => |kind| .{ .field_kind = kind },
             .empty_record => .empty_record,
             .empty_tag_union => .empty_tag_union,
             .flex => |flex| .{ .flex = try self.buildVariable(flex, results) },
@@ -41941,8 +41984,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xD9, 0xB8, 0xD4, 0x00, 0x64, 0x84, 0x8A, 0xEB, 0x29, 0xA3, 0xF1, 0x7F, 0xA5, 0x85, 0xEB, 0xF9,
-        0x0C, 0xB1, 0x80, 0x78, 0xCC, 0x9E, 0x43, 0xAB, 0xF9, 0x5E, 0xFB, 0xAB, 0xCD, 0x2F, 0x58, 0x6A,
+        0xD6, 0xC4, 0x20, 0x89, 0x5F, 0x3C, 0x34, 0x4C, 0xBB, 0x6C, 0xEB, 0xFB, 0xAE, 0x08, 0xBE, 0x04,
+        0xD5, 0xDC, 0x71, 0xAD, 0xF7, 0xC8, 0x7C, 0xC5, 0xDB, 0xA8, 0x21, 0x31, 0xAE, 0xD0, 0x42, 0x57,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -42492,6 +42535,7 @@ test "direct dispatch classification follows instantiation clones to the scheme 
     const instantiated_tail = switch (store.payload(checkedFunctionPayload(&store, instantiated, "test callable").ret)) {
         .tag_union => |tag_union| tag_union.ext,
         .pending,
+        .field_kind,
         .err,
         .flex,
         .rigid,
@@ -42546,6 +42590,7 @@ test "direct dispatch classification follows instantiation clones to the scheme 
     const specialized_tail = switch (store.payload(checkedFunctionPayload(&store, specialized, "test callable").ret)) {
         .tag_union => |tag_union| tag_union.ext,
         .pending,
+        .field_kind,
         .err,
         .flex,
         .rigid,
@@ -42570,6 +42615,7 @@ test "direct dispatch classification follows instantiation clones to the scheme 
     const plan_clone_tail = switch (store.payload(checkedFunctionPayload(&store, plan_clone, "test callable").ret)) {
         .tag_union => |tag_union| tag_union.ext,
         .pending,
+        .field_kind,
         .err,
         .flex,
         .rigid,
@@ -42587,6 +42633,7 @@ test "direct dispatch classification follows instantiation clones to the scheme 
     const respecialized_tail = switch (store.payload(checkedFunctionPayload(&store, respecialized, "test callable").ret)) {
         .tag_union => |tag_union| tag_union.ext,
         .pending,
+        .field_kind,
         .err,
         .flex,
         .rigid,

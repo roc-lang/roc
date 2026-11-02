@@ -290,6 +290,8 @@ pub const Worker = struct {
     /// descriptor parameter order. A template's sealed variables (design.md
     /// "Sealed Result Rows") are omitted: they seal to the empty row.
     scheme_vars: []const checked.CheckedTypeId,
+    /// For a template worker: its scheme's kind variables.
+    kinds: SchemeKinds = .{},
     /// For a template worker: the position of each of `scheme_vars` in the
     /// template's checked `scheme_vars`, which a use's substitution is
     /// indexed by, and that checked list's length.
@@ -363,6 +365,14 @@ pub const Worker = struct {
         for (self.literal_scopes) |scope| count += @intCast(scope.len);
         return count - self.own_literals;
     }
+};
+
+/// The kind variables of a scheme (design.md "Field Kinds"): the value type of
+/// each variable's field, null for a variable that is no kind, and the kind
+/// variables, each after those its value type mentions.
+pub const SchemeKinds = struct {
+    payloads: []const ?TypeId = &.{},
+    order: []const u32 = &.{},
 };
 
 /// A generalized local procedure's own scheme: its quantified variables and
@@ -531,9 +541,6 @@ pub const Program = struct {
     local_scopes: std.AutoHashMapUnmanaged(ExprKey, checked.DispatchScopeId) = .empty,
     /// The lambda and closure expressions local procedures bind.
     local_procs: std.AutoHashMapUnmanaged(ExprKey, void) = .empty,
-    /// Whether each worker asked about stores a record field of its
-    /// signature in a presence slot (`signatureHasSlots`).
-    signature_slots: collections.DenseMapUnmanaged(WorkerId, bool) = .empty,
     /// `nominalOverrides` of each nominal type asked about.
     nominal_overrides: collections.DenseMapUnmanaged(TypeId, NominalOverrides) = .empty,
     /// `composedInBody` of each type asked about.
@@ -734,7 +741,6 @@ pub const Program = struct {
         self.sites_by_expr.deinit(self.allocator);
         self.nominal_overrides.deinit(self.allocator);
         self.composed_in_body.deinit(self.allocator);
-        self.signature_slots.deinit(self.allocator);
         self.omitted_defaults.deinit(self.allocator);
         self.codec.deinit(self.allocator);
         self.arena.deinit();
@@ -842,6 +848,14 @@ pub const Program = struct {
             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a procedure template's checked root is not a function type"),
         };
         const params = try self.arena.allocator().dupe(TypeId, self.store.span(signature.args));
+        const kind_roots = try self.allocator.alloc(TypeId, 1 + 2 * evidence_params.len);
+        defer self.allocator.free(kind_roots);
+        kind_roots[0] = fn_ty;
+        for (evidence_params, 0..) |param, index| {
+            kind_roots[1 + 2 * index] = try self.converter().convert(module_index, param.callable_ty, env);
+            kind_roots[2 + 2 * index] = try self.converter().convert(module_index, param.dispatcher_ty, env);
+        }
+        const kinds = try self.schemeKinds(kind_roots, scheme_vars.items.len);
 
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const identity = self.workerIdentity(key);
@@ -858,6 +872,7 @@ pub const Program = struct {
             .proc = proc,
             .module = module_index,
             .scheme_vars = scheme_vars.items,
+            .kinds = kinds,
             .checked_slots = checked_slots.items,
             .checked_scheme_count = @intCast(checked_scheme_vars.len),
             .dictionary_params = dictionary_params.items,
@@ -1013,6 +1028,14 @@ pub const Program = struct {
                             if (candidate.name == field.name) {
                                 named = true;
                                 try pending.append(allocator, .{ field.ty, candidate.ty });
+                                // A kind variable takes the field's storage
+                                // on the other side.
+                                if (field.kind == .variable_slot) {
+                                    bound[field.slot_variable] = try self.layouts.fieldStorage(candidate);
+                                    if (row_vars) |marks| {
+                                        if (field.slot_variable < marks.len) marks[field.slot_variable] = true;
+                                    }
+                                }
                             }
                         }
                         if (!named) try residual.append(allocator, candidate);
@@ -1057,24 +1080,29 @@ pub const Program = struct {
         return try allocator.dupe(?TypeId, bound);
     }
 
-    /// Whether worker `id`'s parameters or result store a record field in a
-    /// presence slot, so a caller may store it differently (design.md
-    /// "Field Kinds").
-    pub fn signatureHasSlots(self: *Program, id: WorkerId) Allocator.Error!bool {
-        if (self.signature_slots.get(id)) |memo| return memo;
-        const target = self.worker(id).*;
+    /// The kind variables among `count` scheme variables that the types
+    /// `roots` over those variables mention (design.md "Field Kinds"). A
+    /// kind variable's scheme relates it to one field, so to one value type.
+    pub fn schemeKinds(self: *Program, roots: []const TypeId, count: usize) Allocator.Error!SchemeKinds {
+        const arena = self.arena.allocator();
+        const payloads = try arena.alloc(?TypeId, count);
+        @memset(payloads, null);
+        var found: std.ArrayList(u32) = .empty;
+        defer found.deinit(self.allocator);
         var pending: std.ArrayList(TypeId) = .empty;
         defer pending.deinit(self.allocator);
         var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
         defer seen.deinit(self.allocator);
-        try pending.appendSlice(self.allocator, target.params);
-        try pending.append(self.allocator, target.ret);
-        const found = walk: while (pending.pop()) |ty| {
+        try pending.appendSlice(self.allocator, roots);
+        while (pending.pop()) |ty| {
             if ((try seen.getOrPut(self.allocator, ty)).found_existing) continue;
             switch (self.store.get(ty)) {
                 .record => |record| {
                     for (self.store.fieldSpan(record.fields)) |field| {
-                        if (field.kind == .presence_slot) break :walk true;
+                        if (field.kind == .variable_slot and payloads[field.slot_variable] == null) {
+                            payloads[field.slot_variable] = field.ty;
+                            try found.append(self.allocator, field.slot_variable);
+                        }
                         try pending.append(self.allocator, field.ty);
                     }
                     if (record.ext) |ext| try pending.append(self.allocator, ext);
@@ -1093,9 +1121,57 @@ pub const Program = struct {
                 },
                 .primitive, .empty_record, .variable => {},
             }
-        } else false;
-        try self.signature_slots.put(self.allocator, id, found);
-        return found;
+        }
+        // A kind whose value type mentions another comes after it.
+        const order = try arena.alloc(u32, found.items.len);
+        var placed: usize = 0;
+        const done = try self.allocator.alloc(bool, count);
+        defer self.allocator.free(done);
+        @memset(done, false);
+        while (placed < order.len) {
+            const before = placed;
+            for (found.items) |index| {
+                if (done[index]) continue;
+                const nested = try self.kindsMentioned(payloads[index].?, payloads.len);
+                defer self.allocator.free(nested);
+                const ready = for (nested) |other| {
+                    if (!done[other]) break false;
+                } else true;
+                if (!ready) continue;
+                done[index] = true;
+                order[placed] = index;
+                placed += 1;
+            }
+            if (placed == before) invariant("a field kind's value type mentions the kind itself, as no finite type does");
+        }
+        return .{ .payloads = payloads, .order = order };
+    }
+
+    /// The kind variables `root` mentions.
+    fn kindsMentioned(self: *Program, root: TypeId, count: usize) Allocator.Error![]u32 {
+        if (self.store.isClosed(root)) return try self.allocator.alloc(u32, 0);
+        const nested = try self.schemeKinds(&.{root}, count);
+        return try self.allocator.dupe(u32, nested.order);
+    }
+
+    /// Turn each kind variable's binding in `bound` into the field's storage:
+    /// the value type for a required kind, or for a kind nothing committed,
+    /// which every strategy commits to `required`; the presence slot over it
+    /// for an optional kind. A binding that already is a storage, or a
+    /// variable of the enclosing scope, stays.
+    pub fn resolveKindSlots(self: *Program, kinds: SchemeKinds, bound: []TypeId) Allocator.Error!void {
+        for (kinds.order) |index| {
+            const payload = kinds.payloads[index].?;
+            if (self.store.committedKindOf(bound[index])) |kind| {
+                const value = try self.substitute(self.allocator, payload, bound);
+                bound[index] = switch (kind) {
+                    .required => value,
+                    .optional => try self.layouts.presenceSlot(value),
+                };
+            } else if (bound[index] == try self.store.emptyTagUnion()) {
+                bound[index] = try self.substitute(self.allocator, payload, bound);
+            }
+        }
     }
 
     /// The indices of the variables `root`'s representation reads. A function
@@ -1114,7 +1190,10 @@ pub const Program = struct {
             switch (self.store.get(ty)) {
                 .variable => |index| try found.append(allocator, index),
                 .record => |record| {
-                    for (self.store.fieldSpan(record.fields)) |field| try pending.append(allocator, field.ty);
+                    for (self.store.fieldSpan(record.fields)) |field| {
+                        if (field.kind == .variable_slot) try found.append(allocator, field.slot_variable);
+                        try pending.append(allocator, field.ty);
+                    }
                     if (record.ext) |ext| try pending.append(allocator, ext);
                 },
                 .tuple => |items| try pending.appendSlice(allocator, self.store.span(items)),
@@ -1210,7 +1289,15 @@ pub const Program = struct {
                 .record => |record| blk: {
                     var fields: std.ArrayList(types.Field) = .empty;
                     defer fields.deinit(allocator);
-                    for (self.store.fieldSpan(record.fields)) |field| try fields.append(allocator, .{ .name = field.name, .ty = done.get(field.ty).?, .kind = field.kind });
+                    for (self.store.fieldSpan(record.fields)) |field| {
+                        const ty = done.get(field.ty).?;
+                        if (field.kind == .variable_slot) {
+                            if (field.slot_variable >= bound.len) invariant("a substituted field kind names a variable past its bindings");
+                            try fields.append(allocator, self.store.instantiatedField(field.name, ty, bound[field.slot_variable]));
+                        } else {
+                            try fields.append(allocator, .{ .name = field.name, .ty = ty, .kind = field.kind });
+                        }
+                    }
                     var ext: ?TypeId = if (record.ext) |ext| done.get(ext).? else null;
                     if (ext) |ext_ty| switch (self.store.get(ext_ty)) {
                         .empty_record => ext = null,
@@ -1593,6 +1680,7 @@ pub const Program = struct {
         try self.relateThroughTargetRequirements(target, related);
         const bound = try self.arena.allocator().alloc(TypeId, count);
         for (related, bound, target_worker.scheme_vars) |ty, *slot, variable| slot.* = ty orelse try self.converter().sealedScheme(target_worker.module, variable);
+        try self.resolveKindSlots(target_worker.kinds, bound);
         return try self.targetRequirements(target, bound);
     }
 

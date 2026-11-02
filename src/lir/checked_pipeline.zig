@@ -2743,7 +2743,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
             const gop = try visited.getOrPut(ty);
             if (gop.found_existing) continue;
             switch (types.payload(ty)) {
-                .pending, .err, .empty_record, .empty_tag_union => {},
+                .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
                 .flex, .rigid => return true,
                 .alias => |alias| {
                     try stack.append(allocator, alias.backing);

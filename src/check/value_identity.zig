@@ -257,7 +257,7 @@ pub fn compute(allocator: Allocator, inputs: Inputs) Allocator.Error!ModuleIdent
                     hash.update(&try state.type_walk.digest(ty));
                     try reuse_types.append(allocator, .{ .ty = ty, .identity = hash.finalResult() });
                 },
-                .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => {},
+                .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => {},
             }
         }
     }
@@ -635,7 +635,7 @@ const State = struct {
             try self.type_walk.writeNode(&scratch, ty, &pending);
             const nominal = switch (self.inputs.types.payload(ty)) {
                 .nominal => |nominal| nominal,
-                .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => continue,
+                .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => continue,
             };
             if (self.type_walk.isOwn(nominal.origin_module)) {
                 const statement: CIR.Statement.Idx = @fromBackingInt(nominal.source_decl);
@@ -1745,6 +1745,7 @@ const TypeDigest = struct {
         switch (self.inputs.types.payload(ty)) {
             .pending => hashTag(hasher, "pending"),
             .err => hashTag(hasher, "err"),
+            .field_kind => |kind| hashTag(hasher, @tagName(kind)),
             .empty_record => hashTag(hasher, "empty-record"),
             .empty_tag_union => hashTag(hasher, "empty-tag-union"),
             inline .flex, .rigid => |variable, tag| {

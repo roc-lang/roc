@@ -444,14 +444,14 @@ pub fn rootHoldsFunction(
     // the wrapper's result.
     switch (own_types.payload(root.request.checked_type)) {
         .function => |function| try pending.append(allocator, .{ .key = own_key, .types = own_types, .ty = function.ret }),
-        .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => base.invariant("compile-time finalization invariant violated: a compile-time root's checked type is not a function type", .{}),
+        .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => base.invariant("compile-time finalization invariant violated: a compile-time root's checked type is not a function type", .{}),
     }
     while (pending.pop()) |item| {
         const seen_entry = try seen.getOrPut(allocator, .{ .key = item.key, .ty = item.ty });
         if (seen_entry.found_existing) continue;
         switch (item.types.payload(item.ty)) {
             .function => return true,
-            .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+            .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
             .alias => |alias| {
                 try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = alias.backing });
                 for (alias.args) |arg| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = arg });

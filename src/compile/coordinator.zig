@@ -9478,7 +9478,7 @@ fn storedNamedOccurrences(
         if (@backingInt(named_type.ty) >= types.payloadCount()) return error.TestUnexpectedResult;
         switch (types.payload(named_type.ty)) {
             .nominal => |nominal| if (!std.mem.eql(u8, &nominal.owner_module.bytes, &named_type.module.bytes)) return error.TestUnexpectedResult,
-            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
+            .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
         }
         try found.append(allocator, .{ .ty_module = named_type.ty_module.bytes, .ty = @backingInt(named_type.ty) });
     }
@@ -10568,7 +10568,7 @@ fn rejectedAppTypeIdentity(allocator: Allocator, app_source: []const u8, type_na
                 found = row.identity;
             },
             .alias => {},
-            .pending, .err, .empty_record, .empty_tag_union, .flex, .rigid, .record, .tuple, .function, .tag_union => return error.TestUnexpectedResult,
+            .pending, .field_kind, .err, .empty_record, .empty_tag_union, .flex, .rigid, .record, .tuple, .function, .tag_union => return error.TestUnexpectedResult,
         }
     }
     return found orelse error.TestUnexpectedResult;

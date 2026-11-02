@@ -602,6 +602,7 @@ pub fn reachableAcross(allocator: Allocator, sets: []const *const Set, host_visi
     return .{ .arena = arena, .excerpts = owned, .source_files = owned_source_files, .owners = retained };
 }
 
+/// Copies every excerpt from `sets` into one owned set, with each distinct source file listed once.
 pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!Set {
     var arena = collections.SingleThreadArena.init(allocator);
     errdefer arena.deinit();

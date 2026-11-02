@@ -3042,6 +3042,7 @@ fn isInspectOverrideCallable(checked_types: anytype, owner: MethodOwner, callabl
         const variable = switch (store.payload(type_arg)) {
             .flex, .rigid => |variable| variable,
             .pending,
+            .field_kind,
             .err,
             .alias,
             .record,
