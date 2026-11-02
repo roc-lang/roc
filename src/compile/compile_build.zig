@@ -575,6 +575,14 @@ pub const BuildEnv = struct {
         return key;
     }
 
+    /// Whether `name` is a compiler-synthesized or compiler-owned package,
+    /// whose root is a directory the compiler chose for this invocation.
+    pub fn isCompilerPlacedPackage(_: *const BuildEnv, name: []const u8) bool {
+        return std.mem.eql(u8, name, package_identity.synthetic_app_identity) or
+            std.mem.eql(u8, name, package_identity.synthetic_platform_identity) or
+            compiler_platforms.fromIdentity(name) != null;
+    }
+
     /// Relocate only registered compiler-owned source directories. All other
     /// paths are native compilation inputs, including paths through symlinks.
     pub fn completionInputPath(self: *BuildEnv, allocator: Allocator, path: []const u8) Allocator.Error!completed_compilation.InputPath {
@@ -582,9 +590,7 @@ pub const BuildEnv = struct {
         var it = self.packages.iterator();
         while (it.next()) |entry| {
             const pkg = entry.value_ptr;
-            if (!std.mem.eql(u8, pkg.name, package_identity.synthetic_app_identity) and
-                !std.mem.eql(u8, pkg.name, package_identity.synthetic_platform_identity) and
-                compiler_platforms.fromIdentity(pkg.name) == null) continue;
+            if (!self.isCompilerPlacedPackage(pkg.name)) continue;
             if (isPathInDir(path, pkg.root_dir) and (owner == null or pkg.root_dir.len > owner.?.root_dir.len)) owner = pkg;
         }
         if (owner) |pkg| return .{

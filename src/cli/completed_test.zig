@@ -7,15 +7,58 @@ const compile = @import("compile");
 const Allocator = std.mem.Allocator;
 
 /// Prefix of every command record; changing the record format changes it.
-pub const magic = "ROC_COMPLETED_DEV_TEST_V3";
+pub const magic = "ROC_COMPLETED_DEV_TEST_V4";
 /// A SHA-256 content digest.
 pub const Digest = [32]u8;
+/// Binds record paths to one invocation. A record never names the checkout,
+/// the package cache or a staging directory: a file of a package whose root
+/// is placed by the compiler is named by that package, and any other file
+/// relative to the current working directory.
+pub const Paths = struct {
+    cwd: []const u8,
+    placed: []const Placed,
+
+    /// A package whose name identifies it wherever its root directory lands.
+    pub const Placed = struct { name: []const u8, root_dir: []const u8 };
+
+    /// Separates a placed package's name from a path inside it. Neither a
+    /// package name nor a file path can contain it.
+    const separator = 0;
+
+    /// The name of absolute `path` in a record.
+    pub fn portable(self: Paths, allocator: Allocator, path: []const u8) Allocator.Error![]const u8 {
+        var owner: ?Placed = null;
+        for (self.placed) |package| {
+            if (!isInside(package.root_dir, path)) continue;
+            if (owner == null or package.root_dir.len > owner.?.root_dir.len) owner = package;
+        }
+        const package = owner orelse return std.fs.path.relative(allocator, self.cwd, null, self.cwd, path);
+        const inner = try std.fs.path.relative(allocator, self.cwd, null, package.root_dir, path);
+        return std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ package.name, separator, inner });
+    }
+
+    /// The absolute path a record's `path` names in this invocation, or null
+    /// when it names a placed package this invocation does not have.
+    pub fn bind(self: Paths, allocator: Allocator, path: []const u8) Allocator.Error!?[]const u8 {
+        const split = std.mem.findScalar(u8, path, separator) orelse
+            return try std.fs.path.resolve(allocator, &.{ self.cwd, path });
+        for (self.placed) |package| {
+            if (std.mem.eql(u8, package.name, path[0..split])) return try std.fs.path.resolve(allocator, &.{ package.root_dir, path[split + 1..] });
+        }
+        return null;
+    }
+
+    fn isInside(dir: []const u8, path: []const u8) bool {
+        return path.len > dir.len and std.mem.startsWith(u8, path, dir) and std.fs.path.isSep(path[dir.len]);
+    }
+};
+
 /// A file a producer read, with the content state it saw.
 pub const Input = struct {
     path: []const u8,
     state: compile.watch_inputs.State,
 };
-/// A module path and the cwd-relative physical file the import resolver admitted for it.
+/// A module path and the physical file the import resolver admitted for it.
 pub const Resolution = struct { path: []const u8, target: []const u8 };
 /// Everything a command's outcome depends on outside the compiler, in sorted order.
 pub const Plan = struct { inputs: []Input, resolutions: []Resolution };
@@ -192,38 +235,56 @@ pub fn decode(allocator: Allocator, comptime T: type, bytes: []const u8) Allocat
 }
 
 /// Paths in source locations and path annotations remain structured. The
-/// publication side makes them relative; replay binds them to this invocation.
-pub fn mapDiagnosticPaths(allocator: Allocator, diagnostic: *Diagnostic, cwd: []const u8, comptime restore: bool) Allocator.Error!void {
-    if (diagnostic.file) |path| diagnostic.file = try mapPath(allocator, cwd, path, restore);
-    try mapElements(allocator, diagnostic.headline, cwd, restore);
-    try mapElements(allocator, diagnostic.body, cwd, restore);
+/// publication side makes them portable; replay binds them to this invocation
+/// and answers false when one names a package the invocation does not have.
+pub fn mapDiagnosticPaths(allocator: Allocator, diagnostic: *Diagnostic, paths: Paths, comptime restore: bool) Allocator.Error!bool {
+    if (diagnostic.file) |path| diagnostic.file = (try mapPath(allocator, paths, path, restore)) orelse return false;
+    return try mapElements(allocator, diagnostic.headline, paths, restore) and try mapElements(allocator, diagnostic.body, paths, restore);
 }
 
-fn mapPath(allocator: Allocator, cwd: []const u8, path: []const u8, comptime restore: bool) Allocator.Error![]const u8 {
+fn mapPath(allocator: Allocator, paths: Paths, path: []const u8, comptime restore: bool) Allocator.Error!?[]const u8 {
     if (path.len == 0) return path;
-    return if (restore) std.fs.path.resolve(allocator, &.{ cwd, path }) else std.fs.path.relative(allocator, cwd, null, cwd, path);
+    return if (restore) paths.bind(allocator, path) else try paths.portable(allocator, path);
 }
 
-fn mapElements(allocator: Allocator, elements: []reporting.DocumentElement, cwd: []const u8, comptime restore: bool) Allocator.Error!void {
+fn mapElements(allocator: Allocator, elements: []reporting.DocumentElement, paths: Paths, comptime restore: bool) Allocator.Error!bool {
     for (elements) |*element| switch (element.*) {
         .annotated => |*a| if (a.annotation == .path) {
-            a.content = try mapPath(allocator, cwd, a.content, restore);
+            a.content = (try mapPath(allocator, paths, a.content, restore)) orelse return false;
         },
         .source_code_region => |*r| if (r.filename) |path| {
-            r.filename = try mapPath(allocator, cwd, path, restore);
+            r.filename = (try mapPath(allocator, paths, path, restore)) orelse return false;
         },
         .source_code_multi_region => |*r| if (r.filename) |path| {
-            r.filename = try mapPath(allocator, cwd, path, restore);
+            r.filename = (try mapPath(allocator, paths, path, restore)) orelse return false;
         },
         .source_code_with_underlines => |*r| if (r.display_region.filename) |path| {
-            r.display_region.filename = try mapPath(allocator, cwd, path, restore);
+            r.display_region.filename = (try mapPath(allocator, paths, path, restore)) orelse return false;
         },
         .source_location => |*r| if (r.filename) |path| {
-            r.filename = try mapPath(allocator, cwd, path, restore);
+            r.filename = (try mapPath(allocator, paths, path, restore)) orelse return false;
         },
-        .vertical_stack, .horizontal_concat => |children| try mapElements(allocator, children, cwd, restore),
+        .vertical_stack, .horizontal_concat => |children| if (!try mapElements(allocator, children, paths, restore)) return false,
         .text, .line_break, .indent, .space, .horizontal_rule, .annotation_start, .annotation_end, .raw, .reflowing_text, .link => {},
     };
+    return true;
+}
+
+test "record paths name placed packages, never the checkout or cache root" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const first = Paths{ .cwd = "/checkout/a", .placed = &.{.{ .name = "https://example.com/pkg.tar.zst", .root_dir = "/cache/one/pkg" }} };
+    const second = Paths{ .cwd = "/elsewhere/deep/b", .placed = &.{.{ .name = "https://example.com/pkg.tar.zst", .root_dir = "/other/cache/pkg" }} };
+    const local = try first.portable(allocator, "/checkout/a/src/Main.roc");
+    try std.testing.expectEqualStrings(local, try second.portable(allocator, "/elsewhere/deep/b/src/Main.roc"));
+    try std.testing.expectEqualStrings("/elsewhere/deep/b/src/Main.roc", (try second.bind(allocator, local)).?);
+    const fetched = try first.portable(allocator, "/cache/one/pkg/Lib.roc");
+    try std.testing.expectEqualStrings(fetched, try second.portable(allocator, "/other/cache/pkg/Lib.roc"));
+    try std.testing.expectEqualStrings("/other/cache/pkg/Lib.roc", (try second.bind(allocator, fetched)).?);
+    // A directory that only shares a name prefix is not inside the package.
+    try std.testing.expectEqualStrings("../../cache/one/pkg2/Lib.roc", try first.portable(allocator, "/cache/one/pkg2/Lib.roc"));
+    try std.testing.expect((try (Paths{ .cwd = "/checkout/a", .placed = &.{} }).bind(allocator, fetched)) == null);
 }
 
 test "completed test records reject every truncated prefix and corrupted content" {
@@ -259,11 +320,12 @@ test "completed test diagnostics retain structured source and styling across pat
     const original = Diagnostic.fromReport(&report);
     const cloned_bytes = try encode(allocator, original);
     var portable = (try decode(allocator, Diagnostic, cloned_bytes)).?;
-    try mapDiagnosticPaths(allocator, &portable, cwd, false);
+    const paths = Paths{ .cwd = cwd, .placed = &.{} };
+    try std.testing.expect(try mapDiagnosticPaths(allocator, &portable, paths, false));
     const portable_bytes = try encode(allocator, portable);
     try std.testing.expect(std.mem.find(u8, portable_bytes, cwd) == null);
     var restored = (try decode(allocator, Diagnostic, portable_bytes)).?;
-    try mapDiagnosticPaths(allocator, &restored, cwd, true);
+    try std.testing.expect(try mapDiagnosticPaths(allocator, &restored, paths, true));
     var before = std.Io.Writer.Allocating.init(gpa);
     defer before.deinit();
     var after = std.Io.Writer.Allocating.init(gpa);

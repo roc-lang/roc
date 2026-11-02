@@ -15732,7 +15732,12 @@ the same sources, and `roc build` adds exactly the module objects still
 missing (`compile.boxy_object_cache`, the `boxy_object` family).
 `roc test` checks its root for explicit test roots
 (`Validation.explicit_roots`), which is its own check under either strategy,
-and with `--specialize=no` it leaves exactly what that check leaves. `roc
+and with `--specialize=no` it leaves exactly what that check leaves plus its
+test outcomes and completed-command records (Completed dev test commands).
+Those are not lowered output: they are the same `test_result` family under
+either strategy, and whether a command reads and writes them is separate from
+the policy above (`cachesPostCheckWork`), which stays the policy of lowered
+output, packs and program artifacts. `roc
 check` accepts `--opt` and ignores it; it honors `--specialize`, because the
 strategy selects the compile-time evaluator that completes the module's
 roots. The checked module itself names no strategy: both evaluators store
@@ -24389,8 +24394,25 @@ of checked graphs and lowering sessions. After resolving the current package
 graph, the command can validate its recorded consumed source and imported-file
 contents and replay the complete outcome before loading checked modules. The
 test command has its own identity domain, including compiler compatibility,
-root selection, checking context, resolved package graph and execution policy.
-Neither a build nor a check commits a test-command outcome.
+specialization strategy, root selection, checking context, resolved package
+graph and execution policy. Neither a build nor a check commits a test-command
+outcome.
+
+Under `.boxy` the same two levels apply unchanged: a command record and its
+root outcomes are observations of checked programs, not lowered output, so
+they are outside `cachesPostCheckWork`. A root outcome's key names the strategy,
+so the strategies never answer for each other. A `.boxy` evaluation completes
+every literal through its literal argument roots, so a cached root has no
+discovery work left and an all-hit plan lowers nothing.
+
+No path is an identity. A command names each file by its path relative to the
+working directory, and a file of a fetched, compiler-owned or synthesized
+package by that package and its path inside it, since the package cache and
+staging directories move independently of the project
+(`completed_test.Paths`). A local package's identity is its canonical path, so
+the command names it relative to the working directory too. A copy of a project
+at another location, with the same files at the same relative paths, therefore
+replays the same record, with its reports bound to the copy.
 
 The early input plan is producer data: the source and file-import reads of a
 completed compilation, including missing-file results, and the storage source
@@ -24420,8 +24442,8 @@ runtime demand construction, specialization, CTFE, LIR/ARC, static data,
 native test code generation and execution. It does not load procedure packs.
 
 The command envelope and individual-root outcome payloads carry content checksums.
-Command source paths and diagnostic path components are relative to the current
-working directory and are rebound only after validation. Compilation diagnostics
+Command source paths and diagnostic path components are rebound to the current
+invocation only after validation. Compilation diagnostics
 are replayed from their document items, before test observations; color,
 verbosity and terminal width are current renderer inputs. The command's arena
 owns validated source bytes and lightweight source environments throughout replay.
@@ -24654,7 +24676,15 @@ Raw `dbg` and crash payload bytes remain checked output and are never rewritten.
 Failure excerpts of mentioned bindings are covered by checked definition
 identity; primary source excerpts and line numbers render from current sources.
 Passes and failures are equally admissible; compiler errors and incomplete
-execution are not durable outcomes.
+execution are not durable outcomes. Neither is a root that ran out of stack:
+how deep it got depended on the executing thread's stack and on the compiler
+frames beneath it, which no identity records, so the host reports the overflow
+explicitly (`BoolRootEvalResult.stack_overflowed`) and the root runs again on
+every command. Allocation failure ends the process and publishes nothing.
+
+Nothing else a root observes lies outside its identity. Roc has no ambient
+input a pure `expect` can read, and an `expect` body cannot be effectful, so no
+root calls a hosted function: the host's code and environment are not inputs.
 
 Completed-command format V2 references durable individual outcomes and retains
 producer-authored report maps and each occurrence's current region, order and
