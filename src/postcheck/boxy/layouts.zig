@@ -381,7 +381,7 @@ pub const Layouts = struct {
         };
     }
 
-    /// The stored types of `record`'s slots, by semantic index: its fields,
+    /// The stored types of `record`'s slots, by storage index: its fields,
     /// then its unnamed fields. Caller frees.
     pub fn recordStorage(self: *Layouts, record: types.Record) Allocator.Error![]TypeId {
         const fields = self.store.fieldSpan(record.fields);
