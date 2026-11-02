@@ -2166,14 +2166,32 @@ fn excerptRegionCount(comptime CG: type, regions: []const CG.CodeRegion) usize {
     return count;
 }
 
+/// An excerpt keeps its runtime number loads apart from its linked relocations,
+/// and nothing reads the order between the two: numbering follows the loads'
+/// own order, and object writers skip them. So each is compared in its own order.
 fn relocationsMatch(comptime CG: type, original: *CG, fresh: *CG) bool {
+    return relocationClassMatches(CG, original, fresh, .runtime_number) and
+        relocationClassMatches(CG, original, fresh, .linked);
+}
+
+const RelocationClass = enum { runtime_number, linked };
+
+fn relocationClass(relocation: IndexedRelocation) ?RelocationClass {
+    return switch (relocation) {
+        .retired => null,
+        .runtime_number => .runtime_number,
+        .linked_function, .linked_data, .local_data => .linked,
+    };
+}
+
+fn relocationClassMatches(comptime CG: type, original: *CG, fresh: *CG, class: RelocationClass) bool {
     var original_index: usize = 0;
     var fresh_index: usize = 0;
     const original_relocations = original.getRelocations();
     const fresh_relocations = fresh.getRelocations();
     while (true) {
-        while (original_index < original_relocations.len and original_relocations[original_index] == .retired) original_index += 1;
-        while (fresh_index < fresh_relocations.len and fresh_relocations[fresh_index] == .retired) fresh_index += 1;
+        while (original_index < original_relocations.len and relocationClass(original_relocations[original_index]) != class) original_index += 1;
+        while (fresh_index < fresh_relocations.len and relocationClass(fresh_relocations[fresh_index]) != class) fresh_index += 1;
         const original_done = original_index == original_relocations.len;
         const fresh_done = fresh_index == fresh_relocations.len;
         if (original_done or fresh_done) return original_done and fresh_done;

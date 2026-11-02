@@ -152,6 +152,7 @@ pub const FnTemplate = struct {
     fn_def: const_store.FnDef,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
+    owner_fn_ty: ?const_store.ConstTypeId = null,
     evidence: const_store.ConstFnEvidenceVector = .{},
     evidence_frames: []const const_store.ConstFnEvidenceFrame = &.{},
     evidence_frame_head: ?u32 = null,

@@ -8584,9 +8584,19 @@ from the template's module and the shape from the use's module, and neither
 need hold the contract. A generic method selected for that dictionary, such as
 `List.encoder_for`, names its item and its format only in the encoder it
 returns, so Boxy relates the method to the requirement's position at the call,
-and the method's own codec requirements are read at what that relation binds. A
-generated codec runtime body reads its edge in that
-body's module, which must hold an equal contract. Completed-body records
+and the method's own codec requirements are read at what that relation binds.
+A variable of the template that built a stored nested function can reach neither
+the function's type nor its captures, as the format of an encoder a generic method
+returned does not, so the function keeps its template specialization's concrete
+type (`ConstFn.owner_fn_ty`) and Boxy relates the template to it. Relating a
+requirement to its selected method then binds the variables only that requirement
+names, for dictionaries and descriptors alike. A
+generated codec runtime body reads its edge in that body's module when that
+module holds an equal contract; otherwise, as for a custom format's contract
+reached through a Builtin method, it reads the edge the same way, from the storing
+module's import closure. A generated runtime whose encoding operand reads the frame
+that built it, rather than being a value any frame can rebuild, always captures
+the encoding, so a stored one has its value when that frame is gone. Completed-body records
 retain recorded edges and are rejected when their recording module is absent.
 
 The checker's derived-codec walk records each nominal application whose

@@ -20,6 +20,139 @@ Wrap(a) := { inner : a }.{
 	}
 }
 
+# A custom format's method names neither the format nor the state its callback
+# threads, so a stored encoder's own type reaches neither, and a format's type
+# argument can be a value's layout. The stored encoder keeps the concrete type of
+# the method that built it.
+Format := [Format].{
+	encode_list : Str, U64, ({ text : Str }, ({ text : Str }, (Str -> Try(Str, err)) -> Try({ text : Str }, err)) -> Try({ text : Str }, err)) -> Try(Str, err)
+	encode_list = |state, count, write_items| {
+		write = |current, write_item| {
+			match write_item(current.text) {
+				Ok(text) => Ok({ text: Str.concat(text, ";") })
+				Err(err) => Err(err)
+			}
+		}
+		match write_items({ text: Str.concat(Str.concat(state, Str.inspect(count)), ":") }, write) {
+			Ok(done) => Ok(done.text)
+			Err(err) => Err(err)
+		}
+	}
+}
+
+Tagged(tag) := [Tagged(tag)].{
+	encode_list : Str, U64, ({ text : Str }, ({ text : Str }, (Str -> Try(Str, err)) -> Try({ text : Str }, err)) -> Try({ text : Str }, err)) -> Try(Str, err)
+	encode_list = |state, _count, write_items| {
+		write = |current, write_item| {
+			match write_item(current.text) {
+				Ok(text) => Ok({ text: Str.concat(text, "|") })
+				Err(err) => Err(err)
+			}
+		}
+		match write_items({ text: Str.concat(state, "<") }, write) {
+			Ok(done) => Ok(Str.concat(done.text, ">"))
+			Err(err) => Err(err)
+		}
+	}
+}
+
+Item := { value : I64 }.{
+	encoder_for : encoding -> (Item, Str -> Try(Str, err))
+	encoder_for = |_| |self, state| Ok(Str.concat(state, Str.inspect(self.value)))
+}
+
+format_encoder : {} -> (a, Str -> Try(Str, []))
+	where [a.encoder_for : Format -> (a, Str -> Try(Str, []))]
+format_encoder = |{}| {
+	A : a
+	A.encoder_for(Format.Format)
+}
+
+tagged_encoder : {} -> (a, Str -> Try(Str, []))
+	where [a.encoder_for : Tagged(U8) -> (a, Str -> Try(Str, []))]
+tagged_encoder = |{}| {
+	A : a
+	A.encoder_for(Tagged.Tagged(1))
+}
+
+# A compiler-derived encoder over a custom format is built from a generic
+# method's `encoding` parameter, which is gone when the stored encoder is
+# restored, and its contract lives in this module rather than in Builtin. The
+# format's payload is heap-allocated so a stored encoder must hold a real value.
+Rendered(tag) := [Rendered(tag)].{
+	encode_i64 : I64, Str -> Try(Str, err)
+	encode_i64 = |value, state| Ok(Str.concat(state, Str.inspect(value)))
+
+	encode_str : Str, Str -> Try(Str, err)
+	encode_str = |value, state| Ok(Str.concat(state, value))
+
+	rename_field : Rendered(tag), Str -> Str
+	rename_field = |_, name| name
+
+	encode_record : Str, U64, ({ text : Str }, ({ text : Str }, Str, (Str -> Try(Str, err)) -> Try({ text : Str }, err)) -> Try({ text : Str }, err)) -> Try(Str, err)
+	encode_record = |state, _count, write_fields| {
+		write = |current, name, write_field| {
+			match write_field(Str.concat(Str.concat(current.text, name), "=")) {
+				Ok(text) => Ok({ text: Str.concat(text, " ") })
+				Err(err) => Err(err)
+			}
+		}
+		match write_fields({ text: state }, write) {
+			Ok(done) => Ok(done.text)
+			Err(err) => Err(err)
+		}
+	}
+
+	encode_list : Str, U64, ({ text : Str }, ({ text : Str }, (Str -> Try(Str, err)) -> Try({ text : Str }, err)) -> Try({ text : Str }, err)) -> Try(Str, err)
+	encode_list = |state, _count, write_items| {
+		write = |current, write_item| {
+			match write_item(current.text) {
+				Ok(text) => Ok({ text: Str.concat(text, ";") })
+				Err(err) => Err(err)
+			}
+		}
+		match write_items({ text: state }, write) {
+			Ok(done) => Ok(done.text)
+			Err(err) => Err(err)
+		}
+	}
+}
+
+rendered_encoder : {} -> (a, Str -> Try(Str, []))
+	where [a.encoder_for : Rendered(Str) -> (a, Str -> Try(Str, []))]
+rendered_encoder = |{}| {
+	A : a
+	A.encoder_for(Rendered.Rendered("a tag long enough to live on the heap, not inline"))
+}
+
+# A format's method can dispatch on the format's type argument, and the same
+# format at another argument is a different dictionary.
+Label := [Label(Str)].{
+	to_label : Label -> Str
+	to_label = |self| {
+		Label(text) = self
+		text
+	}
+}
+
+Prefixed(p) := { prefix : p }.{
+	encode_item : Prefixed(p), Str, I64 -> Str where [p.to_label : p -> Str]
+	encode_item = |self, state, value| Str.concat(Str.concat(state, self.prefix.to_label()), Str.inspect(value))
+}
+
+Value := { value : I64 }.{
+	encoder_for : encoding -> (Value, Str -> Str) where [encoding.encode_item : encoding, Str, I64 -> Str]
+	encoder_for = |encoding| |self, state| encoding.encode_item(state, self.value)
+}
+
+Values := { values : List(Value) }.{
+	encoder_for : encoding -> (Values, Str -> Str) where [encoding.encode_item : encoding, Str, I64 -> Str]
+	encoder_for = |encoding| {
+		encode_value = Value.encoder_for(encoding)
+		|self, state| self.values.fold(state, |text, value| encode_value(value, text))
+	}
+}
+
 parser : {} -> (Str -> Try(a, [InvalidJson(Str)])) where [a.Json.Parseable([InvalidJson(Str)])]
 parser = |{}| |text| Json.parse(text)
 
@@ -53,6 +186,30 @@ stored_nested_list_encoder = encoder({})
 stored_wrap_encoder : Wrap(List(Str)) -> Str
 stored_wrap_encoder = encoder({})
 
+stored_format_encoder : List(Item), Str -> Try(Str, [])
+stored_format_encoder = format_encoder({})
+
+stored_nested_format_encoder : List(List(Item)), Str -> Try(Str, [])
+stored_nested_format_encoder = format_encoder({})
+
+stored_tagged_encoder : List(Item), Str -> Try(Str, [])
+stored_tagged_encoder = tagged_encoder({})
+
+stored_rendered_ints : List(I64), Str -> Try(Str, [])
+stored_rendered_ints = rendered_encoder({})
+
+stored_rendered_alias : List(I64), Str -> Try(Str, [])
+stored_rendered_alias = stored_rendered_ints
+
+stored_rendered_holder : { encode : List(I64), Str -> Try(Str, []) }
+stored_rendered_holder = { encode: stored_rendered_alias }
+
+stored_rendered_records : List({ a : I64, b : Str }), Str -> Try(Str, [])
+stored_rendered_records = rendered_encoder({})
+
+stored_prefixed_encoder : Values, Str -> Str
+stored_prefixed_encoder = Values.encoder_for(Prefixed.{ prefix: Label.Label("#") })
+
 main! = |args| {
 	count = Str.inspect(args.len())
 	quoted = Str.inspect(count)
@@ -78,5 +235,16 @@ main! = |args| {
 	Stdout.line!(stored_list_encoder([args.len().to_i64_wrap()]))
 	Stdout.line!(stored_nested_list_encoder([[count]]))
 	Stdout.line!(stored_wrap_encoder(Wrap.{ inner: [count] }))
+	items = [Item.{ value: 7 }, Item.{ value: args.len().to_i64_wrap() }]
+	Stdout.line!(Str.inspect(stored_format_encoder(items, "items=")))
+	Stdout.line!(Str.inspect(stored_nested_format_encoder([items, []], "nested=")))
+	Stdout.line!(Str.inspect(stored_tagged_encoder(items, "tagged=")))
+	Stdout.line!(stored_prefixed_encoder(Values.{ values: [Value.{ value: 5 }, Value.{ value: args.len().to_i64_wrap() }] }, "prefixed="))
+	ints = [5, args.len().to_i64_wrap()]
+	Stdout.line!(Str.inspect(stored_rendered_ints(ints, "ints=")))
+	Stdout.line!(Str.inspect(stored_rendered_alias(ints, "alias=")))
+	encode_held = stored_rendered_holder.encode
+	Stdout.line!(Str.inspect(encode_held(ints, "held=")))
+	Stdout.line!(Str.inspect(stored_rendered_records([{ a: 5, b: count }], "records=")))
 	Ok({})
 }
