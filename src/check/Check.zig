@@ -9243,9 +9243,10 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
     if (slots.items.len == 0) return;
     const slot_count = slots.items.len;
 
-    // Collect every local-declaration mention inside each backing template.
-    // The walk stays within the mentioning declaration's own template: a
-    // mentioned declaration's backing belongs to its own slot's analysis.
+    // Collect every local-declaration mention inside each backing template
+    // and each unnamed field, which instantiates with the backing. The walk
+    // stays within the mentioning declaration's own template: a mentioned
+    // declaration's backing belongs to its own slot's analysis.
     var mentions: std.ArrayListUnmanaged(NominalDeclMention) = .empty;
     defer mentions.deinit(self.gpa);
     var walk_stack: std.ArrayListUnmanaged(Var) = .empty;
@@ -9259,6 +9260,7 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
         visited.clearRetainingCapacity();
         walk_stack.clearRetainingCapacity();
         try walk_stack.append(self.gpa, decl.backing);
+        try self.appendUnnamedFieldVars(&walk_stack, decl);
         while (walk_stack.pop()) |var_| {
             const root = self.types.resolveVar(var_);
             if (visited.contains(root.var_)) continue;
@@ -9453,6 +9455,24 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
         if (reported[edge.owner_slot]) continue;
         reported[edge.owner_slot] = true;
         try self.reportGrowingNominalDecl(slots.items[edge.owner_slot]);
+    }
+}
+
+/// Append the type of each unnamed field of `decl`. Those fields stay out of
+/// the backing row, so only the declaration's annotation names them.
+fn appendUnnamedFieldVars(self: *Self, stack: *std.ArrayListUnmanaged(Var), decl: types_mod.NominalDecl) std.mem.Allocator.Error!void {
+    const statement_idx: CIR.Statement.Idx = @fromBackingInt(decl.statement());
+    var anno_idx = self.cir.store.getStatement(statement_idx).s_nominal_decl.anno;
+    const record = while (true) {
+        switch (self.cir.store.getTypeAnno(anno_idx)) {
+            .parens => |parens| anno_idx = parens.anno,
+            .record => |record| break record,
+            else => return,
+        }
+    };
+    for (self.cir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
+        const field = self.cir.store.getAnnoRecordField(field_idx);
+        if (field.is_unnamed) try stack.append(self.gpa, ModuleEnv.varFrom(field.ty));
     }
 }
 

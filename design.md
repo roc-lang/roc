@@ -20141,7 +20141,21 @@ it is rebuilt by the descriptor-driven `adapt` (Dynamic Values In LIR), which
 matches fields by name at any depth: `StorageDifference.record_order` on a
 result or a read, and the check of each explicit argument at a direct call. A
 function value converts by an adapter around it, like one a row widening reaches.
-A specialized program has one type for both and needs no conversion.
+
+A specialized program specializes each use at its own types, so a call that hands
+a padded nominal to a row parameter gets an instance at that nominal, and the row
+and the nominal rarely meet. A record row keeps its structural layout whichever
+nominals back onto it: several can, with different orders or different padding,
+and a plain record of the same fields is a value of that row. They meet where a
+type stays fixed across uses, a compile-time value read at a lifted type, and the
+read's typed boundary converts it: field by field for a record, and element by
+element for a list, in a loop that builds a new list of the target's layout. The
+loop runs only where the two layouts differ.
+
+An unnamed field instantiates with its nominal and terminates as a backing does:
+Monotype registers a placeholder for it, keyed by declaration and arguments,
+before expanding it, and the checker's nominal argument growth rule walks unnamed
+fields along with the backing.
 
 A function value stored inside data whose signature differs by a padded record's
 order is not converted: `adapt` copies an erased callable as it is, so
