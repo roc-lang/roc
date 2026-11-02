@@ -356,6 +356,23 @@ const issue_12787_stored_record_encoder_stdout =
     \\
 ;
 
+const boxy_padded_records_stdout =
+    \\2 a string that is too long to be stored inline 9 13 c
+    \\[1, 2, 5, 8] 2 a string that is too long to be stored inline
+    \\a string that is too long to be stored inline 9 1 10 { i: { a: "a string that is too long to be stored inline", b: 1 }, n: 9 }
+    \\3 <opaque>
+    \\4 1 {} {}
+    \\2 2 3
+    \\a string that is too long to be stored inline 42 9 changed 9 x 2
+    \\3 a string that is too long to be stored inline { l: "a string that is too long to be stored inline", r: 3 }
+    \\5
+    \\1 1 5 2 [4]
+    \\1 [1, 1] 6 1 8 3
+    \\8 [8, 10] 3 3 {}
+    \\12 [12, 14] 15 2 a stored table with a name too long to be inline a stored pair with a string too long to be inline 16
+    \\
+;
+
 const issue_12787_widened_question_row_stdout =
     \\Ann <ann@example.com> ***
     \\invalid email not an email
@@ -628,6 +645,8 @@ const CustomCase = enum {
     issue_12741_wasm_generic_tail_calls_speed,
     boxy_recursive_method_dispatch_wasm_dev,
     boxy_recursive_method_dispatch_wasm_size,
+    boxy_padded_records_wasm_dev,
+    boxy_padded_records_wasm_size,
     issue_10827_private_compiler_support,
     issue_11134_wasm_post_llvm_pipeline,
     macos_output_basename_reproducible,
@@ -1391,6 +1410,15 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: a boxed function inspects as a box (dev, yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=yes" }, .roc_file = "test/echo/boxy_box_of_function_inspect.roc", .stdout_exact = "Box(<function>){ b: Box(<function>) }Box(Box(<function>))" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: a boxed function inspects as a box (interpreter, no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache", "--specialize=no" }, .roc_file = "test/echo/boxy_box_of_function_inspect.roc", .stdout_exact = "Box(<function>){ b: Box(<function>) }Box(Box(<function>))" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: a boxed function inspects as a box (interpreter, yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache", "--specialize=yes" }, .roc_file = "test/echo/boxy_box_of_function_inspect.roc", .stdout_exact = "Box(<function>){ b: Box(<function>) }Box(Box(<function>))" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal keeps its declared order (interpreter, --specialize=no)", .backend = .interpreter, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/boxy_padded_records/main.roc", .stdout_exact = boxy_padded_records_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal keeps its declared order (dev, --specialize=no)", .backend = .dev, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/boxy_padded_records/main.roc", .stdout_exact = boxy_padded_records_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal keeps its declared order (size, --specialize=no)", .backend = .size, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/boxy_padded_records/main.roc", .stdout_exact = boxy_padded_records_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal keeps its declared order (speed, --specialize=no)", .backend = .speed, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/boxy_padded_records/main.roc", .stdout_exact = boxy_padded_records_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal keeps its declared order (dev, --specialize=yes)", .backend = .dev, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/boxy_padded_records/main.roc", .stdout_exact = boxy_padded_records_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal whose padding is its type parameter (interpreter, --specialize=no)", .backend = .interpreter, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/boxy_padding_type_parameter.roc", .stdout_exact = "3 7 4\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal whose padding is its type parameter (dev, --specialize=no)", .backend = .dev, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/boxy_padding_type_parameter.roc", .stdout_exact = "3 7 4\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal whose padding is its type parameter (size, --specialize=no)", .backend = .size, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/boxy_padding_type_parameter.roc", .stdout_exact = "3 7 4\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal whose padding is its type parameter (speed, --specialize=no)", .backend = .speed, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/boxy_padding_type_parameter.roc", .stdout_exact = "3 7 4\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: Boxy composes a generic type recursive through a list (dev, --specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=no" }, .roc_file = "test/echo/boxy_generic_recursive_through_list.roc", .stdout_exact = "4 3 1" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: Boxy composes a generic type recursive through a list (interpreter, --specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache", "--specialize=no" }, .roc_file = "test/echo/boxy_generic_recursive_through_list.roc", .stdout_exact = "4 3 1" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: a method whose scheme requires itself (interpreter, --specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache", "--specialize=yes" }, .roc_file = "test/echo/boxy_recursive_method_dispatch.roc", .stdout_exact = "True False False3 3kept 2 generic5 23" } } },
@@ -4203,6 +4231,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (speed)", .timeout_ms = 600_000, .backend = .speed, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_speed } },
     .{ .id = 0, .suite = .subcommands, .name = "Boxy composes the dictionaries of a method whose scheme requires itself on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .boxy_recursive_method_dispatch_wasm_dev } },
     .{ .id = 0, .suite = .subcommands, .name = "Boxy composes the dictionaries of a method whose scheme requires itself on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .boxy_recursive_method_dispatch_wasm_size } },
+    .{ .id = 0, .suite = .subcommands, .name = "Boxy lays out a padded nominal in declared order on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .boxy_padded_records_wasm_dev } },
+    .{ .id = 0, .suite = .subcommands, .name = "Boxy lays out a padded nominal in declared order on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .boxy_padded_records_wasm_size } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: LLVM size wasm32 links the Boxy runtime", .backend = .size, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=size", "--no-cache", "--output=boxed_closure_size.wasm" }, .roc_file = "test/wasm/boxed_closure_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "UnresolvedBuiltinImport" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: LLVM speed wasm32 links the Boxy runtime", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=speed", "--no-cache", "--output=boxed_closure_speed.wasm" }, .roc_file = "test/wasm/boxed_closure_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "UnresolvedBuiltinImport" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10827: Roc compiler support is private from a strong-intrinsic wasm host", .backend = .dev, .body = .{ .custom = .issue_10827_private_compiler_support } },
@@ -5883,6 +5913,8 @@ fn runCustomCase(
         .issue_12741_wasm_generic_tail_calls_speed => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=speed"),
         .boxy_recursive_method_dispatch_wasm_dev => customBoxyRecursiveMethodDispatchWasm(io, allocator, &env, &timer, timeout_ms, "--opt=dev"),
         .boxy_recursive_method_dispatch_wasm_size => customBoxyRecursiveMethodDispatchWasm(io, allocator, &env, &timer, timeout_ms, "--opt=size"),
+        .boxy_padded_records_wasm_dev => customBoxyPaddedRecordsWasm(io, allocator, &env, &timer, timeout_ms, "--opt=dev"),
+        .boxy_padded_records_wasm_size => customBoxyPaddedRecordsWasm(io, allocator, &env, &timer, timeout_ms, "--opt=size"),
         .issue_10827_private_compiler_support => customIssue10827PrivateCompilerSupport(io, allocator, &env, &timer, timeout_ms),
         .issue_11134_wasm_post_llvm_pipeline => customWasmPostLlvmPipeline(io, allocator, &env, &timer, timeout_ms),
         .macos_output_basename_reproducible => customMacosOutputBasenameReproducible(io, allocator, &env, &timer, timeout_ms),
@@ -14938,6 +14970,42 @@ fn customBoxyRecursiveMethodDispatchWasm(
     const expected = "True False 3 3 kept 2 generic 5 2";
     if (!std.mem.eql(u8, result, expected)) {
         return customFailure(allocator, timer, "recursive method dispatch wasm returned \"{s}\"", .{result});
+    }
+    return null;
+}
+
+fn customBoxyPaddedRecordsWasm(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    opt_arg: []const u8,
+) ?TestResult {
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "boxy-padded-records.wasm" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output path: {}", .{err});
+    defer allocator.free(output_path);
+    const output_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output argument: {}", .{err});
+    defer allocator.free(output_arg);
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--target=wasm32", opt_arg, "--specialize=no", "--no-cache", output_arg },
+        .roc_file = "test/wasm/boxy_padded_records_app.roc",
+        .exit = .success,
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+    })) |failure| return failure;
+    if (validateWasmOutput(io, allocator, timer, output_path)) |failure| return failure;
+
+    var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
+        return customFailure(allocator, timer, "failed to load the padded records wasm module: {}", .{err});
+    defer wasm.deinit();
+    const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
+        return customFailure(allocator, timer, "padded records wasm execution failed: {}", .{err});
+    const expected = "a string that is too long to be stored inline 42 1 3 6 5";
+    if (!std.mem.eql(u8, result, expected)) {
+        return customFailure(allocator, timer, "padded records wasm returned \"{s}\"", .{result});
     }
     return null;
 }

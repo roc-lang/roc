@@ -420,6 +420,25 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
     };
 }
 
+test "a composed declared-order record's labels and descriptors are its operands" {
+    var store = LirStore.init(std.testing.allocator);
+    defer store.deinit();
+    const a: LocalId = @fromBackingInt(1);
+    const b: LocalId = @fromBackingInt(2);
+    const c: LocalId = @fromBackingInt(3);
+    const op: DynOp = .{ .desc_declared_record = .{
+        .names = try store.addLocalSpan(&.{a}),
+        .descs = try store.addLocalSpan(&.{ b, c }),
+        .padding = try store.addU32Span(&.{1}),
+    } };
+    var out: std.ArrayList(LocalId) = .empty;
+    defer out.deinit(std.testing.allocator);
+    try Operands.of(op).appendAll(&store, std.testing.allocator, &out);
+    try std.testing.expectEqualSlices(LocalId, &.{ a, b, c }, out.items);
+    try std.testing.expectEqual(Ownership.none, ownership(op));
+    try std.testing.expect(isComposition(op));
+}
+
 test "every operand of a composed record is visited in order" {
     var store = LirStore.init(std.testing.allocator);
     defer store.deinit();

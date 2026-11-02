@@ -776,6 +776,38 @@ fn hostedPaddedCheck(padded: PaddedArgs) callconv(.c) RocStr {
     return RocStr.fromSlice(result_str, ops);
 }
 
+/// Hosted function: Padded.check_slot!—the generic `Slot(U32)` at the offsets
+/// of its declaration: z@0, _pad@4, value@8.
+const PaddedSlotArgs = extern struct { z: u32, _pad: u32, value: u32 };
+
+fn hostedPaddedCheckSlot(slot: PaddedSlotArgs) callconv(.c) RocStr {
+    const ops = g_roc_ops.?;
+    const result: u64 = @as(u64, slot.z) * 100 + slot.value;
+    var buf: [32]u8 = undefined;
+    const result_str = std.fmt.bufPrint(&buf, "{d}", .{result}) catch "err";
+    return RocStr.fromSlice(result_str, ops);
+}
+
+/// Hosted function: Padded.check_spaced!—`Spaced(U64)`, whose padding takes the
+/// size of a U64 with alignment one: first@0, _pad@4, second@12.
+const PaddedSpacedArgs = extern struct { first: u32, _pad: [2]u32, second: u32 };
+
+fn hostedPaddedCheckSpaced(spaced: PaddedSpacedArgs) callconv(.c) RocStr {
+    const ops = g_roc_ops.?;
+    const result: u64 = @as(u64, spaced.first) * 100 + spaced.second;
+    var buf: [32]u8 = undefined;
+    const result_str = std.fmt.bufPrint(&buf, "{d}", .{result}) catch "err";
+    return RocStr.fromSlice(result_str, ops);
+}
+
+/// Hosted function: Padded.check_held!—`Held(v)` at the offsets of its
+/// declaration: z@0, _pad@4, held@8. The box goes back as it came.
+const PaddedHeldArgs = extern struct { z: u32, _pad: u32, held: ?[*]u8 };
+
+fn hostedPaddedCheckHeld(held: PaddedHeldArgs) callconv(.c) PaddedHeldArgs {
+    return .{ .z = held.z * 2, ._pad = 0, .held = held.held };
+}
+
 const BoxedHostDropCounts = struct {
     primitive: usize = 0,
     nested_record: usize = 0,
@@ -1383,6 +1415,9 @@ comptime {
     @export(&hostedHostHandleClose, .{ .name = "roc_proc_handle_close", .visibility = .hidden });
     @export(&hostedHostHandleReadExactly, .{ .name = "roc_proc_handle_read_exactly", .visibility = .hidden });
     @export(&hostedPaddedCheck, .{ .name = "roc_padded_check", .visibility = .hidden });
+    @export(&hostedPaddedCheckHeld, .{ .name = "roc_padded_check_held", .visibility = .hidden });
+    @export(&hostedPaddedCheckSlot, .{ .name = "roc_padded_check_slot", .visibility = .hidden });
+    @export(&hostedPaddedCheckSpaced, .{ .name = "roc_padded_check_spaced", .visibility = .hidden });
     @export(&hostedStderrLine, .{ .name = "roc_stderr_line", .visibility = .hidden });
     @export(&hostedStdinLine, .{ .name = "roc_stdin_line", .visibility = .hidden });
     @export(&hostedStdoutLine, .{ .name = "roc_stdout_line", .visibility = .hidden });

@@ -1727,6 +1727,34 @@ test "interning shares structurally equal nodes" {
     try std.testing.expect(!store.isClosed(list_v));
 }
 
+test "a padded backing is a type of its own, whose unnamed fields count toward it" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+    const a = try store.internName("a");
+    const z = try store.internName("z");
+    const number = try store.primitive(.u32);
+    const fields: []const Field = &.{ .{ .name = a, .ty = number, .kind = .inline_slot }, .{ .name = z, .ty = number, .kind = .inline_slot } };
+    const plain = try store.intern(.{ .record = .{ .fields = fields, .ext = null } });
+    const padded = try store.intern(.{ .record = .{ .fields = fields, .ext = null, .declared = .{ .padding = &.{number}, .slots = &.{ 1, 2, 0 } } } });
+    const other_order = try store.intern(.{ .record = .{ .fields = fields, .ext = null, .declared = .{ .padding = &.{number}, .slots = &.{ 0, 2, 1 } } } });
+    const other_padding = try store.intern(.{ .record = .{ .fields = fields, .ext = null, .declared = .{ .padding = &.{try store.primitive(.u64)}, .slots = &.{ 1, 2, 0 } } } });
+    try std.testing.expect(plain != padded);
+    try std.testing.expect(padded != other_order);
+    try std.testing.expect(padded != other_padding);
+    try std.testing.expectEqual(padded, try store.intern(.{ .record = .{ .fields = fields, .ext = null, .declared = .{ .padding = &.{number}, .slots = &.{ 1, 2, 0 } } } }));
+
+    try std.testing.expect(!store.sameRecordOrder(store.get(plain).record, store.get(padded).record));
+    try std.testing.expect(!store.sameRecordOrder(store.get(padded).record, store.get(plain).record));
+    try std.testing.expect(!store.sameRecordOrder(store.get(padded).record, store.get(other_order).record));
+    try std.testing.expect(store.sameRecordOrder(store.get(padded).record, store.get(other_padding).record));
+    try std.testing.expectEqualSlices(TypeId, &.{number}, store.paddingTypes(store.get(padded).record));
+    try std.testing.expectEqual(@as(usize, 0), store.paddingTypes(store.get(plain).record).len);
+
+    try std.testing.expect(store.isClosed(padded));
+    const open = try store.intern(.{ .record = .{ .fields = fields, .ext = null, .declared = .{ .padding = &.{try store.variable(0)}, .slots = &.{ 1, 2, 0 } } } });
+    try std.testing.expect(!store.isClosed(open));
+}
+
 /// Whether two types could unify without a structural conflict: the same
 /// kind of type, the same primitive, records with the same fields, tuples
 /// and functions of the same arity, the same nominal; a variable is
