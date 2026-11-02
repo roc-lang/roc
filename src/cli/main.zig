@@ -11435,6 +11435,8 @@ fn finishBuildCommand(
 const BoxyLibraryObjects = struct {
     /// Every library unit's pieces, in unit order.
     pieces: []const *const backend.dev.UnitPieces.Pieces,
+    /// Every library unit's object cache key, in unit order.
+    keys: []const [32]u8,
     /// The pieces of the units this build lowered itself, which it owns;
     /// the rest belong to compile-time evaluation's scheduler.
     owned_pieces: []const *backend.dev.UnitPieces.Pieces,
@@ -11562,6 +11564,7 @@ fn buildBoxyLibraryObjects(
     // the link's inputs (and so the executable) are the same every build.
     const objects = try ctx.arena.alloc(?*const backend.dev.UnitPieces.Pieces, units.items.len);
     @memset(objects, null);
+    const keys = try ctx.arena.alloc([32]u8, units.items.len);
     var hosted_symbols: std.ArrayList([]const u8) = .empty;
     var seen_hosted = std.StringHashMap(void).init(ctx.arena);
     var owned_pieces: std.ArrayList(*backend.dev.UnitPieces.Pieces) = .empty;
@@ -11591,6 +11594,7 @@ fn buildBoxyLibraryObjects(
         try build_env.boxyAdoptExports(digests, task.artifact);
         if (known.restored) restored += 1 else built += 1;
         objects[index] = known.pieces;
+        keys[index] = task.key.bytes;
         for (known.hosted_symbols) |symbol| {
             const owned = try ctx.arena.dupe(u8, symbol);
             if ((try seen_hosted.getOrPut(owned)).found_existing) continue;
@@ -11639,6 +11643,7 @@ fn buildBoxyLibraryObjects(
                 if (result.restored) restored += 1 else built += 1;
                 try digests.recordExports(task.artifact, result.exports);
                 objects[index] = result.pieces;
+                keys[index] = task.key.bytes;
                 for (result.hosted_symbols) |symbol| {
                     const owned = try ctx.arena.dupe(u8, symbol);
                     if ((try seen_hosted.getOrPut(owned)).found_existing) continue;
@@ -11667,26 +11672,54 @@ fn buildBoxyLibraryObjects(
     for (visible) |artifact| {
         if (artifact.platform_type_inputs.requirements.len != 0) try paired_platforms.append(ctx.arena, artifact.codeGenerationKey().bytes);
     }
-    return .{ .pieces = ordered, .owned_pieces = owned_pieces.items, .hosted_symbols = hosted_symbols.items, .platform = platform, .paired_platforms = paired_platforms.items };
+    return .{ .pieces = ordered, .keys = keys, .owned_pieces = owned_pieces.items, .hosted_symbols = hosted_symbols.items, .platform = platform, .paired_platforms = paired_platforms.items };
 }
 
 /// Compose the program's pieces into the one object its link takes: every
 /// piece the root unit's entrypoints and host-visible constants reach
 /// (design.md "Unit Pieces And Whole-Program Dead Code"), materialized for
-/// the link.
+/// the link. The composed object is a function of the units' keys, so the
+/// cache files it under them and a build whose units are all unchanged links
+/// the object it composed before.
 fn composeBoxyProgramObject(
     ctx: *CliCtx,
     reporter: *progress.Reporter,
     link_objects: *link_artifacts.Objects,
+    cache_manager: ?*CacheManager,
+    root_key: ?[32]u8,
     root: *const backend.dev.UnitPieces.Pieces,
-    library: []const *const backend.dev.UnitPieces.Pieces,
+    library: BoxyLibraryObjects,
     target: RocTarget,
     synthetic_default_platform: bool,
 ) CliMainError![]const u8 {
+    const program_key: ?[32]u8 = if (root_key) |key| key: {
+        var hasher = base.Sha256.init(.{});
+        hasher.update("roc.boxy.program-object.v1");
+        hasher.update(&key);
+        for (library.keys) |unit_key| hasher.update(&unit_key);
+        hasher.update(@tagName(target));
+        hasher.update(&.{@intFromBool(synthetic_default_platform)});
+        break :key hasher.finalResult();
+    } else null;
+    const program_scope = "boxy-program";
+    // A record is the object's identity, then the object: the identity was
+    // computed from these bytes by the build that composed them.
+    if (program_key) |key| if (cache_manager) |manager| if (manager.loadFamilyBytes(.boxy_object, key, program_scope)) |record| {
+        defer manager.allocator.free(record);
+        if (record.len >= 40) {
+            const identity: link_artifacts.Identity = .{ .digest = record[0..32].*, .size = std.mem.readInt(u64, record[32..40], .little) };
+            if (identity.size == record.len - 40) {
+                reporter.begin("Object Materialization");
+                const path = link_objects.materializeKnown(record[40..], identity) catch return error.NativeCompilationFailed;
+                reporter.end();
+                return path;
+            }
+        }
+    };
     reporter.begin("Composing Program Object");
-    const inputs = try ctx.arena.alloc(*const backend.dev.UnitPieces.Pieces, library.len + 1);
+    const inputs = try ctx.arena.alloc(*const backend.dev.UnitPieces.Pieces, library.pieces.len + 1);
     inputs[0] = root;
-    @memcpy(inputs[1..], library);
+    @memcpy(inputs[1..], library.pieces);
     var compiler = backend.ObjectFileCompiler.init(ctx.gpa);
     var timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
     compiler.timing = &timing;
@@ -11701,8 +11734,17 @@ fn composeBoxyProgramObject(
     defer composed.deinit();
     reporter.endWithBreakdown(&devBackendBreakdown(timing.snapshot()));
     reporter.begin("Object Materialization");
-    const path = link_objects.materializeKnown(composed.object_bytes, link_artifacts.Identity.of(composed.object_bytes)) catch return error.NativeCompilationFailed;
+    const identity = link_artifacts.Identity.of(composed.object_bytes);
+    const path = link_objects.materializeKnown(composed.object_bytes, identity) catch return error.NativeCompilationFailed;
     reporter.end();
+    if (program_key) |key| if (cache_manager) |manager| {
+        const record = try ctx.gpa.alloc(u8, 40 + composed.object_bytes.len);
+        defer ctx.gpa.free(record);
+        record[0..32].* = identity.digest;
+        std.mem.writeInt(u64, record[32..40], identity.size, .little);
+        @memcpy(record[40..], composed.object_bytes);
+        manager.storeFamilyBytes(.boxy_object, key, record, program_scope, "boxy program object");
+    };
     return path;
 }
 
@@ -12384,7 +12426,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             error.MalformedPieces, error.UnsupportedPiecesVersion => base.invariant("the cached pieces of the root unit were admitted but do not decode: {s}", .{@errorName(err)}),
         };
         defer root_pieces.deinit();
-        const obj_path = try composeBoxyProgramObject(ctx, &reporter, &link_objects, &root_pieces, library.pieces, target, args.synthetic_default_platform);
+        const obj_path = try composeBoxyProgramObject(ctx, &reporter, &link_objects, boxy_cache_manager, boxy_root_key.?.bytes, &root_pieces, library, target, args.synthetic_default_platform);
         reporter.begin("Preparing Link Inputs");
         const root_hosted = try ctx.arena.alloc([]const u8, entry.hosted_symbols.len);
         for (entry.hosted_symbols, root_hosted) |symbol, *owned| owned.* = try ctx.arena.dupe(u8, symbol);
@@ -12468,7 +12510,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         defer root_pieces.deinit();
         reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
         reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(backend_timing.snapshot().native_emission));
-        const obj_path = try composeBoxyProgramObject(ctx, &reporter, &link_objects, &root_pieces, library.pieces, target, args.synthetic_default_platform);
+        const obj_path = try composeBoxyProgramObject(ctx, &reporter, &link_objects, boxy_cache_manager, if (boxy_root_key) |key| key.bytes else null, &root_pieces, library, target, args.synthetic_default_platform);
         const root_hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
         const link_facts: ProgramOutput.LinkFacts = .{
             .hosted_symbols = try unionSymbols(ctx.arena, root_hosted_symbols, library.hosted_symbols),
