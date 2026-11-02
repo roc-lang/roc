@@ -18,6 +18,8 @@ pub const available = builtin.link_libc and build_options.dev_diagnostics;
 pub const Var = enum {
     /// Trace Boxy-only work; specialized compilation must produce no events.
     trace_boxy_work,
+    /// Print the exact code/data dependency graph of each imported CTFE image.
+    ctfe_image_graph,
     /// Rebuild every restored Boxy object and compare it with the cached one.
     verify_boxy_object_reuse,
     /// Measure serialization of completed specialization bodies.
@@ -63,6 +65,7 @@ pub const Var = enum {
             .completed_body_cache => "ROC_COMPLETED_BODY_CACHE",
             .spec_resolution_profile => "ROC_SPEC_RESOLUTION_PROFILE",
             .trace_boxy_work => "ROC_TRACE_BOXY_WORK",
+            .ctfe_image_graph => "ROC_CTFE_IMAGE_GRAPH",
             .verify_boxy_object_reuse => "ROC_VERIFY_BOXY_OBJECT_REUSE",
             .lir_dump => "ROC_LIR_DUMP",
             .spec_census => "ROC_SPEC_CENSUS",

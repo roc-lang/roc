@@ -2571,7 +2571,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         }
     }
 
-    if (input.proc_debug_names) {
+    if (input.proc_debug_names or base.dev_diagnostics.isSet(.ctfe_image_graph)) {
         for (program.workers.items) |worker| {
             // A template's worker carries its procedure's source name.
             const name: []const u8 = switch (worker.key) {
@@ -2587,7 +2587,10 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                 },
                 inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => |_, kind| "boxy." ++ @tagName(kind),
             };
-            try program.result.store.setProcDebugName(worker.proc, name);
+            if (input.proc_debug_names) try program.result.store.setProcDebugName(worker.proc, name);
+            if (base.dev_diagnostics.isSet(.ctfe_image_graph)) {
+                std.debug.print("ctfe-worker\troc__p{s}\t{s}\t{s}\t{s}\n", .{ &program.result.store.getProcSpec(worker.proc).identity.symbolHex(), program.module(worker.module).view.module_env.module_name, @tagName(worker.key), name });
+            }
         }
     }
     program.result.finishExpectSites();

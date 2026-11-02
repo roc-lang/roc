@@ -1516,6 +1516,7 @@ pub const BoxyObjectSource = struct {
 const BoxyLinkedImages = struct {
     const Image = if (compilerHostMustUseInterpreterForCtfe()) void else backend.dev.NativeImage.Image;
     allocator: Allocator,
+    std_io: ?std.Io = null,
     mutex: std.atomic.Mutex = .unlocked,
     images: std.ArrayList(Image) = .empty,
     code: std.ArrayList([]const u8) = .empty,
@@ -1603,6 +1604,8 @@ const BoxyLinkedImages = struct {
         }
         if (pending.items.len == 0) return;
         var compiler = backend.ObjectFileCompiler.init(self.allocator);
+        var image_timing: ?backend.ObjectFileCompiler.Timing = if (base.dev_diagnostics.isSet(.trace_boxy_work)) (if (self.std_io) |io| .init(io) else null) else null;
+        compiler.timing = if (image_timing) |*timing| timing else null;
         var image = compiler.composeImage(self.objects.items, .{
             .demanded_symbols = pending.items,
             .provided_symbols = &self.symbols,
@@ -1855,7 +1858,7 @@ fn evaluateRootsBoxy(
         flag.* = artifacts[root.module].compile_time_roots.root(root.root).kind != .literal_argument and
             try checked_root_graph.rootHoldsFunction(allocator, artifacts, lowering_modules.imports, root);
     }
-    var images = BoxyLinkedImages{ .allocator = allocator };
+    var images = BoxyLinkedImages{ .allocator = allocator, .std_io = options.std_io };
     defer images.deinit();
     var evaluations = try ModuleEvaluations.init(allocator, modules, roots, &graph);
     defer evaluations.deinit();

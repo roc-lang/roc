@@ -26064,6 +26064,11 @@ lookup separates function-type classification from provider queries; the
 provider reports exclusive bucket, offer, metadata, graph, eligibility, payload,
 and installation phases under the same diagnostic.
 
+`ROC_CTFE_IMAGE_GRAPH` prints the exact selected code/data dependency graph
+of each imported native CTFE image, including source locations, code sizes,
+requested symbols, callable pointers and helper aliases. It is diagnostic
+only and does not change reachability or persisted artifacts.
+
 `ROC_TEST_COMMAND_WORK` prints deterministic test-command counters at exit.
 The specialization, evaluation, runtime LIR, ARC, static-data and native test
 execution producers increment their own counters. A complete result hit leaves

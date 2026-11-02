@@ -1370,6 +1370,14 @@ fn ownDataItem(a: Allocator, item: CodeExcerpt.DataItem) Allocator.Error!CodeExc
     };
 }
 
+fn traceImagePhase(timing: ?*ObjectFileCompiler.Timing, mark: *i96, label: []const u8) void {
+    if (timing) |timer| {
+        const end = timer.start();
+        std.debug.print("ctfe-image-phase\t{s}\t{d}us\n", .{ label, @divTrunc(end - mark.*, 1000) });
+        mark.* = timer.start();
+    }
+}
+
 fn composeWithCodeGen(
     comptime CodeGen: type,
     comptime native: bool,
@@ -1381,6 +1389,8 @@ fn composeWithCodeGen(
     resolver: ?NativeImage.Resolver,
 ) (if (native) (CompilationError || NativeImage.Error)!NativeImage.Image else CompilationError!CompilationResult) {
     std.debug.assert(native or options.provided_symbols == null);
+    const image_trace = if (native and @import("base").dev_diagnostics.isSet(.trace_boxy_work)) timing else null;
+    var image_mark = if (image_trace) |timer| timer.start() else 0;
     const symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;
     // The object is a function of the units, not of the order they arrive
     // in: the units are taken in the order of their source-file tables, and
@@ -1471,6 +1481,7 @@ fn composeWithCodeGen(
     defer root_data.deinit(allocator);
     for (host_visible.items) |item| root_data.append(allocator, item.name) catch return CompilationError.OutOfMemory;
     if (options.demanded_symbols) |names| root_data.appendSlice(allocator, names) catch return CompilationError.OutOfMemory;
+    traceImagePhase(image_trace, &image_mark, "inputs");
     var reachable = CodeExcerpt.reachableAcross(allocator, sets, host_visible.items, .{
         .procs = root_procs.items,
         .data = root_data.items,
@@ -1479,6 +1490,7 @@ fn composeWithCodeGen(
         .provided = if (options.provided_symbols) |symbols| (if (symbols.count() == 0) null else .{ .symbols = symbols, .entry = NativeImage.providedEntry }) else null,
     }) catch return CompilationError.OutOfMemory;
     defer reachable.deinit();
+    traceImagePhase(image_trace, &image_mark, "reachability");
     // The source-file table of the reached code, named from the units that
     // index it.
     const files = allocator.alloc(@import("base").SourceFileEntry, reachable.source_files.len) catch return CompilationError.OutOfMemory;
@@ -1491,8 +1503,13 @@ fn composeWithCodeGen(
             invariant("a composed source file belongs to no unit", .{});
         };
     }
+    if (native and @import("base").dev_diagnostics.isSet(.ctfe_image_graph)) {
+        try @import("CtfeImageGraph.zig").trace(allocator, &reachable, files, root_data.items, host_visible.items, &helper_aliases);
+        if (image_trace) |timer| image_mark = timer.start();
+    }
     var canonical = CodeExcerpt.arrange(allocator, &reachable, host_visible.items) catch return CompilationError.OutOfMemory;
     defer canonical.deinit();
+    traceImagePhase(image_trace, &image_mark, "arrangement");
     var store = LirStore.init(allocator);
     defer store.deinit();
     store.setSourceFiles(files) catch return CompilationError.OutOfMemory;
@@ -1667,6 +1684,7 @@ fn composeWithCodeGen(
     defer resolved.deinit(allocator);
     if (timing) |timings| timings.finish(symbol_relocations_started_ns, .symbol_relocations);
     if (native) {
+        traceImagePhase(image_trace, &image_mark, "assembly-and-symbols");
         var image = try NativeImage.load(allocator, .{
             .code = code,
             .rodata = rodata.items,
@@ -1677,7 +1695,9 @@ fn composeWithCodeGen(
             .unwind = final.getUnwindFunctions(),
         }, resolver.?);
         errdefer image.deinit();
+        traceImagePhase(image_trace, &image_mark, "mapping-and-relocation");
         image.code_locations = try encodeCodeLocations(allocator, &store, &final);
+        traceImagePhase(image_trace, &image_mark, "source-locations");
         return image;
     }
     const object_bytes = try encodeObject(allocator, &store, target, &final, code, rodata.items, zero_fill_size, resolved.symbols, relocations, rodata_relocations.items, dwarf_procs.items, timing);
