@@ -183,7 +183,7 @@ noinline fn increfComposite(desc: *const TypeDesc, ptr: [*]u8, count: isize, ops
     stack.push(.at(desc, ptr), ops);
     while (stack.pop()) |pending| {
         var value = pending;
-        // A wrapper has only one child. Follow it without scheduling work.
+        // Follow the next child directly; only siblings need scheduling.
         while (true) {
             const d = value.desc;
             switch (d.kind) {
@@ -194,7 +194,13 @@ noinline fn increfComposite(desc: *const TypeDesc, ptr: [*]u8, count: isize, ops
                 .erased_callable => utils.increfDataPtr(value.word(), count, .atomic, ops),
                 .record, .tuple => {
                     const fields = d.fields();
-                    for (d.refcountedFieldSlots()) |slot| stack.push(value.field(&fields[slot]), ops);
+                    const slots = d.refcountedFieldSlots();
+                    if (slots.len != 0) {
+                        // Retain visits fields in reverse physical order.
+                        for (slots[0 .. slots.len - 1]) |slot| stack.push(value.field(&fields[slot]), ops);
+                        value = value.field(&fields[slots[slots.len - 1]]);
+                        continue;
+                    }
                 },
                 .tag_union => {
                     const variant = &d.variants()[d.readDiscriminant(value.ptr)];
@@ -281,7 +287,7 @@ noinline fn decrefComposite(desc: *const TypeDesc, ptr: [*]u8, ops: *RocOps) voi
         .release_list => |list| utils.decref(list.list.getAllocationDataPtr(ops), list.list.capacity_or_alloc_ptr, list.alignment, true, .atomic, ops),
         .value => |pending| {
             var value = pending;
-            // Keep cleanup sentinels on the stack while following wrappers.
+            // Keep cleanup sentinels and siblings pending while following a child.
             while (true) {
                 const d = value.desc;
                 switch (d.kind) {
@@ -316,10 +322,15 @@ noinline fn decrefComposite(desc: *const TypeDesc, ptr: [*]u8, ops: *RocOps) voi
                     .record, .tuple => {
                         const fields = d.fields();
                         const slots = d.refcountedFieldSlots();
-                        var index = slots.len;
-                        while (index > 0) {
-                            index -= 1;
-                            walker.stack.push(.{ .value = value.field(&fields[slots[index]]) }, ops);
+                        if (slots.len != 0) {
+                            // Release visits fields in forward physical order.
+                            var index = slots.len;
+                            while (index > 1) {
+                                index -= 1;
+                                walker.stack.push(.{ .value = value.field(&fields[slots[index]]) }, ops);
+                            }
+                            value = value.field(&fields[slots[0]]);
+                            continue;
                         }
                     },
                     .tag_union => {

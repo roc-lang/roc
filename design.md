@@ -14987,6 +14987,13 @@ adds four bytes per selected field and four bytes per reference-containing
 record/tuple layout, and adds nothing to the descriptor header or to
 reference-free field tables.
 
+Record and tuple reference-count traversal follows its next selected child
+directly and queues only the remaining siblings. Retain keeps reverse physical
+field order; release keeps forward physical field order. A single selected
+child needs no push/pop pair. Pending list and box releases stay below their
+children and the children of nested records on the work stack. This uses the
+existing slot table and adds no descriptor metadata or compiler analysis.
+
 Descriptors come from two sources and nowhere else:
 
 - *Static descriptors.* The lowerer interns a descriptor for every closed

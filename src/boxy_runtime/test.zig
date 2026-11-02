@@ -425,6 +425,8 @@ test "reference counting follows deep wrappers and preserves pending container r
         wrapped = compose.tagUnion(&env.cache, ops, &.{
             .{ .name = &name_ok, .payload_count = 1, .payloads = &.{wrapped} },
         });
+        wrapped = compose.tuple(&env.cache, ops, &.{wrapped});
+        wrapped = recordAB(&env, compose.zstDesc(), wrapped);
     }
     const record = recordAB(&env, wrapped, wrapped);
     const boxed = compose.box(&env.cache, ops, record);
@@ -448,6 +450,56 @@ test "reference counting follows deep wrappers and preserves pending container r
     // List and box cleanup remain pending while their wrapped children run.
     walk.decref(list_desc, @ptrCast(&list), ops);
     try testing.expectEqual(baseline, env.allocations());
+}
+
+test "record traversal preserves final drop order and pending container releases" {
+    const Drops = struct {
+        const Self = @This();
+        ids: [40]usize = undefined,
+        len: usize = 0,
+
+        const Capture = struct { drops: *Self, id: usize };
+
+        fn onDrop(capture: ?[*]u8, _: *RocOps) callconv(.c) void {
+            const saved: *const Capture = @ptrCast(@alignCast(capture.?));
+            saved.drops.ids[saved.drops.len] = saved.id;
+            saved.drops.len += 1;
+        }
+    };
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    const leaf = recordAB(&env, compose.scalarDesc(.u64), compose.erasedCallableDesc());
+    const fields: [40]*const TypeDesc = @splat(leaf);
+    // One child, multiple siblings, and enough siblings to grow the work stack.
+    for ([_]usize{ 1, 3, 40 }) |count| {
+        const tuple = compose.tuple(&env.cache, ops, fields[0..count]);
+        const boxed = compose.box(&env.cache, ops, tuple);
+        const list_desc = compose.list(&env.cache, ops, boxed);
+        const baseline = env.allocations();
+        var drops: Drops = .{};
+        const payload = utils.allocateWithRefcount(tuple.size, tuple.alignment, true, ops);
+        @memset(payload[0..tuple.size], 0);
+        for (tuple.fields(), 0..) |field, index| {
+            const callable = erased_callable.allocate(&Overrides.alwaysEqual, &Drops.onDrop, @sizeOf(Drops.Capture), ops);
+            const capture: *Drops.Capture = @ptrCast(@alignCast(erased_callable.capturePtr(callable)));
+            capture.* = .{ .drops = &drops, .id = index };
+            const slot = payload + field.offset + fieldOffset(leaf, 1);
+            @as(*[*]u8, @ptrCast(@alignCast(slot))).* = callable;
+        }
+        walk.incref(tuple, payload, 2, ops);
+        for (0..2) |_| {
+            walk.decref(tuple, payload, ops);
+            try testing.expectEqual(@as(usize, 0), drops.len);
+            try testing.expectEqual(baseline + count + 1, env.allocations());
+        }
+        var list = RocList.list_allocate(boxed.alignment, 1, boxed.size, true, ops);
+        @as(*[*]u8, @ptrCast(@alignCast(list.bytes.?))).* = payload;
+        walk.decref(list_desc, @ptrCast(&list), ops);
+        try testing.expectEqual(count, drops.len);
+        for (drops.ids[0..count], 0..) |id, index| try testing.expectEqual(index, id);
+        try testing.expectEqual(baseline, env.allocations());
+    }
 }
 
 test "equality compares structure and honors is_eq overrides" {
