@@ -420,6 +420,8 @@ final_codec_dispatch_constraint_fns: collections.DenseMapUnmanaged(Var, CodecCon
 /// A relation that was already parked for finalization validates a private
 /// instance there (`finalCodecRelationInstance`).
 scheme_deferred_codec_constraint_fns: collections.DenseMapUnmanaged(Var, void) = .empty,
+/// Each private instance's callable and the template relation it validates.
+final_codec_instance_templates: collections.DenseMapUnmanaged(Var, Var) = .empty,
 checking_final_codec_dispatch_constraints: bool = false,
 /// Boundary validation produces constraints once; the exact calls and live
 /// contract roots freeze only after the module's error rows have settled.
@@ -1684,6 +1686,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .final_codec_dispatch_constraints = .settled,
     .final_codec_dispatch_constraint_fns = .keyed,
     .scheme_deferred_codec_constraint_fns = .keyed,
+    .final_codec_instance_templates = .keyed,
     .checking_final_codec_dispatch_constraints = .lexical,
     .constraining_boundary_codecs = .lexical,
     .settling_codec_method_requirements_depth = .lexical,
@@ -2265,6 +2268,9 @@ const SchemeDispatchRequirement = struct {
     /// rehydrated schemes set it because only their instantiated copies need
     /// validation here.
     pristine_codec_is_scheme_only: bool,
+    /// Finalization validates a private instance of this scheme-only relation,
+    /// whose derivation serves a procedure that runs as a root with no caller.
+    validates_final_instance: bool = false,
     /// The expression in this scheme whose use created the pending copy.
     /// Creation requirements already have exact constraint provenance; copied
     /// requirements need this separate use-site provenance because their
@@ -40794,6 +40800,7 @@ fn deduplicateGeneralizedDispatchRequirements(
                 const retained = &self.type_schemes.items[scheme_idx].dispatch_requirements.items[entry.value_ptr.write_index];
                 retained.deferred_generated_codec = retained.deferred_generated_codec or requirement.deferred_generated_codec;
                 retained.pristine_codec_is_scheme_only = retained.pristine_codec_is_scheme_only or requirement.pristine_codec_is_scheme_only;
+                retained.validates_final_instance = retained.validates_final_instance or requirement.validates_final_instance;
                 continue;
             }
         } else {
@@ -41395,7 +41402,7 @@ fn publishBindingSchemeCodecRequirement(
                 .scheme_root = @backingInt(scheme.root_var),
                 .receiver_var = @backingInt(requirement.receiver_var),
                 .constraint_index = constraint_index,
-                .requires_instantiation = @intFromBool(requirement.pristine_codec_is_scheme_only),
+                .requires_instantiation = @intFromBool(requirement.pristine_codec_is_scheme_only and !requirement.validates_final_instance),
                 .is_synthetic = @intFromBool(self.synthetic_binding_schemes.contains(indexed_var)),
             });
             continue;
@@ -41405,7 +41412,7 @@ fn publishBindingSchemeCodecRequirement(
             scheme.root_var,
             requirement.receiver_var,
             constraint_index,
-            requirement.pristine_codec_is_scheme_only,
+            requirement.pristine_codec_is_scheme_only and !requirement.validates_final_instance,
             self.synthetic_binding_schemes.contains(indexed_var),
         );
     }
@@ -41539,6 +41546,7 @@ fn activateSchemeDeferredCodecConstraints(
                 try self.typeHasGeneralizedVar(requirement.constraint.fn_var))
             {
                 requirement.pristine_codec_is_scheme_only = true;
+                requirement.validates_final_instance = true;
             }
             if (!requirement.pristine_codec_is_scheme_only) continue;
             std.debug.assert(requirement.deferred_generated_codec);
@@ -48866,10 +48874,11 @@ fn deferGeneratedCodecConstraintToFinalization(
 /// A private instance of a parked relation whose scheme quantifies some of
 /// its variables. Each use validates its own copy of the relation at its own
 /// types; this instance validates the definition itself, so a relation no type
-/// can satisfy is reported even when nothing uses the definition. It keeps the
-/// definition's rigid variables rigid, so a body that cannot deliver its
-/// annotation is rejected, and shares its monomorphic variables, so the relation
-/// still determines them. Nothing else reaches the copied variables.
+/// can satisfy is reported even when nothing uses the definition, and its
+/// derivation is the template's own, for a procedure that runs as a root. It
+/// keeps the definition's rigid variables rigid, so a body that cannot deliver
+/// its annotation is rejected, and shares its monomorphic variables, so the
+/// relation still determines them. Nothing else reaches the copied variables.
 fn finalCodecRelationInstance(
     self: *Self,
     pending: FinalCodecDispatchConstraint,
@@ -48899,6 +48908,7 @@ fn finalCodecRelationInstance(
     defer self.active_scheme_root = previous_scheme_root;
     self.active_scheme_root = self.dispatchRelationOwner(pending.constraint.fn_var);
     try self.recordDispatchRelationOwner(relation.constraint.fn_var);
+    try self.final_codec_instance_templates.put(self.gpa, relation.constraint.fn_var, pending.constraint.fn_var);
     return relation;
 }
 
@@ -48928,6 +48938,14 @@ fn checkFinalGeneratedCodecConstraints(self: *Self, env: *Env) Allocator.Error!v
 
     try self.checkStaticDispatchConstraints(env, true);
     try self.checkAllConstraints(env);
+
+    // A relation no instance satisfies is rejected for the definition too.
+    var instances = self.final_codec_instance_templates.iterator();
+    while (instances.next()) |instance| {
+        if (self.types.varStaticDispatchRejected(instance.key_ptr.*)) {
+            try self.markStaticDispatchFnRejected(instance.value_ptr.*);
+        }
+    }
 }
 
 fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pass: bool) std.mem.Allocator.Error!void {
@@ -55090,6 +55108,7 @@ fn recordGeneratedCodecDerivationSnapshot(
 
     try self.cir.recordGeneratedCodecDerivation(
         kind,
+        self.final_codec_instance_templates.get(constraint_fn_var) orelse constraint_fn_var,
         constraint_fn_var,
         runtime_fn_var,
         shape_var,

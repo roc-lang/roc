@@ -12416,14 +12416,9 @@ unresolved receiver. `Check.activateSchemeDeferredCodecConstraints` marks it
 scheme-only at the boundary. Each use copies it and validates the copy at that
 use's own state and error row, so two calls of one definition in one body may
 take two rows, and a call's `Parser Error Row Missing Tag` or state mismatch is
-that use's own relation. Checked output records the template as requiring
-instantiation, so the definition has no uninstantiated root contract, and
-derivations live on the copies, never on the template. A generalized binding
-that nothing uses (`_ = any_parser`) keeps the relation it copied as a template
-with no copy of its own, so its evidence is `unreachable_value`: no value ever
-reaches that dispatch. `.boxy` constructs a stored lambda with its own
+that use's own relation. `.boxy` constructs a stored lambda with its own
 dictionaries, and a `from_scheme` entry there means no use instantiated it, so
-that dictionary is the same crash and nothing reads it.
+that dictionary is a crash nothing reads.
 
 A definition with no use still owes its relation a verdict, so finalization
 validates one private instance of it (`Check.finalCodecRelationInstance`)
@@ -12431,7 +12426,13 @@ rather than the template. The instance copies the variables the scheme
 quantifies, keeps rigid variables rigid, so a body that cannot deliver its
 annotation is rejected, and shares monomorphic variables, so a relation that
 reaches a weak value still determines it. A relation no type satisfies, such as
-a format with no `parse_u64`, is reported at the expression that created it.
+a format with no `parse_u64`, is reported at the expression that created it,
+and rejects the template. The instance's derivation answers for the template
+(`GeneratedCodecDerivation.template_constraint_fn_var`), and evidence through
+it states the instance's callable, whose types that derivation was built at. So
+a procedure that runs as a root, which has no caller, relates to the instance as
+it would to a use, and a generalized binding nothing uses (`_ = any_parser`)
+still has evidence at its construction.
 This validates in a private copy and rewrites no solved variable the program can
 reach, so it adds no Rewrite Inventory entry (Solver-Mutating Rewrites).
 
