@@ -11752,7 +11752,11 @@ Equating the rows instead would write `Bad(a)` into the callback's row, so the
 inferred signature would be strictly less general than an annotation the
 checker accepts. Two tagless contributions share the one tail. A tag the
 source turns out to carry at a use merges with a same-named head whose
-payload agrees and is a mismatch otherwise (Row Union Normalization).
+payload agrees and is a mismatch otherwise (Row Union Normalization). An error
+that is not a row at all, such as a nominal tag union, is not a tagless
+contribution: it has no residual extension, so it is related to the whole
+result row as a contribution with tags is, and a bare tag returned beside
+`check(x)?` on a `Try(_, Error)` joins `Error`.
 
 Under an ANNOTATED result the residual tail is the annotation's—rigid, or
 bounded by it—so a tagless source there is a row still being resolved (a
