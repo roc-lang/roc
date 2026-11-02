@@ -29,20 +29,20 @@ Linked(p) := { x : U8, _ : p, next : [End, Next(Box(Linked(p)))], w : U16 }.{
 second : Linked(p) -> U8
 second = |l| match l.next {
 	End => 0
-	Next(b) => Box.unbox(b).x + Box.unbox(b).w.to_u8()
+	Next(b) => Box.unbox(b).x + Box.unbox(b).w.to_u8_wrap()
 }
 
 # Closed readers use the offsets the generic `new` has to agree with.
 second_small : Linked(U8) -> U8
 second_small = |l| match l.next {
 	End => 0
-	Next(b) => Box.unbox(b).x + Box.unbox(b).w.to_u8()
+	Next(b) => Box.unbox(b).x + Box.unbox(b).w.to_u8_wrap()
 }
 
 second_large : Linked(Str) -> U8
 second_large = |l| match l.next {
 	End => 0
-	Next(b) => Box.unbox(b).x + Box.unbox(b).w.to_u8()
+	Next(b) => Box.unbox(b).x + Box.unbox(b).w.to_u8_wrap()
 }
 
 stored_spacer : Spacer(Str)
