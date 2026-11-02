@@ -1513,7 +1513,8 @@ layout indices and the starts of runs of erased argument layouts. A program
 numbers both in the order its lowering reached them, which depends on which
 procedures it lowered and which a pack served, so code loads each such number
 with a fixed-width instruction sequence and records it as a runtime number
-(`RuntimeNumber`) that its excerpt carries. Once the image's code is placed,
+(`RuntimeNumber`) that its excerpt carries. Once the image's code and its entry
+wrappers, which register each dictionary worker's return layout, are placed,
 each number is given its arranged one in the order the placed code first
 loads it, and every load is patched to it (`LirCodeGen.renumberRuntimeNumbers`,
 `RuntimeTables.Numbering`); the fixed layouts keep their indices. The sidecar
@@ -8570,7 +8571,11 @@ bodies that closure reaches, so one of its modules recorded an equal contract.
 Boxy resolves a stored function's codec dictionary edge from the same module,
 and builds the generated codec worker in it: the dictionary's requirement comes
 from the template's module and the shape from the use's module, and neither
-need hold the contract. A generated codec runtime body reads its edge in that
+need hold the contract. A generic method selected for that dictionary, such as
+`List.encoder_for`, names its item and its format only in the encoder it
+returns, so Boxy relates the method to the requirement's position at the call,
+and the method's own codec requirements are read at what that relation binds. A
+generated codec runtime body reads its edge in that
 body's module, which must hold an equal contract. Completed-body records
 retain recorded edges and are rejected when their recording module is absent.
 
