@@ -10367,7 +10367,19 @@ fn customNativeBuildExcerptRoundTrip(
             .not_contains = &.{ .{ .stream = .stderr, .text = "round trip failed" }, .{ .stream = .stderr, .text = "panic" } },
         })) |failure| return failure;
     }
-    return null;
+
+    // Boxy code loads runtime table numbers, which excerpts keep apart from
+    // their linked relocations.
+    const boxy_output_path = std.fmt.allocPrint(allocator, "{s}/excerpt_round_trip_boxy", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const boxy_out_arg = outputArg(allocator, boxy_output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+    return runRocAndCheck(io, allocator, &round_trip_env, timer, timeout_ms, .{
+        .args = &.{ "build", "--no-cache", "--opt=dev", "--specialize=no", boxy_out_arg },
+        .roc_file = "test/cli/issue_12728_boxy_built_codecs/App.roc",
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        .not_contains = &.{ .{ .stream = .stderr, .text = "round trip failed" }, .{ .stream = .stderr, .text = "panic" } },
+    });
 }
 
 /// `ROC_DEV_PACK_OBJECTS` makes a native dev build also lower every visible
@@ -11680,6 +11692,9 @@ fn customIssue12728BoxyBuiltCodecs(
         \\[1]
         \\[["1"]]
         \\["1"]
+        \\Ok("items=2:7;1;")
+        \\Ok("nested=2:2:7;1;;0:;")
+        \\Ok("tagged=<7|1|>")
         \\
         ,
     });
