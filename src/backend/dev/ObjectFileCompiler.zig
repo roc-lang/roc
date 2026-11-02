@@ -1390,7 +1390,7 @@ fn composeWithCodeGen(
 ) (if (native) (CompilationError || NativeImage.Error)!NativeImage.Image else CompilationError!CompilationResult) {
     std.debug.assert(native or options.provided_symbols == null);
     const image_trace = if (native and @import("base").dev_diagnostics.isSet(.trace_boxy_work)) timing else null;
-    var image_mark = if (image_trace) |timer| timer.start() else 0;
+    var image_mark: i96 = if (image_trace) |timer| timer.start() else 0;
     const symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;
     // The object is a function of the units, not of the order they arrive
     // in: the units are taken in the order of their source-file tables, and
