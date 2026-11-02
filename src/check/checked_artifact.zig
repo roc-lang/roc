@@ -988,7 +988,9 @@ pub const RootRequestTable = struct {
         }
         for (requests.items) |*request| {
             if (request.root_evidence != null) continue;
-            const template_ref = request.procedure_template orelse continue;
+            const template_ref = request.procedure_template orelse
+                aliasRootWrapperTemplate(request.*, top_level_procedure_bindings, callable_eval_templates, entry_wrappers) orelse
+                continue;
             if (!template_ref.artifact.eql(artifact_key.digest())) {
                 checkedArtifactInvariant("root procedure template belonged to a different checked artifact", .{});
             }
@@ -2207,6 +2209,26 @@ fn procedureTemplateForTopLevelBinding(
             .lifted => checkedArtifactInvariant("checked root binding referenced lifted procedure before post-check lowering", .{}),
         },
         .callable_eval_template, .checked_error => null,
+    };
+}
+
+/// The entry wrapper template of a root bound to an exact procedure alias. The
+/// root enters the alias's scope, which is that wrapper's, so the wrapper's
+/// template root evidence is the root's.
+fn aliasRootWrapperTemplate(
+    request: RootRequest,
+    top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
+    callable_eval_templates: *const CallableEvalTemplateTable,
+    entry_wrappers: *const EntryWrapperTable,
+) ?canonical.ProcedureTemplateRef {
+    const binding_ref = request.procedure_binding orelse return null;
+    return switch (top_level_procedure_bindings.get(binding_ref).body) {
+        .callable_eval_template => |template_id| blk: {
+            const template = callable_eval_templates.templates.items[@backingInt(template_id)];
+            if (template.forwarded_lookup == null) break :blk null;
+            break :blk templateForEntryWrapperRoot(entry_wrappers, template.root);
+        },
+        .direct_template, .checked_error => null,
     };
 }
 

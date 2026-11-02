@@ -5,7 +5,12 @@ platform ""
     # Helper imports Core and Utils; Core imports Utils
     exposes [Helper, Core, Utils]
     packages {}
-    provides { "roc_process_string": process_string_for_host, "roc_trimmed_string": trimmed_string_for_host }
+    provides {
+        "roc_process_string": process_string_for_host,
+        "roc_trimmed_string": trimmed_string_for_host,
+        "roc_any_string": any_string_for_host,
+        "roc_direct_string": direct_string_for_host,
+    }
     targets: {
         inputs_dir: "targets/",
         x64mac: { inputs: ["libhost.a", app] },
@@ -26,17 +31,27 @@ import Core
 import Helper
 import Utils
 
-# No host calls this root. It is here to be lowered: a provided root that is an
-# alias of a generic procedure takes that procedure's dictionaries from the
-# root's own evidence.
+# No host calls these roots. They are here to be lowered: a provided root that
+# is an alias of a generic procedure takes that procedure's dictionaries from
+# the root's own evidence, and without an annotation the alias's scope keeps the
+# requirement, which the root's evidence then fills.
 trim_any = |value| value.trim()
 
 trimmed_string_for_host : Str -> Str
 trimmed_string_for_host = trim_any
 
+any_string_for_host = trim_any
+
+direct_string_for_host : Str -> Str
+direct_string_for_host = |input| process_string(input)
+
+# The requirement is reached through this module's own alias, whatever the app
+# binds it to.
+required_again = process_string
+
 process_string_for_host : Str -> Str
 process_string_for_host = |input| {
-    result = process_string(input)
+    result = required_again(input)
     result
 }
 

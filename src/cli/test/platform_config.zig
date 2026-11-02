@@ -137,6 +137,14 @@ const str_tests = [_]SimpleTestSpec{
         .roc_file = "test/str/app_aliased_requirement.roc",
         .description = "A requirement bound to an alias of a generic procedure",
     },
+    .{
+        .roc_file = "test/str/app_aliased_generic_requirement.roc",
+        .description = "A requirement bound to an alias that stays generic",
+    },
+    .{
+        .roc_file = "test/str/app_generic_requirement.roc",
+        .description = "A requirement bound to a generic procedure",
+    },
 
     // Direct calls from app to each exposed module
     .{
