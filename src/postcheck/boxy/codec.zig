@@ -243,7 +243,7 @@ fn contractEnv(program: *Program, module: ModuleIndex, constructor_ty: checked.C
                 try pending.append(allocator, tag_union.ext);
             },
             .empty_record, .empty_tag_union => {},
-            .pending, .err => invariant("a generated codec contract's type is not a checked type"),
+            .pending, .field_kind, .err => invariant("a generated codec contract's type is not a checked type"),
         }
         // Components are visited in source order.
         std.mem.reverse(checked.CheckedTypeId, pending.items[start..]);
@@ -1277,16 +1277,9 @@ const Gen = struct {
                 const ret_ty = fnRet(program_, callable.fn_ty);
                 const call_args = try b.allocator.dupe(LocalId, args);
                 defer b.allocator.free(call_args);
-                // A target storing record fields of its signature in presence
-                // slots is called at its own storage, adapting the arguments
-                // (design.md "Field Kinds"); the result is adapted to the
-                // call's own type in every case, since a sealed row of it may
-                // be widened here (design.md "Sealed Result Rows").
-                if (try program_.signatureHasSlots(callee)) {
-                    for (call_args, fnArgs(program_, callable.fn_ty), target_worker.params) |*arg, arg_ty, param_ty| {
-                        arg.* = try b.adaptValue(arg.*, arg_ty, try program_.substitute(b.allocator, param_ty, instance.bound));
-                    }
-                }
+                // The result is adapted to the call's own type, since a
+                // sealed row of it may be widened here (design.md "Sealed
+                // Result Rows").
                 const all = try std.mem.concat(b.allocator, LocalId, &.{ call_args, instance.hidden });
                 defer b.allocator.free(all);
                 const target = try self.local(instance.ret);

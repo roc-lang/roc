@@ -2101,6 +2101,7 @@ fn valuePositionMask(
             },
             .alias => |alias| try pending.append(arena, .{ .ty = alias.backing, .value_position = visit.value_position }),
             .pending,
+            .field_kind,
             .err,
             .flex,
             .rigid,
@@ -2955,7 +2956,7 @@ fn checkedResultRowIsClosed(view: ModuleView, root: checked.CheckedTypeId) bool 
             .empty_tag_union => return true,
             .flex, .rigid => |variable| return payload.variableSealsToRowDefault() and
                 variable.row_default == .empty_tag_union,
-            .pending, .err, .record, .tuple, .nominal, .function, .empty_record => return false,
+            .pending, .field_kind, .err, .record, .tuple, .nominal, .function, .empty_record => return false,
         }
     }
     Common.invariant("checked result row extension chain was cyclic");
@@ -2967,7 +2968,7 @@ fn checkedResultRowIsClosed(view: ModuleView, root: checked.CheckedTypeId) bool 
 fn closedResultRowOrNull(view: ModuleView, checked_fn_root: checked.CheckedTypeId) ?ClosedResultRow {
     const function = switch (resolvedPayload(view, checked_fn_root).payload) {
         .function => |function| function,
-        .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
+        .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
     };
     const ret = resolvedPayload(view, function.ret);
     switch (ret.payload) {
@@ -2983,7 +2984,7 @@ fn closedResultRowOrNull(view: ModuleView, checked_fn_root: checked.CheckedTypeI
             if (!checkedResultRowIsClosed(view, ret.root)) return null;
             return .{ .row = ret.root, .behind_try = false };
         },
-        .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record => return null,
+        .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record => return null,
     }
 }
 
@@ -3014,7 +3015,7 @@ fn requestDeterminedResultRowVariable(
 ) Allocator.Error!?checked.CheckedTypeId {
     const function = switch (resolvedPayload(view, checked_fn_root).payload) {
         .function => |function| function,
-        .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
+        .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
     };
     var chain: std.ArrayList(checked.CheckedTypeId) = .empty;
     defer chain.deinit(allocator);
@@ -3053,7 +3054,7 @@ fn requestDeterminedResultRowVariable(
                 if (row_variable.constraints.len != 0 and !row_variable.row_default_discharges_constraints) return null;
                 break current;
             },
-            .pending, .err, .record, .tuple, .function, .empty_record, .empty_tag_union => return null,
+            .pending, .field_kind, .err, .record, .tuple, .function, .empty_record, .empty_tag_union => return null,
         }
     };
 
@@ -3070,7 +3071,7 @@ fn requestDeterminedResultRowVariable(
         try visited.put(ty, {});
         switch (checkedPayload(view, ty)) {
             .pending => Common.invariant("pending checked type reached Monotype result row scan"),
-            .err, .empty_record, .empty_tag_union => {},
+            .field_kind, .err, .empty_record, .empty_tag_union => {},
             .flex, .rigid => |other_variable| for (other_variable.constraints) |constraint| try others.append(allocator, constraint.fn_ty),
             .alias => |alias| {
                 try others.appendSlice(allocator, alias.args);
@@ -6355,7 +6356,7 @@ const Builder = struct {
         if (subst[slot] == .checked_error) return subst;
         const row_variable = switch (checkedPayload(view, variable)) {
             .flex, .rigid => |row_variable| row_variable,
-            .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => Common.invariant("request-determined result row was not a variable"),
+            .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => Common.invariant("request-determined result row was not a variable"),
         };
         const released = try graph.arena().dupe(SubstSlot, subst);
         released[slot] = .{ .node = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(
@@ -6915,7 +6916,7 @@ const Builder = struct {
                 .flex, .rigid => |variable| {
                     if (variable.numeric_default_phase == null and variable.row_default == null) return true;
                 },
-                .pending, .err, .empty_record, .empty_tag_union => {},
+                .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
                 .alias => |alias| {
                     try pending.appendSlice(self.allocator, alias.args);
                     try pending.append(self.allocator, alias.backing);
@@ -8875,7 +8876,7 @@ const Builder = struct {
         const ground = walk: while (pending.pop()) |ty| {
             if ((try seen.getOrPut(ty)).found_existing) continue;
             switch (checkedPayload(view, ty)) {
-                .pending, .err, .flex, .rigid => break :walk false,
+                .pending, .field_kind, .err, .flex, .rigid => break :walk false,
                 .empty_record, .empty_tag_union => {},
                 .alias => |alias| {
                     try pending.append(self.allocator, alias.backing);
@@ -12404,6 +12405,7 @@ const Builder = struct {
         const gpa = self.allocator;
         switch (payload) {
             .pending,
+            .field_kind,
             .err,
             .flex,
             .rigid,
@@ -12435,7 +12437,7 @@ const Builder = struct {
                             current_fields = ext_record.fields;
                             current = ext_record.ext;
                         },
-                        .pending, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union => Common.invariant("open or non-record checked row reached Monotype record lowering"),
+                        .pending, .field_kind, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union => Common.invariant("open or non-record checked row reached Monotype record lowering"),
                     }
                 }
             },
@@ -12464,7 +12466,7 @@ const Builder = struct {
                             current_tags = ext_union.tags;
                             current = ext_union.ext;
                         },
-                        .pending, .err, .record, .tuple, .nominal, .function, .empty_record => Common.invariant("open or non-tag checked row reached Monotype tag-union lowering"),
+                        .pending, .field_kind, .err, .record, .tuple, .nominal, .function, .empty_record => Common.invariant("open or non-tag checked row reached Monotype tag-union lowering"),
                     }
                 }
             },
@@ -12514,7 +12516,7 @@ const Builder = struct {
         const view = frame.view;
         const content: Type.Content = switch (frame.payload) {
             .pending => Common.invariant("pending checked type reached Monotype lowering"),
-            .err => Common.invariant("erroneous checked type reached Monotype lowering"),
+            .field_kind, .err => Common.invariant("erroneous checked type reached Monotype lowering"),
             .flex, .rigid => |variable| lowerCheckedTypeVariable(variable),
             .empty_record => .{ .record = .empty() },
             .empty_tag_union => .{ .tag_union = .empty() },
@@ -27319,7 +27321,7 @@ const BodyContext = struct {
             try visited_order.append(self.allocator, checked_ty);
             switch (checkedPayload(self.view, checked_ty)) {
                 .pending => Common.invariant("pending checked type reached Monotype error scan"),
-                .err => {
+                .field_kind, .err => {
                     try memo.put(self.builder.allocator, checkedTypeAddress(self.view, root), true);
                     return true;
                 },
@@ -27392,7 +27394,7 @@ const BodyContext = struct {
                     .builtin => |builtin| checked.builtinRuntimeEncoding(builtin) == .primitive,
                     .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => false,
                 },
-                .alias, .record, .tag_union, .pending, .err => false,
+                .alias, .record, .tag_union, .pending, .field_kind, .err => false,
             };
             if (!fixed) {
                 try memo.put(self.builder.allocator, checkedTypeAddress(self.view, root), false);
@@ -27816,7 +27818,7 @@ const BodyContext = struct {
             };
             switch (checkedPayload(self.view, task.checked_ty)) {
                 .pending => Common.invariant("pending checked type reached Monotype instantiation"),
-                .err => Common.invariant("erroneous checked type reached Monotype instantiation"),
+                .field_kind, .err => Common.invariant("erroneous checked type reached Monotype instantiation"),
                 .flex, .rigid => |variable| {
                     const variable_node = resolved: {
                         if (self.resolves_enclosing_variables) {
@@ -27923,7 +27925,7 @@ const BodyContext = struct {
             },
             // A variable is pure exactly when it is its evidence binding,
             // which `instantiatedChildIsPure` reads directly.
-            .flex, .rigid, .alias, .record, .tag_union, .pending, .err => false,
+            .flex, .rigid, .alias, .record, .tag_union, .pending, .field_kind, .err => false,
         };
     }
 
@@ -27934,7 +27936,7 @@ const BodyContext = struct {
                 const bound = (try self.evidenceBinding(checked_ty)) orelse return false;
                 return self.graph.sameClass(bound, node);
             },
-            .function, .tuple, .empty_record, .empty_tag_union, .nominal, .alias, .record, .tag_union, .pending, .err => self.instantiation.pure_nodes.contains(node),
+            .function, .tuple, .empty_record, .empty_tag_union, .nominal, .alias, .record, .tag_union, .pending, .field_kind, .err => self.instantiation.pure_nodes.contains(node),
         };
     }
 
@@ -28957,7 +28959,7 @@ const BodyContext = struct {
                         std.mem.eql(u8, occurrence.names.moduleIdentityBytes(nominal.origin_module), ns.moduleIdentityBytes(def.module)) and
                         nominal.source_decl == def.source_decl and std.mem.eql(u8, occurrence.names.typeNameText(nominal.name), ns.typeNameText(def.type_name));
                 },
-                .pending, .err, .flex, .rigid, .record, .tuple, .function, .tag_union, .empty_record, .empty_tag_union => return false,
+                .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .function, .tag_union, .empty_record, .empty_tag_union => return false,
             }
         }
         pub fn validModuleIdentity(self: PersistentProvenance, identity: [32]u8) bool {
@@ -28989,6 +28991,7 @@ const BodyContext = struct {
                         .nominal => |nominal| nominal.owner_module,
                         .alias => |alias| alias.owner_module,
                         .pending,
+                        .field_kind,
                         .err,
                         .flex,
                         .rigid,
@@ -38478,7 +38481,7 @@ const BodyContext = struct {
     fn checkedFunctionType(self: *BodyContext, checked_fn_ty: checked.CheckedTypeId) checked.CheckedFunctionType {
         return switch (resolvedPayload(self.view, checked_fn_ty).payload) {
             .function => |function| function,
-            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => Common.invariant("checked call function type was not a function"),
+            .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => Common.invariant("checked call function type was not a function"),
         };
     }
 
@@ -39275,7 +39278,7 @@ const BodyContext = struct {
         const value_expr = self.view.bodies.expr(call.args[0]);
         switch (resolvedPayload(self.view, value_expr.ty).payload) {
             .function => {},
-            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
+            .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
         }
 
         try self.constrainTypeToMono(checked_ret_ty, str_ty);
@@ -40295,7 +40298,7 @@ const BodyContext = struct {
         const checked_try = while (true) switch (checkedPayload(self.view, checked_try_ty)) {
             .alias => |alias| checked_try_ty = alias.backing,
             .nominal => |nominal| break nominal,
-            .pending, .err, .flex, .rigid, .record, .tuple, .function, .tag_union, .empty_record, .empty_tag_union => Common.invariant("custom iterator advance callable did not return Try"),
+            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .function, .tag_union, .empty_record, .empty_tag_union => Common.invariant("custom iterator advance callable did not return Try"),
         };
         const checked_try_builtin = switch (checked_try.representation) {
             .builtin => |builtin| builtin,
@@ -40308,7 +40311,7 @@ const BodyContext = struct {
         const checked_ok_items = while (true) switch (checkedPayload(self.view, checked_ok)) {
             .alias => |alias| checked_ok = alias.backing,
             .tuple => |items| break items,
-            .pending, .err, .flex, .rigid, .record, .nominal, .function, .tag_union, .empty_record, .empty_tag_union => Common.invariant("custom iterator advance success value was not an item-state tuple"),
+            .pending, .field_kind, .err, .flex, .rigid, .record, .nominal, .function, .tag_union, .empty_record, .empty_tag_union => Common.invariant("custom iterator advance success value was not an item-state tuple"),
         };
         if (checked_ok_items.len != 2) {
             Common.invariant("custom iterator advance success tuple did not have item and state elements");
@@ -46141,7 +46144,7 @@ const BodyContext = struct {
                     }
                     return nominal.args[0];
                 },
-                .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => Common.invariant("optional access chain's checked type was not a nominal Try"),
+                .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => Common.invariant("optional access chain's checked type was not a nominal Try"),
             }
         }
     }
@@ -47320,7 +47323,7 @@ const BodyContext = struct {
             const payload = checkedPayload(self.view, next);
             switch (payload) {
                 .pending => Common.invariant("pending checked type reached Monotype sealing scan"),
-                .err, .empty_record, .empty_tag_union => {},
+                .field_kind, .err, .empty_record, .empty_tag_union => {},
                 .flex, .rigid => if (!payload.variableSealsToRowDefault()) return false,
                 .alias => |alias| {
                     try pending.appendSlice(self.allocator, alias.args);
@@ -50701,7 +50704,7 @@ const BodyContext = struct {
                     current = lookup.declaration.backing;
                 },
                 .flex, .rigid => return .scheme_interior,
-                .pending, .err, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return .absent,
+                .pending, .field_kind, .err, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return .absent,
             }
         }
     }
@@ -53816,7 +53819,7 @@ const BodyContext = struct {
         const slots = try self.graph.arena().alloc(SubstSlot, schema.scheme_vars.len);
         for (schema.scheme_vars, slots) |ty, *slot| {
             slot.* = switch (checkedPayload(self.view, ty)) {
-                .err => .checked_error,
+                .field_kind, .err => .checked_error,
                 .pending => Common.invariant("pending checked type reached a root substitution"),
                 .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => .{ .node = try self.instNode(ty) },
             };
@@ -53848,7 +53851,7 @@ const BodyContext = struct {
         const slots = try arena.alloc(SubstSlot, tys.len);
         for (tys, slots) |ty, *slot| {
             slot.* = switch (checkedPayload(site_view, ty)) {
-                .err => .checked_error,
+                .field_kind, .err => .checked_error,
                 .pending => Common.invariant("pending checked type reached a specialization substitution"),
                 .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => .{ .node = try ctx.instNode(ty) },
             };
@@ -70813,7 +70816,7 @@ fn resolvedPayload(view: ModuleView, ty: checked.CheckedTypeId) ResolvedPayload 
         const payload = checkedPayload(view, current);
         switch (payload) {
             .alias => |alias| current = alias.backing,
-            .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return .{ .root = current, .payload = payload },
+            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return .{ .root = current, .payload = payload },
         }
     }
     Common.invariant("checked type alias chain was cyclic");

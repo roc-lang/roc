@@ -194,7 +194,7 @@ const NamedTarget = struct {
         const declaration = switch (self.owner.checked_types.view().payload(self.ty)) {
             .nominal => |n| n.owner_module.*,
             .alias => |a| a.owner_module.*,
-            .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => base.invariant("reuse type identity names a non-named type", .{}),
+            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => base.invariant("reuse type identity names a non-named type", .{}),
         };
         return .{ .module = declaration, .ty_module = self.owner.key.digest(), .ty = self.ty };
     }
@@ -531,7 +531,7 @@ fn copyRoot(module: *checked.CheckedModuleArtifact, previous: *const Previous, m
                     named.def.type_name = try module.canonical_names.internTypeName(target.owner.canonical_names.typeNameText(ty.name));
                     named.def.source_decl = ty.source_decl;
                 },
-                .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => base.invariant("relocated stored type must have a named checked occurrence", .{}),
+                .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => base.invariant("relocated stored type must have a named checked occurrence", .{}),
             }
         } else rebindOccurrence(&named.named_type, previous.key, module.key, &transplant.type_occurrences, relocations);
     }
@@ -813,7 +813,7 @@ fn verifyNamedTypeOccurrence(
             base.invariant("a transplanted named type's checked occurrence named another module's nominal type", .{});
         },
         .alias => if (kind != .alias) base.invariant("a transplanted nominal type's checked occurrence was an alias", .{}),
-        .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => base.invariant("a transplanted named type's checked occurrence was not a named type", .{}),
+        .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => base.invariant("a transplanted named type's checked occurrence was not a named type", .{}),
     }
 }
 

@@ -17,9 +17,9 @@ const Allocator = std.mem.Allocator;
 const TypeId = types.TypeId;
 
 /// The presence slot variant of an omitted optional field.
-pub const missing_label = "#Missing";
+pub const missing_label = types.missing_label;
 /// The presence slot variant of a supplied optional field.
-pub const present_label = "#Present";
+pub const present_label = types.present_label;
 
 /// Committed layouts of closed Boxy types, memoized per joined type.
 pub const Layouts = struct {
@@ -28,9 +28,6 @@ pub const Layouts = struct {
     converter: types.Converter,
     layouts: *layout.Store,
     memo: collections.DenseMapUnmanaged(TypeId, Committed) = .empty,
-    slot_memo: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty,
-    /// The payload of each presence-slot type.
-    slot_payloads: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty,
     /// The recursive component of each open type `recursiveComponent` has
     /// placed, or `no_component` for one in no cycle.
     components: collections.DenseMapUnmanaged(TypeId, u32) = .empty,
@@ -70,8 +67,6 @@ pub const Layouts = struct {
 
     pub fn deinit(self: *Layouts) void {
         self.memo.deinit(self.allocator);
-        self.slot_memo.deinit(self.allocator);
-        self.slot_payloads.deinit(self.allocator);
         self.components.deinit(self.allocator);
         self.size_components.deinit(self.allocator);
         for (self.component_targets.items) |targets| self.allocator.free(targets);
@@ -342,21 +337,15 @@ pub const Layouts = struct {
     /// The presence-slot type `[#Missing, #Present(payload)]` of an
     /// optional field (design.md "Field Kinds").
     pub fn presenceSlot(self: *Layouts, payload: TypeId) Allocator.Error!TypeId {
-        if (self.slot_memo.get(payload)) |slot| return slot;
-        const missing = try self.store.internName(missing_label);
-        const present = try self.store.internName(present_label);
-        const slot = try self.store.intern(.{ .tag_union = .{ .tags = &.{
-            .{ .name = missing, .payloads = &.{} },
-            .{ .name = present, .payloads = &.{payload} },
+        return try self.store.intern(.{ .tag_union = .{ .tags = &.{
+            .{ .name = try self.store.internName(missing_label), .payloads = &.{} },
+            .{ .name = try self.store.internName(present_label), .payloads = &.{payload} },
         }, .ext = null } });
-        try self.slot_memo.put(self.allocator, payload, slot);
-        try self.slot_payloads.put(self.allocator, slot, payload);
-        return slot;
     }
 
     /// The payload of `ty` when it is an optional field's presence slot.
     pub fn presenceSlotPayload(self: *const Layouts, ty: TypeId) ?TypeId {
-        return self.slot_payloads.get(ty);
+        return self.store.presenceSlotPayload(ty);
     }
 
     /// The stored type of a record field: its value type for an inline slot,
@@ -365,6 +354,7 @@ pub const Layouts = struct {
         return switch (field.kind) {
             .inline_slot => field.ty,
             .presence_slot => try self.presenceSlot(field.ty),
+            .variable_slot => try self.store.variable(field.slot_variable),
         };
     }
 

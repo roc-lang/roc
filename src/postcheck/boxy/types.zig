@@ -196,13 +196,26 @@ pub const NominalDeclKey = struct {
 
 pub const Primitive = checked.CheckedPrimitive;
 
+/// The presence slot variant of an omitted optional field. `#` starts a
+/// comment in source, so no user tag can spell it.
+pub const missing_label = "#Missing";
+/// The presence slot variant of a supplied optional field.
+pub const present_label = "#Present";
+/// The labels of the two `Store.committedKind` types.
+const required_kind_label = "#Required";
+const optional_kind_label = "#Optional";
+
 /// How a record field is stored (design.md "Field Kinds").
 pub const FieldKind = enum(u8) {
     /// An inline slot (`required` and `defaulted` fields).
     inline_slot,
-    /// A `[#Missing, #Present(value)]` presence slot (`optional` fields and
-    /// fields whose kind is a scheme's undetermined kind variable).
+    /// A `[#Missing, #Present(value)]` presence slot (`optional` fields).
     presence_slot,
+    /// A slot of the scheme variable `Field.slot_variable`, whose binding is
+    /// the field's storage at an instantiation: the value type for a required
+    /// instantiation, the presence slot for an optional one (fields whose
+    /// kind is a scheme's undetermined kind variable).
+    variable_slot,
 };
 
 /// A field of a record type, by the record's type and the field's name.
@@ -213,6 +226,8 @@ pub const Field = struct {
     name: NameId,
     ty: TypeId,
     kind: FieldKind,
+    /// The scheme variable of a `variable_slot` field.
+    slot_variable: u32 = 0,
 };
 
 /// One tag of a tag union type: its name and payload types.
@@ -292,6 +307,10 @@ pub const Store = struct {
     /// variable: no `variable` node is reachable from it except through a
     /// function type, whose values are erased callables.
     closed_flags: std.ArrayList(bool) = .empty,
+    /// The payload of each presence-slot type (design.md "Field Kinds"),
+    /// recorded as `intern` meets its reserved labels, which no source type
+    /// can spell, however the type came to be interned.
+    presence_payloads: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty,
     /// Every stored child list, indexed by its span's `start`. Each list is
     /// its own allocation in `span_arena`, so a slice `span`, `fieldSpan`, or
     /// `tagSpan` returns stays valid as the store grows.
@@ -373,6 +392,7 @@ pub const Store = struct {
     }
 
     pub fn deinit(self: *Store) void {
+        self.presence_payloads.deinit(self.allocator);
         self.nodes.deinit(self.allocator);
         self.closed_flags.deinit(self.allocator);
         self.type_ids.deinit(self.allocator);
@@ -526,7 +546,8 @@ pub const Store = struct {
                     try self.keyU32(@backingInt(field.name));
                     try self.keyType(field.ty);
                     try self.scratch_key.append(self.allocator, @backingInt(field.kind));
-                    closed = closed and self.isClosed(field.ty);
+                    try self.keyU32(field.slot_variable);
+                    closed = closed and self.isClosed(field.ty) and field.kind != .variable_slot;
                 }
                 try self.keyU32(if (record.ext) |ext| @backingInt(ext) else std.math.maxInt(u32));
                 if (record.ext) |ext| closed = closed and self.isClosed(ext);
@@ -604,7 +625,43 @@ pub const Store = struct {
         };
         try self.nodes.append(self.allocator, stored);
         try self.closed_flags.append(self.allocator, closed);
+        switch (node) {
+            .tag_union => |tag_union| if (tag_union.ext == null and tag_union.tags.len == 2 and
+                std.mem.eql(u8, self.nameText(tag_union.tags[0].name), missing_label) and
+                std.mem.eql(u8, self.nameText(tag_union.tags[1].name), present_label))
+            {
+                try self.presence_payloads.put(self.allocator, id, tag_union.tags[1].payloads[0]);
+            },
+            .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => {},
+        }
         return id;
+    }
+
+    /// The payload of `ty` when it is a presence slot.
+    pub fn presenceSlotPayload(self: *const Store, ty: TypeId) ?TypeId {
+        return self.presence_payloads.get(ty);
+    }
+
+    /// The type standing for a field kind a checked substitution committed
+    /// to, until the field's value type turns it into the field's storage
+    /// (`Program.resolveKindSlots`). A body lowered in a scope binding a kind
+    /// to it stores the field by that kind (`instantiatedField`).
+    pub fn committedKind(self: *Store, optional: bool) Allocator.Error!TypeId {
+        const name = try self.internName(if (optional) optional_kind_label else required_kind_label);
+        return try self.intern(.{ .tag_union = .{ .tags = &.{.{ .name = name, .payloads = &.{} }}, .ext = null } });
+    }
+
+    /// Which field kind `ty` stands for, when it is a `committedKind`.
+    pub fn committedKindOf(self: *const Store, ty: TypeId) ?enum { required, optional } {
+        const tag_union = switch (self.get(ty)) {
+            .tag_union => |tag_union| tag_union,
+            .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => return null,
+        };
+        if (tag_union.ext != null or tag_union.tags.len != 1) return null;
+        const text = self.nameText(self.tagSpan(tag_union.tags)[0].name);
+        if (std.mem.eql(u8, text, required_kind_label)) return .required;
+        if (std.mem.eql(u8, text, optional_kind_label)) return .optional;
+        return null;
     }
 
     fn addSpan(self: *Store, ids: []const TypeId) Allocator.Error!Span {
@@ -625,6 +682,22 @@ pub const Store = struct {
         const start: u32 = @intCast(self.tags.items.len);
         try self.tags.append(self.allocator, stored);
         return .{ .start = start, .len = @intCast(tags.len) };
+    }
+
+    /// The field `name` of value type `ty` whose kind variable a scheme binds
+    /// to `slot`: the field's storage at that instantiation, or a committed
+    /// kind.
+    pub fn instantiatedField(self: *const Store, name: NameId, ty: TypeId, slot: TypeId) Field {
+        if (self.presence_payloads.contains(slot)) return .{ .name = name, .ty = ty, .kind = .presence_slot };
+        if (self.committedKindOf(slot)) |kind| return .{ .name = name, .ty = ty, .kind = switch (kind) {
+            .required => .inline_slot,
+            .optional => .presence_slot,
+        } };
+        switch (self.get(slot)) {
+            .variable => |index| if (slot != ty) return .{ .name = name, .ty = ty, .kind = .variable_slot, .slot_variable = index },
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function => {},
+        }
+        return .{ .name = name, .ty = ty, .kind = .inline_slot };
     }
 
     pub fn primitive(self: *Store, value: Primitive) Allocator.Error!TypeId {
@@ -797,6 +870,7 @@ pub const Converter = struct {
                 },
                 .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => null,
             },
+            .field_kind => |kind| try self.store.committedKind(kind == .optional),
             .alias, .record, .tuple, .function, .tag_union => null,
         };
     }
@@ -813,7 +887,7 @@ pub const Converter = struct {
         const payload = types.payload(variable);
         const bounded = switch (payload) {
             .flex => |flex| flex.bounded_row_ext and flex.row_default == .empty_tag_union and payload.variableSealsToRowDefault(),
-            .rigid, .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
+            .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
         };
         if (!bounded) return false;
         // Polarity also opens a row in a callback's parameter, which the
@@ -844,7 +918,7 @@ pub const Converter = struct {
         const function = while (true) switch (types.payload(root)) {
             .alias => |alias| root = alias.backing,
             .function => |function| break function,
-            .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return true,
+            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return true,
         };
         var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
         defer pending.deinit(allocator);
@@ -875,7 +949,7 @@ pub const Converter = struct {
                     .local_box_payload_capability, .imported_box_payload_capability => return true,
                     .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => try pending.appendSlice(allocator, nominal.args),
                 },
-                .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+                .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
             }
         }
         return false;
@@ -894,7 +968,7 @@ pub const Converter = struct {
         const function = while (true) switch (types.payload(root)) {
             .alias => |alias| root = alias.backing,
             .function => |function| break function,
-            .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return true,
+            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return true,
         };
         for (function.args) |arg| {
             if (try self.mentionsVariable(module, arg, variable)) return true;
@@ -926,7 +1000,7 @@ pub const Converter = struct {
                         for (nominal.args) |arg| if (try self.mentionsVariable(module, arg, variable)) return true;
                     },
                 },
-                .flex, .rigid, .pending, .err, .empty_record, .empty_tag_union => {},
+                .flex, .rigid, .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
                 .record, .tuple, .function => if (try self.mentionsVariable(module, ty, variable)) return true,
             }
         }
@@ -964,7 +1038,7 @@ pub const Converter = struct {
                     try pending.append(allocator, function.ret);
                 },
                 .nominal => |nominal| try pending.appendSlice(allocator, nominal.args),
-                .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+                .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
             }
         }
         return false;
@@ -975,7 +1049,7 @@ pub const Converter = struct {
     pub fn sealedScheme(self: Converter, module: ModuleIndex, variable: checked.CheckedTypeId) Allocator.Error!TypeId {
         return switch (self.modules.get(module).types().payload(variable)) {
             .flex, .rigid => |payload| try self.sealVariable(payload),
-            .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => try self.convert(module, variable, .{ .module = module, .vars = &.{}, .bound = &.{} }),
+            .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => try self.convert(module, variable, .{ .module = module, .vars = &.{}, .bound = &.{} }),
         };
     }
 
@@ -992,7 +1066,7 @@ pub const Converter = struct {
         while (pending.pop()) |ty| {
             if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
             switch (types.payload(ty)) {
-                .err => return true,
+                .field_kind, .err => return true,
                 .alias => |alias| try pending.append(allocator, alias.backing),
                 .record => |record| {
                     for (record.fields) |field| try pending.append(allocator, field.ty);
@@ -1053,13 +1127,13 @@ pub const Converter = struct {
                             current_fields = ext_record.fields;
                             current = ext_record.ext;
                         },
-                        .pending, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => break,
+                        .pending, .field_kind, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => break,
                     }
                 }
                 // The row's remainder, when it is not the empty record.
                 switch (types.payload(current)) {
                     .empty_record => {},
-                    .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .tag_union, .empty_tag_union => try pending.append(allocator, .{ .module = module, .ty = current }),
+                    .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .tag_union, .empty_tag_union => try pending.append(allocator, .{ .module = module, .ty = current }),
                 }
             },
             .tuple => |items| for (items) |item| try pending.append(allocator, .{ .module = module, .ty = item }),
@@ -1077,12 +1151,12 @@ pub const Converter = struct {
                             current_tags = ext_union.tags;
                             current = ext_union.ext;
                         },
-                        .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => break,
+                        .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => break,
                     }
                 }
                 switch (types.payload(current)) {
                     .empty_tag_union => {},
-                    .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union => try pending.append(allocator, .{ .module = module, .ty = current }),
+                    .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union => try pending.append(allocator, .{ .module = module, .ty = current }),
                 }
             },
             .function => |function| {
@@ -1090,7 +1164,7 @@ pub const Converter = struct {
                 try pending.append(allocator, .{ .module = module, .ty = function.ret });
             },
             .nominal => |nominal| for (nominal.args) |arg| try pending.append(allocator, .{ .module = module, .ty = arg }),
-            .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union => unreachable, // `leaf` answers these
+            .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => unreachable, // `leaf` answers these
         }
         try frames.append(allocator, .{
             .module = module,
@@ -1125,11 +1199,7 @@ pub const Converter = struct {
                 while (true) {
                     for (current_fields) |field| {
                         const field_name = try self.store.internName(name_store.recordFieldLabelText(field.name));
-                        try fields.append(allocator, .{
-                            .name = field_name,
-                            .ty = children[child_index],
-                            .kind = self.fieldKind(field.kind),
-                        });
+                        try fields.append(allocator, self.convertedField(module, field_name, children[child_index], field.kind, env));
                         if (field.kind.tag == .defaulted) try defaults.append(allocator, .{ .name = field_name, .default = field.kind.default });
                         child_index += 1;
                     }
@@ -1140,12 +1210,12 @@ pub const Converter = struct {
                             current_fields = ext_record.fields;
                             current = ext_record.ext;
                         },
-                        .pending, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => break,
+                        .pending, .field_kind, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => break,
                     }
                 }
                 var ext: ?TypeId = switch (types.payload(current)) {
                     .empty_record => null,
-                    .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .tag_union, .empty_tag_union => children[child_index],
+                    .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .tag_union, .empty_tag_union => children[child_index],
                 };
                 // A remainder that converted to a closed record joins this row.
                 if (ext) |ext_ty| switch (self.store.get(ext_ty)) {
@@ -1190,12 +1260,12 @@ pub const Converter = struct {
                             current_tags = ext_union.tags;
                             current = ext_union.ext;
                         },
-                        .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => break,
+                        .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => break,
                     }
                 }
                 var ext: ?TypeId = switch (types.payload(current)) {
                     .empty_tag_union => null,
-                    .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union => children[child_index],
+                    .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union => children[child_index],
                 };
                 var ext_payload_copies: std.ArrayList(TypeId) = .empty;
                 defer ext_payload_copies.deinit(allocator);
@@ -1220,7 +1290,7 @@ pub const Converter = struct {
                 return try self.store.intern(.{ .tag_union = .{ .tags = tags.items, .ext = ext } });
             },
             .nominal => |nominal| return try self.nominalNode(module, nominal, children, env),
-            .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union => unreachable, // `leaf` answers these
+            .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => unreachable, // `leaf` answers these
         }
     }
 
@@ -1239,7 +1309,7 @@ pub const Converter = struct {
                 };
                 return try self.nominalNode(module, nominal, args, env);
             },
-            .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => invariant("a stored named type's occurrence is not a nominal type"),
+            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => invariant("a stored named type's occurrence is not a nominal type"),
         };
     }
 
@@ -1304,11 +1374,20 @@ pub const Converter = struct {
         return try self.store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
     }
 
-    fn fieldKind(self: Converter, kind: checked.CheckedFieldKind) FieldKind {
+    /// A record field of value type `ty`: an undetermined kind takes the
+    /// binding its scheme gives it, and a kind no scope binds commits to
+    /// `required`, as it does for every other strategy.
+    fn convertedField(self: Converter, module: ModuleIndex, name: NameId, ty: TypeId, kind: checked.CheckedFieldKind, env: Env) Field {
         return switch (kind.tag) {
-            .required, .defaulted => .inline_slot,
-            .optional => .presence_slot,
-            .undetermined => if (self.seal_undetermined_kinds) .inline_slot else .presence_slot,
+            .required, .defaulted => .{ .name = name, .ty = ty, .kind = .inline_slot },
+            .optional => .{ .name = name, .ty = ty, .kind = .presence_slot },
+            .undetermined => {
+                if (!self.seal_undetermined_kinds) {
+                    const variable = kind.undeterminedVariable() orelse invariant("an undetermined field kind has no variable");
+                    if (env.lookup(module, variable)) |slot| return self.store.instantiatedField(name, ty, slot);
+                }
+                return .{ .name = name, .ty = ty, .kind = .inline_slot };
+            },
             .err => invariant("an erroneous record field kind reached Boxy lowering"),
         };
     }
@@ -1371,7 +1450,10 @@ pub const Converter = struct {
                 .variable => break :walk false,
                 .primitive, .empty_record, .function => {},
                 .record => |record| {
-                    for (store.fieldSpan(record.fields)) |field| try pending.append(store.allocator, field.ty);
+                    for (store.fieldSpan(record.fields)) |field| {
+                        if (field.kind == .variable_slot) break :walk false;
+                        try pending.append(store.allocator, field.ty);
+                    }
                     if (record.ext) |ext| try pending.append(store.allocator, ext);
                 },
                 .tuple => |items| try pending.appendSlice(store.allocator, store.span(items)),
@@ -1401,7 +1483,7 @@ pub const Converter = struct {
                 .local_declaration => |decl| try self.outerVariables(.{ .module = module, .decl = decl }),
                 .builtin, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => &.{},
             },
-            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => &.{},
+            .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => &.{},
         };
     }
 
@@ -1474,7 +1556,7 @@ pub const Converter = struct {
                         .builtin, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
                     }
                 },
-                .pending, .err, .empty_record, .empty_tag_union => {},
+                .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
             }
         }
         var outer: std.ArrayList(checked.CheckedTypeId) = .empty;

@@ -85,7 +85,7 @@ pub const Task = union(enum) {
     /// Pop the arguments of a call to `callee` and call it.
     /// `adapt` is set for a callee storing record fields of its signature
     /// in presence slots: the types its scheme takes and the arguments'.
-    finish_call: struct { callee: WorkerId, hidden: []LocalId, arg_count: u32, ret: TypeId, result: TypeId, adapt: ?Builder.CallAdapt = null },
+    finish_call: struct { callee: WorkerId, hidden: []LocalId, arg_count: u32, ret: TypeId, result: TypeId },
     finish_erased_call: struct { fn_ty: TypeId, arg_count: u32, result: TypeId },
     finish_low_level: struct { op: LIR.LowLevel, arg_count: u32, result: TypeId, arg_types: []const TypeId = &.{} },
     /// Return to the enclosing expression's source region.
@@ -1704,16 +1704,12 @@ pub const Builder = struct {
 
     /// Where two types of one value differ: nowhere; only in the tags of
     /// rows, one widening the other along the coercion's reach (design.md
-    /// "Sealed Result Rows"); in the storage of record fields (design.md
-    /// "Field Kinds"), with or without such rows; or inside the function
-    /// type the value has.
-    pub const StorageDifference = enum { none, rows, slots, function };
+    /// "Sealed Result Rows"); or inside the function type the value has.
+    pub const StorageDifference = enum { none, rows, function };
 
     /// A function value inside data is outside every row widening's reach
-    /// (design.md "Row Coercion Primitive") and function types relate
-    /// exactly, never by a construction relation that absorbs omitted
-    /// optional fields (design.md "Field Kinds"), so both types of the value
-    /// store such a function's signature alike.
+    /// (design.md "Row Coercion Primitive"), so both types of the value store
+    /// such a function's signature alike.
     const nested_function_storage = "two types of one value store the signature of a function value inside data differently";
 
     pub fn storageDifference(self: *Builder, from_root: TypeId, to_root: TypeId) Allocator.Error!StorageDifference {
@@ -1760,23 +1756,11 @@ pub const Builder = struct {
             switch (from) {
                 .record => |record| {
                     for (store.fieldSpan(to.record.fields)) |to_field| {
-                        // A closed record lacking an optional field the
-                        // destination stores gets it missing.
-                        const present = for (store.fieldSpan(record.fields)) |from_field| {
-                            if (from_field.name == to_field.name) break true;
-                        } else false;
-                        if (!present and record.ext == null and to_field.kind == .presence_slot) switch (pair.place) {
-                            .data => result = .slots,
-                            .root_function, .signature_data => return .function,
-                            .nested_function => invariant(nested_function_storage),
-                        };
                         for (store.fieldSpan(record.fields)) |from_field| {
                             if (from_field.name != to_field.name) continue;
-                            if (from_field.kind != to_field.kind) switch (pair.place) {
-                                .data => result = .slots,
-                                .root_function, .signature_data => return .function,
-                                .nested_function => invariant(nested_function_storage),
-                            };
+                            if (from_field.kind != to_field.kind or from_field.slot_variable != to_field.slot_variable) {
+                                invariant("two types of one value store a record field differently, though a field has one storage at an instantiation");
+                            }
                             try pending.append(self.allocator, .{ .from = from_field.ty, .to = to_field.ty, .place = inner });
                         }
                     }
@@ -1829,13 +1813,11 @@ pub const Builder = struct {
     }
 
     /// The value `value` of type `from` at type `to`, a type of the same
-    /// value whose rows may be wider (design.md "Sealed Result Rows") or
-    /// whose record fields may be stored differently (design.md "Field
-    /// Kinds"): itself where the representations agree; converted between
-    /// two closed types whose rows alone differ by the module's conversion
-    /// worker; rebuilt by the descriptor-driven `adapt` where a row the
-    /// body opens or a field's storage differs; and a function value
-    /// adapting the calls where a function's signature does.
+    /// value whose rows may be wider (design.md "Sealed Result Rows"):
+    /// itself where the representations agree; converted between two closed
+    /// types whose rows differ by the module's conversion worker; rebuilt by
+    /// the descriptor-driven `adapt` where a row the body opens differs; and
+    /// a function value adapting the calls where a function's signature does.
     pub fn adaptValue(self: *Builder, value: LocalId, from: TypeId, to: TypeId) Allocator.Error!LocalId {
         switch (try self.storageDifference(from, to)) {
             .none => {
@@ -1856,11 +1838,6 @@ pub const Builder = struct {
             },
             .rows => {
                 if (try self.closed(from) and try self.closed(to)) return try self.convertRows(value, from, to);
-                const target = try self.localOf(to, .frame);
-                try self.emitDyn(target, .{ .adapt = .{ .src = value, .from = try self.descOf(from), .to = try self.descOf(to) } });
-                return target;
-            },
-            .slots => {
                 const target = try self.localOf(to, .frame);
                 try self.emitDyn(target, .{ .adapt = .{ .src = value, .from = try self.descOf(from), .to = try self.descOf(to) } });
                 return target;
@@ -2661,7 +2638,6 @@ pub const Builder = struct {
             .numeral_arg => |arg| try self.pushValue(try self.numeralArgument(arg.literal, arg.ty)),
             .finish_call => |call| {
                 defer self.allocator.free(call.hidden);
-                if (call.adapt) |adapt| return try self.finishAdaptedCall(call.callee, call.hidden, adapt, call.ret, call.result);
                 try self.finishCall(call.callee, call.hidden, call.arg_count, call.ret, call.result);
             },
             .finish_low_level => |ll| try self.finishLowLevel(ll.op, ll.arg_count, ll.result, ll.arg_types),
@@ -3326,7 +3302,7 @@ pub const Builder = struct {
         const checked_types = self.view.types();
         var ret = switch (checked_types.payload(call_plan.callable_ty)) {
             .function => |function| function.ret,
-            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => invariant("a literal conversion's callable type is not a function type"),
+            .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => invariant("a literal conversion's callable type is not a function type"),
         };
         const row = while (true) switch (checked_types.payload(ret)) {
             .alias => |alias| ret = alias.backing,
@@ -3334,7 +3310,7 @@ pub const Builder = struct {
                 if (nominal.args.len != 2) invariant("a literal conversion's result is not a Try type");
                 break nominal.args[1];
             },
-            .pending, .err, .flex, .rigid, .function, .record, .tuple, .empty_record, .tag_union, .empty_tag_union => invariant("a literal conversion's result is not a Try type"),
+            .pending, .field_kind, .err, .flex, .rigid, .function, .record, .tuple, .empty_record, .tag_union, .empty_tag_union => invariant("a literal conversion's result is not a Try type"),
         };
         const try_ty = try self.program.converter().nominalAt(self.module, ret, &.{ result_ty, try self.convert(row) }, self.env);
         try self.push(.{ .finish_literal_conversion = .{ .expr = expr_id, .kind = kind, .try_ty = try_ty, .result = result_ty } });
@@ -4206,10 +4182,11 @@ pub const Builder = struct {
         @memcpy(descs[0..outer_count], self.var_descs[0..outer_count]);
         const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
         defer self.allocator.free(own_types);
-        for (descs[outer_count..], own_types, related[outer_count..], scheme.scheme_vars) |*desc, *own_ty, ty, variable| {
+        for (own_types, related[outer_count..], scheme.scheme_vars) |*own_ty, ty, variable| {
             own_ty.* = ty orelse try self.program.converter().sealedScheme(self.module, variable);
-            desc.* = try self.descOf(own_ty.*);
         }
+        try self.resolveOwnKinds(lambda_ty, scheme, own_types);
+        for (descs[outer_count..], own_types) |*desc, own_ty| desc.* = try self.descOf(own_ty);
         const dicts = try self.allocator.alloc(LocalId, scheme.dictionaries.len + declaring_dicts);
         defer self.allocator.free(dicts);
         const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
@@ -4254,7 +4231,7 @@ pub const Builder = struct {
         const use_bound = try self.allocator.alloc(TypeId, vars.len);
         defer self.allocator.free(use_bound);
         for (use_bound[0..outer_count], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
-        for (use_bound[outer_count..], related[outer_count..], scheme.scheme_vars) |*slot, ty, variable| slot.* = ty orelse try self.program.converter().sealedScheme(self.module, variable);
+        @memcpy(use_bound[outer_count..], own_types);
         const procedure_ty = try self.program.converter().convert(self.module, lambda_ty, .{ .module = self.module, .vars = vars, .bound = use_bound });
         return try self.adaptValue(closure, procedure_ty, use_ty);
     }
@@ -4538,6 +4515,7 @@ pub const Builder = struct {
                 try self.convert(subst[index])
             else
                 try self.program.converter().sealedScheme(self.module, variable);
+        try self.resolveOwnKinds(lambda_ty, scheme, own_types);
         const bound = try self.allocator.alloc(TypeId, vars.len);
         defer self.allocator.free(bound);
         @memcpy(bound[0..own_types.len], own_types);
@@ -4970,6 +4948,7 @@ pub const Builder = struct {
                 const bound = try self.allocator.alloc(TypeId, scope_vars.len);
                 defer self.allocator.free(bound);
                 for (related, bound, scope_vars) |ty, *slot, variable| slot.* = ty orelse try self.program.converter().sealedScheme(owner.module, variable);
+                try self.program.resolveKindSlots(try self.program.schemeKinds(&.{generic_fn}, scope_vars.len), bound);
                 const concrete: types.Env = .{ .module = owner.module, .vars = scope_vars, .bound = bound };
                 const concrete_capture_types = try self.allocator.alloc(TypeId, captures.len);
                 defer self.allocator.free(concrete_capture_types);
@@ -5422,34 +5401,8 @@ pub const Builder = struct {
             try self.requiredInstanceAt(callee, self.resolvedRef(resolved.?).ref.platform_required_proc, subst, call_fn, .literal)
         else
             try self.callInstanceAt(callee, subst, self.view.view.static_dispatch_plans.siteEvidence(call.func) orelse &.{}, call_fn, .{ .use = call.func });
-        var adapt: ?CallAdapt = null;
-        if (try self.program.signatureHasSlots(callee)) {
-            const arg_types = try self.program.arena.allocator().alloc(TypeId, call.args.len);
-            for (call.args, arg_types) |arg, *arg_ty| arg_ty.* = try self.exprType(arg);
-            adapt = .{ .bound = instance.bound, .arg_types = arg_types };
-        }
-        try self.push(.{ .finish_call = .{ .callee = callee, .hidden = instance.hidden, .arg_count = @intCast(call.args.len), .ret = instance.ret, .result = try self.exprType(expr_id), .adapt = adapt } });
+        try self.push(.{ .finish_call = .{ .callee = callee, .hidden = instance.hidden, .arg_count = @intCast(call.args.len), .ret = instance.ret, .result = try self.exprType(expr_id) } });
         try self.pushExprsReversed(call.args);
-    }
-
-    pub const CallAdapt = struct { bound: []const TypeId, arg_types: []const TypeId };
-
-    /// A call of a worker storing record fields of its signature in
-    /// presence slots: each argument adapted to the worker's storage of its
-    /// parameter at this call's instantiation, and the result adapted back
-    /// (design.md "Field Kinds").
-    pub fn finishAdaptedCall(self: *Builder, callee: WorkerId, hidden: []const LocalId, adapt: CallAdapt, ret: TypeId, result_ty: TypeId) Allocator.Error!void {
-        const explicit = try self.popValues(@intCast(adapt.arg_types.len));
-        defer self.allocator.free(explicit);
-        const target_worker = self.program.worker(callee).*;
-        for (explicit, adapt.arg_types, target_worker.params) |*arg, arg_ty, param_ty| {
-            arg.* = try self.adaptValue(arg.*, arg_ty, try self.program.substitute(self.allocator, param_ty, adapt.bound));
-        }
-        const args = try std.mem.concat(self.allocator, LocalId, &.{ explicit, hidden });
-        defer self.allocator.free(args);
-        const target = try self.localOf(ret, .frame);
-        try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = target_worker.proc, .args = try self.store.addLocalSpan(args), .next = undefined } });
-        try self.pushValue(try self.adaptValue(target, ret, result_ty));
     }
 
     /// A call of a function value: evaluate the function, then its
@@ -5638,7 +5591,32 @@ pub const Builder = struct {
             }
             slot.* = ty orelse try self.program.converter().sealedScheme(target.module, target.scheme_vars[index]);
         }
+        try self.program.resolveKindSlots(target.kinds, bound);
         return bound;
+    }
+
+    /// `own_types`, the types a generalized local scheme's variables take at
+    /// a use, with its kind variables at their fields' storage. `checked_ty`
+    /// is the scheme's root type.
+    fn resolveOwnKinds(self: *Builder, checked_ty: checked.CheckedTypeId, scheme: lower.LocalScheme, own_types: []TypeId) Allocator.Error!void {
+        const outer = self.env.vars.len;
+        const vars = try std.mem.concat(self.allocator, checked.CheckedTypeId, &.{ self.env.vars, scheme.scheme_vars });
+        defer self.allocator.free(vars);
+        const generic = try self.allocator.alloc(TypeId, vars.len);
+        defer self.allocator.free(generic);
+        for (generic, 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
+        const env: types.Env = .{ .module = self.module, .vars = vars, .bound = generic };
+        const roots = try self.allocator.alloc(TypeId, 1 + 2 * scheme.params.len);
+        defer self.allocator.free(roots);
+        roots[0] = try self.program.converter().convert(self.module, checked_ty, env);
+        for (scheme.params, 0..) |param, index| {
+            roots[1 + 2 * index] = try self.program.converter().convert(self.module, param.callable_ty, env);
+            roots[2 + 2 * index] = try self.program.converter().convert(self.module, param.dispatcher_ty, env);
+        }
+        const actual = try std.mem.concat(self.allocator, TypeId, &.{ self.env.bound, own_types });
+        defer self.allocator.free(actual);
+        try self.program.resolveKindSlots(try self.program.schemeKinds(roots, vars.len), actual);
+        @memcpy(own_types, actual[outer..]);
     }
 
     /// The worker of a method target: the procedure template the target
@@ -6032,6 +6010,7 @@ pub const Builder = struct {
                     if (target_subst.len != target.scheme_vars.len) invariant("an alias's forwarded lookup's substitution differs from its target's scheme");
                     const target_bound = try arena.alloc(TypeId, target_subst.len);
                     for (target_subst, target_bound) |checked_ty, *ty| ty.* = try self.convert(checked_ty);
+                    try self.program.resolveKindSlots(target.kinds, target_bound);
                     const hidden = try self.allocator.alloc(LocalId, target_subst.len + target.dictionary_params.len + target.literal_params);
                     errdefer self.allocator.free(hidden);
                     if (!chain_frame) {
@@ -7050,8 +7029,9 @@ pub const Builder = struct {
                     try self.convert(subst[index])
                 else
                     try self.program.converter().sealedScheme(self.module, variable);
-                try own_descs.append(self.allocator, try self.descOf(own_ty.*));
             }
+            try self.resolveOwnKinds(self.bodies().expr(expr_id).ty, scheme, own_types);
+            for (own_types) |own_ty| try own_descs.append(self.allocator, try self.descOf(own_ty));
             const scope_id = self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr }).?;
             const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
             for (scheme.dictionaries) |param_index| {
@@ -7279,6 +7259,12 @@ pub const Builder = struct {
             ordered[position] = switch (fields[position].kind) {
                 .inline_slot => value,
                 .presence_slot => try self.buildTag(try self.program.layouts.presenceSlot(fields[position].ty), try self.program.store.internName(@import("layouts.zig").present_label), &.{value}),
+                .variable_slot => blk: {
+                    const storage = try self.program.layouts.fieldStorage(fields[position]);
+                    const slot_local = try self.localOf(storage, .frame);
+                    try self.emitDyn(slot_local, .{ .adapt = .{ .src = value, .from = try self.descOf(fields[position].ty), .to = try self.descOf(storage) } });
+                    break :blk slot_local;
+                },
             };
         }
         // Unset fields (`name: _`) are missing.
@@ -7344,6 +7330,7 @@ pub const Builder = struct {
                 .presence_slot => try self.buildTag(try self.program.layouts.presenceSlot(field.ty), try self.program.store.internName(@import("layouts.zig").missing_label), &.{}),
                 .inline_slot => try self.defaultValue(self.program.omitted_defaults.get(.{ .module = self.module, .expr = expr_id, .name = field.name }) orelse
                     invariant("a record construction omits a field it has no default for")),
+                .variable_slot => invariant("a record construction omits a field of undetermined kind"),
             };
         }
         try self.pushValue(try self.buildStruct(ty, slots));
