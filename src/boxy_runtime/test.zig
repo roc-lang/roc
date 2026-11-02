@@ -901,6 +901,34 @@ test "a composed union equal to a recursive member is that member" {
     try testing.expectEqual(expr, other.variants()[1].payload);
 }
 
+test "a composed union is a recursive member whatever fills its payload-less tag's slot" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    // `Expr := [Leaf, Next(Expr)]`, whose compiled descriptor fills `Leaf`'s
+    // slot with an empty aggregate, then `[Leaf, Next(b)]` at the same type.
+    const leaf = name("Leaf");
+    const next = name("Next");
+    const expr_name = name("Expr");
+    var key: u8 = 0;
+    const shell = compose.recursiveOpen(&env.cache, ops, &key, &.{});
+    const box = compose.recursiveBox(&env.cache, ops, shell);
+    const boxed_payload = [_]*const TypeDesc{box};
+    const member = compose.tagUnion(&env.cache, ops, &.{
+        .{ .name = &leaf, .payload_count = 0, .payloads = &.{} },
+        .{ .name = &next, .payload_count = 1, .payloads = &boxed_payload },
+    });
+    @constCast(&member.variants()[0]).payload = compose.tuple(&env.cache, ops, &.{});
+    const backed = compose.nominal(&env.cache, ops, member, &expr_name, null, false);
+    const expr = compose.recursiveClose(&env.cache, ops, shell, backed, &key, &.{});
+    const expr_payload = [_]*const TypeDesc{expr};
+    const composed = compose.tagUnion(&env.cache, ops, &.{
+        .{ .name = &leaf, .payload_count = 0, .payloads = &.{} },
+        .{ .name = &next, .payload_count = 1, .payloads = &expr_payload },
+    });
+    try testing.expectEqual(member, composed);
+}
+
 test "reference field tables remain exact when recursive placeholders close" {
     var env = Env.init();
     defer env.deinit();

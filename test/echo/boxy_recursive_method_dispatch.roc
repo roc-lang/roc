@@ -39,6 +39,25 @@ Expr := [Leaf(Str), Next(Expr)].{
 	}
 }
 
+# A tag without a payload: the structural parameter closes into `Chain` only
+# because a payload-less tag has nothing to tell the two apart.
+Chain := [End, Link(Chain)].{
+	label = |c| match c {
+		End => "end"
+		Link(inner) => inner.label()
+	}
+
+	zero = |c| match c {
+		End => 0
+		Link(inner) => inner.zero()
+	}
+
+	none = |c| match c {
+		End => []
+		Link(inner) => inner.none()
+	}
+}
+
 generic_keep = |x| Expr.Next(Expr.Leaf("a")).keep(x)
 
 late_count = |e, x| e.count(x)
@@ -67,5 +86,11 @@ main! = |_args| {
 	stored : U64
 	stored = stored_counter(two)
 	echo!(stored.to_str())
+	chain = Chain.Link(Chain.Link(Chain.End))
+	zero : U64
+	zero = chain.zero()
+	none : List(U64)
+	none = chain.none()
+	echo!("${chain.label()} ${zero.to_str()} ${Str.inspect(none)}")
 	Ok({})
 }
