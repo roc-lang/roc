@@ -61,7 +61,7 @@ Padded := {
     ## pointer at 8, which the record's row would put the other way round.
     Mixed(v) := {
         z : F32,
-        _ : U32,
+        _ : {},
         held : Box(v),
     }.{
         new : F32, v -> Mixed(v)

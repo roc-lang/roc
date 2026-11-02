@@ -326,7 +326,6 @@ ROC_STATIC_ASSERT(offsetof(Padded, a) == 8, "Padded.a offset mismatch");
 #if UINTPTR_MAX == UINT64_MAX
 struct PaddedMixed {
     float z;
-    uint8_t _pad0[4];
     RocBox held;
 };
 ROC_STATIC_ASSERT(sizeof(PaddedMixed) == 16, "PaddedMixed size mismatch");
@@ -336,13 +335,12 @@ ROC_STATIC_ASSERT(offsetof(PaddedMixed, held) == 8, "PaddedMixed.held offset mis
 #else
 struct PaddedMixed {
     float z;
-    uint8_t _pad0[4];
     RocBox held;
 };
-ROC_STATIC_ASSERT(sizeof(PaddedMixed) == 12, "PaddedMixed size mismatch");
+ROC_STATIC_ASSERT(sizeof(PaddedMixed) == 8, "PaddedMixed size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(PaddedMixed) == 4, "PaddedMixed alignment mismatch");
 ROC_STATIC_ASSERT(offsetof(PaddedMixed, z) == 0, "PaddedMixed.z offset mismatch");
-ROC_STATIC_ASSERT(offsetof(PaddedMixed, held) == 8, "PaddedMixed.held offset mismatch");
+ROC_STATIC_ASSERT(offsetof(PaddedMixed, held) == 4, "PaddedMixed.held offset mismatch");
 #endif
 
 #if UINTPTR_MAX == UINT64_MAX
@@ -826,7 +824,6 @@ ROC_STATIC_ASSERT(ROC_ALIGNOF(PaddedCheckHeldArgs) == 4, "PaddedCheckHeldArgs al
 #if UINTPTR_MAX == UINT64_MAX
 typedef struct {
     float z;
-    uint8_t _pad0[4];
     RocBox held;
 } PaddedCheckMixedArgs;
 ROC_STATIC_ASSERT(sizeof(PaddedCheckMixedArgs) == 16, "PaddedCheckMixedArgs size mismatch");
@@ -834,10 +831,9 @@ ROC_STATIC_ASSERT(ROC_ALIGNOF(PaddedCheckMixedArgs) == 8, "PaddedCheckMixedArgs 
 #else
 typedef struct {
     float z;
-    uint8_t _pad0[4];
     RocBox held;
 } PaddedCheckMixedArgs;
-ROC_STATIC_ASSERT(sizeof(PaddedCheckMixedArgs) == 12, "PaddedCheckMixedArgs size mismatch");
+ROC_STATIC_ASSERT(sizeof(PaddedCheckMixedArgs) == 8, "PaddedCheckMixedArgs size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(PaddedCheckMixedArgs) == 4, "PaddedCheckMixedArgs alignment mismatch");
 #endif
 

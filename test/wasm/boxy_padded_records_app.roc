@@ -19,8 +19,7 @@ make = |z, a| { z, a }
 
 read_z = |r| r.z
 
-main! : {} -> Str
-main! = |_| {
+main! = || {
 	text = Slot.new(1, "a string that is too long to be stored inline")
 	number : Slot(U64)
 	number = Slot.set(text, 42)
