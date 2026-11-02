@@ -490,6 +490,7 @@ pub fn generateWasmModule(allocator: Allocator, program: Program, cpu_level: roc
     const helpers = try backend.collectRequiredRcHelpers(allocator, program.static_data);
     defer allocator.free(helpers);
     codegen.static_data_rc_helpers = helpers;
+    try codegen.setCompositionSites(program.static_data);
     codegen.module.addStaticDataExports(program.static_data) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.Internal,

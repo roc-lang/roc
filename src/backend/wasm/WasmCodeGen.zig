@@ -298,6 +298,9 @@ rc_helper_funcs: std.AutoHashMap(u64, u32),
 rc_helper_table_indices: std.AutoHashMap(u64, u32),
 /// Atomic helpers explicitly named by static-data relocations.
 static_data_rc_helpers: []const RcHelperKey = &.{},
+/// Each composition site's export name, by static-data id. A site is named by
+/// its worker and position rather than by its id.
+composition_site_names: std.AutoHashMapUnmanaged(u32, []const u8) = .empty,
 /// Map from proc spec id → wasm table index (for proc_ref literals).
 proc_table_indices: collections.DenseMap(u32, u32),
 /// Map from LIR string backing id → wasm data offset for the backing bytes.
@@ -525,6 +528,7 @@ pub fn configureStaticDataAddressTracking(self: *Self) void {
 }
 
 pub fn deinit(self: *Self) void {
+    self.composition_site_names.deinit(self.allocator);
     self.module.deinit();
     var body_it = self.pending_bodies.valueIterator();
     while (body_it.next()) |body| {
@@ -1371,12 +1375,24 @@ fn emitDataAddressConst(self: *Self, address: DataAddress, addend: i32) Allocato
     }
 }
 
+/// Record the export name of each composition site in `exports`, which stays
+/// alive for the rest of code generation.
+pub fn setCompositionSites(self: *Self, exports: []const lir.Program.StaticDataExport) Allocator.Error!void {
+    for (exports) |data_export| {
+        if (!data_export.is_mutable) continue;
+        try self.composition_site_names.put(self.allocator, @backingInt(data_export.value_id.?), data_export.symbol_name);
+    }
+}
+
 fn staticDataSymbol(self: *Self, id: LIR.StaticDataId) Allocator.Error!SymbolIndex {
     const raw_id: u32 = @backingInt(id);
     if (self.recorder) |recorder| return SymbolIndex.fromRaw(try recorder.placeholder(.{ .static_data = raw_id }));
     if (self.static_data_symbols.get(raw_id)) |symbol| return symbol;
 
-    const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, id);
+    const symbol_name = if (self.composition_site_names.get(raw_id)) |name|
+        try self.allocator.dupe(u8, name)
+    else
+        try lir.Program.staticDataSymbolName(self.allocator, id);
     errdefer self.allocator.free(symbol_name);
 
     const symbol = if (self.module.findSymbolByNameAndKind(symbol_name, .data)) |existing|
@@ -7414,7 +7430,11 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
     const stmt = self.store.getCFStmt(stmt_id);
     switch (stmt) {
         .dyn => |dyn_stmt| {
-            try self.generateDyn(dyn_stmt.target, self.store.stmtRow(dyn_stmt.data));
+            const op = self.store.stmtRow(dyn_stmt.data);
+            if (dyn_stmt.composition_cache) |cache|
+                try self.generateCachedComposition(dyn_stmt.target.?, op, cache)
+            else
+                try self.generateDyn(dyn_stmt.target, op);
             try work.append(wa, .{ .node = .{ .stmt_id = dyn_stmt.next, .stop = stop } });
         },
         .assign_ref => |assign| {
@@ -8761,6 +8781,63 @@ fn emitProcTableIndex(self: *Self, proc_id: LIR.LirProcSpecId) Allocator.Error!v
         .{@backingInt(proc_id)},
     );
     try self.emitFunctionTableIndexConst(table_idx);
+}
+
+/// Inline the site's load and operand comparisons (design.md "Runtime"). Only
+/// a miss builds the runtime arguments, probes the interner, and publishes. A
+/// wasm program runs on one thread, so a plain load sees every publication.
+fn generateCachedComposition(self: *Self, dst: ProcLocalId, op: LIR.DynOp, cache: LIR.StaticDataId) Allocator.Error!void {
+    var operands: std.ArrayList(ProcLocalId) = .empty;
+    defer operands.deinit(self.allocator);
+    try lir.DynOps.Operands.of(op).appendAll(self.store, self.allocator, &operands);
+    try self.emitStaticDataAddressConst(cache, 0);
+    const site = try self.emitSetNewLocal(.i32);
+    try self.emitLocalGet(site);
+    try self.emitLoadOp(.i32, 0);
+    const entry = try self.emitSetNewLocal(.i32);
+
+    // The outer block ends the composition; the inner one is the miss path.
+    try self.emitVoidBlock();
+    try self.emitVoidBlock();
+    self.cf_depth += 2;
+    try self.emitLocalGet(entry);
+    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+    try self.emitBrIf(0);
+    for (operands.items, 0..) |operand, i| {
+        try self.emitProcLocal(operand);
+        try self.emitLocalGet(entry);
+        try self.emitLoadOp(.i32, @intCast((i + 1) * wasm_word_size));
+        self.currentCode().append(self.allocator, Op.i32_ne) catch return error.OutOfMemory;
+        try self.emitBrIf(0);
+    }
+    try self.emitLocalGet(entry);
+    try self.emitLoadOp(.i32, @offsetOf(boxy_runtime.compose.CompositionEntry, "result"));
+    try self.bindReturnedScalar(dst, .i32);
+    try self.emitBr(1);
+    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+    self.cf_depth -= 1;
+
+    try self.generateDyn(dst, op);
+    if (op == .desc_recursive_open) {
+        try self.emitProcLocal(dst);
+        try self.emitLoadOp(.i32, desc_size_offset);
+        try self.emitI32Const(-1);
+        self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+        try self.emitBrIf(0);
+    }
+    const words = try self.emitFpOffsetToNewLocal(try self.allocStackMemory(@intCast(@max(operands.items.len, 1) * wasm_word_size), wasm_word_size));
+    for (operands.items, 0..) |operand, i| {
+        try self.emitLocalGet(words);
+        try self.emitProcLocal(operand);
+        try self.emitStoreOp(.i32, @intCast(i * wasm_word_size));
+    }
+    try self.emitLocalGet(site);
+    try self.emitI32Const(@intCast(operands.items.len));
+    try self.emitLocalGet(words);
+    try self.emitProcLocal(dst);
+    try self.emitBoxyRuntimeCall(.site_publish);
+    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+    self.cf_depth -= 1;
 }
 
 fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocator.Error!void {

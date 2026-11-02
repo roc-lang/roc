@@ -411,6 +411,10 @@ pub const MonoLlvmCodeGen = struct {
     stmt_incoming_counts: collections.DenseMap(u32, u32),
     /// The current procedure's slot lifetime markers.
     slot_lifetimes: SlotLifetimes,
+    /// The current procedure's dynamic frame region. Its size is read from
+    /// descriptors the entry chain composes, so it is the one allocation that
+    /// follows the entry block.
+    dyn_region: ?LlvmBuilder.Value = null,
     stmt_entry_blocks: collections.DenseMap(u32, LlvmBuilder.Function.Block.Index),
     /// The join body being entered in its own block, which is also the entry
     /// block of that statement when other paths arrive at it.
@@ -4273,7 +4277,11 @@ pub const MonoLlvmCodeGen = struct {
         try self.emitSlotLifetimeMarkers(stmt_id);
         switch (stmt) {
             .dyn => |dyn_stmt| {
-                try self.emitDyn(dyn_stmt.target, self.store.stmtRow(dyn_stmt.data));
+                const op = self.store.stmtRow(dyn_stmt.data);
+                if (dyn_stmt.composition_cache) |cache|
+                    try self.emitCachedComposition(dyn_stmt.target.?, op, cache)
+                else
+                    try self.emitDyn(dyn_stmt.target, op);
                 try work.append(wa, .{ .node = dyn_stmt.next });
             },
             .assign_ref => |assign| {
@@ -11780,6 +11788,7 @@ pub const MonoLlvmCodeGen = struct {
             total = wip.bin(.add, offset, size, "") catch return error.OutOfMemory;
         }
         const region = wip.alloca(.normal, .i8, total, LlvmBuilder.Alignment.fromByteUnits(collections.max_roc_alignment.toByteUnits()), .default, "dyn_region") catch return error.OutOfMemory;
+        self.dyn_region = region;
         var next: usize = 0;
         for (0..locals.len) |i| {
             const local = GuardedList.at(locals, i);
@@ -11821,6 +11830,87 @@ pub const MonoLlvmCodeGen = struct {
 
     fn materializeDynOperand(self: *MonoLlvmCodeGen, local: LocalId) Error!void {
         try self.materializeLocalIfDeferred(local);
+    }
+
+    /// The address of a composition site's writable slot, which is named by
+    /// its export rather than by its static-data id and is never a constant.
+    fn compositionSiteAddress(self: *MonoLlvmCodeGen, id: lir.LIR.StaticDataId) Error!LlvmBuilder.Value {
+        const raw_id: u32 = @backingInt(id);
+        const builder = self.builder orelse return error.CompilationFailed;
+        if (self.static_data_addresses) |addresses| {
+            const address = builder.intConst(self.ptrSizedIntType(), addresses[raw_id]) catch return error.OutOfMemory;
+            return builder.castValue(.inttoptr, address, try self.ptrType()) catch return error.OutOfMemory;
+        }
+        const row = self.static_data_export_rows.get(raw_id) orelse
+            llvmInvariantFmt("composition site {d} has no static-data export", .{raw_id});
+        const data_export = self.static_data_exports[row];
+        if (builtin.mode == .debug and !data_export.is_mutable) invariant("LLVM codegen invariant violated: composition site {d} is not mutable data", .{raw_id});
+        return (try self.staticDataSymbol(data_export.symbol_name)).toValue();
+    }
+
+    /// Inline the site's acquire-load and operand comparisons (design.md
+    /// "Runtime"). Only a miss builds the runtime arguments, probes the
+    /// interner, and publishes. The comparisons share one branch, so a site
+    /// adds the same blocks at any operand count.
+    fn emitCachedComposition(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LIR.DynOp, cache: lir.LIR.StaticDataId) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const dyn_operands = lir.DynOps.Operands.of(op);
+        // Materialized here, these hold on both paths and after the join.
+        try dyn_operands.each(self.store, self, materializeDynOperand);
+        try self.prepareLocalWrite(target);
+        var operands: std.ArrayList(LocalId) = .empty;
+        defer operands.deinit(self.allocator);
+        try dyn_operands.appendAll(self.store, self.allocator, &operands);
+        const count = operands.items.len;
+        const opens = op == .desc_recursive_open;
+
+        const ptr_ty = try self.ptrType();
+        const word = self.targetWordSize();
+        const site = try self.compositionSiteAddress(cache);
+        const entry = wip.loadAtomic(.normal, ptr_ty, site, .system, .acquire, self.targetPointerAlignment(), "") catch return error.OutOfMemory;
+        const published = wip.icmp(.ne, entry, try self.nullPtr(), "") catch return error.OutOfMemory;
+        const compare_block = wip.block(1, "site_compare") catch return error.OutOfMemory;
+        const miss_block = wip.block(if (count == 0) 1 else 2, "site_miss") catch return error.OutOfMemory;
+        const done_block = wip.block(if (opens) 3 else 2, "site_done") catch return error.OutOfMemory;
+        _ = wip.brCond(published, compare_block, miss_block, .then_likely) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = compare_block };
+        var matches: ?LlvmBuilder.Value = null;
+        for (operands.items, 0..) |operand, i| {
+            const expected = try self.loadPointer(try self.offsetPtr(entry, @intCast((i + 1) * word)));
+            const same = wip.icmp(.eq, try self.wordValue(operand), expected, "") catch return error.OutOfMemory;
+            matches = if (matches) |previous| wip.bin(.@"and", previous, same, "") catch return error.OutOfMemory else same;
+        }
+        // A miss overwrites this before anything reads it.
+        try self.bindWord(target, try self.loadPointer(try self.offsetPtr(entry, @offsetOf(boxy_runtime.compose.CompositionEntry, "result"))));
+        if (matches) |hit| {
+            _ = wip.brCond(hit, done_block, miss_block, .then_likely) catch return error.OutOfMemory;
+        } else {
+            _ = wip.br(done_block) catch return error.OutOfMemory;
+        }
+
+        wip.cursor = .{ .block = miss_block };
+        try self.emitDyn(target, op);
+        const result = try self.wordValue(target);
+        if (opens) {
+            const size = wip.load(.normal, .i32, try self.offsetPtr(result, desc_size_offset), LlvmBuilder.Alignment.fromByteUnits(4), "") catch return error.OutOfMemory;
+            const unfinished = wip.icmp(.eq, size, try self.intValue(.i32, std.math.maxInt(u32)), "") catch return error.OutOfMemory;
+            const publish_block = wip.block(1, "site_publish") catch return error.OutOfMemory;
+            _ = wip.brCond(unfinished, done_block, publish_block, .else_likely) catch return error.OutOfMemory;
+            wip.cursor = .{ .block = publish_block };
+        }
+        const words = try self.dynInputArray(word, count);
+        for (operands.items, 0..) |operand, i| try self.storePointer(try self.offsetPtr(words, @intCast(i * word)), try self.wordValue(operand));
+        const usize_ty = self.ptrSizedIntType();
+        _ = try self.callBoxyRuntime("roc_desc_site_publish", .void, &.{ ptr_ty, .i32, ptr_ty, usize_ty }, &.{
+            site,
+            try self.intValue(.i32, count),
+            words,
+            wip.cast(.ptrtoint, result, usize_ty, "") catch return error.OutOfMemory,
+        });
+        _ = wip.br(done_block) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = done_block };
     }
 
     fn emitDyn(self: *MonoLlvmCodeGen, target_or_null: ?LocalId, op: lir.LIR.DynOp) Error!void {
@@ -14607,7 +14697,7 @@ pub const MonoLlvmCodeGen = struct {
             for (block.instructions.items) |instruction| {
                 const tag = wip.instructions.get(@backingInt(instruction)).tag;
                 if (builtin.mode == .debug and block_idx != 0) {
-                    if (tag == .alloca or tag == .@"alloca inalloca") {
+                    if ((tag == .alloca or tag == .@"alloca inalloca") and instruction.toValue() != self.dyn_region) {
                         const builder = self.builder orelse return error.CompilationFailed;
                         const instruction_index = @backingInt(instruction);
                         const instruction_name = if (wip.strip)
@@ -14628,6 +14718,7 @@ pub const MonoLlvmCodeGen = struct {
             block.incoming = block.branches;
         }
 
+        self.dyn_region = null;
         wip.finish() catch return error.OutOfMemory;
     }
 
@@ -15052,6 +15143,38 @@ test "static-data slots with constant images are internal constants and function
     const callable = builder.variables.items[builder.variables.items.len - 1];
     try std.testing.expectEqual(.external, callable.global.ptrConst(&builder).linkage);
     try std.testing.expect(callable.init == .no_init);
+}
+
+test "composition sites are the writable exports that name them" {
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .aarch64, .os_tag = .macos });
+    var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, target);
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    const id: lir.LIR.StaticDataId = @fromBackingInt(0);
+    const exports = [_]lir.Program.StaticDataExport{.{
+        .symbol_name = "roc__boxy_site_00_0",
+        .value_id = id,
+        .bytes = &(@as([8]u8, @splat(0))),
+        .alignment = 8,
+        .is_mutable = true,
+    }};
+    try codegen.setStaticDataExports(&exports);
+    var builder = try codegen.createBuilder("composition_site");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    defer codegen.builder = null;
+
+    _ = try codegen.compositionSiteAddress(id);
+    const site = builder.variables.items[builder.variables.items.len - 1];
+    try std.testing.expectEqual(.external, site.global.ptrConst(&builder).linkage);
+    try std.testing.expectEqual(.global, site.mutability);
+    try std.testing.expect(site.init == .no_init);
+    try std.testing.expect(codegen.static_data_symbols.contains("roc__boxy_site_00_0"));
 }
 
 test "object-cache pack constants are weak data under their content names and point at the object's own functions" {

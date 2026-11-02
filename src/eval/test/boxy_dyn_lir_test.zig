@@ -1028,6 +1028,107 @@ test "boxy composition site hits bypass the interner and operand changes replace
     try run.env.checkForLeaks();
 }
 
+/// The word a pointer-sized result holds, released.
+fn takeWord(bytes: []align(16) u8) usize {
+    defer allocator.free(bytes);
+    return std.mem.readInt(usize, bytes[0..@sizeOf(usize)], .little);
+}
+
+test "boxy llvm composition site hits bypass the interner and operand changes replace the entry" {
+    var b = try Builder.init(.native);
+    defer b.deinit();
+    const elem = try b.local(.opaque_ptr);
+    const result = try b.local(.opaque_ptr);
+    var site: boxy.compose.CompositionSite = .{};
+    const site_id: LIR.StaticDataId = @fromBackingInt(@intCast(b.statics.items.len));
+    try b.statics.append(allocator, @intFromPtr(&site));
+    const compose_stmt = try b.store.addCFStmt(.{ .dyn = .{
+        .target = result,
+        .data = try b.store.addStmtRow(DynOp, .{ .desc_list = .{ .elem = elem } }),
+        .composition_cache = site_id,
+        .next = try b.ret(result),
+    } }, .test_fixture);
+    const body = try b.static(elem, .{ .desc = boxy.compose.scalarDesc(.i64) }, compose_stmt);
+    const root = try b.proc(&.{}, body, .opaque_ptr, .{});
+    const state = try boxy.compiled.InProcessState.create(allocator);
+    defer state.destroy();
+    const entered = state.enter();
+    defer boxy.compiled.InProcessState.leave(entered);
+    var run: Run = undefined;
+    try run.init(&b);
+    defer run.deinit();
+
+    const first = takeWord(try run.runLlvm(root, .opaque_ptr));
+    try std.testing.expectEqual(first, site.load().?.result);
+    try std.testing.expect(site.load().?.holds(&.{@intFromPtr(boxy.compose.scalarDesc(.i64))}));
+    // A runtime probe could no longer find the original descriptor. A hit
+    // must still return exactly that descriptor, without growing the table.
+    const table = state.descriptors.table.swap(null, .acq_rel);
+    const before = state.descriptors.len;
+    try std.testing.expectEqual(first, takeWord(try run.runLlvm(root, .opaque_ptr)));
+    try std.testing.expectEqual(before, state.descriptors.len);
+    state.descriptors.table.store(table, .release);
+
+    // A different type argument at the same site is never answered from the
+    // entry, and takes the entry over.
+    b.cells.items[0].* = @intFromPtr(boxy.compose.strDesc());
+    const second = takeWord(try run.runLlvm(root, .opaque_ptr));
+    try std.testing.expect(first != second);
+    try std.testing.expectEqual(boxy.compose.strDesc(), @as(*const TypeDesc, @ptrFromInt(second)).child.?);
+    try std.testing.expectEqual(second, site.load().?.result);
+    b.cells.items[0].* = @intFromPtr(boxy.compose.scalarDesc(.i64));
+    try std.testing.expectEqual(first, takeWord(try run.runLlvm(root, .opaque_ptr)));
+    try std.testing.expectEqual(first, site.load().?.result);
+}
+
+test "boxy llvm composition sites publish a recursive member only once it is finished" {
+    var b = try Builder.init(.native);
+    defer b.deinit();
+    const key = try b.local(.opaque_ptr);
+    const shell = try b.local(.opaque_ptr);
+    const boxed = try b.local(.opaque_ptr);
+    const closed = try b.local(.opaque_ptr);
+    var sites: [3]boxy.compose.CompositionSite = @splat(.{});
+    const first_site: u32 = @intCast(b.statics.items.len);
+    for (&sites) |*site| try b.statics.append(allocator, @intFromPtr(site));
+    const no_vars = try b.span(&.{});
+    const close_stmt = try b.store.addCFStmt(.{ .dyn = .{
+        .target = closed,
+        .data = try b.store.addStmtRow(DynOp, .{ .desc_recursive_close = .{ .shell = shell, .desc = boxed, .key = key, .vars = no_vars } }),
+        .composition_cache = @fromBackingInt(first_site + 2),
+        .next = try b.ret(closed),
+    } }, .test_fixture);
+    const box_stmt = try b.store.addCFStmt(.{ .dyn = .{
+        .target = boxed,
+        .data = try b.store.addStmtRow(DynOp, .{ .desc_recursive_box = .{ .payload = shell } }),
+        .composition_cache = @fromBackingInt(first_site + 1),
+        .next = close_stmt,
+    } }, .test_fixture);
+    const open_stmt = try b.store.addCFStmt(.{ .dyn = .{
+        .target = shell,
+        .data = try b.store.addStmtRow(DynOp, .{ .desc_recursive_open = .{ .key = key, .vars = no_vars } }),
+        .composition_cache = @fromBackingInt(first_site),
+        .next = box_stmt,
+    } }, .test_fixture);
+    const body = try b.static(key, .{ .desc = boxy.compose.scalarDesc(.i64) }, open_stmt);
+    const root = try b.proc(&.{}, body, .opaque_ptr, .{});
+    const state = try boxy.compiled.InProcessState.create(allocator);
+    defer state.destroy();
+    const entered = state.enter();
+    defer boxy.compiled.InProcessState.leave(entered);
+    var run: Run = undefined;
+    try run.init(&b);
+    defer run.deinit();
+
+    const finished = takeWord(try run.runLlvm(root, .opaque_ptr));
+    try std.testing.expectEqual(null, sites[0].load());
+    try std.testing.expectEqual(finished, sites[2].load().?.result);
+    try std.testing.expect(!boxy.compose.recursiveIsOpen(@ptrFromInt(finished)));
+    // The interner now answers the open, so its site may hold the result.
+    try std.testing.expectEqual(finished, takeWord(try run.runLlvm(root, .opaque_ptr)));
+    try std.testing.expectEqual(finished, sites[0].load().?.result);
+}
+
 /// Return a one-field generic record either directly in the caller's result
 /// storage or from a distinct frame local. Its heap string is moved out again
 /// by the caller, so every backend must preserve exactly one owned reference.

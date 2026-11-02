@@ -10376,6 +10376,7 @@ fn writeDevWasmObject(
     const static_rc_helpers = try backend.collectRequiredRcHelpers(ctx.gpa, static_data_exports);
     defer ctx.gpa.free(static_rc_helpers);
     codegen.static_data_rc_helpers = static_rc_helpers;
+    try codegen.setCompositionSites(static_data_exports);
     try codegen.registerIndirectCallTypes();
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
     try codegen.compileStaticDataRcHelpers(static_rc_helpers);

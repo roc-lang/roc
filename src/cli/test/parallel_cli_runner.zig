@@ -514,6 +514,9 @@ const CustomCase = enum {
     issue_11627_static_data_names_cache,
     issue_10733_wasm_boxy_dev_sealed_object,
     issue_12029_wasm_boxy_tail_calls,
+    wasm_boxy_composition_sites_dev,
+    wasm_boxy_composition_sites_size,
+    wasm_boxy_composition_sites_speed,
     issue_12769_wasm_many_parameters_specialized,
     issue_12769_wasm_many_parameters_boxy,
     issue_12769_wasm_parameter_limit_dev_specialized,
@@ -1660,6 +1663,12 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11558 Boxy callable result widened into the caller's error row (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_11558_callable_result_row.roc", .stdout_exact = "done\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: Boxy composition sites reuse and replace descriptors and dictionaries (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/boxy_composition_site_cache.roc", .stdout_exact = "nnssnnnssnnnssnnnssn" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: Boxy composition sites reuse and replace descriptors and dictionaries (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/boxy_composition_site_cache.roc", .stdout_exact = "nnssnnnssnnnssnnnssn" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: Boxy composition sites reuse and replace descriptors and dictionaries (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no" }, .roc_file = "test/echo/boxy_composition_site_cache.roc", .stdout_exact = "nnssnnnssnnnssnnnssn" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: Boxy composition sites reuse and replace descriptors and dictionaries (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no" }, .roc_file = "test/echo/boxy_composition_site_cache.roc", .stdout_exact = "nnssnnnssnnnssnnnssn" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: Boxy composition sites answer each type argument (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/boxy_composition_site_type_args.roc", .stdout_exact = "{ item: 1, more: [1] }{ item: \"1\", more: [\"1\"] }{ item: 1, more: [1] }{ item: { tag: 1 }, more: [{ tag: 1 }] }{ item: 1, more: [1] };{ item: 1, more: [1] }{ item: \"1\", more: [\"1\"] };{ item: \"1\", more: [\"1\"] }same[1]/[[1]]/[[1]][\"1\"]/[[\"1\"]]/[[\"1\"]]Link(1, Link(1, End))Link(\"1\", Link(\"1\", End))Link(1, End){ item: 2, more: [2] }{ item: \"2\", more: [\"2\"] }{ item: 2, more: [2] }{ item: { tag: 2 }, more: [{ tag: 2 }] }{ item: 2, more: [2] };{ item: 2, more: [2] }{ item: \"2\", more: [\"2\"] };{ item: \"2\", more: [\"2\"] }same[2]/[[2]]/[[2]][\"2\"]/[[\"2\"]]/[[\"2\"]]Link(2, Link(2, End))Link(\"2\", Link(\"2\", End))Link(2, End)" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: Boxy composition sites answer each type argument (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/boxy_composition_site_type_args.roc", .stdout_exact = "{ item: 1, more: [1] }{ item: \"1\", more: [\"1\"] }{ item: 1, more: [1] }{ item: { tag: 1 }, more: [{ tag: 1 }] }{ item: 1, more: [1] };{ item: 1, more: [1] }{ item: \"1\", more: [\"1\"] };{ item: \"1\", more: [\"1\"] }same[1]/[[1]]/[[1]][\"1\"]/[[\"1\"]]/[[\"1\"]]Link(1, Link(1, End))Link(\"1\", Link(\"1\", End))Link(1, End){ item: 2, more: [2] }{ item: \"2\", more: [\"2\"] }{ item: 2, more: [2] }{ item: { tag: 2 }, more: [{ tag: 2 }] }{ item: 2, more: [2] };{ item: 2, more: [2] }{ item: \"2\", more: [\"2\"] };{ item: \"2\", more: [\"2\"] }same[2]/[[2]]/[[2]][\"2\"]/[[\"2\"]]/[[\"2\"]]Link(2, Link(2, End))Link(\"2\", Link(\"2\", End))Link(2, End)" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: Boxy composition sites answer each type argument (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no" }, .roc_file = "test/echo/boxy_composition_site_type_args.roc", .stdout_exact = "{ item: 1, more: [1] }{ item: \"1\", more: [\"1\"] }{ item: 1, more: [1] }{ item: { tag: 1 }, more: [{ tag: 1 }] }{ item: 1, more: [1] };{ item: 1, more: [1] }{ item: \"1\", more: [\"1\"] };{ item: \"1\", more: [\"1\"] }same[1]/[[1]]/[[1]][\"1\"]/[[\"1\"]]/[[\"1\"]]Link(1, Link(1, End))Link(\"1\", Link(\"1\", End))Link(1, End){ item: 2, more: [2] }{ item: \"2\", more: [\"2\"] }{ item: 2, more: [2] }{ item: { tag: 2 }, more: [{ tag: 2 }] }{ item: 2, more: [2] };{ item: 2, more: [2] }{ item: \"2\", more: [\"2\"] };{ item: \"2\", more: [\"2\"] }same[2]/[[2]]/[[2]][\"2\"]/[[\"2\"]]/[[\"2\"]]Link(2, Link(2, End))Link(\"2\", Link(\"2\", End))Link(2, End)" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: Boxy composition sites answer each type argument (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no" }, .roc_file = "test/echo/boxy_composition_site_type_args.roc", .stdout_exact = "{ item: 1, more: [1] }{ item: \"1\", more: [\"1\"] }{ item: 1, more: [1] }{ item: { tag: 1 }, more: [{ tag: 1 }] }{ item: 1, more: [1] };{ item: 1, more: [1] }{ item: \"1\", more: [\"1\"] };{ item: \"1\", more: [\"1\"] }same[1]/[[1]]/[[1]][\"1\"]/[[\"1\"]]/[[\"1\"]]Link(1, Link(1, End))Link(\"1\", Link(\"1\", End))Link(1, End){ item: 2, more: [2] }{ item: \"2\", more: [\"2\"] }{ item: 2, more: [2] }{ item: { tag: 2 }, more: [{ tag: 2 }] }{ item: 2, more: [2] };{ item: 2, more: [2] }{ item: \"2\", more: [\"2\"] };{ item: \"2\", more: [\"2\"] }same[2]/[[2]]/[[2]][\"2\"]/[[\"2\"]]/[[\"2\"]]Link(2, Link(2, End))Link(\"2\", Link(\"2\", End))Link(2, End)" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: Boxy adapted dictionary of a procedure alias's where-clause (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/boxy_adapted_dictionary_alias.roc", .stdout_exact = "done\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: Boxy adapted dictionary of a procedure alias's where-clause (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/boxy_adapted_dictionary_alias.roc", .stdout_exact = "done\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11558 Boxy record field inspected through its nominal's custom to_inspect (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11558_record_field_custom_inspect.roc", .stdout_exact = "{ color: Color::Red, count: 42 }\n" } } },
@@ -3860,6 +3869,9 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12554: wasm32 platform that reserves memory below a global_base smaller than its stack links (LLVM)", .backend = .size, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=size", "--no-cache" }, .roc_file = "test/wasm/issue_12554_reserved_low_memory/app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "linker failed" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: dev wasm32 emits a valid sealed Boxy object", .backend = .dev, .body = .{ .custom = .issue_10733_wasm_boxy_dev_sealed_object } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12029: boxy tail calls run in constant stack on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12029_wasm_boxy_tail_calls } },
+    .{ .id = 0, .suite = .subcommands, .name = "Boxy composition sites answer each type argument on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .wasm_boxy_composition_sites_dev } },
+    .{ .id = 0, .suite = .subcommands, .name = "Boxy composition sites answer each type argument on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .wasm_boxy_composition_sites_size } },
+    .{ .id = 0, .suite = .subcommands, .name = "Boxy composition sites answer each type argument on wasm32 (speed)", .timeout_ms = 600_000, .backend = .speed, .body = .{ .custom = .wasm_boxy_composition_sites_speed } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 functions take more than 255 parameters (dev, specialized)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_many_parameters_specialized } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 functions take more than 255 parameters (dev, boxy)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_many_parameters_boxy } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 arguments past the parameter limit travel in memory (dev, specialized)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_parameter_limit_dev_specialized } },
@@ -5521,6 +5533,9 @@ fn runCustomCase(
         .literal_root_rejected_every_build => customLiteralRootRejectedEveryBuild(io, allocator, &env, &timer, timeout_ms),
         .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
         .issue_12029_wasm_boxy_tail_calls => customIssue12029WasmBoxyTailCalls(io, allocator, &env, &timer, timeout_ms),
+        .wasm_boxy_composition_sites_dev => customWasmBoxyCompositionSites(io, allocator, &env, &timer, timeout_ms, "--opt=dev"),
+        .wasm_boxy_composition_sites_size => customWasmBoxyCompositionSites(io, allocator, &env, &timer, timeout_ms, "--opt=size"),
+        .wasm_boxy_composition_sites_speed => customWasmBoxyCompositionSites(io, allocator, &env, &timer, timeout_ms, "--opt=speed"),
         .issue_12769_wasm_many_parameters_specialized => customIssue12769WasmManyParameters(io, allocator, &env, &timer, timeout_ms, "--specialize=yes"),
         .issue_12769_wasm_many_parameters_boxy => customIssue12769WasmManyParameters(io, allocator, &env, &timer, timeout_ms, "--specialize=no"),
         .issue_12769_wasm_parameter_limit_dev_specialized => customIssue12769WasmParameterLimit(io, allocator, &env, &timer, timeout_ms, "--opt=dev", "--specialize=yes"),
@@ -14514,6 +14529,46 @@ fn wasmHasExport(bytes: []const u8, wanted: []const u8) (std.Io.Reader.TakeLeb12
         return false;
     }
     return false;
+}
+
+/// Build a program whose generic bodies run at several type arguments for
+/// wasm32 without specialization and run it.
+fn customWasmBoxyCompositionSites(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    opt: []const u8,
+) ?TestResult {
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "boxy-composition-sites.wasm" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output path: {}", .{err});
+    defer allocator.free(output_path);
+    const output_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate wasm output argument: {}", .{err});
+    defer allocator.free(output_arg);
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--target=wasm32", opt, "--specialize=no", "--no-cache", output_arg },
+        .roc_file = "test/wasm/boxy_composition_sites_app.roc",
+        .exit = .success,
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+    })) |failure| return failure;
+    if (validateWasmOutput(io, allocator, timer, output_path)) |failure| return failure;
+
+    var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
+        return customFailure(allocator, timer, "failed to load the composition site wasm module: {}", .{err});
+    defer wasm.deinit();
+    const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
+        return customFailure(allocator, timer, "composition site wasm execution failed: {}", .{err});
+    const expected =
+        \\{ item: 21, more: [21] } { item: "21", more: ["21"] } { item: 21, more: [21] } same [21]/[[21]]/[[21]] Link(21, End) Link("21", End) Link(21, Link(21, End))
+    ;
+    if (!std.mem.eql(u8, result, expected)) {
+        return customFailure(allocator, timer, "composition site wasm returned \"{s}\"", .{result});
+    }
+    return null;
 }
 
 /// Build a program of generic tail-call cycles for wasm32 without

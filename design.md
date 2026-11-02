@@ -15081,7 +15081,8 @@ locals, read from their descriptors, and each dynamic local's address is the
 region base plus its running offset. Because every descriptor a body uses is
 composed at entry, the region's size and every offset are available before the
 first body statement runs. LLVM allocates the region with one dynamically
-sized `alloca`; the dev backend adjusts the stack pointer after its fixed frame
+sized `alloca`, the one allocation that follows the entry block, since site
+comparisons split the entry chain into blocks; the dev backend adjusts the stack pointer after its fixed frame
 and keeps the region base in a frame slot; the wasm backend bumps the shadow
 stack; the interpreter allocates a buffer per activation.
 
@@ -15172,10 +15173,18 @@ hidden arguments the worker needs, bound as captures: the descriptors for the
 target scheme's variables under the edge's `subst`, and the dictionaries for
 the target scheme's own evidence parameters under the edge's nested evidence.
 A dictionary whose target and captures are all static is emitted as static,
-immortal data. One whose captures mention the enclosing worker's hidden
-parameters is composed at runtime, hoisted to entry like a descriptor, and
-interned in the same immortal cache keyed by the target worker and its capture
-identities, so composition allocates nothing after the first evaluation.
+immortal data, interned by procedure and capture words: its callable is a
+static-data node of the same shape a composed callable has, with a static
+refcount, and its slot's value points at the callable's payload. A local's
+static content (a static descriptor, a static dictionary, or the null word of
+an unread literal argument) is what decides this, so a closed type's dictionary
+is static in a generic body too. One whose captures mention the enclosing
+worker's hidden parameters is composed at runtime, hoisted to entry like a
+descriptor, and interned in the same immortal cache keyed by the target worker
+and its capture identities, so composition allocates nothing after the first
+evaluation. A compile-time program with stored functions composes every
+dictionary, because reading a function value back resolves its captured
+descriptors through what the program's compositions noted.
 
 Compiler-derived structural evidence (equality, hashing, inspection) is a
 callable over the dispatcher's descriptor: the dictionary for `[a.is_eq]` with
@@ -15464,11 +15473,17 @@ Saved objects and LirImages carry the initial zero bytes, never runtime pointers
 Each interpreter owns its own instances of these slots, with
 the lifetime of its composition arena.
 
-The dev backend and interpreter acquire-load a site's pointer to an immutable
+Every backend and the interpreter acquire-load a site's pointer to an immutable
 snapshot of the last operand pointers and result. If every operand matches,
 they use that result without entering the runtime or probing the interner. The
 constructor, worker, arities and other non-local arguments are fixed by the
-site; the local operand sequence is its complete varying key. A miss composes
+site; the local operand sequence is its complete varying key. The snapshot's
+operands and result are words at the target's width. A site's slot is named by
+its export, never by its static-data id, and is never folded to a constant. The
+dev backend branches once per operand. LLVM compares every operand in one block
+and branches once, so a site adds a fixed number of blocks at any arity, and
+marks the hit as likely. The wasm backend's program has one thread, so its plain
+load is the acquire-load. A miss composes
 normally, then release-stores a complete snapshot pointer. An atomic store
 of one pointer means no reader can observe a partially replaced operand/result
 pair, even with several writers. Snapshots are themselves interned by result
