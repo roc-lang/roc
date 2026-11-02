@@ -45830,22 +45830,6 @@ const BodyContext = struct {
         return (try self.runEvidence(.{ .instantiate_call = .{ .source_fn_ty = source_fn_ty, .caller = caller, .checked_ret_ty = checked_ret_ty, .checked_args = checked_args, .expected_ret_node = expected_ret_node, .capture_constructor_argument_evidence = capture_constructor_argument_evidence, .callee_value = true } })).nodeValue();
     }
 
-    fn instantiateCallableDispatchPlanCallNodeFromCaller(
-        self: *BodyContext,
-        callable_plan: CallableDispatchPlan,
-        caller: *BodyContext,
-        checked_ret_ty: checked.CheckedTypeId,
-        expected_ret_ty: ?Type.TypeId,
-    ) Allocator.Error!NodeId {
-        return try self.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
-            callable_plan,
-            caller,
-            checked_ret_ty,
-            if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
-            .expression_lowering,
-        );
-    }
-
     fn instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
         self: *BodyContext,
         callable_plan: CallableDispatchPlan,
@@ -49985,20 +49969,6 @@ const BodyContext = struct {
             }
         }
         return try drafts.toOwnedSlice(self.allocator);
-    }
-
-    fn lowerDispatchOperandAtNode(
-        self: *BodyContext,
-        operand: static_dispatch.StaticDispatchOperand,
-        node: NodeId,
-    ) Allocator.Error!DraftExprId {
-        return switch (operand) {
-            .checked_expr => |expr| try self.lowerExprAtTypeCell(expr, DraftTypeCell.fromGraphNode(node)),
-            .generated_interpolation_segments,
-            .generated_numeral,
-            .generated_quote,
-            => try self.lowerDispatchOperandAtType(operand, try self.activeTypeFromNode(node)),
-        };
     }
 
     fn lowerDispatchOperandAtType(
