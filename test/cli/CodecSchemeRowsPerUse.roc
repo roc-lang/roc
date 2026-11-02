@@ -156,3 +156,19 @@ expect {
 	state = 3
 	unused_local(state) == 1
 }
+
+known_state = |state| {
+	typed : U64
+	typed = state
+	U64.parser_for(Format.Default)(typed)
+}
+
+expect {
+	state : U64
+	state = 7
+	narrow : Parsed([Negative])
+	narrow = known_state(state)
+	wide : Parsed(Wide)
+	wide = known_state(state)
+	(show_narrow(narrow), show_wide(wide)) == ("negative", "negative")
+}

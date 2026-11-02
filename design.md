@@ -12436,8 +12436,8 @@ This validates in a private copy and rewrites no solved variable the program can
 reach, so it adds no Rewrite Inventory entry (Solver-Mutating Rewrites).
 
 A relation whose state is known at the boundary is unaffected: it is validated
-there, before generalization, and its row quantifies with the rest of the
-definition. Pinned by `src/check/test/codec_scheme_relation_test.zig` (accepted:
+there, before generalization, so its constraints enter the definition's type
+before anything can copy it. Pinned by `src/check/test/codec_scheme_relation_test.zig` (accepted:
 quantified schemes for parsers, encoders and forwarding definitions, two rows
 in one body; rejected: a use's state or row, a relation no type satisfies with
 no use, and an annotation's rigid state or error row) and

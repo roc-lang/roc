@@ -117,12 +117,25 @@ test "a relation reaching a weak value still determines that value" {
     var env = try TestEnv.init("Test", prelude ++
         \\seeds = []
         \\
-        \\parse_seed = |_| match seeds {
-        \\    [seed] => U64.parser_for(Format.Default)(seed)
-        \\    _ => Err(Empty)
-        \\}
+        \\first : List(item) -> item
+        \\first = |_| crash "first"
+        \\
+        \\parse_seed = |_| U64.parser_for(Format.Default)(first(seeds))
     );
     defer env.deinit();
     try env.assertNoErrors();
     try env.assertDefType("seeds", "List(U64)");
+}
+
+test "a relation whose state is known validates at its boundary" {
+    var env = try TestEnv.init("Test", prelude ++
+        \\known = |state| {
+        \\    typed : U64
+        \\    typed = state
+        \\    U64.parser_for(Format.Default)(typed)
+        \\}
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
+    try env.assertDefType("known", "U64 -> Try({ rest: U64, value: U64 }, [Negative])");
 }
