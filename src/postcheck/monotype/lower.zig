@@ -288,13 +288,6 @@ pub const Options = struct {
     /// Preserve source-level procedure names for consumers that present runtime
     /// diagnostics from lowered code.
     proc_debug_names: bool = false,
-    /// The object cache to ask for closed specializations at reservation.
-    spec_cache: ?Common.SpecCacheLookup = null,
-    /// Which cache entries can serve this program: whether its code is
-    /// linked, so a linked-object entry (`Common.SpecCacheHit.c_abi_entry`)
-    /// can, and whether its emitter splices dev code.
-    spec_cache_takes: Common.SpecCacheTakes = .dev_code,
-    interface_cache: ?Common.InterfaceSummaryCache = null,
     /// Optional deterministic counters for specialization-shape tests.
     specialization_counters: ?*SpecializationCounters = null,
     /// Optional deterministic workload diagnostics. The checked pipeline
@@ -318,13 +311,6 @@ pub const Options = struct {
     /// program demands and the checked roots each of its compile-time roots
     /// reads.
     comptime_demand_out: ?*ComptimeDemand = null,
-    /// Receives what each object-cache specialization's code reads of
-    /// compile-time evaluation, for a program whose specializations may be
-    /// written to the object cache.
-    spec_comptime_reads_out: ?*SpecComptimeReads = null,
-    /// Receives every object-cache key that resolved to another key's
-    /// specialization (`SpecKeyAliases`).
-    spec_key_aliases_out: ?*SpecKeyAliases = null,
     /// Turn each specialized custom literal's conversion into a literal root
     /// whose completed value the specialization reads. The consumer that
     /// asks for this evaluates every literal root the program registers.
@@ -455,12 +441,6 @@ const ComptimeDemandState = struct {
     value_read_roots: std.ArrayList(u32) = .empty,
     value_read_evaluated: std.ArrayList(bool) = .empty,
     ingested_value_reads: usize = 0,
-    /// The roots each procedure an object-cache entry serves read, by the
-    /// procedure's function: its body is skipped, so its reads come from the
-    /// entry (`Common.SpecCacheHit.comptime_root_reads`).
-    cached_fn_reads: collections.DenseMapUnmanaged(Ast.FnId, Range) = .empty,
-    cached_fn_read_roots: std.ArrayList(u32) = .empty,
-    ingested_cached_fns: usize = 0,
     expr_marks: std.ArrayList(u32) = .empty,
     def_marks: std.ArrayList(u32) = .empty,
     nested_marks: std.ArrayList(u32) = .empty,
@@ -504,8 +484,6 @@ const ComptimeDemandState = struct {
         self.value_reads.deinit(allocator);
         self.value_read_roots.deinit(allocator);
         self.value_read_evaluated.deinit(allocator);
-        self.cached_fn_reads.deinit(allocator);
-        self.cached_fn_read_roots.deinit(allocator);
         self.expr_marks.deinit(allocator);
         self.def_marks.deinit(allocator);
         self.nested_marks.deinit(allocator);
@@ -582,18 +560,6 @@ const ComptimeDemandState = struct {
             entry.value_ptr.* = .{ .start = @intCast(start), .len = @intCast(self.value_read_roots.items.len - start) };
         }
 
-        const cached = builder.cached_fn_reads.items;
-        while (self.ingested_cached_fns < cached.len) : (self.ingested_cached_fns += 1) {
-            const entry = cached[self.ingested_cached_fns];
-            const start = self.cached_fn_read_roots.items.len;
-            for (entry.reads) |read| {
-                const read_view = builder.moduleForKeyBytes(read.module) orelse
-                    Common.invariant("object cache entry read a compile-time root of a module outside the lowering input");
-                try self.cached_fn_read_roots.append(allocator, try self.intern(allocator, .{ .module = read_view.key, .root = @fromBackingInt(read.root) }));
-            }
-            try self.cached_fn_reads.put(allocator, entry.fn_id, .{ .start = @intCast(start), .len = @intCast(self.cached_fn_read_roots.items.len - start) });
-        }
-
         while (self.indexed_declared_roots < builder.declared_roots.items.len) : (self.indexed_declared_roots += 1) {
             const root = builder.declared_roots.items[self.indexed_declared_roots];
             const id = try self.intern(allocator, .{ .module = root.source_module, .root = root.request.compile_time_root.? });
@@ -649,9 +615,6 @@ const ComptimeDemandState = struct {
         self.summary_literal = false;
         self.visits.clearRetainingCapacity();
         if (body) |expr| try self.visits.append(allocator, .{ .expr = expr });
-        if (item & nested_bit == 0) if (view.defs[item].fn_id) |fn_id| if (self.cached_fn_reads.get(fn_id)) |range| {
-            try self.summary_reads.appendSlice(allocator, self.cached_fn_read_roots.items[range.start..][0..range.len]);
-        };
         while (self.visits.pop()) |visit| switch (visit) {
             .stmt => |stmt| try self.visitStmt(allocator, view, stmt),
             .expr => |expr| {
@@ -921,92 +884,6 @@ const ComptimeDemandState = struct {
         const result = try allocator.alloc(EntryRoot, self.stored_demanded.items.len);
         for (self.stored_demanded.items, result) |root, *slot| slot.* = self.roots.items[root];
         return result;
-    }
-};
-
-/// What each object-cache specialization of a program reads of compile-time
-/// evaluation, by specialization key (design.md "Demand-Driven Compile-Time
-/// Evaluation"). The object cache offers a specialization only when its code
-/// evaluates no root in place, and records the roots it reads, which a
-/// program taking the entry demands. A key with no row reads nothing.
-pub const SpecComptimeReads = struct {
-    /// `evaluated`: the code reads a compile-time value through its
-    /// evaluation, a literal root's included, through every procedure it
-    /// reaches.
-    pub const Row = struct { start: u32, len: u32, local: bool, evaluated: bool };
-    pub const Lookup = struct { offerable: bool, reads: []const Common.ComptimeRootRead, evaluated: bool = false };
-
-    allocator: Allocator,
-    rows: std.AutoHashMapUnmanaged([32]u8, Row) = .empty,
-    /// The same summary for every function of the program, by its id, for
-    /// procedures served by their identity rather than a key.
-    fn_rows: std.AutoHashMapUnmanaged(u32, Row) = .empty,
-    reads: std.ArrayList(Common.ComptimeRootRead) = .empty,
-
-    pub fn get(self: *const SpecComptimeReads, key: [32]u8) Lookup {
-        const row = self.rows.get(key) orelse return .{ .offerable = true, .reads = &.{} };
-        return .{ .offerable = !row.local, .reads = self.reads.items[row.start..][0..row.len], .evaluated = row.evaluated };
-    }
-
-    /// The summary of the function `fn_id` names.
-    pub fn fnReads(self: *const SpecComptimeReads, fn_id: u32) Lookup {
-        const row = self.fn_rows.get(fn_id) orelse return .{ .offerable = true, .reads = &.{} };
-        return .{ .offerable = !row.local, .reads = self.reads.items[row.start..][0..row.len], .evaluated = row.evaluated };
-    }
-
-    pub fn clone(self: *const SpecComptimeReads, allocator: Allocator) Allocator.Error!SpecComptimeReads {
-        var result: SpecComptimeReads = .{ .allocator = allocator };
-        errdefer result.deinit();
-        result.rows = try self.rows.clone(allocator);
-        result.fn_rows = try self.fn_rows.clone(allocator);
-        try result.reads.appendSlice(allocator, self.reads.items);
-        return result;
-    }
-
-    pub fn deinit(self: *SpecComptimeReads) void {
-        self.rows.deinit(self.allocator);
-        self.fn_rows.deinit(self.allocator);
-        self.reads.deinit(self.allocator);
-        self.* = .{ .allocator = self.allocator };
-    }
-};
-
-/// Object-cache keys that resolved to the specialization of another key.
-///
-/// A request whose type is less specific than its own solution reuses an
-/// existing record through that record's solved type (`SpecBuilder`), so the
-/// record's procedure is the procedure of the reusing request's key too. Each
-/// alias names such a key and the key the record was reserved under. A
-/// program offers its procedures under both, so the keys a build offers are
-/// the keys of its requests, whichever of two requests reached the record
-/// first.
-pub const SpecKeyAliases = struct {
-    pub const Alias = struct {
-        alias: [32]u8,
-        target: [32]u8,
-
-        fn lessThan(_: void, left: Alias, right: Alias) bool {
-            return switch (std.mem.order(u8, &left.alias, &right.alias)) {
-                .lt => true,
-                .gt => false,
-                .eq => std.mem.order(u8, &left.target, &right.target) == .lt,
-            };
-        }
-    };
-
-    allocator: Allocator,
-    /// Sorted by alias, then target, without duplicates.
-    items: std.ArrayList(Alias) = .empty,
-
-    pub fn clone(self: *const SpecKeyAliases, allocator: Allocator) Allocator.Error!SpecKeyAliases {
-        var result: SpecKeyAliases = .{ .allocator = allocator };
-        try result.items.appendSlice(allocator, self.items.items);
-        return result;
-    }
-
-    pub fn deinit(self: *SpecKeyAliases) void {
-        self.items.deinit(self.allocator);
-        self.* = .{ .allocator = self.allocator };
     }
 };
 
@@ -1525,9 +1402,6 @@ pub fn run(
         try builder.completeParkedSpecJobsAsStubs();
         // Every body is lowered, so the program's demand is known.
         try builder.orderComptimeRoots();
-        try builder.collectSpecKeyAliases();
-        try builder.recordSpecComptimeReads();
-        try builder.outputSpecKeyAliases();
     }
     if (options.demand_counters_out) |out| out.* = builder.demand_counters;
 
@@ -4600,9 +4474,6 @@ pub const DemandCounters = struct {
     upgraded: u64 = 0,
     /// Parked specializations completed as never-run stubs.
     stubs: u64 = 0,
-    /// Parked requests whose specialization an earlier compilation settled
-    /// (design.md "Discovery Summaries"); each is counted in `parked` too.
-    summarized: u64 = 0,
 };
 
 /// Bound running plus completed-but-unaccepted jobs. Extra slots let free
@@ -4616,8 +4487,6 @@ const SharedSummaries = WorkerInputs.AppendIndex(InterfaceReplayAddress, Interfa
 /// sealed, and the reservation already owns its global ids, so the job
 /// outlives the requesting graph and draft.
 const PendingSpecJob = struct {
-    completed_body_address: ?CompletedBodyAddress = null,
-    profile_key: [32]u8 = @splat(0),
     /// Logical enqueue order across the whole build. The inline executor
     /// accepts queue entries strictly in this order. Representation-sensitive
     /// immediate claims are completed as inline work of the executing body;
@@ -5036,8 +4905,6 @@ const SpecJobLaneState = struct {
 /// One immutable graph-free result handed from ordinary body lowering to
 /// ordered coordinator commit.
 const CompletedSpecJobShard = struct {
-    decoded_body_arena: ?*std.heap.ArenaAllocator = null,
-    frozen_probe_record: ?FrozenProbeRecord = null,
     worker_id: SpecJobWorkerId,
     commit_domain: *SpecJobCommitDomain,
     dispatch_index: u64,
@@ -5053,12 +4920,7 @@ const CompletedSpecJobShard = struct {
 
     fn deinit(self: *CompletedSpecJobShard) void {
         const allocator = self.body_draft.allocator;
-        if (self.frozen_probe_record) |record| allocator.free(record.bytes);
         self.body_draft.deinit();
-        if (self.decoded_body_arena) |arena| {
-            arena.deinit();
-            allocator.destroy(arena);
-        }
         allocator.free(self.interface_summaries);
         if (self.diagnostics) |diagnostics| {
             allocator.destroy(diagnostics);
@@ -5106,7 +4968,6 @@ const SpecJobWorkerInputs = struct {
     proc_debug_names: bool,
     interface_summaries: *const SharedSummaries,
     interface_summary_end: usize,
-    interface_cache: ?Common.InterfaceSummaryCache,
     collect_counters: bool,
     collect_diagnostics: bool,
     inline_expects: InlineExpectMode,
@@ -5464,18 +5325,6 @@ const CheckedOccurrence = struct { module: checked.ModuleId, ty: checked.Checked
 /// A closed checked type key inside one module's reflexive import closure.
 const ClosedOccurrenceKey = struct { module: [32]u8, key: [32]u8 };
 
-/// The checked modules whose type occurrences one lowering may name
-/// (design.md "Occurrence scope"): the reflexive import closure of `view`,
-/// the module whose checked types or body is lowered, and the modules that
-/// the lowering's input types already name.
-const OccurrenceScope = struct {
-    view: ModuleView,
-    /// The modules the lowering's input types name (a replayed request's
-    /// leaves, a completed body's requested function type), sorted by key;
-    /// see `Builder.inputOccurrenceModules`.
-    input_modules: []const [32]u8 = &.{},
-};
-
 /// Every module view's closed named roots by checked type key, each key's
 /// holders sorted by module key: the occurrences a lowering chooses its
 /// representative among inside its occurrence scope (design.md "Occurrence
@@ -5607,15 +5456,6 @@ const Builder = struct {
         children: ScratchSlot(checked.CheckedPatternId) = .{},
     } = .{},
     field_kind_scope_pool: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind)) = .empty,
-    /// The object cache consulted for closed specializations, if any.
-    spec_cache: ?Common.SpecCacheLookup,
-    interface_cache: ?Common.InterfaceSummaryCache,
-    spec_cache_takes: Common.SpecCacheTakes,
-    /// The module identities of the checked modules this lowering reads, which
-    /// the object cache serves entries for (`Common.ProgramModules`); built
-    /// at the first lookup.
-    program_modules: ?Common.ProgramModules = null,
-    program_module_buffer: [][32]u8 = &.{},
     counters: ?*SpecializationCounters,
     diagnostics: ?*Diagnostics,
     /// Result-owned sink while one ordinary specialization shard is lowering or
@@ -5635,7 +5475,6 @@ const Builder = struct {
     /// `literalProgramContext`.
     literal_program_context: ??[32]u8 = null,
     interface_program_context: ??[32]u8 = null,
-    interface_callee_contexts: std.AutoHashMapUnmanaged([32]u8, ?[32]u8) = .empty,
     /// See `literalTopModules`; outer null until computed.
     literal_top_modules: ??std.AutoHashMapUnmanaged([32]u8, [32]u8) = null,
     /// Top-level statements of each top module whose types a literal value
@@ -5668,11 +5507,6 @@ const Builder = struct {
     demand_driven_comptime_roots: bool,
     validated_comptime_roots: ?*const std.AutoHashMapUnmanaged(EntryRoot, void),
     comptime_demand_out: ?*ComptimeDemand,
-    spec_comptime_reads_out: ?*SpecComptimeReads,
-    spec_key_aliases_out: ?*SpecKeyAliases,
-    /// Every object-cache key that resolved to another key's specialization,
-    /// sorted; see `SpecKeyAliases`. Filled once every body is lowered.
-    spec_key_aliases: std.ArrayList(SpecKeyAliases.Alias) = .empty,
     /// Every declared compile-time root, in request order.
     declared_roots: std.ArrayList(DeclaredRoot) = .empty,
     /// Reserved compile-time root bodies the program has not demanded yet,
@@ -5688,9 +5522,6 @@ const Builder = struct {
     deferred_roots: std.ArrayList(Ast.Root) = .empty,
     /// Committed root values restored or evaluated in place. Coordinator-only.
     root_value_reads: std.ArrayList(RootValueRead) = .empty,
-    /// The compile-time roots read by each procedure an object-cache entry
-    /// serves, recorded at reservation. Coordinator-only.
-    cached_fn_reads: std.ArrayList(CachedFnReads) = .empty,
     /// What the committed program demands of compile-time evaluation so far.
     comptime_demand: ComptimeDemandState = .{},
     post_check_executor: ?base.post_check_task_executor.Executor,
@@ -5964,9 +5795,6 @@ const Builder = struct {
             .current_loc = program.current_loc,
             .current_region = program.current_region,
             .proc_debug_names = options.proc_debug_names,
-            .spec_cache = options.spec_cache,
-            .interface_cache = options.interface_cache orelse if (options.spec_cache) |cache| cache.interfaces else null,
-            .spec_cache_takes = options.spec_cache_takes,
             .counters = counters,
             .diagnostics = options.diagnostics,
             .active_spec_job_diagnostics = null,
@@ -5981,8 +5809,6 @@ const Builder = struct {
             .demand_driven_comptime_roots = options.demand_driven_comptime_roots,
             .validated_comptime_roots = options.validated_comptime_roots,
             .comptime_demand_out = options.comptime_demand_out,
-            .spec_comptime_reads_out = options.spec_comptime_reads_out,
-            .spec_key_aliases_out = options.spec_key_aliases_out,
             .post_check_executor = options.post_check_executor,
             .timing = options.timing,
             .resolution_profile = .{ .std_io = if (options.timing) |timing| timing.std_io else null },
@@ -6139,7 +5965,6 @@ const Builder = struct {
             .comptime_value_reads = inputs.comptime_value_reads,
             .literal_roots = inputs.literal_roots,
             .replay_interface_summaries = inputs.replay_interface_summaries,
-            .interface_cache = inputs.interface_cache,
             .post_check_executor = null,
             .timing = null,
         });
@@ -6204,7 +6029,6 @@ const Builder = struct {
 
     fn deinit(self: *Builder) void {
         self.resolution_profile.report();
-        self.allocator.free(self.program_module_buffer);
         deinitSpecJobLanes(self.allocator, self.spec_job_lanes);
         for (self.lower_frame_pool.items) |*frames| frames.deinit(self.allocator);
         self.lower_frame_pool.deinit(self.allocator);
@@ -6240,8 +6064,6 @@ const Builder = struct {
         self.parked_root_jobs.deinit(self.allocator);
         self.deferred_roots.deinit(self.allocator);
         self.root_value_reads.deinit(self.allocator);
-        self.cached_fn_reads.deinit(self.allocator);
-        self.spec_key_aliases.deinit(self.allocator);
         self.comptime_demand.deinit(self.allocator);
         self.literal_reuse.deinit(self.allocator);
         if (self.literal_top_modules) |*known| if (known.*) |*map| map.deinit(self.allocator);
@@ -6283,7 +6105,6 @@ const Builder = struct {
         if (self.shared_summaries) |*summaries| summaries.deinit();
         self.worker_inputs.deinit(self.allocator);
         self.interface_summaries.deinit();
-        self.interface_callee_contexts.deinit(self.allocator);
         self.spec_store.deinit();
         self.pending_spec_jobs.deinit(self.allocator);
         self.parked_spec_jobs.deinit(self.allocator);
@@ -6541,142 +6362,14 @@ const Builder = struct {
         defer scratch.deinit();
         for (entries) |entry| {
             _ = scratch.reset(.retain_capacity);
-            const summary = try self.interface_summaries.insertRelocated(
+            _ = try self.interface_summaries.insertRelocated(
                 &self.program.types,
                 &self.program.names,
                 entry,
                 try entry.request.copy(scratch.allocator(), relocation),
                 relocation,
             );
-            if (!entry.persisted) try self.recordPersistentInterface(.{ .address = entry.address, .evidence = entry.evidence, .request = try entry.request.copy(scratch.allocator(), relocation), .summary = summary }, &self.program.types, &self.program.names);
         }
-    }
-
-    const PersistentInterfaceFamily = struct { provider: [32]u8, procedure: [8]u8 };
-
-    fn persistentInterfaceFamily(self: *Builder, address: InterfaceReplayAddress) Allocator.Error!?PersistentInterfaceFamily {
-        if (self.interface_cache == null or address.kind != .procedure) return null;
-        const callee = self.moduleForKeyBytes(address.family.module) orelse return null;
-        const template = callee.templates.get(@fromBackingInt(address.family.template));
-        // Checking already supplies the complete relation of a closed
-        // interface, so no callee relation program exists for it.
-        if (templateInterfaceIsClosed(callee, &template)) return null;
-        const scope_context = callee.compile_time_root_identities.valueContext() orelse return null;
-        const program_context = (try self.programValueContext(false)) orelse return null;
-        var hash = base.Sha256.init(.{});
-        hash.update("roc.interface-provider.v3");
-        hash.update(&(callee.code_generation_key orelse callee.key).bytes);
-        hash.update(&scope_context);
-        hash.update(&program_context);
-        hash.update(&((try self.interfaceCalleeContext(callee)) orelse return null));
-        var ordinals: [8]u8 = undefined;
-        std.mem.writeInt(u32, ordinals[0..4], address.family.proc_base, .little);
-        std.mem.writeInt(u32, ordinals[4..8], address.family.template, .little);
-        hash.update(@tagName(self.inline_expects));
-        hash.update(&.{ @intFromBool(self.static_data_literals), @intFromBool(self.comptime_value_reads), @intFromBool(self.literal_roots) });
-        const family = hash.finalResult();
-        if (base.dev_diagnostics.isSet(.pack_trace)) std.debug.print("interface family module={s} proc={d} template={d} code={x} scope={x} program={x} family={x}\n", .{ callee.module_env.module_name, address.family.proc_base, address.family.template, (callee.code_generation_key orelse callee.key).bytes, scope_context, program_context, family });
-        return .{ .provider = family, .procedure = ordinals };
-    }
-
-    /// Explicit import closure and requirement identities supplied by checking.
-    /// Unlike the literal-value program context this does not include exports
-    /// of unrelated modules (in particular the platform's call to app main).
-    fn interfaceCalleeContext(self: *Builder, callee: ModuleView) Allocator.Error!?[32]u8 {
-        if (self.interface_callee_contexts.get(callee.key.bytes)) |known| return known;
-        const top = (try self.literalTopModules()).?;
-        var visited = std.AutoHashMap([32]u8, void).init(self.allocator);
-        defer visited.deinit();
-        var pending = std.ArrayList(ModuleView).empty;
-        defer pending.deinit(self.allocator);
-        var dependencies = std.ArrayList([32]u8).empty;
-        defer dependencies.deinit(self.allocator);
-        var requirements = std.ArrayList([64]u8).empty;
-        defer requirements.deinit(self.allocator);
-        try pending.append(self.allocator, callee);
-        while (pending.pop()) |view| {
-            const seen = try visited.getOrPut(view.key.bytes);
-            if (seen.found_existing) continue;
-            try dependencies.append(self.allocator, (view.code_generation_key orelse view.key).bytes);
-            for (view.direct_import_module_keys) |key| {
-                const imported = self.moduleForKeyBytes(key.bytes) orelse {
-                    // A type-only dependency need not be in the lowering's
-                    // module set. Without its explicit context no record is offered.
-                    try self.interface_callee_contexts.put(self.allocator, callee.key.bytes, null);
-                    return null;
-                };
-                try pending.append(self.allocator, imported);
-            }
-            const identities = view.compile_time_root_identities;
-            for ([_][]const [32]u8{ identities.method_requires, identities.export_requires }) |required| for (required) |name| {
-                var providers = top.keyIterator();
-                while (providers.next()) |key| {
-                    const provider = self.moduleForKeyBytes(key.*) orelse Common.invariant("interface requirement has no checked provider view");
-                    for (provider.compile_time_root_identities.exports) |exported| {
-                        if (!std.mem.eql(u8, &name, &exported.name)) continue;
-                        var pair: [64]u8 = undefined;
-                        pair[0..32].* = name;
-                        pair[32..].* = exported.value;
-                        try requirements.append(self.allocator, pair);
-                    }
-                }
-            };
-        }
-        const Order = struct {
-            fn dependency(_: void, a: [32]u8, b: [32]u8) bool {
-                return std.mem.order(u8, &a, &b) == .lt;
-            }
-            fn requirement(_: void, a: [64]u8, b: [64]u8) bool {
-                return std.mem.order(u8, &a, &b) == .lt;
-            }
-        };
-        std.mem.sort([32]u8, dependencies.items, {}, Order.dependency);
-        std.mem.sort([64]u8, requirements.items, {}, Order.requirement);
-        var hash = base.Sha256.init(.{});
-        hash.update("roc.interface-dependencies.v1");
-        var counts: [8]u8 = undefined;
-        std.mem.writeInt(u32, counts[0..4], @intCast(dependencies.items.len), .little);
-        std.mem.writeInt(u32, counts[4..8], @intCast(requirements.items.len), .little);
-        hash.update(&counts);
-        for (dependencies.items) |key| hash.update(&key);
-        hash.update("requirements");
-        for (requirements.items) |pair| hash.update(&pair);
-        const digest = hash.finalResult();
-        try self.interface_callee_contexts.put(self.allocator, callee.key.bytes, digest);
-        return digest;
-    }
-
-    fn recordPersistentInterface(self: *Builder, entry: InterfaceSummaryEntry, types_: *Type.Store, ns: *const names.NameStore) Allocator.Error!void {
-        const family = (try self.persistentInterfaceFamily(entry.address)) orelse return;
-        const evidence = (try self.persistentInterfaceEvidence(entry.evidence)) orelse return;
-        const summary: PersistentInterface.Summary = switch (entry.summary) {
-            .unchanged => .unchanged,
-            .constraints => |c| .{ .constraints = c },
-        };
-        var stats: PersistentInterface.Stats = .{};
-        const bytes = PersistentInterface.encodeWithStats(self.allocator, types_, ns, entry.request.leaves, summary, BodyContext.PersistentProvenance{ .builder = self }, &stats) catch |err| switch (err) {
-            error.NotRepresentable => {
-                self.count("interface_persistent_unrepresentable");
-                return;
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-        };
-        defer self.allocator.free(bytes);
-        const key = PersistentInterface.requestKey(entry.request, evidence, family.procedure);
-        const cache = self.interface_cache.?;
-        try cache.record(cache.context, family.provider, key, bytes);
-        self.count("interface_persistent_records");
-        self.countBy("interface_persistent_bytes", @intCast(bytes.len));
-        self.countBy("interface_persistent_types", @intCast(stats.types));
-        self.countBy("interface_persistent_references", @intCast(stats.references));
-        if (stats.composites != 0) self.count("interface_persistent_composite_records");
-        if (stats.defaults != 0) self.count("interface_persistent_default_records");
-    }
-
-    fn persistentInterfaceEvidence(self: *Builder, evidence: StoredConstFnEvidence) Allocator.Error!?[32]u8 {
-        for (evidence.entries.targets) |target| if (target.method.kind == .local_proc) return null;
-        const contexts = (try self.literalTopModules()) orelse return null;
-        return Ast.fnEvidenceContextDigest(evidence.entries, evidence.frames, evidence.head, contexts).bytes;
     }
 
     fn addDigestStats(self: *Builder, stats: Type.Store.DigestStats) void {
@@ -7535,142 +7228,6 @@ const Builder = struct {
         return env.getSourceAll()[region.start.offset..region.end.offset];
     }
 
-    /// Every key of a request a record served through its solved view, when
-    /// it differs from the key the record was reserved under. Only a request
-    /// the object cache could key has a key: one whose type mentions no
-    /// function, served by a record that has a key itself.
-    fn collectSpecKeyAliases(self: *Builder) Allocator.Error!void {
-        for (self.spec_store.solvedViewHits()) |hit| {
-            const record = self.program.specs.get(@backingInt(hit.spec));
-            const target = self.program.getFn(record.fn_id).source.spec_key orelse continue;
-            const alias = Ast.specIdentityKey(hit.identity);
-            if (std.mem.eql(u8, &alias.bytes, &target.bytes)) continue;
-            if (try self.monoFnTypeMentionsFunction(hit.identity.request_fn_ty)) continue;
-            try self.spec_key_aliases.append(self.allocator, .{ .alias = alias.bytes, .target = target.bytes });
-        }
-        const items = self.spec_key_aliases.items;
-        std.mem.sort(SpecKeyAliases.Alias, items, {}, SpecKeyAliases.Alias.lessThan);
-        var kept: usize = 0;
-        for (items) |item| {
-            if (kept != 0 and std.meta.eql(items[kept - 1], item)) continue;
-            items[kept] = item;
-            kept += 1;
-        }
-        self.spec_key_aliases.shrinkRetainingCapacity(kept);
-    }
-
-    fn outputSpecKeyAliases(self: *Builder) Allocator.Error!void {
-        const out = self.spec_key_aliases_out orelse return;
-        var result: SpecKeyAliases = .{ .allocator = self.allocator };
-        try result.items.appendSlice(self.allocator, self.spec_key_aliases.items);
-        out.* = result;
-    }
-
-    /// What each object-cache specialization's code reads of compile-time
-    /// evaluation (`SpecComptimeReads`). Only code that reaches a read needs a
-    /// closure, so the definitions that reach one are found first by walking
-    /// references backwards from the definitions that read.
-    fn recordSpecComptimeReads(self: *Builder) Allocator.Error!void {
-        const out = self.spec_comptime_reads_out orelse return;
-        const state = &self.comptime_demand;
-        const view = self.program.view();
-        try state.index(self.allocator, self, view);
-        const def_count = view.defs.len;
-        const item_count = def_count + view.nested_defs.len;
-        const Dense = struct {
-            fn of(def_item: u32, defs: usize) usize {
-                return if (def_item & ComptimeDemandState.nested_bit != 0) defs + (def_item & ~ComptimeDemandState.nested_bit) else def_item;
-            }
-            fn item(index: usize, defs: usize) u32 {
-                return if (index < defs) @intCast(index) else @as(u32, @intCast(index - defs)) | ComptimeDemandState.nested_bit;
-            }
-        };
-        // Reverse references, as one flat list per referenced definition.
-        const counts = try self.allocator.alloc(u32, item_count + 1);
-        defer self.allocator.free(counts);
-        @memset(counts, 0);
-        for (0..item_count) |index| {
-            const item_summary = try state.summary(self.allocator, view, Dense.item(index, def_count));
-            for (state.summary_refs.items[item_summary.refs.start..][0..item_summary.refs.len]) |ref| counts[Dense.of(ref, def_count) + 1] += 1;
-        }
-        for (1..counts.len) |index| counts[index] += counts[index - 1];
-        const referrers = try self.allocator.alloc(u32, counts[item_count]);
-        defer self.allocator.free(referrers);
-        const cursor = try self.allocator.dupe(u32, counts[0..item_count]);
-        defer self.allocator.free(cursor);
-        for (0..item_count) |index| {
-            const item_summary = state.summarySlot(Dense.item(index, def_count)).*.?;
-            for (state.summary_refs.items[item_summary.refs.start..][0..item_summary.refs.len]) |ref| {
-                const target = Dense.of(ref, def_count);
-                referrers[cursor[target]] = @intCast(index);
-                cursor[target] += 1;
-            }
-        }
-        const reaches_read = try self.allocator.alloc(bool, item_count);
-        defer self.allocator.free(reaches_read);
-        @memset(reaches_read, false);
-        var pending = std.ArrayList(u32).empty;
-        defer pending.deinit(self.allocator);
-        for (0..item_count) |index| {
-            if (state.summarySlot(Dense.item(index, def_count)).*.?.reads.len == 0) continue;
-            reaches_read[index] = true;
-            try pending.append(self.allocator, @intCast(index));
-        }
-        while (pending.pop()) |index| {
-            for (referrers[counts[index]..counts[index + 1]]) |referrer| {
-                if (reaches_read[referrer]) continue;
-                reaches_read[referrer] = true;
-                try pending.append(self.allocator, referrer);
-            }
-        }
-        // Code that reads a literal root's value, which no read names.
-        const reaches_literal = try self.allocator.alloc(bool, item_count);
-        defer self.allocator.free(reaches_literal);
-        @memset(reaches_literal, false);
-        for (0..item_count) |index| {
-            if (!state.summarySlot(Dense.item(index, def_count)).*.?.literal) continue;
-            reaches_literal[index] = true;
-            try pending.append(self.allocator, @intCast(index));
-        }
-        while (pending.pop()) |index| {
-            for (referrers[counts[index]..counts[index + 1]]) |referrer| {
-                if (reaches_literal[referrer]) continue;
-                reaches_literal[referrer] = true;
-                try pending.append(self.allocator, referrer);
-            }
-        }
-
-        var result: SpecComptimeReads = .{ .allocator = self.allocator };
-        errdefer result.deinit();
-        for (view.fns, 0..) |fn_, raw| {
-            const item = state.fn_items.items[raw] orelse continue;
-            const dense = Dense.of(item, def_count);
-            if (!reaches_read[dense] and !reaches_literal[dense]) continue;
-            const reads = try state.rootReads(self.allocator, view, item);
-            const start = result.reads.items.len;
-            for (reads) |read| {
-                const root = state.roots.items[read];
-                try result.reads.append(self.allocator, .{ .module = root.module.bytes, .root = @backingInt(root.root) });
-            }
-            const row: SpecComptimeReads.Row = .{ .start = @intCast(start), .len = @intCast(result.reads.items.len - start), .local = state.closure_local, .evaluated = true };
-            try result.fn_rows.put(self.allocator, @intCast(raw), row);
-            const key = fn_.source.spec_key orelse continue;
-            const entry = try result.rows.getOrPut(self.allocator, key.bytes);
-            // Specializations sharing a key are one specialization.
-            if (entry.found_existing) continue;
-            entry.value_ptr.* = row;
-        }
-        // A key that resolved to another key's specialization reads what
-        // that specialization reads.
-        for (self.spec_key_aliases.items) |alias| {
-            const row = result.rows.get(alias.target) orelse continue;
-            const entry = try result.rows.getOrPut(self.allocator, alias.alias);
-            if (entry.found_existing) continue;
-            entry.value_ptr.* = row;
-        }
-        out.* = result;
-    }
-
     fn finishUndemandedRoot(self: *Builder, job: PendingSpecJob) Allocator.Error!void {
         const fn_data = functionShape(&self.program.types, job.fn_ty, "compile-time root entry template type was not a function");
         const args = try self.typedLocalsForArgs(self.program.types.span(fn_data.args));
@@ -7864,7 +7421,6 @@ const Builder = struct {
             .proc_debug_names = self.proc_debug_names,
             .interface_summaries = &self.shared_summaries.?,
             .interface_summary_end = self.shared_summaries.?.count,
-            .interface_cache = self.interface_cache,
             .replay_interface_summaries = self.replay_interface_summaries,
             .collect_counters = self.counters != null,
             .collect_diagnostics = self.diagnostics != null,
@@ -8078,7 +7634,6 @@ const Builder = struct {
             .proc_debug_names = self.proc_debug_names,
             .interface_summaries = &self.shared_summaries.?,
             .interface_summary_end = self.shared_summaries.?.count,
-            .interface_cache = self.interface_cache,
             .collect_counters = self.counters != null,
             .collect_diagnostics = self.diagnostics != null,
             .inline_expects = self.inline_expects,
@@ -9294,22 +8849,6 @@ const Builder = struct {
                 const name: []const u8 = if (proc_base.export_name) |e| view.names.exportNameText(e) else "?";
                 std.debug.print("CENSUS_KEY\t{s}\t{x}\tev={x}\tcodec={x}\treq={x}\tcallable={s}\n", .{ name, key.bytes[0..8], spec_identity.evidence_digest.bytes[0..6], spec_identity.codec_contract_digest.bytes[0..6], spec_identity.request_fn_ty_digest.bytes[0..6], @tagName(spec_identity.callable) });
             }
-            resolution_profile.enter(.native_lookup);
-            // A queued discovery request whose outcome an earlier compilation
-            // settled is parked below with no body, so answering it consults
-            // no cached code, and a program whose every request is settled
-            // reads no code pack.
-            const settled_discovery = demand == .discovery and body_scheduling == .queued and !self.parking_root_job and self.discoverySettled(key.bytes);
-            // Discovery lowers a body to find the literal roots it registers;
-            // cached code records the compile-time values it reads, not those
-            // roots, so only an evaluation request takes a cached body.
-            if (!settled_discovery and demand != .discovery) if (self.spec_cache) |cache| {
-                if (cache.lookup(key.bytes, self.spec_cache_takes, try self.programModules())) |hit| {
-                    fn_template.cached = hit;
-                    self.count("spec_cache_hits");
-                    if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("lookup monotype key={x} hit\n", .{key.bytes[0..8]});
-                } else if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("lookup monotype key={x} miss\n", .{key.bytes[0..8]});
-            };
         }
         resolution_profile.enter(.evidence_copy);
         if (stored_source_topology) |stored_evidence| {
@@ -9326,9 +8865,6 @@ const Builder = struct {
             const symbol = self.symbols.freshCoordinator();
             try self.registerProcDebugNameForTemplate(symbol, view, template_ref);
             const fn_id = try self.program.addFn(fn_template);
-            if (fn_template.cached) |hit| if (hit.comptime_root_reads.len != 0) {
-                try self.cached_fn_reads.append(self.allocator, .{ .fn_id = fn_id, .reads = hit.comptime_root_reads });
-            };
             self.promoteFnSignatureRelation(fn_id, signature_relation);
             // The definition fills once its body lowers; a recursive request
             // that reuses this entry meanwhile reads the requested template,
@@ -9378,8 +8914,6 @@ const Builder = struct {
                 }
                 resolution_profile.enter(.body_address);
                 const job: PendingSpecJob = .{
-                    .completed_body_address = if (dev_diagnostics.isSet(.completed_body_cache)) try self.completedBodyAddress(spec_identity, view, source_fn_key, subst, signature_relation, demand) else null,
-                    .profile_key = if (dev_diagnostics.isSet(.sealed_body_profile)) Ast.specIdentityKey(spec_identity).bytes else @splat(0),
                     .dispatch_index = undefined,
                     .spec = reserved.spec,
                     .reservation = reservation,
@@ -9405,7 +8939,7 @@ const Builder = struct {
                 if (demand == .discovery) {
                     // A hosted procedure and an object-cache entry have no
                     // body to lower, so there is nothing to leave unlowered.
-                    if (template.target != .hosted and fn_template.cached == null and
+                    if (template.target != .hosted and
                         try self.discoveryRequestReachesNoLiteralRoot(template_ref, lower_fn_ty, subst, spec_evidence))
                     {
                         try self.parked_spec_jobs.put(self.allocator, reservation.fn_id, job);
@@ -9413,22 +8947,6 @@ const Builder = struct {
                         self.traceDemand("park", reservation.fn_id);
                         return reservation.def;
                     }
-                    // An earlier compilation lowered this specialization's
-                    // closure, from modules this lowering has at the same
-                    // keys, and evaluated every literal root it registered
-                    // without an error or a message: the closure registers
-                    // the same roots with the same outcomes now, so it is
-                    // parked like a request the analysis proves reaches no
-                    // literal root.
-                    if (template.target != .hosted and fn_template.cached == null) if (fn_template.spec_key) |key| {
-                        if (self.discoverySettled(key.bytes)) {
-                            try self.parked_spec_jobs.put(self.allocator, reservation.fn_id, job);
-                            self.demand_counters.parked += 1;
-                            self.demand_counters.summarized += 1;
-                            self.traceDemand("summarized", reservation.fn_id);
-                            return reservation.def;
-                        }
-                    };
                     try self.beginDiscoverySpec(reservation.fn_id);
                 }
                 try self.enqueueSpecJob(job);
@@ -9625,26 +9143,6 @@ const Builder = struct {
     ) Allocator.Error!void {
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
-
-        if (fn_template.cached != null) {
-            // The object cache holds this specialization's compiled
-            // procedure. The definition keeps its declared shape and no body,
-            // exactly like a hosted procedure, and downstream stages emit an
-            // external reference the object writer resolves from the cache.
-            const fn_data = functionShape(&self.program.types, lower_fn_ty, "cached procedure template root type was not a function");
-            const args = try self.typedLocalsForArgs(self.program.types.span(fn_data.args));
-            self.program.setDef(reservation.def, .{
-                .symbol = reservation.symbol,
-                .fn_def = fn_template,
-                .fn_id = reservation.fn_id,
-                .args = args,
-                .body = .hosted,
-                .ret = fn_data.ret,
-            });
-            self.program.setFnSource(reservation.fn_id, fn_template);
-            try self.markTemplateReady(reservation.fn_id, lower_fn_ty);
-            return;
-        }
 
         switch (template.target) {
             .hosted => {
@@ -9898,7 +9396,6 @@ const Builder = struct {
     fn discoveryTemplate(template: Ast.FnTemplate) Ast.FnTemplate {
         var marked = template;
         marked.discovery = true;
-        marked.discovery_key = template.spec_key orelse template.discovery_key;
         marked.spec_key = null;
         marked.procedure_keyed_by_layout = false;
         return marked;
@@ -9963,20 +9460,6 @@ const Builder = struct {
     /// Why a specialization's body is lowered, as the coordinator knows it now.
     fn specDemand(self: *const Builder, fn_id: Ast.FnId) Demand {
         return if (self.discovery_specs.contains(fn_id)) .discovery else .evaluation;
-    }
-
-    /// Whether the object cache holds a discovery summary of the
-    /// specialization `key` names whose every recorded module is a module of
-    /// this lowering at the same key.
-    fn discoverySettled(self: *Builder, key: [32]u8) bool {
-        const cache = self.spec_cache orelse return false;
-        for (cache.discoverySettlements(key)) |settlement| {
-            const present = for (settlement.modules) |module| {
-                if (self.moduleForKeyBytes(module) == null) break false;
-            } else true;
-            if (present) return true;
-        }
-        return false;
     }
 
     fn beginDiscoverySpec(self: *Builder, fn_id: Ast.FnId) Allocator.Error!void {
@@ -10136,8 +9619,7 @@ const Builder = struct {
             const body = try self.program.addExpr(.{ .ty = fn_data.ret, .data = .{ .crash = message } });
             // A never-run stub is not its specialization's discovery body,
             // so it settles nothing.
-            var stub_template = discoveryTemplate(job.fn_template);
-            stub_template.discovery_key = null;
+            const stub_template = discoveryTemplate(job.fn_template);
             self.program.setDef(job.reservation.def, .{
                 .symbol = job.reservation.symbol,
                 .fn_def = stub_template,
@@ -10188,8 +9670,8 @@ const Builder = struct {
     /// of in a body shard. A hosted template reaches the host directly, a
     /// template the object cache holds keeps its declared shape with no body,
     /// Neither has a graph/draft pair for a worker lane to hand back.
-    fn specJobCompletesOnCoordinator(template: checked.CheckedProcedureTemplate, job: PendingSpecJob) bool {
-        return job.fn_template.cached != null or template.target == .hosted;
+    fn specJobCompletesOnCoordinator(template: checked.CheckedProcedureTemplate) bool {
+        return template.target == .hosted;
     }
 
     /// Execute queued specialization bodies in dispatch order until the wave
@@ -10249,7 +9731,7 @@ const Builder = struct {
                 }
                 const view = self.moduleForDigest(names.procTemplateModuleDigest(job.template_ref));
                 const template = view.templates.get(job.template_ref.template);
-                if (self.spec_store.recordStatus(job.spec) == .ready or specJobCompletesOnCoordinator(template, job)) {
+                if (self.spec_store.recordStatus(job.spec) == .ready or specJobCompletesOnCoordinator(template)) {
                     // Coordinator-only entries still wait their exact acceptance
                     // turn, but need not wait for any later worker task.
                     _ = self.pending_spec_jobs.pop();
@@ -10283,7 +9765,6 @@ const Builder = struct {
                             .proc_debug_names = self.proc_debug_names,
                             .interface_summaries = &self.shared_summaries.?,
                             .interface_summary_end = self.shared_summaries.?.count,
-                            .interface_cache = self.interface_cache,
                             .collect_counters = self.counters != null,
                             .collect_diagnostics = self.diagnostics != null,
                             .inline_expects = self.inline_expects,
@@ -10551,7 +10032,7 @@ const Builder = struct {
         // Hosted completion has no Roc graph/draft pair to transfer, and
         // neither does an object-cache completion. Both keep coordinator
         // ownership while ordinary bodies establish the shard handoff.
-        if (specJobCompletesOnCoordinator(template, job)) {
+        if (specJobCompletesOnCoordinator(template)) {
             try self.completeTemplateReservation(
                 job.reservation,
                 job.fn_template,
@@ -10662,333 +10143,6 @@ const Builder = struct {
     /// Deferred preparation executes against the worker's private Builder and
     /// workspace. Representation-sensitive iterator callees lower eagerly into
     /// this same draft, so callbacks never mutate coordinator state.
-    fn completedBodyAddress(
-        self: *Builder,
-        identity: Ast.SpecIdentity,
-        view: ModuleView,
-        source_fn_key: names.TypeDigest,
-        subst: ?SealedSubstitution,
-        relation: Ast.SignatureRelation,
-        demand: Demand,
-    ) Allocator.Error!?CompletedBodyAddress {
-        if (self.interface_cache == null) return null;
-        const scope_context = view.compile_time_root_identities.valueContext() orelse return null;
-        const program_context = (try self.programValueContext(false)) orelse return null;
-        const callee_context = (try self.interfaceCalleeContext(view)) orelse return null;
-        var family = TypeDigestHasher.init();
-        family.update("roc.completed-body-family.v6");
-        family.update(&view.key.bytes);
-        family.update(&(view.code_generation_key orelse view.key).bytes);
-        family.update(&scope_context);
-        family.update(&program_context);
-        family.update(&callee_context);
-        family.update(@tagName(self.inline_expects));
-        family.update(@tagName(demand));
-        family.update(&.{ @intFromBool(self.static_data_literals), @intFromBool(self.comptime_value_reads), @intFromBool(self.literal_roots), @intFromBool(self.proc_debug_names) });
-        var request = TypeDigestHasher.init();
-        request.update("roc.completed-body-request.v1");
-        request.update(&Ast.specIdentityKey(identity).bytes);
-        request.update(&source_fn_key.bytes);
-        request.update(@tagName(relation));
-        if (subst) |slots| {
-            request.update(&.{1});
-            hashU32(&request, @intCast(slots.len));
-            for (slots) |slot| switch (slot) {
-                .checked_error => request.update(&.{0}),
-                .ty => |ty| {
-                    request.update(&.{1});
-                    request.update(&self.specializationTypeDigest(ty).bytes);
-                },
-            };
-        } else request.update(&.{0});
-        return .{ .family = family.finalResult(), .key = request.finalResult() };
-    }
-
-    fn completedBodySourceKeys(self: *Builder, allocator: Allocator) Allocator.Error![]const [32]u8 {
-        var max: usize = 0;
-        var it = self.sourceFileIds().iterator();
-        while (it.next()) |entry| max = @max(max, @as(usize, entry.value_ptr.*) + 1);
-        const keys = try allocator.alloc([32]u8, max);
-        @memset(keys, @splat(0));
-        it = self.sourceFileIds().iterator();
-        while (it.next()) |entry| keys[entry.value_ptr.*] = entry.key_ptr.*;
-        return keys;
-    }
-
-    fn completedBodyModuleKeys(self: *Builder, allocator: Allocator) Allocator.Error![]const [32]u8 {
-        var max: usize = 0;
-        var it = self.loweringModuleIds().iterator();
-        while (it.next()) |entry| max = @max(max, @as(usize, @backingInt(entry.value_ptr.*)) + 1);
-        const keys = try allocator.alloc([32]u8, max);
-        @memset(keys, @splat(0));
-        it = self.loweringModuleIds().iterator();
-        while (it.next()) |entry| keys[@backingInt(entry.value_ptr.*)] = entry.key_ptr.*;
-        return keys;
-    }
-
-    fn completedBodyStaticDependencies(self: *Builder, allocator: Allocator, requests: []const DraftStaticDataRequest) Allocator.Error!?[]const CompletedBodyStaticDependency {
-        const dependencies = try allocator.alloc(CompletedBodyStaticDependency, requests.len);
-        const Owner = struct { module: [32]u8, root: checked.ConstNodeId };
-        var paths: std.AutoHashMapUnmanaged(Owner, CompletedConstPaths) = .empty;
-        for (requests, dependencies) |request, *dependency| {
-            const view = self.moduleForId(request.module);
-            const template = view.const_templates.get(request.const_locator);
-            if (template.state != .stored_const) return null;
-            const stored = template.state.stored_const;
-            if (@backingInt(stored.root) >= view.compile_time_root_identities.rows.len) return null;
-            const entry = try paths.getOrPut(allocator, .{ .module = view.key.bytes, .root = stored.node });
-            if (!entry.found_existing) entry.value_ptr.* = try CompletedConstPaths.init(allocator, view.const_store, stored.node);
-            dependency.* = .{
-                .root = stored.root,
-                .identity = view.compile_time_root_identities.rows[@backingInt(stored.root)],
-                .checked_type_key = self.moduleForId(request.checked_type_module).types.rootKey(request.checked_type),
-                .path = (try entry.value_ptr.path(request.const_node)) orelse return null,
-            };
-        }
-        return dependencies;
-    }
-
-    fn completedBodyRootDependencies(self: *Builder, allocator: Allocator, reads: []const DraftRootValueRead) Allocator.Error!?[]const CompletedBodyRootDependency {
-        const dependencies = try allocator.alloc(CompletedBodyRootDependency, reads.len);
-        for (reads, dependencies) |read, *dependency| {
-            const view = self.moduleForId(read.root.module);
-            const raw = @backingInt(read.root.root);
-            if (raw >= view.compile_time_root_identities.rows.len) return null;
-            dependency.* = .{
-                .root = read.root,
-                .identity = view.compile_time_root_identities.rows[raw],
-                .payload = std.meta.activeTag(view.compile_time_roots.root(read.root.root).payload),
-                .declared_read = self.comptimeValueReadDeclared(view, read.root.root),
-            };
-        }
-        return dependencies;
-    }
-
-    /// The occurrence scope of `job`'s body: its template's module and the
-    /// requested function type, which is sealed in the program's store. The
-    /// caller frees the scope's input modules.
-    fn specJobOccurrenceScope(self: *Builder, job: *const PendingSpecJob) Allocator.Error!OccurrenceScope {
-        return .{
-            .view = self.moduleForDigest(names.procTemplateModuleDigest(job.template_ref)),
-            .input_modules = try self.inputOccurrenceModules(&self.program.types, (&job.fn_ty)[0..1]),
-        };
-    }
-
-    fn loadCompletedBody(
-        self: *Builder,
-        workspace: *SpecJobWorkspace,
-        job: PendingSpecJob,
-    ) Allocator.Error!?RestoredCompletedBody {
-        const address = job.completed_body_address orelse return null;
-        const provider = self.interface_cache.?;
-        const timing_io = if (self.timing) |timing| timing.std_io else null;
-        const start = if (timing_io) |std_io| timingNowNs(std_io) else 0;
-        const bytes = (try provider.load(provider.context, self.allocator, address.family, address.key)) orelse return null;
-        defer self.allocator.free(bytes);
-        const arena = try self.allocator.create(std.heap.ArenaAllocator);
-        arena.* = .init(self.allocator);
-        var owned = true;
-        defer if (owned) {
-            arena.deinit();
-            self.allocator.destroy(arena);
-        };
-        const validation = CompletedBodyValidation{ .builder = self, .job = job, .names = &workspace.name_store };
-        const scope = try self.specJobOccurrenceScope(&job);
-        defer self.allocator.free(scope.input_modules);
-        var payload = PersistentInterface.decodeFrozen(FrozenBodyProbe, "BODY0005".*, arena.allocator(), &workspace.types, &workspace.name_store, bytes, BodyContext.PersistentProvenance{ .builder = self, .scope = scope, .completed_body_validation = &validation }, null) catch |err| switch (err) {
-            error.InvalidSummary => return null,
-            error.OutOfMemory => return error.OutOfMemory,
-        };
-        validation.rebind(&payload) catch |err| switch (err) {
-            error.InvalidSummary => return null,
-            error.OutOfMemory => return error.OutOfMemory,
-        };
-        var draft = BodyDraftStore.init(self.allocator);
-        errdefer draft.deinit();
-        inline for (completed_body_columns) |column| {
-            const values = @field(payload, column);
-            @field(draft, column) = .fromOwnedSlice(try self.allocator.dupe(@typeInfo(@TypeOf(values)).pointer.child, values));
-        }
-        // Substitutions are individually owned by BodyDraftStore. All other
-        // immutable nested data stays in the shard's retained decoding arena.
-        for (payload.templates) |stored| {
-            var spec: SealedTemplateSpec = undefined;
-            inline for (@typeInfo(SealedTemplateSpec).@"struct".field_names) |field| {
-                if (comptime std.mem.eql(u8, field, "evidence")) {
-                    spec.evidence = if (stored.evidence) |evidence| try FrozenEvidenceContext.restore(self, evidence) else null;
-                } else if (comptime std.mem.eql(u8, field, "subst")) {
-                    spec.subst = try self.allocator.dupe(SealedSubstSlot, stored.subst);
-                } else if (comptime std.mem.eql(u8, field, "codec_contract")) {
-                    spec.codec_contract = self.completedBodyCodec(stored.codec_contract);
-                } else @field(spec, field) = @field(stored, field);
-            }
-            errdefer self.allocator.free(spec.subst);
-            try draft.sealed_template_specs.append(self.allocator, spec);
-        }
-        for (payload.nested) |stored| {
-            var spec: SealedNestedSpec = undefined;
-            inline for (@typeInfo(SealedNestedSpec).@"struct".field_names) |field| {
-                if (comptime std.mem.eql(u8, field, "codec_contract")) {
-                    spec.codec_contract = self.completedBodyCodec(stored.codec_contract);
-                } else @field(spec, field) = @field(stored, field);
-            }
-            try draft.sealed_nested_specs.append(self.allocator, spec);
-        }
-        draft.spec_job_workspace = workspace;
-        draft.mutable_graph_names = &workspace.name_store;
-        draft.demand = payload.demand;
-        draft.demand_owner = job.reservation.fn_id;
-        draft.upgrade_all = payload.upgrade_all;
-        draft.upgrade_owner = payload.upgrade_owner;
-        draft.sealWorkerLocalSymbols(payload.worker_local_symbol_count);
-        owned = false;
-        if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("completed-body hit key={x} bytes={d} restore_ns={d}\n", .{ address.key, bytes.len, if (timing_io) |std_io| timingNowNs(std_io) - start else 0 });
-        return .{
-            .arena = arena,
-            .draft = draft,
-            .pending = .{ .reservation = job.reservation, .fn_template = job.fn_template, .signature_relation = job.signature_relation, .root_ty = payload.root_ty, .lowered = payload.lowered },
-        };
-    }
-
-    fn completedBodyCodec(self: *Builder, stored: ?FrozenCodecProbe) ?SealedCodecContractContext {
-        const value = stored orelse return null;
-        return .{ .anchor = .{ .view = self.moduleForId(value.module), .derivation = value.derivation, .call_index = value.call_index, .kind = value.kind }, .constructor_ty = value.constructor_ty, .shape_ty = value.shape_ty };
-    }
-
-    fn profileFrozenBody(self: *Builder, workspace: *SpecJobWorkspace, draft: *const BodyDraftStore, pending: SealedPendingTemplateBody, job: PendingSpecJob, lower_ns: i64) Allocator.Error!?FrozenProbeRecord {
-        var scratch = std.heap.ArenaAllocator.init(self.allocator);
-        defer scratch.deinit();
-        const timing_io = if (self.timing) |timing| timing.std_io else null;
-        const start = if (timing_io) |std_io| timingNowNs(std_io) else 0;
-        const templates = try scratch.allocator().alloc(FrozenTemplateProbe, draft.sealed_template_specs.items.len);
-        for (draft.sealed_template_specs.items, templates) |source, *out| {
-            inline for (@typeInfo(FrozenTemplateProbe).@"struct".field_names) |field| {
-                if (comptime std.mem.eql(u8, field, "evidence")) {
-                    out.evidence = if (source.evidence) |evidence| try FrozenDispatchEvidence.capture(self, scratch.allocator(), source.template_ref, evidence) else null;
-                } else if (comptime std.mem.eql(u8, field, "codec_contract")) {
-                    out.codec_contract = FrozenCodecProbe.of(source.codec_contract);
-                } else @field(out, field) = @field(source, field);
-            }
-        }
-        const nested = try scratch.allocator().alloc(FrozenNestedProbe, draft.sealed_nested_specs.items.len);
-        for (draft.sealed_nested_specs.items, nested) |source, *out| {
-            inline for (@typeInfo(FrozenNestedProbe).@"struct".field_names) |field| {
-                if (comptime std.mem.eql(u8, field, "codec_contract")) {
-                    out.codec_contract = FrozenCodecProbe.of(source.codec_contract);
-                } else @field(out, field) = @field(source, field);
-            }
-        }
-        const address = job.completed_body_address orelse CompletedBodyAddress{ .family = @splat(0), .key = @splat(0) };
-        const dependencies = (try self.completedBodyRootDependencies(scratch.allocator(), draft.root_value_reads.items)) orelse return null;
-        const payload: FrozenBodyProbe = .{
-            .address = address,
-            .source_file_keys = try self.completedBodySourceKeys(scratch.allocator()),
-            .lowering_module_keys = try self.completedBodyModuleKeys(scratch.allocator()),
-            .root_dependencies = dependencies,
-            .static_dependencies = (try self.completedBodyStaticDependencies(scratch.allocator(), draft.static_data_requests.items)) orelse return null,
-            .root_ty = pending.root_ty,
-            .lowered = pending.lowered,
-            .self_reservation = pending.reservation,
-            .worker_local_symbol_count = draft.worker_local_symbol_count,
-            .demand = draft.demand,
-            .upgrade_all = draft.upgrade_all,
-            .upgrade_owner = draft.upgrade_owner,
-            .templates = templates,
-            .nested = nested,
-            .fns = draft.fns.items,
-            .const_fn_evidence = draft.const_fn_evidence.items,
-            .const_fn_evidence_targets = draft.const_fn_evidence_targets.items,
-            .const_fn_evidence_structurals = draft.const_fn_evidence_structurals.items,
-            .const_fn_evidence_frames = draft.const_fn_evidence_frames.items,
-            .defs = draft.defs.items,
-            .def_owners = draft.def_owners.items,
-            .nested_defs = draft.nested_defs.items,
-            .exprs = draft.exprs.items,
-            .pats = draft.pats.items,
-            .stmts = draft.stmts.items,
-            .locals = draft.locals.items,
-            .expr_ids = draft.expr_ids.items,
-            .pat_ids = draft.pat_ids.items,
-            .typed_locals = draft.typed_locals.items,
-            .stmt_ids = draft.stmt_ids.items,
-            .field_exprs = draft.field_exprs.items,
-            .field_access_segments = draft.field_access_segments.items,
-            .fn_def_captures = draft.fn_def_captures.items,
-            .record_destructs = draft.record_destructs.items,
-            .str_pattern_steps = draft.str_pattern_steps.items,
-            .declared_fields = draft.declared_fields.items,
-            .branches = draft.branches.items,
-            .if_branches = draft.if_branches.items,
-            .string_literals = draft.string_literals.items,
-            .string_bytes = draft.string_bytes.items,
-            .proc_debug_names = draft.proc_debug_names.items,
-            .roots = draft.roots.items,
-            .layout_requests = draft.layout_requests.items,
-            .runtime_schema_requests = draft.runtime_schema_requests.items,
-            .comptime_sites = draft.comptime_sites.items,
-            .local_names = draft.local_names.items,
-            .source_text_bytes = draft.source_text_bytes.items,
-            .expr_locs = draft.expr_locs.items,
-            .expr_regions = draft.expr_regions.items,
-            .stmt_locs = draft.stmt_locs.items,
-            .stmt_regions = draft.stmt_regions.items,
-            .owner_runs = draft.owner_runs.items,
-            .static_data_requests = draft.static_data_requests.items,
-            .comptime_value_roots = draft.comptime_value_roots.items,
-            .root_value_reads = draft.root_value_reads.items,
-            .literal_roots = draft.literal_roots.items,
-        };
-        var stats: PersistentInterface.Stats = .{};
-        const replay = dev_diagnostics.isSet(.completed_body_cache);
-        if (replay and !CompletedBodyValidation.coverage(payload)) {
-            if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("completed-body unsupported static={d} comptime={d} literals={d} layouts={d} roots={d} templates={d} nested={d} lower_ns={d}\n", .{ payload.static_data_requests.len, payload.comptime_value_roots.len, payload.literal_roots.len, payload.layout_requests.len, payload.roots.len, payload.templates.len, payload.nested.len, lower_ns });
-            return null;
-        }
-        if (replay and job.completed_body_address == null) return null;
-        const bytes = PersistentInterface.encodeFrozen(FrozenBodyProbe, if (replay) "BODY0005".* else "BODYPR02".*, self.allocator, &workspace.types, &workspace.name_store, payload, BodyContext.PersistentProvenance{ .builder = self }, &stats) catch |err| switch (err) {
-            error.NotRepresentable => return null,
-            error.OutOfMemory => return error.OutOfMemory,
-        };
-        errdefer self.allocator.free(bytes);
-        if (replay) {
-            if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("completed-body write key={x} bytes={d} encode_ns={d} lower_ns={d}\n", .{ address.key, bytes.len, if (timing_io) |std_io| timingNowNs(std_io) - start else 0, lower_ns });
-            return .{ .family = address.family, .key = address.key, .bytes = bytes };
-        }
-        const elapsed = if (timing_io) |std_io| timingNowNs(std_io) - start else 0;
-        var hash = base.Sha256.init(.{});
-        hash.update("diagnostic-completed-body-record.v2");
-        hash.update(@tagName(self.inline_expects));
-        hash.update(@tagName(job.demand));
-        hash.update(&.{ @intFromBool(self.static_data_literals), @intFromBool(self.comptime_value_reads), @intFromBool(self.literal_roots) });
-        const family = hash.finalResult();
-        const prior = if (self.interface_cache) |provider| try provider.load(provider.context, self.allocator, family, job.profile_key) else null;
-        defer if (prior) |old| self.allocator.free(old);
-        const scope = try self.specJobOccurrenceScope(&job);
-        defer self.allocator.free(scope.input_modules);
-        const decoded_fresh = try self.probeFrozenRead(bytes, scope);
-        const decoded_prior = if (prior) |old| try self.probeFrozenRead(old, scope) else null;
-        var refs: FrozenReferenceProbe = .{ .self_fn = job.reservation.fn_id, .self_def = job.reservation.def, .builder = self };
-        refs.scan(FrozenBodyProbe, payload);
-        std.debug.print("body-record key={x} prior={} fresh_decoded={} prior_decoded={} external_fn={d} external_def={d} lifted_fn={d} missing_checked_module={d}\n", .{ job.profile_key, prior != null, decoded_fresh, decoded_prior orelse false, refs.external_fn, refs.external_def, refs.lifted_fn, refs.missing_checked_module });
-        std.debug.print("body-key key={x} source={x} demand={s} native={} lower_ns={d} comptime_roots={d} root_reads={d} literals={d}\n", .{ job.profile_key, job.source_fn_key.bytes, @tagName(job.demand), job.fn_template.spec_key != null, lower_ns, draft.comptime_value_roots.items.len, draft.root_value_reads.items.len, draft.literal_roots.items.len });
-        std.debug.print("frozen-body bytes={d} types={d} refs={d} exprs={d} templates={d} nested={d} encode_ns={d}\n", .{ bytes.len, stats.types, stats.references, draft.exprs.items.len, templates.len, nested.len, elapsed });
-        return .{ .family = family, .key = job.profile_key, .bytes = bytes };
-    }
-
-    // This probe validates the portable type closure only. Its result is never
-    // supplied to compilation: IR references have not yet been rebound.
-    fn probeFrozenRead(self: *Builder, bytes: []const u8, scope: OccurrenceScope) Allocator.Error!bool {
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena.deinit();
-        var ns = names.NameStore.init(arena.allocator());
-        var types_ = Type.Store.init(arena.allocator());
-        _ = PersistentInterface.decodeFrozen(FrozenBodyProbe, "BODYPR02".*, arena.allocator(), &types_, &ns, bytes, BodyContext.PersistentProvenance{ .builder = self, .scope = scope }, null) catch |err| switch (err) {
-            error.InvalidSummary => return false,
-            error.OutOfMemory => return error.OutOfMemory,
-        };
-        return true;
-    }
-
     fn lowerPendingSpecJobToShard(
         self: *Builder,
         worker: *SpecJobWorkerState,
@@ -10997,7 +10151,6 @@ const Builder = struct {
         view: ModuleView,
         template: checked.CheckedProcedureTemplate,
     ) Allocator.Error!CompletedSpecJobShard {
-        const profile_start = if (dev_diagnostics.isSet(.sealed_body_profile) or dev_diagnostics.isSet(.completed_body_cache)) if (self.timing) |timing| timingNowNs(timing.std_io) else 0 else 0;
         switch (template.target) {
             .roc,
             .intrinsic,
@@ -11023,27 +10176,6 @@ const Builder = struct {
         }
         const epoch = workspace.beginEpoch(self.program);
         errdefer workspace.finishEpoch(epoch);
-        if (try self.loadCompletedBody(workspace, job)) |restored_| {
-            var restored = restored_;
-            errdefer {
-                restored.draft.deinit();
-                restored.arena.deinit();
-                self.allocator.destroy(restored.arena);
-            }
-            const store_epoch = try workspace.captureStoreEpoch(epoch);
-            workspace.finishEpoch(epoch);
-            return .{
-                .decoded_body_arena = restored.arena,
-                .worker_id = worker.worker_id,
-                .commit_domain = commit_domain,
-                .dispatch_index = job.dispatch_index,
-                .worker_local_symbol_count = restored.draft.worker_local_symbol_count,
-                .store_epoch = store_epoch,
-                .body_draft = restored.draft,
-                .pending = restored.pending,
-                .diagnostics = null,
-            };
-        }
         const program_types_before = self.program.types.epochBoundary();
         const program_names_before = self.program.names.epochBoundary();
         const program_loc_before = self.program.current_loc;
@@ -11093,8 +10225,6 @@ const Builder = struct {
         try self.finalizeBodyDraftGraph(graph, &body_draft, final_guard, final_end);
         const sealed_pending = try self.sealOrdinarySpecJobDraft(graph, &body_draft, pending);
         body_draft.sealWorkerLocalSymbols(self.symbols.worker_local.next);
-        const frozen_probe_record = if (dev_diagnostics.isSet(.sealed_body_profile) or dev_diagnostics.isSet(.completed_body_cache)) try self.profileFrozenBody(workspace, &body_draft, sealed_pending, job, if (self.timing) |timing| timingNowNs(timing.std_io) - profile_start else 0) else null;
-        errdefer if (frozen_probe_record) |record| self.allocator.free(record.bytes);
         if (self.spec_job_parallel_callback) {
             const program_types_after = self.program.types.epochBoundary();
             if (!std.meta.eql(program_types_before, program_types_after)) {
@@ -11115,7 +10245,6 @@ const Builder = struct {
         self.countBodyDiagnostic("spec_job_shards_lowered");
         workspace.finishEpoch(epoch);
         return .{
-            .frozen_probe_record = frozen_probe_record,
             .worker_id = worker.worker_id,
             .commit_domain = commit_domain,
             .dispatch_index = job.dispatch_index,
@@ -11187,9 +10316,6 @@ const Builder = struct {
                 Common.compilerBug("Monotype specialization shard lost its coordinator counter sink");
             addFlatCounters(SpecializationCounters, destination, delta);
         }
-        if (shard.frozen_probe_record) |record| if (self.interface_cache) |provider| {
-            try provider.record(provider.context, record.family, record.key, record.bytes);
-        };
         shard.diagnostics_committed = true;
         self.countCoordinatorBodyDiagnostic("spec_job_shards_committed");
         self.acceptSpecDispatch(shard.dispatch_index);
@@ -13054,51 +12180,6 @@ const Builder = struct {
         return representative;
     }
 
-    /// The modules that the types `inputs` of `input_types` name through
-    /// their named types, as occurrence stores and as declaring modules,
-    /// sorted by key. The caller frees the result.
-    fn inputOccurrenceModules(self: *Builder, input_types: *const Type.Store, inputs: []const Type.TypeId) Allocator.Error![]const [32]u8 {
-        var reached = std.AutoHashMapUnmanaged([32]u8, void).empty;
-        defer reached.deinit(self.allocator);
-        var seen = collections.DenseMap(Type.TypeId, void).init(self.allocator);
-        defer seen.deinit();
-        var pending = std.ArrayList(Type.TypeId).empty;
-        defer pending.deinit(self.allocator);
-        try pending.appendSlice(self.allocator, inputs);
-        while (pending.pop()) |ty| {
-            if ((try seen.getOrPut(ty)).found_existing) continue;
-            switch (input_types.get(ty)) {
-                .named => |named| {
-                    try reached.put(self.allocator, named.named_type.ty_module.bytes, {});
-                    try reached.put(self.allocator, named.named_type.module.bytes, {});
-                },
-                .primitive, .erased, .zst, .hole, .list, .box, .tuple, .func, .record, .tag_union => {},
-            }
-            try input_types.appendChildTypes(ty, &pending);
-        }
-        const modules = try self.allocator.alloc([32]u8, reached.count());
-        var keys = reached.keyIterator();
-        var index: usize = 0;
-        while (keys.next()) |key| : (index += 1) modules[index] = key.*;
-        std.mem.sort([32]u8, modules, {}, moduleKeyLessThan);
-        return modules;
-    }
-
-    /// The current witness of the closed checked root `key` inside `scope`:
-    /// the closure's representative, or, when the closure holds no such root,
-    /// the same choice among the modules the scope's input types name.
-    fn closedOccurrenceInScope(self: *Builder, scope: OccurrenceScope, owner: [32]u8, key: [32]u8) Allocator.Error!?CheckedOccurrence {
-        if (try self.closedOccurrenceInClosure(scope.view.key.bytes, owner, key)) |occurrence| return occurrence;
-        if (scope.input_modules.len == 0) return null;
-        return self.closedOccurrenceAmong(scope.input_modules, owner, key);
-    }
-
-    /// Whether `scope` may name occurrences in the module keyed `module`.
-    fn scopeContainsModule(self: *Builder, scope: OccurrenceScope, module: [32]u8) Allocator.Error!bool {
-        if (sortedModuleKeysContain(try self.moduleClosure(scope.view.key.bytes), module)) return true;
-        return sortedModuleKeysContain(scope.input_modules, module);
-    }
-
     fn moduleForDigest(self: *Builder, module_digest: names.CheckedModuleDigest) ModuleView {
         return self.moduleForKeyBytes(module_digest.bytes) orelse
             Common.invariant("procedure template referenced a checked module that is not in the lowering input");
@@ -13175,18 +12256,6 @@ const Builder = struct {
 
     fn relationModuleView(self: *Builder, index: usize) ModuleView {
         return &self.moduleViews()[1 + self.modules.imports.len + index];
-    }
-
-    /// Every input module's view, built on first use.
-    fn programModules(self: *Builder) Allocator.Error!Common.ProgramModules {
-        if (self.program_modules) |modules| return modules;
-        const views = self.moduleViews();
-        const identities = try self.allocator.alloc([32]u8, views.len);
-        for (views, identities) |view, *identity| identity.* = view.module_identity.stable_hash;
-        self.program_module_buffer = identities;
-        const modules = Common.sortProgramModules(identities);
-        self.program_modules = modules;
-        return modules;
     }
 
     fn moduleViews(self: *Builder) []const ModuleViewData {
@@ -19950,11 +19019,6 @@ const DraftSpecReuse = struct {
     prefix_proof: ?RuntimeImpossibilityProofId,
 };
 
-const CachedFnReads = struct {
-    fn_id: Ast.FnId,
-    reads: []const Common.ComptimeRootRead,
-};
-
 const DraftRootValueRead = struct {
     expr: DraftExprId,
     root: EntryRoot,
@@ -22812,8 +21876,6 @@ const ActiveConstBindingScope = struct {
     entered: bool = false,
 };
 
-const PersistentInterface = @import("interface_summary.zig");
-
 const InterfaceReplayStatus = enum { expanding, expanded, ready };
 
 const InterfaceReplayAddress = struct {
@@ -22862,8 +21924,6 @@ const InterfaceSummaryEntry = struct {
     evidence: StoredConstFnEvidence,
     request: InterfaceConstraints.Identity,
     summary: InterfaceSummary,
-    /// Already loaded from the persistent family; do not encode it again.
-    persisted: bool = false,
 };
 
 /// A completed expansion's contribution to its request roots. An expansion
@@ -22903,7 +21963,6 @@ const InterfaceSummary = union(enum) {
 const FoundInterfaceSummary = struct {
     summary: InterfaceSummary,
     domain: Domain,
-    persistent: bool = false,
 
     const Domain = enum {
         /// The finding body's own type and name stores.
@@ -23090,7 +22149,6 @@ const InterfaceSummaryCache = struct {
             },
             .request = try request.copy(arena, InterfaceSummaryCopy{}),
             .summary = try source.summary.copy(arena, summary_relocation),
-            .persisted = source.persisted,
         };
         self.buckets.appendAssumeCapacity(source.address, @intCast(self.entries.items.len));
         self.entries.appendAssumeCapacity(owned);
@@ -28927,136 +27985,6 @@ const BodyContext = struct {
         return .{ .cache = &workspace.interface_summaries, .types_are_durable = false };
     }
 
-    fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, request: InterfaceConstraints.Identity, root_count: usize) Allocator.Error!?FoundInterfaceSummary {
-        if (!self.builder.replay_interface_summaries.enabled()) return null;
-        if (try self.findMemoryInterfaceSummary(address, evidence, request)) |found| return found;
-        const family = (try self.builder.persistentInterfaceFamily(address)) orelse return null;
-        const cache = self.builder.interface_cache.?;
-        const evidence_key = (try self.builder.persistentInterfaceEvidence(evidence)) orelse return null;
-        const key = PersistentInterface.requestKey(request, evidence_key, family.procedure);
-        const bytes = (try cache.load(cache.context, self.allocator, family.provider, key)) orelse {
-            self.builder.count("interface_persistent_misses");
-            return null;
-        };
-        defer self.allocator.free(bytes);
-        var stats: PersistentInterface.Stats = .{};
-        const scope = OccurrenceScope{ .view = self.view, .input_modules = try self.builder.inputOccurrenceModules(self.typeStore(), request.leaves) };
-        defer self.builder.allocator.free(scope.input_modules);
-        const decoded = PersistentInterface.decodeForRequest(self.graph.arena(), self.typeStore(), self.nameStoreMut(), request.leaves, bytes, PersistentProvenance{ .builder = self.builder, .scope = scope }, root_count, address.kind != .method_signature, &stats) catch |err| switch (err) {
-            error.InvalidSummary => {
-                self.builder.count("interface_persistent_invalid");
-                return null;
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-        };
-        const summary: InterfaceSummary = switch (decoded) {
-            .unchanged => .unchanged,
-            .constraints => |c| .{ .constraints = c },
-        };
-        self.builder.count("interface_persistent_hits");
-        if (stats.composites != 0) self.builder.count("interface_persistent_composite_hits");
-        if (stats.defaults != 0) self.builder.count("interface_persistent_default_hits");
-        // This cache owns the record independently of the graph arena. Worker
-        // records cross to the coordinator only with their accepted shard.
-        return .{ .summary = try self.insertInterfaceSummary(.{ .address = address, .evidence = evidence, .request = request, .summary = summary, .persisted = true }), .domain = .graph, .persistent = true };
-    }
-
-    const PersistentProvenance = struct {
-        builder: *Builder,
-        /// The occurrence scope a decoded record's occurrences are bound in
-        /// (design.md "Occurrence scope"); encoding needs none.
-        scope: ?OccurrenceScope = null,
-        completed_body_validation: ?*const CompletedBodyValidation = null,
-        pub fn validateFrozenPayload(self: PersistentProvenance, payload: FrozenBodyProbe) PersistentInterface.DecodeError!void {
-            // The optional context is present for actual replay; the separate
-            // diagnostic round-trip deliberately discards the decoded payload.
-            if (self.completed_body_validation) |validation| try validation.validate(payload);
-        }
-
-        pub fn defaultDeclaringModule(self: PersistentProvenance, identity: [32]u8, expr: u32) ?[32]u8 {
-            const declaring = self.builder.moduleForIdentityHash(&identity) orelse return null;
-            _ = declaring.bodies.defaultExpr(expr) orelse return null;
-            return declaring.key.bytes;
-        }
-        pub fn validNamedDefinition(self: PersistentProvenance, ns: *const names.NameStore, named: Type.NamedType, def: Type.TypeDef, kind: Type.NamedKind, owner: ?static_dispatch.BuiltinOwner) bool {
-            if (def.site != self.builder.isAppModuleIdentity(ns.moduleIdentityBytes(def.module))) return false;
-            if (!self.validNamedType(named)) return false;
-            const occurrence = self.builder.moduleForKeyBytes(named.ty_module.bytes).?;
-            const payload = occurrence.types.payload(named.ty);
-            switch (payload) {
-                .alias => |alias| {
-                    return kind == .alias and owner == null and std.mem.eql(u8, &alias.owner_module.bytes, &named.module.bytes) and
-                        std.mem.eql(u8, occurrence.names.moduleIdentityBytes(alias.origin_module), ns.moduleIdentityBytes(def.module)) and
-                        alias.source_decl == def.source_decl and std.mem.eql(u8, occurrence.names.typeNameText(alias.name), ns.typeNameText(def.type_name));
-                },
-                .nominal => |nominal| {
-                    return kind == (if (nominal.is_opaque) Type.NamedKind.@"opaque" else .nominal) and owner == builtinOwner(nominal.builtin) and
-                        std.mem.eql(u8, &nominal.owner_module.bytes, &named.module.bytes) and
-                        std.mem.eql(u8, occurrence.names.moduleIdentityBytes(nominal.origin_module), ns.moduleIdentityBytes(def.module)) and
-                        nominal.source_decl == def.source_decl and std.mem.eql(u8, occurrence.names.typeNameText(nominal.name), ns.typeNameText(def.type_name));
-                },
-                .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .function, .tag_union, .empty_record, .empty_tag_union => return false,
-            }
-        }
-        pub fn validModuleIdentity(self: PersistentProvenance, identity: [32]u8) bool {
-            return self.builder.moduleForIdentityHash(&identity) != null;
-        }
-        pub fn describeNamedType(self: PersistentProvenance, named: Type.NamedType) PersistentInterface.NamedOccurrence {
-            const view = self.builder.moduleForKeyBytes(named.ty_module.bytes) orelse
-                Common.invariant("persistent named occurrence has no checked artifact");
-            const root = view.types.rootRows()[@backingInt(named.ty)];
-            if (!root.contains_identity_variables) return .{ .closed = .{ .owner = named.module.bytes, .key = root.key.bytes } };
-            return .{ .exact = .{ .owner = named.module.bytes, .occurrence = named.ty_module.bytes, .ty = @backingInt(named.ty) } };
-        }
-        /// The current occurrence a stored one binds to inside this
-        /// provenance's scope, or null when the record is invalid here: an
-        /// exact occurrence outside the scope, or a closed key the scope holds
-        /// no committed closed root for.
-        pub fn resolveNamedType(self: PersistentProvenance, stored: PersistentInterface.NamedOccurrence) Allocator.Error!?Type.NamedType {
-            const scope = self.scope orelse Common.invariant("persistent occurrence resolution has no occurrence scope");
-            return switch (stored) {
-                .input => null,
-                .exact => |exact| blk: {
-                    if (!try self.builder.scopeContainsModule(scope, exact.occurrence)) break :blk null;
-                    break :blk .{ .module = .{ .bytes = exact.owner }, .ty_module = .{ .bytes = exact.occurrence }, .ty = @fromBackingInt(exact.ty) };
-                },
-                .closed => |closed| blk: {
-                    const occurrence = (try self.builder.closedOccurrenceInScope(scope, closed.owner, closed.key)) orelse break :blk null;
-                    const view = self.builder.moduleForKeyBytes(occurrence.module.bytes).?;
-                    const owner = switch (view.types.payload(occurrence.ty)) {
-                        .nominal => |nominal| nominal.owner_module,
-                        .alias => |alias| alias.owner_module,
-                        .pending,
-                        .field_kind,
-                        .err,
-                        .flex,
-                        .rigid,
-                        .record,
-                        .tuple,
-                        .function,
-                        .empty_record,
-                        .tag_union,
-                        .empty_tag_union,
-                        => break :blk null,
-                    };
-                    if (!std.mem.eql(u8, &owner.bytes, &closed.owner)) break :blk null;
-                    break :blk .{ .module = .{ .bytes = closed.owner }, .ty_module = occurrence.module, .ty = occurrence.ty };
-                },
-            };
-        }
-        pub fn validNamedType(self: PersistentProvenance, named: Type.NamedType) bool {
-            if (self.builder.moduleForKeyBytes(named.module.bytes) == null) {
-                if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("interface invalid named owner={x}\n", .{named.module.bytes});
-                return false;
-            }
-            const occurrence = self.builder.moduleForKeyBytes(named.ty_module.bytes) orelse {
-                if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("interface invalid occurrence={x} type={d}\n", .{ named.ty_module.bytes, @backingInt(named.ty) });
-                return false;
-            };
-            return @backingInt(named.ty) < occurrence.types.payloadCount();
-        }
-    };
-
     fn findMemoryInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, request: InterfaceConstraints.Identity) Allocator.Error!?FoundInterfaceSummary {
         if (!self.builder.replay_interface_summaries.enabled()) return null;
         const local = self.interfaceSummaryCache().cache;
@@ -29126,7 +28054,6 @@ const BodyContext = struct {
         if (binding.types_are_durable) {
             // Coordinator leaves already belong to permanent program storage.
             const summary = try binding.cache.insert(self.typeStore(), self.nameStore(), entry);
-            if (!entry.persisted) try self.builder.recordPersistentInterface(.{ .address = entry.address, .evidence = entry.evidence, .request = entry.request, .summary = summary }, self.typeStore(), self.nameStore());
             return summary;
         }
         // Retain only settled leaves; open cells remain explicit constraints.
@@ -29385,14 +28312,14 @@ const BodyContext = struct {
                 },
             }
         }
-        if (cached == null and replay_state.use_finished_summaries) cached = try self.findInterfaceSummary(address, stored_evidence, request, request_roots.items.len);
+        if (cached == null and replay_state.use_finished_summaries) cached = try self.findMemoryInterfaceSummary(address, stored_evidence, request);
         var verify_summary: ?InterfaceSummary = null;
         const saved_use_summaries = replay_state.use_finished_summaries;
         expansion.saved_use_summaries = saved_use_summaries;
         expansion.restores_use_summaries = true;
         if (cached) |found| {
             self.builder.count("interface_summary_hits");
-            if (!found.persistent and std.debug.runtime_safety and self.builder.diagnostics != null and self.builder.interface_summary_checks < 16) {
+            if (std.debug.runtime_safety and self.builder.diagnostics != null and self.builder.interface_summary_checks < 16) {
                 self.builder.interface_summary_checks += 1;
                 self.builder.count("interface_summary_verifications");
                 verify_summary = try self.graphDomainSummary(found);
@@ -54550,9 +53477,9 @@ const BodyContext = struct {
             .input_digest = interfaceRequestBucket(request.bytes),
         };
         var verify_summary: ?InterfaceSummary = null;
-        if (try self.findInterfaceSummary(address, evidence, request, roots.items.len)) |found| {
+        if (try self.findMemoryInterfaceSummary(address, evidence, request)) |found| {
             self.builder.count("interface_summary_hits");
-            if (!found.persistent and std.debug.runtime_safety and self.builder.diagnostics != null and self.builder.interface_summary_checks < 16) {
+            if (std.debug.runtime_safety and self.builder.diagnostics != null and self.builder.interface_summary_checks < 16) {
                 self.builder.interface_summary_checks += 1;
                 self.builder.count("interface_summary_verifications");
                 verify_summary = try self.graphDomainSummary(found);
@@ -54671,7 +53598,7 @@ const BodyContext = struct {
         };
         const use_summaries = self.draft.interface_replay.use_finished_summaries;
         if (use_summaries) {
-            if (try self.findInterfaceSummary(address, evidence, request, 1)) |found| {
+            if (try self.findMemoryInterfaceSummary(address, evidence, request)) |found| {
                 switch (found.summary) {
                     .unchanged => {},
                     .constraints => |constraints| try self.graph.unify((try self.instantiateFoundConstraints(found.domain, constraints))[0], constraint_node),
@@ -54731,7 +53658,7 @@ const BodyContext = struct {
         const evidence = StoredConstFnEvidence.empty();
         const request: InterfaceConstraints.Identity = .{ .bytes = &.{}, .leaves = &.{} };
         if (cacheable) {
-            if (try self.findInterfaceSummary(address, evidence, request, 1)) |found| {
+            if (try self.findMemoryInterfaceSummary(address, evidence, request)) |found| {
                 return switch (found.summary) {
                     .constraints => |constraints| (try self.instantiateFoundConstraints(found.domain, constraints))[0],
                     .unchanged => Common.invariant("checked method signature snapshot had no root"),
@@ -73982,7 +72909,7 @@ const ClosedOccurrenceFixture = struct {
     }
 };
 
-test "fresh closed named occurrences agree with persistent replay and preserve open identities" {
+test "fresh closed named occurrences agree and preserve open identities" {
     const a = std.testing.allocator;
     var first = checked.CheckedTypeStore{};
     defer first.deinit(a);
@@ -74018,10 +72945,7 @@ test "fresh closed named occurrences agree with persistent replay and preserve o
     try builder.buildClosedOccurrenceIndex();
     const left = try builder.canonicalNamedOccurrence(&views[0], first_ty, owner);
     const right = try builder.canonicalNamedOccurrence(&views[1], second_ty, owner);
-    const provenance = BodyContext.PersistentProvenance{ .builder = &builder, .scope = .{ .view = &views[0] } };
-    const restored = (try provenance.resolveNamedType(.{ .closed = .{ .owner = owner.bytes, .key = key } })).?;
     try std.testing.expectEqualDeep(left, right);
-    try std.testing.expectEqualDeep(left, restored);
     try std.testing.expectEqual(second_ty, left.ty);
     try std.testing.expectEqualSlices(u8, &views[1].key.bytes, &left.ty_module.bytes);
     const open = try builder.canonicalNamedOccurrence(&views[0], open_ty, owner);
@@ -74075,923 +72999,4 @@ test "issue 12693 closed named occurrence lowered from an import stays inside th
     // closed type is represented by the package module's occurrence too.
     const from_app = try builder.canonicalNamedOccurrence(&views[0], app_ty, owner);
     try std.testing.expectEqualDeep(from_form, from_app);
-}
-
-// Experimental complete-result encoding, enabled only by a diagnostic variable.
-// The separate completed_body_cache diagnostic enables validated replay.
-const FrozenBodyProbe = struct {
-    address: CompletedBodyAddress,
-    source_file_keys: []const [32]u8,
-    lowering_module_keys: []const [32]u8,
-    root_dependencies: []const CompletedBodyRootDependency,
-    static_dependencies: []const CompletedBodyStaticDependency,
-    root_ty: Type.TypeId,
-    lowered: SealedLoweredTemplateBody,
-    self_reservation: TemplateReservation,
-    worker_local_symbol_count: u32,
-    demand: Demand,
-    upgrade_all: bool,
-    upgrade_owner: bool,
-    templates: []const FrozenTemplateProbe,
-    nested: []const FrozenNestedProbe,
-    fns: []const DraftFn,
-    const_fn_evidence: []const check.ConstStore.ConstFnEvidence,
-    const_fn_evidence_targets: []const check.ConstStore.ConstFnTargetEvidence,
-    const_fn_evidence_structurals: []const check.ConstStore.ConstFnStructuralEvidence,
-    const_fn_evidence_frames: []const check.ConstStore.ConstFnEvidenceFrame,
-    defs: []const DraftDef,
-    def_owners: []const DraftOwner,
-    nested_defs: []const DraftNestedDef,
-    exprs: []const DraftExpr,
-    pats: []const DraftPat,
-    stmts: []const DraftStmt,
-    locals: []const DraftLocal,
-    expr_ids: []const DraftExprId,
-    pat_ids: []const DraftPatId,
-    typed_locals: []const DraftTypedLocal,
-    stmt_ids: []const DraftStmtId,
-    field_exprs: []const DraftFieldExpr,
-    field_access_segments: []const DraftFieldAccessSegment,
-    fn_def_captures: []const DraftFnDefCapture,
-    record_destructs: []const DraftRecordDestruct,
-    str_pattern_steps: []const DraftStrPatternStep,
-    declared_fields: []const DraftDeclaredField,
-    branches: []const DraftBranch,
-    if_branches: []const DraftIfBranch,
-    string_literals: []const DraftStringLiteral,
-    string_bytes: []const u8,
-    proc_debug_names: []const Ast.ProcDebugName,
-    roots: []const DraftRoot,
-    layout_requests: []const DraftLayoutRequest,
-    runtime_schema_requests: []const DraftRuntimeSchemaRequest,
-    comptime_sites: []const DraftComptimeSite,
-    local_names: []const DraftSpan(u8),
-    source_text_bytes: []const u8,
-    expr_locs: []const base.SourceLoc,
-    expr_regions: []const base.Region,
-    stmt_locs: []const base.SourceLoc,
-    stmt_regions: []const base.Region,
-    owner_runs: []const DraftOwnerRun,
-    static_data_requests: []const DraftStaticDataRequest,
-    comptime_value_roots: []const Common.ComptimeValueRoot,
-    root_value_reads: []const DraftRootValueRead,
-    literal_roots: []const DraftLiteralRoot,
-};
-const FrozenCodecProbe = struct {
-    module: checked.ModuleId,
-    derivation: static_dispatch.GeneratedCodecDerivationId,
-    call_index: u32,
-    kind: CodecKind,
-    constructor_ty: Type.TypeId,
-    shape_ty: Type.TypeId,
-    fn of(value: ?SealedCodecContractContext) ?FrozenCodecProbe {
-        const v = value orelse return null;
-        return .{ .module = v.anchor.view.key, .derivation = v.anchor.derivation, .call_index = v.anchor.call_index, .kind = v.anchor.kind, .constructor_ty = v.constructor_ty, .shape_ty = v.shape_ty };
-    }
-};
-const FrozenTemplateProbe = struct {
-    state: DraftSpecState,
-    template_ref: names.ProcTemplate,
-    source_fn_ty: checked.CheckedTypeId,
-    source_fn_key: names.TypeDigest,
-    request_fn_ty: Type.TypeId,
-    evidence: ?FrozenDispatchEvidence,
-    /// The request's substitution sealed in the shard's store epoch.
-    subst: SealedSubstitution,
-    codec_contract: ?FrozenCodecProbe,
-    requires_local: bool,
-    local_context_dependent: bool,
-    lexical_owner: ?DraftOwner,
-    fn_id: DraftFnId,
-    def_id: ?DraftDefId,
-    resolved_slot: ?Ast.FnSlot,
-    committed_request_fn_ty: ?Type.TypeId = null,
-    committed_codec_contract: ?Ast.CodecContractIdentity = null,
-    demand: Demand = .evaluation,
-    /// Whether the resolved specialization is this request shaped by its
-    /// template's demand, so every call to it is demand-shaped.
-    demand_shaped: bool = false,
-    /// Whether the draft body uses this request's function as a value rather
-    /// than only calling it. A value's type is the program's, so such a
-    /// request is never shaped.
-    value_used: bool = false,
-};
-const FrozenNestedProbe = struct {
-    state: DraftSpecState,
-    nested: Ast.NestedFn,
-    source_fn_key: names.TypeDigest,
-    request_fn_ty: Type.TypeId,
-    capture_abi_digest: names.TypeDigest,
-    codec_contract: ?FrozenCodecProbe,
-    sealed_codec_contract: ?Ast.CodecContractIdentity = null,
-    lexical_owner: DraftOwner,
-    requires_local: bool,
-    local_context_dependent: bool,
-    fn_id: DraftFnId,
-};
-
-const FrozenProbeRecord = struct { family: [32]u8, key: [32]u8, bytes: []u8 };
-const FrozenReferenceProbe = struct {
-    self_fn: Ast.FnId,
-    self_def: Ast.DefId,
-    builder: *Builder,
-    external_fn: u32 = 0,
-    external_def: u32 = 0,
-    lifted_fn: u32 = 0,
-    missing_checked_module: u32 = 0,
-    fn scan(self: *FrozenReferenceProbe, comptime T: type, value: T) void {
-        if (T == Ast.FnId) {
-            if (value != self.self_fn) self.external_fn += 1;
-            return;
-        }
-        if (T == Ast.DefId) {
-            if (value != self.self_def) self.external_def += 1;
-            return;
-        }
-        if (T == Ast.LiftedFnId) {
-            self.lifted_fn += 1;
-            return;
-        }
-        if (T == checked.ModuleId) {
-            if (self.builder.moduleForKeyBytes(value.bytes) == null) self.missing_checked_module += 1;
-            return;
-        }
-        switch (@typeInfo(T)) {
-            .@"struct" => |info| inline for (info.field_names, info.field_types) |field, F| self.scan(F, @field(value, field)),
-            .@"union" => |info| inline for (info.field_names, info.field_types) |field, F| {
-                if (std.meta.activeTag(value) == @field(info.tag_type.?, field)) {
-                    self.scan(F, @field(value, field));
-                    return;
-                }
-            },
-            .optional => |info| {
-                if (value) |v| self.scan(info.child, v);
-            },
-            .pointer => |info| {
-                if (info.size == .slice) {
-                    for (value) |v| self.scan(info.child, v);
-                } else @compileError("probe pointer is not a slice");
-            },
-            .array => |info| for (value) |v| self.scan(info.child, v),
-            .type,
-            .void,
-            .bool,
-            .noreturn,
-            .int,
-            .float,
-            .comptime_float,
-            .comptime_int,
-            .undefined,
-            .null,
-            .error_union,
-            .error_set,
-            .@"enum",
-            .@"fn",
-            .@"opaque",
-            .frame,
-            .@"anyframe",
-            .vector,
-            .enum_literal,
-            .spirv,
-            => {},
-        }
-    }
-};
-
-const completed_body_columns = .{ "fns", "const_fn_evidence", "const_fn_evidence_targets", "const_fn_evidence_structurals", "const_fn_evidence_frames", "defs", "def_owners", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "record_destructs", "str_pattern_steps", "declared_fields", "branches", "if_branches", "string_literals", "string_bytes", "proc_debug_names", "roots", "layout_requests", "runtime_schema_requests", "comptime_sites", "local_names", "source_text_bytes", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions", "owner_runs", "static_data_requests", "comptime_value_roots", "root_value_reads", "literal_roots" };
-const CompletedBodyAddress = struct { family: [32]u8, key: [32]u8 };
-const CompletedBodyRootDependency = struct {
-    root: EntryRoot,
-    identity: checked.CompileTimeRootIdentity,
-    payload: std.meta.Tag(checked.CompileTimeRootPayload),
-    declared_read: bool,
-};
-const RestoredCompletedBody = struct {
-    arena: *std.heap.ArenaAllocator,
-    draft: BodyDraftStore,
-    pending: SealedPendingTemplateBody,
-};
-
-const CompletedBodyValidation = struct {
-    builder: *Builder,
-    job: PendingSpecJob,
-    names: *const names.NameStore,
-    const Error = PersistentInterface.DecodeError;
-
-    fn rejected(comptime line: u32) error{InvalidSummary} {
-        if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("completed-body rejected line={d}\n", .{line});
-        return error.InvalidSummary;
-    }
-    fn coverage(payload: FrozenBodyProbe) bool {
-        if (payload.comptime_value_roots.len != 0 or payload.literal_roots.len != 0 or payload.layout_requests.len != 0 or payload.roots.len != 0) return false;
-        for (payload.templates) |spec| if (spec.state == .lowering or (spec.local_context_dependent and spec.state != .lowered)) return false;
-        for (payload.nested) |spec| if (spec.state == .lowering or (spec.local_context_dependent and spec.state != .lowered)) return false;
-        return true;
-    }
-    fn staticNode(self: *const CompletedBodyValidation, request: DraftStaticDataRequest, dependency: CompletedBodyStaticDependency) Error!checked.ConstNodeId {
-        if (!std.mem.eql(u8, &request.module.bytes, &request.const_locator.artifact.bytes)) return rejected(@src().line);
-        const view = self.builder.moduleForKeyBytes(request.module.bytes) orelse return rejected(@src().line);
-        const raw = @backingInt(request.const_locator.template);
-        if (raw >= view.const_templates.templates.items.len) return rejected(@src().line);
-        const template = view.const_templates.templates.items[raw];
-        if (!std.meta.eql(template.owner, request.const_locator.owner) or !std.meta.eql(template.source_scheme, request.const_locator.source_scheme) or template.state != .stored_const) return rejected(@src().line);
-        const stored = template.state.stored_const;
-        if (dependency.root != stored.root or @backingInt(stored.root) >= view.compile_time_root_identities.rows.len) return rejected(@src().line);
-        if (!std.meta.eql(dependency.identity, view.compile_time_root_identities.rows[@backingInt(stored.root)])) return rejected(@src().line);
-        const type_view = self.builder.moduleForKeyBytes(request.checked_type_module.bytes) orelse return rejected(@src().line);
-        if (@backingInt(request.checked_type) >= type_view.types.payloadCount() or !std.meta.eql(dependency.checked_type_key, type_view.types.rootKey(request.checked_type))) return rejected(@src().line);
-        if (request.node == null and dependency.path.len != 0) return rejected(@src().line);
-        return CompletedConstPaths.follow(view.const_store, stored.node, dependency.path) orelse rejected(@src().line);
-    }
-
-    fn validate(self: *const CompletedBodyValidation, payload: FrozenBodyProbe) Error!void {
-        if (!std.meta.eql(payload.address, self.job.completed_body_address.?)) return rejected(@src().line);
-        if (payload.demand != self.job.demand) return rejected(@src().line);
-        // These columns need additional checked-value or declaration binding
-        // contracts. This format never admits them without those contracts.
-        if (payload.comptime_value_roots.len != 0 or payload.literal_roots.len != 0 or payload.layout_requests.len != 0 or payload.roots.len != 0) return rejected(@src().line);
-        if (payload.static_dependencies.len != payload.static_data_requests.len) return rejected(@src().line);
-        for (payload.static_data_requests, payload.static_dependencies) |request, dependency| _ = try self.staticNode(request, dependency);
-        if (payload.root_dependencies.len != payload.root_value_reads.len) return rejected(@src().line);
-        for (payload.root_dependencies, payload.root_value_reads) |dependency, read| {
-            if (!std.meta.eql(dependency.root, read.root)) return rejected(@src().line);
-            const view = self.builder.moduleForKeyBytes(read.root.module.bytes) orelse return rejected(@src().line);
-            const raw = @backingInt(read.root.root);
-            if (raw >= view.compile_time_roots.roots.len or raw >= view.compile_time_root_identities.rows.len) return rejected(@src().line);
-            if (!std.meta.eql(dependency.identity, view.compile_time_root_identities.rows[raw])) return rejected(@src().line);
-            if (dependency.payload != std.meta.activeTag(view.compile_time_roots.root(read.root.root).payload)) return rejected(@src().line);
-            if (dependency.declared_read != self.builder.comptimeValueReadDeclared(view, read.root.root)) return rejected(@src().line);
-        }
-        for (payload.local_names) |span| try bounds(span.start, span.len, payload.source_text_bytes.len);
-        for (payload.string_literals) |literal| {
-            const len = if (literal.const_blob) |blob| blk: {
-                const view = self.builder.moduleForKeyBytes(blob.module_bytes) orelse return rejected(@src().line);
-                if (@backingInt(blob.data) >= view.const_store.blob_views.items.len) return rejected(@src().line);
-                if (!std.mem.eql(u8, blob.bytes, view.const_store.blobData(blob.data))) return rejected(@src().line);
-                break :blk blob.bytes.len;
-            } else blk: {
-                try bounds(literal.backing.start, literal.backing.len, payload.string_bytes.len);
-                break :blk literal.backing.len;
-            };
-            try bounds(literal.offset, literal.len, len);
-        }
-        for (payload.locals) |local| if (@backingInt(local.symbol) >= payload.worker_local_symbol_count) return rejected(@src().line);
-        for (payload.defs) |def| if (@backingInt(def.symbol) >= payload.worker_local_symbol_count) return rejected(@src().line);
-        for (payload.nested_defs) |def| if (@backingInt(def.symbol) >= payload.worker_local_symbol_count) return rejected(@src().line);
-        for (payload.proc_debug_names) |name| if (@backingInt(name.symbol) >= payload.worker_local_symbol_count) return rejected(@src().line);
-        for (payload.owner_runs) |owner_run| inline for (@typeInfo(DraftCoreKind).@"enum".field_names, 0..) |column, index| {
-            if (owner_run.starts[index] > owner_run.ends[index] or owner_run.ends[index] > @field(payload, column).len) return rejected(@src().line);
-        };
-        for (payload.fns, 0..) |fn_, index| switch (fn_.parent_owner) {
-            .draft_fn => |parent| if (@backingInt(parent) >= index) return rejected(@src().line),
-            .root, .reserved_fn => {},
-        };
-        for (payload.templates) |spec| {
-            if (spec.state == .lowering or (spec.local_context_dependent and spec.state != .lowered)) return rejected(@src().line);
-            const closed_local = spec.local_context_dependent and spec.state == .lowered;
-            if ((spec.evidence == null) != closed_local) return rejected(@src().line);
-            if (closed_local and (spec.def_id != null or spec.lexical_owner == null)) return rejected(@src().line);
-            if (spec.evidence) |stored_evidence| {
-                try self.evidence(stored_evidence.stored);
-                try stored_evidence.validate(self);
-            }
-        }
-        for (payload.nested) |spec| if (spec.state == .lowering or (spec.local_context_dependent and spec.state != .lowered)) return rejected(@src().line);
-        var walker = Walker{ .validation = self, .payload = &payload };
-        var read_only = payload;
-        try walker.walk(FrozenBodyProbe, &read_only, false);
-    }
-
-    fn bounds(start: u32, len: u32, limit: usize) Error!void {
-        if (start > limit or len > limit - start) return rejected(@src().line);
-    }
-
-    fn procedure(self: *const CompletedBodyValidation, ref: names.ProcTemplate) Error!ModuleView {
-        const view = self.builder.moduleForKeyBytes(names.procTemplateModuleDigest(ref).bytes) orelse return rejected(@src().line);
-        if (@backingInt(ref.template) >= view.templates.templates.items.len) return rejected(@src().line);
-        const template = view.templates.get(ref.template);
-        if (template.proc_base != ref.proc_base) return rejected(@src().line);
-        return view;
-    }
-
-    fn evidence(self: *const CompletedBodyValidation, stored: StoredConstFnEvidence) Error!void {
-        if (stored.frames.len != 1 or stored.head != 0 or stored.frames[0].scope() != .root or stored.frames[0].parent != null or stored.frames[0].roots_start != 0) return rejected(@src().line);
-        for (stored.entries.nodes) |node| switch (node) {
-            .target => |index| if (index >= stored.entries.targets.len) return rejected(@src().line),
-            .structural => |index| if (index >= stored.entries.structurals.len) return rejected(@src().line),
-            .from_callable,
-            .from_scheme,
-            .unreachable_value,
-            .checked_error,
-            => {},
-        };
-        const end = (try checked.ConstStore.evidenceVectorEnd(self.builder.allocator, stored.entries, 0, stored.frames[0].roots_len)) orelse return rejected(@src().line);
-        if (end != stored.entries.nodes.len) return rejected(@src().line);
-        if (!std.meta.eql(stored.digest, Ast.fnEvidenceDigest(stored.entries, stored.frames, stored.head))) return rejected(@src().line);
-        for (stored.entries.targets) |target| {
-            const view = self.builder.moduleForKeyBytes(target.view.bytes) orelse return rejected(@src().line);
-            if (target.method.kind == .local_proc or @backingInt(target.method.callable_ty) >= view.types.payloadCount()) return rejected(@src().line);
-            if (!std.meta.eql(target.method_callable_key, view.types.rootKey(target.method.callable_ty))) return rejected(@src().line);
-            if (target.instantiation) |instantiation| {
-                const owner = self.builder.moduleForKeyBytes(instantiation.view.bytes) orelse return rejected(@src().line);
-                if (@backingInt(instantiation.callable_ty) >= owner.types.payloadCount()) return rejected(@src().line);
-                if (!std.meta.eql(instantiation.callable_key, owner.types.rootKey(instantiation.callable_ty))) return rejected(@src().line);
-            }
-        }
-        for (stored.entries.structurals) |structural| if (structural.checked) |stored_checked| {
-            // A completed body retains the edges its lowering recorded.
-            const checked_ = switch (stored_checked) {
-                .recorded => |recorded| recorded,
-                .codec => return rejected(@src().line),
-            };
-            const view = self.builder.moduleForKeyBytes(checked_.view.bytes) orelse return rejected(@src().line);
-            if (@backingInt(checked_.dispatcher_ty) >= view.types.payloadCount() or @backingInt(checked_.callable_ty) >= view.types.payloadCount()) return rejected(@src().line);
-            if (!std.meta.eql(checked_.dispatcher_key, view.types.rootKey(checked_.dispatcher_ty)) or !std.meta.eql(checked_.callable_key, view.types.rootKey(checked_.callable_ty))) return rejected(@src().line);
-            if (checked_.generated_codec_derivation) |id| {
-                if (@backingInt(id) >= view.static_dispatch_plans.generated_codec_derivations.len) return rejected(@src().line);
-                if (!std.meta.eql(checked_.generated_codec_content, view.static_dispatch_plans.generated_codec_derivations[@backingInt(id)].content)) return rejected(@src().line);
-            } else if (checked_.generated_codec_content != null) return rejected(@src().line);
-        };
-    }
-
-    fn rebind(self: *const CompletedBodyValidation, payload: *FrozenBodyProbe) Error!void {
-        for (@constCast(payload.static_data_requests), payload.static_dependencies) |*request, dependency| {
-            const node = try self.staticNode(request.*, dependency);
-            if (request.node != null) request.node = node;
-            request.const_node = node;
-        }
-        var walker = Walker{ .validation = self, .payload = payload };
-        try walker.walk(FrozenBodyProbe, payload, true);
-    }
-
-    const Walker = struct {
-        validation: *const CompletedBodyValidation,
-        payload: *const FrozenBodyProbe,
-        fn walk(self: *Walker, comptime T: type, value: anytype, comptime rebind_: bool) Error!void {
-            const p = self.payload;
-            const v = self.validation;
-            if (T == TemplateReservation) {
-                if (rebind_) value.* = v.job.reservation;
-                return;
-            }
-            if (T == Ast.FnId) {
-                if (rebind_) value.* = v.job.reservation.fn_id else if (value.* != p.self_reservation.fn_id) return rejected(@src().line);
-                return;
-            }
-            if (T == Ast.DefId) {
-                if (rebind_) value.* = v.job.reservation.def else if (value.* != p.self_reservation.def) return rejected(@src().line);
-                return;
-            }
-            if (T == Ast.LiftedFnId) return rejected(@src().line);
-            if (T == base.SourceLoc) {
-                if (value.file == base.SourceLoc.no_file) return;
-                if (value.file >= p.source_file_keys.len) return rejected(@src().line);
-                const current = v.builder.sourceFileIds().get(p.source_file_keys[value.file]) orelse return rejected(@src().line);
-                if (rebind_) value.file = current;
-                return;
-            }
-            if (T == Common.LoweringModuleId) {
-                if (@backingInt(value.*) >= p.lowering_module_keys.len) return rejected(@src().line);
-                const current = v.builder.loweringModuleIds().get(p.lowering_module_keys[@backingInt(value.*)]) orelse return rejected(@src().line);
-                if (rebind_) value.* = current;
-                return;
-            }
-            if (T == checked.ModuleId) {
-                if (v.builder.moduleForKeyBytes(value.bytes) == null) return rejected(@src().line);
-                return;
-            }
-            if (T == names.ProcTemplate) {
-                _ = try v.procedure(value.*);
-                return;
-            }
-            if (T == Ast.HostedFn) {
-                _ = try v.procedure(value.template);
-                const entry = for (v.builder.hosted_catalog) |entry| {
-                    if (names.procedureTemplateRefEql(entry.template, value.template)) break entry;
-                } else return rejected(@src().line);
-                if (entry.binding != .mapped) return rejected(@src().line);
-                if (!std.mem.eql(u8, v.names.externalSymbolNameText(value.external_symbol_name), v.builder.program.names.externalSymbolNameText(entry.external_symbol_name))) return rejected(@src().line);
-                if (rebind_) value.* = v.builder.hostedFn(value.template);
-                return;
-            }
-            if (T == Ast.NestedFn) {
-                const owner = try v.procedure(value.owner);
-                const site_view = if (value.default_root) |identity|
-                    v.builder.moduleForIdentityHash(&identity.bytes) orelse return rejected(@src().line)
-                else
-                    owner;
-                if (@backingInt(value.site) >= site_view.nested_proc_sites.sites.len) return rejected(@src().line);
-                switch (site_view.nested_proc_sites.sites[@backingInt(value.site)].owner) {
-                    .template => |site_owner| if (value.default_root != null or !names.procedureTemplateRefEql(site_owner, value.owner)) return rejected(@src().line),
-                    .default_root => if (value.default_root == null) return rejected(@src().line),
-                }
-                return;
-            }
-            if (T == DraftTypeCell) {
-                if (value.* != .sealed) return rejected(@src().line);
-                return;
-            }
-            if (T == DraftProcCallee) if (value.* != .func) return rejected(@src().line);
-            if (T == FrozenCodecProbe) {
-                const owner = v.builder.moduleForKeyBytes(value.module.bytes) orelse return rejected(@src().line);
-                if (@backingInt(value.derivation) >= owner.static_dispatch_plans.generated_codec_derivations.len) return rejected(@src().line);
-            }
-            inline for (.{ .{ DraftExprId, "exprs" }, .{ DraftPatId, "pats" }, .{ DraftStmtId, "stmts" }, .{ DraftLocalId, "locals" }, .{ DraftFnId, "fns" }, .{ DraftDefId, "defs" }, .{ DraftNestedDefId, "nested_defs" }, .{ DraftStringLiteralId, "string_literals" }, .{ DraftComptimeSiteId, "comptime_sites" }, .{ DraftStaticDataId, "static_data_requests" }, .{ DraftComptimeValueRootId, "comptime_value_roots" } }) |column| {
-                if (T == column[0]) {
-                    if (@backingInt(value.*) >= @field(p.*, column[1]).len) return rejected(@src().line);
-                    return;
-                }
-            }
-            // u8 spans have two distinct owners and were checked by their
-            // owning fields above; no generic choice of backing is permitted.
-            if (T == DraftSpan(u8)) return;
-            inline for (.{ "expr_ids", "pat_ids", "stmt_ids", "typed_locals", "field_exprs", "field_access_segments", "fn_def_captures", "record_destructs", "str_pattern_steps", "declared_fields", "branches", "if_branches", "const_fn_evidence", "const_fn_evidence_targets", "const_fn_evidence_structurals", "const_fn_evidence_frames" }) |column| {
-                const Child = @typeInfo(@TypeOf(@field(p.*, column))).pointer.child;
-                if (T == DraftSpan(Child)) {
-                    try CompletedBodyValidation.bounds(value.start, value.len, @field(p.*, column).len);
-                    return;
-                }
-            }
-            switch (@typeInfo(T)) {
-                .@"struct" => |info| inline for (info.field_names, info.field_types) |field, F| try self.walk(F, &@field(value, field), rebind_),
-                .@"union" => |info| inline for (info.field_names, info.field_types) |field, F| {
-                    if (std.meta.activeTag(value.*) == @field(info.tag_type.?, field)) return self.walk(F, &@field(value, field), rebind_);
-                },
-                .optional => |info| if (value.*) |*present| try self.walk(info.child, present, rebind_),
-                .pointer => |info| {
-                    if (info.size != .slice) @compileError("completed bodies contain bounded owned slices");
-                    for (@constCast(value.*)) |*item| try self.walk(info.child, item, rebind_);
-                },
-                .array => |info| for (value) |*item| try self.walk(info.child, item, rebind_),
-                .type,
-                .void,
-                .bool,
-                .noreturn,
-                .int,
-                .float,
-                .comptime_float,
-                .comptime_int,
-                .undefined,
-                .null,
-                .error_union,
-                .error_set,
-                .@"enum",
-                .@"fn",
-                .@"opaque",
-                .frame,
-                .@"anyframe",
-                .vector,
-                .enum_literal,
-                .spirv,
-                => {},
-            }
-        }
-    };
-};
-
-/// ConstStore evidence intentionally omits edge-local substitutions. A queued
-/// body frontier can still consume them, so completed bodies retain them in
-/// addition to the value's dispatch identity. The shared walk gives these
-/// entries the same explicit order during capture and restoration.
-const FrozenDispatchEvidence = struct {
-    stored: StoredConstFnEvidence,
-    substitutions: []const ?Substitution,
-
-    const Substitution = struct {
-        module: checked.ModuleId,
-        tys: []const checked.CheckedTypeId,
-        keys: []const names.TypeDigest,
-        alias: ?struct { module: checked.ModuleId, value: static_dispatch.MethodAlias },
-    };
-
-    fn capture(builder: *Builder, allocator: Allocator, owner: names.ProcTemplate, vector: []const SpecEvidence) Allocator.Error!FrozenDispatchEvidence {
-        var walk = SpecEvidenceWalk{};
-        defer walk.deinit(allocator);
-        var substitutions = std.ArrayList(?Substitution).empty;
-        var cursor = vector;
-        while (try walk.next(allocator, &cursor)) |entry| switch (entry) {
-            .target => |target| {
-                const stored: ?Substitution = if (target.substitution) |substitution| blk: {
-                    const keys = try allocator.alloc(names.TypeDigest, substitution.tys.len);
-                    for (substitution.tys, keys) |ty, *key| key.* = substitution.view.types.rootKey(ty);
-                    break :blk .{
-                        .module = substitution.view.key,
-                        .tys = substitution.tys,
-                        .keys = keys,
-                        .alias = if (substitution.alias) |alias| .{ .module = alias.view.key, .value = alias.alias } else null,
-                    };
-                } else null;
-                try substitutions.append(allocator, stored);
-            },
-            .structural,
-            .from_callable,
-            .from_scheme,
-            .unreachable_value,
-            .checked_error,
-            => {},
-        };
-        return .{ .stored = try builder.constFnEvidence(rootEvidence(owner, vector)), .substitutions = substitutions.items };
-    }
-
-    fn validate(self: FrozenDispatchEvidence, validation: *const CompletedBodyValidation) CompletedBodyValidation.Error!void {
-        var targets: usize = 0;
-        for (self.stored.entries.nodes) |entry| if (entry == .target) {
-            targets += 1;
-        };
-        if (targets != self.substitutions.len) return CompletedBodyValidation.rejected(@src().line);
-        for (self.substitutions) |maybe| if (maybe) |substitution| {
-            const view = validation.builder.moduleForKeyBytes(substitution.module.bytes) orelse return CompletedBodyValidation.rejected(@src().line);
-            if (substitution.tys.len != substitution.keys.len) return CompletedBodyValidation.rejected(@src().line);
-            for (substitution.tys, substitution.keys) |ty, key| {
-                if (@backingInt(ty) >= view.types.payloadCount()) return CompletedBodyValidation.rejected(@src().line);
-                if (!std.meta.eql(key, view.types.rootKey(ty))) return CompletedBodyValidation.rejected(@src().line);
-            }
-            if (substitution.alias) |alias| {
-                const alias_view = validation.builder.moduleForKeyBytes(alias.module.bytes) orelse return CompletedBodyValidation.rejected(@src().line);
-                switch (alias.value) {
-                    .top_level => |pattern| {
-                        for (alias_view.callable_eval_templates.templates) |template| {
-                            if (template.pattern == pattern) break;
-                        } else return CompletedBodyValidation.rejected(@src().line);
-                    },
-                    .local => |local| {
-                        if (@backingInt(local.lookup) >= alias_view.bodies.stored_exprs.len) return CompletedBodyValidation.rejected(@src().line);
-                        if (local.dispatch_scope) |scope| if (@backingInt(scope) >= alias_view.templates.dispatch_scopes.len) return CompletedBodyValidation.rejected(@src().line);
-                    },
-                }
-            }
-        };
-    }
-
-    fn restoreSubstitutions(self: FrozenDispatchEvidence, builder: *Builder, vector: []const SpecEvidence) Allocator.Error!void {
-        var walk = SpecEvidenceWalk{};
-        defer walk.deinit(builder.allocator);
-        var cursor = vector;
-        var index: usize = 0;
-        while (try walk.next(builder.allocator, &cursor)) |entry| switch (entry) {
-            .target => |target| {
-                if (index >= self.substitutions.len) Common.invariant("validated body evidence lost a target substitution");
-                @constCast(target).substitution = if (self.substitutions[index]) |substitution| .{
-                    .view = builder.moduleForId(substitution.module),
-                    // Global specialization records may outlive the shard.
-                    .tys = try builder.evidence_arena.allocator().dupe(checked.CheckedTypeId, substitution.tys),
-                    .alias = if (substitution.alias) |alias| .{ .view = builder.moduleForId(alias.module), .alias = alias.value } else null,
-                } else null;
-                index += 1;
-            },
-            .structural,
-            .from_callable,
-            .from_scheme,
-            .unreachable_value,
-            .checked_error,
-            => {},
-        };
-        if (index != self.substitutions.len) Common.invariant("validated body evidence changed target count");
-    }
-};
-
-const FrozenEvidenceContext = struct {
-    allocator: Allocator,
-    builder: *Builder,
-    fn restore(builder: *Builder, evidence: FrozenDispatchEvidence) Allocator.Error![]const SpecEvidence {
-        var self = FrozenEvidenceContext{ .allocator = builder.allocator, .builder = builder };
-        var cursor: usize = 0;
-        const vector = try BodyContext.materializeConstFnEvidenceVector(&self, null, evidence.stored.entries, &cursor, evidence.stored.frames[0].roots_len);
-        try evidence.restoreSubstitutions(builder, vector);
-        return vector;
-    }
-    fn finishStoredEvidenceTarget(self: *FrozenEvidenceContext, target: *SpecEvidenceTarget, stored: check.ConstStore.ConstFnTargetEvidence, nested: NestedSpecEvidence) Allocator.Error!void {
-        if (stored.method.kind == .local_proc) Common.invariant("validated completed body retained a local procedure context");
-        target.* = .{
-            .view = self.builder.moduleForDigest(stored.view),
-            .target = stored.method,
-            .instantiation = if (stored.instantiation) |instance| .{ .view = self.builder.moduleForDigest(instance.view), .callable_ty = instance.callable_ty } else null,
-            .local_proc_context = null,
-            .nested = nested,
-        };
-    }
-};
-
-test "completed body frontier retains nested target substitutions with owned checked types" {
-    const a = std.testing.allocator;
-    var ns = names.NameStore.init(a);
-    defer ns.deinit();
-    var types = checked.CheckedTypeStore{};
-    defer types.deinit(a);
-    const first = try types.reserveSyntheticTypeRoot(a, .{ .bytes = @splat(7) }, false);
-    try types.fillSyntheticTypeRoot(a, first, .empty_record);
-    const second = try types.reserveSyntheticTypeRoot(a, .{ .bytes = @splat(8) }, false);
-    try types.fillSyntheticTypeRoot(a, second, .empty_tag_union);
-    const owner: checked.ModuleId = .{ .bytes = @splat(11) };
-    var views: [1]ModuleViewData = undefined;
-    views[0].key = owner;
-    views[0].types = types.view();
-    var builder: Builder = undefined;
-    builder.allocator = a;
-    builder.borrowed_module_views = &views;
-    builder.module_index = @TypeOf(builder.module_index).init(a);
-    defer builder.module_index.deinit();
-    try builder.module_index.put(owner.bytes, .root);
-    builder.evidence_arena = base.SingleThreadArena.init(a);
-    defer builder.evidence_arena.deinit();
-    const validation = CompletedBodyValidation{ .builder = &builder, .job = undefined, .names = &ns };
-    var ids = [_]checked.CheckedTypeId{ first, second };
-    var keys = [_]names.TypeDigest{ views[0].types.rootKey(first), views[0].types.rootKey(second) };
-    var substitutions = [_]?FrozenDispatchEvidence.Substitution{
-        .{ .module = owner, .tys = ids[0..1], .keys = keys[0..1], .alias = null },
-        .{ .module = owner, .tys = ids[1..2], .keys = keys[1..2], .alias = null },
-    };
-    var frozen = FrozenDispatchEvidence{ .stored = StoredConstFnEvidence.empty(), .substitutions = &substitutions };
-    frozen.stored.entries.nodes = &.{ .{ .target = 0 }, .{ .target = 1 } };
-    try frozen.validate(&validation);
-    var child: SpecEvidenceTarget = undefined;
-    child.nested = .synthesize;
-    child.callable_contracts = &.{};
-    var parent: SpecEvidenceTarget = undefined;
-    parent.nested = .{ .resolved = &.{.{ .target = &child }} };
-    parent.callable_contracts = &.{};
-    try frozen.restoreSubstitutions(&builder, &.{.{ .target = &parent }});
-    try std.testing.expectEqual(first, parent.substitution.?.tys[0]);
-    try std.testing.expectEqual(second, child.substitution.?.tys[0]);
-    try std.testing.expectEqual(&views[0], child.substitution.?.view);
-    ids[1] = first;
-    try std.testing.expectEqual(second, child.substitution.?.tys[0]);
-    try std.testing.expectError(error.InvalidSummary, frozen.validate(&validation));
-    ids[1] = second;
-    substitutions[1].?.module.bytes[0] ^= 1;
-    try std.testing.expectError(error.InvalidSummary, frozen.validate(&validation));
-    substitutions[1].?.module = owner;
-    frozen.substitutions = substitutions[0..1];
-    try std.testing.expectError(error.InvalidSummary, frozen.validate(&validation));
-}
-
-test "completed body rejects foreign reservations and rebinds its own references" {
-    const a = std.testing.allocator;
-    var ns = names.NameStore.init(a);
-    defer ns.deinit();
-    var builder: Builder = undefined;
-    var job: PendingSpecJob = undefined;
-    job.completed_body_address = .{ .family = @splat(2), .key = @splat(3) };
-    job.demand = .evaluation;
-    job.reservation = .{ .def = @fromBackingInt(17), .fn_id = @fromBackingInt(18), .symbol = @fromBackingInt(19) };
-    var payload = std.mem.zeroes(FrozenBodyProbe);
-    payload.address = job.completed_body_address.?;
-    payload.demand = .evaluation;
-    var exprs = [_]DraftExpr{.{ .ty = .{ .sealed = @fromBackingInt(1) }, .data = .{ .def_ref = .{ .final = payload.self_reservation.def } } }};
-    payload.exprs = &exprs;
-    const validation = CompletedBodyValidation{ .builder = &builder, .job = job, .names = &ns };
-    try validation.validate(payload);
-    exprs[0].data.def_ref.final = @fromBackingInt(1);
-    try std.testing.expectError(error.InvalidSummary, validation.validate(payload));
-    exprs[0].data.def_ref.final = payload.self_reservation.def;
-    try validation.rebind(&payload);
-    try std.testing.expectEqual(job.reservation.def, exprs[0].data.def_ref.final);
-    try std.testing.expectEqualDeep(job.reservation, payload.self_reservation);
-}
-
-test "completed body rejects incompatible demand missing columns and invalid draft references" {
-    const a = std.testing.allocator;
-    var ns = names.NameStore.init(a);
-    defer ns.deinit();
-    var builder: Builder = undefined;
-    var job: PendingSpecJob = undefined;
-    job.completed_body_address = .{ .family = @splat(2), .key = @splat(3) };
-    job.demand = .evaluation;
-    var payload = std.mem.zeroes(FrozenBodyProbe);
-    payload.address = job.completed_body_address.?;
-    payload.demand = .evaluation;
-    const exprs = [_]DraftExpr{.{ .ty = .{ .sealed = @fromBackingInt(1) }, .data = .unit }};
-    payload.exprs = &exprs;
-    const validation = CompletedBodyValidation{ .builder = &builder, .job = job, .names = &ns };
-    try validation.validate(payload);
-    payload.demand = .discovery;
-    try std.testing.expectError(error.InvalidSummary, validation.validate(payload));
-    payload.demand = .evaluation;
-    const valid_body = payload.lowered.body;
-    payload.lowered.body = @fromBackingInt(1);
-    try std.testing.expectError(error.InvalidSummary, validation.validate(payload));
-    payload.lowered.body = valid_body;
-    payload.lowered.args = .{ .start = 0, .len = 1 };
-    try std.testing.expectError(error.InvalidSummary, validation.validate(payload));
-    payload.lowered.args = .empty();
-    const layouts = [_]DraftLayoutRequest{undefined};
-    payload.layout_requests = &layouts;
-    try std.testing.expect(!CompletedBodyValidation.coverage(payload));
-    try std.testing.expectError(error.InvalidSummary, validation.validate(payload));
-}
-
-test "completed body admits context-free procedure values but requires finished lexical bodies" {
-    var payload = std.mem.zeroes(FrozenBodyProbe);
-    var specs = [_]FrozenTemplateProbe{std.mem.zeroes(FrozenTemplateProbe)};
-    payload.templates = &specs;
-    // Taking a context-free procedure as a value sets requires_local even
-    // while its body remains a deferred coordinator request.
-    specs[0].state = .deferred;
-    specs[0].requires_local = true;
-    try std.testing.expect(CompletedBodyValidation.coverage(payload));
-    specs[0].local_context_dependent = true;
-    try std.testing.expect(!CompletedBodyValidation.coverage(payload));
-    specs[0].state = .lowering;
-    try std.testing.expect(!CompletedBodyValidation.coverage(payload));
-    specs[0].state = .lowered;
-    try std.testing.expect(CompletedBodyValidation.coverage(payload));
-}
-
-/// A selector in the producer's stored value, independent of allocation ids.
-const CompletedConstStep = struct {
-    kind: enum(u8) { box, nominal, list, tuple, record, tag, capture },
-    index: u32 = 0,
-    capture: ?checked.CaptureId = null,
-};
-const CompletedBodyStaticDependency = struct {
-    root: checked.ComptimeRootId,
-    identity: checked.CompileTimeRootIdentity,
-    checked_type_key: names.TypeDigest,
-    path: []const CompletedConstStep,
-};
-
-/// Explicit paths in one immutable stored value. Sharing and cycles terminate
-/// at the first visited node; each retained edge is an actual constructor or
-/// capture edge. No old node number is interpreted by the reader.
-const CompletedConstPaths = struct {
-    const Entry = struct { node: checked.ConstNodeId, parent: ?u32, step: CompletedConstStep };
-    entries: std.ArrayList(Entry) = .empty,
-    by_node: collections.DenseMapUnmanaged(checked.ConstNodeId, u32) = .empty,
-    allocator: Allocator,
-    fn add(self: *CompletedConstPaths, node: checked.ConstNodeId, parent: ?u32, step: CompletedConstStep) Allocator.Error!void {
-        const entry = try self.by_node.getOrPut(self.allocator, node);
-        if (entry.found_existing) return;
-        entry.value_ptr.* = @intCast(self.entries.items.len);
-        try self.entries.append(self.allocator, .{ .node = node, .parent = parent, .step = step });
-    }
-    fn init(allocator: Allocator, store: *const checked.ConstStore, root: checked.ConstNodeId) Allocator.Error!CompletedConstPaths {
-        var self = CompletedConstPaths{ .allocator = allocator };
-        try self.add(root, null, .{ .kind = .box });
-        var index: u32 = 0;
-        while (index < self.entries.items.len) : (index += 1) {
-            const value = store.get(self.entries.items[index].node);
-            switch (value) {
-                .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-                .box => |child| try self.add(child, index, .{ .kind = .box }),
-                .nominal => |nominal| try self.add(nominal.backing, index, .{ .kind = .nominal }),
-                .tuple => |children| for (children, 0..) |child, i| try self.add(child, index, .{ .kind = .tuple, .index = @intCast(i) }),
-                .record => |children| for (children, 0..) |child, i| try self.add(child, index, .{ .kind = .record, .index = @intCast(i) }),
-                .list => |list| switch (list) {
-                    .nodes => |children| for (children, 0..) |child, i| try self.add(child, index, .{ .kind = .list, .index = @intCast(i) }),
-                    .packed_bytes, .empty => {},
-                },
-                .tag => |tag| for (tag.payloads, 0..) |child, i| try self.add(child, index, .{ .kind = .tag, .index = @intCast(i) }),
-                .fn_value => |fn_id| for (store.getFn(fn_id).captures, 0..) |capture, i| try self.add(capture.value, index, .{ .kind = .capture, .index = @intCast(i), .capture = capture.id }),
-                .pending, .zst, .scalar, .str, .crash, .checked_error => {},
-            }
-        }
-        return self;
-    }
-    fn path(self: *const CompletedConstPaths, node: checked.ConstNodeId) Allocator.Error!?[]const CompletedConstStep {
-        var index = self.by_node.get(node) orelse return null;
-        var reversed = std.ArrayList(CompletedConstStep).empty;
-        while (self.entries.items[index].parent) |parent| {
-            try reversed.append(self.allocator, self.entries.items[index].step);
-            index = parent;
-        }
-        std.mem.reverse(CompletedConstStep, reversed.items);
-        return reversed.items;
-    }
-    fn follow(store: *const checked.ConstStore, root: checked.ConstNodeId, steps: []const CompletedConstStep) ?checked.ConstNodeId {
-        var node = root;
-        for (steps) |step| {
-            const value = store.get(node);
-            node = switch (step.kind) {
-                .box => if (value == .box and step.index == 0) value.box else return null,
-                .nominal => if (value == .nominal and step.index == 0) value.nominal.backing else return null,
-                .list => if (value == .list and value.list == .nodes and step.index < value.list.nodes.len) value.list.nodes[step.index] else return null,
-                .tuple => if (value == .tuple and step.index < value.tuple.len) value.tuple[step.index] else return null,
-                .record => if (value == .record and step.index < value.record.len) value.record[step.index] else return null,
-                .tag => if (value == .tag and step.index < value.tag.payloads.len) value.tag.payloads[step.index] else return null,
-                .capture => blk: {
-                    if (value != .fn_value) return null;
-                    const captures = store.getFn(value.fn_value).captures;
-                    if (step.index >= captures.len or step.capture == null or !std.meta.eql(captures[step.index].id, step.capture.?)) return null;
-                    break :blk captures[step.index].value;
-                },
-            };
-        }
-        return node;
-    }
-};
-
-test "completed body constant paths survive node renumbering and sharing changes" {
-    const a = std.testing.allocator;
-    var scratch = std.heap.ArenaAllocator.init(a);
-    defer scratch.deinit();
-    var first = checked.ConstStore.init(a);
-    defer first.deinit();
-    var second = checked.ConstStore.init(a);
-    defer second.deinit();
-    const old_leaf = try first.append(.{ .scalar = .{ .u64 = 42 } });
-    const old_box = try first.append(.{ .box = old_leaf });
-    const old_root = try first.append(.{ .record = &.{ old_box, old_box } });
-    _ = try second.append(.zst);
-    const new_root = try second.reserve();
-    const new_box = try second.reserve();
-    const new_leaf = try second.append(.{ .scalar = .{ .u64 = 42 } });
-    const second_leaf = try second.append(.{ .scalar = .{ .u64 = 42 } });
-    const second_box = try second.append(.{ .box = second_leaf });
-    second.fill(new_box, .{ .box = new_leaf });
-    second.fill(new_root, .{ .record = &.{ new_box, second_box } });
-    const paths = try CompletedConstPaths.init(scratch.allocator(), &first, old_root);
-    const path = (try paths.path(old_leaf)).?;
-    try std.testing.expectEqual(@as(usize, 2), path.len);
-    try std.testing.expectEqual(new_leaf, CompletedConstPaths.follow(&second, new_root, path).?);
-    try std.testing.expectEqual(@as(?checked.ConstNodeId, null), CompletedConstPaths.follow(&second, new_box, path));
-    const invalid = [_]CompletedConstStep{.{ .kind = .record, .index = 2 }};
-    try std.testing.expectEqual(@as(?checked.ConstNodeId, null), CompletedConstPaths.follow(&second, new_root, &invalid));
-}
-
-test "completed body constant path publication terminates on shared cyclic values" {
-    const a = std.testing.allocator;
-    var scratch = std.heap.ArenaAllocator.init(a);
-    defer scratch.deinit();
-    var store = checked.ConstStore.init(a);
-    defer store.deinit();
-    const root = try store.reserve();
-    const child = try store.append(.{ .box = root });
-    store.fill(root, .{ .tuple = &.{ child, child } });
-    const paths = try CompletedConstPaths.init(scratch.allocator(), &store, root);
-    try std.testing.expectEqual(@as(usize, 2), paths.entries.items.len);
-    const path = (try paths.path(child)).?;
-    try std.testing.expectEqual(child, CompletedConstPaths.follow(&store, root, path).?);
-    try std.testing.expectEqual(@as(usize, 0), (try paths.path(root)).?.len);
-}
-
-test "completed body static paths require current producer identity and checked type owner" {
-    const a = std.testing.allocator;
-    var ns = names.NameStore.init(a);
-    defer ns.deinit();
-    var store = checked.ConstStore.init(a);
-    defer store.deinit();
-    const leaf = try store.append(.zst);
-    const root = try store.append(.{ .box = leaf });
-    var types = checked.CheckedTypeStore{};
-    defer types.deinit(a);
-    const ty = try types.reserveSyntheticTypeRoot(a, .{ .bytes = @splat(7) }, false);
-    try types.fillSyntheticTypeRoot(a, ty, .empty_record);
-    const owner: checked.ModuleId = .{ .bytes = @splat(11) };
-    var templates: checked.ConstTemplateTable = .{};
-    defer templates.templates.deinit(a);
-    const locator: checked.ConstLocator = .{
-        .artifact = owner,
-        .owner = .{ .top_level_binding = .{ .module_idx = 0, .pattern = @fromBackingInt(1) } },
-        .template = @fromBackingInt(@intCast(templates.templates.items.len)),
-        .source_scheme = .{ .bytes = @splat(12) },
-    };
-    // The template's root is the identity table's only row.
-    const identity_row = 0;
-    try templates.templates.append(a, .{
-        .id = locator.template,
-        .owner = locator.owner,
-        .source_scheme = locator.source_scheme,
-        .state = .{ .stored_const = .{ .node = root, .root = @fromBackingInt(identity_row), .root_type = @fromBackingInt(1) } },
-    });
-    var rows = [_]checked.CompileTimeRootIdentity{.{ .value = @splat(13), .site = @splat(14) }};
-    const identities: checked.CompileTimeRootIdentityTable = .{ .rows = &rows };
-    var views: [1]ModuleViewData = undefined;
-    views[0].key = owner;
-    views[0].const_templates = &templates;
-    views[0].const_store = &store;
-    views[0].types = types.view();
-    views[0].compile_time_root_identities = &identities;
-    var builder: Builder = undefined;
-    builder.allocator = a;
-    builder.borrowed_module_views = &views;
-    builder.module_index = @TypeOf(builder.module_index).init(a);
-    defer builder.module_index.deinit();
-    try builder.module_index.put(owner.bytes, .root);
-    const validation = CompletedBodyValidation{ .builder = &builder, .job = undefined, .names = &ns };
-    var request: DraftStaticDataRequest = .{
-        .const_locator = locator,
-        .module = owner,
-        // The old allocation ids deliberately do not exist in this store.
-        .node = @fromBackingInt(111),
-        .const_node = @fromBackingInt(111),
-        .checked_type = ty,
-        .checked_type_module = owner,
-        .ty = .{ .sealed = @fromBackingInt(1) },
-    };
-    const path = [_]CompletedConstStep{.{ .kind = .box }};
-    const dependency: CompletedBodyStaticDependency = .{
-        .root = @fromBackingInt(identity_row),
-        .identity = rows[identity_row],
-        .checked_type_key = views[0].types.rootKey(ty),
-        .path = &path,
-    };
-    try std.testing.expectEqual(leaf, try validation.staticNode(request, dependency));
-    rows[0].value[0] ^= 1;
-    try std.testing.expectError(error.InvalidSummary, validation.staticNode(request, dependency));
-    rows[0] = dependency.identity;
-    request.checked_type_module.bytes[0] ^= 1;
-    try std.testing.expectError(error.InvalidSummary, validation.staticNode(request, dependency));
-    request.checked_type_module = owner;
-    templates.templates.items[0].state = .reserved;
-    try std.testing.expectError(error.InvalidSummary, validation.staticNode(request, dependency));
 }

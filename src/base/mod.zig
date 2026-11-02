@@ -27,7 +27,6 @@ comptime {
 pub const RegionInfo = @import("RegionInfo.zig");
 pub const SourceLoc = @import("source_loc.zig").SourceLoc;
 pub const SourceFileEntry = @import("source_loc.zig").SourceFileEntry;
-pub const retained_cache = @import("retained_cache.zig");
 pub const Scratch = @import("Scratch.zig").Scratch;
 pub const parallel = @import("parallel.zig");
 pub const post_check_task_executor = @import("post_check_task_executor.zig");

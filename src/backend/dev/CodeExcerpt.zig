@@ -162,24 +162,6 @@ const DataOwner = struct {
     }
 };
 
-/// Storage borrowed by an excerpt set, independently of its metadata arena.
-const Owner = union(enum) {
-    record: *base.retained_cache.Owner,
-    data: *DataOwner,
-
-    fn retain(self: Owner) void {
-        switch (self) {
-            inline .record, .data => |owner| owner.retain(),
-        }
-    }
-
-    fn release(self: Owner) void {
-        switch (self) {
-            inline .record, .data => |owner| owner.release(),
-        }
-    }
-};
-
 /// One pointer-sized relocation inside a data item.
 pub const DataRelocation = struct {
     offset: u32,
@@ -196,10 +178,6 @@ pub const content_data_prefix = lir.Program.content_data_symbol_prefix;
 
 /// One lifted region of machine code.
 pub const Excerpt = struct {
-    /// Producer-validated canonical payload. Relocations and dependency bindings
-    /// remain separate metadata; a byte-changing producer must clear this.
-    payload_record: ?*const base.retained_cache.Record = null,
-    metadata_origin: ?*const MetadataOrigin = null,
     kind: Kind,
     code: []const u8,
     /// Offset within `code` that references to this excerpt resolve to.
@@ -218,29 +196,6 @@ pub const Excerpt = struct {
     loc: base.SourceLoc = .none,
 };
 
-/// An excerpt's immutable dependency-component identity and producer metadata.
-/// The record owner also owns source and the dependency arrays.
-pub const MetadataOrigin = struct {
-    record: *const base.retained_cache.Record,
-    source: *const Set,
-    index: u32,
-    refs: []const Binding,
-    symbolic: []const ?Binding,
-};
-
-/// Exact content-addressed dependency endpoint, including its component ordinal.
-pub const Binding = struct { component: [32]u8, index: u32 };
-
-/// Canonical bytes retained across relocation-only assembly. Data metadata may
-/// have content names rebound; its ordered raw bytes retain the payload identity.
-pub const AssembledPayload = struct {
-    record: *const base.retained_cache.Record,
-    metadata_origin: ?*const MetadataOrigin,
-    code: []const u8,
-    data: []const DataItem,
-    data_graph: ?DataGraphView = null,
-};
-
 /// An ordered set of excerpts covering one code buffer. Order is emission
 /// order, which `assemble` reproduces.
 pub const Set = struct {
@@ -249,20 +204,18 @@ pub const Set = struct {
     /// The module content identity of each source-file index the excerpts'
     /// lines use (`LirStore.sourceFileModuleIdentity`).
     source_files: []const [32]u8 = &.{},
-    owners: []const Owner = &.{},
+    owners: []const *DataOwner = &.{},
 
     /// Allocate the owner list before transferring the arena to a result.
     /// No retain happens until the last fallible allocation has succeeded.
-    pub fn retainOwners(a: Allocator, excerpts: []const Excerpt) Allocator.Error![]const Owner {
-        var owners = std.AutoHashMap(Owner, void).init(a);
+    pub fn retainOwners(a: Allocator, excerpts: []const Excerpt) Allocator.Error![]const *DataOwner {
+        var owners = std.AutoHashMap(*DataOwner, void).init(a);
         defer owners.deinit();
         for (excerpts) |excerpt| {
-            if (excerpt.payload_record) |record| try owners.put(.{ .record = record.owner }, {});
-            if (excerpt.metadata_origin) |origin| try owners.put(.{ .record = origin.record.owner }, {});
-            if (excerpt.data_graph) |graph| try owners.put(.{ .data = graph.graph.owner }, {});
-            for (excerpt.data) |item| if (item.owner) |owner| try owners.put(.{ .data = owner }, {});
+            if (excerpt.data_graph) |graph| try owners.put(graph.graph.owner, {});
+            for (excerpt.data) |item| if (item.owner) |owner| try owners.put(owner, {});
         }
-        const retained = try a.alloc(Owner, owners.count());
+        const retained = try a.alloc(*DataOwner, owners.count());
         var it = owners.keyIterator();
         var i: usize = 0;
         while (it.next()) |owner| : (i += 1) retained[i] = owner.*;
@@ -1582,16 +1535,7 @@ pub fn extractPrepared(
 
         // Every data item the region names, then every item those name, so
         // an excerpt carries the whole constant graph it points into.
-        const retained_payload = region.payload;
-        const region_data = if (retained_payload) |payload| data: {
-            const items = try arena_allocator.alloc(DataItem, payload.data.len);
-            for (payload.data, items) |item, *out| out.* = try cloneData(arena_allocator, item);
-            break :data items;
-        } else &.{};
-        const region_graph = if (retained_payload) |payload|
-            if (payload.data_graph) |graph| try graph.clone(arena_allocator) else null
-        else
-            try captureGraph(arena_allocator, region_relocations.items, prepared);
+        const region_graph = try captureGraph(arena_allocator, region_relocations.items, prepared);
 
         // Lines and failure sites are in code offset order, so each region's
         // are one contiguous run found by search. A failing call's return
@@ -1608,7 +1552,7 @@ pub fn extractPrepared(
             if (site.offset > region.end) break;
             try failure_sites.append(arena_allocator, .{ .offset = @intCast(site.offset - region.start), .meaning = site.meaning });
         }
-        const excerpt_code = if (retained_payload) |payload| try arena_allocator.dupe(u8, payload.code) else code_bytes: {
+        const excerpt_code = code_bytes: {
             const bytes = try arena_allocator.dupe(u8, code[region.start..region.end]);
             codegen.normalizeExcerptCode(region.start, bytes);
             for (region_refs.items) |ref| CG.normalizeExcerptRefSite(bytes, ref.site, codeRefForm(ref.form), if (ref.veneer) |offset| offset else null);
@@ -1616,8 +1560,6 @@ pub fn extractPrepared(
             break :code_bytes bytes;
         };
         excerpts[index] = .{
-            .payload_record = if (retained_payload) |payload| payload.record else null,
-            .metadata_origin = if (retained_payload) |payload| payload.metadata_origin else null,
             .kind = kind,
             .code = excerpt_code,
             .entry = @intCast(region.entry),
@@ -1627,7 +1569,7 @@ pub fn extractPrepared(
             .lines = try lines.toOwnedSlice(arena_allocator),
             .failure_sites = try failure_sites.toOwnedSlice(arena_allocator),
             .relocations = try region_relocations.toOwnedSlice(arena_allocator),
-            .data = region_data,
+            .data = &.{},
             .data_graph = region_graph,
             .loc = switch (region.kind) {
                 // A procedure placed from another set carries the location
@@ -2415,7 +2357,6 @@ const LineBinding = union(enum) {
 };
 
 fn appendMetadata(comptime CG: type, codegen: *CG, excerpt: Excerpt, start: usize, lines: LineBinding) Allocator.Error!void {
-    if (excerpt.payload_record) |record| codegen.retainAssembledPayload(start, .{ .record = record, .metadata_origin = excerpt.metadata_origin, .code = excerpt.code, .data = excerpt.data, .data_graph = excerpt.data_graph });
     switch (excerpt.kind) {
         .proc => |identity| {
             try codegen.registerAssembledProc(identity, start + excerpt.entry);
@@ -3000,7 +2941,6 @@ test "excerpt metadata queues unresolved targets, preserves same-offset line ord
             self.proc_entry = entry;
         }
         pub fn registerAssembledProcLoc(_: *Self, _: lir.ProcIdentity, _: base.SourceLoc) Allocator.Error!void {}
-        pub fn retainAssembledPayload(_: *Self, _: usize, _: AssembledPayload) void {}
         pub fn registerSplicedHelper(_: *Self, _: []const u8, _: usize) Allocator.Error!void {}
         pub fn queueAssembledSymbolicRef(self: *Self, ref: SymbolicReference) Allocator.Error!void {
             self.refs[self.refs_len] = ref;
@@ -3447,13 +3387,8 @@ test "boxy composition slots keep identity through canonical arrangement and pac
     var arranged = try arrange(a, &source, &.{});
     defer arranged.deinit();
     try std.testing.expectEqual(@as(usize, 3), arranged.data.len);
-    const Pack = @import("PackFile.zig");
-    const bytes = try Pack.write(a, &arranged.set, &.{});
-    defer a.free(bytes);
-    var read_back = try Pack.read(a, bytes);
-    defer read_back.deinit();
     var mutable: usize = 0;
-    for (read_back.set.excerpts[0].data) |item| {
+    for (arranged.set.excerpts[0].data) |item| {
         if (!item.is_mutable) continue;
         mutable += 1;
         try std.testing.expect(std.mem.eql(u8, item.name, "site_a") or std.mem.eql(u8, item.name, "site_b"));
@@ -3543,7 +3478,7 @@ test "shared constant graphs visit each node once and survive independent owners
     try std.testing.checkAllAllocationFailures(deterministic.allocator(), testSharedGraphs, .{});
 }
 
-fn testSharedGraphs(allocator: Allocator) (@import("PackFile.zig").ReadError || Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+fn testSharedGraphs(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const refs = [_]NamedRelocation{.{ .offset = 0, .name = "roc__d0", .scope = .program, .kind = .{ .data = .rel32 } }};
     const edges = [_]DataRelocation{
         .{ .offset = 0, .name = "roc__d1", .addend = 0, .function = false },
@@ -3585,13 +3520,6 @@ fn testSharedGraphs(allocator: Allocator) (@import("PackFile.zig").ReadError || 
     try std.testing.expectEqual(@as(usize, 2), arranged.data.len);
     try std.testing.expectEqual(@as(usize, 0), arranged.set.excerpts[0].data.len);
     try std.testing.expect(arranged.set.excerpts[0].data_graph != null);
-    const pack_bytes = try @import("PackFile.zig").write(allocator, &arranged.set, &.{});
-    defer allocator.free(pack_bytes);
-    var loaded = try @import("PackFile.zig").read(allocator, pack_bytes);
-    defer loaded.deinit();
-    const rewritten = try @import("PackFile.zig").write(allocator, &loaded.set, &.{});
-    defer allocator.free(rewritten);
-    try std.testing.expectEqualSlices(u8, pack_bytes, rewritten);
     var combined = try combineDistinct(allocator, &.{&copy});
     defer combined.deinit();
     try std.testing.expect(combined.excerpts[0].data_graph != null);

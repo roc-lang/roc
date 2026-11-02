@@ -478,22 +478,6 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "src" });
     }
 
-    /// Get the executable cache directory (for cached linked executables).
-    pub fn getExeCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
-        const version_dir = try self.getVersionCacheDir(allocator);
-        defer allocator.free(version_dir);
-
-        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "exe" });
-    }
-
-    /// Logical scope for cached test results.
-    pub fn getTestCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
-        const version_dir = try self.getVersionCacheDir(allocator);
-        defer allocator.free(version_dir);
-
-        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "test" });
-    }
-
     /// Get the cache entries directory (alias for module cache dir).
     pub fn getCacheEntriesDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         return self.getModuleCacheDir(allocator);

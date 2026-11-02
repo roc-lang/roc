@@ -135,7 +135,6 @@ fn preparedCopy(
         .target = prepared.target,
         .root_count = prepared.root_count,
         .test_plan_metadata = metadata,
-        .spec_key_aliases = try prepared.spec_key_aliases.clone(allocator),
     };
 }
 
