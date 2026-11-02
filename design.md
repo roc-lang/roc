@@ -23738,14 +23738,15 @@ against the borrow typing rules:
   a forward dataflow fixpoint—summaries agreeing on every name's ownership
   mode share one abstraction whose must-alias partition is the meet of
   theirs (with per-fine-class balances re-attributed by constraint
-  propagation), and the body is re-certified only when a jump strictly
-  refines that abstraction. Mode disagreements split the abstraction along
-  exactly the entry-state modes real in-edges disagree about, so refinement never
-  manufactures entry states no jump produced; in the worst case it
-  degenerates to one walk per distinct summary, with no capacity cap and no
-  skip path. The join is monotone over a finite-height lattice (partition
-  refinement is bounded by the name count; balance divergence across
-  mode-identical entries is itself a finding—per-iteration accumulation),
+  propagation) and whose lender conjunctions are the union of theirs, and the
+  body is re-certified only when a jump strictly refines that abstraction.
+  Mode disagreements split the abstraction along exactly the entry-state modes
+  real in-edges disagree about, so refinement never manufactures entry states
+  no jump produced; in the worst case it degenerates to one walk per distinct
+  summary, with no capacity cap and no skip path. The join is monotone over a
+  finite-height lattice (partition refinement and lender growth are bounded by
+  the name count; balance divergence across mode-identical entries is itself a
+  finding—per-iteration accumulation),
   so certification of every procedure runs to completion
 - an intermediate aggregate field read needed to claim a selected field
   keeps its carrier local across inner-join frames as well as join summaries.
@@ -23753,11 +23754,18 @@ against the borrow typing rules:
   exact ownership path when the enclosing loop is summarized again. Copying
   reachable frame values therefore also copies the carrier bindings of their
   payload sources, including field reads defined inside an exited region.
-- distinct borrow-lender and holder proofs remain separate at every join;
-  a group-count threshold must never discard provenance and manufacture a
-  borrowed entry with no owner. Valid incoming paths with different owners
-  are certified with their respective owners, and an incoming path that
-  releases its owner before the borrow is used is still rejected
+- no join discards a lifetime proof; a group-count threshold must never
+  discard provenance and manufacture a borrowed entry with no owner. Valid
+  incoming paths with different lenders join to a value that needs every one
+  of those lenders live, so a read after any of them dies is still rejected.
+  A union is taken only when it is exact: the paths share a partition and
+  balances, and each lender has one proof on both. Every other disagreement,
+  including different holders and a proof with no lenders, stays a separate
+  abstraction certified with its own owners
+- a summary names only what the join body can observe. A borrow the body
+  never reads, holding no ownership and with no container above it, has
+  exactly its lenders' liveness, so the summary names those lenders' anchors
+  instead of it
 - explicit initialized-payload control flow refines conditional ownership:
   the initialized edge promotes the payload to ordinary owned state and the
   uninitialized edge removes its possible unit and binding. Presence
