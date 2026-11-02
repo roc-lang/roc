@@ -1988,7 +1988,7 @@ pub const Builder = struct {
     /// Dictionary `dictionary` of type `from` adapted to `to`. A dictionary
     /// is composed in the entry chain and lives as long as the process, so
     /// its adapter is too.
-    fn adaptDictionary(self: *Builder, dictionary: LocalId, from: TypeId, to: TypeId) Allocator.Error!LocalId {
+    pub fn adaptDictionary(self: *Builder, dictionary: LocalId, from: TypeId, to: TypeId) Allocator.Error!LocalId {
         const saved = self.immortal_closures;
         self.immortal_closures = true;
         defer self.immortal_closures = saved;

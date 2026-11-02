@@ -207,7 +207,10 @@ fn convertIn(program: *Program, env: types.Env, ty: checked.CheckedTypeId) Alloc
 /// outside the value shape, in first-visit order, each bound to the family's
 /// variable at its index. The shape's own variables (an uninhabited payload,
 /// say) seal to their defaults: the shape is the contract's, and only the
-/// results' rows vary with a use.
+/// results' rows vary with a use. A variable that seals to its row default is
+/// no variable of the family either: no generated code can produce a value at
+/// such a row's tail, so a use wider than the sealed row converts at
+/// `constructorAt` (design.md "Sealed Result Rows").
 fn contractEnv(program: *Program, module: ModuleIndex, constructor_ty: checked.CheckedTypeId, shape_ty: checked.CheckedTypeId) Allocator.Error!types.Env {
     const allocator = program.allocator;
     const store = program.module(module).types();
@@ -226,7 +229,7 @@ fn contractEnv(program: *Program, module: ModuleIndex, constructor_ty: checked.C
         if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
         const start = pending.items.len;
         switch (store.payload(ty)) {
-            .flex, .rigid => if (shape_done) try vars.append(allocator, ty),
+            .flex, .rigid => if (shape_done and !store.payload(ty).variableSealsToRowDefault()) try vars.append(allocator, ty),
             .alias => |alias| try pending.append(allocator, alias.backing),
             .record => |record| {
                 for (record.fields) |field| try pending.append(allocator, field.ty);
@@ -730,7 +733,7 @@ pub fn dictionaryAt(b: *Builder, module_index: ModuleIndex, id: static_dispatch.
 
 /// A family's constructor at a use whose constructor type is `actual`:
 /// the immortal callable capturing the family's local procedure values at
-/// the use's types, then its variables' descriptors.
+/// the use's types, then its variables' descriptors, adapted to `actual`.
 fn constructorAt(b: *Builder, family: u32, actual: TypeId) Allocator.Error!LocalId {
     const fam_ = b.program.codec.families.items[family];
     const count = fam_.env.vars.len;
@@ -752,7 +755,8 @@ fn constructorAt(b: *Builder, family: u32, actual: TypeId) Allocator.Error!Local
         }
     }
     for (bound, captures[fam_.locals.items.len..]) |ty, *desc| desc.* = try b.descOf(ty);
-    return try b.composeDictionary(try constructorWorker(b.program, family), captures);
+    const composed = try b.composeDictionary(try constructorWorker(b.program, family), captures);
+    return try b.adaptDictionary(composed, try b.program.substitute(b.allocator, fam_.constructor_fn, bound), actual);
 }
 
 /// A structural `parser_for`/`encoder_for` dispatch: the derivation's
@@ -855,7 +859,7 @@ pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.Const
     defer b.allocator.free(bound);
     const descs = try program.arena.allocator().alloc(LocalId, bound.len);
     for (bound, descs) |ty, *desc| desc.* = try b.descOf(ty);
-    try b.push(.{ .finish_restore_closure = .{ .worker = worker, .count = @intCast(captures.len), .descs = descs, .dicts = &.{}, .capture_types = captures, .worker_ty = fn_ty, .ty = fn_ty } });
+    try b.push(.{ .finish_restore_closure = .{ .worker = worker, .count = @intCast(captures.len), .descs = descs, .dicts = &.{}, .capture_types = captures, .worker_ty = try program.substitute(b.allocator, fam_.runtime_fn, bound), .ty = fn_ty } });
     // The local procedures' function values follow the names; compile-time
     // evaluation stores none of them, as a local procedure is a procedure
     // of its declaring body, not a value the runtime holds.
