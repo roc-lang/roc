@@ -1,20 +1,32 @@
 # Generic bodies dispatching directly to methods. Every call's types mention
 # the enclosing body's own type variables, so each must read them in that
-# body's scope.
+# body's scope: a row variable of the target takes the caller's row, not the
+# empty row of a variable no scope binds.
 
 Cell(a) :: { value : a }.{
-	# Open in the error row of `f`, plus `Empty`.
-	attempt = |cell, full, f| if full f(cell.value) else Err(Empty)
+	attempt = |cell, full, f| {
+		if !full {
+			return Err(Empty)
+		}
+		f(cell.value)
+	}
 
-	# Generic in the error row `attempt` leaves open, which only the caller
-	# of `forward` closes.
+	forward : Cell(_), Bool, _ -> Try(_, _)
 	forward = |cell, full, f| cell.attempt(full, f)
 
-	# Reads the row back through a second generic layer.
-	forward_twice = |cell, full, f| match cell.forward(full, f) {
-		Ok(value) => Ok(value)
-		Err(e) => Err(Wrapped(e))
+	unannotated = |cell, full, f| cell.attempt(full, f)
+}
+
+local_row = |value, full, f| {
+	Local(a) := { item : a }.{
+		attempt = |l, ok, g| {
+			if !ok {
+				return Err(Empty)
+			}
+			g(l.item)
+		}
 	}
+	Local.{ item: value }.attempt(full, f)
 }
 
 describe : Try(Str, [Empty, Short(U64), Long(Str)]) -> Str
@@ -25,37 +37,48 @@ describe = |result| match result {
 	Err(Long(text)) => "long ${text}"
 }
 
-wrapped = |cell, full| match cell.forward_twice(full, |_| Err(Other(1.U8))) {
-	Err(Wrapped(Empty)) => "wrapped empty"
-	Err(Wrapped(Other(n))) => "wrapped ${n.to_str()}"
-	Ok(_) => "ok"
+Bag(a) :: { items : List(a) }.{
+	iter = |bag| bag.items.iter()
 }
 
-local_method = |value, other| {
-	Pair(a) := { left : a, right : a }.{
-		right = |pair| pair.right
+total = |bag, start| {
+	var $sum = start
+	for item in bag {
+		$sum = $sum + item
 	}
-	Pair.{ left: value, right: other }.right()
+	$sum
 }
 
-generic_literal = |value| {
-	Counted(a) := { item : a, count : U64 }.{
-		bump = |counted, by| Counted.{ item: counted.item, count: counted.count + by }
-		count = |counted| counted.count
+first_or = |items, default| {
+	var $found = Err(Missing(default))
+	for item in Bag.{ items } {
+		$found = Ok(item)
+		break
 	}
-	Counted.{ item: value, count: 1 }.bump(41).count()
+	$found
 }
 
-main! = |_args| {
-	cell = Cell.{ value: "payload that does not fit in a small string, so it is on the heap" }
-	echo!(describe(cell.forward(Bool.True, |text| Ok(text))))
-	echo!(describe(cell.forward(Bool.True, |text| Err(Long(text)))))
-	echo!(describe(cell.forward(Bool.True, |text| Err(Short(Str.count_utf8_bytes(text))))))
-	echo!(describe(cell.forward(Bool.False, |text| Ok(text))))
-	echo!(wrapped(cell, Bool.False))
-	echo!(wrapped(cell, Bool.True))
-	echo!(local_method("left", "right"))
-	echo!(local_method(1.U64, 2.U64).to_str())
-	echo!(generic_literal("anything").to_str())
+Mark(a) := { tag : a }.{
+	label = |m, prefix| "${prefix}:${m.tag.to_str()}"
+}
+
+interpolate = |value, prefix| Mark.{ tag: value }.label(prefix)
+
+main! = |args| {
+	full = List.len(args) < 9
+	payload = "payload that does not fit in a small string, so it is on the heap"
+	cell = Cell.{ value: payload }
+	echo!(describe(cell.forward(full, |text| Err(Long(text)))))
+	echo!(describe(cell.forward(!full, |text| Err(Long(text)))))
+	echo!(describe(cell.unannotated(full, |text| Err(Short(Str.count_utf8_bytes(text))))))
+	echo!(describe(cell.unannotated(!full, |text| Err(Short(Str.count_utf8_bytes(text))))))
+	echo!(describe(local_row(payload, full, |text| Err(Long(text)))))
+	echo!(describe(local_row(payload, !full, |text| Err(Long(text)))))
+	echo!(total(Bag.{ items: [1.U64, 2, 3] }, 10).to_str())
+	match first_or(if full ["x", "y"] else [], "none") {
+		Ok(item) => echo!(item)
+		Err(Missing(item)) => echo!(item)
+	}
+	echo!(interpolate(7.U8, "n"))
 	Ok({})
 }
