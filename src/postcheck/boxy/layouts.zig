@@ -403,6 +403,17 @@ pub const Layouts = struct {
         };
     }
 
+    /// Whether a component of type `ty` stored at `slot` is held in a box
+    /// the committed layout inserted to break a recursive type. A `Box` the
+    /// type states itself, including through nominal wrappers, is the
+    /// component's own representation.
+    pub fn isRecursionBox(self: *Layouts, slot: layout.Idx, ty: TypeId) Allocator.Error!bool {
+        if (self.layouts.getLayout(slot).tag != .box) return false;
+        var current = ty;
+        while (self.store.get(current) == .nominal) current = try self.converter.backing(current);
+        return self.store.get(current) != .box;
+    }
+
     /// The committed layout of the closed type `ty`.
     pub fn layoutOf(self: *Layouts, ty: TypeId) Allocator.Error!layout.Idx {
         if (!try self.converter.representationClosed(ty)) types.invariant("asked for the committed layout of an open type");

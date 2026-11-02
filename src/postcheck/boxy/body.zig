@@ -8964,8 +8964,7 @@ pub const Builder = struct {
     /// Whether a component of type `ty` stored at `slot` is held in a box
     /// the committed layout inserted to break a recursive type.
     pub fn isRecursionBox(self: *Builder, slot: layout.Idx, ty: TypeId) Allocator.Error!bool {
-        if (self.program.result.layouts.getLayout(slot).tag != .box) return false;
-        return self.program.store.get(try self.structuralType(ty)) != .box;
+        return try self.program.layouts.isRecursionBox(slot, ty);
     }
 
     /// `value` (of `ty`) as it is stored at `slot`: boxed when the slot is a
