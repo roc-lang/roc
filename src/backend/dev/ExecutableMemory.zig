@@ -261,6 +261,21 @@ pub const ExecutableMemory = struct {
         };
     }
 
+    /// Reserve unwind metadata after the caller's image, while leaving the
+    /// whole mapping writable for relocation. The caller protects the code
+    /// prefix after filling it; the trailing unwind table stays read-only to
+    /// the caller and is deregistered with the mapping.
+    pub fn initWritableWithUnwind(total_size: usize, code_size: usize, functions: []const coff.FunctionInfo) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, UnsupportedPlatform, UnwindRegistrationFailed })!Self {
+        const split = try coff.splitNestedFunctions(std.heap.smp_allocator, functions);
+        defer std.heap.smp_allocator.free(split);
+        const offset = std.mem.alignForward(usize, total_size, 4);
+        const size = try WindowsUnwindState.xdataSize(split);
+        var memory = try initWritable(offset + size, @max(code_size, 1), 0);
+        errdefer memory.deinit();
+        memory.windows_unwind = try WindowsUnwindState.init(memory.memory, code_size, offset, split);
+        return memory;
+    }
+
     /// Mark a writable allocation returned by `initWritable` executable.
     pub fn finishWrite(self: *Self) error{ MprotectFailed, VirtualProtectFailed, UnsupportedPlatform }!void {
         try protectExecutable(self.memory);

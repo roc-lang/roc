@@ -492,6 +492,27 @@ pub fn reachableAcross(allocator: Allocator, sets: []const *const Set, host_visi
         }
     }
     const reached = try allocator.alloc([]bool, sets.len);
+    const provided = try allocator.alloc([]?usize, sets.len);
+    var provided_count: usize = 0;
+    defer {
+        for (provided[0..provided_count]) |row| allocator.free(row);
+        allocator.free(provided);
+    }
+    for (sets, provided) |set, *row| {
+        row.* = try allocator.alloc(?usize, set.excerpts.len);
+        provided_count += 1;
+        for (set.excerpts, row.*) |excerpt, *address| {
+            address.* = null;
+            if (roots.provided) |external| {
+                const name = switch (excerpt.kind) {
+                    .proc => |identity| try identity.symbolName(names_allocator),
+                    .rc_helper => |name| name,
+                    else => continue,
+                };
+                address.* = external.symbols.get(name);
+            }
+        }
+    }
     var reached_count: usize = 0;
     defer {
         for (reached[0..reached_count]) |flags| allocator.free(flags);
@@ -519,9 +540,14 @@ pub fn reachableAcross(allocator: Allocator, sets: []const *const Set, host_visi
             const flags = reached[ref.set];
             if (flags[ref.index]) continue;
             flags[ref.index] = true;
+            if (provided[ref.set][ref.index] != null) continue;
             const set = sets[ref.set];
             const excerpt = set.excerpts[ref.index];
-            for (excerpt.refs) |edge| try excerpt_work.append(allocator, canonical[ref.set][edge.target]);
+            for (excerpt.refs) |edge| {
+                const target = canonical[ref.set][edge.target];
+                if (provided[target.set][target.index] != null) std.debug.assert(edge.delta == sets[target.set].excerpts[target.index].entry);
+                try excerpt_work.append(allocator, target);
+            }
             for (excerpt.symbolic_refs) |edge| {
                 const target: ?Ref = switch (edge.binding) {
                     .local => |index| canonical[ref.set][index],
@@ -574,7 +600,8 @@ pub fn reachableAcross(allocator: Allocator, sets: []const *const Set, host_visi
             if (reached[ref.set][ref.index]) index.* = maps[ref.set][ref.index];
         }
     }
-    for (sets, reached, maps) |set, flags, map| {
+    for (sets, reached, maps, provided) |set, flags, map, supplied| {
+        if (std.mem.indexOfScalar(bool, flags, true) == null) continue;
         const file_map = try a.alloc(u32, set.source_files.len);
         for (set.source_files, file_map) |identity, *file| {
             file.* = for (source_files.items, 0..) |existing, index| {
@@ -584,8 +611,12 @@ pub fn reachableAcross(allocator: Allocator, sets: []const *const Set, host_visi
                 break :index @intCast(source_files.items.len - 1);
             };
         }
-        for (set.excerpts, flags) |source, keep| {
+        for (set.excerpts, flags, supplied) |source, keep, address| {
             if (!keep) continue;
+            if (address) |target| {
+                try excerpts.append(a, try roots.provided.?.entry(a, source, target));
+                continue;
+            }
             const first: u32 = @intCast(excerpts.items.len);
             try copyExcerpts(a, &excerpts, &.{ .arena = undefined, .excerpts = &.{source} }, file_map);
             const refs: []Reference = @constCast(excerpts.items[first].refs);
@@ -1873,6 +1904,12 @@ fn regionContaining(comptime CG: type, regions: []const CG.CodeRegion, offset: u
 /// What a linked program's code is reached from: the procedures the host
 /// calls through entry wrappers, and the constants the host binds by name.
 pub const ImageRoots = struct {
+    /// Process-local entries already loaded by this evaluator. Their graph
+    /// was linked when published, so a new image needs only an entry to it.
+    provided: ?struct {
+        symbols: *const std.StringHashMapUnmanaged(usize),
+        entry: *const fn (Allocator, Excerpt, usize) Allocator.Error!Excerpt,
+    } = null,
     procs: []const lir.ProcIdentity,
     data: []const []const u8,
     /// Keep every entrypoint wrapper of the set: a whole program's roots.
@@ -3623,4 +3660,42 @@ test "shared graphs publish transitive code pointer eligibility through cycles" 
     try std.testing.expect(!namesProgramLocalSymbols(excerpt));
     excerpt.data_graph = null;
     try std.testing.expect(namesProgramLocalSymbols(excerpt));
+}
+
+test "CTFE reachability follows data callbacks and stops at published code" {
+    const a = std.testing.allocator;
+    const callback_name = try lir.ProcIdentity.forTest(4).symbolName(a);
+    defer a.free(callback_name);
+    const published_name = try lir.ProcIdentity.forTest(2).symbolName(a);
+    defer a.free(published_name);
+    const data = [_]DataItem{.{ .name = "callback", .bytes = &(@as([8]u8, @splat(0))), .alignment = 8, .symbol_offset = 0, .relocations = &.{.{ .offset = 0, .name = callback_name, .addend = 0, .function = true }} }};
+    const excerpts = [_]Excerpt{
+        testProc(1, "one", &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }}, &.{}, &.{}, &.{}),
+        testProc(2, "two", &.{}, &.{.{ .site = 0, .form = .call, .target = .{ .proc = lir.ProcIdentity.forTest(3) } }}, &.{}, &.{}),
+        testProc(3, "three", &.{}, &.{}, &.{}, &data),
+        testProc(4, "callback body", &.{}, &.{}, &.{}, &.{}),
+        testProc(5, "unreachable", &.{}, &.{}, &.{}, &.{}),
+    };
+    const set = Set{ .arena = undefined, .excerpts = &excerpts };
+    var aliases = std.StringHashMap([]const u8).init(a);
+    defer aliases.deinit();
+    var first = try reachableAcross(a, &.{&set}, &.{}, .{ .procs = &.{lir.ProcIdentity.forTest(1)}, .data = &.{}, .helper_aliases = &aliases });
+    defer first.deinit();
+    try std.testing.expectEqual(@as(usize, 4), first.excerpts.len);
+    try std.testing.expect(first.definitionOf(.{ .proc = lir.ProcIdentity.forTest(4) }) != null);
+    try std.testing.expect(first.definitionOf(.{ .proc = lir.ProcIdentity.forTest(5) }) == null);
+    const Entry = struct {
+        fn make(allocator: Allocator, source: Excerpt, address: usize) Allocator.Error!Excerpt {
+            std.debug.assert(address == 42);
+            return .{ .kind = source.kind, .code = try allocator.dupe(u8, "published entry"), .entry = 0, .frame = source.frame, .refs = &.{}, .relocations = &.{}, .data = &.{} };
+        }
+    };
+    var published: std.StringHashMapUnmanaged(usize) = .empty;
+    defer published.deinit(a);
+    try published.put(a, published_name, 42);
+    var next = try reachableAcross(a, &.{&set}, &.{}, .{ .procs = &.{lir.ProcIdentity.forTest(1)}, .data = &.{}, .helper_aliases = &aliases, .provided = .{ .symbols = &published, .entry = Entry.make } });
+    defer next.deinit();
+    try std.testing.expectEqual(@as(usize, 2), next.excerpts.len);
+    try std.testing.expectEqualStrings("published entry", next.excerpts[1].code);
+    try std.testing.expectEqual(@as(u32, 1), next.excerpts[0].refs[0].target);
 }

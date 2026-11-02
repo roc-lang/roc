@@ -49,6 +49,7 @@ const stub_size = 16;
 
 /// Everything spliced into one image, until it is linked.
 pub const HostSplice = struct {
+    pub const collectCodeSymbols = collectSymbols;
     allocator: Allocator,
     /// The carried data items in placement order, one per name.
     data: std.ArrayList(CodeExcerpt.DataItem) = .empty,
@@ -429,7 +430,7 @@ fn comptimeDictSeed() callconv(.c) u64 {
 
 /// Every procedure and refcount helper of the image by the name object code
 /// gives it: the program's own, and the spliced ones.
-fn collectCodeSymbols(allocator: Allocator, codegen: *const HostLirCodeGen, out: *std.StringHashMap(usize)) Allocator.Error!void {
+fn collectSymbols(allocator: Allocator, codegen: *const HostLirCodeGen, out: *std.StringHashMap(usize)) Allocator.Error!void {
     for (codegen.codeRegions()) |region| {
         const name: []u8 = switch (region.kind) {
             .proc => |proc_id| try codegen.store.getProcSpecImmediate(proc_id).identity.symbolName(allocator),
@@ -450,7 +451,7 @@ fn collectCodeSymbols(allocator: Allocator, codegen: *const HostLirCodeGen, out:
 
 /// An absolute jump to `target`: x86_64 `jmp [rip]` over the address, or
 /// AArch64 `ldr x16, #8; br x16` over it.
-fn writeStub(stub: *[stub_size]u8, target: usize) void {
+pub fn writeStub(stub: *[stub_size]u8, target: usize) void {
     @memset(stub, 0);
     if (host_isa) |isa| switch (isa) {
         .x86_64 => {

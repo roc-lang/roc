@@ -174,6 +174,17 @@ pub fn applyRelocationsWithContext(
     }
 }
 
+/// Apply producer-indexed references after the image has bound every symbol
+/// once. Calls can use nearby stubs while address relocations retain the
+/// symbol's address (or its addressable code stub).
+pub fn applyIndexedRelocations(code: []u8, base_address: usize, relocations: []const IndexedRelocation, addresses: []const usize, calls: []const usize) ApplyRelocationsError!void {
+    for (relocations) |relocation| switch (relocation) {
+        .linked_function => |function| try patchLinkedFunctionRelocation(code, base_address, function.offset, calls[@backingInt(function.symbol)], function.kind),
+        .linked_data => |data| try patchLinkedDataRelocation(code, base_address, data.offset, addresses[@backingInt(data.symbol)], data.kind),
+        .local_data, .retired => {},
+    };
+}
+
 fn patchLinkedFunctionRelocation(code: []u8, code_base_addr: usize, reloc_offset_u64: u64, target_addr: usize, kind: FunctionRelocationKind) ApplyRelocationsError!void {
     const reloc_offset = try asCodeOffset(reloc_offset_u64, code.len);
     switch (kind) {

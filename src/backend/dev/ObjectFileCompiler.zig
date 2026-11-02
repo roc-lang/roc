@@ -38,6 +38,7 @@ const SymbolTable = @import("SymbolTable.zig");
 const IndexedRelocation = @import("Relocation.zig").IndexedRelocation;
 const StaticStringData = @import("StaticStringData.zig");
 const UnitPieces = @import("UnitPieces.zig");
+const NativeImage = @import("NativeImage.zig");
 const TargetUsize = @import("base").target.TargetUsize;
 
 /// Information about an entrypoint to compile
@@ -76,6 +77,11 @@ pub const CompilationResult = struct {
 
 /// What a composition keeps and how it names what it keeps.
 pub const ComposeOptions = struct {
+    /// CTFE's generated references, including static-data function pointers.
+    /// Null selects the final executable's ordinary root policy.
+    demanded_symbols: ?[]const []const u8 = null,
+    /// Process-local definitions already published by this evaluation session.
+    provided_symbols: ?*const std.StringHashMapUnmanaged(usize) = null,
     enable_default_platform_runtime: bool = false,
     /// The procedures the composition starts its walk from, beside every
     /// entrypoint wrapper and host-visible constant. Null keeps every piece.
@@ -273,13 +279,18 @@ pub const ObjectFileCompiler = struct {
             if (comptime comptime_target.defaultCpuTarget() != comptime_target) continue;
             if (default_target == comptime_target) {
                 if (comptime isaOfOrNull(comptime_target) != null) {
-                    return composeWithCodeGen(LirCodeGenMod.LirCodeGen(comptime_target), self.allocator, inputs, target, options, self.timing);
+                    return composeWithCodeGen(LirCodeGenMod.LirCodeGen(comptime_target), false, self.allocator, inputs, target, options, self.timing, null);
                 } else {
                     return CompilationError.UnsupportedTarget;
                 }
             }
         }
         return CompilationError.UnsupportedTarget;
+    }
+
+    /// Compose directly into this process, keeping only explicit demands.
+    pub fn composeImage(self: *ObjectFileCompiler, inputs: []const *const UnitPieces.Pieces, options: ComposeOptions, resolver: NativeImage.Resolver) (CompilationError || NativeImage.Error)!NativeImage.Image {
+        return composeWithCodeGen(LirCodeGenMod.HostLirCodeGen, true, self.allocator, inputs, LirCodeGenMod.host_lir_codegen_target, options, self.timing, resolver);
     }
 
     pub fn compileToObjectFileAndWrite(
@@ -1361,12 +1372,15 @@ fn ownDataItem(a: Allocator, item: CodeExcerpt.DataItem) Allocator.Error!CodeExc
 
 fn composeWithCodeGen(
     comptime CodeGen: type,
+    comptime native: bool,
     allocator: Allocator,
     inputs: []const *const UnitPieces.Pieces,
     target: RocTarget,
     options: ComposeOptions,
     timing: ?*ObjectFileCompiler.Timing,
-) CompilationError!CompilationResult {
+    resolver: ?NativeImage.Resolver,
+) (if (native) (CompilationError || NativeImage.Error)!NativeImage.Image else CompilationError!CompilationResult) {
+    std.debug.assert(native or options.provided_symbols == null);
     const symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;
     // The object is a function of the units, not of the order they arrive
     // in: the units are taken in the order of their source-file tables, and
@@ -1412,6 +1426,28 @@ fn composeWithCodeGen(
             }
         }.lessThan);
     }
+    if (options.demanded_symbols) |demanded| {
+        var catalog = std.StringHashMap(CodeExcerpt.DataItem).init(allocator);
+        defer catalog.deinit();
+        for (host_visible.items) |item| catalog.put(item.name, item) catch return CompilationError.OutOfMemory;
+        var pending = std.ArrayList([]const u8).empty;
+        defer pending.deinit(allocator);
+        for (demanded) |name| if (catalog.contains(name)) {
+            pending.append(allocator, name) catch return CompilationError.OutOfMemory;
+        };
+        var seen = std.StringHashMap(void).init(allocator);
+        defer seen.deinit();
+        host_visible.clearRetainingCapacity();
+        while (pending.pop()) |name| {
+            if ((seen.getOrPut(name) catch return CompilationError.OutOfMemory).found_existing) continue;
+            const item = catalog.get(name) orelse invariant("a CTFE data root has no explicit definition", .{});
+            host_visible.append(allocator, item) catch return CompilationError.OutOfMemory;
+            for (item.relocations) |reference| {
+                if (reference.function or reference.external) continue;
+                pending.append(allocator, reference.name) catch return CompilationError.OutOfMemory;
+            }
+        }
+    }
     // Static data reaches refcount helpers under their atomic aliases.
     var helper_aliases = std.StringHashMap([]const u8).init(allocator);
     defer helper_aliases.deinit();
@@ -1423,7 +1459,9 @@ fn composeWithCodeGen(
     };
     var root_procs = std.ArrayList(lir.ProcIdentity).empty;
     defer root_procs.deinit(allocator);
-    if (options.roots) |roots| {
+    if (options.demanded_symbols != null) {
+        // Symbol roots below select both workers and helpers.
+    } else if (options.roots) |roots| {
         root_procs.appendSlice(allocator, roots) catch return CompilationError.OutOfMemory;
     } else for (sets) |set| for (set.excerpts) |excerpt| switch (excerpt.kind) {
         .proc => |identity| root_procs.append(allocator, identity) catch return CompilationError.OutOfMemory,
@@ -1432,11 +1470,13 @@ fn composeWithCodeGen(
     var root_data = std.ArrayList([]const u8).empty;
     defer root_data.deinit(allocator);
     for (host_visible.items) |item| root_data.append(allocator, item.name) catch return CompilationError.OutOfMemory;
+    if (options.demanded_symbols) |names| root_data.appendSlice(allocator, names) catch return CompilationError.OutOfMemory;
     var reachable = CodeExcerpt.reachableAcross(allocator, sets, host_visible.items, .{
         .procs = root_procs.items,
         .data = root_data.items,
         .helper_aliases = &helper_aliases,
-        .entrypoints = true,
+        .entrypoints = options.demanded_symbols == null,
+        .provided = if (options.provided_symbols) |symbols| (if (symbols.count() == 0) null else .{ .symbols = symbols, .entry = NativeImage.providedEntry }) else null,
     }) catch return CompilationError.OutOfMemory;
     defer reachable.deinit();
     // The source-file table of the reached code, named from the units that
@@ -1581,6 +1621,17 @@ fn composeWithCodeGen(
                 .epilogue_offset = frame.epilogue_offset,
                 .uses_frame_pointer = frame.uses_frame_pointer,
             }) catch return CompilationError.OutOfMemory;
+            if (native and alias != null and !std.mem.eql(u8, name, symbol_name)) {
+                appendDefinition(allocator, &final.codegen.symbols, &symbols, .{
+                    .name = name,
+                    .offset = start + excerpt.entry,
+                    .size = excerpt.code.len - excerpt.entry,
+                    .is_global = false,
+                    .is_function = true,
+                    .is_external = false,
+                    .section = .text,
+                }) catch return CompilationError.OutOfMemory;
+            }
             if (alias == null) dwarf_procs.append(allocator, .{
                 .name = symbol_name,
                 .code_start = start + excerpt.entry,
@@ -1615,6 +1666,20 @@ fn composeWithCodeGen(
     var resolved = try resolveObjectSymbols(allocator, &final.codegen.symbols, symbols.items, relocations);
     defer resolved.deinit(allocator);
     if (timing) |timings| timings.finish(symbol_relocations_started_ns, .symbol_relocations);
+    if (native) {
+        var image = try NativeImage.load(allocator, .{
+            .code = code,
+            .rodata = rodata.items,
+            .zero_fill_size = zero_fill_size,
+            .symbols = resolved.symbols,
+            .relocations = relocations,
+            .data_relocations = rodata_relocations.items,
+            .unwind = final.getUnwindFunctions(),
+        }, resolver.?);
+        errdefer image.deinit();
+        image.code_locations = try encodeCodeLocations(allocator, &store, &final);
+        return image;
+    }
     const object_bytes = try encodeObject(allocator, &store, target, &final, code, rodata.items, zero_fill_size, resolved.symbols, relocations, rodata_relocations.items, dwarf_procs.items, timing);
     errdefer allocator.free(object_bytes);
     return CompilationResult{
@@ -1894,4 +1959,56 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
             try std.testing.expectEqualStrings(text, value[0..output[2]]);
         }
     }
+}
+
+test "native CTFE composition omits unused code and reuses a published worker" {
+    const host = @import("isa.zig").host orelse return error.SkipZigTest;
+    const a = std.testing.allocator;
+    const target_code: []const u8 = switch (host) {
+        .x86_64 => &.{ 0xb8, 42, 0, 0, 0, 0xc3 },
+        .aarch64 => &.{ 0x40, 0x05, 0x80, 0xd2, 0xc0, 0x03, 0x5f, 0xd6 },
+    };
+    const stack: u8 = if (builtin.os.tag == .windows) 40 else 8;
+    const caller_code: []const u8 = switch (host) {
+        .x86_64 => &.{ 0x48, 0x83, 0xec, stack, 0xe8, 0, 0, 0, 0, 0x48, 0x83, 0xc4, stack, 0xc3 },
+        .aarch64 => &.{ 0xfd, 0x7b, 0xbf, 0xa9, 0, 0, 0, 0x94, 0xfd, 0x7b, 0xc1, 0xa8, 0xc0, 0x03, 0x5f, 0xd6 },
+    };
+    const frame: CodeExcerpt.Frame = .{ .prologue_size = 0, .stack_alloc = 0, .frame_size = 0, .callee_saved_mask = 0, .epilogue_offset = 0, .uses_frame_pointer = false };
+    const first_id = lir.ProcIdentity.forTest(1);
+    const other_id = lir.ProcIdentity.forTest(2);
+    const caller_id = lir.ProcIdentity.forTest(3);
+    const first_name = try first_id.symbolName(a);
+    defer a.free(first_name);
+    const other_name = try other_id.symbolName(a);
+    defer a.free(other_name);
+    const caller_name = try caller_id.symbolName(a);
+    defer a.free(caller_name);
+    const excerpts = [_]CodeExcerpt.Excerpt{
+        .{ .kind = .{ .proc = first_id }, .code = target_code, .entry = 0, .frame = frame, .refs = &.{}, .relocations = &.{}, .data = &.{} },
+        .{ .kind = .{ .proc = other_id }, .code = caller_code, .entry = 0, .frame = frame, .refs = &.{}, .relocations = &.{.{ .offset = if (host == .x86_64) 5 else 4, .name = "unreachable_missing_symbol", .scope = .shared, .kind = .{ .function = if (host == .x86_64) .x86_call_rel32 else .aarch64_call26 } }}, .data = &.{} },
+        .{ .kind = .{ .proc = caller_id }, .code = caller_code, .entry = 0, .frame = frame, .refs = &.{.{ .site = 4, .form = .call, .target = 0, .delta = 0 }}, .relocations = &.{}, .data = &.{} },
+    };
+    const pieces: UnitPieces.Pieces = .{ .arena = undefined, .set = .{ .arena = undefined, .excerpts = &excerpts }, .erased_capture_prefix = 0, .source_files = &.{}, .exported_data = &.{}, .helper_aliases = &.{} };
+    const Never = struct {
+        fn resolve(_: *const anyopaque, _: []const u8) ?NativeImage.Binding {
+            return null;
+        }
+    };
+    var compiler = ObjectFileCompiler.init(a);
+    var first = try compiler.composeImage(&.{&pieces}, .{ .demanded_symbols = &.{first_name}, .global_procs = true }, .{ .context = &pieces, .resolve = Never.resolve });
+    defer first.deinit();
+    try std.testing.expect(first.symbols.contains(first_name));
+    try std.testing.expect(!first.symbols.contains(other_name));
+    try std.testing.expect(!first.symbols.contains(caller_name));
+    const answer: *const fn () callconv(.c) u64 = @ptrFromInt(first.symbols.get(first_name).?);
+    try std.testing.expectEqual(@as(u64, 42), answer());
+    var next = try compiler.composeImage(&.{&pieces}, .{ .demanded_symbols = &.{caller_name}, .provided_symbols = &first.symbols, .global_procs = true }, .{ .context = &pieces, .resolve = Never.resolve });
+    defer next.deinit();
+    try std.testing.expect(!next.symbols.contains(other_name));
+    const reused: [*]const u8 = @ptrFromInt(next.symbols.get(first_name).?);
+    const pointer_offset: usize = if (host == .x86_64) 6 else 8;
+    try std.testing.expectEqual(first.symbols.get(first_name).?, std.mem.readInt(usize, reused[pointer_offset..][0..@sizeOf(usize)], .little));
+    const call: *const fn () callconv(.c) u64 = @ptrFromInt(next.symbols.get(caller_name).?);
+    try std.testing.expectEqual(@as(u64, 42), call());
+    try std.testing.expectEqual(@as(u64, 42), answer());
 }

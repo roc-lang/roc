@@ -15540,10 +15540,26 @@ resolved, dead-stripped from the `provides` roots, and localized").
   a link the compiler performs itself walks their symbol and relocation
   tables with the same relocatable-object reader the evaluator uses and
   copies only the reached functions.
-- COMPILE-TIME EVALUATION keeps whole units: a module's roots may call any
-  export of any import, so the evaluator's in-process image of a unit is
-  built from all of the unit's pieces, which is what loading the unit's
-  object did. Nothing is dropped before the final link.
+- COMPILE-TIME EVALUATION keeps cached units as pieces and prepares only
+  the code its emitted evaluation program references. Emitted call and
+  address relocations, and function pointers in its static data, seed the
+  same exact piece/data reachability walk used for executable composition.
+  The selected pieces are placed directly into executable memory with their
+  producer-authored symbols, relocations, source locations and unwind data.
+  There is no intermediate object encoding/parsing or DWARF generation.
+  A session publishes definitions once in a symbol-to-address table. Later
+  programs stop the walk at published procedures and helpers and use small
+  process-local jump entries to their existing code. Constants accompanying
+  new pieces stay in the new image, keeping PC-relative data references
+  within that mapping; a reused worker retains its original constants and
+  its worker/site-owned mutable composition slots. Those entries contain process addresses
+  and are never written to a cache. Their references may address only the
+  original procedure/helper entry, not an interior instruction. Every image
+  lives until all evaluations in the session finish, and its mutable sites
+  are reset before each evaluation. Each program takes an immutable snapshot
+  of the code ranges it can call, so publication by another compiling worker
+  cannot invalidate failure reporting's ranges. The persisted module entry
+  and its content identity do not change.
 - AT `--opt=speed` AND `--opt=size` under `--specialize=no` the program is
   one unit whose lowering walks from the program's roots, so it never emits
   an unreached procedure, and the LLVM backend gives every procedure but the
@@ -15609,8 +15625,11 @@ reports the same diagnostics.
 Where a cache exists and the compiler runs native code, a module's roots first
 run in a program linked against its imports' cached objects: a module unit
 (`TargetConfig.boxy_unit`) lowering only what those roots reach, compiled into
-the compiler's process and calling the imports' objects, loaded once per
-evaluation (`BoxyLinkedImages`), by symbol. A module with no object yet is
+the compiler's process and calling imported code by symbol.
+`BoxyLinkedImages` registers the imports' pieces before lowering; only after
+the program emits its explicit references does it materialize their reachable
+closure. Published code is reused across the session
+("Unit Pieces And Whole-Program Dead Code"). A module with no object yet is
 compiled whole and filed by the compilation that first needs it, whichever
 command that is; the root module's own constant code is compiled for the
 evaluation and discarded. A module can have an object only once every
@@ -15663,8 +15682,9 @@ tasks and receives its own completions, a token on the worker channel tells a
 worker a session has a task queued, and the session's owner takes completions
 it already has without waiting while checking continues. A platform module with
 requirements has no object of its own, so a module importing one runs as the
-whole program. Each object is filed with its `CodeLocations`: its line table,
-failure sites and source files (Compile-Time Failure Sites). A failure in an
+whole program. Each cached piece carries source lines and failure sites; direct image
+composition writes its `CodeLocations` table, including source file identities
+(Compile-Time Failure Sites). A failure in an
 object's code is therefore found and reported exactly as one in a whole
 program's own code, and the two forms report identically. The table is read
 only when something fails, so the code that succeeds carries nothing extra. A
