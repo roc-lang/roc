@@ -1395,21 +1395,6 @@ fn composeWithCodeGen(
     for (inputs) |pieces| {
         if (pieces.erased_capture_prefix != erased_capture_prefix) invariant("composed units were generated for different capture prefixes", .{});
     }
-    var merged = CodeExcerpt.combine(allocator, sets) catch return CompilationError.OutOfMemory;
-    defer merged.deinit();
-    var unique = CodeExcerpt.distinct(allocator, &merged) catch return CompilationError.OutOfMemory;
-    defer unique.deinit();
-    // The merged source-file table, named from the units that index it.
-    const files = allocator.alloc(@import("base").SourceFileEntry, merged.source_files.len) catch return CompilationError.OutOfMemory;
-    defer allocator.free(files);
-    for (merged.source_files, files) |identity, *file| {
-        file.* = named: {
-            for (inputs) |pieces| for (pieces.source_files) |source| {
-                if (std.mem.eql(u8, &source.identity, &identity)) break :named .{ .name = source.name, .qualified_name = source.qualified_name, .module_identity = identity };
-            };
-            invariant("a composed source file belongs to no unit", .{});
-        };
-    }
     var host_visible = std.ArrayList(CodeExcerpt.DataItem).empty;
     defer host_visible.deinit(allocator);
     var exported_roots = std.StringHashMap(void).init(allocator);
@@ -1428,14 +1413,6 @@ fn composeWithCodeGen(
             }
         }.lessThan);
     }
-    // The walk follows constants into the code they name, so the catalog
-    // holds every constant a piece carries beside the host-visible ones.
-    var carried = CodeExcerpt.DataCollector{ .allocator = allocator };
-    defer carried.deinit();
-    for (host_visible.items) |item| carried.items.append(allocator, item) catch return CompilationError.OutOfMemory;
-    for (unique.excerpts) |excerpt| carried.add(excerpt) catch return CompilationError.OutOfMemory;
-    var catalog = CodeExcerpt.PreparedData.init(allocator, &.{}, &.{}, carried.items.items) catch return CompilationError.OutOfMemory;
-    defer catalog.deinit();
     // Static data reaches refcount helpers under their atomic aliases.
     var helper_aliases = std.StringHashMap([]const u8).init(allocator);
     defer helper_aliases.deinit();
@@ -1449,20 +1426,32 @@ fn composeWithCodeGen(
     defer root_procs.deinit(allocator);
     if (options.roots) |roots| {
         root_procs.appendSlice(allocator, roots) catch return CompilationError.OutOfMemory;
-    } else for (unique.excerpts) |excerpt| switch (excerpt.kind) {
+    } else for (sets) |set| for (set.excerpts) |excerpt| switch (excerpt.kind) {
         .proc => |identity| root_procs.append(allocator, identity) catch return CompilationError.OutOfMemory,
         .rc_helper, .entrypoint, .message_pool_run, .branch_island => {},
     };
     var root_data = std.ArrayList([]const u8).empty;
     defer root_data.deinit(allocator);
     for (host_visible.items) |item| root_data.append(allocator, item.name) catch return CompilationError.OutOfMemory;
-    var reachable = CodeExcerpt.retainReachable(allocator, &unique, &catalog, .{
+    var reachable = CodeExcerpt.reachableAcross(allocator, sets, host_visible.items, .{
         .procs = root_procs.items,
         .data = root_data.items,
         .helper_aliases = &helper_aliases,
         .entrypoints = true,
     }) catch return CompilationError.OutOfMemory;
     defer reachable.deinit();
+    // The source-file table of the reached code, named from the units that
+    // index it.
+    const files = allocator.alloc(@import("base").SourceFileEntry, reachable.source_files.len) catch return CompilationError.OutOfMemory;
+    defer allocator.free(files);
+    for (reachable.source_files, files) |identity, *file| {
+        file.* = named: {
+            for (inputs) |pieces| for (pieces.source_files) |source| {
+                if (std.mem.eql(u8, &source.identity, &identity)) break :named .{ .name = source.name, .qualified_name = source.qualified_name, .module_identity = identity };
+            };
+            invariant("a composed source file belongs to no unit", .{});
+        };
+    }
     var canonical = CodeExcerpt.arrange(allocator, &reachable, host_visible.items) catch return CompilationError.OutOfMemory;
     defer canonical.deinit();
     var store = LirStore.init(allocator);
