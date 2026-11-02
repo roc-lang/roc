@@ -254,7 +254,7 @@ pub const SlotSpan = struct { start: u32, len: u32 };
 pub const DeclaredOrder = struct {
     /// The types of the unnamed fields, in declared order.
     padding: Span,
-    /// The record's slots in declared order, each by semantic index: a named
+    /// The record's slots in declared order, each by storage index: a named
     /// field's position in the record's `fields`, and an unnamed field's
     /// position in `padding` past those.
     slots: SlotSpan,
@@ -555,7 +555,7 @@ pub const Store = struct {
         return self.span(declared.padding);
     }
 
-    /// The slots of `declared`, in declared order, by semantic index.
+    /// The slots of `declared`, in declared order, by storage index.
     pub fn declaredSlots(self: *const Store, declared: DeclaredOrder) []const u32 {
         return self.declared_slots.items[declared.slots.start];
     }
