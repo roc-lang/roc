@@ -12805,7 +12805,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(backend_timing.snapshot().native_emission));
         const root_image: ?[]align(backend.dev.UnitImage.alignment.toByteUnits()) u8 = if (compile.boxy_unit.producesImage(target)) image: {
             reporter.begin("Unit Image");
-            const image = object_compiler.buildUnitImage(&root_pieces, target) catch |err| {
+            const image = object_compiler.buildUnitImage(&root_pieces, target, .entrypoints) catch |err| {
                 reporter.fail();
                 std.log.err("Building the root unit's image failed: {}", .{err});
                 return error.NativeCompilationFailed;

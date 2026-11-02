@@ -283,18 +283,35 @@ pub const ObjectFileCompiler = struct {
         return CompilationError.UnsupportedTarget;
     }
 
+    /// Which pieces of a unit its image keeps.
+    pub const ImageRoots = enum {
+        /// A library unit: every procedure, since any importer may call it.
+        every_procedure,
+        /// The root unit, which no other unit imports: only what its
+        /// entrypoint wrappers and host-visible constants reach.
+        entrypoints,
+    };
+
     /// Build the unit image (`UnitImage`) of one unit's pieces for a Linux
-    /// x86_64 target: the pieces composed on their own, keeping every
-    /// procedure, entrypoint wrapper and host-visible constant, with every
-    /// procedure given a global symbol so other units' references to it
-    /// resolve by name, then lifted from the composed relocatable object.
+    /// x86_64 target: the pieces composed on their own, keeping what `roots`
+    /// selects with what it reaches, every entrypoint wrapper and every
+    /// host-visible constant, and every procedure given a global symbol so
+    /// other units' references to it resolve by name; then lifted from the
+    /// composed relocatable object.
     pub fn buildUnitImage(
         self: *ObjectFileCompiler,
         pieces: *const UnitPieces.Pieces,
         target: RocTarget,
+        roots: ImageRoots,
     ) CompilationError![]align(UnitImage.alignment.toByteUnits()) u8 {
         std.debug.assert(target.toOsTag() == .linux and target.toCpuArch() == .x86_64);
-        var composed = try self.composeObject(&.{pieces}, target, .{ .roots = null, .global_procs = true });
+        var composed = try self.composeObject(&.{pieces}, target, .{
+            .roots = switch (roots) {
+                .every_procedure => null,
+                .entrypoints => &.{},
+            },
+            .global_procs = true,
+        });
         defer composed.deinit();
         return UnitImage.build(self.allocator, &.{composed.object_bytes}, .{ .keep_debug = true }) catch |err| switch (err) {
             error.OutOfMemory => return CompilationError.OutOfMemory,

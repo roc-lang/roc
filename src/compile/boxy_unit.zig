@@ -388,7 +388,7 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     };
     errdefer pieces.deinit();
     const image: ?Image = if (producesImage(unit.target)) .{
-        .bytes = object_compiler.buildUnitImage(pieces, unit.target) catch |err| {
+        .bytes = object_compiler.buildUnitImage(pieces, unit.target, .every_procedure) catch |err| {
             std.log.err("Building the unit image of module {s} failed: {}", .{ module_name, err });
             return error.NativeCompilationFailed;
         },
