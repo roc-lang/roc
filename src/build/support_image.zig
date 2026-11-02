@@ -15,6 +15,7 @@ const UnitImage = @import("UnitImage");
 const MainError = std.process.Args.ToSliceError || std.Io.Dir.ReadFileAllocError ||
     std.Io.Dir.WriteFileError || UnitImage.BuildError || error{ExpectedOutputAndObjects};
 
+/// Convert the objects named on the command line into one image file.
 pub fn main(init: std.process.Init) MainError!void {
     const gpa = init.gpa;
     const args = try init.minimal.args.toSlice(init.arena.allocator());

@@ -512,6 +512,7 @@ pub const View = struct {
     }
 };
 
+/// One ELF section header, as the patch link reads and rewrites it.
 pub const SectionHeader = struct {
     name: u32,
     type: u32,
@@ -524,6 +525,7 @@ pub const SectionHeader = struct {
     addralign: u64,
     entsize: u64,
 
+    /// Encode the header into its 64 bytes.
     pub fn write(self: SectionHeader, out: *[64]u8) void {
         std.mem.writeInt(u32, out[0..4], self.name, .little);
         std.mem.writeInt(u32, out[4..8], self.type, .little);
@@ -567,26 +569,20 @@ fn readU64(bytes: []const u8, at: usize) u64 {
     return std.mem.readInt(u64, bytes[at..][0..8], .little);
 }
 
-pub const PT_LOAD = 1;
-pub const PT_PHDR = 6;
-pub const PF_X = 1;
-pub const PF_W = 2;
-pub const PF_R = 4;
+const PT_LOAD = 1;
+const PT_PHDR = 6;
 const ET_REL = 1;
 const ET_EXEC = 2;
 const EM_X86_64 = 62;
-pub const SHT_PROGBITS = 1;
-pub const SHT_SYMTAB = 2;
-pub const SHT_STRTAB = 3;
-pub const SHT_NOBITS = 8;
-pub const SHF_WRITE = 0x1;
-pub const SHF_ALLOC = 0x2;
-pub const SHF_EXECINSTR = 0x4;
+const SHT_PROGBITS = 1;
+const SHT_SYMTAB = 2;
+const SHT_STRTAB = 3;
+const SHF_ALLOC = 0x2;
 const SHF_GNU_RETAIN = 0x200000;
 const SHN_ABS = 0xfff1;
-pub const STB_LOCAL = 0;
-pub const STB_GLOBAL = 1;
-pub const STB_WEAK = 2;
+const STB_LOCAL = 0;
+const STB_GLOBAL = 1;
+const STB_WEAK = 2;
 const STT_NOTYPE = 0;
 const STV_HIDDEN = 2;
 

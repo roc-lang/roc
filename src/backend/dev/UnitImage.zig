@@ -66,9 +66,12 @@ pub const SiteKind = enum(u8) {
 /// `Site.target_region` of a site whose target is an import.
 pub const import_target: u8 = 0xff;
 
+/// The ELF type a symbol keeps in the output's symbol table.
 pub const SymbolType = enum(u8) { notype = 0, object = 1, func = 2 };
 
+/// `Symbol.flags` bit: other images may resolve imports to the symbol.
 pub const symbol_exported: u8 = 1;
+/// `Symbol.flags` and `Import.flags` bit: a weak definition or reference.
 pub const symbol_weak: u8 = 2;
 
 /// One symbol the image defines.
@@ -293,6 +296,7 @@ pub const BuildError = Allocator.Error || error{
     ImageTooLarge,
 };
 
+/// How `build` treats its inputs.
 pub const BuildOptions = struct {
     /// Keep `.debug_line`, `.debug_info` and `.debug_abbrev`. Without it,
     /// every debug section is dropped.
@@ -358,22 +362,9 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
                     object_places[index] = .{ .region = .bss, .offset = bss_size };
                     bss_size += section.size;
                 },
-                .debug_line, .debug_info, .debug_abbrev => {
-                    const slot: usize = switch (class) {
-                        .debug_line => 0,
-                        .debug_info => 1,
-                        .debug_abbrev => 2,
-                        else => unreachable, // the enclosing prong matches only the three debug classes
-                    };
-                    const region: Region = switch (class) {
-                        .debug_line => .debug_line,
-                        .debug_info => .debug_info,
-                        .debug_abbrev => .debug_abbrev,
-                        else => unreachable, // the enclosing prong matches only the three debug classes
-                    };
-                    object_places[index] = .{ .region = region, .offset = debug_sizes[slot] };
-                    debug_sizes[slot] += section.size;
-                },
+                .debug_line => placeDebug(&object_places[index], &debug_sizes[0], .debug_line, section.size),
+                .debug_info => placeDebug(&object_places[index], &debug_sizes[1], .debug_info, section.size),
+                .debug_abbrev => placeDebug(&object_places[index], &debug_sizes[2], .debug_abbrev, section.size),
             }
         }
     }
@@ -448,12 +439,14 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
                 if (winner.object != object_index or winner.symbol != symbol_index) continue;
             }
             const visible = is_global and (symbol.visibility == STV_DEFAULT or symbol.visibility == STV_PROTECTED);
-            const symbol_type: SymbolType = switch (symbol.type) {
-                STT_FUNC => .func,
-                STT_OBJECT => .object,
-                STT_NOTYPE => .notype,
-                else => return error.UnsupportedSymbol,
-            };
+            const symbol_type: SymbolType = if (symbol.type == STT_FUNC)
+                .func
+            else if (symbol.type == STT_OBJECT)
+                .object
+            else if (symbol.type == STT_NOTYPE)
+                .notype
+            else
+                return error.UnsupportedSymbol;
             const index: u32 = @intCast(symbol_records.items.len);
             try symbol_records.append(arena, .{
                 .name = try strings.add(symbol.name),
@@ -488,13 +481,16 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
                 const r_sym: u32 = @truncate(r_info >> 32);
                 const r_type: u32 = @truncate(r_info);
                 if (r_sym >= object.symbols.len) return error.InvalidObject;
-                const kind: SiteKind = switch (r_type) {
-                    R_X86_64_64 => .abs64,
-                    R_X86_64_PC32, R_X86_64_PLT32 => .pc32,
-                    R_X86_64_32 => .abs32,
-                    R_X86_64_32S => .abs32s,
-                    else => return error.UnsupportedRelocation,
-                };
+                const kind: SiteKind = if (r_type == R_X86_64_64)
+                    .abs64
+                else if (r_type == R_X86_64_PC32 or r_type == R_X86_64_PLT32)
+                    .pc32
+                else if (r_type == R_X86_64_32)
+                    .abs32
+                else if (r_type == R_X86_64_32S)
+                    .abs32s
+                else
+                    return error.UnsupportedRelocation;
                 if (r_offset + kindWidth(kind) > site_section.size) return error.InvalidObject;
                 const site_offset = site_place.offset + r_offset;
                 const symbol = object.symbols[r_sym];
@@ -678,6 +674,11 @@ pub fn applySite(field: []u8, kind: SiteKind, target_plus_addend: i64, site_addr
 
 const Place = struct { region: Region, offset: u64 };
 
+fn placeDebug(place: *?Place, size: *u64, region: Region, section_size: u64) void {
+    place.* = .{ .region = region, .offset = size.* };
+    size.* += section_size;
+}
+
 const Definition = struct {
     object: u32,
     symbol: u32,
@@ -732,25 +733,18 @@ const Layout = struct {
 const SectionClass = enum { skip, text, rodata, data, bss, debug_line, debug_info, debug_abbrev };
 
 fn classify(section: Section, options: BuildOptions) BuildError!SectionClass {
-    switch (section.type) {
-        SHT_NULL, SHT_SYMTAB, SHT_STRTAB, SHT_RELA => return .skip,
-        SHT_X86_64_UNWIND => return .skip,
-        SHT_LLVM_ADDRSIG => return .skip,
-        else => {},
-    }
+    const consumed = section.type == SHT_NULL or section.type == SHT_SYMTAB or section.type == SHT_STRTAB or section.type == SHT_RELA;
+    // Unwind tables and the address-significance table are not placed.
+    const dropped = section.type == SHT_X86_64_UNWIND or section.type == SHT_LLVM_ADDRSIG;
+    if (consumed or dropped) return .skip;
     if (section.flags & SHF_TLS != 0) return error.UnsupportedSection;
     if (section.flags & SHF_ALLOC != 0) {
         if (section.addralign > page_size) return error.UnsupportedSection;
-        return switch (section.type) {
-            SHT_PROGBITS => if (section.flags & SHF_EXECINSTR != 0)
-                .text
-            else if (section.flags & SHF_WRITE != 0)
-                .data
-            else
-                .rodata,
-            SHT_NOBITS => .bss,
-            else => error.UnsupportedSection,
-        };
+        if (section.type == SHT_NOBITS) return .bss;
+        if (section.type != SHT_PROGBITS) return error.UnsupportedSection;
+        if (section.flags & SHF_EXECINSTR != 0) return .text;
+        if (section.flags & SHF_WRITE != 0) return .data;
+        return .rodata;
     }
     if (section.type == SHT_PROGBITS and std.mem.startsWith(u8, section.name, ".debug_")) {
         if (!options.keep_debug) return .skip;
@@ -849,10 +843,7 @@ const Object = struct {
                     .type = @truncate(info),
                     .visibility = @truncate(entries[at + 5]),
                 };
-                switch (symbol.bind) {
-                    STB_LOCAL, STB_GLOBAL, STB_WEAK => {},
-                    else => return error.UnsupportedSymbol,
-                }
+                if (symbol.bind != STB_LOCAL and symbol.bind != STB_GLOBAL and symbol.bind != STB_WEAK) return error.UnsupportedSymbol;
                 if (symbol.shndx == SHN_COMMON or (symbol.shndx == SHN_ABS and symbol.type != STT_FILE)) return error.UnsupportedSymbol;
                 if (symbol.shndx != SHN_UNDEF and symbol.shndx < SHN_LORESERVE and symbol.shndx >= sections.len) return error.InvalidObject;
             }

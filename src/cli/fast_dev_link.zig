@@ -9,9 +9,7 @@
 //! On a miss the link step prelinks the host with LLD, files it, and writes
 //! it into the output.
 const std = @import("std");
-const base = @import("base");
 const compile = @import("compile");
-const backend = @import("backend");
 const linker = @import("linker.zig");
 const host_prelink = @import("host_prelink.zig");
 const patch_link = @import("patch_link.zig");

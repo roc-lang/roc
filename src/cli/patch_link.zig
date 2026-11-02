@@ -30,6 +30,18 @@ const Executor = base.post_check_task_executor.Executor;
 
 const page_size: u64 = 4096;
 const sym_size = 24;
+const PT_LOAD = 1;
+const PF_X = 1;
+const PF_W = 2;
+const PF_R = 4;
+const SHT_PROGBITS = 1;
+const SHT_SYMTAB = 2;
+const SHT_STRTAB = 3;
+const SHT_NOBITS = 8;
+const SHF_WRITE = 0x1;
+const SHF_ALLOC = 0x2;
+const SHF_EXECINSTR = 0x4;
+const STB_LOCAL = 0;
 
 /// One image to place, with the key that orders it.
 pub const ImageInput = struct {
@@ -37,6 +49,7 @@ pub const ImageInput = struct {
     key: [32]u8,
 };
 
+/// Everything a patch link reads.
 pub const Inputs = struct {
     host: host_prelink.View,
     host_key: [32]u8,
@@ -60,6 +73,7 @@ pub const Timing = struct {
     sites_patched: u64 = 0,
 };
 
+/// Why a patch link failed.
 pub const LinkError = Allocator.Error || error{
     /// The app imports a symbol the host must provide and does not. The
     /// names are in `Outcome.missing`.
@@ -70,6 +84,7 @@ pub const LinkError = Allocator.Error || error{
     ProgramTooLarge,
 } || OutputFile.Error;
 
+/// What a failed patch link reports beyond its error.
 pub const Outcome = struct {
     missing: []const []const u8 = &.{},
 };
@@ -214,14 +229,14 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     defer headers.deinit(gpa);
     for (0..host.header.shnum) |index| try headers.append(gpa, host.section(@intCast(index)));
     const text_index: u32 = @intCast(headers.items.len);
-    try headers.append(gpa, .{ .name = try addName(gpa, &names, ".text.roc"), .type = host_prelink.SHT_PROGBITS, .flags = host_prelink.SHF_ALLOC | host_prelink.SHF_EXECINSTR, .addr = host_prelink.app_base, .offset = app_offset, .size = rx_size, .link = 0, .info = 0, .addralign = page_size, .entsize = 0 });
+    try headers.append(gpa, .{ .name = try addName(gpa, &names, ".text.roc"), .type = SHT_PROGBITS, .flags = SHF_ALLOC | SHF_EXECINSTR, .addr = host_prelink.app_base, .offset = app_offset, .size = rx_size, .link = 0, .info = 0, .addralign = page_size, .entsize = 0 });
     const data_index: u32 = @intCast(headers.items.len);
-    try headers.append(gpa, .{ .name = try addName(gpa, &names, ".data.roc"), .type = host_prelink.SHT_PROGBITS, .flags = host_prelink.SHF_ALLOC | host_prelink.SHF_WRITE, .addr = rw_base, .offset = rw_offset, .size = rw_file_size, .link = 0, .info = 0, .addralign = page_size, .entsize = 0 });
+    try headers.append(gpa, .{ .name = try addName(gpa, &names, ".data.roc"), .type = SHT_PROGBITS, .flags = SHF_ALLOC | SHF_WRITE, .addr = rw_base, .offset = rw_offset, .size = rw_file_size, .link = 0, .info = 0, .addralign = page_size, .entsize = 0 });
     const bss_index: u32 = @intCast(headers.items.len);
-    try headers.append(gpa, .{ .name = try addName(gpa, &names, ".bss.roc"), .type = host_prelink.SHT_NOBITS, .flags = host_prelink.SHF_ALLOC | host_prelink.SHF_WRITE, .addr = rw_base + rw_file_size, .offset = rw_offset + rw_file_size, .size = rw_mem_size - rw_file_size, .link = 0, .info = 0, .addralign = 16, .entsize = 0 });
+    try headers.append(gpa, .{ .name = try addName(gpa, &names, ".bss.roc"), .type = SHT_NOBITS, .flags = SHF_ALLOC | SHF_WRITE, .addr = rw_base + rw_file_size, .offset = rw_offset + rw_file_size, .size = rw_mem_size - rw_file_size, .link = 0, .info = 0, .addralign = 16, .entsize = 0 });
     const debug_names = [_][]const u8{ ".debug_abbrev", ".debug_info", ".debug_line" };
     for (debug_host_index, debug_names, 0..) |host_index, debug_name, slot| {
-        const header: host_prelink.SectionHeader = .{ .name = 0, .type = host_prelink.SHT_PROGBITS, .flags = 0, .addr = 0, .offset = debug_offsets[slot], .size = debug_sizes[slot], .link = 0, .info = 0, .addralign = 1, .entsize = 0 };
+        const header: host_prelink.SectionHeader = .{ .name = 0, .type = SHT_PROGBITS, .flags = 0, .addr = 0, .offset = debug_offsets[slot], .size = debug_sizes[slot], .link = 0, .info = 0, .addralign = 1, .entsize = 0 };
         if (host_index != 0) {
             headers.items[host_index].offset = header.offset;
             headers.items[host_index].size = header.size;
@@ -242,8 +257,8 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         strtab.size = strtab_size;
     } else {
         const strtab_index: u32 = @intCast(headers.items.len + 1);
-        try headers.append(gpa, .{ .name = try addName(gpa, &names, ".symtab"), .type = host_prelink.SHT_SYMTAB, .flags = 0, .addr = 0, .offset = symtab_offset, .size = symtab_count * sym_size, .link = strtab_index, .info = @intCast(first_global), .addralign = 8, .entsize = sym_size });
-        try headers.append(gpa, .{ .name = try addName(gpa, &names, ".strtab"), .type = host_prelink.SHT_STRTAB, .flags = 0, .addr = 0, .offset = strtab_offset, .size = strtab_size, .link = 0, .info = 0, .addralign = 1, .entsize = 0 });
+        try headers.append(gpa, .{ .name = try addName(gpa, &names, ".symtab"), .type = SHT_SYMTAB, .flags = 0, .addr = 0, .offset = symtab_offset, .size = symtab_count * sym_size, .link = strtab_index, .info = @intCast(first_global), .addralign = 8, .entsize = sym_size });
+        try headers.append(gpa, .{ .name = try addName(gpa, &names, ".strtab"), .type = SHT_STRTAB, .flags = 0, .addr = 0, .offset = strtab_offset, .size = strtab_size, .link = 0, .info = 0, .addralign = 1, .entsize = 0 });
     }
     const shstrtab_offset = tail_at;
     tail_at += names.items.len;
@@ -366,8 +381,8 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         }
     }
     const phdrs = mapped[@intCast(host.header.phdr_offset)..][0 .. host.header.phnum * 56];
-    writeLoad(phdrs[host.header.first_spare * 56 ..][0..56], app_offset, host_prelink.app_base, rx_size, rx_size, host_prelink.PF_R | host_prelink.PF_X);
-    if (rw_mem_size != 0) writeLoad(phdrs[(host.header.first_spare + 1) * 56 ..][0..56], rw_offset, rw_base, rw_file_size, rw_mem_size, host_prelink.PF_R | host_prelink.PF_W);
+    writeLoad(phdrs[host.header.first_spare * 56 ..][0..56], app_offset, host_prelink.app_base, rx_size, rx_size, PF_R | PF_X);
+    if (rw_mem_size != 0) writeLoad(phdrs[(host.header.first_spare + 1) * 56 ..][0..56], rw_offset, rw_base, rw_file_size, rw_mem_size, PF_R | PF_W);
     var build_id = std.crypto.hash.sha2.Sha256.init(.{});
     build_id.update("roc-fast-dev-link-build-id-v1");
     build_id.update(&inputs.host_key);
@@ -497,7 +512,7 @@ const Task = struct {
                 .func => 2,
             };
             std.mem.writeInt(u32, entry[0..4], @intCast(place.strings + symbol.name), .little);
-            entry[4] = (host_prelink.STB_LOCAL << 4) | elf_type;
+            entry[4] = (STB_LOCAL << 4) | elf_type;
             entry[5] = 0;
             std.mem.writeInt(u16, entry[6..8], @intCast(context.section_index[
                 switch (region) {
@@ -552,7 +567,7 @@ fn populate(bytes: []u8) void {
 }
 
 fn writeLoad(entry: *[56]u8, offset: u64, vaddr: u64, filesz: u64, memsz: u64, flags: u32) void {
-    std.mem.writeInt(u32, entry[0..4], host_prelink.PT_LOAD, .little);
+    std.mem.writeInt(u32, entry[0..4], PT_LOAD, .little);
     std.mem.writeInt(u32, entry[4..8], flags, .little);
     std.mem.writeInt(u64, entry[8..16], offset, .little);
     std.mem.writeInt(u64, entry[16..24], vaddr, .little);
@@ -613,12 +628,10 @@ pub const OutputFile = struct {
     pub const Error = Allocator.Error || error{ AccessDenied, NoSpaceLeft, FileNotFound, Unexpected };
 
     fn failure(errno: linux.E) Error {
-        return switch (errno) {
-            .ACCES, .PERM, .ROFS => error.AccessDenied,
-            .NOSPC, .DQUOT => error.NoSpaceLeft,
-            .NOENT, .NOTDIR => error.FileNotFound,
-            else => error.Unexpected,
-        };
+        if (errno == .ACCES or errno == .PERM or errno == .ROFS) return error.AccessDenied;
+        if (errno == .NOSPC or errno == .DQUOT) return error.NoSpaceLeft;
+        if (errno == .NOENT or errno == .NOTDIR) return error.FileNotFound;
+        return error.Unexpected;
     }
 
     /// Create the output for `dest_path`. Fails when the destination
@@ -629,12 +642,10 @@ pub const OutputFile = struct {
         const dest = try arena.dupeSentinel(u8, dest_path, 0);
         const temp = try std.fmt.allocPrintSentinel(arena, "{s}{s}.{s}.{d}.roc-link", .{ if (std.fs.path.dirname(dest_path) == null) "" else dir, if (std.fs.path.dirname(dest_path) == null) "" else "/", std.fs.path.basename(dest_path), linux.getpid() }, 0);
         const anonymous = linux.openat(linux.AT.FDCWD, dir_z, .{ .ACCMODE = .RDWR, .TMPFILE = true, .DIRECTORY = true, .CLOEXEC = true }, 0o777);
-        switch (linux.errno(anonymous)) {
-            .SUCCESS => return .{ .fd = @intCast(anonymous), .dest = dest, .temp = temp, .named = false },
-            // The filesystem has no anonymous files.
-            .OPNOTSUPP, .ISDIR => {},
-            else => |errno| return failure(errno),
-        }
+        const anonymous_errno = linux.errno(anonymous);
+        if (anonymous_errno == .SUCCESS) return .{ .fd = @intCast(anonymous), .dest = dest, .temp = temp, .named = false };
+        // Without anonymous files on this filesystem, a named file stands in.
+        if (anonymous_errno != .OPNOTSUPP and anonymous_errno != .ISDIR) return failure(anonymous_errno);
         const named = linux.openat(linux.AT.FDCWD, temp, .{ .ACCMODE = .RDWR, .CREAT = true, .TRUNC = true, .CLOEXEC = true }, 0o777);
         if (linux.errno(named) != .SUCCESS) return failure(linux.errno(named));
         return .{ .fd = @intCast(named), .dest = dest, .temp = temp, .named = true };
@@ -648,11 +659,9 @@ pub const OutputFile = struct {
         var remaining = len;
         while (remaining != 0) {
             const rc = linux.copy_file_range(source, &in_offset, self.fd, &out_offset, @intCast(@min(remaining, 1 << 30)), 0);
-            switch (linux.errno(rc)) {
-                .SUCCESS => {},
-                .INTR => continue,
-                else => |errno| return failure(errno),
-            }
+            const errno = linux.errno(rc);
+            if (errno == .INTR) continue;
+            if (errno != .SUCCESS) return failure(errno);
             if (rc == 0) return error.Unexpected;
             remaining -= rc;
         }
@@ -664,11 +673,9 @@ pub const OutputFile = struct {
         var written: usize = 0;
         while (written < bytes.len) {
             const rc = linux.pwrite(self.fd, bytes.ptr + written, bytes.len - written, @intCast(written));
-            switch (linux.errno(rc)) {
-                .SUCCESS => {},
-                .INTR => continue,
-                else => |errno| return failure(errno),
-            }
+            const errno = linux.errno(rc);
+            if (errno == .INTR) continue;
+            if (errno != .SUCCESS) return failure(errno);
             written += rc;
         }
         self.size = @max(self.size, bytes.len);
@@ -697,16 +704,13 @@ pub const OutputFile = struct {
             const proc_path = try std.fmt.allocPrintSentinel(arena, "/proc/self/fd/{d}", .{self.fd}, 0);
             while (true) {
                 const rc = linux.linkat(linux.AT.FDCWD, proc_path, linux.AT.FDCWD, self.temp, linux.AT.SYMLINK_FOLLOW);
-                switch (linux.errno(rc)) {
-                    .SUCCESS => break,
-                    .INTR => continue,
-                    // A temporary name a killed build left behind.
-                    .EXIST => {
-                        const unlinked = linux.unlinkat(linux.AT.FDCWD, self.temp, 0);
-                        if (linux.errno(unlinked) != .SUCCESS) return failure(linux.errno(unlinked));
-                    },
-                    else => |errno| return failure(errno),
-                }
+                const errno = linux.errno(rc);
+                if (errno == .SUCCESS) break;
+                if (errno == .INTR) continue;
+                if (errno != .EXIST) return failure(errno);
+                // A temporary name a killed build left behind.
+                const unlinked = linux.unlinkat(linux.AT.FDCWD, self.temp, 0);
+                if (linux.errno(unlinked) != .SUCCESS) return failure(linux.errno(unlinked));
             }
             self.named = true;
         }

@@ -12401,12 +12401,14 @@ const FastDevLink = struct {
             unit.* = .{ .view = backend.dev.UnitImage.View.init(image) catch base.invariant("roc build invariant violated: a unit image does not read", .{}), .key = key };
         }
         units[library.images.len] = .{ .view = backend.dev.UnitImage.View.init(root_image) catch base.invariant("roc build invariant violated: the root unit image does not read", .{}), .key = root_key };
+        const support_view = backend.dev.UnitImage.View.init(self.support) catch
+            unreachable; // `start` read this image
         var timing: patch_link.Timing = .{};
         var outcome: patch_link.Outcome = .{};
         patch_link.link(ctx.gpa, ctx.arena, ctx.io.std_io, .{
             .host = host_view,
             .host_key = self.job.key,
-            .support = .{ .view = backend.dev.UnitImage.View.init(self.support) catch unreachable, .key = self.support_digest }, // `start` read this image
+            .support = .{ .view = support_view, .key = self.support_digest },
             .units = units,
             .root = library.images.len,
             .host_required = self.spec.host_required,
