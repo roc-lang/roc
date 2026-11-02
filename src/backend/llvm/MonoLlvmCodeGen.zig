@@ -15155,7 +15155,7 @@ test "composition sites are the writable exports that name them" {
     var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, target);
     defer codegen.deinit();
     codegen.layout_store = &layouts;
-    const id: lir.LIR.StaticDataId = @fromBackingInt(0);
+    const id: lir.LIR.StaticDataId = @fromBackingInt(1);
     const exports = [_]lir.Program.StaticDataExport{.{
         .symbol_name = "roc__boxy_site_00_0",
         .value_id = id,

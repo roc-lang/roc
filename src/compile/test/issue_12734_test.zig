@@ -1,5 +1,6 @@
 //! Composition slots remain explicit, distinct mutable data after LIR passes.
 const std = @import("std");
+const collections = @import("collections");
 const lir = @import("lir");
 const harness = @import("lower_to_lir_harness.zig");
 
@@ -53,11 +54,11 @@ test "issue 12734: boxy composition sites survive ARC and static data compaction
 const Compositions = struct { closed: usize = 0, open: usize = 0 };
 
 fn dictionaryCompositions(store: *const lir.LirStore) std.mem.Allocator.Error!Compositions {
-    var static_locals = std.AutoHashMap(lir.LIR.LocalId, void).init(std.testing.allocator);
-    defer static_locals.deinit();
+    var static_locals: collections.DenseMapUnmanaged(lir.LIR.LocalId, void) = .empty;
+    defer static_locals.deinit(std.testing.allocator);
     for (0..store.cfStmtCount()) |i| {
         const stmt = store.getCFStmt(@fromBackingInt(@intCast(i)));
-        if (stmt == .assign_literal and stmt.assign_literal.value == .static_data) try static_locals.put(stmt.assign_literal.target, {});
+        if (stmt == .assign_literal and stmt.assign_literal.value == .static_data) try static_locals.put(std.testing.allocator, stmt.assign_literal.target, {});
     }
     var result: Compositions = .{};
     for (0..store.cfStmtCount()) |i| {

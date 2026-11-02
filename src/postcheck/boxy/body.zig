@@ -364,7 +364,7 @@ pub const Builder = struct {
 
     /// What each local holding static data holds, for a dictionary that
     /// captures it.
-    static_words: std.AutoHashMapUnmanaged(LocalId, StaticDescs.CaptureWord) = .empty,
+    static_words: collections.DenseMapUnmanaged(LocalId, StaticDescs.CaptureWord) = .empty,
     /// Each type's descriptor once noted (`Input.stored_functions`).
     noted_descs: collections.DenseMapUnmanaged(TypeId, LocalId) = .empty,
     /// The locals the entry chain defines, which every statement of the
