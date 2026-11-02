@@ -45235,7 +45235,7 @@ fn dispatchStateIsAncestorObligation(
     env: *Env,
 ) Allocator.Error!bool {
     const ancestor_key = try self.dispatchStateTypeKey(ancestor.receiver_var, ancestor.constraint_fn_var, value, env);
-    if (!std.mem.eql(u8, &ancestor_key, &state_type_key)) return false;
+    if (!std.meta.eql(ancestor_key, state_type_key)) return false;
     return try self.identityVarsMatch(ancestor.receiver_var, dispatcher_var, value, env) and
         try self.identityVarsMatch(ancestor.constraint_fn_var, constraint_fn_var, value, env);
 }
