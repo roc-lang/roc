@@ -12404,6 +12404,48 @@ does not excuse the annotation), and
 test/cli/ParserChildErrorOutsideAnnotation.roc (a nested custom parser's error
 tag outside the annotated row, including when a caller also widens the row).
 
+### Parked Codec Relations Validate A Private Instance
+
+A generalized scheme never changes after its boundary: every use copies it, so
+a later write would reach some uses and miss others. A generated-codec relation
+parked for finalization whose receiver is known but whose state or error row is
+still a variable the definition quantifies (`any_parser = |_|
+U64.parser_for(Format.Default)`, whose state nothing in the definition fixes)
+therefore belongs to its scheme as a template, exactly like a relation over an
+unresolved receiver. `Check.activateSchemeDeferredCodecConstraints` marks it
+scheme-only at the boundary. Each use copies it and validates the copy at that
+use's own state and error row, so two calls of one definition in one body may
+take two rows, and a call's `Parser Error Row Missing Tag` or state mismatch is
+that use's own relation. Checked output records the template as requiring
+instantiation, so the definition has no uninstantiated root contract, and
+derivations live on the copies, never on the template. A generalized binding
+that nothing uses (`_ = any_parser`) keeps the relation it copied as a template
+with no copy of its own, so its evidence is `unreachable_value`: no value ever
+reaches that dispatch. `.boxy` constructs a stored lambda with its own
+dictionaries, and a `from_scheme` entry there means no use instantiated it, so
+that dictionary is the same crash and nothing reads it.
+
+A definition with no use still owes its relation a verdict, so finalization
+validates one private instance of it (`Check.finalCodecRelationInstance`)
+rather than the template. The instance copies the variables the scheme
+quantifies, keeps rigid variables rigid, so a body that cannot deliver its
+annotation is rejected, and shares monomorphic variables, so a relation that
+reaches a weak value still determines it. A relation no type satisfies, such as
+a format with no `parse_u64`, is reported at the expression that created it.
+This validates in a private copy and rewrites no solved variable the program can
+reach, so it adds no Rewrite Inventory entry (Solver-Mutating Rewrites).
+
+A relation whose state is known at the boundary is unaffected: it is validated
+there, before generalization, and its row quantifies with the rest of the
+definition. Pinned by `src/check/test/codec_scheme_relation_test.zig` (accepted:
+quantified schemes for parsers, encoders and forwarding definitions, two rows
+in one body; rejected: a use's state or row, a relation no type satisfies with
+no use, and an annotation's rigid state or error row) and
+`test/cli/CodecSchemeRowsPerUse.roc`, which runs parsers and encoders at two
+rows in one body, through a forwarding definition and a local alias, in stored
+records, at two state types, through an import, and as bindings nothing uses, on
+every backend under both strategies.
+
 ### Derived Equality And Hashing Over Open Rows
 
 Deferred dispatch relations record both their creating binding group and their

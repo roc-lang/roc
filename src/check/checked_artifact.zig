@@ -18856,6 +18856,9 @@ const EvidencePass = struct {
     local_value_scheme_by_var: collections.DenseMap(u32, u32),
     /// First value_use record per looked-up pattern.
     value_use_record_by_pattern: collections.DenseMap(u32, u32),
+    /// Callable roots of scheme-only generated-codec relations. Each use
+    /// validates its own copy, so such a relation has no derivation of its own.
+    scheme_only_codec_callables: collections.DenseMap(Var, void),
     /// Each scheme-use record's substitution, indexed by the resolved root of
     /// each pair's scheme-side var; the first pair recorded for a root wins.
     /// The store is read-only during this pass, so resolved roots are fixed.
@@ -18984,6 +18987,7 @@ const EvidencePass = struct {
             .source_by_checked_expr = collections.DenseMap(u32, u32).init(allocator),
             .local_value_scheme_by_var = collections.DenseMap(u32, u32).init(allocator),
             .value_use_record_by_pattern = collections.DenseMap(u32, u32).init(allocator),
+            .scheme_only_codec_callables = collections.DenseMap(Var, void).init(allocator),
             .node_by_record = collections.DenseMap(u32, static_dispatch.EvidenceNodeId).init(allocator),
             .evidence_node_buckets = std.AutoHashMap(u64, static_dispatch.EvidenceNodeId).init(allocator),
             .evidence_node_next = .empty,
@@ -19022,6 +19026,7 @@ const EvidencePass = struct {
         self.source_by_checked_expr.deinit();
         self.local_value_scheme_by_var.deinit();
         self.value_use_record_by_pattern.deinit();
+        self.scheme_only_codec_callables.deinit();
         self.fresh_by_pair_root.deinit(self.allocator);
         self.node_by_record.deinit();
         self.evidence_node_buckets.deinit();
@@ -19610,6 +19615,11 @@ const EvidencePass = struct {
 
     fn buildIndexes(self: *EvidencePass) Allocator.Error!void {
         const module_env = self.module.moduleEnvConst();
+        for (module_env.binding_scheme_codec_requirements.items.items) |requirement| {
+            if (requirement.requires_instantiation == 0) continue;
+            const constraint = module_env.types.getStaticDispatchConstraintAt(requirement.constraint_index);
+            try self.scheme_only_codec_callables.put(self.types.resolveVar(constraint.fn_var).var_, {});
+        }
         for (module_env.generated_codec_derivations.items.items, 0..) |derivation, index| {
             const kind: static_dispatch.GeneratedCodecDerivationKind = switch (@as(ModuleEnv.GeneratedCodecDerivation.Kind, @fromBackingInt(@intCast(derivation.kind)))) {
                 .parser => .parser,
@@ -21560,6 +21570,12 @@ const EvidencePass = struct {
                     const callable_var = fresh_fn_var orelse param.constraint.fn_var;
                     const callable_ty = self.checked_types.rootForSourceVar(self.module, callable_var) orelse
                         checkedArtifactInvariant("checked structural evidence callable type was not published", .{});
+                    // A generalized binding nothing uses keeps the relation it
+                    // copied as a template: no use instantiates it, so no value
+                    // ever reaches the dispatch.
+                    if (self.scheme_only_codec_callables.contains(self.types.resolveVar(callable_var).var_)) {
+                        break :blk .unreachable_value;
+                    }
                     break :blk .{ .structural = .{
                         .derivation = kind,
                         .dispatcher_ty = dispatcher_ty,

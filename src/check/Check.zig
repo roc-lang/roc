@@ -417,6 +417,8 @@ final_codec_dispatch_constraint_fns: collections.DenseMapUnmanaged(Var, CodecCon
 /// Generic generated-codec relations captured by their owning type scheme.
 /// Their definition-side worklist entries must retire without being treated as
 /// settled: each scheme instantiation copies and validates the exact relation.
+/// A relation that was already parked for finalization validates a private
+/// instance there (`finalCodecRelationInstance`).
 scheme_deferred_codec_constraint_fns: collections.DenseMapUnmanaged(Var, void) = .empty,
 checking_final_codec_dispatch_constraints: bool = false,
 /// Boundary validation produces constraints once; the exact calls and live
@@ -2258,7 +2260,8 @@ const SchemeDispatchRequirement = struct {
     /// receiver's structural spine even when the receiver root is monomorphic.
     deferred_generated_codec: bool,
     /// This pristine relation exists only as a scheme template in this checker.
-    /// Local unresolved captures set this after generalization; imported and
+    /// Local unresolved captures and parked relations that reach the scheme's
+    /// quantified variables set this after generalization; imported and
     /// rehydrated schemes set it because only their instantiated copies need
     /// validation here.
     pristine_codec_is_scheme_only: bool,
