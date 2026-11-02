@@ -5,7 +5,7 @@ platform ""
     # Helper imports Core and Utils; Core imports Utils
     exposes [Helper, Core, Utils]
     packages {}
-    provides { "roc_process_string": process_string_for_host }
+    provides { "roc_process_string": process_string_for_host, "roc_trimmed_string": trimmed_string_for_host }
     targets: {
         inputs_dir: "targets/",
         x64mac: { inputs: ["libhost.a", app] },
@@ -25,6 +25,14 @@ platform ""
 import Core
 import Helper
 import Utils
+
+# No host calls this root. It is here to be lowered: a provided root that is an
+# alias of a generic procedure takes that procedure's dictionaries from the
+# root's own evidence.
+trim_any = |value| value.trim()
+
+trimmed_string_for_host : Str -> Str
+trimmed_string_for_host = trim_any
 
 process_string_for_host : Str -> Str
 process_string_for_host = |input| {
