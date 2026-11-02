@@ -29,6 +29,10 @@ main! = || {
     Stdout.line!(Padded.Held.unbox(held))
     Stdout.line!(Padded.Held.doubled(held).to_str())
 
+    mixed = Padded.check_mixed!(Padded.Mixed.new(1.5, "mixed across the host"))
+    Stdout.line!(Padded.Mixed.unbox(mixed))
+    Stdout.line!(Str.inspect(Padded.Mixed.scaled(mixed)))
+
     lifted : Padded
     lifted = from_row(66, 77)
     Stdout.line!(lifted.check!())

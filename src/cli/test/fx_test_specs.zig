@@ -318,7 +318,7 @@ pub const io_spec_tests = [_]TestSpec{
     // type can be the nominal's own type parameter.
     .{
         .roc_file = "test/fx/host_interop_generic_padding.roc",
-        .io_spec = "1>1122|1>3344|1>held across the host|1>110|1>6677|1>77|1>8899",
+        .io_spec = "1>1122|1>3344|1>held across the host|1>110|1>mixed across the host|1>3|1>6677|1>77|1>8899",
         .description = "Generic nominal records with unnamed padding match the host C struct layout",
     },
 

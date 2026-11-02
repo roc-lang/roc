@@ -80,6 +80,22 @@ Op(a) := { f : a -> Str, _ : U8, v : a }.{
 
 Table := { items : List(Plain), _ : U8, name : Str }
 
+# Generated codecs walk the record row, and read and build the padded record.
+Encoded := { z : U32, _ : U32, a : Str ?? "fallback" }.{
+	encoder_for : _
+	parser_for : _
+}
+
+EncodedSlot(a) := { y : U32, _ : U8, a : a }.{
+	encoder_for : _
+	parser_for : _
+}
+
+EncodedOuter := { p : Encoded, _ : U16, n : U64 }.{
+	encoder_for : _
+	parser_for : _
+}
+
 size : Tree(a) -> U64
 size = |t| List.fold(t.kids, 1, |n, k| n + size(k))
 
@@ -123,6 +139,14 @@ tag_param = |t| match t {
 tuple_param : ({ z : U32, a : U64 }, U8) -> U32
 tuple_param = |(r, b)| r.z + b.to_u32()
 
+nested_param : { p : { z : U32, a : U64 }, n : U8 } -> U64
+nested_param = |r| r.p.a + r.n.to_u64()
+
+# An empty record takes no space where the padded record it stands for does, so
+# the field beside it moves.
+unit_param : { k : {}, n : U64 } -> U64
+unit_param = |r| r.n
+
 apply : (a -> b), a -> b
 apply = |f, a| f(a)
 
@@ -144,7 +168,14 @@ stored_generic = Pair.new(3, "a stored pair with a string too long to be inline"
 evaluated : U64
 evaluated = Pair.left(Pair.new(16.U64, "s"))
 
-main! = |_args| {
+adder : Plain -> (U64 -> U64)
+adder = |p| |x| x + p.a
+
+stored_adder : U64 -> U64
+stored_adder = adder({ z: 1, a: 20 })
+
+main! = |args| {
+	suffix = Str.join_with(args.drop_first(1), "")
 	long = "a string that is too long to be stored inline"
 	p = Padded.new(1, long)
 	q = Padded.bump(p)
@@ -223,8 +254,30 @@ main! = |_args| {
 	lifted_fn = Lifted.to_plain
 	lifted_unit : Only
 	lifted_unit = Lifted.nothing
+	beside : { k : Only, n : U64 }
+	beside = Lifted.beside
+	nested : { p : Plain, n : U8 }
+	nested = { p: plain, n: 3 }
+	echo!("${Str.inspect(beside.n)} ${Str.inspect(unit_param(beside))} ${Str.inspect(nested_param(nested))} ${Str.inspect(stored_adder(1))}\n")
 	echo!("${Str.inspect(lifted.a)} ${Str.inspect(List.map(lifted_list, |e| e.a))} ${Str.inspect(lifted_fn(1).a)} ${Str.inspect(apply(Lifted.to_plain, 2.U32).a)} ${Str.inspect(lifted_unit)}\n")
 
 	echo!("${Str.inspect(stored.a)} ${Str.inspect(List.map(stored_list, |e| e.a))} ${Str.inspect(stored_fn(1).a)} ${Str.inspect(List.len(stored_table.items))} ${stored_table.name} ${stored_generic.r} ${Str.inspect(evaluated)}\n")
+
+	encoded : Encoded
+	encoded = { z: 4, a: "text" }
+	encoded_slot : EncodedSlot(Str)
+	encoded_slot = { y: 5, a: "slot" }
+	encoded_outer : EncodedOuter
+	encoded_outer = { p: encoded, n: 11 }
+	echo!("${Json.to_str(encoded)} ${Json.to_str(encoded_slot)} ${Json.to_str(encoded_outer)}\n")
+	parsed : Try(Encoded, _)
+	parsed = Json.parse(Str.concat("{\"a\": \"parsed\", \"z\": 6}", suffix))
+	defaulted_parse : Try(Encoded, _)
+	defaulted_parse = Json.parse(Str.concat("{\"z\": 7}", suffix))
+	parsed_slot : Try(EncodedSlot(U64), _)
+	parsed_slot = Json.parse(Str.concat("{\"a\": 7, \"y\": 8}", suffix))
+	parsed_outer : Try(EncodedOuter, _)
+	parsed_outer = Json.parse(Str.concat("{\"p\": {\"z\": 9}, \"n\": 10}", suffix))
+	echo!("${Str.inspect(parsed.map_ok(|v| v.a))} ${Str.inspect(parsed.map_ok(|v| v.z))} ${Str.inspect(defaulted_parse.map_ok(|v| v.a))} ${Str.inspect(parsed_slot.map_ok(|v| v.a))} ${Str.inspect(parsed_outer.map_ok(|v| v.p.a))} ${Str.inspect(parsed_outer.map_ok(|v| v.n))}\n")
 	Ok({})
 }

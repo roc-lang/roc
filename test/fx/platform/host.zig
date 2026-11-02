@@ -808,6 +808,15 @@ fn hostedPaddedCheckHeld(held: PaddedHeldArgs) callconv(.c) PaddedHeldArgs {
     return .{ .z = held.z * 2, ._pad = 0, .held = held.held };
 }
 
+/// Hosted function: Padded.check_mixed!—`Mixed(v)` at the offsets of its
+/// declaration: z@0, held@8. Its fields are of different C ABI classes, so the
+/// order of the Roc struct decides which register each one travels in.
+const PaddedMixedArgs = extern struct { z: f64, held: ?[*]u8 };
+
+fn hostedPaddedCheckMixed(mixed: PaddedMixedArgs) callconv(.c) PaddedMixedArgs {
+    return .{ .z = mixed.z * 2, .held = mixed.held };
+}
+
 const BoxedHostDropCounts = struct {
     primitive: usize = 0,
     nested_record: usize = 0,
@@ -1416,6 +1425,7 @@ comptime {
     @export(&hostedHostHandleReadExactly, .{ .name = "roc_proc_handle_read_exactly", .visibility = .hidden });
     @export(&hostedPaddedCheck, .{ .name = "roc_padded_check", .visibility = .hidden });
     @export(&hostedPaddedCheckHeld, .{ .name = "roc_padded_check_held", .visibility = .hidden });
+    @export(&hostedPaddedCheckMixed, .{ .name = "roc_padded_check_mixed", .visibility = .hidden });
     @export(&hostedPaddedCheckSlot, .{ .name = "roc_padded_check_slot", .visibility = .hidden });
     @export(&hostedPaddedCheckSpaced, .{ .name = "roc_padded_check_spaced", .visibility = .hidden });
     @export(&hostedStderrLine, .{ .name = "roc_stderr_line", .visibility = .hidden });

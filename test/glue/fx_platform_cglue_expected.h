@@ -170,6 +170,7 @@ typedef struct Builder Builder;
 typedef struct HostTree HostTree;
 typedef struct Host Host;
 typedef struct Padded Padded;
+typedef struct PaddedMixed PaddedMixed;
 typedef struct PaddedSlot PaddedSlot;
 typedef struct PaddedSpaced PaddedSpaced;
 typedef struct PaddedHeld PaddedHeld;
@@ -320,6 +321,26 @@ ROC_STATIC_ASSERT(sizeof(Padded) == 12, "Padded size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(Padded) == 4, "Padded alignment mismatch");
 ROC_STATIC_ASSERT(offsetof(Padded, z) == 0, "Padded.z offset mismatch");
 ROC_STATIC_ASSERT(offsetof(Padded, a) == 8, "Padded.a offset mismatch");
+#endif
+
+#if UINTPTR_MAX == UINT64_MAX
+struct PaddedMixed {
+    double z;
+    RocBox held;
+};
+ROC_STATIC_ASSERT(sizeof(PaddedMixed) == 16, "PaddedMixed size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(PaddedMixed) == 8, "PaddedMixed alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(PaddedMixed, z) == 0, "PaddedMixed.z offset mismatch");
+ROC_STATIC_ASSERT(offsetof(PaddedMixed, held) == 8, "PaddedMixed.held offset mismatch");
+#else
+struct PaddedMixed {
+    double z;
+    RocBox held;
+};
+ROC_STATIC_ASSERT(sizeof(PaddedMixed) == 16, "PaddedMixed size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(PaddedMixed) == 8, "PaddedMixed alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(PaddedMixed, z) == 0, "PaddedMixed.z offset mismatch");
+ROC_STATIC_ASSERT(offsetof(PaddedMixed, held) == 8, "PaddedMixed.held offset mismatch");
 #endif
 
 #if UINTPTR_MAX == UINT64_MAX
@@ -524,7 +545,7 @@ typedef void (*HostedFn)(void);
 
 // Hosted Function Count
 
-#define HOSTED_FUNCTION_COUNT 29
+#define HOSTED_FUNCTION_COUNT 30
 
 
 #define HOSTED_IDX_BUILDER_PRINT_VALUE 0
@@ -551,11 +572,12 @@ typedef void (*HostedFn)(void);
 #define HOSTED_IDX_PROC_HANDLE_READ_EXACTLY 21
 #define HOSTED_IDX_PADDED_CHECK 22
 #define HOSTED_IDX_PADDED_CHECK_HELD 23
-#define HOSTED_IDX_PADDED_CHECK_SLOT 24
-#define HOSTED_IDX_PADDED_CHECK_SPACED 25
-#define HOSTED_IDX_STDERR_LINE 26
-#define HOSTED_IDX_STDIN_LINE 27
-#define HOSTED_IDX_STDOUT_LINE 28
+#define HOSTED_IDX_PADDED_CHECK_MIXED 24
+#define HOSTED_IDX_PADDED_CHECK_SLOT 25
+#define HOSTED_IDX_PADDED_CHECK_SPACED 26
+#define HOSTED_IDX_STDERR_LINE 27
+#define HOSTED_IDX_STDIN_LINE 28
+#define HOSTED_IDX_STDOUT_LINE 29
 
 // Argument Structures
 
@@ -795,6 +817,27 @@ ROC_STATIC_ASSERT(ROC_ALIGNOF(PaddedCheckHeldArgs) == 4, "PaddedCheckHeldArgs al
 #endif
 
 /**
+ * Arguments for Padded.check_mixed!
+ * Roc signature: Padded.Mixed(rigid) => Padded.Mixed(rigid)
+ * Refcounted fields are owned by the hosted function.
+ */
+#if UINTPTR_MAX == UINT64_MAX
+typedef struct {
+    double z;
+    RocBox held;
+} PaddedCheckMixedArgs;
+ROC_STATIC_ASSERT(sizeof(PaddedCheckMixedArgs) == 16, "PaddedCheckMixedArgs size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(PaddedCheckMixedArgs) == 8, "PaddedCheckMixedArgs alignment mismatch");
+#else
+typedef struct {
+    double z;
+    RocBox held;
+} PaddedCheckMixedArgs;
+ROC_STATIC_ASSERT(sizeof(PaddedCheckMixedArgs) == 16, "PaddedCheckMixedArgs size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(PaddedCheckMixedArgs) == 8, "PaddedCheckMixedArgs alignment mismatch");
+#endif
+
+/**
  * Arguments for Padded.check_slot!
  * Roc signature: Padded.Slot(U32) => Str
  * Refcounted fields are owned by the hosted function.
@@ -954,6 +997,9 @@ extern RocStr roc_padded_check(Padded arg0);
 /* Padded.check_held!: Padded.Held(rigid) => Padded.Held(rigid) */
 extern PaddedHeld roc_padded_check_held(PaddedHeld arg0);
 
+/* Padded.check_mixed!: Padded.Mixed(rigid) => Padded.Mixed(rigid) */
+extern PaddedMixed roc_padded_check_mixed(PaddedMixed arg0);
+
 /* Padded.check_slot!: Padded.Slot(U32) => Str */
 extern RocStr roc_padded_check_slot(PaddedSlot arg0);
 
@@ -1007,11 +1053,12 @@ typedef struct {
     HostedFn proc_handle_read_exactly_bang;  /* index 21, C name: proc_handle_read_exactly */
     HostedFn padded_check_bang;  /* index 22, C name: padded_check */
     HostedFn padded_check_held_bang;  /* index 23, C name: padded_check_held */
-    HostedFn padded_check_slot_bang;  /* index 24, C name: padded_check_slot */
-    HostedFn padded_check_spaced_bang;  /* index 25, C name: padded_check_spaced */
-    HostedFn stderr_line_bang;  /* index 26, C name: stderr_line */
-    HostedFn stdin_line_bang;  /* index 27, C name: stdin_line */
-    HostedFn stdout_line_bang;  /* index 28, C name: stdout_line */
+    HostedFn padded_check_mixed_bang;  /* index 24, C name: padded_check_mixed */
+    HostedFn padded_check_slot_bang;  /* index 25, C name: padded_check_slot */
+    HostedFn padded_check_spaced_bang;  /* index 26, C name: padded_check_spaced */
+    HostedFn stderr_line_bang;  /* index 27, C name: stderr_line */
+    HostedFn stdin_line_bang;  /* index 28, C name: stdin_line */
+    HostedFn stdout_line_bang;  /* index 29, C name: stdout_line */
 } HostedFunctions;
 
 

@@ -30,6 +30,7 @@ platform ""
         "roc_proc_handle_read_exactly": Proc.handle_read_exactly!,
         "roc_padded_check": Padded.check!,
         "roc_padded_check_held": Padded.check_held!,
+        "roc_padded_check_mixed": Padded.check_mixed!,
         "roc_padded_check_slot": Padded.check_slot!,
         "roc_padded_check_spaced": Padded.check_spaced!,
         "roc_stderr_line": Stderr.line!,

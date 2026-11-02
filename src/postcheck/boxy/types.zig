@@ -560,6 +560,18 @@ pub const Store = struct {
         return self.declared_slots.items[declared.slots.start];
     }
 
+    /// The record row of `ty`: `ty` itself, unless it is the backing of a
+    /// padded nominal, whose row is the record of the same fields.
+    pub fn recordRow(self: *Store, ty: TypeId) Allocator.Error!TypeId {
+        const record = switch (self.get(ty)) {
+            .record => |record| record,
+            .primitive, .empty_record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => return ty,
+        };
+        if (record.declared == null) return ty;
+        if (record.fields.len == 0 and record.ext == null) return try self.emptyRecord();
+        return try self.intern(.{ .record = .{ .fields = self.fieldSpan(record.fields), .ext = record.ext } });
+    }
+
     /// Whether two record types of one value store their fields alike.
     pub fn sameRecordOrder(self: *const Store, a: Record, b: Record) bool {
         const a_declared = a.declared orelse return b.declared == null;
@@ -1749,6 +1761,12 @@ test "a padded backing is a type of its own, whose unnamed fields count toward i
     try std.testing.expect(store.sameRecordOrder(store.get(padded).record, store.get(other_padding).record));
     try std.testing.expectEqualSlices(TypeId, &.{number}, store.paddingTypes(store.get(padded).record));
     try std.testing.expectEqual(@as(usize, 0), store.paddingTypes(store.get(plain).record).len);
+
+    try std.testing.expectEqual(plain, try store.recordRow(padded));
+    try std.testing.expectEqual(plain, try store.recordRow(plain));
+    try std.testing.expectEqual(number, try store.recordRow(number));
+    const only_padding = try store.intern(.{ .record = .{ .fields = &.{}, .ext = null, .declared = .{ .padding = &.{number}, .slots = &.{0} } } });
+    try std.testing.expectEqual(try store.emptyRecord(), try store.recordRow(only_padding));
 
     try std.testing.expect(store.isClosed(padded));
     const open = try store.intern(.{ .record = .{ .fields = fields, .ext = null, .declared = .{ .padding = &.{try store.variable(0)}, .slots = &.{ 1, 2, 0 } } } });

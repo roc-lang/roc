@@ -57,6 +57,26 @@ Padded := {
         doubled = |held| held.z
     }
 
+    ## A padded nominal that a C ABI splits by field class: a float at 0 and a
+    ## pointer at 8, which the record's row would put the other way round.
+    Mixed(v) := {
+        z : F64,
+        _ : {},
+        held : Box(v),
+    }.{
+        new : F64, v -> Mixed(v)
+        new = |z, value| { z, held: Box.box(value) }
+
+        unbox : Mixed(v) -> v
+        unbox = |mixed| Box.unbox(mixed.held)
+
+        scaled : Mixed(v) -> F64
+        scaled = |mixed| mixed.z
+    }
+
+    ## Hosted: the host returns the record with `z` doubled and its box unmoved.
+    check_mixed! : Mixed(v) => Mixed(v)
+
     ## Hosted: the host reads the record at its declared offsets and returns
     ## "<z*100 + value>".
     check_slot! : Slot(U32) => Str

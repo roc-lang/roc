@@ -6,4 +6,5 @@ Lifted := {}.{
 	plains = [{ z: 7.U32, a: 8.U64 }, { z: 9.U32, a: 10.U64 }]
 	to_plain = |z| { z, a: 3.U64 }
 	nothing = {}
+	beside = { k: {}, n: 5.U64 }
 }
