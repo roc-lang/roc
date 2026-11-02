@@ -1988,7 +1988,7 @@ pub const Builder = struct {
     /// Dictionary `dictionary` of type `from` adapted to `to`. A dictionary
     /// is composed in the entry chain and lives as long as the process, so
     /// its adapter is too.
-    fn adaptDictionary(self: *Builder, dictionary: LocalId, from: TypeId, to: TypeId) Allocator.Error!LocalId {
+    pub fn adaptDictionary(self: *Builder, dictionary: LocalId, from: TypeId, to: TypeId) Allocator.Error!LocalId {
         const saved = self.immortal_closures;
         self.immortal_closures = true;
         defer self.immortal_closures = saved;
@@ -3935,7 +3935,7 @@ pub const Builder = struct {
             },
             .structural, .direct_pending => invariant("an interpolation's conversion plan has no callable resolution"),
         }
-        const try_ty = switch (self.program.store.get(try self.convert(plan.callable_ty))) {
+        const try_ty = switch (self.program.store.get(try self.dispatchCallable(plan.resolution, plan.callable_ty))) {
             .function => |function| function.ret,
             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("an interpolation's conversion type is not a function type"),
         };
@@ -5602,6 +5602,22 @@ pub const Builder = struct {
         };
     }
 
+    /// The function type a dispatch calls at, in this body's scope. A
+    /// direct call's plan callable is specialized against its target, which
+    /// renames every variable it leaves unsubstituted, so it cannot name this
+    /// body's scheme variables; the edge's own callable relation does
+    /// (design.md "Call Sites"). An edge with no
+    /// callable relation has a monomorphic target, whose plan callable holds
+    /// no variable of this body.
+    pub fn dispatchCallable(self: *Builder, resolution: static_dispatch.CheckedCallResolution, callable_ty: checked.CheckedTypeId) Allocator.Error!TypeId {
+        const direct = switch (resolution) {
+            .direct_closed, .direct_parametric => |direct| direct,
+            .direct_pending, .evidence_dependent, .structural, .checked_error, .@"unreachable" => return try self.convert(callable_ty),
+        };
+        const node = self.view.view.static_dispatch_plans.evidenceNode(direct.evidence);
+        return (try self.instantiationCallable(node.instantiation)) orelse try self.convert(callable_ty);
+    }
+
     /// The types the scheme variables of `callee` take at a call: the
     /// checked substitution's, where an erroneous entry takes what the call's
     /// function type `call_fn` relates it to, or seals.
@@ -6627,8 +6643,8 @@ pub const Builder = struct {
         }
     }
 
-    pub fn operandTypes(self: *Builder, callable_ty: checked.CheckedTypeId) Allocator.Error![]const TypeId {
-        return switch (self.program.store.get(try self.convert(callable_ty))) {
+    pub fn operandTypes(self: *Builder, call_plan: static_dispatch.StaticDispatchCallPlan) Allocator.Error![]const TypeId {
+        return switch (self.program.store.get(try self.dispatchCallable(call_plan.resolution, call_plan.callable_ty))) {
             .function => |function| self.program.store.span(function.args),
             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a dispatch's callable type is not a function type"),
         };
@@ -6638,7 +6654,7 @@ pub const Builder = struct {
         const table = self.view.view.static_dispatch_plans;
         const call_plan = self.dispatchPlan(plan_id);
         const operands = call_plan.argsSlice(table);
-        const operand_types = try self.allocator.dupe(TypeId, try self.operandTypes(call_plan.callable_ty));
+        const operand_types = try self.allocator.dupe(TypeId, try self.operandTypes(call_plan));
         defer self.allocator.free(operand_types);
         if (operand_types.len != operands.len) invariant("a dispatch's operand count differs from its callable type");
         switch (call_plan.resolution) {
@@ -6647,7 +6663,7 @@ pub const Builder = struct {
                 if (node.target.kind == .local_proc) {
                     // A method declared in a function body is a call of
                     // its local procedure's function value.
-                    const fn_ty = try self.convert(call_plan.callable_ty);
+                    const fn_ty = try self.dispatchCallable(call_plan.resolution, call_plan.callable_ty);
                     const value = try self.localMethodValue(node, fn_ty);
                     switch (call_plan.result_mode) {
                         .value, .parser_for, .encoder_for, .hash, .map, .map_effectful => {},
@@ -6665,6 +6681,7 @@ pub const Builder = struct {
                     return;
                 }
                 const callee = try self.methodTargetWorker(node.target);
+                const call_fn = try self.dispatchCallable(call_plan.resolution, call_plan.callable_ty);
                 const instance = switch (node.instantiation) {
                     // Reached through a procedure alias, the target takes the
                     // instantiation the call's callable type gives it.
@@ -6672,8 +6689,8 @@ pub const Builder = struct {
                     .monomorphic, .callable, .derived_from_callable => blk: {
                         const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
                         break :blk switch (node.nested) {
-                            .resolved => try self.callInstanceAt(callee, subst, table.nestedEvidence(node), try self.convert(call_plan.callable_ty), .{ .node = direct.evidence }),
-                            .from_callable => try self.callableDerivedInstance(callee, subst, try self.convert(call_plan.callable_ty)),
+                            .resolved => try self.callInstanceAt(callee, subst, table.nestedEvidence(node), call_fn, .{ .node = direct.evidence }),
+                            .from_callable => try self.callableDerivedInstance(callee, subst, call_fn),
                             .through_alias => invariant("alias-scope evidence accompanies only an alias instantiation"),
                         };
                     },
@@ -8557,12 +8574,12 @@ pub const Builder = struct {
             .direct_closed, .direct_parametric => |direct| {
                 const node = table.evidenceNode(direct.evidence);
                 if (node.target.kind == .local_proc) {
-                    const fn_ty = try self.convert(callable_ty);
+                    const fn_ty = try self.dispatchCallable(resolution, callable_ty);
                     return try self.emitErasedCall(try self.localMethodValue(node, fn_ty), fn_ty, args, result_ty);
                 }
                 const callee = try self.methodTargetWorker(node.target);
                 const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
-                const call_fn = try self.convert(callable_ty);
+                const call_fn = try self.dispatchCallable(resolution, callable_ty);
                 // Reached through a procedure alias, the target takes the
                 // instantiation the call's callable type gives it.
                 const instance = if (node.instantiation == .alias) try self.aliasTargetInstance(node, callee, .{ .node = direct.evidence }) else switch (node.nested) {

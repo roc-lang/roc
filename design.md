@@ -6600,6 +6600,11 @@ is a fresh instance such as an imported or viewed variable brought into
 this store—and `identityOrigin` refuses one that declares none, so a
 forgotten origin fails loudly instead of reading as an unquantified tail.
 Serialized stores carry no origins: no post-check consumer asks the question.
+A post-check consumer that reads a direct dispatch's function type in its
+enclosing scope reads the edge's callable relation
+(`EvidenceTargetInstantiation`), a root the scope's own scheme variables
+appear in, never the specialized plan callable, whose variables no scope
+binds.
 
 Type substitution preserves this graph discipline. A substitution of a closed
 root is the original root, because no formal can occur in it. A real
@@ -14897,6 +14902,23 @@ under the destination's descriptor. Either conversion is elided when the two
 types are one or commit one layout, since a reached row's source tags are a
 subset of its destination's and equal variant counts mean equal tag sets.
 
+A generated codec family (design.md "Dictionaries") seals in the same way.
+A family's value shape, encoding, and state are closed, so its only variables
+are those of its results, and its generated code constructs only the tags its
+contract names: nothing in a family's body can produce a value at a row tail.
+So a variable of the derivation's constructor type that seals to its row
+default (`variableSealsToRowDefault`) is no variable of the family
+(`contractEnv`), and takes no hidden descriptor. A family's helpers then have
+closed results, whose descriptors are static and whose values are ordinary
+locals, however many distinct field types a record has. A rigid tail, a bare
+variable with no row default, and a tail whose constraints closing the row
+does not discharge stay variables of the family: a rigid tail names a row the
+enclosing scope chooses, and the other two may be a format's own error type or
+a producer's. Widening is the same conversion as any sealed result's, at the
+one place both rows are known: a family's constructor is adapted to the
+callable type of its use (`constructorAt`), and a stored runtime restored from
+its captures to the stored function's type (`restoreRuntime`).
+
 A conversion worker belongs to the module that emits it and is memoized
 within that module only: two modules converting the same pair each carry
 their own copy. Nothing about a module's conversions is shared or deduplicated
@@ -14916,7 +14938,9 @@ A direct call to a known template reads the checked site evidence of the use
   from the enclosing worker's hidden descriptor parameters. A sealed variable
   of the target scheme (Sealed Result Rows) takes no descriptor; where the
   edge copied it to a wider row, the call's result is converted from the
-  callee's result at the sealed row to the call's own type.
+  callee's result at the sealed row to the call's own type. The call's
+  function type is the edge's callable relation, whose variables are this
+  body's scheme variables (`Builder.dispatchCallable`).
 - the node's nested evidence names, for each evidence parameter of the target
   scheme in checked order, how the requirement was discharged. The lowerer
   passes the dictionary that discharge denotes (see Dictionaries).
