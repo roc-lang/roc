@@ -325,7 +325,8 @@ ROC_STATIC_ASSERT(offsetof(Padded, a) == 8, "Padded.a offset mismatch");
 
 #if UINTPTR_MAX == UINT64_MAX
 struct PaddedMixed {
-    double z;
+    float z;
+    uint8_t _pad0[4];
     RocBox held;
 };
 ROC_STATIC_ASSERT(sizeof(PaddedMixed) == 16, "PaddedMixed size mismatch");
@@ -334,11 +335,12 @@ ROC_STATIC_ASSERT(offsetof(PaddedMixed, z) == 0, "PaddedMixed.z offset mismatch"
 ROC_STATIC_ASSERT(offsetof(PaddedMixed, held) == 8, "PaddedMixed.held offset mismatch");
 #else
 struct PaddedMixed {
-    double z;
+    float z;
+    uint8_t _pad0[4];
     RocBox held;
 };
-ROC_STATIC_ASSERT(sizeof(PaddedMixed) == 16, "PaddedMixed size mismatch");
-ROC_STATIC_ASSERT(ROC_ALIGNOF(PaddedMixed) == 8, "PaddedMixed alignment mismatch");
+ROC_STATIC_ASSERT(sizeof(PaddedMixed) == 12, "PaddedMixed size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(PaddedMixed) == 4, "PaddedMixed alignment mismatch");
 ROC_STATIC_ASSERT(offsetof(PaddedMixed, z) == 0, "PaddedMixed.z offset mismatch");
 ROC_STATIC_ASSERT(offsetof(PaddedMixed, held) == 8, "PaddedMixed.held offset mismatch");
 #endif
@@ -823,18 +825,20 @@ ROC_STATIC_ASSERT(ROC_ALIGNOF(PaddedCheckHeldArgs) == 4, "PaddedCheckHeldArgs al
  */
 #if UINTPTR_MAX == UINT64_MAX
 typedef struct {
-    double z;
+    float z;
+    uint8_t _pad0[4];
     RocBox held;
 } PaddedCheckMixedArgs;
 ROC_STATIC_ASSERT(sizeof(PaddedCheckMixedArgs) == 16, "PaddedCheckMixedArgs size mismatch");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(PaddedCheckMixedArgs) == 8, "PaddedCheckMixedArgs alignment mismatch");
 #else
 typedef struct {
-    double z;
+    float z;
+    uint8_t _pad0[4];
     RocBox held;
 } PaddedCheckMixedArgs;
-ROC_STATIC_ASSERT(sizeof(PaddedCheckMixedArgs) == 16, "PaddedCheckMixedArgs size mismatch");
-ROC_STATIC_ASSERT(ROC_ALIGNOF(PaddedCheckMixedArgs) == 8, "PaddedCheckMixedArgs alignment mismatch");
+ROC_STATIC_ASSERT(sizeof(PaddedCheckMixedArgs) == 12, "PaddedCheckMixedArgs size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(PaddedCheckMixedArgs) == 4, "PaddedCheckMixedArgs alignment mismatch");
 #endif
 
 /**

@@ -60,17 +60,17 @@ Padded := {
     ## A padded nominal that a C ABI splits by field class: a float at 0 and a
     ## pointer at 8, which the record's row would put the other way round.
     Mixed(v) := {
-        z : F64,
-        _ : {},
+        z : F32,
+        _ : U32,
         held : Box(v),
     }.{
-        new : F64, v -> Mixed(v)
+        new : F32, v -> Mixed(v)
         new = |z, value| { z, held: Box.box(value) }
 
         unbox : Mixed(v) -> v
         unbox = |mixed| Box.unbox(mixed.held)
 
-        scaled : Mixed(v) -> F64
+        scaled : Mixed(v) -> F32
         scaled = |mixed| mixed.z
     }
 

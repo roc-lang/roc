@@ -809,12 +809,12 @@ fn hostedPaddedCheckHeld(held: PaddedHeldArgs) callconv(.c) PaddedHeldArgs {
 }
 
 /// Hosted function: Padded.check_mixed!—`Mixed(v)` at the offsets of its
-/// declaration: z@0, held@8. Its fields are of different C ABI classes, so the
-/// order of the Roc struct decides which register each one travels in.
-const PaddedMixedArgs = extern struct { z: f64, held: ?[*]u8 };
+/// declaration: z@0, _pad@4, held@8. Its fields are of different C ABI classes,
+/// so the order of the Roc struct decides which register each one travels in.
+const PaddedMixedArgs = extern struct { z: f32, _pad: u32, held: ?[*]u8 };
 
 fn hostedPaddedCheckMixed(mixed: PaddedMixedArgs) callconv(.c) PaddedMixedArgs {
-    return .{ .z = mixed.z * 2, .held = mixed.held };
+    return .{ .z = mixed.z * 2, ._pad = 0, .held = mixed.held };
 }
 
 const BoxedHostDropCounts = struct {
