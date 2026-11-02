@@ -440,8 +440,8 @@ const NameCopier = struct {
 /// across them, with each helper, which its content names, defined once (the
 /// first set defining it), and the constants each excerpt carries supplying
 /// the code their relocations name. A procedure's identity names one
-/// procedure, so exactly one set defines it. `host_visible` are the constants the host binds
-/// by name, whose relocations seed the walk beside `roots`. Only the
+/// procedure, so exactly one set defines it. `host_visible` are the constants
+/// the host binds by name, whose relocations seed the walk beside `roots`. Only the
 /// reached excerpts are copied, so composing a program costs its reachable
 /// code, not every unit's.
 pub fn reachableAcross(allocator: Allocator, sets: []const *const Set, host_visible: []const DataItem, roots: ImageRoots) Allocator.Error!Set {
