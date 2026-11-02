@@ -17578,6 +17578,12 @@ const Builder = struct {
         };
     }
 
+    /// The call's representation at `rep`. Read through the call each time:
+    /// planning grows the tables its instantiation views.
+    fn requirementCallRep(self: *const Builder, call: *const DictionaryCallArgs, rep: TypeRepId) ?TypeRepId {
+        return self.requirementCallInstantiation(call).get(&self.plan, rep);
+    }
+
     fn stepDictionaryCallArgs(self: *Builder, machine: *DictionaryArgsMachine, state: *DictionaryCallArgs) Allocator.Error!bool {
         switch (state.stage) {
             .next_param => {},
@@ -17726,9 +17732,9 @@ const Builder = struct {
                 const requirement = self.plan.dictionaries.items[hidden.dictionaries.start + method_index];
                 const method_id = arg.method_evidence.start + method_index;
                 const method = self.plan.dictionary_method_evidence.items[method_id];
-                if (method.resolution != .worker or method.instantiation_rep != null or method.instantiation_ret_type == null) continue;
-                const instantiation = try self.staticDictionaryMethodInstantiation(self.requirementCallInstantiation(state), arg.rep, requirement, method.callable_type);
-                if (instantiation.rep == null) continue;
+                if (method.resolution != .worker or method.instantiation_ret_type == null) continue;
+                const instantiation = try self.staticDictionaryMethodInstantiation(state, arg.rep, requirement, method.callable_type);
+                if (instantiation.rep == null or instantiation.rep == method.instantiation_rep) continue;
                 // Nested dictionaries are planned at the method's
                 // instantiation, and a method's own positions bind none of
                 // the variables only its caller's requirements name.
@@ -18345,13 +18351,16 @@ const Builder = struct {
                             .resolution = .{ .structural = kind },
                         };
                     },
-                    .parser, .encoder, .map, .map_effectful => {},
+                    // A declared structural codec method has no callable type
+                    // of its own: the checked contract supplies the worker.
+                    .parser, .encoder => return try self.structuralDictionaryMethodEvidence(source_rep, requirement, requirement_view, state.call),
+                    .map, .map_effectful => {},
                 };
                 const source = workerSourceForMethodTarget(lookup, source_rep.source_type, null);
                 const callable_type = CheckedTypeIdentity{ .module = viewModule(lookup.view), .ty = lookup.target.callable_ty };
                 _ = try self.analyzeType(lookup.view, lookup.target.callable_ty);
                 const worker = try self.ensureWorker(source, callable_type, null);
-                const instantiation = try self.staticDictionaryMethodInstantiation(self.requirementCallInstantiation(state.call), source_rep_id, requirement, callable_type);
+                const instantiation = try self.staticDictionaryMethodInstantiation(state.call, source_rep_id, requirement, callable_type);
                 const method: DictionaryMethodEvidence = .{
                     .requirement_type = requirement.fn_ty,
                     .callable_type = callable_type,
@@ -18369,6 +18378,14 @@ const Builder = struct {
                     .evidence_view = null,
                     .evidence = null,
                     .scheme_substitution = null,
+                    // The method's checked positions leave a variable open
+                    // when only a position built around the dispatcher names
+                    // it, as a returned encoder does: the call's position
+                    // binds it.
+                    .relation = if (instantiation.rep) |rep|
+                        try self.storedUseSchemeRepSubstitutions(self.plan.workers.items[@backingInt(worker)].rep, rep)
+                    else
+                        null,
                     .env = state.env,
                 }) orelse return null;
                 state.awaiting = null;
@@ -18387,7 +18404,7 @@ const Builder = struct {
                 },
             }
         }
-        return try self.structuralDictionaryMethodEvidence(source_rep, requirement, requirement_view);
+        return try self.structuralDictionaryMethodEvidence(source_rep, requirement, requirement_view, state.call);
     }
 
     /// A nominal's argument where the call holds the structure the
@@ -19764,8 +19781,15 @@ const Builder = struct {
     }
 
     fn appendStoredUseSchemePair(self: *Builder, scheme_rep: TypeRepId, site_rep: TypeRepId, start: u32) Allocator.Error!void {
-        for (self.plan.scheme_rep_substitutions.items[start..]) |pair| {
+        for (self.plan.scheme_rep_substitutions.items[start..]) |*pair| {
             if (pair.scheme_rep != scheme_rep) continue;
+            // A position left at the variable itself binds nothing, so
+            // another position's binding stands.
+            if (site_rep == scheme_rep) return;
+            if (pair.site_rep == scheme_rep) {
+                pair.site_rep = site_rep;
+                return;
+            }
             if (!self.storedRepsSameType(pair.site_rep, site_rep)) boxyPlanInvariant("a stored function's use put two types in one variable's position");
             return;
         }
@@ -20090,7 +20114,7 @@ const Builder = struct {
     /// edge instantiated it to.
     fn staticDictionaryMethodInstantiation(
         self: *Builder,
-        call: RequirementCallInstantiation,
+        call: *const DictionaryCallArgs,
         source_rep_id: TypeRepId,
         requirement: DictionaryRequirement,
         target_callable_type: CheckedTypeIdentity,
@@ -20157,7 +20181,7 @@ const Builder = struct {
     /// is called there. Null for every other position.
     fn requirementPositionAtCall(
         self: *Builder,
-        call: RequirementCallInstantiation,
+        call: *const DictionaryCallArgs,
         dispatcher_rep: TypeRepId,
         source_rep_id: TypeRepId,
         rep_id: TypeRepId,
@@ -20165,7 +20189,7 @@ const Builder = struct {
     ) Allocator.Error!?TypeRepId {
         if (rep_id == dispatcher_rep) return null;
         if (!try self.plan.namesTypeVariable(self.allocator, target_rep_id)) return null;
-        if (call.get(&self.plan, rep_id) != null) return null;
+        if (self.requirementCallRep(call, rep_id) != null) return null;
         if (!try self.plan.namesTypeVariable(self.allocator, rep_id)) return null;
 
         // The key is the position followed by each of its variables and the
@@ -20184,7 +20208,7 @@ const Builder = struct {
                 const site = if (current == dispatcher_rep)
                     source_rep_id
                 else
-                    call.get(&self.plan, current) orelse return null;
+                    self.requirementCallRep(call, current) orelse return null;
                 try key.appendSlice(self.allocator, &.{ @backingInt(current), @backingInt(site) });
                 continue;
             }
@@ -20346,7 +20370,7 @@ const Builder = struct {
 
     fn instantiatedRequirementType(
         self: *Builder,
-        call: RequirementCallInstantiation,
+        call: *const DictionaryCallArgs,
         dispatcher_rep: TypeRepId,
         source_type: CheckedTypeIdentity,
         rep_id: TypeRepId,
@@ -20357,7 +20381,7 @@ const Builder = struct {
         // The selected target's declared type is the position's exact type
         // wherever it names no variable of the target's own scheme.
         if (!try self.plan.namesTypeVariable(self.allocator, target_rep_id)) return target_type;
-        if (call.get(&self.plan, rep_id)) |call_rep| return self.plan.representations.items[@backingInt(call_rep)].source_type;
+        if (self.requirementCallRep(call, rep_id)) |call_rep| return self.plan.representations.items[@backingInt(call_rep)].source_type;
         if (!try self.plan.namesTypeVariable(self.allocator, rep_id)) {
             return self.plan.representations.items[@backingInt(rep_id)].source_type;
         }
@@ -20425,6 +20449,7 @@ const Builder = struct {
         source_rep: TypeRepresentation,
         requirement: DictionaryRequirement,
         requirement_view: ModuleView,
+        call: *const DictionaryCallArgs,
     ) Allocator.Error!DictionaryMethodEvidence {
         const kind = self.structuralKindForRequirement(requirement, requirement_view) orelse
             boxyPlanInvariant("static boxy dictionary could not resolve a checked method target or structural method");
@@ -20440,6 +20465,7 @@ const Builder = struct {
                 requirement,
                 requirement_view,
                 kind,
+                call,
             ),
             .map, .map_effectful => boxyPlanInvariant("derived map evidence reached Boxy runtime dictionary planning"),
         };
@@ -20451,6 +20477,7 @@ const Builder = struct {
         requirement: DictionaryRequirement,
         requirement_view: ModuleView,
         kind: static_dispatch.StructuralKind,
+        call: *const DictionaryCallArgs,
     ) Allocator.Error!DictionaryMethodEvidence {
         const expected_kind: static_dispatch.GeneratedCodecDerivationKind = switch (kind) {
             .parser => .parser,
@@ -20480,9 +20507,9 @@ const Builder = struct {
         const try_payloads = checkedTryPayloads(requirement_view, runtime.ret) orelse
             boxyPlanInvariant("generated codec dictionary runtime did not return Try");
         const shape_key = source_view.checked_types.rootKey(source_rep.source_type.ty);
-        const encoding_key = requirement_view.checked_types.rootKey(constructor.args[0]);
-        const state_key = requirement_view.checked_types.rootKey(state_type);
-        const error_key = requirement_view.checked_types.rootKey(try_payloads.err);
+        const encoding_key = self.requirementPositionKey(call, requirement_view, constructor.args[0]);
+        const state_key = self.requirementPositionKey(call, requirement_view, state_type);
+        const error_key = self.requirementPositionKey(call, requirement_view, try_payloads.err);
         if (self.active_stored_fn) |stored| {
             // A stored function carries the evidence its value was produced
             // with. Its structural entry for this shape is the dictionary's
@@ -20557,6 +20584,22 @@ const Builder = struct {
                 null,
             ) },
         };
+    }
+
+    /// The checked key of a requirement's position at this call. A requirement
+    /// a generic method forwards names the format in that method's variables,
+    /// which the call binds.
+    fn requirementPositionKey(
+        self: *const Builder,
+        call: *const DictionaryCallArgs,
+        requirement_view: ModuleView,
+        ty: checked.CheckedTypeId,
+    ) checked_names.CanonicalTypeKey {
+        const rep = self.plan.repForSourceType(typeRef(requirement_view, ty)) orelse
+            boxyPlanInvariant("generated codec requirement position was not analyzed");
+        const bound = self.requirementCallRep(call, rep) orelse return requirement_view.checked_types.rootKey(ty);
+        const source = self.plan.representations.items[@backingInt(bound)].source_type;
+        return self.moduleForId(source.module).checked_types.rootKey(source.ty);
     }
 
     /// The structural codec evidence a stored function retained for this

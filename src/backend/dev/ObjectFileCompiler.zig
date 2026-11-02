@@ -533,11 +533,6 @@ fn compileWithCodeGen(
     }
     const starts = CodeExcerpt.assembleArranged(CodeGen, allocator, &final, &canonical.set, &procs_by_identity, &helper_keys) catch return CompilationError.OutOfMemory;
     defer allocator.free(starts);
-    // The placed code loads the Boxy runtime's table numbers in canonical
-    // order; number them by it, so they depend on nothing but that code.
-    var runtime_numbering: lir.RuntimeTables.Numbering = .{};
-    defer runtime_numbering.deinit(allocator);
-    final.renumberRuntimeNumbers(&runtime_numbering) catch return CompilationError.OutOfMemory;
 
     var symbols = std.ArrayList(SymbolDefinition).empty;
     defer symbols.deinit(allocator);
@@ -704,6 +699,13 @@ fn compileWithCodeGen(
         };
     }
     if (timing) |timings| timings.finish(entrypoint_instructions_started_ns, .entrypoint_instructions);
+
+    // The placed code, entry wrappers included, loads the Boxy runtime's table
+    // numbers in canonical order; number them by it, so they depend on nothing
+    // but that code.
+    var runtime_numbering: lir.RuntimeTables.Numbering = .{};
+    defer runtime_numbering.deinit(allocator);
+    final.renumberRuntimeNumbers(&runtime_numbering) catch return CompilationError.OutOfMemory;
 
     // Get generated code and relocations
     symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;

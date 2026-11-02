@@ -720,6 +720,8 @@ const BindingFact = union(enum) {
     consuming_result: OwnershipFlow,
 };
 
+const FreshFormRead = struct { target: LIR.LocalId, fresh_form: LIR.LirProcSpecId };
+
 const VisibilityFact = union(enum) {
     link: struct { a: LIR.LocalId, b: LIR.LocalId },
     seed: LIR.LocalId,
@@ -881,6 +883,8 @@ const Solver = struct {
     /// Later analyses consume these typed facts without decoding LIR again.
     binding_facts: std.ArrayList(BindingFact),
     visibility_facts: std.ArrayList(VisibilityFact),
+    /// Reads that name a fresh form. Each may become a call of that procedure.
+    fresh_form_reads: std.ArrayList(FreshFormRead),
     unique_facts: std.ArrayList(UniqueFact),
     address_taken: std.bit_set.DynamicBitSetUnmanaged,
     /// Reachable returned locals and joins, partitioned by source proc.
@@ -965,6 +969,7 @@ pub fn solveWithOptions(
         .param_uses = .empty,
         .binding_facts = .empty,
         .visibility_facts = .empty,
+        .fresh_form_reads = .empty,
         .unique_facts = .empty,
         .address_taken = .{},
         .proc_stmts = .{},
@@ -996,6 +1001,7 @@ pub fn solveWithOptions(
         solver.param_uses.deinit(allocator);
         solver.binding_facts.deinit(allocator);
         solver.visibility_facts.deinit(allocator);
+        solver.fresh_form_reads.deinit(allocator);
         solver.unique_facts.deinit(allocator);
         solver.address_taken.deinit(allocator);
         solver.proc_stmts.deinit(allocator);
@@ -2939,6 +2945,9 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             } else if (assign.value == .str_literal or assign.value == .static_data or assign.value == .bytes_literal) {
                 try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
             }
+            if (store.literalExtra(assign.value).fresh_alternative) |fresh_form| {
+                try solver.fresh_form_reads.append(allocator, .{ .target = assign.target, .fresh_form = fresh_form });
+            }
             switch (assign.value) {
                 .str_literal, .static_data, .bytes_literal => {},
                 .i64_literal,
@@ -3588,6 +3597,21 @@ fn computeVisibilityFromFacts(
         }
     }
 
+    // A read that names a fresh form may be emitted as a call of it, and which
+    // reads are is settled after this analysis. Visibility is a may-property,
+    // so every such read flows from the procedure's returns.
+    for (solver.fresh_form_reads.items) |read| {
+        const target = domain.indexOf(read.target) orelse continue;
+        if (solver.store.getProcSpecImmediate(read.fresh_form).body == null) {
+            seeds.set(target);
+            continue;
+        }
+        for (solver.proc_returns.of(@backingInt(read.fresh_form))) |return_local| {
+            const returned = domain.indexOfRaw(return_local) orelse continue;
+            sets.unite(target, returned);
+        }
+    }
+
     // Pinned parameters and returns are the remaining producer-authored
     // visibility seeds.
     for (0..solver.store.procSpecCount()) |proc_index| {
@@ -3781,6 +3805,18 @@ fn computeVisibilityFromLift(
                     .discriminant => {},
                 }
             },
+            .assign_literal => |assign| {
+                // A read that names a fresh form may be emitted as a call of it.
+                if (store.literalExtra(assign.value).fresh_alternative) |fresh_form| {
+                    if (store.getProcSpecImmediate(fresh_form).body == null) {
+                        seedLocal(&visible, rc_local, @backingInt(assign.target));
+                    } else {
+                        for (ret_values.of(@backingInt(fresh_form))) |value| {
+                            addEdge(&sets, rc_local, @backingInt(assign.target), value);
+                        }
+                    }
+                }
+            },
             .assign_struct => |assign| {
                 if (store.optionalStmtRow(assign.contents_desc)) |contents_desc| {
                     if (contents_desc.localOrNull()) |local| {
@@ -3967,7 +4003,6 @@ fn computeVisibilityFromLift(
                 }
             },
             .init_uninitialized,
-            .assign_literal,
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_inspect,
@@ -7940,6 +7975,49 @@ test "uniqueness carries a candidate read's origin through a returned record fie
     try UniquenessOracleState.compare(&f, rc, &solution, .stamped, &metrics);
     try std.testing.expect(solution.fresh_reads.isSet(@backingInt(read)));
     try std.testing.expect(!solution.fresh_reads.isSet(@backingInt(idle_read)));
+}
+
+test "a read's possible fresh form joins every read of that form in host visibility" {
+    const allocator = std.testing.allocator;
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    // fresh() = []: the procedure both reads name.
+    const built = try f.local(f.list);
+    const fresh_body = try f.store.addCFStmt(.{ .assign_list = .{
+        .target = built,
+        .elems = LIR.LocalSpan.empty(),
+        .next = try f.ret(built),
+    } }, .test_fixture);
+    const fresh_form = try f.proc(&.{}, fresh_body, f.list);
+    const static_list = try f.staticData(fresh_form, f.list);
+    const readOf = struct {
+        fn stmt(fixture: anytype, target: LIR.LocalId, id: LIR.StaticDataId, form: LIR.LirProcSpecId) SolveError!LIR.CFStmtId {
+            return fixture.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .static_data = .{
+                    .id = id,
+                    .copies = try fixture.store.addOptionalStmtRow(LIR.LiteralExtra, .{ .fresh_alternative = form }),
+                } },
+                .next = try fixture.ret(target),
+            } }, .test_fixture);
+        }
+    }.stmt;
+    // The root's read reaches the host; the other's stays in the program.
+    const host_read = try f.local(f.list);
+    const root = try f.proc(&.{}, try readOf(&f, host_read, static_list, fresh_form), f.list);
+    const program_read = try f.local(f.list);
+    _ = try f.proc(&.{}, try readOf(&f, program_read, static_list, fresh_form), f.list);
+
+    const rc = try allocator.alloc(bool, f.store.localCount());
+    defer allocator.free(rc);
+    @memset(rc, true);
+    var solution = try solveWithOptions(allocator, &f.store, &f.layouts, rc, .{}, &.{root}, true, true, .{});
+    defer solution.deinit();
+    // Either read may become a call, and the procedure's returns connect the
+    // calls, so the visibility of one is the visibility of all.
+    try std.testing.expect(solution.isVisible(host_read));
+    try std.testing.expect(solution.isVisible(built));
+    try std.testing.expect(solution.isVisible(program_read));
 }
 
 test "uniqueness vetoes a join cell's field that a call definition does not vouch for" {
