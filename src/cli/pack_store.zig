@@ -2360,7 +2360,7 @@ pub const LoadedPacks = struct {
         self.lookup_profile.report();
         if (base.dev_diagnostics.isSet(.pack_stats)) {
             const stats = self.index_stats;
-            var sessions = self.retention_batches.valueIterator();
+            var sessions = self.store_sessions.valueIterator();
             while (sessions.next()) |batch| std.debug.print("pack physical: containers={d}\n", .{batch.*.containerCount()});
             if (self.record_owner) |owner| std.debug.print("pack acquisitions: {any}\n", .{owner.metrics});
             std.debug.print("pack index: index_bytes={d} bucket_opens={d} bucket_absent={d} negative_hits={d} metadata_opens={d} metadata_bytes={d} candidates={d} duplicates={d} payload_opens={d} payload_files={d} payload_bytes={d} decoded_artifacts={d} requested_artifacts={d} served_artifacts={d} allocation_failures={d} requested={d} served={d} misses={d} source_ineligible={d} linked_ineligible={d} corrupt={d} missing={d}\n", .{ stats.index_bytes, stats.bucket_opens, stats.bucket_absent, stats.negative_hits, stats.metadata_opens, stats.metadata_bytes, stats.candidates, stats.duplicates, stats.payload_opens, stats.payload_files, stats.payload_bytes, stats.decoded_artifacts, stats.requested_artifacts, stats.served_artifacts, stats.allocation_failures, stats.requested, stats.served, stats.misses, stats.source_ineligible, stats.linked_ineligible, stats.corrupt, stats.missing });
