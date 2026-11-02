@@ -437,9 +437,10 @@ const NameCopier = struct {
 /// Callers select cache entries using their full compilation provenance.
 /// The excerpts of `sets` that `roots` reach, as one set: the walk of
 /// `retainReachable` over several sets at once, following every reference
-/// across them, with each procedure and helper defined once (the first set
-/// defining it) and the constants each excerpt carries supplying the code
-/// their relocations name. `host_visible` are the constants the host binds
+/// across them, with each helper, which its content names, defined once (the
+/// first set defining it), and the constants each excerpt carries supplying
+/// the code their relocations name. A procedure's identity names one
+/// procedure, so exactly one set defines it. `host_visible` are the constants the host binds
 /// by name, whose relocations seed the walk beside `roots`. Only the
 /// reached excerpts are copied, so composing a program costs its reachable
 /// code, not every unit's.
@@ -457,7 +458,7 @@ pub fn reachableAcross(allocator: Allocator, sets: []const *const Set, host_visi
         switch (excerpt.kind) {
             .proc => |identity| {
                 const gop = try by_proc.getOrPut(identity);
-                if (gop.found_existing) continue;
+                if (gop.found_existing) base.invariant("two units define the procedure {x}", .{identity.bytes});
                 gop.value_ptr.* = ref;
                 try by_name.put(try identity.symbolName(names_allocator), ref);
             },
@@ -472,8 +473,8 @@ pub fn reachableAcross(allocator: Allocator, sets: []const *const Set, host_visi
     while (aliases.next()) |alias| {
         if (by_name.get(alias.value_ptr.*)) |ref| try by_name.put(alias.key_ptr.*, ref);
     }
-    // A procedure or helper another set also defines is the first set's:
-    // every edge to a later definition lands on the first.
+    // A helper another set also defines is the first set's: every edge to a
+    // later definition lands on the first.
     const canonical = try allocator.alloc([]Ref, sets.len);
     var canonical_count: usize = 0;
     defer {

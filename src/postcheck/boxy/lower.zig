@@ -625,16 +625,18 @@ pub const Program = struct {
         };
     }
 
-    /// The module unit this lowering emits, or null for a program.
-    /// The identity of a worker that exists only within this lowering. A
-    /// module unit's pieces meet other units' in one program, so its
-    /// program-local workers are named under the unit's link name.
-    fn programLocalIdentity(self: *const Program, role: []const u8, raw: u64) LIR.ProcIdentity {
+    /// The identity of a procedure that exists only within this lowering,
+    /// whichever kind of worker it is. `raw` numbers it within this lowering
+    /// alone, and a module unit's pieces meet other units' in one program,
+    /// where one identity is one procedure, so a unit's numbers are named
+    /// under the unit's link name.
+    pub fn programLocalIdentity(self: *const Program, role: []const u8, raw: u64) LIR.ProcIdentity {
         const local = LIR.ProcIdentity.programLocal(role, raw);
         if (self.moduleUnit() == null) return local;
         return local.derived("boxy.unit", &self.modules.linkName(self.modules.views.items[0].index));
     }
 
+    /// The module unit this lowering emits, or null for a program.
     pub fn moduleUnit(self: *const Program) ?ModuleUnit {
         return switch (self.input.unit) {
             .program => null,
@@ -2122,7 +2124,7 @@ pub const Program = struct {
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
-            .identity = LIR.ProcIdentity.programLocal("boxy.convert", @backingInt(id)),
+            .identity = self.programLocalIdentity("boxy.convert", @backingInt(id)),
             .emission_unit = LIR.EmissionUnit.module(@backingInt(module_index)),
             .args = .empty(),
             .ret_layout = .zst,
@@ -2237,7 +2239,7 @@ pub const Program = struct {
 
     fn addErasedWorker(self: *Program, key: WorkerKey, module_index: ModuleIndex, scheme_vars: []const checked.CheckedTypeId, params: []const TypeId, ret: TypeId, role: []const u8) Allocator.Error!WorkerId {
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
-        return try self.addErasedWorkerWithIdentity(key, module_index, scheme_vars, params, ret, LIR.ProcIdentity.programLocal(role, @backingInt(id)));
+        return try self.addErasedWorkerWithIdentity(key, module_index, scheme_vars, params, ret, self.programLocalIdentity(role, @backingInt(id)));
     }
 
     fn addErasedWorkerWithIdentity(self: *Program, key: WorkerKey, module_index: ModuleIndex, scheme_vars: []const checked.CheckedTypeId, params: []const TypeId, ret: TypeId, identity: LIR.ProcIdentity) Allocator.Error!WorkerId {

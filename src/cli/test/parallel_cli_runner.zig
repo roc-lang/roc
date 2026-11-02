@@ -356,6 +356,20 @@ const issue_12787_stored_record_encoder_stdout =
     \\
 ;
 
+const boxy_unit_workers_stdout =
+    \\Ok("a string long enough to be on the heap")
+    \\Ok(38)
+    \\Err(Empty)
+    \\Err(Empty)
+    \\Err(TooMany(2))
+    \\Err(Aborted(2))
+    \\(True, False)
+    \\(True, False)
+    \\["a string long enough to be on the heap"]
+    \\[38]
+    \\
+;
+
 const padded_nominals_share_a_row_stdout =
     \\3 7 11 15 19
     \\4 8 10
@@ -1473,6 +1487,10 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal keeps its declared order (interpreter, --specialize=yes)", .backend = .interpreter, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/boxy_padded_records/main.roc", .stdout_exact = boxy_padded_records_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal keeps its declared order (size, --specialize=yes)", .backend = .size, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/boxy_padded_records/main.roc", .stdout_exact = boxy_padded_records_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal keeps its declared order (speed, --specialize=yes)", .backend = .speed, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/boxy_padded_records/main.roc", .stdout_exact = boxy_padded_records_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: generated workers of two modules stay distinct (dev, --specialize=no)", .backend = .dev, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/boxy_unit_workers/main.roc", .stdout_exact = boxy_unit_workers_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: generated workers of two modules stay distinct (interpreter, --specialize=no)", .backend = .interpreter, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/boxy_unit_workers/main.roc", .stdout_exact = boxy_unit_workers_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: generated workers of two modules stay distinct (speed, --specialize=no)", .backend = .speed, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/boxy_unit_workers/main.roc", .stdout_exact = boxy_unit_workers_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: generated workers of two modules stay distinct (dev, --specialize=yes)", .backend = .dev, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/boxy_unit_workers/main.roc", .stdout_exact = boxy_unit_workers_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: padded nominals share a record row (interpreter, --specialize=no)", .backend = .interpreter, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/padded_nominals_share_a_row/main.roc", .stdout_exact = padded_nominals_share_a_row_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: padded nominals share a record row (interpreter, --specialize=yes)", .backend = .interpreter, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/padded_nominals_share_a_row/main.roc", .stdout_exact = padded_nominals_share_a_row_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: padded nominals share a record row (dev, --specialize=no)", .backend = .dev, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/padded_nominals_share_a_row/main.roc", .stdout_exact = padded_nominals_share_a_row_stdout } } },

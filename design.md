@@ -15899,9 +15899,14 @@ table and object encoding that each unit paid for happen once, for the
 program, over the reachable set (`ObjectFileCompiler.composeObject`). The
 composed object is a function of the units alone: they are taken in the
 order of their source-file tables, and host-visible constants in name order,
-so the order units finish in changes nothing in it. A unit's program-local
-workers (adapters, roots, static-data initializers) are named under the
-unit's link name, since pieces of different units meet in one program.
+so the order units finish in changes nothing in it. A worker a unit exports is
+named by content identity. Every other procedure of a unit (conversions,
+adapters, structural and codec workers, literal thunks, roots, static-data
+initializers and the rest) is numbered within its own lowering and named under
+the unit's link name (`Program.programLocalIdentity`), since pieces of different
+units meet in one program and composition treats one identity as one procedure:
+an edge to a procedure lands on the definition composition keeps, so two
+different procedures under one identity would run each other's code.
 `ROC_VERIFY_BOXY_OBJECT_REUSE` compares a restored unit's encoded pieces
 with a rebuilt unit's exactly as it compared objects.
 
