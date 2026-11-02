@@ -5061,7 +5061,7 @@ const Builder = struct {
                 const direct_target = call.direct_target orelse return;
                 if (self.directTargetIsThroughAlias(site.view, direct_target)) return;
                 const local_proc_direct_target = self.directTargetIsLocalProc(site.view, direct_target);
-                const local_proc_worker_call = local_proc_direct_target and self.directTargetHasNoCaptures(site.view, direct_target);
+                const local_proc_worker_call = local_proc_direct_target and try self.directTargetHasNoCaptures(site.view, direct_target);
                 if (local_proc_worker_call or !local_proc_direct_target) {
                     try actions.append(self.allocator, .{ .direct_call_target = site });
                 } else {
@@ -5260,7 +5260,7 @@ const Builder = struct {
                 });
             },
             .nested_callable_use => |state| {
-                const source = self.workerSourceForDirectTarget(state.view, state.target);
+                const source = try self.workerSourceForDirectTarget(state.view, state.target);
                 if (source != .nested_expr) return;
                 const callable_ty = typeRef(state.view, state.view.checked_bodies.expr(state.func).ty);
                 try self.pushPlanActions(actions, &.{
@@ -5295,7 +5295,7 @@ const Builder = struct {
             .direct_call_target => |site| {
                 const call = site.view.checked_bodies.expr(site.expr).data.call;
                 const target = call.direct_target orelse return;
-                const source = self.workerSourceForDirectTarget(site.view, target);
+                const source = try self.workerSourceForDirectTarget(site.view, target);
                 const checked_type = self.workerCheckedTypeForSource(source, typeRef(site.view, call.source_fn_ty_payload));
                 const source_fn_type = self.directCallInstantiationSourceFnType(site.view, target, call.source_fn_ty_payload);
                 _ = try self.analyzeType(self.moduleForId(source_fn_type.module), source_fn_type.ty);
@@ -5390,7 +5390,7 @@ const Builder = struct {
             .nested_expr,
             .generated_field_iterator,
             .derived_map,
-            => .{ .source = self.workerSourceForCallableEvalSource(source), .checked_type = checked_type },
+            => .{ .source = try self.workerSourceForCallableEvalSource(source), .checked_type = checked_type },
         };
         if (!workerSourceEql(selected.source, source) or !typeRefEql(selected.checked_type, checked_type)) {
             return try actions.append(self.allocator, .{ .ensure_worker = .{ .source = selected.source, .checked_type = selected.checked_type, .root_request = root_request } });
@@ -6700,7 +6700,7 @@ const Builder = struct {
                     self.directTargetIsLocalProc(view, target)
                 else
                     false;
-                const local_proc_worker_call = local_proc_direct_target and self.directTargetHasNoCaptures(view, direct_target.?);
+                const local_proc_worker_call = local_proc_direct_target and try self.directTargetHasNoCaptures(view, direct_target.?);
                 if (direct_target == null or (local_proc_direct_target and !local_proc_worker_call)) {
                     try actions.append(self.allocator, exprAction(view, call.func));
                 } else {
@@ -6908,7 +6908,7 @@ const Builder = struct {
         const source = if (stored_fn) |stored|
             try self.workerSourceForStoredFnAtType(stored, typeRef(view, expr.ty))
         else
-            self.workerSourceForProcedureValueRef(view, ref_id) orelse return;
+            (try self.workerSourceForProcedureValueRef(view, ref_id)) orelse return;
         if (self.pendingCallableEvalProducer(source)) |producer| {
             return try self.pushPlanActions(actions, &.{
                 .{ .ensure_worker = .{ .source = .{ .procedure_template = producer.wrapper.template }, .checked_type = typeRef(producer.view, producer.wrapper.checked_fn_root), .root_request = null } },
@@ -7714,7 +7714,7 @@ const Builder = struct {
         const source = if (const_type) |stored_type|
             try self.workerSourceForConstFnValueAtStoredType(store_view, fn_value, stored_type)
         else
-            self.workerSourceForConstFnValue(fn_value, requested_type);
+            try self.workerSourceForConstFnValue(viewModule(store_view), fn_value, requested_type);
         const checked_type = switch (source) {
             .procedure_template => |template| self.checkedTypeForTemplate(template),
             .nested_expr => self.workerCheckedTypeForSource(source, typeRef(store_view, fn_value.source_fn_ty)),
@@ -7921,9 +7921,10 @@ const Builder = struct {
 
     fn workerSourceForConstFnValue(
         self: *Builder,
+        store_module: PlanModuleId,
         fn_value: check.ConstStore.ConstFn,
         requested_type: CheckedTypeIdentity,
-    ) WorkerSource {
+    ) Allocator.Error!WorkerSource {
         return switch (fn_value.fn_def) {
             .local_template,
             .imported_template,
@@ -7958,10 +7959,11 @@ const Builder = struct {
             },
             .parser_runtime => |runtime| blk: {
                 const view = self.moduleForKey(.{ .bytes = checked_names.procTemplateModuleDigest(runtime.owner).bytes });
-                break :blk .{ .generated_codec = self.storedGeneratedCodecSource(
+                break :blk .{ .generated_codec = try self.storedGeneratedCodecSource(
+                    store_module,
                     view,
                     runtime.expr,
-                    requested_type.ty,
+                    requested_type,
                     .parser_runtime,
                     .parser,
                     fn_value,
@@ -7969,10 +7971,11 @@ const Builder = struct {
             },
             .encoder_for_runtime => |runtime| blk: {
                 const view = self.moduleForKey(.{ .bytes = checked_names.procTemplateModuleDigest(runtime.owner).bytes });
-                break :blk .{ .generated_codec = self.storedGeneratedCodecSource(
+                break :blk .{ .generated_codec = try self.storedGeneratedCodecSource(
+                    store_module,
                     view,
                     runtime.expr,
-                    requested_type.ty,
+                    requested_type,
                     .encoder_runtime,
                     .encoder,
                     fn_value,
@@ -8013,17 +8016,20 @@ const Builder = struct {
             .checked_generated,
             => null,
         };
-        const selected = selection orelse return self.workerSourceForConstFnValue(
+        const selected = selection orelse return try self.workerSourceForConstFnValue(
+            viewModule(store_view),
             fn_value,
             typeRef(store_view, fn_value.source_fn_ty),
         );
-        const view = self.moduleForKey(.{ .bytes = checked_names.procTemplateModuleDigest(selected.owner).bytes });
-        const selected_contract = self.generatedCodecContractForRuntimeExpr(
-            view,
+        const expr_view = self.moduleForKey(.{ .bytes = checked_names.procTemplateModuleDigest(selected.owner).bytes });
+        const selected_contract = try self.generatedCodecContractForRuntimeExpr(
+            viewModule(store_view),
+            expr_view,
             selected.expr,
             selected.derivation_kind,
             fn_value,
         );
+        const view = selected_contract.view;
         const derivation = selected_contract.derivation;
         if (!try self.storedTypeInstantiatesCheckedType(store_view, stored_type, view, selected_contract.runtime_ty)) {
             boxyPlanInvariant("stored generated codec runtime type disagreed with its checked contract");
@@ -8034,7 +8040,7 @@ const Builder = struct {
             .runtime_type = typeRef(view, derivation.runtime_ty),
             .capture_type = typeRef(view, derivation.encoding_ty),
             .contract_derivation = selected_contract.id,
-            .contract_expr = .{ .module = viewModule(view), .expr = selected.expr },
+            .contract_expr = .{ .module = viewModule(expr_view), .expr = selected.expr },
         } };
     }
 
@@ -8591,16 +8597,18 @@ const Builder = struct {
 
     fn storedGeneratedCodecSource(
         self: *Builder,
-        view: ModuleView,
+        store_module: PlanModuleId,
+        expr_view: ModuleView,
         expr_id: checked.CheckedExprId,
-        stored_runtime_ty: checked.CheckedTypeId,
+        stored_runtime_type: CheckedTypeIdentity,
         kind: GeneratedCodecKind,
         derivation_kind: static_dispatch.GeneratedCodecDerivationKind,
         stored: check.ConstStore.ConstFn,
-    ) GeneratedCodecSource {
-        const selected = self.generatedCodecContractForRuntimeExpr(view, expr_id, derivation_kind, stored);
+    ) Allocator.Error!GeneratedCodecSource {
+        const selected = try self.generatedCodecContractForRuntimeExpr(store_module, expr_view, expr_id, derivation_kind, stored);
+        const view = selected.view;
         const derivation = selected.derivation;
-        if (selected.runtime_ty != stored_runtime_ty or
+        if (!std.meta.eql(view.checked_types.rootKey(selected.runtime_ty), self.moduleForId(stored_runtime_type.module).checked_types.rootKey(stored_runtime_type.ty)) or
             checkedFunctionPayload(view, derivation.source_constructor_ty).args.len != 1)
         {
             boxyPlanInvariant("stored generated codec runtime disagreed with its checked contract");
@@ -8611,11 +8619,14 @@ const Builder = struct {
             .runtime_type = typeRef(view, derivation.runtime_ty),
             .capture_type = typeRef(view, derivation.encoding_ty),
             .contract_derivation = selected.id,
-            .contract_expr = .{ .module = viewModule(view), .expr = expr_id },
+            .contract_expr = .{ .module = viewModule(expr_view), .expr = expr_id },
         };
     }
 
     const GeneratedCodecContract = struct {
+        /// The module holding the contract. A contract over another module's
+        /// format need not lie in the module of the runtime's source expression.
+        view: ModuleView,
         id: static_dispatch.GeneratedCodecDerivationId,
         derivation: static_dispatch.GeneratedCodecDerivation,
         /// The runtime function type the stored value instantiates: the
@@ -8631,12 +8642,14 @@ const Builder = struct {
     /// from the use that produced it.
     fn generatedCodecContractForRuntimeExpr(
         self: *Builder,
-        view: ModuleView,
+        store_module: PlanModuleId,
+        expr_view: ModuleView,
         expr_id: checked.CheckedExprId,
         expected_kind: static_dispatch.GeneratedCodecDerivationKind,
         stored: check.ConstStore.ConstFn,
-    ) GeneratedCodecContract {
-        const dispatch = self.dispatchPlanForGeneratedRuntime(view, expr_id);
+    ) Allocator.Error!GeneratedCodecContract {
+        const dispatch = self.dispatchPlanForGeneratedRuntime(expr_view, expr_id);
+        var view = expr_view;
         const selected: struct {
             kind: static_dispatch.StructuralKind,
             derivation: ?static_dispatch.GeneratedCodecDerivationId,
@@ -8653,9 +8666,16 @@ const Builder = struct {
             },
             .evidence_dependent => |dependent| blk: {
                 const evidence = storedStructuralEvidence(stored, dependent.index, dependent.callable_contract);
-                const checked_evidence = storedCheckedStructuralIn(view, evidence.checked orelse
-                    boxyPlanInvariant("stored generated codec evidence had no checked structural identity")) orelse
-                    boxyPlanInvariant("stored generated codec evidence named a contract outside its runtime's module");
+                const edge = evidence.checked orelse
+                    boxyPlanInvariant("stored generated codec evidence had no checked structural identity");
+                const checked_evidence = storedCheckedStructuralIn(view, edge) orelse switch (edge) {
+                    .recorded => boxyPlanInvariant("stored generated codec evidence named a contract outside its runtime's module"),
+                    .codec => |codec| found: {
+                        const found = try self.storedCodecEdge(store_module, codec);
+                        view = found.view;
+                        break :found found.edge;
+                    },
+                };
                 break :blk .{
                     .kind = evidence.derivation.kind(),
                     .derivation = checked_evidence.generated_codec_derivation,
@@ -8686,6 +8706,7 @@ const Builder = struct {
             boxyPlanInvariant("stored generated codec source plan disagreed with its checked contract");
         }
         return .{
+            .view = view,
             .id = derivation_id,
             .derivation = derivation,
             .runtime_ty = if (selected.from_evidence)
@@ -8906,13 +8927,7 @@ const Builder = struct {
             => .encoder,
             .parser_constructor, .encoder_constructor => boxyPlanInvariant("generated codec call was planned from a constructor worker"),
         };
-        const view = if (contract_codec.contract_expr) |expr|
-            self.moduleForId(expr.module)
-        else
-            self.moduleForId(contract_worker.checked_type.module);
-        if (contract_codec.shape.module != viewModule(view)) {
-            boxyPlanInvariant("generated codec shape and runtime contract belonged to different checked modules");
-        }
+        const view = self.moduleForId(contract_codec.shape.module);
         const capture_type = contract_codec.capture_type orelse
             boxyPlanInvariant("generated codec runtime had no capture type");
         if (capture_type.module != viewModule(view)) {
@@ -18435,7 +18450,7 @@ const Builder = struct {
                     },
                     // A declared structural codec method has no callable type
                     // of its own: the checked contract supplies the worker.
-                    .parser, .encoder => return try self.structuralDictionaryMethodEvidence(source_rep, requirement, requirement_view, state.call),
+                    .parser, .encoder => return try self.structuralDictionaryMethodEvidence(source_rep_id, requirement, requirement_view, state.call),
                     .map, .map_effectful => {},
                 };
                 const source = workerSourceForMethodTarget(lookup, source_rep.source_type, null);
@@ -18488,7 +18503,7 @@ const Builder = struct {
                 },
             }
         }
-        return try self.structuralDictionaryMethodEvidence(source_rep, requirement, requirement_view, state.call);
+        return try self.structuralDictionaryMethodEvidence(source_rep_id, requirement, requirement_view, state.call);
     }
 
     /// A nominal's argument where the call holds the structure the
@@ -20534,7 +20549,7 @@ const Builder = struct {
 
     fn structuralDictionaryMethodEvidence(
         self: *Builder,
-        source_rep: TypeRepresentation,
+        source_rep_id: TypeRepId,
         requirement: DictionaryRequirement,
         requirement_view: ModuleView,
         call: *const DictionaryCallArgs,
@@ -20549,7 +20564,7 @@ const Builder = struct {
                 .resolution = .{ .structural = kind },
             },
             .parser, .encoder => try self.generatedCodecStaticDictionaryMethodEvidence(
-                source_rep,
+                source_rep_id,
                 requirement,
                 requirement_view,
                 kind,
@@ -20561,7 +20576,7 @@ const Builder = struct {
 
     fn generatedCodecStaticDictionaryMethodEvidence(
         self: *Builder,
-        source_rep: TypeRepresentation,
+        source_rep_id: TypeRepId,
         requirement: DictionaryRequirement,
         requirement_view: ModuleView,
         kind: static_dispatch.StructuralKind,
@@ -20572,6 +20587,7 @@ const Builder = struct {
             .encoder => .encoder,
             .equality, .hash, .map, .map_effectful => boxyPlanInvariant("non-codec dictionary requested a generated codec worker"),
         };
+        const source_rep = self.plan.representations.items[@backingInt(source_rep_id)];
         const source_view = self.moduleForId(source_rep.source_type.module);
         if (requirement.fn_ty.module != viewModule(requirement_view)) {
             boxyPlanInvariant("generated codec dictionary requirement types belonged to different checked modules");
@@ -20594,12 +20610,11 @@ const Builder = struct {
         };
         const try_payloads = checkedTryPayloads(requirement_view, runtime.ret) orelse
             boxyPlanInvariant("generated codec dictionary runtime did not return Try");
-        const shape_key = source_view.checked_types.rootKey(source_rep.source_type.ty);
         if (self.active_stored_fn) |stored| {
             // A stored function carries the evidence its value was produced
             // with. Its structural entry for this shape is the dictionary's
             // method, exactly as the same entry is at a live checked use.
-            if (try self.storedCodecEvidenceForShape(stored, expected_kind, shape_key)) |found| {
+            if (try self.storedCodecEvidenceForShape(stored, expected_kind, source_rep_id)) |found| {
                 const evidence_view = found.view;
                 const evidence = found.edge;
                 const derivation_id = evidence.generated_codec_derivation orelse
@@ -20633,7 +20648,7 @@ const Builder = struct {
         } = null;
         for (source_view.static_dispatch_plans.generated_codec_derivations, 0..) |derivation, index| {
             if (derivation.kind != expected_kind or
-                !std.meta.eql(shape_key, source_view.checked_types.rootKey(derivation.shape_ty)) or
+                !try self.repIsCheckedType(source_rep_id, source_view, derivation.shape_ty) or
                 !try self.requirementPositionIs(call, requirement_view, constructor.args[0], source_view, derivation.encoding_ty) or
                 !try self.requirementPositionIs(call, requirement_view, state_type, source_view, derivation.state_ty) or
                 !try self.requirementPositionIs(call, requirement_view, try_payloads.err, source_view, derivation.error_ty))
@@ -20655,7 +20670,7 @@ const Builder = struct {
         const selected = found orelse
             boxyPlanInvariant("generated codec dictionary had no matching checked derivation contract");
         const callable_type = typeRef(source_view, selected.derivation.constructor_ty);
-        const shape = source_rep.source_type;
+        const shape = typeRef(source_view, selected.derivation.shape_ty);
         return .{
             .requirement_type = requirement.fn_ty,
             .callable_type = callable_type,
@@ -20687,11 +20702,17 @@ const Builder = struct {
         const rep = self.plan.repForSourceType(typeRef(requirement_view, ty)) orelse
             boxyPlanInvariant("generated codec requirement position was not analyzed");
         const bound = self.requirementCallRep(call, rep) orelse return std.meta.eql(requirement_view.checked_types.rootKey(ty), other_key);
-        if (self.stored_type_of_rep.get(bound)) |stored| {
-            return try self.storedTypeInstantiatesCheckedType(self.moduleForId(stored.module), stored.ty, other_view, other_ty);
+        return try self.repIsCheckedType(bound, other_view, other_ty);
+    }
+
+    /// Whether a representation is a checked type: a stored representation by
+    /// instantiating it, every other one by its source type.
+    fn repIsCheckedType(self: *Builder, rep: TypeRepId, view: ModuleView, ty: checked.CheckedTypeId) Allocator.Error!bool {
+        if (self.stored_type_of_rep.get(rep)) |stored| {
+            return try self.storedTypeInstantiatesCheckedType(self.moduleForId(stored.module), stored.ty, view, ty);
         }
-        const source = self.plan.representations.items[@backingInt(bound)].source_type;
-        return std.meta.eql(self.moduleForId(source.module).checked_types.rootKey(source.ty), other_key);
+        const source = self.plan.representations.items[@backingInt(rep)].source_type;
+        return std.meta.eql(self.moduleForId(source.module).checked_types.rootKey(source.ty), view.checked_types.rootKey(ty));
     }
 
     /// A stored function use's substitution: the relation of its worker to its
@@ -20747,7 +20768,7 @@ const Builder = struct {
         self: *Builder,
         stored: StoredFnSource,
         kind: static_dispatch.GeneratedCodecDerivationKind,
-        shape_key: checked_names.CanonicalTypeKey,
+        shape_rep: TypeRepId,
     ) Allocator.Error!?StoredCodecEdgeIn {
         const store_view = self.moduleForId(stored.module);
         const fn_value = (store_view.const_store orelse boxyPlanInvariant("stored function had no ConstStore")).getFn(stored.fn_id);
@@ -20769,7 +20790,8 @@ const Builder = struct {
                 else
                     boxyPlanInvariant("stored function kept a recorded codec edge"),
             };
-            if (!std.meta.eql(codec.dispatcher_key, shape_key)) continue;
+            const found = try self.storedCodecEdge(stored.module, codec);
+            if (!try self.repIsCheckedType(shape_rep, found.view, found.edge.dispatcher_ty)) continue;
             if (selected) |existing| {
                 if (!std.meta.eql(existing, codec)) boxyPlanInvariant("stored codec evidence named two contracts for one shape");
             } else {
@@ -21510,7 +21532,7 @@ const Builder = struct {
             .checked_generated,
             => null,
         };
-        const codec = generated orelse return self.workerSourceForConstFnValue(fn_value, requested_type);
+        const codec = generated orelse return try self.workerSourceForConstFnValue(viewModule(store_view), fn_value, requested_type);
         var stored_encoding_type: ?check.ConstStore.ConstTypeId = null;
         for (fn_value.captures) |capture| {
             if (capture.id != checked.CaptureId.generatedCheck(0)) continue;
@@ -21526,16 +21548,17 @@ const Builder = struct {
                 encoding_type,
                 view,
                 codec.expr,
-                requested_type.ty,
+                requested_type,
                 codec.kind,
                 codec.derivation_kind,
                 fn_value,
             )
         else
-            self.storedGeneratedCodecSource(
+            try self.storedGeneratedCodecSource(
+                viewModule(store_view),
                 view,
                 codec.expr,
-                requested_type.ty,
+                requested_type,
                 codec.kind,
                 codec.derivation_kind,
                 fn_value,
@@ -21547,16 +21570,17 @@ const Builder = struct {
         self: *Builder,
         store_view: ModuleView,
         stored_encoding_type: check.ConstStore.ConstTypeId,
-        view: ModuleView,
+        expr_view: ModuleView,
         expr_id: checked.CheckedExprId,
-        requested_runtime_type: checked.CheckedTypeId,
+        requested_runtime_type: CheckedTypeIdentity,
         kind: GeneratedCodecKind,
         derivation_kind: static_dispatch.GeneratedCodecDerivationKind,
         stored: check.ConstStore.ConstFn,
     ) Allocator.Error!GeneratedCodecSource {
-        const selected = self.generatedCodecContractForRuntimeExpr(view, expr_id, derivation_kind, stored);
+        const selected = try self.generatedCodecContractForRuntimeExpr(viewModule(store_view), expr_view, expr_id, derivation_kind, stored);
+        const view = selected.view;
         const derivation = selected.derivation;
-        if (selected.runtime_ty != requested_runtime_type or
+        if (!std.meta.eql(view.checked_types.rootKey(selected.runtime_ty), self.moduleForId(requested_runtime_type.module).checked_types.rootKey(requested_runtime_type.ty)) or
             !try self.storedTypeMatchesCheckedType(store_view, stored_encoding_type, view, derivation.encoding_ty))
         {
             boxyPlanInvariant("stored generated codec encoding disagreed with its checked contract");
@@ -21567,7 +21591,7 @@ const Builder = struct {
             .runtime_type = typeRef(view, derivation.runtime_ty),
             .capture_type = typeRef(view, derivation.encoding_ty),
             .contract_derivation = selected.id,
-            .contract_expr = .{ .module = viewModule(view), .expr = expr_id },
+            .contract_expr = .{ .module = viewModule(expr_view), .expr = expr_id },
         };
     }
 
@@ -21889,8 +21913,8 @@ const Builder = struct {
         self: *Builder,
         view: ModuleView,
         target: checked.ResolvedValueId,
-    ) bool {
-        const source = self.workerSourceForDirectTarget(view, target);
+    ) Allocator.Error!bool {
+        const source = try self.workerSourceForDirectTarget(view, target);
         if (source != .nested_expr) return false;
         return self.nestedCallableHasNoCaptures(source.nested_expr);
     }
@@ -21921,18 +21945,18 @@ const Builder = struct {
         return typeRef(view, call_site_type);
     }
 
-    fn workerSourceForDirectTarget(self: *Builder, view: ModuleView, target: checked.ResolvedValueId) WorkerSource {
+    fn workerSourceForDirectTarget(self: *Builder, view: ModuleView, target: checked.ResolvedValueId) Allocator.Error!WorkerSource {
         const record = resolvedValueRecord(view, target);
         return switch (record.ref) {
             .top_level_proc,
             .promoted_top_level_proc,
-            => |procedure| self.workerSourceForProcedureUse(procedure),
-            .platform_required_proc => |required| self.workerSourceForProcedureUse(required.procedure),
+            => |procedure| try self.workerSourceForProcedureUse(procedure),
+            .platform_required_proc => |required| try self.workerSourceForProcedureUse(required.procedure),
             .local_proc => |local| if (topLevelProcedureBindingForExpr(view, local.expr)) |binding|
                 .{ .procedure_binding = binding }
             else
                 .{ .nested_expr = .{ .module = viewModule(view), .expr = nestedCallableSiteExprFor(view, local.expr) orelse local.expr } },
-            .imported_proc, .hosted_proc => |procedure| self.workerSourceForProcedureUse(procedure),
+            .imported_proc, .hosted_proc => |procedure| try self.workerSourceForProcedureUse(procedure),
             .local_param,
             .local_value,
             .local_mutable_version,
@@ -21951,12 +21975,12 @@ const Builder = struct {
         self: *Builder,
         view: ModuleView,
         ref_id: checked.ResolvedValueRefId,
-    ) ?WorkerSource {
-        return self.resolveWorkerSource(.{ .value_ref = .{ .view = view, .ref_id = ref_id } });
+    ) Allocator.Error!?WorkerSource {
+        return try self.resolveWorkerSource(.{ .value_ref = .{ .view = view, .ref_id = ref_id } });
     }
 
-    fn workerSourceForProcedureUse(self: *Builder, procedure: checked.ProcedureUseTemplate) WorkerSource {
-        return self.resolveWorkerSource(.{ .procedure_use = procedure }) orelse
+    fn workerSourceForProcedureUse(self: *Builder, procedure: checked.ProcedureUseTemplate) Allocator.Error!WorkerSource {
+        return (try self.resolveWorkerSource(.{ .procedure_use = procedure })) orelse
             boxyPlanInvariant("procedure use resolved to no worker source");
     }
 
@@ -21964,8 +21988,8 @@ const Builder = struct {
         self: *Builder,
         view: ModuleView,
         template_id: checked.CallableEvalTemplateId,
-    ) ?WorkerSource {
-        return self.resolveWorkerSource(.{ .eval_template = .{ .view = view, .template = template_id } });
+    ) Allocator.Error!?WorkerSource {
+        return try self.resolveWorkerSource(.{ .eval_template = .{ .view = view, .template = template_id } });
     }
 
     /// One reference on a chain of callable references.
@@ -21982,7 +22006,7 @@ const Builder = struct {
     /// to the next reference. A procedure use whose evaluated callable names
     /// no source is itself the source; since that always names one, only the
     /// most recent such procedure use can apply.
-    fn resolveWorkerSource(self: *Builder, first: WorkerSourceQuery) ?WorkerSource {
+    fn resolveWorkerSource(self: *Builder, first: WorkerSourceQuery) Allocator.Error!?WorkerSource {
         var query = first;
         var fallback: ?checked.ProcedureUseTemplate = null;
         while (true) {
@@ -22066,7 +22090,8 @@ const Builder = struct {
                         .fn_value => |fn_id| {
                             const store = view.const_store orelse
                                 boxyPlanInvariant("finalized callable eval root had no ConstStore");
-                            return self.workerSourceForConstFnValue(
+                            return try self.workerSourceForConstFnValue(
+                                viewModule(view),
                                 store.getFn(fn_id),
                                 typeRef(view, template.checked_fn_root),
                             );
@@ -22181,7 +22206,21 @@ const Builder = struct {
         const root = view.compile_time_roots.root(template.root);
         return switch (root.payload) {
             .fn_value => |fn_id| .{ .module = viewModule(view), .fn_id = fn_id },
-            .pending, .unevaluated, .const_node, .discarded, .expect, .runtime => null,
+            // An alias of another callable is that callable's stored function,
+            // as `resolveWorkerSource` follows it to that callable's worker.
+            .pending => blk: {
+                const expr = view.checked_bodies.expr(root.expr);
+                const maybe_ref: ?checked.ResolvedValueRefId = if (expr.data == .lookup_local)
+                    expr.data.lookup_local.resolved
+                else if (expr.data == .lookup_external)
+                    expr.data.lookup_external
+                else if (expr.data == .lookup_required)
+                    expr.data.lookup_required
+                else
+                    null;
+                break :blk self.storedFnSourceForProcedureValueRef(view, maybe_ref orelse break :blk null);
+            },
+            .unevaluated, .const_node, .discarded, .expect, .runtime => null,
         };
     }
 
@@ -22297,18 +22336,18 @@ const Builder = struct {
         }
     }
 
-    fn workerSourceForCallableEvalSource(self: *Builder, source: WorkerSource) WorkerSource {
+    fn workerSourceForCallableEvalSource(self: *Builder, source: WorkerSource) Allocator.Error!WorkerSource {
         return switch (source) {
             .procedure_binding => |binding_ref| blk: {
                 const view = self.moduleForKey(binding_ref.artifact);
                 const binding = view.top_level_procedure_bindings.get(binding_ref.binding);
                 break :blk switch (binding.body) {
                     .checked_error => boxyPlanInvariant("rejected binding reached Boxy planning callable consumption"),
-                    .callable_eval_template => |template| self.workerSourceForCallableEvalTemplate(view, template) orelse source,
+                    .callable_eval_template => |template| try self.workerSourceForCallableEvalTemplate(view, template) orelse source,
                     .direct_template => source,
                 };
             },
-            .procedure_use => |procedure| self.workerSourceForProcedureUse(procedure),
+            .procedure_use => |procedure| try self.workerSourceForProcedureUse(procedure),
             .procedure_template,
             .nested_expr,
             .generated_codec,

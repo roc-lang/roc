@@ -8581,8 +8581,12 @@ returned does not, so the function keeps its template specialization's concrete
 type (`ConstFn.owner_fn_ty`) and Boxy relates the template to it. Relating a
 requirement to its selected method then binds the variables only that requirement
 names, for dictionaries and descriptors alike. A
-generated codec runtime body reads its edge in that
-body's module, which must hold an equal contract. Completed-body records
+generated codec runtime body reads its edge in that body's module when that
+module holds an equal contract; otherwise, as for a custom format's contract
+reached through a Builtin method, it reads the edge the same way, from the storing
+module's import closure. A generated runtime whose encoding operand reads the frame
+that built it, rather than being a value any frame can rebuild, always captures
+the encoding, so a stored one has its value when that frame is gone. Completed-body records
 retain recorded edges and are rejected when their recording module is absent.
 
 The checker's derived-codec walk records each nominal application whose

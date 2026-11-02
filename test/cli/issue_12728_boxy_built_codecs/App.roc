@@ -75,6 +75,56 @@ tagged_encoder = |{}| {
 	A.encoder_for(Tagged.Tagged(1))
 }
 
+# A compiler-derived encoder over a custom format is built from a generic
+# method's `encoding` parameter, which is gone when the stored encoder is
+# restored, and its contract lives in this module rather than in Builtin. The
+# format's payload is heap-allocated so a stored encoder must hold a real value.
+Rendered(tag) := [Rendered(tag)].{
+	encode_i64 : I64, Str -> Try(Str, err)
+	encode_i64 = |value, state| Ok(Str.concat(state, Str.inspect(value)))
+
+	encode_str : Str, Str -> Try(Str, err)
+	encode_str = |value, state| Ok(Str.concat(state, value))
+
+	rename_field : Rendered(tag), Str -> Str
+	rename_field = |_, name| name
+
+	encode_record : Str, U64, ({ text : Str }, ({ text : Str }, Str, (Str -> Try(Str, err)) -> Try({ text : Str }, err)) -> Try({ text : Str }, err)) -> Try(Str, err)
+	encode_record = |state, _count, write_fields| {
+		write = |current, name, write_field| {
+			match write_field(Str.concat(Str.concat(current.text, name), "=")) {
+				Ok(text) => Ok({ text: Str.concat(text, " ") })
+				Err(err) => Err(err)
+			}
+		}
+		match write_fields({ text: state }, write) {
+			Ok(done) => Ok(done.text)
+			Err(err) => Err(err)
+		}
+	}
+
+	encode_list : Str, U64, ({ text : Str }, ({ text : Str }, (Str -> Try(Str, err)) -> Try({ text : Str }, err)) -> Try({ text : Str }, err)) -> Try(Str, err)
+	encode_list = |state, _count, write_items| {
+		write = |current, write_item| {
+			match write_item(current.text) {
+				Ok(text) => Ok({ text: Str.concat(text, ";") })
+				Err(err) => Err(err)
+			}
+		}
+		match write_items({ text: state }, write) {
+			Ok(done) => Ok(done.text)
+			Err(err) => Err(err)
+		}
+	}
+}
+
+rendered_encoder : {} -> (a, Str -> Try(Str, []))
+	where [a.encoder_for : Rendered(Str) -> (a, Str -> Try(Str, []))]
+rendered_encoder = |{}| {
+	A : a
+	A.encoder_for(Rendered.Rendered("a tag long enough to live on the heap, not inline"))
+}
+
 # A format's method can dispatch on the format's type argument, and the same
 # format at another argument is a different dictionary.
 Label := [Label(Str)].{
@@ -145,6 +195,18 @@ stored_nested_format_encoder = format_encoder({})
 stored_tagged_encoder : List(Item), Str -> Try(Str, [])
 stored_tagged_encoder = tagged_encoder({})
 
+stored_rendered_ints : List(I64), Str -> Try(Str, [])
+stored_rendered_ints = rendered_encoder({})
+
+stored_rendered_alias : List(I64), Str -> Try(Str, [])
+stored_rendered_alias = stored_rendered_ints
+
+stored_rendered_holder : { encode : List(I64), Str -> Try(Str, []) }
+stored_rendered_holder = { encode: stored_rendered_alias }
+
+stored_rendered_records : List({ a : I64, b : Str }), Str -> Try(Str, [])
+stored_rendered_records = rendered_encoder({})
+
 stored_prefixed_encoder : Values, Str -> Str
 stored_prefixed_encoder = Values.encoder_for(Prefixed.{ prefix: Label.Label("#") })
 
@@ -178,5 +240,11 @@ main! = |args| {
 	Stdout.line!(Str.inspect(stored_nested_format_encoder([items, []], "nested=")))
 	Stdout.line!(Str.inspect(stored_tagged_encoder(items, "tagged=")))
 	Stdout.line!(stored_prefixed_encoder(Values.{ values: [Value.{ value: 5 }, Value.{ value: args.len().to_i64_wrap() }] }, "prefixed="))
+	ints = [5, args.len().to_i64_wrap()]
+	Stdout.line!(Str.inspect(stored_rendered_ints(ints, "ints=")))
+	Stdout.line!(Str.inspect(stored_rendered_alias(ints, "alias=")))
+	encode_held = stored_rendered_holder.encode
+	Stdout.line!(Str.inspect(encode_held(ints, "held=")))
+	Stdout.line!(Str.inspect(stored_rendered_records([{ a: 5, b: count }], "records=")))
 	Ok({})
 }

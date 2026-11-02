@@ -17422,6 +17422,10 @@ const Builder = struct {
                 ),
             };
         };
+        const retained_body = if (encoding_let) |let_|
+            try fn_ctx.retainGeneratedEncoding(try fn_ctx.localExpr(let_.local, arg_tys.get(0)), arg_tys.get(0), body, runtime_fn.ret)
+        else
+            body;
         const runtime_fn_id = try self.program.addFn(.{
             .fn_def = switch (kind) {
                 .parser => .{ .parser_runtime = .{
@@ -17450,7 +17454,7 @@ const Builder = struct {
         var codec_expr = try fn_ctx.addExpr(.{ .ty = ty, .data = .{ .lambda = .{
             .fn_id = draftFinalFn(runtime_fn_id),
             .args = lambda_args,
-            .body = body,
+            .body = retained_body,
         } } });
         var capture_index = precomputed_plan.captures.items.len;
         while (capture_index > 0) {
@@ -48653,6 +48657,33 @@ const BodyContext = struct {
         return &workspace.const_type_cache;
     }
 
+    /// Whether a generated codec's encoding operand reads the frame that builds
+    /// the codec, rather than being a tag any frame can lower. A stored runtime
+    /// is restored with no such frame.
+    fn generatedEncodingReadsFrame(self: *const BodyContext, operand: static_dispatch.StaticDispatchOperand) bool {
+        var expr_id = operand.checked_expr;
+        while (true) {
+            const expr = self.view.bodies.expr(expr_id);
+            if (expr.data == .nominal) {
+                expr_id = expr.data.nominal.backing_expr;
+                continue;
+            }
+            return expr.data != .zero_argument_tag;
+        }
+    }
+
+    /// `body` reading the encoding, so the generated runtime captures it though
+    /// a shape's body may not.
+    fn retainGeneratedEncoding(
+        self: *BodyContext,
+        encoding: DraftExprId,
+        encoding_ty: Type.TypeId,
+        body: DraftExprId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        return try self.wrapLet(try self.addLocal(self.builder.symbols.fresh(), encoding_ty), encoding_ty, encoding, body, ret_ty);
+    }
+
     /// A restored function belongs to the template specialization that built
     /// it, so the nested functions lowered from it keep that type.
     fn restoreConstFnOwner(self: *BodyContext, store_view: ModuleView, fn_value: check.ConstStore.ConstFn) Allocator.Error!void {
@@ -49387,6 +49418,16 @@ const BodyContext = struct {
             Common.invariant("stored " ++ codec_name ++ " runtime body differed from its sealed return type");
         }
         self.draft.exprs.items[@backingInt(body)].ty = ret_cell;
+        const retained_body = if (boundary.encoding_let) |let_| retained: {
+            const retained = try self.retainGeneratedEncoding(
+                try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(boundary.encoding_node), .{ .local = let_.local }),
+                encoding_ty,
+                body,
+                ret_ty,
+            );
+            self.draft.exprs.items[@backingInt(retained)].ty = ret_cell;
+            break :retained retained;
+        } else body;
 
         const stored_evidence = try self.storedEvidence(self.evidence);
         const evidence_digest = stored_evidence.digest;
@@ -49422,7 +49463,7 @@ const BodyContext = struct {
         var codec_expr = try self.addExprWithTypeCell(request_cell, .{ .lambda = .{
             .fn_id = .{ .draft = runtime_fn_id },
             .args = lambda_args,
-            .body = body,
+            .body = retained_body,
         } });
         var capture_index = precomputed_plan.captures.items.len;
         while (capture_index > 0) {
@@ -49515,6 +49556,11 @@ const BodyContext = struct {
         try fn_ctx.restoreGeneratedRuntimeEvidence(store_view, fn_value, plan);
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const plan_args = callable_plan.operands;
+        // The encoding operand can read a binder of the constructing frame,
+        // which is gone; the stored capture holds its value at this type.
+        if (constGeneratedCapture(fn_value, encoding_capture_id)) |capture| {
+            try fn_ctx.recordExprTypeRead(plan_args[0].checked_expr, try fn_ctx.activeNodeFromType(try fn_ctx.lowerConstCaptureType(store_view, capture.ty)));
+        }
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
             callable_plan,
             &fn_ctx,
@@ -56762,6 +56808,10 @@ const BodyContext = struct {
                 &precomputed_plan,
             );
         };
+        const parser_body = if (self.generatedEncodingReadsFrame(plan_args[0]))
+            try self.retainGeneratedEncoding(try self.localExpr(encoding_local, arg_tys.get(0)), arg_tys.get(0), parsed, runtime_fn.ret)
+        else
+            parsed;
         const fn_id = try self.addFn(.{
             .fn_def = .{ .parser_runtime = .{
                 .owner = self.owner_template,
@@ -56777,7 +56827,7 @@ const BodyContext = struct {
             .args = try self.addTypedLocalSpan(&.{
                 .{ .local = state_local, .ty = runtime_arg_tys.get(0) },
             }),
-            .body = parsed,
+            .body = parser_body,
         } } });
         var capture_index = precomputed_plan.captures.items.len;
         while (capture_index > 0) {
@@ -56870,6 +56920,10 @@ const BodyContext = struct {
                 &precomputed_plan,
             );
         };
+        const encoder_body = if (self.generatedEncodingReadsFrame(plan_args[0]))
+            try self.retainGeneratedEncoding(try self.localExpr(encoding_local, arg_tys.get(0)), arg_tys.get(0), encoded, runtime_fn.ret)
+        else
+            encoded;
         const fn_id = try self.addFn(.{
             .fn_def = .{ .encoder_for_runtime = .{
                 .owner = self.owner_template,
@@ -56886,7 +56940,7 @@ const BodyContext = struct {
                 .{ .local = value_local, .ty = runtime_arg_tys[0] },
                 .{ .local = state_local, .ty = runtime_arg_tys[1] },
             }),
-            .body = encoded,
+            .body = encoder_body,
         } } });
         var capture_index = precomputed_plan.captures.items.len;
         while (capture_index > 0) {
@@ -70440,12 +70494,16 @@ fn constCaptureBinder(id: check.ConstStore.CaptureId) checked.PatternBinderId {
     return id.binder();
 }
 
-fn constGeneratedCaptureNode(fn_value: check.ConstStore.ConstFn, capture_id: u32) ?checked.ConstNodeId {
+fn constGeneratedCapture(fn_value: check.ConstStore.ConstFn, capture_id: u32) ?check.ConstStore.ConstCapture {
     const needle = checked.CaptureId.generatedCheck(capture_id);
     for (fn_value.captures) |capture| {
-        if (capture.id == needle) return capture.value;
+        if (capture.id == needle) return capture;
     }
     return null;
+}
+
+fn constGeneratedCaptureNode(fn_value: check.ConstStore.ConstFn, capture_id: u32) ?checked.ConstNodeId {
+    return (constGeneratedCapture(fn_value, capture_id) orelse return null).value;
 }
 
 fn monotypePrimitive(primitive: check.ConstStore.Primitive) Type.Primitive {
