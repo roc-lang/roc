@@ -63,6 +63,8 @@ pub const HostSplice = if (builtin.os.tag == .freestanding) void else @import("H
 /// On-disk form of one module's pack of excerpts.
 pub const PackFile = @import("PackFile.zig");
 pub const UnitPieces = @import("UnitPieces.zig");
+/// One unit's machine code laid out for a fast dev link.
+pub const UnitImage = @import("UnitImage.zig");
 pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").Entrypoint;
 pub const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
 pub const StaticDataRelocation = @import("StaticDataExport.zig").StaticDataRelocation;

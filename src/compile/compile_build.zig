@@ -700,6 +700,16 @@ pub const BuildEnv = struct {
         return platform.targets_config;
     }
 
+    /// The linker symbols the selected platform's header names: its
+    /// `provides` section's and its `hosted` section's, in header order.
+    /// Null when no platform is selected.
+    pub fn getPlatformLinkSymbols(self: *const BuildEnv) ?struct { provides: []const ProvidesEntry, hosted: []const []const u8 } {
+        const name = self.selected_platform_package_name orelse return null;
+        const platform = self.packages.get(name) orelse return null;
+        std.debug.assert(platform.kind == .platform);
+        return .{ .provides = platform.provides_entries.items, .hosted = platform.hosted_symbols.items };
+    }
+
     /// Get the root_file of the platform package, if any.
     pub fn getPlatformRootFile(self: *const BuildEnv) ?[]const u8 {
         const name = self.selected_platform_package_name orelse return null;
@@ -1291,6 +1301,8 @@ pub const BuildEnv = struct {
             if (self.packages.getPtr(key_pkg)) |pkg| {
                 pkg.provides_entries = header_info.provides_entries;
                 header_info.provides_entries = .empty; // Prevent double-free in deinit
+                pkg.hosted_symbols = header_info.hosted_symbols;
+                header_info.hosted_symbols = .empty; // Prevent double-free in deinit
                 pkg.targets_config = header_info.targets_config;
                 header_info.targets_config = null; // Prevent double-free in deinit
             }
@@ -1644,6 +1656,8 @@ pub const BuildEnv = struct {
         /// Source-local public declarations from a package or platform header.
         public_surface: PublicSurface = .{},
         provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .empty,
+        /// The symbol strings of a platform header's `hosted` section.
+        hosted_symbols: std.ArrayListUnmanaged([]const u8) = .empty,
         targets_config: ?targets_config_mod.TargetsConfig = null,
 
         fn deinit(self: *Package, gpa: Allocator) void {
@@ -1655,6 +1669,8 @@ pub const BuildEnv = struct {
                 freeConstSlice(gpa, entry.ffi_symbol);
             }
             self.provides_entries.deinit(gpa);
+            for (self.hosted_symbols.items) |symbol| freeConstSlice(gpa, symbol);
+            self.hosted_symbols.deinit(gpa);
             var it = self.shorthands.iterator();
             while (it.next()) |e| {
                 freeConstSlice(gpa, e.key_ptr.*);
@@ -1676,6 +1692,8 @@ pub const BuildEnv = struct {
         resolver_root: package_resolution.FetchedPackage,
         /// Platform provides entries (roc_ident -> ffi_symbol mapping)
         provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .empty,
+        /// The symbol strings of a platform header's `hosted` section.
+        hosted_symbols: std.ArrayListUnmanaged([]const u8) = .empty,
         /// Targets configuration extracted from platform header
         targets_config: ?targets_config_mod.TargetsConfig = null,
         /// The file this header was read from, parsed in full.
@@ -1691,6 +1709,8 @@ pub const BuildEnv = struct {
                 freeConstSlice(gpa, entry.ffi_symbol);
             }
             self.provides_entries.deinit(gpa);
+            for (self.hosted_symbols.items) |symbol| freeConstSlice(gpa, symbol);
+            self.hosted_symbols.deinit(gpa);
         }
     };
 
@@ -1825,6 +1845,11 @@ pub const BuildEnv = struct {
                         .roc_ident = try self.gpa.dupe(u8, roc_ident),
                         .ffi_symbol = try self.gpa.dupe(u8, ffi_symbol),
                     });
+                }
+
+                for (ast.store.symbolMapEntrySlice(p.hosted)) |entry_idx| {
+                    const entry = ast.store.getSymbolMapEntry(entry_idx);
+                    try info.hosted_symbols.append(self.gpa, try self.gpa.dupe(u8, ast.resolve(entry.symbol)));
                 }
 
                 // Extract targets config from the platform AST
@@ -2175,6 +2200,8 @@ pub const BuildEnv = struct {
                 if (package.kind == .platform and child_pkg.provides_entries.items.len == 0) {
                     child_pkg.provides_entries = child_info.provides_entries;
                     child_info.provides_entries = .empty; // Prevent double-free in deinit
+                    child_pkg.hosted_symbols = child_info.hosted_symbols;
+                    child_info.hosted_symbols = .empty; // Prevent double-free in deinit
                 }
                 if (package.kind == .platform and child_pkg.targets_config == null) {
                     child_pkg.targets_config = child_info.targets_config;
@@ -2759,7 +2786,7 @@ pub const BuildEnv = struct {
         const coordinator = self.coordinator orelse return null;
         const objects = &(coordinator.boxy_objects orelse return null);
         const known = objects.objectWithKey(artifact, key) orelse return null;
-        return .{ .pieces = known.object.?.pieces, .hosted_symbols = known.object.?.hosted_symbols, .restored = known.restored };
+        return .{ .pieces = known.object.?.pieces, .image = objects.imageOf(artifact), .hosted_symbols = known.object.?.hosted_symbols, .restored = known.restored };
     }
 
     /// Record in `digests` the exports of `artifact`'s object, which this
@@ -2772,6 +2799,9 @@ pub const BuildEnv = struct {
 
     pub const BoxyKnownObject = struct {
         pieces: *const backend.dev.UnitPieces.Pieces,
+        /// The object's unit image, owned by the compilation, for a target
+        /// that `boxy_unit.producesImage`.
+        image: ?@import("boxy_unit.zig").Image,
         hosted_symbols: []const []const u8,
         restored: bool,
     };

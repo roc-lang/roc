@@ -38,6 +38,7 @@ const SymbolTable = @import("SymbolTable.zig");
 const IndexedRelocation = @import("Relocation.zig").IndexedRelocation;
 const StaticStringData = @import("StaticStringData.zig");
 const UnitPieces = @import("UnitPieces.zig");
+const UnitImage = @import("UnitImage.zig");
 const TargetUsize = @import("base").target.TargetUsize;
 
 /// Information about an entrypoint to compile
@@ -280,6 +281,32 @@ pub const ObjectFileCompiler = struct {
             }
         }
         return CompilationError.UnsupportedTarget;
+    }
+
+    /// Build the unit image (`UnitImage`) of one unit's pieces for a Linux
+    /// x86_64 target: the pieces composed on their own, keeping every
+    /// procedure, entrypoint wrapper and host-visible constant, with every
+    /// procedure given a global symbol so other units' references to it
+    /// resolve by name, then lifted from the composed relocatable object.
+    pub fn buildUnitImage(
+        self: *ObjectFileCompiler,
+        pieces: *const UnitPieces.Pieces,
+        target: RocTarget,
+    ) CompilationError![]align(UnitImage.alignment.toByteUnits()) u8 {
+        std.debug.assert(target.toOsTag() == .linux and target.toCpuArch() == .x86_64);
+        var composed = try self.composeObject(&.{pieces}, target, .{ .roots = null, .global_procs = true });
+        defer composed.deinit();
+        return UnitImage.build(self.allocator, &.{composed.object_bytes}, .{ .keep_debug = true }) catch |err| switch (err) {
+            error.OutOfMemory => return CompilationError.OutOfMemory,
+            error.InvalidObject,
+            error.UnsupportedSection,
+            error.UnsupportedSymbol,
+            error.UnsupportedRelocation,
+            error.DuplicateDefinition,
+            error.RelocationOutOfRange,
+            error.ImageTooLarge,
+            => invariant("the dev backend's object for a unit is not convertible into a unit image: {s}", .{@errorName(err)}),
+        };
     }
 
     pub fn compileToObjectFileAndWrite(

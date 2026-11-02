@@ -9957,7 +9957,7 @@ const PackStoreFiles = struct {
             if (entry.state != .published) continue;
             switch (entry.family) {
                 .local_pack, .package_pack, .optimized_pack => {},
-                .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .local_discovery, .package_discovery, .program_output, .scratch, .boxy_object => continue,
+                .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .local_discovery, .package_discovery, .program_output, .scratch, .boxy_object, .prelinked_host => continue,
             }
             var artifact = (try store.acquireKey(entry.key, store.now())) orelse return error.InvalidArtifact;
             defer artifact.deinit();
@@ -10715,7 +10715,7 @@ fn optimizedPackCounts(files: *const PackStoreFiles, opt: []const u8) OptimizedP
         switch (family) {
             .optimized_pack => counts.program += 1,
             .package_pack => counts.package += 1,
-            .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .local_pack, .local_discovery, .package_discovery, .program_output, .scratch, .boxy_object => {},
+            .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .local_pack, .local_discovery, .package_discovery, .program_output, .scratch, .boxy_object, .prelinked_host => {},
         }
     }
     return counts;

@@ -42,6 +42,8 @@ pub const Family = enum(u8) {
     scratch,
     /// A module's Boxy object (`compile.boxy_object_cache`).
     boxy_object,
+    /// A platform host linked once for fast dev links of its executables.
+    prelinked_host,
 
     pub fn age(self: Family) i64 {
         return switch (self) {
@@ -60,6 +62,7 @@ pub const Family = enum(u8) {
             .optimized_pack,
             .package_discovery,
             .boxy_object,
+            .prelinked_host,
             => 30 * day_ns,
         };
     }
@@ -67,7 +70,7 @@ pub const Family = enum(u8) {
     pub fn isPack(self: Family) bool {
         return switch (self) {
             .local_pack, .package_pack, .optimized_pack, .local_discovery, .package_discovery, .program_output => true,
-            .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .scratch, .boxy_object => false,
+            .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .scratch, .boxy_object, .prelinked_host => false,
         };
     }
 

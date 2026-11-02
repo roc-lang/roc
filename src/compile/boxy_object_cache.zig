@@ -7,8 +7,11 @@
 //! everything a build needs of the module's code: the export interface
 //! each importing module compiles its calls against, the hosted symbols the
 //! code references, and the code itself in pieces (`backend.dev.UnitPieces`,
-//! design.md "Unit Pieces And Whole-Program Dead Code"). Nothing in it refers
-//! to another cache.
+//! design.md "Unit Pieces And Whole-Program Dead Code"), and for a Linux
+//! x86_64 target the code laid out once more as a unit image
+//! (`backend.dev.UnitImage`), which a fast dev link places directly. The
+//! image starts at a page-aligned offset in the entry, so a mapped entry
+//! serves it in place. Nothing in it refers to another cache.
 
 const std = @import("std");
 const base = @import("base");
@@ -17,9 +20,13 @@ const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 4;
+pub const format_version: u32 = 5;
 
 const magic = "RBXO";
+
+/// The offset alignment of an entry's image, so a page-aligned mapping of
+/// the entry holds the image at a page-aligned address.
+pub const image_alignment: usize = 4096;
 
 /// The cache scope the entries are filed under.
 pub const scope = "boxy";
@@ -115,6 +122,9 @@ pub const Entry = struct {
     app_export_symbols: []const []const u8 = &.{},
     /// The module's code in pieces, encoded (`UnitPieces.encode`).
     pieces: []const u8,
+    /// The module's unit image (`UnitImage`), for a target a fast dev link
+    /// serves; empty for any other target.
+    image: []const u8 = &.{},
 };
 
 /// Encode `entry` as the bytes filed in the cache. The caller owns the result.
@@ -145,6 +155,11 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
     }
     try appendU64(&bytes, allocator, entry.pieces.len);
     try bytes.appendSlice(allocator, entry.pieces);
+    try appendU64(&bytes, allocator, entry.image.len);
+    if (entry.image.len != 0) {
+        try bytes.appendNTimes(allocator, 0, std.mem.alignForward(usize, bytes.items.len, image_alignment) - bytes.items.len);
+        try bytes.appendSlice(allocator, entry.image);
+    }
     return try bytes.toOwnedSlice(allocator);
 }
 
@@ -158,8 +173,25 @@ const min_export_record_size = 32 + 4 * @sizeOf(u64) + 3 + @sizeOf(u32);
 pub const DecodeError = error{InvalidEntry} || Allocator.Error;
 
 /// Decode an entry's bytes. Every slice of the result is allocated from
-/// `allocator`; free them with `deinitEntry`.
+/// `allocator`; free them with `deinitEntry`. The image is copied to memory
+/// aligned for `UnitImage.View`.
 pub fn decode(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
+    const view = try decodeView(allocator, bytes);
+    errdefer deinitEntryView(allocator, view);
+    const pieces = try allocator.dupe(u8, view.pieces);
+    errdefer allocator.free(pieces);
+    const image = try allocator.alignedAlloc(u8, .@"16", view.image.len);
+    @memcpy(image, view.image);
+    var entry = view;
+    entry.pieces = pieces;
+    entry.image = image;
+    return entry;
+}
+
+/// Decode an entry's bytes, borrowing its pieces and image from `bytes`;
+/// every other slice is allocated from `allocator`. Free them with
+/// `deinitEntryView`. A page-aligned `bytes` holds the image page-aligned.
+pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     var reader = Reader{ .bytes = bytes };
     const found_magic = try reader.take(magic.len);
     if (!std.mem.eql(u8, found_magic, magic)) return error.InvalidEntry;
@@ -199,8 +231,11 @@ pub fn decode(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     errdefer freeSymbols(allocator, app_export_symbols);
     const pieces_len = try reader.word64();
     if (pieces_len > std.math.maxInt(usize)) return error.InvalidEntry;
-    const pieces = try allocator.dupe(u8, try reader.take(@intCast(pieces_len)));
-    errdefer allocator.free(pieces);
+    const pieces = try reader.take(@intCast(pieces_len));
+    const image_len = try reader.word64();
+    if (image_len > std.math.maxInt(usize)) return error.InvalidEntry;
+    if (image_len != 0) _ = try reader.take(std.mem.alignForward(usize, reader.at, image_alignment) - reader.at);
+    const image = try reader.take(@intCast(image_len));
     if (reader.at != bytes.len) return error.InvalidEntry;
     return .{
         .exports = exports,
@@ -208,6 +243,7 @@ pub fn decode(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
         .link_root_symbols = link_root_symbols,
         .app_export_symbols = app_export_symbols,
         .pieces = pieces,
+        .image = image,
     };
 }
 
@@ -233,12 +269,19 @@ fn freeSymbols(allocator: Allocator, symbols: []const []const u8) void {
 
 /// Free an entry `decode` returned.
 pub fn deinitEntry(allocator: Allocator, entry: Entry) void {
+    allocator.free(entry.pieces);
+    const image: []align(16) const u8 = @alignCast(entry.image);
+    allocator.free(image);
+    deinitEntryView(allocator, entry);
+}
+
+/// Free an entry `decodeView` returned, leaving the bytes it borrows.
+pub fn deinitEntryView(allocator: Allocator, entry: Entry) void {
     for (entry.exports) |record| allocator.free(record.rc_ret_conditions);
     allocator.free(entry.exports);
     freeSymbols(allocator, entry.hosted_symbols);
     freeSymbols(allocator, entry.link_root_symbols);
     freeSymbols(allocator, entry.app_export_symbols);
-    allocator.free(entry.pieces);
 }
 
 const Reader = struct {
@@ -346,6 +389,7 @@ test "a Boxy object entry round-trips through its bytes" {
         .link_root_symbols = &.{"roc__d3"},
         .app_export_symbols = &.{ "roc__main_for_host", "roc__d3" },
         .pieces = "not really pieces",
+        .image = "an image",
     };
     const bytes = try encode(allocator, entry);
     defer allocator.free(bytes);
@@ -356,6 +400,8 @@ test "a Boxy object entry round-trips through its bytes" {
     try std.testing.expectEqualDeep(entry.link_root_symbols, decoded.link_root_symbols);
     try std.testing.expectEqualDeep(entry.app_export_symbols, decoded.app_export_symbols);
     try std.testing.expectEqualStrings(entry.pieces, decoded.pieces);
+    try std.testing.expectEqualStrings(entry.image, decoded.image);
+    try std.testing.expectEqual(@as(usize, 0), (bytes.len - entry.image.len) % image_alignment);
 
     // A truncated or altered file is no entry.
     try std.testing.expectError(error.InvalidEntry, decode(allocator, bytes[0 .. bytes.len - 1]));

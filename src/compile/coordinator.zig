@@ -1575,6 +1575,9 @@ const BoxyObjects = struct {
     closures_known: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
     /// The pieces of every object recorded, kept for the compilation.
     owned_pieces: std.ArrayList(*backend.dev.UnitPieces.Pieces) = .empty,
+    /// The unit image of every object recorded for a target that
+    /// `boxy_unit.producesImage`, by module key, kept for the compilation.
+    images: std.AutoHashMapUnmanaged([32]u8, boxy_unit.Image) = .empty,
     session: post_check_executor.Session,
     first_error: ?Error = null,
     /// Whether a task finished since `progress` last reported, whichever
@@ -1644,6 +1647,9 @@ const BoxyObjects = struct {
             gpa.destroy(pieces);
         }
         self.owned_pieces.deinit(gpa);
+        var images = self.images.valueIterator();
+        while (images.next()) |image| image.deinit(gpa);
+        self.images.deinit(gpa);
         self.records.deinit(gpa);
         if (self.owned_interfaces) |*owned| owned.deinit();
         self.digests.deinit();
@@ -1671,6 +1677,12 @@ const BoxyObjects = struct {
         const known = self.records.get(artifact.key.bytes) orelse return null;
         if (known.object == null or !std.mem.eql(u8, &known.key.bytes, &key.bytes)) return null;
         return known;
+    }
+
+    /// The unit image of `artifact`'s recorded object, for a target that
+    /// `boxy_unit.producesImage`.
+    pub fn imageOf(self: *const BoxyObjects, artifact: *const Artifact) ?boxy_unit.Image {
+        return self.images.get(artifact.key.bytes);
     }
 
     /// Whether the objects of `module`'s import closure are all known,
@@ -1864,12 +1876,17 @@ const BoxyObjects = struct {
         const gpa = self.coordinator.gpa;
         const arena = self.arena.allocator();
         try self.owned_pieces.ensureUnusedCapacity(gpa, 1);
-        defer built.deinitKeepingPieces(gpa);
+        if (built.image) |image| {
+            errdefer image.deinit(gpa);
+            try self.images.put(gpa, artifact.key.bytes, image);
+        }
+        defer built.deinitKeepingCode(gpa);
         try self.digests.recordExports(artifact, built.exports);
         const symbols = try arena.alloc([]const u8, built.hosted_symbols.len);
         for (built.hosted_symbols, symbols) |symbol, *copy| copy.* = try arena.dupe(u8, symbol);
-        self.owned_pieces.appendAssumeCapacity(built.pieces);
-        return .{ .module = artifact.key.bytes, .pieces = built.pieces, .hosted_symbols = symbols };
+        const pieces = built.pieces orelse Coordinator.coordinatorInvariant("a compile-time evaluation unit was built without its pieces", .{});
+        self.owned_pieces.appendAssumeCapacity(pieces);
+        return .{ .module = artifact.key.bytes, .pieces = pieces, .hosted_symbols = symbols };
     }
 
     /// One unit's build as a post-check task.

@@ -14,6 +14,7 @@ const static_data_exports = @import("static_data");
 const object_cache = @import("boxy_object_cache.zig");
 const boxy_interface = @import("boxy_interface.zig");
 const cache_manager_mod = @import("cache_manager.zig");
+const CacheData = @import("cache_module.zig").CacheModule.CacheData;
 
 const Allocator = std.mem.Allocator;
 const CacheManager = cache_manager_mod.CacheManager;
@@ -37,25 +38,60 @@ pub const Unit = struct {
     interfaces: *ExportInterfaces,
     cache_manager: ?*CacheManager,
     key: object_cache.Key,
+    /// Whether the caller reads the unit's pieces. A fast dev link reads
+    /// only the unit image, and a restored entry is then served from a
+    /// mapping without decoding its pieces.
+    want_pieces: bool = true,
+};
+
+/// Whether a unit compiled for `target` carries a unit image: the targets
+/// a fast dev link serves. Every entry for such a target holds one,
+/// whichever command wrote it.
+pub fn producesImage(target: roc_target.RocTarget) bool {
+    return target.toOsTag() == .linux and target.toCpuArch() == .x86_64;
+}
+
+/// A unit image's bytes and what keeps them alive.
+pub const Image = struct {
+    bytes: []align(backend.dev.UnitImage.alignment.toByteUnits()) const u8,
+    owner: union(enum) {
+        owned,
+        /// The bytes are a slice of this mapped cache entry.
+        mapped: CacheData,
+    },
+
+    pub fn deinit(self: Image, gpa: Allocator) void {
+        switch (self.owner) {
+            .owned => gpa.free(self.bytes),
+            .mapped => |data| data.deinit(gpa),
+        }
+    }
 };
 
 /// A unit's object.
 pub const Built = struct {
     restored: bool,
-    /// The unit's code in pieces. Owned by the unit's `gpa`.
-    pieces: *backend.dev.UnitPieces.Pieces,
+    /// The unit's code in pieces, when the unit wanted them. Owned by the
+    /// unit's `gpa`.
+    pieces: ?*backend.dev.UnitPieces.Pieces,
+    /// The unit's image, for a target that `producesImage`.
+    image: ?Image = null,
     hosted_symbols: []const []const u8,
     /// The ownership signatures the object exports. Owned by the unit's `gpa`.
     exports: []const object_cache.ExportRecord,
 
     pub fn deinit(self: Built, gpa: Allocator) void {
-        self.pieces.deinit();
-        gpa.destroy(self.pieces);
-        self.deinitKeepingPieces(gpa);
+        if (self.pieces) |pieces| {
+            pieces.deinit();
+            gpa.destroy(pieces);
+        }
+        if (self.image) |image| image.deinit(gpa);
+        self.deinitKeepingCode(gpa);
     }
 
-    /// Release everything but the pieces, which the caller now owns.
-    pub fn deinitKeepingPieces(self: Built, gpa: Allocator) void {
+    /// Release everything but the pieces and the image, which the caller
+    /// now owns.
+    pub fn deinitKeepingCode(self: Built, gpa: Allocator) void {
         for (self.exports) |record| gpa.free(record.rc_ret_conditions);
         gpa.free(self.exports);
         for (self.hosted_symbols) |symbol| gpa.free(symbol);
@@ -115,6 +151,38 @@ pub fn restore(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.
         },
     };
     errdefer object_cache.deinitEntry(gpa, entry);
+    try recordInterfaces(interfaces, entry);
+    return entry;
+}
+
+/// Restore `key`'s entry like `restore`, serving it from a mapping of the
+/// cache file: the pieces are left undecoded and the image is borrowed from
+/// the mapping, which the returned `Image` keeps alive.
+pub fn restoreMapped(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.Key, interfaces: *ExportInterfaces) Allocator.Error!?struct { entry: object_cache.Entry, data: CacheData } {
+    const manager = cache_manager orelse return null;
+    const data = manager.loadFamilyMapped(gpa, .checked, .boxy_object, key.bytes, object_cache.scope) orelse {
+        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: no object cache entry for key {s}\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
+        return null;
+    };
+    const entry = object_cache.decodeView(gpa, data.data()) catch |err| switch (err) {
+        error.OutOfMemory => {
+            data.deinit(gpa);
+            return error.OutOfMemory;
+        },
+        error.InvalidEntry => {
+            data.deinit(gpa);
+            return null;
+        },
+    };
+    errdefer {
+        object_cache.deinitEntryView(gpa, entry);
+        data.deinit(gpa);
+    }
+    try recordInterfaces(interfaces, entry);
+    return .{ .entry = entry, .data = data };
+}
+
+fn recordInterfaces(interfaces: *ExportInterfaces, entry: object_cache.Entry) Allocator.Error!void {
     for (entry.exports) |record| try interfaces.put(.{ .bytes = record.identity }, .{
         .rc_borrowed_params = record.rc_borrowed_params,
         .rc_ret_borrowed = record.rc_ret_borrowed,
@@ -125,7 +193,6 @@ pub fn restore(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.
         .rc_ret_conditions = record.rc_ret_conditions,
         .may_leave_pending = record.may_leave_pending,
     });
-    return entry;
 }
 
 /// The export records of `lowered`'s exported procedures, recorded in
@@ -177,6 +244,11 @@ pub fn hostedSymbols(arena: Allocator, store_: *const lir.LirStore) Allocator.Er
     return symbols.items;
 }
 
+fn freeSymbols(gpa: Allocator, symbols: []const []const u8) void {
+    for (symbols) |symbol| gpa.free(symbol);
+    gpa.free(symbols);
+}
+
 /// Copies of `symbols`, each and the slice allocated from `gpa`.
 fn dupeSymbols(gpa: Allocator, symbols: []const []const u8) Allocator.Error![]const []const u8 {
     const copies = try gpa.alloc([]const u8, symbols.len);
@@ -197,17 +269,39 @@ pub const BuildError = eval.CompileTimeFinalization.RuntimeMaterializationError 
 pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     const gpa = unit.gpa;
     const module_name = unit.artifact.canonical_names.moduleNameText(unit.artifact.module_identity.module_name);
-    if (try restore(gpa, unit.cache_manager, unit.key, unit.interfaces)) |entry| {
+    if (!unit.want_pieces) if (try restoreMapped(gpa, unit.cache_manager, unit.key, unit.interfaces)) |restored| {
+        defer object_cache.deinitEntryView(gpa, restored.entry);
+        errdefer restored.data.deinit(gpa);
+        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache hit for {s} key {s}\n", .{ module_name, &std.fmt.bytesToHex(unit.key.bytes[0..8], .lower) });
+        std.debug.assert(restored.entry.image.len != 0 or !producesImage(unit.target));
+        const hosted_symbols = try dupeSymbols(gpa, restored.entry.hosted_symbols);
+        errdefer freeSymbols(gpa, hosted_symbols);
+        const exports = try dupeRecords(gpa, restored.entry.exports);
+        return .{
+            .restored = true,
+            .pieces = null,
+            .image = if (producesImage(unit.target)) .{ .bytes = @alignCast(restored.entry.image), .owner = .{ .mapped = restored.data } } else image: {
+                restored.data.deinit(gpa);
+                break :image null;
+            },
+            .hosted_symbols = hosted_symbols,
+            .exports = exports,
+        };
+    };
+    if (unit.want_pieces) if (try restore(gpa, unit.cache_manager, unit.key, unit.interfaces)) |entry| {
         defer object_cache.deinitEntry(gpa, entry);
         if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache hit for {s} key {s}\n", .{ module_name, &std.fmt.bytesToHex(unit.key.bytes[0..8], .lower) });
         if (dev_diagnostics.isSet(.verify_boxy_object_reuse)) {
             const fresh = try build(unit, module_name);
             defer fresh.deinit(gpa);
-            const encoded = try backend.dev.UnitPieces.encode(gpa, fresh.pieces);
+            const encoded = try backend.dev.UnitPieces.encode(gpa, fresh.pieces.?);
             defer gpa.free(encoded);
             if (!std.mem.eql(u8, encoded, entry.pieces)) {
                 base.invariant("the cached pieces of module {s} differ from a fresh build of them: its key misses an input", .{module_name});
             }
+            if (fresh.image) |image| if (!std.mem.eql(u8, image.bytes, entry.image)) {
+                base.invariant("the cached image of module {s} differs from a fresh build of it: its key misses an input", .{module_name});
+            };
         }
         const pieces = try gpa.create(backend.dev.UnitPieces.Pieces);
         errdefer gpa.destroy(pieces);
@@ -216,22 +310,34 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
             error.MalformedPieces, error.UnsupportedPiecesVersion => base.invariant("the cached pieces of module {s} were admitted but do not decode: {s}", .{ module_name, @errorName(err) }),
         };
         errdefer pieces.deinit();
+        const image: ?Image = if (producesImage(unit.target)) image: {
+            const bytes = try gpa.alignedAlloc(u8, backend.dev.UnitImage.alignment, entry.image.len);
+            @memcpy(bytes, entry.image);
+            break :image .{ .bytes = bytes, .owner = .owned };
+        } else null;
+        errdefer if (image) |owned| owned.deinit(gpa);
         return .{
             .restored = true,
             .pieces = pieces,
+            .image = image,
             .hosted_symbols = try dupeSymbols(gpa, entry.hosted_symbols),
             .exports = try dupeRecords(gpa, entry.exports),
         };
-    }
+    };
     if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache miss for {s} key {s}\n", .{ module_name, &std.fmt.bytesToHex(unit.key.bytes[0..8], .lower) });
     const built = try build(unit, module_name);
     errdefer built.deinit(gpa);
     var cache_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_cache);
     defer cache_scope.end();
-    const encoded = try backend.dev.UnitPieces.encode(gpa, built.pieces);
+    const encoded = try backend.dev.UnitPieces.encode(gpa, built.pieces.?);
     defer gpa.free(encoded);
-    try store(gpa, unit.cache_manager, unit.key, .{ .exports = built.exports, .hosted_symbols = built.hosted_symbols, .pieces = encoded });
-    return built;
+    try store(gpa, unit.cache_manager, unit.key, .{ .exports = built.exports, .hosted_symbols = built.hosted_symbols, .pieces = encoded, .image = if (built.image) |image| image.bytes else &.{} });
+    if (unit.want_pieces) return built;
+    var without_pieces = built;
+    built.pieces.?.deinit();
+    gpa.destroy(built.pieces.?);
+    without_pieces.pieces = null;
+    return without_pieces;
 }
 
 /// Lower and compile `unit`.
@@ -281,6 +387,14 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
         return error.NativeCompilationFailed;
     };
     errdefer pieces.deinit();
+    const image: ?Image = if (producesImage(unit.target)) .{
+        .bytes = object_compiler.buildUnitImage(pieces, unit.target) catch |err| {
+            std.log.err("Building the unit image of module {s} failed: {}", .{ module_name, err });
+            return error.NativeCompilationFailed;
+        },
+        .owner = .owned,
+    } else null;
+    errdefer if (image) |owned| owned.deinit(gpa);
     codegen_scope.end();
     if (backend_timing) |timing| {
         const snapshot = timing.snapshot();
@@ -305,6 +419,7 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     return .{
         .restored = false,
         .pieces = pieces,
+        .image = image,
         .hosted_symbols = try dupeSymbols(gpa, hosted),
         .exports = try dupeRecords(gpa, records),
     };

@@ -10,6 +10,8 @@ const ctx_mod = @import("ctx");
 const threading = @import("threading.zig");
 
 pub const CacheModule = @import("cache_module.zig").CacheModule;
+/// An acquired cache entry: its open file and lease.
+pub const AcquiredArtifact = @import("artifact_store.zig").Artifact;
 const Allocator = std.mem.Allocator;
 const CoreCtx = ctx_mod.CoreCtx;
 const CacheStats = @import("cache_config.zig").CacheStats;
@@ -301,6 +303,24 @@ pub const CacheManager = struct {
 
     pub fn loadFamilyMapped(self: *Self, allocator: Allocator, kind: Kind, family: artifacts.Family, key: [32]u8, scope: []const u8) ?CacheModule.CacheData {
         return self.loadMapped(allocator, kind, family, key, scope, true);
+    }
+
+    /// Acquire `key`'s entry of `family` as an open file, held under a
+    /// shared lease until the caller's `deinit`, for a consumer that copies
+    /// its bytes by file range. Null for a miss.
+    pub fn acquireFamily(self: *Self, family: artifacts.Family, key: [32]u8, scope: []const u8) ?artifacts.Artifact {
+        if (comptime threading.is_freestanding) return null;
+        if (!self.config.enabled) return null;
+        const session = self.sessionHandle() orelse {
+            self.recordMissFor(.checked);
+            return null;
+        };
+        const artifact = (session.acquire(identity(family, key, scope), session.now()) catch null) orelse {
+            self.recordMissFor(.checked);
+            return null;
+        };
+        self.recordHitFor(.checked, artifact.size);
+        return artifact;
     }
 
     fn loadMapped(self: *Self, allocator: Allocator, kind: Kind, family: artifacts.Family, key: [32]u8, scope: []const u8, counted: bool) ?CacheModule.CacheData {
