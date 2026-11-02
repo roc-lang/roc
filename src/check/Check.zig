@@ -417,7 +417,11 @@ final_codec_dispatch_constraint_fns: collections.DenseMapUnmanaged(Var, CodecCon
 /// Generic generated-codec relations captured by their owning type scheme.
 /// Their definition-side worklist entries must retire without being treated as
 /// settled: each scheme instantiation copies and validates the exact relation.
+/// A relation that was already parked for finalization validates a private
+/// instance there (`finalCodecRelationInstance`).
 scheme_deferred_codec_constraint_fns: collections.DenseMapUnmanaged(Var, void) = .empty,
+/// Each private instance's callable and the template relation it validates.
+final_codec_instance_templates: collections.DenseMapUnmanaged(Var, Var) = .empty,
 checking_final_codec_dispatch_constraints: bool = false,
 /// Boundary validation produces constraints once; the exact calls and live
 /// contract roots freeze only after the module's error rows have settled.
@@ -1682,6 +1686,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .final_codec_dispatch_constraints = .settled,
     .final_codec_dispatch_constraint_fns = .keyed,
     .scheme_deferred_codec_constraint_fns = .keyed,
+    .final_codec_instance_templates = .keyed,
     .checking_final_codec_dispatch_constraints = .lexical,
     .constraining_boundary_codecs = .lexical,
     .settling_codec_method_requirements_depth = .lexical,
@@ -2258,10 +2263,14 @@ const SchemeDispatchRequirement = struct {
     /// receiver's structural spine even when the receiver root is monomorphic.
     deferred_generated_codec: bool,
     /// This pristine relation exists only as a scheme template in this checker.
-    /// Local unresolved captures set this after generalization; imported and
+    /// Local unresolved captures and parked relations that reach the scheme's
+    /// quantified variables set this after generalization; imported and
     /// rehydrated schemes set it because only their instantiated copies need
     /// validation here.
     pristine_codec_is_scheme_only: bool,
+    /// Finalization validates a private instance of this scheme-only relation,
+    /// whose derivation serves a procedure that runs as a root with no caller.
+    validates_final_instance: bool = false,
     /// The expression in this scheme whose use created the pending copy.
     /// Creation requirements already have exact constraint provenance; copied
     /// requirements need this separate use-site provenance because their
@@ -40791,6 +40800,7 @@ fn deduplicateGeneralizedDispatchRequirements(
                 const retained = &self.type_schemes.items[scheme_idx].dispatch_requirements.items[entry.value_ptr.write_index];
                 retained.deferred_generated_codec = retained.deferred_generated_codec or requirement.deferred_generated_codec;
                 retained.pristine_codec_is_scheme_only = retained.pristine_codec_is_scheme_only or requirement.pristine_codec_is_scheme_only;
+                retained.validates_final_instance = retained.validates_final_instance or requirement.validates_final_instance;
                 continue;
             }
         } else {
@@ -41392,7 +41402,7 @@ fn publishBindingSchemeCodecRequirement(
                 .scheme_root = @backingInt(scheme.root_var),
                 .receiver_var = @backingInt(requirement.receiver_var),
                 .constraint_index = constraint_index,
-                .requires_instantiation = @intFromBool(requirement.pristine_codec_is_scheme_only),
+                .requires_instantiation = @intFromBool(requirement.pristine_codec_is_scheme_only and !requirement.validates_final_instance),
                 .is_synthetic = @intFromBool(self.synthetic_binding_schemes.contains(indexed_var)),
             });
             continue;
@@ -41402,7 +41412,7 @@ fn publishBindingSchemeCodecRequirement(
             scheme.root_var,
             requirement.receiver_var,
             constraint_index,
-            requirement.pristine_codec_is_scheme_only,
+            requirement.pristine_codec_is_scheme_only and !requirement.validates_final_instance,
             self.synthetic_binding_schemes.contains(indexed_var),
         );
     }
@@ -41527,7 +41537,17 @@ fn activateSchemeDeferredCodecConstraints(
 ) Allocator.Error!void {
     for (roots) |root| {
         const scheme_idx = self.typeSchemeIndexForRoot(root.owner) orelse continue;
-        for (self.type_schemes.items[scheme_idx].dispatch_requirements.items) |requirement| {
+        for (self.type_schemes.items[scheme_idx].dispatch_requirements.items) |*requirement| {
+            // A relation still parked for finalization that reaches this
+            // scheme's quantified variables is a template too: validating it
+            // in place would rewrite variables its uses already copied.
+            if (!requirement.pristine_codec_is_scheme_only and
+                self.final_codec_dispatch_constraint_fns.get(requirement.constraint.fn_var) == .final and
+                try self.typeHasGeneralizedVar(requirement.constraint.fn_var))
+            {
+                requirement.pristine_codec_is_scheme_only = true;
+                requirement.validates_final_instance = true;
+            }
             if (!requirement.pristine_codec_is_scheme_only) continue;
             std.debug.assert(requirement.deferred_generated_codec);
             const fn_root = self.types.resolveVar(requirement.constraint.fn_var).var_;
@@ -48851,6 +48871,47 @@ fn deferGeneratedCodecConstraintToFinalization(
     return true;
 }
 
+/// A private instance of a parked relation whose scheme quantifies some of
+/// its variables. Each use validates its own copy of the relation at its own
+/// types; this instance validates the definition itself, so a relation no type
+/// can satisfy is reported even when nothing uses the definition, and its
+/// derivation is the template's own, for a procedure that runs as a root. It
+/// keeps the definition's rigid variables rigid, so a body that cannot deliver
+/// its annotation is rejected, and shares its monomorphic variables, so the
+/// relation still determines them. Nothing else reaches the copied variables.
+fn finalCodecRelationInstance(
+    self: *Self,
+    pending: FinalCodecDispatchConstraint,
+    env: *Env,
+) Allocator.Error!FinalCodecDispatchConstraint {
+    const region = self.getRegionAt(pending.dispatcher_var);
+    const relation_root = try self.freshFromContent(
+        try self.types.mkFuncUnbound(&.{pending.dispatcher_var}, pending.constraint.fn_var),
+        env,
+        region,
+    );
+    self.var_map.clearRetainingCapacity();
+    var instantiator = self.baseInstantiator(env.rank(), .fresh_rigid);
+    instantiator.polarity_var_behavior = .close;
+    const copied_root = try instantiator.instantiateTypeScheme(relation_root);
+    var copied_iter = instantiator.var_map.valueIterator();
+    while (copied_iter.next()) |copied| {
+        try self.fillInRegionsThrough(copied.*);
+        self.setRegionAt(copied.*, region);
+    }
+    const copied_relation = self.types.resolveVar(copied_root).desc.content.unwrapFunc() orelse
+        unreachable; // instantiating the function type relation_root yields a function type
+    var relation = pending;
+    relation.dispatcher_var = self.types.sliceVars(copied_relation.args)[0];
+    relation.constraint.fn_var = copied_relation.ret;
+    const previous_scheme_root = self.active_scheme_root;
+    defer self.active_scheme_root = previous_scheme_root;
+    self.active_scheme_root = self.dispatchRelationOwner(pending.constraint.fn_var);
+    try self.recordDispatchRelationOwner(relation.constraint.fn_var);
+    try self.final_codec_instance_templates.put(self.gpa, relation.constraint.fn_var, pending.constraint.fn_var);
+    return relation;
+}
+
 fn checkFinalGeneratedCodecConstraints(self: *Self, env: *Env) Allocator.Error!void {
     if (self.final_codec_dispatch_constraints.items.len == 0) return;
     std.debug.assert(self.probe_depth == 0);
@@ -48861,18 +48922,30 @@ fn checkFinalGeneratedCodecConstraints(self: *Self, env: *Env) Allocator.Error!v
 
     for (self.final_codec_dispatch_constraints.items) |pending| {
         if (self.settled_static_dispatch_constraint_fns.contains(pending.constraint.fn_var)) continue;
-        const range = try self.types.appendStaticDispatchConstraints(&.{pending.constraint});
+        const relation = if (self.schemeDefersGeneratedCodecConstraint(pending.constraint.fn_var))
+            try self.finalCodecRelationInstance(pending, env)
+        else
+            pending;
+        const range = try self.types.appendStaticDispatchConstraints(&.{relation.constraint});
         try self.enqueueDeferredDispatchConstraint(env, .{
-            .var_ = pending.dispatcher_var,
+            .var_ = relation.dispatcher_var,
             .constraints = range,
-            .failure_expr = pending.failure_expr,
-        }, pending.owner);
+            .failure_expr = relation.failure_expr,
+        }, relation.owner);
     }
     self.final_codec_dispatch_constraints.clearRetainingCapacity();
     self.final_codec_dispatch_constraint_fns.clearRetainingCapacity();
 
     try self.checkStaticDispatchConstraints(env, true);
     try self.checkAllConstraints(env);
+
+    // A relation no instance satisfies is rejected for the definition too.
+    var instances = self.final_codec_instance_templates.iterator();
+    while (instances.next()) |instance| {
+        if (self.types.varStaticDispatchRejected(instance.key_ptr.*)) {
+            try self.markStaticDispatchFnRejected(instance.value_ptr.*);
+        }
+    }
 }
 
 fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pass: bool) std.mem.Allocator.Error!void {
@@ -55035,6 +55108,7 @@ fn recordGeneratedCodecDerivationSnapshot(
 
     try self.cir.recordGeneratedCodecDerivation(
         kind,
+        self.final_codec_instance_templates.get(constraint_fn_var) orelse constraint_fn_var,
         constraint_fn_var,
         runtime_fn_var,
         shape_var,

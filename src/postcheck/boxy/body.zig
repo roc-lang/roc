@@ -5923,9 +5923,11 @@ pub const Builder = struct {
                 return try self.composeDictionary(entry, &.{desc});
             },
             .checked_error => return try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, .checked_error), &.{}),
-            .unreachable_value => return try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, .unreachable_value), &.{}),
+            // A lambda stored with its own dictionaries takes them where it is
+            // constructed. `from_scheme` there means no use instantiated it, so
+            // nothing ever reads the dictionary.
+            .unreachable_value, .from_scheme => return try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, .unreachable_value), &.{}),
             .from_callable => invariant("callable-derived evidence is resolved with the parameter it stands for (`paramDictionary`)"),
-            .from_scheme => invariant("an abstract scheme requirement reached lowered code without its use's evidence"),
         }
     }
 

@@ -18882,6 +18882,10 @@ const EvidencePass = struct {
     local_value_scheme_by_var: collections.DenseMap(u32, u32),
     /// First value_use record per looked-up pattern.
     value_use_record_by_pattern: collections.DenseMap(u32, u32),
+    /// A scheme relation's callable root -> the callable of the private
+    /// instance whose derivation answers for it. Evidence states the instance,
+    /// whose types are the ones that derivation was built at.
+    codec_instance_by_template: collections.DenseMap(Var, Var),
     /// Each scheme-use record's substitution, indexed by the resolved root of
     /// each pair's scheme-side var; the first pair recorded for a root wins.
     /// The store is read-only during this pass, so resolved roots are fixed.
@@ -19010,6 +19014,7 @@ const EvidencePass = struct {
             .source_by_checked_expr = collections.DenseMap(u32, u32).init(allocator),
             .local_value_scheme_by_var = collections.DenseMap(u32, u32).init(allocator),
             .value_use_record_by_pattern = collections.DenseMap(u32, u32).init(allocator),
+            .codec_instance_by_template = collections.DenseMap(Var, Var).init(allocator),
             .node_by_record = collections.DenseMap(u32, static_dispatch.EvidenceNodeId).init(allocator),
             .evidence_node_buckets = std.AutoHashMap(u64, static_dispatch.EvidenceNodeId).init(allocator),
             .evidence_node_next = .empty,
@@ -19048,6 +19053,7 @@ const EvidencePass = struct {
         self.source_by_checked_expr.deinit();
         self.local_value_scheme_by_var.deinit();
         self.value_use_record_by_pattern.deinit();
+        self.codec_instance_by_template.deinit();
         self.fresh_by_pair_root.deinit(self.allocator);
         self.node_by_record.deinit();
         self.evidence_node_buckets.deinit();
@@ -19648,6 +19654,10 @@ const EvidencePass = struct {
                 checkedArtifactInvariant("duplicate generated codec source constraint identity", .{});
             }
             slot.* = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+            if (derivation.template_constraint_fn_var != derivation.source_constraint_fn_var) {
+                const template: Var = @fromBackingInt(@intCast(derivation.template_constraint_fn_var));
+                try self.codec_instance_by_template.put(self.types.resolveVar(template).var_, source);
+            }
         }
         // Records replayed from one source name the same substitution range,
         // whose pairs are indexed once.
@@ -20640,12 +20650,17 @@ const EvidencePass = struct {
         }
     }
 
+    /// The callable a generated codec relation's derivation was validated at.
+    fn codecRelationCallable(self: *EvidencePass, constraint_fn_var: Var) Var {
+        return self.codec_instance_by_template.get(self.types.resolveVar(constraint_fn_var).var_) orelse constraint_fn_var;
+    }
+
     fn generatedCodecDerivationForSourceConstraint(
         self: *EvidencePass,
         constraint_fn_var: Var,
         expected_kind: static_dispatch.GeneratedCodecDerivationKind,
     ) ?static_dispatch.GeneratedCodecDerivationId {
-        const by_kind = self.generated_codec_by_source.getPtrConst(constraint_fn_var) orelse return null;
+        const by_kind = self.generated_codec_by_source.getPtrConst(self.codecRelationCallable(constraint_fn_var)) orelse return null;
         return by_kind.get(expected_kind);
     }
 
@@ -21582,7 +21597,7 @@ const EvidencePass = struct {
                     .callable_contract = dependent.callable_contract,
                 } },
                 .structural => |kind| blk: {
-                    const callable_var = fresh_fn_var orelse param.constraint.fn_var;
+                    const callable_var = self.codecRelationCallable(fresh_fn_var orelse param.constraint.fn_var);
                     const callable_ty = self.checked_types.rootForSourceVar(self.module, callable_var) orelse
                         checkedArtifactInvariant("checked structural evidence callable type was not published", .{});
                     break :blk .{ .structural = .{
