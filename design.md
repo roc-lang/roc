@@ -5553,6 +5553,33 @@ in the canonicalize task, after the canonicalized-cache entry is stored and
 before the module leaves that task, so every module's source-input identity is
 complete by the time the checked cache is probed.
 
+### Source import inventory and line counting
+
+A successful parse also publishes a small source import inventory, keyed by
+normalized source bytes within the compiler compatibility namespace. It holds
+parser-produced local import spellings, bases and parent counts, qualified
+imports, and public-name-to-source-module mappings. Syntax errors never produce
+a reusable inventory. The inventory contains no filesystem paths or checked
+state. Graph tools consume these same producer facts; a missing or corrupt
+optional record causes a fresh parse, never a guess about imports.
+
+`roc loc` resolves packages through the ordinary resolver and its downloaded
+package sidecars, then traverses source imports without initializing builtins,
+canonicalizing, checking, or evaluating. Its roots are the requested source and
+the selected platform. A used dependency's header is counted, but only public
+modules selected by imports and their transitive imports are traversed. A root
+package's exposed modules and platform hosted modules are parser-recorded
+implicit imports, just as during compilation. Unimported directory neighbors,
+unused dependencies, embedded compiler sources, and non-Roc file imports are
+not code in this count.
+
+Traversal is deduplicated by package and logical module; counting is separately
+deduplicated by canonical filesystem path. This preserves distinct dependency
+alias contexts for a shared file. Root ownership takes precedence over local,
+then HTTPS ownership if a file is reached in multiple categories. Each physical
+line counts once, including a final unterminated line. The second count excludes
+whitespace-only lines and lines whose first non-whitespace byte is `#`.
+
 ### Coordinator phases
 
 `Parse` (probe the canonicalized cache; on a hit load the env, read the file
