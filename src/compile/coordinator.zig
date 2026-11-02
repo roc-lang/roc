@@ -33,6 +33,7 @@
 //!    └─────────┘      └─────────┘        └─────────┘      └─────────┘
 //! ```
 
+const backend = @import("backend");
 const std = @import("std");
 const completed = @import("completed_compilation.zig");
 const builtin = @import("builtin");
@@ -1527,18 +1528,9 @@ pub const BoxyObjectLowering = struct {
     /// the build's link lowers its root unit against the same table; the
     /// scheduler owns one otherwise.
     interfaces: ?*eval.CompileTimeFinalization.ExportInterfaces = null,
-    /// Where the build's link keeps each object as it is built or restored,
-    /// when the link links these objects, so it reads each one back without
-    /// writing it again.
-    materializer: ?Materializer = null,
-
-    pub const Materializer = struct {
-        context: *anyopaque,
-        /// The path of the object `bytes` as the link reads it. Null when
-        /// the link could not keep it: the link materializes it again and
-        /// reports why.
-        materialize: *const fn (context: *anyopaque, bytes: []const u8) Allocator.Error!?[]const u8,
-    };
+    /// Whether the build's link composes every unit's pieces, so a unit the
+    /// link needs is built as soon as its module is checked.
+    links: bool = false,
 };
 
 /// The module objects of a `.boxy` compilation, each restored from the
@@ -1581,6 +1573,8 @@ const BoxyObjects = struct {
     unbound_hosted: std.ArrayList(*const Artifact) = .empty,
     /// The modules whose import closures are known (`closureKnown`).
     closures_known: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
+    /// The pieces of every object recorded, kept for the compilation.
+    owned_pieces: std.ArrayList(*backend.dev.UnitPieces.Pieces) = .empty,
     session: post_check_executor.Session,
     first_error: ?Error = null,
     /// Whether a task finished since `progress` last reported, whichever
@@ -1602,8 +1596,6 @@ const BoxyObjects = struct {
         key: boxy_object_cache.Key = undefined,
         /// Whether the object was restored from the cache rather than built.
         restored: bool = false,
-        /// The object as the link reads it (`BoxyObjectLowering.Materializer`).
-        path: ?[]const u8 = null,
     };
 
     fn init(coordinator: *Coordinator, lowering: BoxyObjectLowering, manager: *CacheManager) Error!BoxyObjects {
@@ -1647,6 +1639,11 @@ const BoxyObjects = struct {
         self.program_completions.deinit(gpa);
         self.unbound_hosted.deinit(gpa);
         self.closures_known.deinit(gpa);
+        for (self.owned_pieces.items) |pieces| {
+            pieces.deinit();
+            gpa.destroy(pieces);
+        }
+        self.owned_pieces.deinit(gpa);
         self.records.deinit(gpa);
         if (self.owned_interfaces) |*owned| owned.deinit();
         self.digests.deinit();
@@ -1866,11 +1863,13 @@ const BoxyObjects = struct {
     fn record(self: *BoxyObjects, artifact: *const Artifact, built: boxy_unit.Built) Error!Object {
         const gpa = self.coordinator.gpa;
         const arena = self.arena.allocator();
-        defer built.deinit(gpa);
+        try self.owned_pieces.ensureUnusedCapacity(gpa, 1);
+        defer built.deinitKeepingPieces(gpa);
         try self.digests.recordExports(artifact, built.exports);
         const symbols = try arena.alloc([]const u8, built.hosted_symbols.len);
         for (built.hosted_symbols, symbols) |symbol, *copy| copy.* = try arena.dupe(u8, symbol);
-        return .{ .module = artifact.key.bytes, .object = try arena.dupe(u8, built.object), .code_locations = try arena.dupe(u8, built.code_locations), .hosted_symbols = symbols };
+        self.owned_pieces.appendAssumeCapacity(built.pieces);
+        return .{ .module = artifact.key.bytes, .pieces = built.pieces, .hosted_symbols = symbols };
     }
 
     /// One unit's build as a post-check task.
@@ -1880,22 +1879,10 @@ const BoxyObjects = struct {
         /// The imports whose objects are not known yet.
         remaining: u32,
         outcome: union(enum) { pending, failed: Error, done: boxy_unit.Built } = .pending,
-        /// Where the link keeps the object, when the build's link links it:
-        /// materialized by the task itself, so the hashing and validation
-        /// that takes runs beside the other units.
-        materializer: ?BoxyObjectLowering.Materializer = null,
-        path: ?[]const u8 = null,
 
         fn run(context: *anyopaque, _: post_check_executor.Worker) ?*anyopaque {
             const self: *UnitTask = @ptrCast(@alignCast(context));
             self.outcome = if (self.prepared.build()) |built| .{ .done = built } else |err| .{ .failed = err };
-            if (self.outcome == .done) if (self.materializer) |materializer| {
-                self.path = materializer.materialize(materializer.context, self.outcome.done.object) catch |err| {
-                    self.outcome.done.deinit(self.prepared.unit.gpa);
-                    self.outcome = .{ .failed = err };
-                    return null;
-                };
-            };
             return null;
         }
 
@@ -1931,7 +1918,7 @@ const BoxyObjects = struct {
         }
         const task = try gpa.create(UnitTask);
         errdefer gpa.destroy(task);
-        task.* = .{ .artifact = artifact, .prepared = try self.prepare(artifact), .remaining = 0, .materializer = self.lowering.materializer };
+        task.* = .{ .artifact = artifact, .prepared = try self.prepare(artifact), .remaining = 0 };
         errdefer task.prepared.deinit(gpa);
         try self.units.put(gpa, artifact.key.bytes, task);
         errdefer _ = self.units.remove(artifact.key.bytes);
@@ -1965,7 +1952,7 @@ const BoxyObjects = struct {
     /// builds it. A run links nothing, and a build of another target links
     /// objects of its own.
     fn linkNeeds(self: *const BoxyObjects, artifact: *const Artifact) bool {
-        return self.lowering.materializer != null and self.coordinator.rootSees(artifact);
+        return self.lowering.links and self.coordinator.rootSees(artifact);
     }
 
     /// Fix the link's module names now that checking has named every module
@@ -2110,7 +2097,7 @@ const BoxyObjects = struct {
             .done => |built| {
                 task.outcome = .pending;
                 const object = try self.record(artifact, built);
-                try self.records.put(gpa, artifact.key.bytes, .{ .object = object, .key = task.prepared.unit.key, .restored = built.restored, .path = task.path });
+                try self.records.put(gpa, artifact.key.bytes, .{ .object = object, .key = task.prepared.unit.key, .restored = built.restored });
             },
         }
         try self.release(artifact.key.bytes);
@@ -6767,7 +6754,7 @@ pub const Coordinator = struct {
         // no library object.
         if (self.runtime_lowering != null) if (try self.boxyObjects()) |objects| {
             if (self.moduleIsPlatformRoot(mod)) try objects.offerUnboundHosted();
-            if (objects.lowering.materializer != null and !self.moduleIsRoot(mod) and try self.reachableFromRoots(mod)) try objects.offer(artifact_ptr);
+            if (objects.lowering.links and !self.moduleIsRoot(mod) and try self.reachableFromRoots(mod)) try objects.offer(artifact_ptr);
         };
     }
 

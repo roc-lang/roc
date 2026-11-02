@@ -581,6 +581,15 @@ pub const Program = struct {
     }
 
     /// The module unit this lowering emits, or null for a program.
+    /// The identity of a worker that exists only within this lowering. A
+    /// module unit's pieces meet other units' in one program, so its
+    /// program-local workers are named under the unit's link name.
+    fn programLocalIdentity(self: *const Program, role: []const u8, raw: u64) LIR.ProcIdentity {
+        const local = LIR.ProcIdentity.programLocal(role, raw);
+        if (self.moduleUnit() == null) return local;
+        return local.derived("boxy.unit", &self.modules.linkName(self.modules.views.items[0].index));
+    }
+
     pub fn moduleUnit(self: *const Program) ?ModuleUnit {
         return switch (self.input.unit) {
             .program => null,
@@ -1665,7 +1674,7 @@ pub const Program = struct {
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
-            .identity = LIR.ProcIdentity.programLocal("boxy.adapter", @backingInt(id)),
+            .identity = self.programLocalIdentity("boxy.adapter", @backingInt(id)),
             .emission_unit = .isolated,
             .args = .empty(),
             .ret_layout = .zst,
@@ -1762,7 +1771,7 @@ pub const Program = struct {
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
-            .identity = LIR.ProcIdentity.programLocal("boxy.static_data", @backingInt(id)),
+            .identity = self.programLocalIdentity("boxy.static_data", @backingInt(id)),
             .emission_unit = .isolated,
             .args = .empty(),
             .ret_layout = .zst,
@@ -1794,7 +1803,7 @@ pub const Program = struct {
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
-            .identity = LIR.ProcIdentity.programLocal("boxy.root", @backingInt(id)),
+            .identity = self.programLocalIdentity("boxy.root", @backingInt(id)),
             .emission_unit = .isolated,
             .args = .empty(),
             .ret_layout = .zst,

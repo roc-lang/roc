@@ -10707,6 +10707,64 @@ test "a dev object defines every static datum its link keeps" {
     }
 }
 
+test "a composed program object holds only the pieces its roots reach" {
+    const allocator = std.testing.allocator;
+    inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {
+        var arena_state = base.SingleThreadArena.init(allocator);
+        defer arena_state.deinit();
+        const a = arena_state.allocator();
+        const callee_identity = lir.ProcIdentity.forTest(2001);
+        const unreached_identity = lir.ProcIdentity.forTest(2002);
+        const entry_identity = lir.ProcIdentity.forTest(2003);
+        // The library unit: the callee the app reaches, and one nothing reaches.
+        var library_store = lir.LirStore.init(a);
+        defer library_store.deinit();
+        var library_layouts = try layout.Store.init(a, .u64);
+        defer library_layouts.deinit();
+        try library_store.setSourceFiles(&.{.{ .name = "Lib.roc", .qualified_name = "lib.Lib", .module_identity = @splat(1) }});
+        for ([_]lir.ProcIdentity{ callee_identity, unreached_identity }) |identity| {
+            const local = try library_store.addLocal(.{ .layout_idx = .u64 });
+            const ret = try library_store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+            const body = try library_store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u64 } }, .next = ret } }, .test_fixture);
+            _ = try library_store.addProcSpec(.{ .name = library_store.freshSyntheticSymbol(), .identity = identity, .args = .empty(), .body = body, .ret_layout = .u64, .exported = true }, .none);
+        }
+        var library_compiler = backend.ObjectFileCompiler.init(allocator);
+        library_compiler.link_unit = true;
+        var library_pieces = try library_compiler.compileToPieces(&library_store, &library_layouts, &.{}, &.{}, library_store.getProcSpecs(), target);
+        defer library_pieces.deinit();
+        // The app unit: an entrypoint whose procedure calls the library's callee.
+        var app_store = lir.LirStore.init(a);
+        defer app_store.deinit();
+        var app_layouts = try layout.Store.init(a, .u64);
+        defer app_layouts.deinit();
+        try app_store.setSourceFiles(&.{.{ .name = "Main.roc", .qualified_name = "app.Main", .module_identity = @splat(2) }});
+        const linked = try app_store.addProcSpec(.{ .name = app_store.freshSyntheticSymbol(), .identity = callee_identity, .args = .empty(), .ret_layout = .u64, .external = true, .linked = true }, .none);
+        const result = try app_store.addLocal(.{ .layout_idx = .u64 });
+        const ret = try app_store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+        const body = try app_store.addCFStmt(.{ .assign_call = .{ .target = result, .proc = linked, .args = .empty(), .next = ret } }, .test_fixture);
+        const entry_proc = try app_store.addProcSpec(.{ .name = app_store.freshSyntheticSymbol(), .identity = entry_identity, .args = .empty(), .body = body, .ret_layout = .u64 }, .none);
+        const entrypoints = [_]backend.Entrypoint{.{ .symbol_name = "roc__main", .proc = entry_proc, .arg_layouts = &.{}, .ret_layout = .u64 }};
+        var app_compiler = backend.ObjectFileCompiler.init(allocator);
+        var app_pieces = try app_compiler.compileToPieces(&app_store, &app_layouts, &entrypoints, &.{}, app_store.getProcSpecs(), target);
+        defer app_pieces.deinit();
+        var composer = backend.ObjectFileCompiler.init(allocator);
+        var composed = try composer.composeObject(&.{ &app_pieces, &library_pieces }, target, .{ .roots = &.{}, .global_procs = true });
+        defer composed.deinit();
+        var again = try composer.composeObject(&.{ &library_pieces, &app_pieces }, target, .{ .roots = &.{}, .global_procs = true });
+        defer again.deinit();
+        try std.testing.expectEqualSlices(u8, composed.object_bytes, again.object_bytes);
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "program.o", .data = composed.object_bytes });
+        const object_path = try tmp.dir.realPathFileAlloc(std.testing.io, "program.o", a);
+        const kept = try host_symbols.scanHostInputs(a, std.testing.io, &.{object_path}, &.{ "roc__main", try callee_identity.symbolName(a), try entry_identity.symbolName(a) });
+        try std.testing.expect(kept.all_inputs_scanned);
+        try std.testing.expectEqual(@as(usize, 0), kept.missing.len);
+        const dropped = try host_symbols.scanHostInputs(a, std.testing.io, &.{object_path}, &.{try unreached_identity.symbolName(a)});
+        try std.testing.expectEqual(@as(usize, 1), dropped.missing.len);
+    }
+}
+
 fn sharedLibraryAppExports(
     ctx: *CliCtx,
     entrypoints: []const backend.Entrypoint,
@@ -11375,13 +11433,24 @@ fn finishBuildCommand(
 /// program's, materialized for linking, and the hosted symbols they
 /// reference.
 const BoxyLibraryObjects = struct {
-    objects: []const []const u8,
+    /// Every library unit's pieces, in unit order.
+    pieces: []const *const backend.dev.UnitPieces.Pieces,
+    /// The pieces of the units this build lowered itself, which it owns;
+    /// the rest belong to compile-time evaluation's scheduler.
+    owned_pieces: []const *backend.dev.UnitPieces.Pieces,
     hosted_symbols: []const []const u8,
     /// The program's platform module, for the root unit's key.
     platform: ?check.CheckedArtifact.ImportedModuleView,
     /// The checked keys of the platform modules the root unit lowers, whose
     /// implementations its object holds.
     paired_platforms: []const [32]u8,
+
+    fn deinit(self: BoxyLibraryObjects, gpa: Allocator) void {
+        for (self.owned_pieces) |pieces| {
+            pieces.deinit();
+            gpa.destroy(pieces);
+        }
+    }
 };
 
 /// Lower every module of the program other than the root as its own unit,
@@ -11399,7 +11468,6 @@ fn buildBoxyLibraryObjects(
     reporter: *progress.Reporter,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     target: RocTarget,
-    link_objects: *link_artifacts.Objects,
     interfaces: *postcheck.Boxy.Lower.ExportInterfaces,
     digests: *compile.boxy_interface.Digests,
 ) CliMainError!BoxyLibraryObjects {
@@ -11492,10 +11560,15 @@ fn buildBoxyLibraryObjects(
 
     // The units' objects in unit order, whatever order they finish in, so
     // the link's inputs (and so the executable) are the same every build.
-    const objects = try ctx.arena.alloc(?[]const u8, units.items.len);
+    const objects = try ctx.arena.alloc(?*const backend.dev.UnitPieces.Pieces, units.items.len);
     @memset(objects, null);
     var hosted_symbols: std.ArrayList([]const u8) = .empty;
     var seen_hosted = std.StringHashMap(void).init(ctx.arena);
+    var owned_pieces: std.ArrayList(*backend.dev.UnitPieces.Pieces) = .empty;
+    errdefer for (owned_pieces.items) |pieces| {
+        pieces.deinit();
+        ctx.gpa.destroy(pieces);
+    };
     var restored: u32 = 0;
     var built: u32 = 0;
     var done: usize = 0;
@@ -11517,7 +11590,7 @@ fn buildBoxyLibraryObjects(
         };
         try build_env.boxyAdoptExports(digests, task.artifact);
         if (known.restored) restored += 1 else built += 1;
-        objects[index] = known.path orelse link_objects.materialize(known.object) catch return error.NativeCompilationFailed;
+        objects[index] = known.pieces;
         for (known.hosted_symbols) |symbol| {
             const owned = try ctx.arena.dupe(u8, symbol);
             if ((try seen_hosted.getOrPut(owned)).found_existing) continue;
@@ -11565,12 +11638,16 @@ fn buildBoxyLibraryObjects(
                 if (first_error != null) continue;
                 if (result.restored) restored += 1 else built += 1;
                 try digests.recordExports(task.artifact, result.exports);
-                objects[index] = link_objects.materialize(result.object) catch return error.NativeCompilationFailed;
+                objects[index] = result.pieces;
                 for (result.hosted_symbols) |symbol| {
                     const owned = try ctx.arena.dupe(u8, symbol);
                     if ((try seen_hosted.getOrPut(owned)).found_existing) continue;
                     try hosted_symbols.append(ctx.arena, owned);
                 }
+                // The pieces outlive the task: the link composes them.
+                try owned_pieces.append(ctx.arena, result.pieces);
+                result.deinitKeepingPieces(ctx.gpa);
+                task.outcome = .pending;
                 for (dependents[index].items) |dependent| {
                     remaining[dependent] -= 1;
                     if (remaining[dependent] == 0) try ready.append(ctx.gpa, dependent);
@@ -11583,24 +11660,50 @@ fn buildBoxyLibraryObjects(
     if (!args.no_cache) build_env.recordBoxyObjects(restored, built);
     reporter.end();
     recordPostCheckLowering(reporter, &unit_timing, .boxy);
-    const ordered = try ctx.arena.alloc([]const u8, units.items.len);
+    const ordered = try ctx.arena.alloc(*const backend.dev.UnitPieces.Pieces, units.items.len);
     for (objects, ordered) |object, *slot| slot.* = object orelse base.invariant("roc build invariant violated: a .boxy unit completed without an object", .{});
     var paired_platforms: std.ArrayList([32]u8) = .empty;
     if (platform) |view| try paired_platforms.append(ctx.arena, (view.code_generation_key orelse view.key).bytes);
     for (visible) |artifact| {
         if (artifact.platform_type_inputs.requirements.len != 0) try paired_platforms.append(ctx.arena, artifact.codeGenerationKey().bytes);
     }
-    return .{ .objects = ordered, .hosted_symbols = hosted_symbols.items, .platform = platform, .paired_platforms = paired_platforms.items };
+    return .{ .pieces = ordered, .owned_pieces = owned_pieces.items, .hosted_symbols = hosted_symbols.items, .platform = platform, .paired_platforms = paired_platforms.items };
 }
 
-/// Keep a Boxy module object compile-time evaluation built or restored for
-/// the link (`BoxyObjectLowering.Materializer`).
-fn materializeBoxyObject(context: *anyopaque, bytes: []const u8) Allocator.Error!?[]const u8 {
-    const objects: *link_artifacts.Objects = @ptrCast(@alignCast(context));
-    return objects.materialize(bytes) catch |err| switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        else => null,
+/// Compose the program's pieces into the one object its link takes: every
+/// piece the root unit's entrypoints and host-visible constants reach
+/// (design.md "Unit Pieces And Whole-Program Dead Code"), materialized for
+/// the link.
+fn composeBoxyProgramObject(
+    ctx: *CliCtx,
+    reporter: *progress.Reporter,
+    link_objects: *link_artifacts.Objects,
+    root: *const backend.dev.UnitPieces.Pieces,
+    library: []const *const backend.dev.UnitPieces.Pieces,
+    target: RocTarget,
+    synthetic_default_platform: bool,
+) CliMainError![]const u8 {
+    reporter.begin("Composing Program Object");
+    const inputs = try ctx.arena.alloc(*const backend.dev.UnitPieces.Pieces, library.len + 1);
+    inputs[0] = root;
+    @memcpy(inputs[1..], library);
+    var compiler = backend.ObjectFileCompiler.init(ctx.gpa);
+    var timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
+    compiler.timing = &timing;
+    var composed = compiler.composeObject(inputs, target, .{
+        .enable_default_platform_runtime = synthetic_default_platform,
+        .roots = &.{},
+    }) catch |err| {
+        reporter.fail();
+        std.log.err("Composing the program's object failed: {}", .{err});
+        return error.NativeCompilationFailed;
     };
+    defer composed.deinit();
+    reporter.endWithBreakdown(&devBackendBreakdown(timing.snapshot()));
+    reporter.begin("Object Materialization");
+    const path = link_objects.materializeKnown(composed.object_bytes, link_artifacts.Identity.of(composed.object_bytes)) catch return error.NativeCompilationFailed;
+    reporter.end();
+    return path;
 }
 
 /// The platform module whose hosted section binds every hosted function
@@ -12187,10 +12290,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     defer releaseScratchDir(ctx, build_scratch_dir);
     var link_objects = link_artifacts.Objects.init(ctx.coreCtx(), ctx.arena, if (object_store) |store| .{ .store = store.native, .identity = store.linkObjectIdentity(@splat(0)) } else null, build_scratch_dir) catch return error.NativeCompilationFailed;
     defer link_objects.deinit();
-    // The link keeps each of those objects as compile-time evaluation builds
-    // or restores it.
+    // The link composes every unit's pieces, so compile-time evaluation
+    // builds the units the link needs as their modules are checked.
     if (boxy_interfaces != null) if (build_env.boxy_object_lowering) |*lowering| {
-        if (lowering.target == target) lowering.materializer = .{ .context = &link_objects, .materialize = materializeBoxyObject };
+        if (lowering.target == target) lowering.links = true;
     };
     var program_probe: ?ProgramOutputProbe = null;
     if (object_store) |store| if (target_arch != .wasm32 and args.opt == .dev and runtime_lowering.target.specialization_strategy == .lss and !dev_diagnostics.isSet(.dev_pack_objects)) {
@@ -12264,19 +12367,25 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // calls against their export interfaces.
     if (boxy_interfaces != null) boxy_digests = try build_env.boxyLinkDigests();
     const boxy_library: ?BoxyLibraryObjects = if (boxy_interfaces) |*interfaces|
-        try buildBoxyLibraryObjects(ctx, args, &build_env, &reporter, root_artifact, target, &link_objects, interfaces, &boxy_digests)
+        try buildBoxyLibraryObjects(ctx, args, &build_env, &reporter, root_artifact, target, interfaces, &boxy_digests)
     else
         null;
+    defer if (boxy_library) |library| library.deinit(ctx.gpa);
     const boxy_cache_manager: ?*CacheManager = if (args.no_cache) null else build_env.cache_manager;
     const boxy_root_key: ?compile.boxy_object_cache.Key = if (boxy_library) |library| try boxyObjectKey(ctx.gpa, &boxy_digests, root_artifact, boxyUnitPlatform(root_artifact, library.platform), args, target, library.paired_platforms) else null;
-    if (dev_diagnostics.isSet(.trace_boxy_work)) if (boxy_library) |library| std.debug.print("boxy-work: library objects {d}, root key {s}\n", .{ library.objects.len, &std.fmt.bytesToHex(boxy_root_key.?.bytes[0..8], .lower) });
+    if (dev_diagnostics.isSet(.trace_boxy_work)) if (boxy_library) |library| std.debug.print("boxy-work: library units {d}, root key {s}\n", .{ library.pieces.len, &std.fmt.bytesToHex(boxy_root_key.?.bytes[0..8], .lower) });
     // The root program's object is cached under its own key too: a build
     // whose every module is cached lowers nothing.
     if (boxy_library) |library| if (try compile.boxy_unit.restore(ctx.gpa, boxy_cache_manager, boxy_root_key.?, &boxy_interfaces.?)) |entry| {
         defer compile.boxy_object_cache.deinitEntry(ctx.gpa, entry);
         build_env.recordBoxyObjects(1, 0);
+        var root_pieces = backend.dev.UnitPieces.decode(ctx.gpa, entry.pieces) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.MalformedPieces, error.UnsupportedPiecesVersion => base.invariant("the cached pieces of the root unit were admitted but do not decode: {s}", .{@errorName(err)}),
+        };
+        defer root_pieces.deinit();
+        const obj_path = try composeBoxyProgramObject(ctx, &reporter, &link_objects, &root_pieces, library.pieces, target, args.synthetic_default_platform);
         reporter.begin("Preparing Link Inputs");
-        const obj_path = link_objects.materialize(entry.object) catch return error.NativeCompilationFailed;
         const root_hosted = try ctx.arena.alloc([]const u8, entry.hosted_symbols.len);
         for (entry.hosted_symbols, root_hosted) |symbol, *owned| owned.* = try ctx.arena.dupe(u8, symbol);
         const link_root_symbols = try ctx.arena.alloc([]const u8, entry.link_root_symbols.len);
@@ -12289,7 +12398,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             .app_export_symbols = app_export_symbols,
             .boxy_runtime = true,
         };
-        try linkNativeBuild(ctx, &reporter, args, target, link_type, final_output_path, platform_dir, resolved_targets_config, build_scratch_dir, &link_objects, obj_path, library.objects, link_facts);
+        try linkNativeBuild(ctx, &reporter, args, target, link_type, final_output_path, platform_dir, resolved_targets_config, build_scratch_dir, &link_objects, obj_path, &.{}, link_facts);
         return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
     };
     var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, if (loaded_packs) |packs| packs.specCacheLookup() else null, nativeObjectCodeProvision(target, args.opt, loaded_packs != null, linked_stores != null, currentRuntimeSpecializationStrategy(args.specialization_strategy)), boxy_root_unit);
@@ -12343,6 +12452,48 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
     defer if (object_compiler.captured_excerpts) |*set| set.deinit();
 
+    if (boxy_library) |library| {
+        var root_pieces = object_compiler.compileToPieces(
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            entrypoints,
+            static_data_exports,
+            lowered.lir_result.store.getProcSpecs(),
+            target,
+        ) catch |err| {
+            reporter.fail();
+            std.log.err("Native compilation failed: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+        defer root_pieces.deinit();
+        reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
+        reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(backend_timing.snapshot().native_emission));
+        const obj_path = try composeBoxyProgramObject(ctx, &reporter, &link_objects, &root_pieces, library.pieces, target, args.synthetic_default_platform);
+        const root_hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
+        const link_facts: ProgramOutput.LinkFacts = .{
+            .hosted_symbols = try unionSymbols(ctx.arena, root_hosted_symbols, library.hosted_symbols),
+            .link_root_symbols = try devObjectLinkRootSymbols(ctx.arena, static_data_exports),
+            .app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
+            .boxy_runtime = lowered.lir_result.store.runtime_contract == .boxy,
+        };
+        if (boxy_root_key) |root_key| {
+            const records = try compile.boxy_unit.exportRecords(ctx.gpa, &lowered, &boxy_interfaces.?);
+            defer ctx.gpa.free(records);
+            const encoded = try backend.dev.UnitPieces.encode(ctx.gpa, &root_pieces);
+            defer ctx.gpa.free(encoded);
+            try compile.boxy_unit.store(ctx.gpa, boxy_cache_manager, root_key, .{
+                .exports = records,
+                .hosted_symbols = root_hosted_symbols,
+                .link_root_symbols = link_facts.link_root_symbols,
+                .app_export_symbols = link_facts.app_export_symbols,
+                .pieces = encoded,
+            });
+            if (!args.no_cache) build_env.recordBoxyObjects(0, 1);
+        }
+        reporter.begin("Preparing Link Inputs");
+        try linkNativeBuild(ctx, &reporter, args, target, link_type, final_output_path, platform_dir, resolved_targets_config, build_scratch_dir, &link_objects, obj_path, &.{}, link_facts);
+        return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
+    }
     var written = object_compiler.compileToObjectFile(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
@@ -12385,19 +12536,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         .app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
         .boxy_runtime = lowered.lir_result.store.runtime_contract == .boxy,
     };
-    if (boxy_root_key) |root_key| {
-        const records = try compile.boxy_unit.exportRecords(ctx.gpa, &lowered, &boxy_interfaces.?);
-        defer ctx.gpa.free(records);
-        try compile.boxy_unit.store(ctx.gpa, boxy_cache_manager, root_key, .{
-            .exports = records,
-            .hosted_symbols = root_hosted_symbols,
-            .link_root_symbols = link_facts.link_root_symbols,
-            .app_export_symbols = link_facts.app_export_symbols,
-            .object = written.object_bytes,
-        });
-        // The summary counts cache work; a build without a cache does none.
-        if (!args.no_cache) build_env.recordBoxyObjects(0, 1);
-    }
     ctx.gpa.free(written.object_bytes);
     written.object_bytes = &.{};
     // The optimized object packs that served this program's specializations.
@@ -12408,8 +12546,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         identity.* = link_artifacts.Identity.of(object);
         try extra_objects.append(link_objects.materializeKnown(object, identity.*) catch return error.NativeCompilationFailed);
     }
-    // The other modules' objects of a `.boxy` build.
-    if (boxy_library) |library| try extra_objects.appendSlice(library.objects);
     reporter.end();
     // The record retains every selected object.
     if (program_probe) |*probe| if (probe.key) |key| if (diag.errors == 0) {

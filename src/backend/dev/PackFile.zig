@@ -23,7 +23,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 21;
+pub const format_version: u32 = 22;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// excerpt holding its procedure, and the ownership signature and
@@ -119,7 +119,10 @@ pub fn writeWithNames(allocator: Allocator, set: *const CodeExcerpt.Set, specs: 
                 try writer.byte(1);
                 try writer.str(name);
             },
-            .entrypoint => try writer.byte(2),
+            .entrypoint => |name| {
+                try writer.byte(2);
+                try writer.str(name);
+            },
             .message_pool_run => try writer.byte(3),
             .branch_island => try writer.byte(4),
         }
@@ -304,7 +307,7 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
         const kind: CodeExcerpt.Kind = switch (try reader.byte()) {
             0 => .{ .proc = .{ .bytes = (try reader.raw(32))[0..32].* } },
             1 => .{ .rc_helper = try reader.str() },
-            2 => .entrypoint,
+            2 => .{ .entrypoint = try reader.str() },
             3 => .message_pool_run,
             4 => .branch_island,
             else => return error.MalformedPack,

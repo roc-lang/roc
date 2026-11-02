@@ -42,17 +42,20 @@ pub const Unit = struct {
 /// A unit's object.
 pub const Built = struct {
     restored: bool,
-    /// Owned by the unit's `gpa`.
-    object: []const u8,
-    /// The object's encoded `CodeLocations`. Owned by the unit's `gpa`.
-    code_locations: []const u8,
+    /// The unit's code in pieces. Owned by the unit's `gpa`.
+    pieces: *backend.dev.UnitPieces.Pieces,
     hosted_symbols: []const []const u8,
     /// The ownership signatures the object exports. Owned by the unit's `gpa`.
     exports: []const object_cache.ExportRecord,
 
     pub fn deinit(self: Built, gpa: Allocator) void {
-        gpa.free(self.object);
-        gpa.free(self.code_locations);
+        self.pieces.deinit();
+        gpa.destroy(self.pieces);
+        self.deinitKeepingPieces(gpa);
+    }
+
+    /// Release everything but the pieces, which the caller now owns.
+    pub fn deinitKeepingPieces(self: Built, gpa: Allocator) void {
         for (self.exports) |record| gpa.free(record.rc_ret_conditions);
         gpa.free(self.exports);
         for (self.hosted_symbols) |symbol| gpa.free(symbol);
@@ -200,14 +203,22 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
         if (dev_diagnostics.isSet(.verify_boxy_object_reuse)) {
             const fresh = try build(unit, module_name);
             defer fresh.deinit(gpa);
-            if (!std.mem.eql(u8, fresh.object, entry.object)) {
-                base.invariant("the cached object of module {s} differs from a fresh build of it: its key misses an input", .{module_name});
+            const encoded = try backend.dev.UnitPieces.encode(gpa, fresh.pieces);
+            defer gpa.free(encoded);
+            if (!std.mem.eql(u8, encoded, entry.pieces)) {
+                base.invariant("the cached pieces of module {s} differ from a fresh build of them: its key misses an input", .{module_name});
             }
         }
+        const pieces = try gpa.create(backend.dev.UnitPieces.Pieces);
+        errdefer gpa.destroy(pieces);
+        pieces.* = backend.dev.UnitPieces.decode(gpa, entry.pieces) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.MalformedPieces, error.UnsupportedPiecesVersion => base.invariant("the cached pieces of module {s} were admitted but do not decode: {s}", .{ module_name, @errorName(err) }),
+        };
+        errdefer pieces.deinit();
         return .{
             .restored = true,
-            .object = try gpa.dupe(u8, entry.object),
-            .code_locations = try gpa.dupe(u8, entry.code_locations),
+            .pieces = pieces,
             .hosted_symbols = try dupeSymbols(gpa, entry.hosted_symbols),
             .exports = try dupeRecords(gpa, entry.exports),
         };
@@ -217,7 +228,9 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     errdefer built.deinit(gpa);
     var cache_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_cache);
     defer cache_scope.end();
-    try store(gpa, unit.cache_manager, unit.key, .{ .exports = built.exports, .hosted_symbols = built.hosted_symbols, .code_locations = built.code_locations, .object = built.object });
+    const encoded = try backend.dev.UnitPieces.encode(gpa, built.pieces);
+    defer gpa.free(encoded);
+    try store(gpa, unit.cache_manager, unit.key, .{ .exports = built.exports, .hosted_symbols = built.hosted_symbols, .pieces = encoded });
     return built;
 }
 
@@ -253,9 +266,10 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     if (backend_timing) |*timing| object_compiler.timing = timing;
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
     object_compiler.link_unit = true;
-    object_compiler.capture_code_locations = true;
     object_compiler.post_check_executor = unit.config.post_check_executor;
-    var written = object_compiler.compileToObjectFile(
+    const pieces = try gpa.create(backend.dev.UnitPieces.Pieces);
+    errdefer gpa.destroy(pieces);
+    pieces.* = object_compiler.compileToPieces(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         &.{},
@@ -266,11 +280,11 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
         std.log.err("Native compilation of module {s} failed: {}", .{ module_name, err });
         return error.NativeCompilationFailed;
     };
-    defer written.deinit();
+    errdefer pieces.deinit();
     codegen_scope.end();
     if (backend_timing) |timing| {
         const snapshot = timing.snapshot();
-        std.debug.print("boxy-work: compiled {s}: setup {d} ms, procedures {d} ms ({d} tasks, {d} in flight at most, {d} workers), symbols {d} ms, encoding {d} ms\n", .{
+        std.debug.print("boxy-work: compiled {s}: setup {d} ms, procedures {d} ms ({d} tasks, {d} in flight at most, {d} workers), extraction {d} ms, encoding {d} ms\n", .{
             module_name,
             snapshot.backend_setup_ns / std.time.ns_per_ms,
             snapshot.procedure_instructions_ns / std.time.ns_per_ms,
@@ -290,8 +304,7 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     if (trace_clock) |io| std.debug.print("boxy-work: built {s} in {d} ms\n", .{ module_name, @divTrunc(std.Io.Timestamp.now(io, .awake).nanoseconds - build_started_ns, std.time.ns_per_ms) });
     return .{
         .restored = false,
-        .object = try gpa.dupe(u8, written.object_bytes),
-        .code_locations = try gpa.dupe(u8, written.code_locations),
+        .pieces = pieces,
         .hosted_symbols = try dupeSymbols(gpa, hosted),
         .exports = try dupeRecords(gpa, records),
     };

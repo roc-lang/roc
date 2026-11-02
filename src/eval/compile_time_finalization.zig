@@ -1694,9 +1694,9 @@ pub const ModuleNames = lir.CheckedPipeline.BoxyModuleNames;
 pub const BoxyObject = struct {
     /// The module's checked key.
     module: [32]u8,
-    object: []const u8,
-    /// Where the object's code came from (`CodeLocations`).
-    code_locations: []const u8,
+    /// The module's code in pieces, which the evaluator composes into the
+    /// image it loads (design.md "Unit Pieces And Whole-Program Dead Code").
+    pieces: *const backend.dev.UnitPieces.Pieces,
     hosted_symbols: []const []const u8,
 };
 
@@ -1751,7 +1751,7 @@ const BoxyLinkedImages = struct {
     images: std.ArrayList(object_image.Image) = .empty,
     /// Each image's code, in `images` order.
     code: std.ArrayList([]const u8) = .empty,
-    /// Each image's locations, in `images` order. Borrowed from its object.
+    /// Each image's locations, in `images` order. Owned.
     locations: std.ArrayList(backend.dev.CodeLocations) = .empty,
     loaded: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
     hosted: std.StringHashMapUnmanaged(void) = .empty,
@@ -1760,6 +1760,7 @@ const BoxyLinkedImages = struct {
         if (comptime !compilerHostMustUseInterpreterForCtfe()) for (self.images.items) |*image| image.deinit();
         self.images.deinit(self.allocator);
         self.code.deinit(self.allocator);
+        for (self.locations.items) |locations| self.allocator.free(locations.bytes);
         self.locations.deinit(self.allocator);
         self.loaded.deinit(self.allocator);
         var names = self.hosted.keyIterator();
@@ -1790,13 +1791,25 @@ const BoxyLinkedImages = struct {
                 if (self.hosted.contains(symbol)) continue;
                 try self.hosted.put(self.allocator, try self.allocator.dupe(u8, symbol), {});
             }
-            const image = object_image.Image.load(self.allocator, object.object, .{ .context = self, .resolve = resolve }) catch |err| switch (err) {
+            // A unit's image holds every piece of it: a module's roots may
+            // call any export, and each procedure is found by its symbol.
+            var compiler = backend.ObjectFileCompiler.init(self.allocator);
+            var composed = compiler.composeObject(&.{object.pieces}, backend.dev.LirCodeGenMod.host_lir_codegen_target, .{
+                .global_procs = true,
+                .capture_code_locations = true,
+            }) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => finalizationInvariantFmt("a cached Boxy module's pieces would not compose: {s}", .{@errorName(err)}),
+            };
+            defer composed.deinit();
+            const image = object_image.Image.load(self.allocator, composed.object_bytes, .{ .context = self, .resolve = resolve }) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => finalizationInvariantFmt("a cached Boxy module object would not load: {s}", .{@errorName(err)}),
             };
             try self.images.append(self.allocator, image);
             try self.code.append(self.allocator, image.code);
-            try self.locations.append(self.allocator, .{ .bytes = object.code_locations });
+            const locations = try self.allocator.dupe(u8, composed.code_locations);
+            try self.locations.append(self.allocator, .{ .bytes = locations });
         }
     }
 

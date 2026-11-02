@@ -15649,20 +15649,21 @@ resolved, dead-stripped from the `provides` roots, and localized").
   keeps every piece of every module. The entry format is its own
   (`compile.boxy_object_cache`), not the specialized object cache's pack,
   and its file is byte-identical for its key as before.
-- REACHABILITY is computed from the checked program, not from machine code.
-  Once checking has resolved every call's dispatch target, the set of
-  procedures the program can reach is a function of the checked modules
-  alone: the walk starts at the app's entrypoints, the `provides` exports and
-  the host-visible constants, and follows each body's references and resolved
-  dispatch targets across modules (the walk Boxy lowering already does to
-  discover a unit's workers, over the whole program). It runs on a post-check
-  worker as soon as the last module is checked, while units are still
-  compiling, so it is finished before any code is copied. Code the backend
-  emits below that level (refcount helpers, structural equality and hashing,
-  codecs, entry wrappers, static-data initializers) is reached from the kept
-  procedures: each piece records what it needs, so the copy step takes, for
-  every kept procedure, the pieces its references name, transitively. Both
-  halves are compiler-produced data; neither is a guess.
+- REACHABILITY is a walk over the pieces' own references
+  (`CodeExcerpt.retainReachable`), which the backend recorded when it
+  emitted the code: from the entrypoint wrappers and the host-visible
+  constants, through every call, address and constant each kept piece
+  names, across units, to a fixed point. Helpers, codecs and other code the
+  backend emits below the procedure level are reached the same way, since
+  each piece records what it needs. Nothing in it is a guess, and the walk
+  over a program's pieces costs milliseconds, so it runs where the pieces
+  are composed. The set of procedures the program reaches is also a
+  function of the checked program alone once every call's dispatch target
+  is resolved, so a walk over the checked modules from the app's
+  entrypoints can decide the procedures on a post-check worker while units
+  are still compiling, leaving the composition only the pieces below that
+  level to follow; that is a refinement of this design, not a change to
+  what is kept.
 - THE LINK takes ONE OBJECT: as units are restored or built, their pieces
   join one program-wide set, and when the walk and the units are done the
   reachable pieces, and the constants they name, are placed into one image
@@ -15691,11 +15692,18 @@ resolved, dead-stripped from the `provides` roots, and localized").
   `--export` names as roots, so its final module holds only reached code
   today; the composition above does not change what it links.
 
-A unit stops at its pieces: extraction lifts each function's bytes and
-references out of the unit's code generator, and the arrangement, symbol
+A unit stops at its pieces (`ObjectFileCompiler.compileToPieces`):
+extraction lifts each function's bytes and references out of the unit's code
+generator and names its constants by content, and the arrangement, symbol
 table and object encoding that each unit paid for happen once, for the
-program, over the reachable set. `ROC_VERIFY_BOXY_OBJECT_REUSE` compares a
-restored unit's pieces with a rebuilt unit's exactly as it compared objects.
+program, over the reachable set (`ObjectFileCompiler.composeObject`). The
+composed object is a function of the units alone: they are taken in the
+order of their source-file tables, and host-visible constants in name order,
+so the order units finish in changes nothing in it. A unit's program-local
+workers (adapters, roots, static-data initializers) are named under the
+unit's link name, since pieces of different units meet in one program.
+`ROC_VERIFY_BOXY_OBJECT_REUSE` compares a restored unit's encoded pieces
+with a rebuilt unit's exactly as it compared objects.
 
 ### Compile-Time Evaluation Strategy
 

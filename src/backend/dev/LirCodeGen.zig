@@ -852,7 +852,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             /// Encoded RC helper key. The region starts with the jump that
             /// skips the helper body; `CodeRegion.entry` locates the body.
             rc_helper: u64,
-            entrypoint,
+            /// A platform entrypoint wrapper, by the symbol it is exported
+            /// under. The name is borrowed from the caller, which keeps it
+            /// for the code generator's lifetime.
+            entrypoint: []const u8,
             /// Message pool bytes; the payload is the pool offset the run starts at.
             message_pool_run: u32,
             branch_island,
@@ -21640,7 +21643,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// 6. Returns `void`
         pub fn generateEntrypointWrapper(
             self: *Self,
-            _: []const u8,
+            symbol_name: []const u8,
             entry_proc: lir.LIR.LirProcSpecId,
             arg_layouts: []const layout.Idx,
             ret_layout: layout.Idx,
@@ -21855,7 +21858,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .start = func_start,
                 .end = func_end,
                 .entry = 0,
-                .kind = .entrypoint,
+                .kind = .{ .entrypoint = symbol_name },
             });
             try self.maybeDrainRcHelpers();
 
@@ -25416,7 +25419,7 @@ test "AArch64 finalized excerpts preserve external calls across changed placemen
             .start = 0,
             .end = body_end,
             .entry = 0,
-            .kind = .entrypoint,
+            .kind = .{ .entrypoint = "" },
         });
         try original.finishImage();
         try std.testing.expectEqual(@as(usize, 1), original.codegen.extern_stubs.items.len);
