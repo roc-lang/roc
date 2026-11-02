@@ -1120,15 +1120,26 @@ pub const DataGraphView = struct {
 pub const DataCollector = struct {
     allocator: Allocator,
     items: std.ArrayList(DataItem) = .empty,
-    visited: std.AutoHashMapUnmanaged(*const DataGraph, std.DynamicBitSetUnmanaged) = .empty,
+    /// Per graph, the generation that last visited each node: a node is
+    /// visited when its stamp is the current generation, so starting a new
+    /// generation forgets every visit at once.
+    visited: std.AutoHashMapUnmanaged(*const DataGraph, []u32) = .empty,
+    generation: u32 = 1,
     pending: std.ArrayList(u32) = .empty,
 
     pub fn deinit(self: *DataCollector) void {
         var it = self.visited.valueIterator();
-        while (it.next()) |bits| bits.deinit(self.allocator);
+        while (it.next()) |stamps| self.allocator.free(stamps.*);
         self.visited.deinit(self.allocator);
         self.items.deinit(self.allocator);
         self.pending.deinit(self.allocator);
+    }
+
+    /// Forget every item and visit, keeping the storage: the next `add`
+    /// collects an excerpt's own closure, as a fresh collector would.
+    pub fn restart(self: *DataCollector) void {
+        self.items.clearRetainingCapacity();
+        self.generation += 1;
     }
 
     pub fn add(self: *DataCollector, excerpt: Excerpt) Allocator.Error!void {
@@ -1138,12 +1149,17 @@ pub const DataCollector = struct {
 
     fn addGraph(self: *DataCollector, view: DataGraphView) Allocator.Error!void {
         const entry = try self.visited.getOrPut(self.allocator, view.graph);
-        if (!entry.found_existing) entry.value_ptr.* = .{};
-        if (entry.value_ptr.bit_length == 0) entry.value_ptr.* = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, view.graph.items.len);
+        if (!entry.found_existing) {
+            errdefer _ = self.visited.remove(view.graph);
+            const stamps = try self.allocator.alloc(u32, view.graph.items.len);
+            @memset(stamps, 0);
+            entry.value_ptr.* = stamps;
+        }
+        const stamps = entry.value_ptr.*;
         try self.pending.appendSlice(self.allocator, view.roots);
         while (self.pending.pop()) |index| {
-            if (entry.value_ptr.isSet(index)) continue;
-            entry.value_ptr.set(index);
+            if (stamps[index] == self.generation) continue;
+            stamps[index] = self.generation;
             const node = view.graph.items[index];
             try self.items.append(self.allocator, node.item);
             for (node.edges) |edge| try self.pending.append(self.allocator, edge orelse base.invariant("prepared constant graph has a missing data target", .{}));

@@ -78,6 +78,8 @@ pub fn encode(allocator: Allocator, pieces: *const Pieces) Allocator.Error![]u8 
         try writer.raw(&file.identity);
     }
     try writer.word(@intCast(set.excerpts.len));
+    var carried = CodeExcerpt.DataCollector{ .allocator = allocator };
+    defer carried.deinit();
     for (set.excerpts) |excerpt| {
         switch (excerpt.kind) {
             .proc => |identity| {
@@ -169,9 +171,9 @@ pub fn encode(allocator: Allocator, pieces: *const Pieces) Allocator.Error![]u8 
             try writer.str(relocation.name);
             try writer.byte(@backingInt(relocation.scope));
         }
-        const data = try CodeExcerpt.materializeData(allocator, excerpt);
-        defer allocator.free(data);
-        try writeData(&writer, data);
+        carried.restart();
+        try carried.add(excerpt);
+        try writeData(&writer, carried.items.items);
     }
     try writeData(&writer, pieces.exported_data);
     try writer.word(@intCast(pieces.helper_aliases.len));
