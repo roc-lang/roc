@@ -8189,6 +8189,7 @@ const desc_alignment_offset: u32 = boxy_runtime.TypeDesc.layout(.u32).of(.alignm
 const BoxyListOp = boxy_runtime.compiled.ListOp;
 const BoxyListOpRequest = boxy_runtime.compiled.ListOpRequest;
 const BoxyFieldInput = boxy_runtime.compose.FieldInput;
+const BoxyDeclaredFieldInput = boxy_runtime.compose.DeclaredFieldInput;
 const BoxyVariantInput = boxy_runtime.compose.VariantInput;
 
 /// The size and alignment of a field of an `extern struct` the wasm32 Boxy
@@ -8833,6 +8834,40 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             } else {
                 try self.emitBoxyRuntimeCall(.record);
             }
+            try self.bindReturnedScalar(dst, .i32);
+        },
+        .desc_declared_record => |d| {
+            const names = self.store.getLocalSpan(d.names);
+            const descs = self.store.getLocalSpan(d.descs);
+            const padding = self.store.getU32Span(d.padding);
+            if (names.len + padding.len != descs.len) wasmInvariantFmt("WASM/codegen invariant violated: desc_declared_record has {d} names and {d} padding fields for {d} descriptors", .{ names.len, padding.len, descs.len });
+            const entry_size = comptime wasm32StructSize(BoxyDeclaredFieldInput);
+            const slot = try self.allocStackMemory(@intCast(@max(descs.len, 1) * entry_size), wasm_word_size);
+            const fields = try self.emitFpOffsetToNewLocal(slot);
+            var next_name: usize = 0;
+            var next_padding: usize = 0;
+            for (0..descs.len) |i| {
+                const entry: u32 = @intCast(i * entry_size);
+                const is_padding = next_padding < padding.len and GuardedList.at(padding, next_padding) == i;
+                try self.emitLocalGet(fields);
+                if (is_padding) {
+                    next_padding += 1;
+                    try self.emitI32Const(0);
+                } else {
+                    try self.emitProcLocal(GuardedList.at(names, next_name));
+                    next_name += 1;
+                }
+                try self.emitStoreOp(.i32, entry + comptime wasm32FieldOffset(BoxyDeclaredFieldInput, "name"));
+                try self.emitLocalGet(fields);
+                try self.emitProcLocal(GuardedList.at(descs, i));
+                try self.emitStoreOp(.i32, entry + comptime wasm32FieldOffset(BoxyDeclaredFieldInput, "desc"));
+                try self.emitLocalGet(fields);
+                try self.emitI32Const(@intFromBool(is_padding));
+                try self.emitStoreOp(.i32, entry + comptime wasm32FieldOffset(BoxyDeclaredFieldInput, "is_padding"));
+            }
+            try self.emitI32Const(@intCast(descs.len));
+            try self.emitLocalGet(fields);
+            try self.emitBoxyRuntimeCall(.declared_record);
             try self.bindReturnedScalar(dst, .i32);
         },
         .desc_tuple => |d| {

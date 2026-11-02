@@ -488,20 +488,20 @@ pub const StaticDescs = struct {
             },
             .record => |record| {
                 kind = .record;
+                flags.declared_order = record.declared != null;
                 const fields = try self.allocator.dupe(types.Field, self.store.fieldSpan(record.fields));
                 defer self.allocator.free(fields);
-                const storage = try self.allocator.alloc(TypeId, fields.len);
+                const storage = try self.layouts.recordStorage(record);
                 defer self.allocator.free(storage);
-                for (fields, storage) |field, *slot| slot.* = try self.layouts.fieldStorage(field);
-                count = @intCast(fields.len);
-                try self.fillFields(item.node, &pointers, committed_layout, storage, fields);
+                count = @intCast(storage.len);
+                try self.fillFields(item.node, &pointers, committed_layout, storage, fields, if (record.declared) |declared| self.store.declaredSlots(declared) else null);
             },
             .tuple => |items_span| {
                 kind = .tuple;
                 const items = try self.allocator.dupe(TypeId, self.store.span(items_span));
                 defer self.allocator.free(items);
                 count = @intCast(items.len);
-                try self.fillFields(item.node, &pointers, committed_layout, items, null);
+                try self.fillFields(item.node, &pointers, committed_layout, items, null, null);
             },
             .tag_union => |tag_union| {
                 kind = .tag_union;
@@ -547,7 +547,9 @@ pub const StaticDescs = struct {
     }
 
     /// The `Field` entries of a record or tuple, in the committed layout's
-    /// memory order. `names` is null for a tuple.
+    /// memory order. `names` is null for a tuple; `storage` holds a slot for
+    /// each of them by semantic index, and past them the slots of a padded
+    /// record's unnamed fields, which `declared` orders.
     fn fillFields(
         self: *StaticDescs,
         owner: ExportIndex,
@@ -555,6 +557,7 @@ pub const StaticDescs = struct {
         committed_layout: layout.Layout,
         storage: []const TypeId,
         names: ?[]const types.Field,
+        declared: ?[]const u32,
     ) Allocator.Error!void {
         if (storage.len == 0) return;
         const layouts = self.layouts.layouts;
@@ -602,21 +605,25 @@ pub const StaticDescs = struct {
                 writeU32(bytes, field.index * field_layout.size + field_layout.of(.field_slot), position);
                 const component = storage[field.index];
                 try entry_pointers.append(self.allocator, .{ .offset = base_offset + field_layout.of(.desc), .target = try self.componentNode(component, field.layout) });
-                if (names) |record_fields| {
+                if (names) |record_fields| if (!field.is_padding) {
                     try entry_pointers.append(self.allocator, .{ .offset = base_offset + field_layout.of(.name), .target = (try self.reserveName(record_fields[field.index].name)).node });
-                }
+                };
             }
         } else {
-            // Every field is zero-sized: each sits at offset 0, in checked field order.
-            for (storage, 0..) |component, index| {
-                const base_offset: u32 = @as(u32, @intCast(index)) * field_layout.size;
+            // Every field is zero-sized: each sits at offset 0, in checked
+            // field order or in the order its declaration gives.
+            for (storage, 0..) |_, position| {
+                const index: usize = if (declared) |slots| slots[position] else position;
+                const base_offset: u32 = @as(u32, @intCast(position)) * field_layout.size;
                 const bytes = @constCast(self.exports.items[entries].bytes);
                 writeU32(bytes, base_offset + field_layout.of(.field_index), @intCast(index));
-                writeU32(bytes, base_offset + field_layout.of(.field_slot), @intCast(index));
-                try entry_pointers.append(self.allocator, .{ .offset = base_offset + field_layout.of(.desc), .target = try self.componentNode(component, try self.layouts.layoutOf(component)) });
-                if (names) |record_fields| {
+                writeU32(bytes, @as(u32, @intCast(index)) * field_layout.size + field_layout.of(.field_slot), @intCast(position));
+                const is_padding = if (names) |record_fields| index >= record_fields.len else false;
+                writeU32(bytes, base_offset + field_layout.of(.is_padding), @intFromBool(is_padding));
+                try entry_pointers.append(self.allocator, .{ .offset = base_offset + field_layout.of(.desc), .target = try self.componentNode(storage[index], try self.layouts.layoutOf(storage[index])) });
+                if (names) |record_fields| if (!is_padding) {
                     try entry_pointers.append(self.allocator, .{ .offset = base_offset + field_layout.of(.name), .target = (try self.reserveName(record_fields[index].name)).node });
-                }
+                };
             }
         }
         try self.setRelocations(entries, entry_pointers.items);

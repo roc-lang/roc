@@ -15095,7 +15095,8 @@ Descriptors come from two sources and nowhere else:
   mentions one of its type variables, the lowerer emits a composition
   statement whose operands are static descriptors and hidden descriptor
   parameters: `desc_list(item)`, `desc_box(payload)`, `desc_record(fields)`,
-  `desc_tag_union(variants)`, `desc_nominal(declaration, args)`,
+  `desc_declared_record(fields)`, `desc_tag_union(variants)`,
+  `desc_nominal(declaration, args)`,
   `desc_erased_callable`. The runtime composes the layout with the shared
   layout code and interns the result in an immortal cache keyed by
   constructor and operand identities, so a composition executed again
@@ -17480,8 +17481,9 @@ the record-field label that matches the lexicographic backing row; a padding
 entry stores the ordinal of the corresponding checked padding type in
 `padding_field_types`. The padding type itself is not duplicated in the
 declared-order entry, so generic nominal instantiation substitutes padding types
-in exactly one place. Monotype preserves this field metadata because boxy
-descriptors also consume it. Layout selection is independent:
+in exactly one place. Monotype preserves this field metadata for `.lss` layout
+selection; `.boxy` does not go through Monotype and reads the same checked data
+directly (Nominal Record Field Order). Layout selection is independent:
 without padding, LSS and boxy reuse the structural
 backing; with padding, they propagate an explicit declared-order policy.
 
@@ -20166,14 +20168,47 @@ record itself. Canonicalization preserves it—a nominal declaration's record
 annotation keeps its fields in source order—and checking records it as
 explicit CheckedModule data distinct from the (lexicographic) backing row,
 so later stages never rescan declarations. Monotype lowering preserves this
-metadata for boxy descriptors. LSS and boxy use the presence of explicit
-checked padding types to select the
+metadata for `.lss`, and `.boxy` reads it from the checked declaration. LSS and
+boxy use the presence of explicit checked padding types to select the
 declared-order layout policy; otherwise their runtime layout path reuses the
 structural backing row. The layout graph records the selected policy on the
 struct span, and the store commits it without probing or reconstructing intent.
 Field-name resolution continues to use the lexicographic row order, independent
 of the layout offset map. The same policy is consumed by the interpreter's
 layout store, so all backends agree.
+
+Under `.boxy` the backing of a padded nominal is a record type of its own,
+distinct from the record of the same fields: `Converter.backing` reads the
+declaration's declared fields and padding types, at the nominal's arguments, and
+interns a record node that carries them. Its fields stay in lexicographic order,
+so a literal, a field read, a pattern, or a codec treats it as it treats any
+record. A padding type may mention the declaration's type variables, so it is a
+component of the node like a field: it counts toward the type's closedness and
+its variables are substituted with the rest. A closed type commits through
+`Graph.declaredOrder`. A generic body composes the descriptor with
+`desc_declared_record`, which calls the runtime's `roc_desc_declared_record`,
+so the shared layout code gives both the same offsets. An explicit constructor
+builds its operand at this type rather than at the operand's record row. A
+padded record of no named fields is still such a record: it has storage, where
+the empty record has none.
+
+A structural record can lift into a padded nominal, and a padded nominal can
+reach a parameter written as its record row, open or closed, because a generic
+function has one body, which reads the record by the structural rule. The two
+types are one value in two memory orders, so where a value crosses between them
+it is rebuilt by the descriptor-driven `adapt` (Dynamic Values In LIR), which
+matches fields by name at any depth: `StorageDifference.record_order` on a
+result or a read, and the check of each explicit argument at a direct call. A
+function value converts by an adapter around it, like one a row widening reaches.
+A specialized program has one type for both and needs no conversion.
+
+A function value stored inside data whose signature differs by a padded record's
+order is not converted: `adapt` copies an erased callable as it is, so
+`StorageDifference` holds this as its invariant for nested function signatures.
+
+The declared order and the padding types are part of the module's checking
+interface, so an edit to either rebuilds the importers that compiled offsets
+against it (Caching Under `.boxy`).
 
 ### Pattern Lowering
 

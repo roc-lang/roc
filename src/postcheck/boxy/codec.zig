@@ -333,8 +333,9 @@ fn methodName(program: *Program, text: []const u8) Allocator.Error!NameId {
 
 /// The selection-key form of a subject type: a format method's subject is
 /// structural, so nominal layers that the codec walks through (user
-/// nominals and `Try`) are peeled. A codec boundary method keeps its exact
-/// subject, whose nominal identity selects the codec.
+/// nominals and `Try`) are peeled, and a padded nominal's backing is its
+/// record row. A codec boundary method keeps its exact subject, whose nominal
+/// identity selects the codec.
 fn subjectKey(program: *Program, method: NameId, ty: TypeId) Allocator.Error!TypeId {
     const text = program.store.nameText(method);
     if (std.mem.eql(u8, text, "encoder_for") or std.mem.eql(u8, text, "parser_for")) return ty;
@@ -345,7 +346,7 @@ fn subjectKey(program: *Program, method: NameId, ty: TypeId) Allocator.Error!Typ
                 if (!peelable(nominal)) return current;
                 current = try program.converter().backing(current);
             },
-            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => return current,
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => return try program.store.recordRow(current),
         }
     }
 }

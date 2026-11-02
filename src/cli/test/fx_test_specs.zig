@@ -313,6 +313,14 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>1122",
         .description = "Nominal record declared-order + unnamed padding matches the host C struct layout",
     },
+    // The same for generic nominals: their records are built by one body whose
+    // field offsets a descriptor composed at runtime has to give, and a padding
+    // type can be the nominal's own type parameter.
+    .{
+        .roc_file = "test/fx/host_interop_generic_padding.roc",
+        .io_spec = "1>1122|1>3344|1>held across the host|1>110|1>mixed across the host|1>3|1>6677|1>77|1>8899",
+        .description = "Generic nominal records with unnamed padding match the host C struct layout",
+    },
 
     // Lookup tests
     .{

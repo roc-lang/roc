@@ -85,7 +85,7 @@ pub const Task = union(enum) {
     /// Pop the arguments of a call to `callee` and call it.
     /// `adapt` is set for a callee storing record fields of its signature
     /// in presence slots: the types its scheme takes and the arguments'.
-    finish_call: struct { callee: WorkerId, hidden: []LocalId, arg_count: u32, ret: TypeId, result: TypeId },
+    finish_call: struct { callee: WorkerId, hidden: []LocalId, bound: []const TypeId, arg_types: []const TypeId, ret: TypeId, result: TypeId },
     finish_erased_call: struct { fn_ty: TypeId, arg_count: u32, result: TypeId },
     finish_low_level: struct { op: LIR.LowLevel, arg_count: u32, result: TypeId, arg_types: []const TypeId = &.{} },
     /// Return to the enclosing expression's source region.
@@ -1091,9 +1091,9 @@ pub const Builder = struct {
             .tuple => |items| try out.appendSlice(self.allocator, store.span(items)),
             .record => |record| {
                 if (record.ext) |ext| try out.append(self.allocator, ext);
-                const fields = try self.allocator.dupe(types.Field, store.fieldSpan(record.fields));
-                defer self.allocator.free(fields);
-                for (fields) |field| try out.append(self.allocator, try self.program.layouts.fieldStorage(field));
+                const storage = try self.program.layouts.recordStorage(record);
+                defer self.allocator.free(storage);
+                try out.appendSlice(self.allocator, storage);
             },
             .tag_union => |tag_union| {
                 if (tag_union.ext) |ext| try out.append(self.allocator, ext);
@@ -1131,6 +1131,7 @@ pub const Builder = struct {
                 break :blk .{ .desc_tuple = .{ .elems = try self.store.addLocalSpan(descs) } };
             },
             .record => |record| blk: {
+                if (record.declared) |declared| break :blk try self.declaredRecordDesc(ty, record, declared);
                 const fields = try self.allocator.dupe(types.Field, store.fieldSpan(record.fields));
                 defer self.allocator.free(fields);
                 const names = try self.allocator.alloc(LocalId, fields.len);
@@ -1186,6 +1187,34 @@ pub const Builder = struct {
         };
         try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, op), .next = undefined } });
         return local;
+    }
+
+    /// The composition of the padded nominal backing `ty`, in declared order.
+    fn declaredRecordDesc(self: *Builder, ty: TypeId, record: types.Record, declared: types.DeclaredOrder) Allocator.Error!LIR.DynOp {
+        if (record.ext != null) invariant("a padded nominal's record row is closed");
+        const store = &self.program.store;
+        const storage = try self.program.layouts.recordStorage(record);
+        defer self.allocator.free(storage);
+        const slots = store.declaredSlots(declared);
+        const descs = try self.allocator.alloc(LocalId, slots.len);
+        defer self.allocator.free(descs);
+        var names: std.ArrayList(LocalId) = .empty;
+        defer names.deinit(self.allocator);
+        var padding: std.ArrayList(u32) = .empty;
+        defer padding.deinit(self.allocator);
+        for (slots, descs, 0..) |slot, *desc, position| {
+            desc.* = try self.slotDesc(ty, .{ .child = storage[slot], .slot = .field });
+            if (slot < record.fields.len) {
+                try names.append(self.allocator, try self.nameDesc(store.fieldSpan(record.fields)[slot].name));
+            } else {
+                try padding.append(self.allocator, @intCast(position));
+            }
+        }
+        return .{ .desc_declared_record = .{
+            .names = try self.store.addLocalSpan(names.items),
+            .descs = try self.store.addLocalSpan(descs),
+            .padding = try self.store.addU32Span(padding.items),
+        } };
     }
 
     /// The `Methods` record of the nominal type `ty`'s overrides, composed
@@ -1446,9 +1475,9 @@ pub const Builder = struct {
                 .tuple => |items| try children.appendSlice(self.allocator, store.span(items)),
                 .record => |record| {
                     if (record.ext != null) invariant("a hosted declaration's record row is closed, as checking requires");
-                    const fields = try self.allocator.dupe(types.Field, store.fieldSpan(record.fields));
-                    defer self.allocator.free(fields);
-                    for (fields) |field| try children.append(self.allocator, try self.program.layouts.fieldStorage(field));
+                    const storage = try self.program.layouts.recordStorage(record);
+                    defer self.allocator.free(storage);
+                    try children.appendSlice(self.allocator, storage);
                 },
                 .tag_union => |tag_union| {
                     if (tag_union.ext != null) invariant("a hosted declaration's tag row is closed, as checking requires");
@@ -1475,7 +1504,19 @@ pub const Builder = struct {
             const built: layout.Idx = switch (store.get(frame.ty)) {
                 .box => try layouts.insertBox(child_layouts[0]),
                 .nominal => child_layouts[0],
-                .tuple, .record => blk: {
+                .record => |record| blk: {
+                    const fields = try self.allocator.alloc(layout.StructField, child_layouts.len);
+                    defer self.allocator.free(fields);
+                    const declared = record.declared orelse {
+                        for (fields, child_layouts, 0..) |*field, child_layout, index| field.* = .{ .index = @intCast(index), .layout = child_layout };
+                        break :blk try layouts.putStructFields(fields);
+                    };
+                    for (fields, store.declaredSlots(declared)) |*field, slot| {
+                        field.* = .{ .index = slot, .layout = child_layouts[slot], .is_padding = slot >= record.fields.len };
+                    }
+                    break :blk try layouts.putNominalStructFields(fields);
+                },
+                .tuple => blk: {
                     const fields = try self.allocator.alloc(layout.StructField, child_layouts.len);
                     defer self.allocator.free(fields);
                     for (fields, child_layouts, 0..) |*field, child_layout, index| field.* = .{ .index = @intCast(index), .layout = child_layout };
@@ -1740,8 +1781,10 @@ pub const Builder = struct {
 
     /// Where two types of one value differ: nowhere; only in the tags of
     /// rows, one widening the other along the coercion's reach (design.md
-    /// "Sealed Result Rows"); or inside the function type the value has.
-    pub const StorageDifference = enum { none, rows, function };
+    /// "Sealed Result Rows"); in the memory order of a record, one being the
+    /// record a padded nominal lifts it into (design.md "Nominal Record Field
+    /// Order"); or inside the function type the value has.
+    pub const StorageDifference = enum { none, rows, record_order, function };
 
     /// A function value inside data is outside every row widening's reach
     /// (design.md "Row Coercion Primitive"), so both types of the value store
@@ -1784,6 +1827,12 @@ pub const Builder = struct {
                     try pending.append(self.allocator, .{ .from = try self.program.converter().backing(pair.from), .to = pair.to, .place = pair.place });
                 } else if (to == .nominal and to.nominal.has_backing) {
                     try pending.append(self.allocator, .{ .from = pair.from, .to = try self.program.converter().backing(pair.to), .place = pair.place });
+                } else if (paddedAgainstEmpty(from, to)) {
+                    switch (pair.place) {
+                        .data => result = .record_order,
+                        .root_function, .signature_data => return .function,
+                        .nested_function => invariant(nested_function_storage),
+                    }
                 }
                 continue;
             }
@@ -1791,6 +1840,11 @@ pub const Builder = struct {
             const inner: Place = if (pair.place == .root_function) .signature_data else pair.place;
             switch (from) {
                 .record => |record| {
+                    if (!store.sameRecordOrder(record, to.record)) switch (pair.place) {
+                        .data => result = .record_order,
+                        .root_function, .signature_data => return .function,
+                        .nested_function => invariant(nested_function_storage),
+                    };
                     for (store.fieldSpan(to.record.fields)) |to_field| {
                         for (store.fieldSpan(record.fields)) |from_field| {
                             if (from_field.name != to_field.name) continue;
@@ -1839,6 +1893,13 @@ pub const Builder = struct {
         return result;
     }
 
+    /// Whether one of two nodes is the backing of a padded nominal of no named
+    /// fields and the other the empty record, which has no storage.
+    fn paddedAgainstEmpty(a: types.Node, b: types.Node) bool {
+        return a == .empty_record and b == .record and b.record.declared != null or
+            b == .empty_record and a == .record and a.record.declared != null;
+    }
+
     /// Whether `ty` is a tag union, through the backing of a nominal.
     fn isTagRow(self: *Builder, ty: TypeId) Allocator.Error!bool {
         return switch (self.program.store.get(ty)) {
@@ -1874,6 +1935,13 @@ pub const Builder = struct {
             },
             .rows => {
                 if (try self.closed(from) and try self.closed(to)) return try self.convertRows(value, from, to);
+                const target = try self.localOf(to, .frame);
+                try self.emitDyn(target, .{ .adapt = .{ .src = value, .from = try self.descOf(from), .to = try self.descOf(to) } });
+                return target;
+            },
+            // Records hold the difference at any depth, even below a list,
+            // so it is rebuilt by descriptors whatever the types.
+            .record_order => {
                 const target = try self.localOf(to, .frame);
                 try self.emitDyn(target, .{ .adapt = .{ .src = value, .from = try self.descOf(from), .to = try self.descOf(to) } });
                 return target;
@@ -2221,7 +2289,7 @@ pub const Builder = struct {
                     }
                 }
                 for (params) |param| try self.pushValue(param);
-                try self.finishCall(target, hidden, @intCast(params.len), try self.program.substitute(self.allocator, target_worker.ret, bound), worker.ret);
+                try self.finishCall(target, hidden, bound, worker.params, try self.program.substitute(self.allocator, target_worker.ret, bound), worker.ret);
             },
             .alias => |alias| {
                 const evidence: []const static_dispatch.CheckedEvidence = if (request.root_evidence) |span| blk: {
@@ -2232,7 +2300,7 @@ pub const Builder = struct {
                 const instance = try self.aliasUseInstance(alias, &.{}, evidence, fn_ty, .literal);
                 defer self.allocator.free(instance.hidden);
                 for (params) |param| try self.pushValue(param);
-                try self.finishCall(alias.target, instance.hidden, @intCast(params.len), instance.ret, worker.ret);
+                try self.finishCall(alias.target, instance.hidden, instance.bound, worker.params, instance.ret, worker.ret);
             },
             .callable_eval => |eval| {
                 try self.tasks.append(self.allocator, .{ .finish_erased_call = .{ .fn_ty = fn_ty, .arg_count = @intCast(params.len), .result = worker.ret } });
@@ -2685,7 +2753,7 @@ pub const Builder = struct {
             .numeral_arg => |arg| try self.pushValue(try self.numeralArgument(arg.literal, arg.ty)),
             .finish_call => |call| {
                 defer self.allocator.free(call.hidden);
-                try self.finishCall(call.callee, call.hidden, call.arg_count, call.ret, call.result);
+                try self.finishCall(call.callee, call.hidden, call.bound, call.arg_types, call.ret, call.result);
             },
             .finish_low_level => |ll| try self.finishLowLevel(ll.op, ll.arg_count, ll.result, ll.arg_types),
             .restore_region => |region| self.region = region,
@@ -2716,7 +2784,7 @@ pub const Builder = struct {
                         const hidden = try self.allocator.alloc(LocalId, bound.len);
                         defer self.allocator.free(hidden);
                         for (bound, hidden) |ty, *desc| desc.* = try self.descOf(ty);
-                        try self.finishCall(callee, hidden, 0, try self.program.substitute(self.allocator, callee_worker.ret, bound), eval.ty);
+                        try self.finishCall(callee, hidden, bound, &.{}, try self.program.substitute(self.allocator, callee_worker.ret, bound), eval.ty);
                     },
                     .discarded, .expect => invariant("a callable-eval binding's root holds a value, which no expect or discarded root does"),
                 }
@@ -3051,7 +3119,13 @@ pub const Builder = struct {
                         try self.pushExprsReversed(tag.args);
                     },
                     .zero_argument_tag => try self.push(.{ .finish_tag_at = .{ .expr = nominal.backing_expr, .ty = try self.exprType(expr_id) } }),
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => try self.push(.{ .expr = nominal.backing_expr }),
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {
+                        // The operand is the nominal's own backing, which a
+                        // padded declaration lays out differently from the
+                        // operand's record row.
+                        try self.destination_types.put(self.allocator, nominal.backing_expr, try self.structuralType(try self.exprType(expr_id)));
+                        try self.push(.{ .expr = nominal.backing_expr });
+                    },
                 }
             },
             .lambda => try self.lowerClosure(expr_id, expr_id, try self.program.siteCaptures(self.module, expr_id)),
@@ -4743,7 +4817,7 @@ pub const Builder = struct {
                 const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = read_ty, .effectful = false } });
                 const instance = try self.callInstanceAt(callee, self.siteSubstitution(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{}, fn_ty, .{ .use = expr_id });
                 defer self.allocator.free(instance.hidden);
-                try self.finishCall(callee, instance.hidden, 0, instance.ret, read_ty);
+                try self.finishCall(callee, instance.hidden, instance.bound, &.{}, instance.ret, read_ty);
             },
             .unimplemented => |unimplemented| {
                 self.region = unimplemented.region;
@@ -5537,7 +5611,12 @@ pub const Builder = struct {
             .local_proc, .local_param, .local_value, .pattern_binder, .local_mutable_version, .platform_required_const, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_checked_error, .platform_required_declaration => invariant("a direct call's target is no procedure"),
         } else null;
         const instance = try self.procedureUseInstance(callee, call.func, required, call_fn);
-        try self.push(.{ .finish_call = .{ .callee = callee.target(), .hidden = instance.hidden, .arg_count = @intCast(call.args.len), .ret = instance.ret, .result = try self.exprType(expr_id) } });
+        const arg_types = switch (self.program.store.get(call_fn)) {
+            .function => |function| self.program.store.span(function.args),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a called value's type is not a function type"),
+        };
+        if (arg_types.len != call.args.len) invariant("a call's argument count differs from its callable type");
+        try self.push(.{ .finish_call = .{ .callee = callee.target(), .hidden = instance.hidden, .bound = instance.bound, .arg_types = arg_types, .ret = instance.ret, .result = try self.exprType(expr_id) } });
         try self.pushExprsReversed(call.args);
     }
 
@@ -6846,7 +6925,7 @@ pub const Builder = struct {
                         // must remain an explicit operation.
                         if (dyn.desc != self.store.localDyn(result).?.desc) return false;
                     },
-                    .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_compose, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record_update, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .closure, .view, .adapt => return false,
+                    .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_compose, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record_update, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .closure, .view, .adapt => return false,
                 }
                 op.target = result;
             },
@@ -6863,15 +6942,76 @@ pub const Builder = struct {
     /// instantiation, `ret`; the call's own type `result_ty` may widen a
     /// sealed row of it, which the result is converted to (design.md
     /// "Sealed Result Rows").
-    pub fn finishCall(self: *Builder, callee: WorkerId, hidden: []const LocalId, arg_count: u32, ret: TypeId, result_ty: TypeId) Allocator.Error!void {
-        const explicit = try self.popValues(arg_count);
+    pub fn finishCall(self: *Builder, callee: WorkerId, hidden: []const LocalId, bound: []const TypeId, arg_types: []const TypeId, ret: TypeId, result_ty: TypeId) Allocator.Error!void {
+        const explicit = try self.popValues(@intCast(arg_types.len));
         defer self.allocator.free(explicit);
+        try self.argsAtParams(explicit, arg_types, callee, bound);
         const args = try std.mem.concat(self.allocator, LocalId, &.{ explicit, hidden });
         defer self.allocator.free(args);
         const target = try self.localOf(ret, .frame);
         const proc = self.program.worker(callee).proc;
         try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = proc, .args = try self.store.addLocalSpan(args), .next = undefined } });
         try self.pushValue(try self.adaptValue(target, ret, result_ty));
+    }
+
+    /// `args` of types `arg_types`, where one parameter of `callee` under
+    /// `bound` stores a record in another order: a padded nominal passed to
+    /// a parameter of its record row (design.md "Nominal Record Field
+    /// Order"), which the callee reads by the structural rule.
+    fn argsAtParams(self: *Builder, args: []LocalId, arg_types: []const TypeId, callee: WorkerId, bound: []const TypeId) Allocator.Error!void {
+        const store = &self.program.store;
+        for (args, arg_types, self.program.worker(callee).params[0..args.len]) |*arg, arg_ty, param| {
+            // A variable has the one representation of whatever it binds.
+            if (store.get(param) == .variable) continue;
+            const param_ty = if (store.isClosed(param)) param else try self.program.substitute(self.allocator, param, bound);
+            if (try self.recordOrderDiffers(arg_ty, param_ty)) arg.* = try self.adaptValue(arg.*, arg_ty, param_ty);
+        }
+    }
+
+    /// Whether two types of one value store a record in different orders,
+    /// outside the function values each holds.
+    fn recordOrderDiffers(self: *Builder, from_root: TypeId, to_root: TypeId) Allocator.Error!bool {
+        const store = &self.program.store;
+        var pending: std.ArrayList([2]TypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ from_root, to_root });
+        while (pending.pop()) |pair| {
+            if (pair[0] == pair[1]) continue;
+            const from = store.get(pair[0]);
+            const to = store.get(pair[1]);
+            if (std.meta.activeTag(from) != std.meta.activeTag(to)) {
+                if (from == .nominal and from.nominal.has_backing) {
+                    try pending.append(self.allocator, .{ try self.program.converter().backing(pair[0]), pair[1] });
+                } else if (to == .nominal and to.nominal.has_backing) {
+                    try pending.append(self.allocator, .{ pair[0], try self.program.converter().backing(pair[1]) });
+                } else if (paddedAgainstEmpty(from, to)) {
+                    return true;
+                }
+                continue;
+            }
+            switch (from) {
+                .record => |record| {
+                    if (!store.sameRecordOrder(record, to.record)) return true;
+                    for (store.fieldSpan(to.record.fields)) |to_field| {
+                        for (store.fieldSpan(record.fields)) |from_field| {
+                            if (from_field.name == to_field.name) try pending.append(self.allocator, .{ from_field.ty, to_field.ty });
+                        }
+                    }
+                },
+                .tuple => |items| for (store.span(items), store.span(to.tuple)) |a, b| try pending.append(self.allocator, .{ a, b }),
+                .tag_union => |tag_union| for (store.tagSpan(to.tag_union.tags)) |to_tag| {
+                    for (store.tagSpan(tag_union.tags)) |from_tag| {
+                        if (from_tag.name != to_tag.name or from_tag.payloads.len != to_tag.payloads.len) continue;
+                        for (store.span(from_tag.payloads), store.span(to_tag.payloads)) |a, b| try pending.append(self.allocator, .{ a, b });
+                    }
+                },
+                .list => |elem| try pending.append(self.allocator, .{ elem, to.list }),
+                .box => |payload| try pending.append(self.allocator, .{ payload, to.box }),
+                .nominal => |nominal| for (store.nominalArgs(nominal), store.nominalArgs(to.nominal)) |a, b| try pending.append(self.allocator, .{ a, b }),
+                .primitive, .empty_record, .function, .variable => {},
+            }
+        }
+        return false;
     }
 
     /// A debug rendering of `ty`, for invariant messages.
@@ -7029,7 +7169,7 @@ pub const Builder = struct {
                         try self.push(.{ .finish_low_level = .{ .op = .bool_not, .arg_count = 1, .result = result_ty } });
                     },
                 }
-                try self.push(.{ .finish_call = .{ .callee = callee, .hidden = instance.hidden, .arg_count = @intCast(operands.len), .ret = instance.ret, .result = if (call_plan.result_mode == .equality) try self.program.store.primitive(.bool) else result_ty } });
+                try self.push(.{ .finish_call = .{ .callee = callee, .hidden = instance.hidden, .bound = instance.bound, .arg_types = try self.program.arena.allocator().dupe(TypeId, operand_types), .ret = instance.ret, .result = if (call_plan.result_mode == .equality) try self.program.store.primitive(.bool) else result_ty } });
                 var index = operands.len;
                 while (index > 0) {
                     index -= 1;

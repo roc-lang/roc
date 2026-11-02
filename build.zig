@@ -1842,6 +1842,7 @@ pub fn build(b: *std.Build) void {
     const run_test_playground_step = b.step("run-test-playground", "Run the integration test suite for the WASM playground");
     const build_test_cli_runners_step = b.step("build-test-cli-runners", "Build CLI integration test runners");
     const run_test_cli_step = b.step("run-test-cli", "Run all CLI integration tests (platforms + subcommands + echo + glue)");
+    const run_test_cli_platforms_boxy_step = b.step("run-test-cli-platforms-boxy", "Run the CLI platform tests with --specialize=no");
     const build_test_serialization_sizes_step = b.step("build-test-serialization-sizes", "Build serialization size checks");
     const run_test_serialization_sizes_step = b.step("run-test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
     const build_test_builtin_bake_reproducible_step = b.step("build-test-builtin-bake-reproducible", "Build the builtin compiler the bake reproducibility check runs");
@@ -2872,6 +2873,22 @@ pub fn build(b: *std.Build) void {
         run_cli.step.dependOn(install_step);
         run_cli.step.dependOn(build_test_hosts_step);
         run_test_cli_step.dependOn(&run_cli.step);
+
+        // The platform suite again under the non-specializing strategy, which
+        // every other CLI job selects case by case.
+        const run_cli_platforms_boxy = b.addRunArtifact(parallel_cli_runner_exe);
+        run_cli_platforms_boxy.addFileArg(fixture_roc);
+        run_cli_platforms_boxy.setCwd(test_fixtures.mutableRoot(&.{build_test_hosts_step}));
+        run_cli_platforms_boxy.addArgs(&.{ "--suite", "platforms", "--specialize=no" });
+        for (test_filters) |f| {
+            run_cli_platforms_boxy.addArg("--filter");
+            run_cli_platforms_boxy.addArg(f);
+        }
+        if (run_args.len != 0) run_cli_platforms_boxy.addArgs(run_args);
+        run_cli_platforms_boxy.addPassthruArgs();
+        run_cli_platforms_boxy.step.dependOn(install_step);
+        run_cli_platforms_boxy.step.dependOn(build_test_hosts_step);
+        run_test_cli_platforms_boxy_step.dependOn(&run_cli_platforms_boxy.step);
     }
 
     // Add the compiled builtins module to roc exe and make it depend on the builtins being ready
