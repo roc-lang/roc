@@ -9476,7 +9476,7 @@ fn appendUnnamedFieldVars(self: *Self, stack: *std.ArrayListUnmanaged(Var), decl
         switch (self.cir.store.getTypeAnno(anno_idx)) {
             .parens => |parens| anno_idx = parens.anno,
             .record => |record| break record,
-            else => return,
+            .apply, .rigid_var, .rigid_var_lookup, .underscore, .lookup, .tag_union, .tag, .tuple, .@"fn", .malformed => return,
         }
     };
     for (self.cir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
