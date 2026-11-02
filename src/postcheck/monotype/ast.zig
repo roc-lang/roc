@@ -1195,6 +1195,12 @@ pub const LambdaExpr = struct {
     fn_id: FnId,
     args: Span(TypedLocal),
     body: ExprId,
+    /// The locals a stored value of this function holds whether or not its
+    /// body reads them, each bound around the lambda. A generated codec
+    /// names here its encoding and every renamed field name, which its
+    /// restore reads by generated capture id (design.md "Stored Function
+    /// Capture Contract").
+    stored_captures: Span(TypedLocal) = .empty(),
 };
 
 /// Call through a function value before lambda solving.
@@ -2054,6 +2060,8 @@ pub const ProgramView = struct {
 
 /// Mutable builder-side Monotype program storage plus side arrays.
 pub const ProgramBuilder = struct {
+    /// See `MonotypeLifted.Ast.Program.retains_declared_captures`.
+    retains_declared_captures: bool = false,
     allocator: std.mem.Allocator,
     names: names.NameStore,
     next_symbol: u32,

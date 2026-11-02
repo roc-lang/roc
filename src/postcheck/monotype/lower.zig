@@ -17361,8 +17361,23 @@ const Builder = struct {
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
         try fn_ctx.restoreGeneratedRuntimeEvidence(store_view, fn_value, plan);
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
-        const plan_args = callable_plan.operands;
-        const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
+        const stored_encoding = constGeneratedCapture(fn_value, encoding_capture_id) orelse
+            Common.invariant("stored " ++ codec_name ++ " runtime function was missing its encoding capture");
+        // The stored capture is the constructor's operand: the operand's own
+        // expression can read binders of the enclosing scope, which a restore
+        // does not have.
+        const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
+            callable_plan,
+            &fn_ctx,
+            expr.ty,
+            try fn_ctx.activeNodeFromType(ty),
+            .template_relation_replay,
+        );
+        try relateRequestComponent(
+            fn_ctx.graph,
+            (try fn_ctx.graph.functionNodes(callable_node)).args[0],
+            try fn_ctx.graph.importMono(try fn_ctx.lowerConstCaptureType(store_view, stored_encoding.ty)),
+        );
         const callable_mono_ty = try fn_ctx.resolvedTypeViewForNode(callable_node);
         const fn_data = functionShape(self.activeTypeStore(), callable_mono_ty, "stored " ++ codec_name ++ " constructor had a non-function type");
         const arg_tys = TypeSpanReader.of(self.activeTypeStore(), fn_data.args);
@@ -17395,22 +17410,13 @@ const Builder = struct {
         const state_local = try fn_ctx.addLocal(self.symbols.fresh(), state_ty);
         const state_expr = try fn_ctx.localExpr(state_local, state_ty);
 
-        var encoding_let: ?struct {
-            local: DraftLocalId,
-            value: DraftExprId,
-        } = null;
-        const encoding_expr = if (constGeneratedCaptureNode(fn_value, encoding_capture_id)) |node| blk: {
-            const local = try fn_ctx.addLocal(self.symbols.fresh(), arg_tys.get(0));
-            fn_ctx.setLocalCaptureId(local, encoding_capture_id);
-            encoding_let = .{
-                .local = local,
-                .value = if (static_data_const_locator) |const_locator|
-                    try runConstRestore(&fn_ctx, store_view, fn_view, node, arg_tys.get(0), const_locator)
-                else
-                    try runConstRestore(&fn_ctx, store_view, fn_view, node, arg_tys.get(0), null),
-            };
-            break :blk try fn_ctx.localExpr(local, arg_tys.get(0));
-        } else try fn_ctx.lowerDispatchOperandAtType(plan_args[0], arg_tys.get(0));
+        const encoding_local = try fn_ctx.addLocal(self.symbols.fresh(), arg_tys.get(0));
+        fn_ctx.setLocalCaptureId(encoding_local, encoding_capture_id);
+        const encoding_value = if (static_data_const_locator) |const_locator|
+            try runConstRestore(&fn_ctx, store_view, fn_view, stored_encoding.value, arg_tys.get(0), const_locator)
+        else
+            try runConstRestore(&fn_ctx, store_view, fn_view, stored_encoding.value, arg_tys.get(0), null);
+        const encoding_expr = try fn_ctx.localExpr(encoding_local, arg_tys.get(0));
 
         const str_ty = try self.primitiveType(.str);
         var precomputed_plan = BodyContext.ParserPrecomputedPlan.init(self.allocator);
@@ -17441,7 +17447,7 @@ const Builder = struct {
         const body = blk: {
             var capture_tys = std.ArrayList(Type.TypeId).empty;
             defer capture_tys.deinit(self.allocator);
-            if (encoding_let != null) try capture_tys.append(self.allocator, arg_tys.get(0));
+            try capture_tys.append(self.allocator, arg_tys.get(0));
             for (precomputed_plan.captures.items) |_| try capture_tys.append(self.allocator, str_ty);
             const demand_scope = try fn_ctx.enterCallableBodyDemandScope(runtime_arg_tys, capture_tys.items);
             defer demand_scope.leave();
@@ -17496,6 +17502,7 @@ const Builder = struct {
             .fn_id = draftFinalFn(runtime_fn_id),
             .args = lambda_args,
             .body = body,
+            .stored_captures = try fn_ctx.codecStoredCaptures(encoding_local, arg_tys.get(0), &precomputed_plan, str_ty),
         } } });
         var capture_index = precomputed_plan.captures.items.len;
         while (capture_index > 0) {
@@ -17503,9 +17510,7 @@ const Builder = struct {
             const capture = precomputed_plan.captures.items[capture_index];
             codec_expr = try fn_ctx.wrapLet(capture.local, str_ty, capture.value, codec_expr, ty);
         }
-        if (encoding_let) |let_| {
-            codec_expr = try fn_ctx.wrapLet(let_.local, arg_tys.get(0), let_.value, codec_expr, ty);
-        }
+        codec_expr = try fn_ctx.wrapLet(encoding_local, arg_tys.get(0), encoding_value, codec_expr, ty);
         codec_expr = try self.wrapConstSourceCaptureLets(&fn_ctx, source_captures.items, codec_expr, ty);
 
         const draft_end = draft.end(self);
@@ -17876,6 +17881,7 @@ const DraftLambdaExpr = struct {
     fn_id: DraftFnTarget,
     args: DraftSpan(DraftTypedLocal),
     body: DraftExprId,
+    stored_captures: DraftSpan(DraftTypedLocal) = .{ .start = 0, .len = 0 },
 };
 
 const DraftCallValue = struct {
@@ -19138,7 +19144,7 @@ const DraftDeferredStoredCodecRestore = struct {
     encoding_node: NodeId,
     shape_node: NodeId,
     encoding_expr: DraftExprId,
-    encoding_let: ?DraftStoredCodecEncodingLet,
+    encoding_let: DraftStoredCodecEncodingLet,
     source_captures: []const Builder.RestoredConstSourceCapture,
     active_const_binding: ?ActiveConstBindingId,
     evidence: EvidenceChain,
@@ -22199,6 +22205,7 @@ const BodyDraftStore = struct {
                 .fn_id = ids.fnTarget(lambda.fn_id),
                 .args = ids.typedLocalSpan(lambda.args),
                 .body = ids.expr(lambda.body),
+                .stored_captures = ids.typedLocalSpan(lambda.stored_captures),
             } },
             .def_ref => |def| .{ .def_ref = ids.defTarget(def) },
             .fn_def => |fn_def| .{ .fn_def = .{
@@ -41680,8 +41687,8 @@ const BodyContext = struct {
 
         for (fields, 0..) |_, index| {
             const capture_id = self.parserFieldCaptureIdForRecordField(fields, index, base_capture_id);
-            const node = constGeneratedCaptureNode(fn_value, capture_id) orelse
-                Common.invariant("stored " ++ codec_name ++ " runtime function was missing a renamed field capture");
+            const node = (constGeneratedCapture(fn_value, capture_id) orelse
+                Common.invariant("stored " ++ codec_name ++ " runtime function was missing a renamed field capture")).value;
             locals[index] = try self.addLocal(self.builder.symbols.fresh(), str_ty);
             self.setLocalCaptureId(locals[index], capture_id);
             values[index] = try runConstRestore(self, store_view, fn_view, node, str_ty, null);
@@ -41746,6 +41753,22 @@ const BodyContext = struct {
         inserted = true;
 
         try self.appendParserPrecomputedCaptures(plan, fields, locals, values);
+    }
+
+    /// The locals a stored generated codec holds: its encoding and every
+    /// renamed field name, which its restore reads by generated capture id.
+    fn codecStoredCaptures(
+        self: *BodyContext,
+        encoding_local: DraftLocalId,
+        encoding_ty: Type.TypeId,
+        plan: *const ParserPrecomputedPlan,
+        str_ty: Type.TypeId,
+    ) Allocator.Error!DraftSpan(DraftTypedLocal) {
+        const locals = try self.allocator.alloc(BodyTypedLocal, plan.captures.items.len + 1);
+        defer self.allocator.free(locals);
+        locals[0] = .{ .local = encoding_local, .ty = encoding_ty };
+        for (locals[1..], plan.captures.items) |*local, capture| local.* = .{ .local = capture.local, .ty = str_ty };
+        return try self.addTypedLocalSpan(locals);
     }
 
     fn parserPrecomputedRecordShapesForTagUnion(
@@ -49389,7 +49412,7 @@ const BodyContext = struct {
         const body = blk: {
             var capture_tys = std.ArrayList(Type.TypeId).empty;
             defer capture_tys.deinit(self.allocator);
-            if (boundary.encoding_let != null) try capture_tys.append(self.allocator, encoding_ty);
+            try capture_tys.append(self.allocator, encoding_ty);
             for (precomputed_plan.captures.items) |_| try capture_tys.append(self.allocator, str_ty);
             const arg_tys: []const Type.TypeId = switch (kind) {
                 .parser => &.{state_ty},
@@ -49460,6 +49483,7 @@ const BodyContext = struct {
             .fn_id = .{ .draft = runtime_fn_id },
             .args = lambda_args,
             .body = body,
+            .stored_captures = try self.codecStoredCaptures(boundary.encoding_let.local, encoding_ty, &precomputed_plan, str_ty),
         } });
         var capture_index = precomputed_plan.captures.items.len;
         while (capture_index > 0) {
@@ -49473,15 +49497,13 @@ const BodyContext = struct {
                 request_cell,
             );
         }
-        if (boundary.encoding_let) |let_| {
-            codec_expr = try self.wrapLetAtTypeCell(
-                let_.local,
-                encoding_cell,
-                let_.value,
-                codec_expr,
-                request_cell,
-            );
-        }
+        codec_expr = try self.wrapLetAtTypeCell(
+            boundary.encoding_let.local,
+            encoding_cell,
+            boundary.encoding_let.value,
+            codec_expr,
+            request_cell,
+        );
         return try self.builder.wrapConstSourceCaptureLetsAtTypeCell(
             self,
             boundary.source_captures,
@@ -49551,7 +49573,11 @@ const BodyContext = struct {
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
         try fn_ctx.restoreGeneratedRuntimeEvidence(store_view, fn_value, plan);
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
-        const plan_args = callable_plan.operands;
+        const stored_encoding = constGeneratedCapture(fn_value, encoding_capture_id) orelse
+            Common.invariant("stored " ++ codec_name ++ " runtime function was missing its encoding capture");
+        // The stored capture is the constructor's operand: the operand's own
+        // expression can read binders of the enclosing scope, which a restore
+        // does not have.
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
             callable_plan,
             &fn_ctx,
@@ -49560,7 +49586,7 @@ const BodyContext = struct {
                 .sealed => |ty| try fn_ctx.activeNodeFromType(ty),
                 .node => |node| node,
             },
-            .expression_lowering,
+            .template_relation_replay,
         );
         const callable = try self.graph.functionNodes(callable_node);
         if (callable.args.len != 1) Common.invariant("stored " ++ codec_name ++ " constructor had an unexpected arity");
@@ -49590,6 +49616,11 @@ const BodyContext = struct {
         };
         const encoding_node = callable.args[0];
         const encoding_cell = DraftTypeCell.fromGraphNode(encoding_node);
+        try relateRequestComponent(
+            self.graph,
+            encoding_node,
+            try self.graph.importMono(try fn_ctx.lowerConstCaptureType(store_view, stored_encoding.ty)),
+        );
 
         const shape_node = try fn_ctx.instNode(plan.dispatcher_ty);
         try fn_ctx.activateCodecContractForPlan(plan, callable_node, shape_node);
@@ -49598,23 +49629,20 @@ const BodyContext = struct {
             .pending_deferred,
         );
 
-        var encoding_let: ?DraftStoredCodecEncodingLet = null;
-        const encoding_expr = if (constGeneratedCaptureNode(fn_value, encoding_capture_id)) |node| blk: {
-            const local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), encoding_cell, null);
-            fn_ctx.setLocalCaptureId(local, encoding_capture_id);
-            const let_value = if (static_data_const_locator) |const_locator|
-                try fn_ctx.restoreConstNodeAtNodeWithStaticRoot(
-                    store_view,
-                    fn_view,
-                    node,
-                    encoding_node,
-                    const_locator,
-                )
-            else
-                try fn_ctx.restoreConstNodeAtNode(store_view, fn_view, node, encoding_node);
-            encoding_let = .{ .local = local, .value = let_value };
-            break :blk try fn_ctx.addExprWithTypeCell(encoding_cell, .{ .local = local });
-        } else try fn_ctx.lowerDispatchOperandAtNode(plan_args[0], encoding_node);
+        const encoding_local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), encoding_cell, null);
+        fn_ctx.setLocalCaptureId(encoding_local, encoding_capture_id);
+        const encoding_value = if (static_data_const_locator) |const_locator|
+            try fn_ctx.restoreConstNodeAtNodeWithStaticRoot(
+                store_view,
+                fn_view,
+                stored_encoding.value,
+                encoding_node,
+                const_locator,
+            )
+        else
+            try fn_ctx.restoreConstNodeAtNode(store_view, fn_view, stored_encoding.value, encoding_node);
+        const encoding_let: DraftStoredCodecEncodingLet = .{ .local = encoding_local, .value = encoding_value };
+        const encoding_expr = try fn_ctx.addExprWithTypeCell(encoding_cell, .{ .local = encoding_local });
 
         // Mirror of `deferStructuralSerializationAtNode`: the reservation
         // carries the encoding operand's impossibility proof from deferral
@@ -56812,6 +56840,7 @@ const BodyContext = struct {
                 .{ .local = state_local, .ty = runtime_arg_tys.get(0) },
             }),
             .body = parsed,
+            .stored_captures = try self.codecStoredCaptures(encoding_local, arg_tys.get(0), &precomputed_plan, str_ty),
         } } });
         var capture_index = precomputed_plan.captures.items.len;
         while (capture_index > 0) {
@@ -56921,6 +56950,7 @@ const BodyContext = struct {
                 .{ .local = state_local, .ty = runtime_arg_tys[1] },
             }),
             .body = encoded,
+            .stored_captures = try self.codecStoredCaptures(encoding_local, arg_tys.get(0), &precomputed_plan, str_ty),
         } } });
         var capture_index = precomputed_plan.captures.items.len;
         while (capture_index > 0) {
@@ -70477,10 +70507,10 @@ fn constCaptureBinder(id: check.ConstStore.CaptureId) checked.PatternBinderId {
     return id.binder();
 }
 
-fn constGeneratedCaptureNode(fn_value: check.ConstStore.ConstFn, capture_id: u32) ?checked.ConstNodeId {
+fn constGeneratedCapture(fn_value: check.ConstStore.ConstFn, capture_id: u32) ?check.ConstStore.ConstCapture {
     const needle = checked.CaptureId.generatedCheck(capture_id);
     for (fn_value.captures) |capture| {
-        if (capture.id == needle) return capture.value;
+        if (capture.id == needle) return capture;
     }
     return null;
 }
