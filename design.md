@@ -14987,6 +14987,13 @@ adds four bytes per selected field and four bytes per reference-containing
 record/tuple layout, and adds nothing to the descriptor header or to
 reference-free field tables.
 
+Record and tuple reference-count traversal follows its next selected child
+directly and queues only the remaining siblings. Retain keeps reverse physical
+field order; release keeps forward physical field order. A single selected
+child needs no push/pop pair. Pending list and box releases stay below their
+children and the children of nested records on the work stack. This uses the
+existing slot table and adds no descriptor metadata or compiler analysis.
+
 Descriptors come from two sources and nowhere else:
 
 - *Static descriptors.* The lowerer interns a descriptor for every closed
@@ -15102,6 +15109,15 @@ slot at offset zero, including a recursive box's pointer slot, so construction
 clears only the bytes after that slot and then writes the discriminant. Unused
 variant space, alignment gaps, and tail padding remain initialized. Multiple
 payloads retain their operand and allocation order and the full initial clear.
+
+Record construction writes fields in semantic operand order, including any
+recursive-box allocations. If their slot sizes fill the record, no clearing
+is needed. Otherwise it clears only the gaps between initialized slots in
+physical order and the remaining suffix, including omitted fields and explicit
+padding. Record updates already visit fields in physical order and clear gaps
+during that traversal. Neither operation clears bytes it then fills from a
+field value, and both preserve initialized padding without additional layout
+metadata.
 
 The LIR statements a generic body uses on dynamic values all name the
 descriptor explicitly as an operand:

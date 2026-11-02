@@ -425,6 +425,8 @@ test "reference counting follows deep wrappers and preserves pending container r
         wrapped = compose.tagUnion(&env.cache, ops, &.{
             .{ .name = &name_ok, .payload_count = 1, .payloads = &.{wrapped} },
         });
+        wrapped = compose.tuple(&env.cache, ops, &.{wrapped});
+        wrapped = recordAB(&env, compose.zstDesc(), wrapped);
     }
     const record = recordAB(&env, wrapped, wrapped);
     const boxed = compose.box(&env.cache, ops, record);
@@ -448,6 +450,56 @@ test "reference counting follows deep wrappers and preserves pending container r
     // List and box cleanup remain pending while their wrapped children run.
     walk.decref(list_desc, @ptrCast(&list), ops);
     try testing.expectEqual(baseline, env.allocations());
+}
+
+test "record traversal preserves final drop order and pending container releases" {
+    const Drops = struct {
+        const Self = @This();
+        ids: [40]usize = undefined,
+        len: usize = 0,
+
+        const Capture = struct { drops: *Self, id: usize };
+
+        fn onDrop(capture: ?[*]u8, _: *RocOps) callconv(.c) void {
+            const saved: *const Capture = @ptrCast(@alignCast(capture.?));
+            saved.drops.ids[saved.drops.len] = saved.id;
+            saved.drops.len += 1;
+        }
+    };
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    const leaf = recordAB(&env, compose.scalarDesc(.u64), compose.erasedCallableDesc());
+    const fields: [40]*const TypeDesc = @splat(leaf);
+    // One child, multiple siblings, and enough siblings to grow the work stack.
+    for ([_]usize{ 1, 3, 40 }) |count| {
+        const tuple = compose.tuple(&env.cache, ops, fields[0..count]);
+        const boxed = compose.box(&env.cache, ops, tuple);
+        const list_desc = compose.list(&env.cache, ops, boxed);
+        const baseline = env.allocations();
+        var drops: Drops = .{};
+        const payload = utils.allocateWithRefcount(tuple.size, tuple.alignment, true, ops);
+        @memset(payload[0..tuple.size], 0);
+        for (tuple.fields(), 0..) |field, index| {
+            const callable = erased_callable.allocate(&Overrides.alwaysEqual, &Drops.onDrop, @sizeOf(Drops.Capture), ops);
+            const capture: *Drops.Capture = @ptrCast(@alignCast(erased_callable.capturePtr(callable)));
+            capture.* = .{ .drops = &drops, .id = index };
+            const slot = payload + field.offset + fieldOffset(leaf, 1);
+            @as(*[*]u8, @ptrCast(@alignCast(slot))).* = callable;
+        }
+        walk.incref(tuple, payload, 2, ops);
+        for (0..2) |_| {
+            walk.decref(tuple, payload, ops);
+            try testing.expectEqual(@as(usize, 0), drops.len);
+            try testing.expectEqual(baseline + count + 1, env.allocations());
+        }
+        var list = RocList.list_allocate(boxed.alignment, 1, boxed.size, true, ops);
+        @as(*[*]u8, @ptrCast(@alignCast(list.bytes.?))).* = payload;
+        walk.decref(list_desc, @ptrCast(&list), ops);
+        try testing.expectEqual(count, drops.len);
+        for (drops.ids[0..count], 0..) |id, index| try testing.expectEqual(index, id);
+        try testing.expectEqual(baseline, env.allocations());
+    }
 }
 
 test "equality compares structure and honors is_eq overrides" {
@@ -860,4 +912,94 @@ test "active tag payloads preserve physical ordering, zero size, and recursive b
     try testing.expectEqual(large, loaded_large.*);
     walk.decref(desc, value.ptr(), ops);
     try testing.expectEqual(baseline, env.allocations());
+}
+
+test "record construction initializes gaps and omitted fields without touching surrounding bytes" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    const byte = compose.scalarDesc(.u8);
+    const wide = compose.scalarDesc(.u64);
+    const zero = compose.zstDesc();
+    const declared = compose.declaredRecord(&env.cache, ops, &.{
+        .{ .name = null, .desc = byte, .is_padding = 1 },
+        .{ .name = &name_c, .desc = byte, .is_padding = 0 },
+        .{ .name = &name_b, .desc = wide, .is_padding = 0 },
+        .{ .name = null, .desc = byte, .is_padding = 1 },
+        .{ .name = &name_a, .desc = zero, .is_padding = 0 },
+        .{ .name = null, .desc = byte, .is_padding = 1 },
+    });
+    const descriptors = [_]*const TypeDesc{
+        compose.record(&env.cache, ops, &.{}),
+        compose.tuple(&env.cache, ops, &.{ zero, zero }),
+        compose.tuple(&env.cache, ops, &.{ wide, wide }),
+        compose.tuple(&env.cache, ops, &.{ byte, wide, byte }),
+        recordAB(&env, byte, wide),
+        declared,
+        compose.nominal(&env.cache, ops, declared, &name_point, null, false),
+    };
+    var sources = [_]Slot{
+        .{ .bytes = @splat(0x31) },
+        .{ .bytes = @splat(0x62) },
+        .{ .bytes = @splat(0x93) },
+    };
+    const values = [_][*]const u8{ sources[0].ptr(), sources[1].ptr(), sources[2].ptr() };
+    for (descriptors) |desc| {
+        const record = compiled.backing(desc);
+        var named_count: usize = 0;
+        for (record.fields()) |field| named_count += @intFromBool(field.is_padding == 0);
+        // The constructor also supports a prefix of semantic fields. All
+        // absent fields, including explicit padding, must remain zero.
+        for (0..named_count + 1) |count| {
+            var actual: Slot = .{ .bytes = @splat(0xa5) };
+            var expected: Slot = .{ .bytes = @splat(0xa5) };
+            @memset(expected.bytes[0..desc.size], 0);
+            for (values[0..count], 0..) |src, index| {
+                const field = record.fieldBySemanticIndex(@intCast(index));
+                @memcpy(expected.bytes[field.offset..][0..field.desc.size], src[0..field.desc.size]);
+            }
+            compiled.buildRecord(desc, actual.ptr(), values[0..count], ops);
+            try testing.expectEqualSlices(u8, &expected.bytes, &actual.bytes);
+        }
+    }
+}
+
+test "record construction and updates preserve boxed fields and initialize all padding" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    const byte = compose.scalarDesc(.u8);
+    const boxed = compose.recursiveBox(&env.cache, ops, compose.strDesc());
+    const record = compose.declaredRecord(&env.cache, ops, &.{
+        .{ .name = null, .desc = byte, .is_padding = 1 },
+        .{ .name = &name_b, .desc = boxed, .is_padding = 0 },
+        .{ .name = &name_a, .desc = byte, .is_padding = 0 },
+        .{ .name = null, .desc = byte, .is_padding = 1 },
+    });
+    const desc = compose.nominal(&env.cache, ops, record, &name_point, null, false);
+    const allocations = env.allocations();
+    const text = "a heap string moved into a recursive record field";
+    const source = bigStr(text, ops);
+    const initial: u8 = 42;
+    const changed: u8 = 91;
+    var base: Slot = .{ .bytes = @splat(0xa5) };
+    compiled.buildRecord(desc, base.ptr(), &.{ @ptrCast(&initial), @ptrCast(&source) }, ops);
+    var actual: Slot = .{ .bytes = @splat(0xb6) };
+    // Updating another field must share the existing box before releasing
+    // the old record; changing the boxed field must move the new string.
+    compiled.updateRecord(desc, base.ptr(), desc, actual.ptr(), &.{&name_a}, &.{@ptrCast(&changed)}, ops);
+    const replacement = bigStr("a replacement heap string in the recursive record field", ops);
+    var replaced: Slot = .{ .bytes = @splat(0xc7) };
+    compiled.updateRecord(desc, actual.ptr(), desc, replaced.ptr(), &.{&name_b}, &.{@ptrCast(&replacement)}, ops);
+    const field_a = record.fieldBySemanticIndex(0);
+    const field_b = record.fieldBySemanticIndex(1);
+    var expected: Slot = .{ .bytes = @splat(0xc7) };
+    @memset(expected.bytes[0..desc.size], 0);
+    expected.bytes[field_a.offset] = changed;
+    @memcpy(expected.bytes[field_b.offset..][0..boxed.size], replaced.bytes[field_b.offset..][0..boxed.size]);
+    try testing.expectEqualSlices(u8, &expected.bytes, &replaced.bytes);
+    const stored: *const RocStr = @ptrCast(@alignCast(compiled.componentAddr(boxed, replaced.ptr() + field_b.offset)));
+    try testing.expectEqualStrings(replacement.asSlice(), stored.asSlice());
+    walk.decref(desc, replaced.ptr(), ops);
+    try testing.expectEqual(allocations, env.allocations());
 }
