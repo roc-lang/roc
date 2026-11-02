@@ -23,17 +23,6 @@ pub const DataRelocationKind = enum {
     pageoff12,
 };
 
-/// A number the Boxy runtime reads its sidecar tables by, loaded into a
-/// register by a fixed-width instruction sequence at the relocation's offset.
-/// An arranged image renumbers what its code uses (design.md "Deterministic Dev
-/// Images") and patches each load, so these are never linker relocations.
-pub const RuntimeNumber = union(enum) {
-    /// A layout index.
-    layout: u32,
-    /// The start of a run of the program's erased argument layouts.
-    erased_arg_layouts: struct { start: u32, len: u32 },
-};
-
 /// A named relocation at a linker or process boundary. Machine-code producers
 /// use IndexedRelocation and carry its symbol-name column alongside the code.
 pub const Relocation = union(enum) {
@@ -91,9 +80,6 @@ pub const IndexedRelocation = union(enum) {
         kind: DataRelocationKind = .abs64,
     },
     local_data: @FieldType(Relocation, "local_data"),
-    /// A runtime table number's patchable load; `offset` is the encoding's
-    /// patch site (`CodeGen.patchRuntimeNumber`).
-    runtime_number: struct { offset: u64, ref: RuntimeNumber },
     /// A relocation superseded by a stub that carries its own relocations.
     /// Consumers skip it; it keeps its slot so recorded relocation indices
     /// stay valid.
@@ -101,14 +87,14 @@ pub const IndexedRelocation = union(enum) {
 
     pub fn getOffset(self: IndexedRelocation) u64 {
         return switch (self) {
-            inline .linked_function, .linked_data, .local_data, .runtime_number => |r| r.offset,
+            inline .linked_function, .linked_data, .local_data => |r| r.offset,
             .retired => 0,
         };
     }
 
     pub fn adjustOffset(self: *IndexedRelocation, delta: u64) void {
         switch (self.*) {
-            inline .linked_function, .linked_data, .local_data, .runtime_number => |*r| r.offset += delta,
+            inline .linked_function, .linked_data, .local_data => |*r| r.offset += delta,
             .retired => {},
         }
     }

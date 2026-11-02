@@ -79,10 +79,11 @@ fn countDecodeShape(store: *const lir.LirStore, layouts: *const layout.Store) ha
 }
 
 test "LIR pass workers deterministically prove runtime range guards" {
-    // Keep checked arithmetic in main! as well as decode so release builds
-    // admit two procedures instead of running a single range task serially.
+    // Keep checked arithmetic in main! as well as decode, and call decode
+    // twice so it stays a procedure of its own, so release builds admit two
+    // procedures instead of running a single range task serially.
     try harness.expectLirPassParallelismDeterministicLir(
-        .{ .app_body = fastloopAppWithResult("16", "n + args.len()") },
+        .{ .app_body = fastloopAppWithResult("16", "n + decode(Str.to_utf8(Str.join_with(args, \";\")), args.len())") },
         .{ .inline_mode = .wrappers, .prove_ranges = true },
         &.{.range},
     );
@@ -2033,9 +2034,10 @@ test "a remainder is below its divisor" {
 test "a remainder bounds its divisor only where the remainder ran" {
     // Mapping an empty list never runs the closure's remainder, so the
     // divisor can still be zero after the map: `n == 0` stays beside the
-    // map loop's own exit test.
+    // loops' own exit tests, which the control without it counts alone.
     const skipped = try ruleCounts("calc : List(U64) -> Bool\ncalc = |xs| {\n    n = xs.len()\n    _ys = xs.map(|i| i % n)\n    n == 0\n}\n", "calc(List.map(_args, Str.count_utf8_bytes))", "num_rem_by");
-    try std.testing.expectEqual(@as(usize, 2), skipped.is_eq);
+    const exits_only = try ruleCounts("calc : List(U64) -> Bool\ncalc = |xs| {\n    n = xs.len()\n    _ys = xs.map(|i| i % n)\n    Bool.False\n}\n", "calc(List.map(_args, Str.count_utf8_bytes))", "num_rem_by");
+    try std.testing.expectEqual(exits_only.is_eq + 1, skipped.is_eq);
     // Every path to the test runs the remainder, so its divisor is nonzero
     // there even past a merge.
     const dominated = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| {\n    r = a % b\n    c = if a > 3 { r } else { a }\n    if b == 0 { 1 } else { c }\n}\n", two_bytes, "num_rem_by");

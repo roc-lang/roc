@@ -92,9 +92,6 @@ fn expectRecursiveCallSlotsHaveLifetimes(
     var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(
         std.testing.allocator,
         &lowered.lir_result.store,
-        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
-        lowered.lir_result.boxy_erased_arg_desc_params.items,
-        lowered.lir_result.boxy_worker_procs.items,
         builtin.target,
     );
     defer codegen.deinit();

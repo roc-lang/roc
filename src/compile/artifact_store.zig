@@ -5,6 +5,7 @@
 const std = @import("std");
 const base = @import("base");
 pub const catalog = @import("cache_index.zig");
+const threading = @import("threading.zig");
 const Io = std.Io;
 const Dir = Io.Dir;
 const Allocator = std.mem.Allocator;
@@ -39,6 +40,8 @@ pub const Family = enum(u8) {
     package_discovery,
     program_output,
     scratch,
+    /// A module's Boxy object (`compile.boxy_object_cache`).
+    boxy_object,
 
     pub fn age(self: Family) i64 {
         return switch (self) {
@@ -56,6 +59,7 @@ pub const Family = enum(u8) {
             .package_pack,
             .optimized_pack,
             .package_discovery,
+            .boxy_object,
             => 30 * day_ns,
         };
     }
@@ -63,7 +67,7 @@ pub const Family = enum(u8) {
     pub fn isPack(self: Family) bool {
         return switch (self) {
             .local_pack, .package_pack, .optimized_pack, .local_discovery, .package_discovery, .program_output => true,
-            .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .scratch => false,
+            .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .scratch, .boxy_object => false,
         };
     }
 
@@ -235,6 +239,11 @@ pub const Store = struct {
         var counters = catalog.Counters{};
         var shard = try Shard.openWith(self, shardFor(key), true, &counters, required);
         defer shard.close();
+        return self.reserveInShard(&shard, identity, key, size, timestamp);
+    }
+
+    /// Reserve a slot in `shard`, which the caller holds open and locked.
+    fn reserveInShard(self: *const Store, shard: *Shard, identity: Identity, key: catalog.Key, size: u64, timestamp: i64) Error!Staging {
         var tx = shard.index.transaction();
         if (tx.header.user[0] == std.math.maxInt(u64)) return error.CapacityExceeded;
         tx.header.user[0] += 1;
@@ -314,7 +323,7 @@ pub const Store = struct {
         return self.acquireKeyObserved(key, timestamp, null);
     }
 
-    fn acquireKeyObserved(self: *const Store, key: catalog.Key, timestamp: i64, deferred: ?*?RetentionBatch.Observation) Error!?Artifact {
+    fn acquireKeyObserved(self: *const Store, key: catalog.Key, timestamp: i64, deferred: ?*?Session.Observation) Error!?Artifact {
         var counters = catalog.Counters{};
         var shard = Shard.openRequired(self, shardFor(key), false, &counters) catch |err| switch (err) {
             error.Missing, error.Busy => return null,
@@ -324,7 +333,7 @@ pub const Store = struct {
         return self.acquireFromShard(key, timestamp, deferred, &shard, null);
     }
 
-    fn acquireFromShard(self: *const Store, key: catalog.Key, timestamp: i64, deferred: ?*?RetentionBatch.Observation, shard: *Shard, containers: ?*ContainerReaders) Error!?Artifact {
+    fn acquireFromShard(self: *const Store, key: catalog.Key, timestamp: i64, deferred: ?*?Session.Observation, shard: *Shard, containers: ?*ContainerReaders) Error!?Artifact {
         var tx = shard.index.transaction();
         const found = (try tx.find(.artifacts, key)) orelse return null;
         var metadata = try currentMetadata(&tx, key, found.value);
@@ -456,44 +465,61 @@ pub const Store = struct {
     }
 };
 
-/// Bounded retention observations for a reader retaining generation leases.
-/// Callers flush before releasing their leases. A failed acquisition may close
-/// its lease early; exact generation validation discards an obsolete observation.
-/// The batch owns its store path and may outlive the Store that created it.
-pub const RetentionBatch = struct {
+/// One process's handle on the store for the length of a compilation: each
+/// shard it touches stays open, with its catalog mapped and its read cache
+/// kept, and the shard's kernel lock is taken only around each operation.
+/// A hit's retention observation is recorded here and written back in one
+/// transaction per shard when the session flushes, instead of one write per
+/// read. Callers flush before releasing their leases; a failed acquisition
+/// may close its lease early, and exact generation validation discards an
+/// obsolete observation. Operations on one session may run from several
+/// threads at once: a mutex per shard serializes them, and the kernel lock
+/// still excludes other processes. The session owns its store path and may
+/// outlive the Store that created it.
+pub const Session = struct {
     const Observation = struct { key: catalog.Key, slot: u64, generation: u64, timestamp: i64 };
+
     store: Store,
     pending: [shard_count][catalog.max_changes]Observation = undefined,
     counts: [shard_count]u8 = @splat(0),
     shards: [shard_count]?Shard = @splat(null),
     caches: [shard_count]catalog.ReadCache = @splat(.{}),
-    counters: catalog.Counters = .{},
-    containers: ContainerReaders = .{},
+    counters: [shard_count]catalog.Counters = @splat(.{}),
+    mutexes: [shard_count]threading.Mutex = @splat(.init),
+    containers: [shard_count]ContainerReaders = @splat(.{}),
 
-    pub fn init(store: *const Store) Allocator.Error!RetentionBatch {
+    pub fn init(store: *const Store) Allocator.Error!Session {
         return .{ .store = .{ .allocator = store.allocator, .io = store.io, .root = try store.allocator.dupe(u8, store.root) } };
     }
 
-    pub fn deinit(self: *RetentionBatch) void {
+    pub fn deinit(self: *Session) void {
         // Retention publication is optional cache I/O. A failed write never
         // turns validated code into a failed compilation; leases remain held
         // until this flush attempt has finished.
         self.flush() catch {};
         for (&self.shards) |*entry| if (entry.*) |*shard| shard.close();
-        self.containers.deinit(self.store.allocator);
+        for (&self.containers) |*readers| readers.deinit(self.store.allocator);
         self.store.deinit();
     }
 
-    pub fn acquireKey(self: *RetentionBatch, key: catalog.Key, timestamp: i64) Error!?Artifact {
+    pub fn now(self: *const Session) i64 {
+        return self.store.now();
+    }
+
+    pub fn acquire(self: *Session, identity: Identity, timestamp: i64) Error!?Artifact {
+        return self.acquireKey(identity.indexedKey(), timestamp);
+    }
+
+    pub fn acquireKey(self: *Session, key: catalog.Key, timestamp: i64) Error!?Artifact {
         const number = Store.shardFor(key);
-        if (self.counts[number] == catalog.max_changes) try self.flushShard(number);
-        var observation: ?Observation = null;
-        const shard = self.acquireShard(number) catch |err| switch (err) {
+        const shard = self.acquireShard(number, false) catch |err| switch (err) {
             error.Missing => return null,
             else => return err,
         };
-        defer shard.lock.unlock(self.store.io);
-        const artifact = try self.store.acquireFromShard(key, timestamp, &observation, shard, &self.containers);
+        defer self.releaseShard(number);
+        if (self.counts[number] == catalog.max_changes) try self.flushHeldShard(number);
+        var observation: ?Observation = null;
+        const artifact = try self.store.acquireFromShard(key, timestamp, &observation, shard, &self.containers[number]);
         if (observation) |value| {
             self.pending[number][self.counts[number]] = value;
             self.counts[number] += 1;
@@ -504,7 +530,7 @@ pub const RetentionBatch = struct {
     /// Acquire a producer-supplied group under bounded shard ownership. Each
     /// result still owns its individual generation lease and open payload.
     /// The output has the same order as keys; absence remains per-record.
-    pub fn acquireKeys(self: *RetentionBatch, allocator: Allocator, keys: []const catalog.Key, timestamp: i64) Error![]?Artifact {
+    pub fn acquireKeys(self: *Session, allocator: Allocator, keys: []const catalog.Key, timestamp: i64) Error![]?Artifact {
         const result = try allocator.alloc(?Artifact, keys.len);
         errdefer allocator.free(result);
         @memset(result, null);
@@ -526,19 +552,19 @@ pub const RetentionBatch = struct {
             var next = starts[number];
             const end = starts[raw_number + 1];
             while (next < end) {
-                if (self.counts[number] == catalog.max_changes) try self.flushShard(number);
-                const shard = self.acquireShard(number) catch |err| switch (err) {
+                const shard = self.acquireShard(number, false) catch |err| switch (err) {
                     error.Missing => break,
                     else => return err,
                 };
-                defer shard.lock.unlock(self.store.io);
+                defer self.releaseShard(number);
+                if (self.counts[number] == catalog.max_changes) try self.flushHeldShard(number);
                 // Reuse the retention transaction's existing bound, also when
                 // every item is absent or already has a current timestamp.
                 const limit = next + @min(end - next, catalog.max_changes - self.counts[number]);
                 while (next < limit) : (next += 1) {
                     const index = order[next];
                     var observation: ?Observation = null;
-                    result[index] = try self.store.acquireFromShard(keys[index], timestamp, &observation, shard, &self.containers);
+                    result[index] = try self.store.acquireFromShard(keys[index], timestamp, &observation, shard, &self.containers[number]);
                     if (observation) |value| {
                         self.pending[number][self.counts[number]] = value;
                         self.counts[number] += 1;
@@ -549,42 +575,102 @@ pub const RetentionBatch = struct {
         return result;
     }
 
-    fn acquireShard(self: *RetentionBatch, number: u4) Error!*Shard {
+    pub fn read(self: *Session, allocator: Allocator, identity: Identity, timestamp: i64) Error!?[]u8 {
+        var artifact = (try self.acquire(identity, timestamp)) orelse return null;
+        defer artifact.deinit();
+        return try artifact.read(allocator);
+    }
+
+    /// Reserve a slot through the session's open shard. The staging publishes
+    /// through the session as well.
+    pub fn reserve(self: *Session, identity: Identity, size: u64, timestamp: i64) Error!Staging {
+        const number = Store.shardFor(identity.indexedKey());
+        const shard = try self.acquireShard(number, true);
+        defer self.releaseShard(number);
+        var staging = try self.store.reserveInShard(shard, identity, identity.indexedKey(), size, timestamp);
+        staging.session = self;
+        return staging;
+    }
+
+    pub fn write(self: *Session, identity: Identity, bytes: []const u8, timestamp: i64) Error!void {
+        var staging = try self.reserve(identity, bytes.len, timestamp);
+        defer staging.deinit();
+        const file = Dir.cwd().createFile(self.store.io, staging.path, .{ .exclusive = true }) catch return error.IoFailure;
+        {
+            defer file.close(self.store.io);
+            file.writeStreamingAll(self.store.io, bytes) catch return error.IoFailure;
+        }
+        try staging.publish();
+    }
+
+    fn publishStaging(self: *Session, staging: *Staging) Error!void {
+        const number = Store.shardFor(staging.key);
+        const shard = try self.acquireShard(number, false);
+        defer self.releaseShard(number);
+        return staging.publishInShard(shard);
+    }
+
+    pub fn groupKeys(self: *Session, allocator: Allocator, identity: Identity) Error![]catalog.Key {
+        const group_key = identity.indexedKey();
+        const number = Store.shardFor(group_key);
+        _ = self.acquireShard(number, false) catch |err| switch (err) {
+            error.Missing => return allocator.alloc(catalog.Key, 0),
+            else => return err,
+        };
+        defer self.releaseShard(number);
+        return Store.groupKeysInShard(allocator, group_key, &self.shards[number].?);
+    }
+
+    /// Hold shard `number`: its mutex, then its kernel lock, with its catalog
+    /// refreshed against what other processes committed meanwhile. The
+    /// caller releases it with `releaseShard`.
+    fn acquireShard(self: *Session, number: u4, create: bool) Error!*Shard {
+        const io = self.store.io;
+        self.mutexes[number].lockUncancelable(io);
+        errdefer self.mutexes[number].unlock(io);
         if (self.shards[number]) |*shard| {
-            shard.lock.lock(self.store.io, .exclusive) catch return error.IoFailure;
-            errdefer shard.lock.unlock(self.store.io);
+            shard.lock.lock(io, .exclusive) catch return error.IoFailure;
+            errdefer shard.lock.unlock(io);
             try shard.index.refresh();
             return shard;
         }
-        var shard = try Shard.openRequired(&self.store, number, false, &self.counters);
+        var shard = try Shard.openWith(&self.store, number, create, &self.counters[number], true);
         shard.index.read_cache = &self.caches[number];
         self.shards[number] = shard;
         return &self.shards[number].?;
     }
 
-    pub fn groupKeys(self: *RetentionBatch, allocator: Allocator, identity: Identity) Error![]catalog.Key {
-        const group_key = identity.indexedKey();
-        const shard = self.acquireShard(Store.shardFor(group_key)) catch |err| switch (err) {
-            error.Missing => return allocator.alloc(catalog.Key, 0),
-            else => return err,
-        };
-        defer shard.lock.unlock(self.store.io);
-        return Store.groupKeysInShard(allocator, group_key, shard);
+    fn releaseShard(self: *Session, number: u4) void {
+        const io = self.store.io;
+        self.shards[number].?.lock.unlock(io);
+        self.mutexes[number].unlock(io);
     }
 
-    pub fn containerCount(self: *const RetentionBatch) usize {
-        return self.containers.entries.count();
+    pub fn containerCount(self: *Session) usize {
+        var count: usize = 0;
+        for (0..shard_count) |number| {
+            self.mutexes[number].lockUncancelable(self.store.io);
+            count += self.containers[number].entries.count();
+            self.mutexes[number].unlock(self.store.io);
+        }
+        return count;
     }
 
-    pub fn flush(self: *RetentionBatch) Error!void {
-        for (0..shard_count) |number| try self.flushShard(@intCast(number));
+    pub fn flush(self: *Session) Error!void {
+        for (0..shard_count) |raw_number| {
+            const number: u4 = @intCast(raw_number);
+            if (self.counts[number] == 0) continue;
+            _ = try self.acquireShard(number, false);
+            defer self.releaseShard(number);
+            try self.flushHeldShard(number);
+        }
     }
 
-    fn flushShard(self: *RetentionBatch, number: u4) Error!void {
+    /// Write shard `number`'s pending observations; the caller holds the shard.
+    fn flushHeldShard(self: *Session, number: u4) Error!void {
         const count = self.counts[number];
         if (count == 0) return;
-        const shard = try self.acquireShard(number);
-        defer shard.lock.unlock(self.store.io);
+        const shard = &self.shards[number].?;
         var tx = shard.index.transaction();
         for (self.pending[number][0..count]) |observation| {
             // A rejected payload may have released its lease. Never apply that
@@ -820,6 +906,9 @@ pub const Staging = struct {
     /// Publication releases the lease while the shard lock still excludes
     /// readers, so no reader ever finds a published slot leased exclusively.
     published: bool = false,
+    /// The session whose open shard publication uses, for a slot a session
+    /// reserved.
+    session: ?*Session = null,
 
     /// Closing a failed staging operation leaves a registered, abandoned slot.
     /// Maintenance can reclaim it after the staging window; no finalizer must
@@ -847,9 +936,15 @@ pub const Staging = struct {
     }
 
     pub fn publish(self: *Staging) Error!void {
+        if (self.session) |session| return session.publishStaging(self);
         var counters = catalog.Counters{};
         var shard = try Shard.openRequired(self.store, Store.shardFor(self.key), false, &counters);
         defer shard.close();
+        return self.publishInShard(&shard);
+    }
+
+    /// Publish into `shard`, which the caller holds open and locked.
+    fn publishInShard(self: *Staging, shard: *Shard) Error!void {
         var tx = shard.index.transaction();
         const found = (try tx.find(.owners, storageKey(self.generation))) orelse return error.Changed;
         var metadata = try Metadata.decode(found.value);
@@ -1544,7 +1639,7 @@ test "artifact groups route all members to one shard and enumerate only publishe
     try std.testing.expectEqual(1, other_keys.len);
 }
 
-test "retained reads batch one exact owner update per generation before releasing leases" {
+test "session reads batch one exact owner update per generation before releasing leases" {
     const a = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -1553,7 +1648,7 @@ test "retained reads batch one exact owner update per generation before releasin
     defer a.free(path);
     var store = try Store.init(a, io, path);
     defer store.deinit();
-    var batch = try RetentionBatch.init(&store);
+    var batch = try Session.init(&store);
     defer batch.deinit();
     var ids: [6]Identity = undefined;
     var held: [6]?Artifact = @splat(null);
@@ -1606,7 +1701,7 @@ test "retained reads batch one exact owner update per generation before releasin
     }
 }
 
-test "retention batches discard observations of a retired generation" {
+test "sessions discard observations of a retired generation" {
     const a = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -1615,7 +1710,7 @@ test "retention batches discard observations of a retired generation" {
     defer a.free(path);
     var store = try Store.init(a, io, path);
     defer store.deinit();
-    var batch = try RetentionBatch.init(&store);
+    var batch = try Session.init(&store);
     defer batch.deinit();
     const id: Identity = .{ .namespace = @splat(8), .family = .local_pack, .key = @splat(3) };
     const key = id.indexedKey();
@@ -1662,7 +1757,7 @@ test "grouped acquisitions preserve order absence duplicates and generation leas
     missing.key = @splat(255);
     keys[81] = missing.indexedKey();
     keys[82] = identities[79].indexedKey();
-    var batch = try RetentionBatch.init(&store);
+    var batch = try Session.init(&store);
     defer batch.deinit();
     const held = try batch.acquireKeys(a, &keys, 100);
     defer a.free(held);
@@ -1704,13 +1799,13 @@ test "container slices share physical ownership and survive logical retirement" 
     try writer.append(other, "second");
     try std.testing.expect((try store.acquire(id, 1)) == null);
     try writer.publish();
-    var reads = try RetentionBatch.init(&store);
+    var reads = try Session.init(&store);
     var first = (try reads.acquireKey(id.indexedKey(), store.now())).?;
     defer first.deinit();
     var second = (try reads.acquireKey(other.indexedKey(), store.now())).?;
     defer second.deinit();
     try std.testing.expect(first.shared == second.shared);
-    try std.testing.expectEqual(@as(usize, 1), reads.containers.entries.count());
+    try std.testing.expectEqual(@as(usize, 1), reads.containerCount());
     reads.deinit(); // Captured slices outlive the acquisition session.
     try std.testing.expectError(error.Busy, store.invalidate(id));
     // Replacement may detach the logical generation, but cannot change bytes
@@ -1766,6 +1861,74 @@ test "container abandoned writers and retired physical generations are cache mis
     const bytes = (try store.read(a, id, 3)).?;
     defer a.free(bytes);
     try std.testing.expectEqualStrings("replacement", bytes);
+}
+
+test "shared session acquires container slices concurrently across shards" {
+    const a = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", a);
+    defer a.free(root);
+    var store = try Store.init(a, std.testing.io, root);
+    defer store.deinit();
+    var identities: [32]Identity = undefined;
+    var covered: [shard_count]bool = @splat(false);
+    for (&identities, 0..) |*identity, i| {
+        identity.* = .{ .namespace = @splat(7), .family = .local_pack, .group = @splat(@intCast(i)), .key = @splat(11) };
+        covered[Store.shardFor(identity.indexedKey())] = true;
+        var writer: ContainerWriter = .{ .store = &store };
+        defer writer.deinit();
+        try writer.append(identity.*, "shared container payload");
+        try writer.publish();
+    }
+    try std.testing.expect(std.mem.count(bool, &covered, &.{true}) > 1);
+    var session = try Session.init(&store);
+    defer session.deinit();
+    const Worker = struct {
+        session: *Session,
+        identities: []const Identity,
+        start: *std.atomic.Value(bool),
+        failed: bool = false,
+        fn run(self: *@This()) void {
+            while (!self.start.load(.acquire)) std.atomic.spinLoopHint();
+            for (0..4) |_| {
+                for (self.identities) |identity| {
+                    var artifact = (self.session.acquire(identity, self.session.now()) catch {
+                        self.failed = true;
+                        return;
+                    }) orelse {
+                        self.failed = true;
+                        return;
+                    };
+                    defer artifact.deinit();
+                    const bytes = artifact.read(self.session.store.allocator) catch {
+                        self.failed = true;
+                        return;
+                    };
+                    defer self.session.store.allocator.free(bytes);
+                    if (!std.mem.eql(u8, bytes, "shared container payload")) self.failed = true;
+                }
+            }
+        }
+    };
+    var start = std.atomic.Value(bool).init(false);
+    var workers: [4]Worker = undefined;
+    var threads: [workers.len]std.Thread = undefined;
+    var spawned: usize = 0;
+    defer {
+        start.store(true, .release);
+        for (threads[0..spawned]) |thread| thread.join();
+    }
+    for (&workers, &threads) |*worker, *thread| {
+        worker.* = .{ .session = &session, .identities = &identities, .start = &start };
+        thread.* = try std.Thread.spawn(.{}, Worker.run, .{worker});
+        spawned += 1;
+    }
+    start.store(true, .release);
+    for (threads) |thread| thread.join();
+    spawned = 0;
+    for (workers) |worker| try std.testing.expect(!worker.failed);
+    try std.testing.expectEqual(identities.len, session.containerCount());
 }
 
 test "container concurrent publishers preserve shared and independent records" {
@@ -1836,7 +1999,7 @@ test "container allocation failures release staging handles and shared readers" 
             defer writer.deinit();
             try writer.append(id, "allocation test");
             try writer.publish();
-            var reads = try RetentionBatch.init(&store);
+            var reads = try Session.init(&store);
             defer reads.deinit();
             var record = (try reads.acquireKey(id.indexedKey(), store.now())) orelse return error.Missing;
             defer record.deinit();

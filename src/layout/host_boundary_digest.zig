@@ -98,7 +98,10 @@ const LayoutHashContext = struct {
             .box, .list, .ptr => try self.hashIdx(hasher, layout_val.getIdx()),
             // An erased callable's signature is hashed by the boundary walk,
             // which knows the function type the callable was erased from.
-            .box_of_zst, .erased_box, .list_of_zst, .erased_callable, .zst, .hole => {},
+            .box_of_zst, .list_of_zst, .erased_callable, .zst, .hole => {},
+            // A dynamic local's bytes are described at runtime; no value
+            // crossing the host boundary has a dynamic layout.
+            .dynamic => {},
             .closure => try self.hashIdx(hasher, layout_val.getClosure().captures_layout_idx),
             .struct_ => {
                 const info = self.layouts.getStructInfo(layout_val);

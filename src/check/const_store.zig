@@ -290,34 +290,100 @@ pub const ConstFnCallableInstantiation = struct {
 pub const ConstFnStructuralEvidence = struct {
     callable_contracts: u32 = 0,
     derivation: static_dispatch.StructuralDerivation,
-    checked: ?struct {
-        /// The module that recorded the edge. Restoration reads the edge's
-        /// checked types and contract from it; a codec edge's identity is its
-        /// contract's content instead, so equal contracts recorded by
-        /// different modules are one specialization.
-        view: names.CheckedModuleDigest,
-        dispatcher_key: names.CanonicalTypeKey,
-        dispatcher_ty: checked_ids.CheckedTypeId,
-        callable_key: names.CanonicalTypeKey,
-        callable_ty: checked_ids.CheckedTypeId,
-        generated_codec_derivation: ?static_dispatch.GeneratedCodecDerivationId,
-        generated_codec_content: ?static_dispatch.GeneratedCodecContentDigest,
-    } = null,
+    checked: ?CheckedStructuralEdge = null,
 
     pub fn identityEql(left: ConstFnStructuralEvidence, right: ConstFnStructuralEvidence) bool {
         if (left.callable_contracts != right.callable_contracts) return false;
         if (!std.meta.eql(left.derivation, right.derivation) or (left.checked == null) != (right.checked == null)) return false;
         const a = left.checked orelse return true;
         const b = right.checked.?;
-        if ((a.generated_codec_content == null) != (b.generated_codec_content == null)) return false;
-        const same_origin = if (a.generated_codec_content) |content|
-            std.meta.eql(content, b.generated_codec_content.?)
+        const a_content = a.codecContent();
+        const b_content = b.codecContent();
+        if ((a_content == null) != (b_content == null)) return false;
+        const same_origin = if (a_content) |content|
+            std.meta.eql(content, b_content.?)
         else
-            std.meta.eql(a.view, b.view);
+            std.meta.eql(a.recorded.view, b.recorded.view);
         return same_origin and
-            std.meta.eql(a.dispatcher_key, b.dispatcher_key) and
-            std.meta.eql(a.callable_key, b.callable_key);
+            std.meta.eql(a.dispatcherKey(), b.dispatcherKey()) and
+            std.meta.eql(a.callableKey(), b.callableKey());
     }
+
+    /// The form a `ConstStore` keeps. A codec edge names its contract by the
+    /// contract's identity across checked modules, never by the module that
+    /// recorded it: a specialization shared by equal contracts keeps the
+    /// first recording module's edge, which a program reusing the storing
+    /// module's values need not hold.
+    pub fn storedForm(self: ConstFnStructuralEvidence) ConstFnStructuralEvidence {
+        var stored = self;
+        const checked = self.checked orelse return stored;
+        switch (checked) {
+            .recorded => |recorded| if (recorded.generated_codec_content) |content| {
+                stored.checked = .{ .codec = .{
+                    .content = content,
+                    .dispatcher_key = recorded.dispatcher_key,
+                    .callable_key = recorded.callable_key,
+                } };
+            },
+            .codec => {},
+        }
+        return stored;
+    }
+};
+
+/// The checked side of a retained structural edge.
+pub const CheckedStructuralEdge = union(enum(u8)) {
+    /// An edge read from the module that recorded it.
+    recorded: RecordedStructuralEdge,
+    /// A codec edge of a function stored in a `ConstStore`
+    /// (`ConstFnStructuralEvidence.storedForm`). Restoration reads it from
+    /// a module of the storing module's import closure that holds an equal
+    /// contract.
+    codec: StoredCodecEdge,
+
+    pub fn codecContent(self: CheckedStructuralEdge) ?static_dispatch.GeneratedCodecContentDigest {
+        return switch (self) {
+            .recorded => |recorded| recorded.generated_codec_content,
+            .codec => |codec| codec.content,
+        };
+    }
+
+    pub fn dispatcherKey(self: CheckedStructuralEdge) names.CanonicalTypeKey {
+        return switch (self) {
+            .recorded => |recorded| recorded.dispatcher_key,
+            .codec => |codec| codec.dispatcher_key,
+        };
+    }
+
+    pub fn callableKey(self: CheckedStructuralEdge) names.CanonicalTypeKey {
+        return switch (self) {
+            .recorded => |recorded| recorded.callable_key,
+            .codec => |codec| codec.callable_key,
+        };
+    }
+};
+
+/// A structural edge as the module that recorded it holds it.
+pub const RecordedStructuralEdge = struct {
+    /// The module that recorded the edge. Restoration reads the edge's
+    /// checked types and contract from it; a codec edge's identity is its
+    /// contract's content instead, so equal contracts recorded by different
+    /// modules are one specialization.
+    view: names.CheckedModuleDigest,
+    dispatcher_key: names.CanonicalTypeKey,
+    dispatcher_ty: checked_ids.CheckedTypeId,
+    callable_key: names.CanonicalTypeKey,
+    callable_ty: checked_ids.CheckedTypeId,
+    generated_codec_derivation: ?static_dispatch.GeneratedCodecDerivationId,
+    generated_codec_content: ?static_dispatch.GeneratedCodecContentDigest,
+};
+
+/// A codec edge named by its contract's identity across checked modules and
+/// the checked keys of its dispatcher and callable types.
+pub const StoredCodecEdge = struct {
+    content: static_dispatch.GeneratedCodecContentDigest,
+    dispatcher_key: names.CanonicalTypeKey,
+    callable_key: names.CanonicalTypeKey,
 };
 
 /// Exact checked method edge retained by a stored function. Target module
@@ -484,6 +550,11 @@ pub const ConstFn = struct {
     fn_def: FnDef,
     source_fn_ty: checked_ids.CheckedTypeId,
     source_fn_key: names.TypeDigest,
+    /// For a nested function, the function type of the template specialization
+    /// that built it. A variable of that template can reach neither this
+    /// function's type nor its captures, such as the format of an encoder a
+    /// generic method returned.
+    owner_fn_ty: ?ConstTypeId = null,
     captures: []const ConstCapture = &.{},
     evidence: ConstFnEvidenceVector = .{},
     evidence_frames: []const ConstFnEvidenceFrame = &.{},
@@ -603,6 +674,13 @@ pub const ConstValue = union(enum) {
         backing: ConstNodeId,
     },
     fn_value: ConstFnId,
+    /// A function value a `.boxy` compile-time program evaluated to: its
+    /// worker and descriptors' types (`recipe`, which `postcheck.Boxy.StoredFn`
+    /// reads) and its captured values and dictionaries.
+    boxy_fn: struct {
+        recipe: ConstStr,
+        captures: []const ConstNodeId,
+    },
 };
 
 /// Internal, relocation-invariant (POD) form of `ConstValue`: variant slices are
@@ -626,6 +704,7 @@ const StoredValue = union(enum) {
     tag: struct { tag_name: ConstRange, payloads: ConstRange },
     nominal: struct { named_type: NamedType, backing: ConstNodeId },
     fn_value: ConstFnId,
+    boxy_fn: struct { recipe: ConstStr, captures: ConstRange },
 };
 
 /// POD form of `ConstFn`: captures slice → range into `capture_pool`.
@@ -633,6 +712,7 @@ const StoredFn = struct {
     fn_def: FnDef,
     source_fn_ty: checked_ids.CheckedTypeId,
     source_fn_key: names.TypeDigest,
+    owner_fn_ty: ?ConstTypeId = null,
     captures: ConstRange = .{},
     evidence: ConstRange = .{},
     evidence_targets: ConstRange = .{},
@@ -1071,6 +1151,45 @@ pub const ConstTypeStore = struct {
         return self.typePortableWithOccurrences(type_names, root, own, own_identity, null);
     }
 
+    /// Whether the type graph at `root` can move into the current versions
+    /// of the modules it names: it holds no function or erased type, no
+    /// field default and no generated type, and `relocations.nominalRelocatable`
+    /// admits every named type it holds.
+    pub fn typeRelocatable(self: *const ConstTypeStore, root: ConstTypeId, relocations: anytype) Allocator.Error!bool {
+        var seen = collections.DenseMap(ConstTypeId, void).init(self.allocator);
+        defer seen.deinit();
+        var pending = std.ArrayList(ConstTypeId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |ty| {
+            const entry = try seen.getOrPut(ty);
+            if (entry.found_existing) continue;
+            switch (self.get(ty)) {
+                .func, .erased => return false,
+                .primitive, .zst => {},
+                .list, .box => |elem| try pending.append(self.allocator, elem),
+                .tuple => |span| try pending.appendSlice(self.allocator, self.typeSpan(span)),
+                .record => |span| for (self.fieldSpan(span)) |field| {
+                    if (field.default != null) return false;
+                    try pending.append(self.allocator, field.ty);
+                    if (field.value_ty) |value_ty| try pending.append(self.allocator, value_ty);
+                },
+                .tag_union => |span| for (self.tagSpan(span)) |tag| try pending.appendSlice(self.allocator, self.typeSpan(tag.payloads)),
+                .named => |named| {
+                    if (named.def.generated != null) return false;
+                    if (!relocations.nominalRelocatable(named.named_type)) return false;
+                    try pending.appendSlice(self.allocator, self.typeSpan(named.args));
+                    for (self.declaredFieldSpan(named.declared_order)) |declared| switch (declared) {
+                        .named => {},
+                        .padding => |padding| try pending.append(self.allocator, padding),
+                    };
+                    if (named.backing) |backing| try pending.append(self.allocator, backing.ty);
+                },
+            }
+        }
+        return true;
+    }
+
     pub fn typePortableWithOccurrences(
         self: *const ConstTypeStore,
         type_names: *const names.NameStore,
@@ -1379,6 +1498,7 @@ pub const ConstStore = struct {
             .box => |n| .{ .box = n },
             .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
             .fn_value => |f| .{ .fn_value = f },
+            .boxy_fn => |function| .{ .boxy_fn = .{ .recipe = function.recipe, .captures = try self.appendNodes(function.captures) } },
             .list => |list| .{ .list = switch (list) {
                 .nodes => |items| .{ .nodes = try self.appendNodes(items) },
                 .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
@@ -1408,12 +1528,16 @@ pub const ConstStore = struct {
         const captures_range = try artifact_serialize.appendSpan(ConstRange, ConstCapture, &self.capture_pool, self.allocator, fn_value.captures);
         const evidence_range = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidence, &self.evidence_pool, self.allocator, fn_value.evidence.nodes);
         const evidence_targets = try artifact_serialize.appendSpan(ConstRange, ConstFnTargetEvidence, &self.evidence_target_pool, self.allocator, fn_value.evidence.targets);
-        const evidence_structurals = try artifact_serialize.appendSpan(ConstRange, ConstFnStructuralEvidence, &self.evidence_structural_pool, self.allocator, fn_value.evidence.structurals);
+        const stored_structurals = try self.allocator.alloc(ConstFnStructuralEvidence, fn_value.evidence.structurals.len);
+        defer self.allocator.free(stored_structurals);
+        for (stored_structurals, fn_value.evidence.structurals) |*stored, structural| stored.* = structural.storedForm();
+        const evidence_structurals = try artifact_serialize.appendSpan(ConstRange, ConstFnStructuralEvidence, &self.evidence_structural_pool, self.allocator, stored_structurals);
         const evidence_frames = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidenceFrame, &self.evidence_frame_pool, self.allocator, fn_value.evidence_frames);
         try self.fns.append(self.allocator, .{
             .fn_def = fn_value.fn_def,
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
+            .owner_fn_ty = fn_value.owner_fn_ty,
             .captures = captures_range,
             .evidence = evidence_range,
             .evidence_targets = evidence_targets,
@@ -1610,6 +1734,7 @@ pub const ConstStore = struct {
             .box => |n| .{ .box = n },
             .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
             .fn_value => |f| .{ .fn_value = f },
+            .boxy_fn => |function| .{ .boxy_fn = .{ .recipe = function.recipe, .captures = self.nodeSlice(function.captures) } },
             .list => |list| .{ .list = switch (list) {
                 .nodes => |r| .{ .nodes = self.nodeSlice(r) },
                 .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
@@ -1630,6 +1755,7 @@ pub const ConstStore = struct {
             .fn_def = stored.fn_def,
             .source_fn_ty = stored.source_fn_ty,
             .source_fn_key = stored.source_fn_key,
+            .owner_fn_ty = stored.owner_fn_ty,
             .captures = self.capture_pool.items[stored.captures.start .. stored.captures.start + stored.captures.len],
             .evidence = .{
                 .nodes = self.evidence_pool.items[stored.evidence.start .. stored.evidence.start + stored.evidence.len],
@@ -1719,7 +1845,8 @@ pub const ConstStore = struct {
             children.clearRetainingCapacity();
             const copied: ConstValue = switch (value) {
                 .pending => constStoreInvariant("a pending node reached a value copy"),
-                .fn_value => constStoreInvariant("a function value reached a value copy"),
+                .fn_value => constStoreInvariant("a Monotype function value reached a value copy"),
+                .boxy_fn => |function| .{ .boxy_fn = .{ .recipe = try self.copyBlob(source, function.recipe), .captures = try mappedNodes(&children, self.allocator, &map, function.captures) } },
                 .zst => .zst,
                 .scalar => |scalar| .{ .scalar = scalar },
                 .str => |str| .{ .str = try self.copyBlob(source, str) },
@@ -1764,7 +1891,7 @@ pub const ConstStore = struct {
     /// Push the nodes a value refers to directly.
     fn appendValueChildren(value: ConstValue, out: *std.ArrayList(ConstNodeId), allocator: Allocator) Allocator.Error!void {
         switch (value) {
-            .pending, .zst, .scalar, .str, .crash, .checked_error, .fn_value => {},
+            .pending, .zst, .scalar, .str, .crash, .checked_error, .fn_value, .boxy_fn => {},
             .box => |payload| try out.append(allocator, payload),
             .nominal => |nominal| try out.append(allocator, nominal.backing),
             .list => |list| switch (list) {
@@ -1798,7 +1925,7 @@ pub const ConstStore = struct {
             const value = self.get(node);
             switch (value) {
                 .pending => constStoreInvariant("a pending node reached a portability walk"),
-                .fn_value => return false,
+                .fn_value, .boxy_fn => return false,
                 .nominal => |nominal| {
                     const module = own orelse return false;
                     if (std.meta.eql(nominal.named_type.module.bytes, module.bytes)) return false;
@@ -1810,6 +1937,71 @@ pub const ConstStore = struct {
             try appendValueChildren(value, &pending, self.allocator);
         }
         return true;
+    }
+
+    /// The modules a stored function's recipe names, by checked key: the
+    /// recipe begins with their table (`postcheck.Boxy.StoredFn`).
+    pub fn recipeModuleKeys(recipe: []const u8) []const [32]u8 {
+        const count = std.mem.readInt(u32, recipe[0..4], .little);
+        return @as([*]const [32]u8, @ptrCast(recipe[4..].ptr))[0..count];
+    }
+
+    /// The bytes of a stored function's recipe after its table of modules.
+    pub fn recipeBody(recipe: []const u8) []const u8 {
+        return recipe[4 + recipeModuleKeys(recipe).len * 32 ..];
+    }
+
+    /// Give the stored function at `node` a recipe naming each module by
+    /// the key `relocations.currentKey` gives for it.
+    pub fn relocateRecipe(self: *ConstStore, node: ConstNodeId, relocations: anytype) Allocator.Error!void {
+        const slot = &self.values.items[@backingInt(node)];
+        const function = switch (slot.*) {
+            .boxy_fn => |function| function,
+            .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => constStoreInvariant("a recipe relocation reached a node that is no stored function"),
+        };
+        const recipe = self.blobBytes(function.recipe);
+        const keys = recipeModuleKeys(recipe);
+        var bytes = std.ArrayList(u8).empty;
+        defer bytes.deinit(self.allocator);
+        try bytes.appendSlice(self.allocator, recipe[0..4]);
+        for (keys) |key| {
+            const current = relocations.currentKey(key) orelse constStoreInvariant("a relocated stored function names a module with no current version");
+            try bytes.appendSlice(self.allocator, &current);
+        }
+        try bytes.appendSlice(self.allocator, recipeBody(recipe));
+        const data = try self.addBlobData(bytes.items);
+        slot.boxy_fn.recipe = .{ .data = data, .offset = 0, .len = @intCast(bytes.items.len) };
+    }
+
+    /// Whether the value graph at `root` can move into other versions of the
+    /// modules it names (design.md "Compile-Time Value Reuse Across Edits").
+    pub const Relocatability = enum { relocatable, holds_function, names_version };
+
+    /// Whether the value graph at `root` can move into the current versions
+    /// of the modules it names: it holds no function value, and
+    /// `relocations.nominalRelocatable` admits every named type it holds.
+    pub fn valueRelocatability(self: *const ConstStore, root: ConstNodeId, relocations: anytype) Allocator.Error!Relocatability {
+        var seen = collections.DenseMap(ConstNodeId, void).init(self.allocator);
+        defer seen.deinit();
+        var pending = std.ArrayList(ConstNodeId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |node| {
+            const entry = try seen.getOrPut(node);
+            if (entry.found_existing) continue;
+            const value = self.get(node);
+            switch (value) {
+                .pending => constStoreInvariant("a pending node reached a relocatability walk"),
+                .fn_value => return .holds_function,
+                .boxy_fn => |function| for (recipeModuleKeys(self.blobBytes(function.recipe))) |key| {
+                    if (relocations.currentKey(key) == null) return .names_version;
+                },
+                .nominal => |nominal| if (!relocations.nominalRelocatable(nominal.named_type)) return .names_version,
+                .zst, .scalar, .str, .crash, .checked_error, .box, .list, .tuple, .record, .tag => {},
+            }
+            try appendValueChildren(value, &pending, self.allocator);
+        }
+        return .relocatable;
     }
 
     /// Whether the value graph at `root` of a store read from outside the
@@ -1827,7 +2019,7 @@ pub const ConstStore = struct {
             if (seen.isSet(raw)) continue;
             seen.set(raw);
             switch (self.values.items[raw]) {
-                .pending, .fn_value => return false,
+                .pending, .fn_value, .boxy_fn => return false,
                 .zst, .scalar => {},
                 .str, .crash, .checked_error => |str| if (!self.validBlob(str)) return false,
                 .box => |payload| try pending.append(self.allocator, @backingInt(payload)),
@@ -1883,6 +2075,12 @@ pub const ConstStore = struct {
             if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
             switch (left) {
                 .pending, .fn_value => return false,
+                .boxy_fn => |function| {
+                    const right_function = right.boxy_fn;
+                    if (!sameBytes(self.blobBytes(function.recipe), other.blobBytes(right_function.recipe))) return false;
+                    if (function.captures.len != right_function.captures.len) return false;
+                    for (function.captures, right_function.captures) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
+                },
                 .zst => {},
                 .scalar => |scalar| if (!std.meta.eql(scalar, right.scalar)) return false,
                 .str => |str| if (!sameBytes(self.blobBytes(str), other.blobBytes(right.str))) return false,
@@ -1921,6 +2119,81 @@ pub const ConstStore = struct {
             }
         }
         return true;
+    }
+
+    /// Feed `root`'s value into `hasher`, shared nodes once each. Equal
+    /// values built the same way feed equal bytes whatever their node ids.
+    /// `context.moduleDigest` gives the bytes naming a nominal type's module,
+    /// and `context.fnValueDigest` the bytes naming a stored function.
+    pub fn hashGraph(
+        self: *const ConstStore,
+        root: ConstNodeId,
+        hasher: *base.Sha256,
+        context: anytype,
+    ) Allocator.Error!void {
+        var ordinals = collections.DenseMap(ConstNodeId, u32).init(self.allocator);
+        defer ordinals.deinit();
+        var next_ordinal: u32 = 0;
+        var pending = std.ArrayList(ConstNodeId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |node| {
+            const entry = try ordinals.getOrPut(node);
+            if (entry.found_existing) {
+                hasher.update("seen");
+                hasher.update(std.mem.asBytes(&entry.value_ptr.*));
+                continue;
+            }
+            entry.value_ptr.* = next_ordinal;
+            next_ordinal += 1;
+            const value = self.get(node);
+            hasher.update(@tagName(std.meta.activeTag(value)));
+            hasher.update(&[_]u8{0});
+            switch (value) {
+                .pending, .zst => {},
+                .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
+                .scalar => |scalar| hashScalar(hasher, scalar),
+                inline .str, .crash, .checked_error => |str| hashBytes(hasher, self.blobBytes(str)),
+                .box => |payload| try pending.append(self.allocator, payload),
+                .nominal => |nominal| {
+                    hasher.update(&context.moduleDigest(nominal.named_type.module));
+                    try pending.append(self.allocator, nominal.backing);
+                },
+                .list => |list| switch (list) {
+                    .nodes => |items| {
+                        hasher.update(std.mem.asBytes(&@as(u32, @intCast(items.len))));
+                        try pending.appendSlice(self.allocator, items);
+                    },
+                    .packed_bytes => |packed_list| {
+                        hasher.update(std.mem.asBytes(&packed_list.len));
+                        hasher.update(std.mem.asBytes(&packed_list.product_width));
+                        hasher.update(if (packed_list.element) |element| @tagName(element) else "product");
+                        hashBytes(hasher, self.blobBytes(packed_list.bytes));
+                    },
+                    .empty => |capacity| hasher.update(std.mem.asBytes(&capacity)),
+                },
+                inline .tuple, .record => |items| {
+                    hasher.update(std.mem.asBytes(&@as(u32, @intCast(items.len))));
+                    try pending.appendSlice(self.allocator, items);
+                },
+                .boxy_fn => |function| {
+                    // The recipe names its modules by checked key; the
+                    // identity names them as `context` does.
+                    const recipe = self.blobBytes(function.recipe);
+                    const keys = recipeModuleKeys(recipe);
+                    hasher.update(std.mem.asBytes(&@as(u32, @intCast(keys.len))));
+                    for (keys) |key| hasher.update(&context.moduleDigest(.{ .bytes = key }));
+                    hashBytes(hasher, recipeBody(recipe));
+                    hasher.update(std.mem.asBytes(&@as(u32, @intCast(function.captures.len))));
+                    try pending.appendSlice(self.allocator, function.captures);
+                },
+                .tag => |tag| {
+                    hashBytes(hasher, tag.tag_name);
+                    hasher.update(std.mem.asBytes(&@as(u32, @intCast(tag.payloads.len))));
+                    try pending.appendSlice(self.allocator, tag.payloads);
+                },
+            }
+        }
     }
 
     pub fn verifyComplete(self: *const ConstStore) Allocator.Error!void {
@@ -2047,6 +2320,10 @@ pub const ConstStore = struct {
                             }
                         },
                         .empty => {},
+                    },
+                    .boxy_fn => |function| {
+                        _ = self.strBytes(function.recipe);
+                        for (function.captures) |child| try pending.append(self.allocator, .{ .value = .{ .id = child, .delayed_depth = node.delayed_depth } });
                     },
                     .tuple,
                     .record,
@@ -2397,6 +2674,19 @@ test "ConstStore.appendFn: no leak or double-free under allocation failure" {
 }
 
 /// Whether two byte strings stored in different stores hold the same bytes.
+fn hashBytes(hasher: *base.Sha256, bytes: []const u8) void {
+    hasher.update(std.mem.asBytes(&@as(u64, bytes.len)));
+    hasher.update(bytes);
+}
+
+fn hashScalar(hasher: *base.Sha256, scalar: ConstScalar) void {
+    hasher.update(@tagName(std.meta.activeTag(scalar)));
+    hasher.update(&[_]u8{0});
+    switch (scalar) {
+        inline .i8, .i16, .i32, .i64, .i128, .u8, .u16, .u32, .u64, .u128, .f32_bits, .f64_bits, .dec_bits => |value| hasher.update(std.mem.asBytes(&value)),
+    }
+}
+
 fn sameBytes(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) return false;
     for (a, b) |left, right| {

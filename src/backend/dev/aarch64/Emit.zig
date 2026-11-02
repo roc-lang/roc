@@ -22,8 +22,8 @@ const Relocation = @import("../Relocation.zig").Relocation;
 /// Parameterized by target for cross-compilation support.
 pub fn Emit(comptime target: RocTarget) type {
     // Validate this is an aarch64 target
-    if (target.toCpuArch() != .aarch64 and target.toCpuArch() != .aarch64_be) {
-        @compileError("aarch64.Emit requires an aarch64 target");
+    if (target.toCpuArch() != .aarch64) {
+        @compileError("aarch64.Emit requires a little-endian aarch64 target");
     }
 
     return struct {
@@ -915,6 +915,11 @@ pub fn Emit(comptime target: RocTarget) type {
             std.debug.assert(dst != base);
             try self.movRegImm64(dst, @bitCast(@as(i64, offset)));
             try self.addRegRegReg(.w64, dst, base, dst);
+        }
+
+        /// LDAR: acquire-load one pointer-sized word, including its publication.
+        pub fn ldarRegMem(self: *Self, dst: GeneralReg, base: GeneralReg) Allocator.Error!void {
+            try self.emit32(0xc8dffc00 | (@as(u32, base.enc()) << 5) | dst.enc());
         }
 
         /// LDR (load register) with unsigned offset
@@ -2088,4 +2093,11 @@ test "pc-relative address sequence reaches targets past ADR's range" {
             );
         }
     }
+}
+
+test "boxy composition acquire load encoding" {
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
+    defer asm_buf.deinit();
+    try asm_buf.ldarRegMem(.X0, .X1);
+    try std.testing.expectEqualSlices(u8, &.{ 0x20, 0xfc, 0xdf, 0xc8 }, asm_buf.buf.items);
 }

@@ -16,6 +16,8 @@ pub const RootMetadata = core.RootMetadata;
 pub const Hosted = core.Hosted;
 /// LIR program result shared by post-check lowering and consumers.
 pub const Program = core.Program;
+/// Operand and ownership facts of `dyn` statements.
+pub const DynOps = core.DynOps;
 /// Public checked-module-to-LIR lowering entrypoint.
 pub const CheckedPipeline = @import("checked_pipeline.zig");
 /// One module's closed exports lowered as a program of their own.
@@ -72,8 +74,6 @@ pub const ErasedOwner = @import("erased_owner.zig");
 pub const ArcDismantle = @import("arc_dismantle.zig");
 /// Shared-memory ARC-inserted LIR image for interpreter-shim execution.
 pub const LirImage = @import("lir_image.zig");
-/// The Boxy runtime table numbers a arranged dev image uses.
-pub const RuntimeTables = @import("runtime_tables.zig");
 
 test "LIR image tests" {
     @import("std").testing.refAllDecls(LirImage);
@@ -170,7 +170,6 @@ test "lir tests" {
     std.testing.refAllDecls(RootMetadata);
     std.testing.refAllDecls(Hosted);
     std.testing.refAllDecls(Program);
-    std.testing.refAllDecls(RuntimeTables);
     std.testing.refAllDecls(ReachableProcs);
     std.testing.refAllDecls(CheckedPipeline);
     std.testing.refAllDecls(BoxReuse);

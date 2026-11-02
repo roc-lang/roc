@@ -5553,6 +5553,10 @@ pub const ReportBuilder = struct {
         defer patterns.deinit(self.gpa);
         var pattern_ends = std.ArrayList(usize).empty;
         defer pattern_ends.deinit(self.gpa);
+        // A label repeated along the chain is one tag with one arity
+        // (design.md "Row Union Normalization"), so it is written once.
+        var names = std.ArrayList(Ident.Idx).empty;
+        defer names.deinit(self.gpa);
         var cursor = row;
         while (true) {
             const content = snapshots.getContentUnwrapAlias(cursor);
@@ -5562,6 +5566,11 @@ pub const ReportBuilder = struct {
                 .tag_union => |tag_union| {
                     const tags = snapshots.sliceTags(tag_union.tags);
                     for (tags.items(.name), tags.items(.args)) |name, args| {
+                        const repeated = for (names.items) |seen| {
+                            if (seen.eql(name)) break true;
+                        } else false;
+                        if (repeated) continue;
+                        try names.append(self.gpa, name);
                         try patterns.appendSlice(self.gpa, self.can_ir.getIdentText(name));
                         const arity = snapshots.sliceVars(args).len;
                         if (arity == 1) {

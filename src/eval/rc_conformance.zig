@@ -440,7 +440,7 @@ pub fn record(observation: Observation) void {
 /// names, because that is the link ARC follows to keep the lender alive.
 ///
 /// Interior allocations *of* an argument (a list's elements, a box's payload)
-/// are deliberately not checked: an op like `list_map_extract_unsafe` moves one
+/// are deliberately not checked: an op like `list_move_out_unsafe` moves one
 /// element's ownership out of a buffer, and no flag describes that move.
 fn checkResultLinks(observation: Observation, effect: RcEffect, positions: usize) void {
     const linked = effect.result_shares_args |

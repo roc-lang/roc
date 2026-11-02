@@ -3774,6 +3774,7 @@ fn prepareAssociatedDeclBody(
     assoc_key: ?AST.DeclIndex.AssocValue,
     type_anno_idx: ?CIR.TypeAnno.Idx,
     mb_where_clauses: ?CIR.WhereClause.Span,
+    anno_name_region: ?Region,
     type_var_scope: ?TypeVarScopeIdx,
 ) std.mem.Allocator.Error!AssociatedDeclBodyWork {
     const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(decl.pattern).to_tokenized_region());
@@ -3789,6 +3790,7 @@ fn prepareAssociatedDeclBody(
         try self.env.addAnnotation(CIR.Annotation{
             .anno = anno_idx,
             .where = mb_where_clauses,
+            .name_region = anno_name_region,
         }, pattern_region)
     else
         null;
@@ -4357,6 +4359,7 @@ fn canonicalizeAssociatedItems(
                                         assoc_key,
                                         type_anno_idx,
                                         where_clauses,
+                                        self.parse_ir.tokens.resolve(ta.name),
                                         type_var_scope,
                                     ) };
                                 }
@@ -4492,6 +4495,7 @@ fn canonicalizeAssociatedItems(
                             decl_ident,
                             type_qualified_decl_idx,
                             assoc_key,
+                            null,
                             null,
                             null,
                             null,

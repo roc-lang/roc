@@ -458,6 +458,35 @@ pub const cases = [_]Case{
         ,
         .expected = "3",
     },
+    // Sealed result rows (design.md "Sealed Result Rows"): every annotated
+    // `Try`-returning function is a static worker under `.boxy`, and each
+    // instantiation that widens its row converts: direct calls, `?` into a
+    // wider result, and the functions as values at wider types.
+    .{
+        .name = "sealed rows: widened calls, ? returns, and function values at wider rows agree",
+        .source =
+        \\{
+        \\    read : Str -> Try(Str, [NotFound])
+        \\    read = |path| if path == "missing" Err(NotFound) else Ok(path)
+        \\    parse : Str -> Try(U8, [InvalidU8])
+        \\    parse = |s| if s == "bad" Err(InvalidU8) else Ok(7)
+        \\    load : Str -> Try(U8, [NotFound, InvalidU8])
+        \\    load = |path| {
+        \\        text = read(path)?
+        \\        parse(text)
+        \\    }
+        \\    apply : (Str -> Try(U8, [NotFound, InvalidU8, Other])), Str -> Try(U8, [NotFound, InvalidU8, Other])
+        \\    apply = |f, s| f(s)
+        \\    k = {
+        \\        dbg 1.U64
+        \\        1.U64
+        \\    }
+        \\    path = if k == 1 "missing" else "ok"
+        \\    (load(path), load("bad"), load("ok"), apply(load, path), apply(parse, "bad"), apply(load, "ok"))
+        \\}
+        ,
+        .inspects = &.{ .nominal, .tag_union, .tuple },
+    },
 };
 
 fn covered(comptime kind: ShapeKind, comptime field: []const u8) bool {

@@ -9,6 +9,8 @@ pub const build = @import("compile_build.zig");
 pub const targets_config = @import("targets_config.zig");
 pub const TargetsConfig = targets_config.TargetsConfig;
 pub const single_module = @import("compile_module.zig");
+pub const source_inventory = @import("source_inventory.zig");
+pub const source_graph = @import("source_graph.zig");
 pub const module_discovery = @import("module_discovery.zig");
 pub const threading = @import("threading.zig");
 pub const static_data_exports = @import("static_data");
@@ -26,6 +28,9 @@ pub const coordinator = @import("coordinator.zig");
 pub const app_header = @import("app_header.zig");
 
 pub const key = @import("cache_key.zig");
+pub const boxy_object_cache = @import("boxy_object_cache.zig");
+pub const boxy_interface = @import("boxy_interface.zig");
+pub const boxy_unit = @import("boxy_unit.zig");
 pub const config = @import("cache_config.zig");
 pub const manager = @import("cache_manager.zig");
 pub const artifacts = @import("artifact_store.zig");
@@ -66,8 +71,11 @@ test "compile tests" {
         std.testing.refAllDecls(artifacts);
         std.testing.refAllDecls(maintenance);
     }
+    std.testing.refAllDecls(boxy_object_cache);
     std.testing.refAllDecls(@import("cache_config.zig"));
     std.testing.refAllDecls(@import("cache_key.zig"));
+    std.testing.refAllDecls(boxy_object_cache);
+    std.testing.refAllDecls(boxy_unit);
     std.testing.refAllDecls(@import("cache_manager.zig"));
     std.testing.refAllDecls(@import("cache_module.zig"));
     std.testing.refAllDecls(@import("cache_versioning.zig"));
@@ -78,6 +86,8 @@ test "compile tests" {
     std.testing.refAllDecls(@import("compile_module.zig"));
     std.testing.refAllDecls(@import("compile_package.zig"));
     std.testing.refAllDecls(@import("module_discovery.zig"));
+    std.testing.refAllDecls(source_inventory);
+    std.testing.refAllDecls(source_graph);
     std.testing.refAllDecls(static_data_exports);
     std.testing.refAllDecls(@import("package_source.zig"));
     std.testing.refAllDecls(@import("package_resolution.zig"));
@@ -148,6 +158,8 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_12229_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12237_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12371_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12583_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12706_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12423_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12348_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11438_test.zig"));
@@ -209,7 +221,16 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11287_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12569_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12585_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12631_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12624_test.zig"));
+    std.testing.refAllDecls(@import("test/boxy_dictionary_evidence_order_test.zig"));
+    std.testing.refAllDecls(@import("test/boxy_return_construction_test.zig"));
+    std.testing.refAllDecls(@import("test/boxy_unary_argument_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12734_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12745_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12787_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12617_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12682_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11292_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11295_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11294_test.zig"));
@@ -281,5 +302,6 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_12147_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12455_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12625_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12638_test.zig"));
     std.testing.refAllDecls(@import("test/import_cycle_checked_test.zig"));
 }

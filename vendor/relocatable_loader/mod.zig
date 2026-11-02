@@ -163,6 +163,10 @@ pub const Image = struct {
     symbols: std.StringHashMapUnmanaged(usize),
     arena: std.heap.ArenaAllocator,
     unwind: coff.UnwindRegistration = .{},
+    /// The object's first code section, where it was loaded.
+    code: []const u8 = &.{},
+    /// The object's zero-filled sections, where they were loaded.
+    zero_filled: []const []u8 = &.{},
 
     /// Load `object_bytes` and bind its undefined symbols through `resolver`.
     /// The bytes are only read during the call.
@@ -177,6 +181,11 @@ pub const Image = struct {
             .resolver = resolver,
         };
         return loader.load();
+    }
+
+    /// Return every zero-filled section to its loaded state: all zeros.
+    pub fn resetZeroFilled(self: *const Image) void {
+        for (self.zero_filled) |section| @memset(section, 0);
     }
 
     /// The address of a symbol the object defines, or null.
@@ -311,6 +320,17 @@ pub const Loader = struct {
         };
         errdefer image.arena.deinit();
         errdefer image.symbols.deinit(self.gpa);
+        for (self.parsed.sections) |section| {
+            if (section.kind != .code) continue;
+            image.code = @as([*]const u8, @ptrFromInt(section.address))[0..@intCast(section.size)];
+            break;
+        }
+        var zero_filled = std.ArrayList([]u8).empty;
+        for (self.parsed.sections) |section| {
+            if (section.kind != .writable or section.bytes.len != 0 or section.size == 0) continue;
+            try zero_filled.append(image.arena.allocator(), @as([*]u8, @ptrFromInt(section.address))[0..@intCast(section.size)]);
+        }
+        image.zero_filled = zero_filled.items;
         const names = image.arena.allocator();
         for (self.parsed.symbols) |symbol| {
             if (symbol.kind != .defined or symbol.name.len == 0) continue;

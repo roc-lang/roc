@@ -3904,8 +3904,7 @@ fn processDevObjectSnapshot(
         hash_results[i].target_name = field_name;
 
         target_snapshot: {
-            const arch = target.toCpuArch();
-            if (arch != .x86_64 and arch != .aarch64 and arch != .aarch64_be) {
+            if (backend.dev.isa.isaOfOrNull(target) == null) {
                 hash_results[i].hash_hex = undefined;
                 hash_results[i].supported = false;
                 break :target_snapshot;
@@ -3963,9 +3962,6 @@ fn processDevObjectSnapshot(
                 entrypoints,
                 static_data_exports,
                 lowered.lir_result.store.getProcSpecs(),
-                lowered.lir_result.boxy_erased_arg_desc_offsets.items,
-                lowered.lir_result.boxy_erased_arg_desc_params.items,
-                lowered.lir_result.boxy_worker_procs.items,
                 target,
             )) |result| {
                 var hasher = Blake3.init(.{});

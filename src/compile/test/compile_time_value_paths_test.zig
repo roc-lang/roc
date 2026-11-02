@@ -11,7 +11,6 @@ const base = @import("base");
 const build_options = @import("build_options");
 const check = @import("check");
 const eval = @import("eval");
-const layout = @import("layout");
 const lir = @import("lir");
 const roc_target = @import("roc_target");
 const CoreCtx = @import("ctx").CoreCtx;
@@ -55,7 +54,7 @@ const platform_files = [_]struct { path: []const u8, source: []const u8 }{
 fn optimizedTarget(inline_mode: lir.CheckedPipeline.InlineMode) lir.CheckedPipeline.TargetConfig {
     // An optimized build specializes ARC modes, as `--opt=size` and
     // `--opt=speed` do.
-    return .{ .inline_expects = .omit, .inline_mode = inline_mode, .specialize_arc_modes = true };
+    return .{ .inline_expects = .omit, .inline_mode = inline_mode, .specialize_arc_modes = true, .prove_uniqueness = true };
 }
 
 /// Both runtime programs of one app.
@@ -141,7 +140,7 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
             .include_provided_data_exports = true,
             .include_internal_static_data = true,
         },
-        .{ .target_usize = base.target.TargetUsize.native, .inline_mode = inline_mode, .specialize_arc_modes = true },
+        .{ .target_usize = base.target.TargetUsize.native, .inline_mode = inline_mode, .specialize_arc_modes = true, .prove_uniqueness = true },
     );
     errdefer restored.deinit();
     const image = static_data_exports.buildStaticData(
@@ -182,7 +181,7 @@ fn hasIntLiteral(result: *const lir.Program.Result, value: i128) bool {
         switch (stmt.assign_literal.value) {
             .i64_literal => |literal| if (literal.value == value) return true,
             .i128_literal => |id| if (result.store.stmtRow(id).value == value) return true,
-            .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => {},
+            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref => {},
         }
     }
     return false;
@@ -236,7 +235,7 @@ test "two equal compile-time tables freeze to one backing in the continued runti
     try std.testing.expect(countListSlots(&lowered.restored.lir_result) > 0);
 }
 
-test "an empty compile-time list read at another layout index still lowers as its capacity request" {
+test "an empty compile-time list read beside other lists still lowers as its capacity request" {
     if (is_freestanding) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var arena = base.SingleThreadArena.init(gpa);
@@ -244,9 +243,7 @@ test "an empty compile-time list read at another layout index still lowers as it
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
     // The roots only the expects read make the evaluation's program intern
-    // three list layouts before the buffer's, while the runtime program, which
-    // lowers only what `main!` reaches, interns the buffer's list layout first:
-    // the two consumers name the same list layout by different indices.
+    // three list layouts before the buffer's.
     var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir,
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
@@ -269,27 +266,6 @@ test "an empty compile-time list read at another layout index still lowers as it
         \\}
     , .wrappers);
     defer lowered.deinit();
-
-    // The evaluation's program names the buffer's list layout by a different
-    // index than the runtime program does, so a construction matched by
-    // layout index would miss here.
-    var host_buffer_layout: ?layout.Idx = null;
-    for (lowered.coord.program_session.?.completed.?.programs()) |program| {
-        const host = &program.lir_result;
-        for (host.static_data_values.items) |slot| {
-            if (slot.compile_time_root == null) continue;
-            const slot_layout = host.layouts.getLayout(slot.layout_idx);
-            if (slot_layout.tag == .list and slot_layout.getIdx() == .u64) host_buffer_layout = slot.layout_idx;
-        }
-    }
-    var runtime_buffer_layout: ?layout.Idx = null;
-    for (lowered.continued.lir_result.store.getCFStmts()) |stmt| {
-        if (stmt == .assign_low_level and stmt.assign_low_level.op == .list_with_capacity) {
-            runtime_buffer_layout = lowered.continued.lir_result.store.getLocal(stmt.assign_low_level.target).layout_idx;
-        }
-    }
-    try std.testing.expect(host_buffer_layout != null and runtime_buffer_layout != null);
-    try std.testing.expect(host_buffer_layout.? != runtime_buffer_layout.?);
 
     for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
         // The buffer is the `with_capacity` it was evaluated with, and no
@@ -534,7 +510,7 @@ fn callsPassingIntLiteral(gpa: std.mem.Allocator, result: *const lir.Program.Res
         const literal: i128 = switch (stmt.assign_literal.value) {
             .i64_literal => |int| int.value,
             .i128_literal => |id| result.store.stmtRow(id).value,
-            .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => continue,
+            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref => continue,
         };
         if (literal == value) try holders.put(gpa, stmt.assign_literal.target, {});
     }

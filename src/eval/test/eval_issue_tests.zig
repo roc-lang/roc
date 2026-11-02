@@ -2082,6 +2082,53 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "[\"failed: Nope2\"]" },
     },
     .{
+        // The interpolation's literal requirement travels around a cycle of
+        // two schemes, returning to each at the variables it left with.
+        .name = "issue 11060: literal requirement of a mutually recursive accumulator",
+        .source_kind = .module,
+        .source =
+        \\make = |start, file|
+        \\    match start(file) {
+        \\        Ok(handle) => Good(handle)
+        \\        Err(e) => Bad("failed: ${Str.inspect(e)}")
+        \\    }
+        \\
+        \\ping = |start, remaining, acc|
+        \\    match remaining {
+        \\        [] => acc
+        \\        [file, .. as rest] => pong(start, rest, acc.append(make(start, file)))
+        \\    }
+        \\
+        \\pong = |start, remaining, acc|
+        \\    match remaining {
+        \\        [] => acc
+        \\        [file, .. as rest] => ping(start, rest, acc.append(make(start, file)))
+        \\    }
+        \\
+        \\main = ping(|_file| Err(Nope2), ["x", "y"], []).len()
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        // Two annotated schemes calling each other each have variables of
+        // their own, so the cycle renames them on every step.
+        .name = "issue 11060: literal requirements of mutually recursive annotated schemes",
+        .source_kind = .module,
+        .source =
+        \\ping : a, U64 -> a where [a.plus : a, a -> a]
+        \\ping = |x, n| if n == 0 x.plus(x) else pong(x, n - 1)
+        \\
+        \\pong : b, U64 -> b where [b.plus : b, b -> b]
+        \\pong = |y, n| if n == 0 y.plus(y.plus(y)) else ping(y, n - 1)
+        \\
+        \\label = |s, n| if n == 0 "ping ${s}" else label2(s, n - 1)
+        \\label2 = |s, n| if n == 0 "pong ${s}" else label(s, n - 1)
+        \\
+        \\main = (ping(5.U64, 3), ping(5.U64, 2), label("x", 3))
+        ,
+        .expected = .{ .inspect_str = "(15, 10, \"pong x\")" },
+    },
+    .{
         // https://github.com/roc-lang/roc/issues/11063
         //
         // `Opt` brings its own `parser_for`, and the record `Opt` wraps has a
@@ -5050,5 +5097,46 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "31" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12624
+        // `run`'s scheme reads `exec`'s result as an anonymous tag union, and
+        // the callback's `?` lifts it into `Try` at this call. The `Ok`
+        // payload's `trim` dispatch is left to the callable, so its evidence
+        // path's tag step reaches the `Try` and must read its backing.
+        .name = "issue 12624: callable-derived evidence path reads a Try lifted from the scheme's tag union",
+        .source_kind = .module,
+        .source =
+        \\run = |exec| {
+        \\    match exec("a") {
+        \\        Ok(output) => Ok(output.trim())
+        \\        Err(e) => Err("${Str.inspect(e)}")
+        \\    }
+        \\}
+        \\
+        \\main = match run(|_s| {
+        \\    _ = Err(Boom)?
+        \\    crash "unreachable"
+        \\}) {
+        \\    Ok(_) => "ok"
+        \\    Err(msg) => msg
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"Boom\"" },
+    },
+    .{
+        // Checking orders a scheme's evidence by its walk of the scheme's row
+        // chains, so `p.y`, read first, puts `y`'s `is_eq` ahead of `x`'s
+        // `trim`. Boxy pairs each signature dictionary group with its own
+        // checked slot rather than its position in the label-sorted
+        // signature.
+        .name = "dictionary groups read their checked evidence slot when the row reads fields out of label order",
+        .source =
+        \\{
+        \\    run = |p| if p.y == "" p.x.trim() else p.y
+        \\    run({ x: " b ", y: "" })
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"b\"" },
     },
 };

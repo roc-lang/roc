@@ -65,8 +65,8 @@ offset = {{
     Generic.f{args.depth - 1}({offset_arg})
 }}
 
-unused : U64
-unused = crash "unused failing interface root"
+unused : U64 -> U64
+unused = |_| crash "unused failing interface root"
 
 main! = |args| {{
     total = Generic.f{args.depth - 1}(args.len().to_u64() + {main_arg}) + offset

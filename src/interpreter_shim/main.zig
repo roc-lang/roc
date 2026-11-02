@@ -123,7 +123,6 @@ fn bindStaticCallableProgram() void {
         .allocator = allocator(),
         .store = &runtime_state.view.store,
         .layout_store = &runtime_state.view.layouts,
-        .boxy_tables = eval.LirInterpreter.BoxyTables.fromImageView(&runtime_state.view),
         .static_strings = runtime_state.static_strings.view(),
         .static_addresses = runtime_state.static_data.addresses,
         .synchronization_io = shimIo(),
@@ -225,11 +224,10 @@ fn evaluateEntrypointInState(
     const entrypoint = state.entrypoints.forOrdinal(entry_idx) orelse
         invariant("LIR shim invariant violated: missing platform entrypoint ordinal {d}", .{entry_idx});
 
-    const retained = eval.LirInterpreter.Retained.createWithBoxyTables(
+    const retained = eval.LirInterpreter.Retained.create(
         allocator(),
         &view.store,
         &view.layouts,
-        eval.LirInterpreter.BoxyTables.fromImageView(view),
         state.static_strings.view(),
         ops,
         shimIo(),

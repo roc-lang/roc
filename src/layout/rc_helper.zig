@@ -203,6 +203,7 @@ pub const Resolver = struct {
                 .{},
             ),
             .hole => base.invariant("layout/ARC invariant violated: a demand hole has no refcount plan", .{}),
+            .dynamic => base.invariant("layout/ARC invariant violated: a dynamic local is reference counted through its runtime descriptor, never a layout plan", .{}),
             .scalar => switch (l.getScalar().tag) {
                 .str => switch (op) {
                     .incref => .str_incref,
@@ -224,10 +225,6 @@ pub const Resolver = struct {
                 .decref => .{ .box_decref = self.boxPlan(key.layout_idx) },
                 .free => .{ .box_free = self.boxPlan(key.layout_idx) },
             },
-            .erased_box => base.invariant(
-                "layout/ARC invariant violated: erased_box RC requires its explicit Boxy descriptor",
-                .{},
-            ),
             .erased_callable => switch (op) {
                 .incref => .erased_callable_incref,
                 .decref => .erased_callable_decref,

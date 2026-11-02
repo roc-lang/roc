@@ -11,7 +11,6 @@ const can = @import("can");
 const check = @import("check");
 const parse = @import("parse");
 const reporting = @import("reporting");
-const post_check_executor = @import("base").post_check_task_executor;
 const watch_inputs = @import("watch_inputs.zig");
 
 const ModuleEnv = can.ModuleEnv;
@@ -234,8 +233,10 @@ pub const WorkerTask = union(enum) {
     canonicalize: CanonicalizeTask,
     /// Type-check a canonicalized module
     type_check: TypeCheckTask,
-    /// Type-erased post-check work whose context owns all persistent task state.
-    post_check: post_check_executor.Task,
+    /// A token of a post-check session with a task queued: the worker
+    /// taking it runs a task of that session, if one is still queued, and
+    /// delivers the completion to the session itself.
+    post_check: *anyopaque,
 };
 
 /// Result of successfully parsing a module
@@ -436,8 +437,6 @@ pub const WorkerResult = union(enum) {
     operation_failed: WorkerOperationFailure,
     /// A worker stage ran out of memory
     worker_oom: WorkerOom,
-    /// Returned in worker arrival order; `Completion.id` identifies the task.
-    post_check: post_check_executor.Completion,
 
     /// Release a result that shutdown prevented the coordinator from accepting.
     /// Parsed environments have no coordinator owner yet; later stages borrow
@@ -453,7 +452,7 @@ pub const WorkerResult = union(enum) {
                 var storage: CheckedArtifact.ModuleEnvStorage = .{ .checked_source = r.module_env };
                 storage.deinit();
             },
-            .canonicalized, .type_checked, .operation_failed, .worker_oom, .post_check => {},
+            .canonicalized, .type_checked, .operation_failed, .worker_oom => {},
         }
         self.deinit(gpa);
     }
@@ -461,7 +460,6 @@ pub const WorkerResult = union(enum) {
     /// Free any owned memory in the result
     pub fn deinit(self: *WorkerResult, gpa: Allocator) void {
         switch (self.*) {
-            .post_check => {},
             inline .parsed, .canonicalized => |*r| {
                 for (r.discovered_local_imports.items) |imp| {
                     gpa.free(imp.import_name);

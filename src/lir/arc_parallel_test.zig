@@ -85,17 +85,18 @@ const ReverseExecutor = struct {
         for (&self.lane_states) |*lane| lane.deinit();
     }
 
-    fn begin(context: *anyopaque) void {
+    fn begin(context: *anyopaque) std.mem.Allocator.Error!*anyopaque {
         const self: *ReverseExecutor = @ptrCast(@alignCast(context));
         std.debug.assert(self.pending_len == 0);
         self.sessions += 1;
+        return context;
     }
 
     fn selected(self: *ReverseExecutor, id: usize) bool {
         return self.fail_session == self.sessions - 1 and self.fail_task == id;
     }
 
-    fn submit(context: *anyopaque, task: executor.Task) std.mem.Allocator.Error!void {
+    fn submit(context: *anyopaque, _: *anyopaque, task: executor.Task) std.mem.Allocator.Error!void {
         const self: *ReverseExecutor = @ptrCast(@alignCast(context));
         if (self.fail_submit and self.selected(task.id)) return error.OutOfMemory;
         self.pending[self.pending_len] = task;
@@ -103,7 +104,7 @@ const ReverseExecutor = struct {
         self.accepted += 1;
     }
 
-    fn receive(context: *anyopaque) executor.Completion {
+    fn receive(context: *anyopaque, _: *anyopaque) executor.Completion {
         const self: *ReverseExecutor = @ptrCast(@alignCast(context));
         self.pending_len -= 1;
         const task = self.pending[self.pending_len];
@@ -124,7 +125,11 @@ const ReverseExecutor = struct {
         return .{ .id = task.id, .worker_id = worker_id, .value = result };
     }
 
-    fn end(context: *anyopaque) void {
+    fn tryReceive(_: *anyopaque, _: *anyopaque) ?executor.Completion {
+        return null;
+    }
+
+    fn end(context: *anyopaque, _: *anyopaque) void {
         const self: *ReverseExecutor = @ptrCast(@alignCast(context));
         std.debug.assert(self.pending_len == 0);
         self.ended += 1;
@@ -134,9 +139,11 @@ const ReverseExecutor = struct {
         return .{
             .context = self,
             .worker_count = self.lanes,
+            .lane_count = self.lanes,
             .beginFn = begin,
             .submitFn = submit,
             .receiveFn = receive,
+            .tryReceiveFn = tryReceive,
             .endFn = end,
         };
     }
@@ -407,7 +414,7 @@ const UniquenessFixture = struct {
         const rc = try testing.allocator.alloc(bool, self.fixture.store.localCount());
         defer testing.allocator.free(rc);
         @memset(rc, true);
-        return arc_solve.solveWithOptions(testing.allocator, &self.fixture.store, &self.fixture.layouts, rc, .{}, &.{}, true, true, .{
+        return arc_solve.solveWithOptions(testing.allocator, &self.fixture.store, &self.fixture.layouts, rc, &.{}, true, true, .{
             .executor = runner,
             .metrics = metrics,
         });
@@ -857,7 +864,7 @@ const DismantleRangeFixture = struct {
         const store = &self.fixture.store;
         const rc = try arc_solve.computeLocalContainsRefcounted(testing.allocator, store, &self.fixture.layouts);
         defer testing.allocator.free(rc);
-        var solution = try arc_solve.solve(testing.allocator, store, &self.fixture.layouts, rc, .{}, &.{}, true);
+        var solution = try arc_solve.solve(testing.allocator, store, &self.fixture.layouts, rc, &.{}, true);
         defer solution.deinit();
         return arc_dismantle.compute(testing.allocator, store, &self.fixture.layouts, rc, &solution, options);
     }

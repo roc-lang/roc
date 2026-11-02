@@ -114,6 +114,22 @@ pub const SnapshotTagUnion = struct {
     ext: SnapshotContentIdx,
 };
 
+/// Append one row part's entry to the labels gathered into `list` from
+/// `base_idx`, where `outer_end` ends the outer parts' labels. A label an outer
+/// part already holds names the same field or tag (design.md "Row Union
+/// Normalization"), and the row means what it would mean with only the
+/// innermost occurrence, so that occurrence replaces the outer one.
+pub fn appendRowLabel(comptime T: type, list: *collections.SafeMultiList(T), gpa: std.mem.Allocator, base_idx: u32, outer_end: u32, entry: T) std.mem.Allocator.Error!void {
+    const names = list.field(.name);
+    for (names[base_idx..outer_end], base_idx..) |name, index| {
+        if (name.eql(entry.name)) {
+            list.set(@fromBackingInt(@intCast(index)), entry);
+            return;
+        }
+    }
+    _ = try list.append(gpa, entry);
+}
+
 /// A single tag in a snapshotted tag union with its name and argument types.
 pub const SnapshotTag = struct {
     name: Ident.Idx,
@@ -1101,6 +1117,7 @@ pub const Store = struct {
         defer trace.end();
 
         // Add immediate fields
+        const base_idx = fields_out.len();
         const record_fields = self.sliceRecordFields(record.fields);
         for (record_fields.items(.name), record_fields.items(.content), record_fields.items(.presence)) |name, content, presence| {
             _ = try fields_out.append(gpa, .{ .name = name, .content = content, .presence = presence });
@@ -1114,8 +1131,9 @@ pub const Store = struct {
                 .structure => |flat| switch (flat) {
                     .record => |rec| {
                         const ext_fields = self.sliceRecordFields(rec.fields);
+                        const outer_end = fields_out.len();
                         for (ext_fields.items(.name), ext_fields.items(.content), ext_fields.items(.presence)) |name, field_content, presence| {
-                            _ = try fields_out.append(gpa, .{ .name = name, .content = field_content, .presence = presence });
+                            try appendRowLabel(SnapshotRecordField, fields_out, gpa, base_idx, outer_end, .{ .name = name, .content = field_content, .presence = presence });
                         }
                         ext_idx = rec.ext;
                     },

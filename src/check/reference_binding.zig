@@ -1,7 +1,6 @@
 //! Relocate foreign source locators using a producer-owned correspondence.
 //! Type variables, local nodes, solver relationships and dispatch decisions do
 //! not change. The mapper rejects any reference outside its declared domain.
-const std = @import("std");
 const base = @import("base");
 const can = @import("can");
 const CIR = can.CIR;
