@@ -16,9 +16,9 @@ Format := [Plain, Other].{
 }
 
 # The format reaches the derived encoder through a binder of this function,
-# which no restore has.
-encoder_with : Format, shape -> (shape, U64 -> Try(U64, err))
-    where [shape.encoder_for : Format -> (shape, U64 -> Try(U64, err))]
+# which no restore has, at a type only the stored encoding names.
+encoder_with : format, shape -> (shape, U64 -> Try(U64, err))
+    where [shape.encoder_for : format -> (shape, U64 -> Try(U64, err))]
 encoder_with = |format, _| {
     Shape : shape
     Shape.encoder_for(format)

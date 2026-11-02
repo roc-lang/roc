@@ -48,9 +48,9 @@ Format := [Plain, Other].{
 }
 
 # The format reaches the derived parser through a binder of this function,
-# which no restore has.
-parser_with : Format, shape -> (U64 -> Try({ value : shape, rest : U64 }, [FormatError]))
-    where [shape.parser_for : Format -> (U64 -> Try({ value : shape, rest : U64 }, [FormatError]))]
+# which no restore has, at a type only the stored encoding names.
+parser_with : format, shape -> (U64 -> Try({ value : shape, rest : U64 }, [FormatError]))
+    where [shape.parser_for : format -> (U64 -> Try({ value : shape, rest : U64 }, [FormatError]))]
 parser_with = |format, _| {
     Shape : shape
     Shape.parser_for(format)
