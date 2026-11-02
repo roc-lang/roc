@@ -36,6 +36,7 @@ pub const CliArgs = union(enum) {
     version,
     docs: DocsArgs,
     deps: DepsArgs,
+    loc: LocArgs,
     bump: BumpArgs,
     install: InstallArgs,
     experimental_lsp: ExperimentalLspArgs,
@@ -300,6 +301,13 @@ pub const DocsArgs = struct {
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
     root_source_url: ?[]const u8 = null, // internal: bundle URL provenance when the source was a URL or installed shorthand
     main_source_url: ?[]const u8 = null, // internal: bundle URL provenance when --main was a URL or installed shorthand
+};
+
+/// Arguments for `roc loc`
+pub const LocArgs = struct {
+    path: []const u8 = default_roc_file,
+    no_cache: bool = false,
+    resolve_limits: ResolveLimitArgs = .{},
 };
 
 /// Arguments for `roc deps`
@@ -1010,6 +1018,23 @@ const commands = [_]Command{
         .resolve = .limits_and_replace_deps,
         .positionals = &.{.{ .field = "path" }},
         .derived = &.{ "root_source_url", "main_source_url" },
+    },
+    .{
+        .name = "loc",
+        .tag = .loc,
+        .summary = "Count lines of Roc source across the import graph",
+        .about =
+        \\Count lines of Roc source across the import graph, counting shared files once.
+        \\Report application, package, or platform lines separately from local and
+        \\HTTPS dependencies, with a second count excluding comments and blank lines.
+        \\Only imported modules and their package headers are counted. No type
+        \\checking or code execution is performed. Uncached dependencies are downloaded.
+        ,
+        .usage = " [OPTIONS] [ROC_FILE]",
+        .arguments = "  [ROC_FILE]  The root .roc file [default: " ++ default_roc_file ++ "]",
+        .flags = &.{.{ .name = "--no-cache", .field = "no_cache", .help = "Disable source import caching" }},
+        .resolve = .limits_and_replace_deps,
+        .positionals = &.{.{ .field = "path" }},
     },
     .{
         .name = "deps",
@@ -3426,4 +3451,18 @@ test "golden help: roc licenses --help" {
         \\  -h, --help  Print help
         \\
     );
+}
+
+test "roc loc defaults to main.roc and accepts source and dependency options" {
+    const gpa = testing.allocator;
+    const defaults = try parse(gpa, testing.io, &.{"loc"});
+    try testing.expectEqualStrings("main.roc", defaults.loc.path);
+    const explicit = try parse(gpa, testing.io, &.{ "loc", "pkg/main.roc", "--no-cache", "--replace-dep", "old/main.roc", "new/main.roc" });
+    try testing.expectEqualStrings("pkg/main.roc", explicit.loc.path);
+    try testing.expect(explicit.loc.no_cache);
+    try testing.expectEqual(@as(usize, 1), explicit.loc.resolve_limits.replace_deps.len);
+    const extra = try parse(gpa, testing.io, &.{ "loc", "a.roc", "b.roc" });
+    try testing.expectEqualStrings("b.roc", extra.problem.unexpected_argument.arg);
+    const help = try parse(gpa, testing.io, &.{ "loc", "--help" });
+    try testing.expect(std.mem.find(u8, help.help, "without") != null or std.mem.find(u8, help.help, "excluding comments") != null);
 }

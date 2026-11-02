@@ -172,6 +172,7 @@ const renderProblem = cli_context.renderProblem;
 comptime {
     if (builtin.is_test) {
         std.testing.refAllDecls(cli_args);
+        std.testing.refAllDecls(@import("loc.zig"));
         std.testing.refAllDecls(default_app);
         std.testing.refAllDecls(progress);
         std.testing.refAllDecls(targets_validator);
@@ -525,6 +526,7 @@ const CliMainError =
         Crash,
         DivisionByZero,
         DepsFailed,
+        LocFailed,
         DocsFailed,
         EmptyArchive,
         EntrypointNotFound,
@@ -1229,7 +1231,7 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
 
 fn parsedArgsUseCache(args: cli_args.CliArgs) bool {
     return switch (args) {
-        .run, .build, .check, .test_cmd, .docs, .deps, .bump, .glue, .install, .experimental_lsp => true,
+        .run, .build, .check, .test_cmd, .docs, .deps, .loc, .bump, .glue, .install, .experimental_lsp => true,
         .fmt, .bundle, .unbundle, .repl, .version, .help, .licenses, .problem => false,
     };
 }
@@ -1276,7 +1278,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .unbundle => .unbundle,
         .bump => .bump,
         .install => .install,
-        .docs, .deps, .glue, .experimental_lsp, .repl, .version, .help, .licenses, .problem => .unknown,
+        .docs, .deps, .loc, .glue, .experimental_lsp, .repl, .version, .help, .licenses, .problem => .unknown,
     };
 
     // Create CLI context at the top level - this is passed to all command handlers
@@ -1341,6 +1343,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{@import("compiler_version").compiler_version}),
         .docs => |docs_args| rocDocs(&ctx, docs_args),
         .deps => |deps_args| rocDeps(&ctx, deps_args),
+        .loc => |loc_args| rocLoc(&ctx, loc_args),
         .bump => |bump_args| rocBump(&ctx, bump_args),
         .install => |install_args| rocInstall(&ctx, install_args),
         .experimental_lsp => |lsp_args| try lsp.runWithStdIo(gpa, std_io, ctx.coreCtx(), .{
@@ -21258,6 +21261,56 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
             return ctx.fail(.{ .bump_failed = .{ .title = "Cannot Extract Public API", .message = message } });
         },
     };
+}
+
+/// Count the source import graph using the resolver and parser inventories;
+/// no BuildEnv or builtin artifacts are needed for this command.
+fn rocLoc(ctx: *CliCtx, args: cli_args.LocArgs) CliMainError!void {
+    const start = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
+    const source = try resolveSourceArg(ctx, args.path, false);
+    const fs = ctx.coreCtx();
+    const root = fs.canonicalize(source.path, ctx.arena) catch |err| {
+        try ctx.io.stderr().print("Could not count {f}: {s}\n", .{ base.bidi.Display{ .bytes = source.path }, @errorName(err) });
+        return error.LocFailed;
+    };
+    const package_cache = compile.build.packagesCacheDir(fs, ctx.arena) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.NoCacheDir => null,
+    };
+    var fetcher: compile.package_resolution.CtxFetcher = .{ .fs = fs, .gpa = ctx.gpa, .cache_packages_dir = package_cache };
+    var resolver = compile.package_resolution.Resolver.init(ctx.gpa, fetcher.fetcher(), resolutionConfigFromLimits(args.resolve_limits));
+    defer resolver.deinit();
+    if (source.url) |url| resolver.setRootUrl(url);
+    var resolved = resolver.resolve(root) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.ResolutionFailed => {
+            const config = ctx.reportConfig(.stderr);
+            for (resolver.diagnostics.items) |*diagnostic| {
+                if (diagnostic.located) |*report| {
+                    try reporting.renderReportToTerminal(report, ctx.io.stderr(), reporting.ColorUtils.getPaletteForConfig(config), config);
+                } else {
+                    try ctx.io.stderr().print("{s}: {s}\n", .{ diagnostic.title, diagnostic.message });
+                }
+            }
+            return error.LocFailed;
+        },
+    };
+    defer resolved.deinit();
+    var manager = CacheManager.init(ctx.gpa, .{ .enabled = !args.no_cache, .roc_ctx = fs }, fs);
+    var graph = compile.source_graph.Graph.init(ctx.gpa, fs, &manager, &resolved);
+    defer graph.deinit();
+    graph.run() catch |err| {
+        try ctx.io.stderr().print("Could not count {f}", .{base.bidi.Display{ .bytes = graph.failure.path }});
+        if (graph.failure.import_name) |name| try ctx.io.stderr().print(" (import {f})", .{base.bidi.Display{ .bytes = name }});
+        try ctx.io.stderr().print(": {s}\n", .{@errorName(err)});
+        return error.LocFailed;
+    };
+    const stdout = ctx.io.stdout();
+    try @import("loc.zig").render(stdout, graph.rootKind(), graph.totals());
+    const elapsed: u64 = @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - start);
+    try stdout.writeAll("Counted in ");
+    try formatElapsedTimeMs(stdout, elapsed);
+    try stdout.writeByte('\n');
 }
 
 /// `roc deps`: resolve the root's dependency graph and print it as a tree
