@@ -59,7 +59,7 @@ fn measure(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLi
 }
 
 /// `Json.parse` into a record of `fields` fields, each of its own tag union.
-fn longestBlockAt(fields: usize, strategy: base.SpecializationStrategy) !usize {
+fn longestBlockAt(fields: usize, strategy: base.SpecializationStrategy) (std.Io.Writer.Error || harness.LowerToLirHarnessError)!usize {
     var app: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer app.deinit();
     try app.writer.writeAll("Model : {\n");
