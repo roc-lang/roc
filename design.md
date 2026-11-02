@@ -20252,8 +20252,8 @@ and the nominal rarely meet. A record row keeps its structural layout whichever
 nominals back onto it: several can, with different orders or different padding,
 and a plain record of the same fields is a value of that row. They meet where a
 type stays fixed across uses, a compile-time value read at a lifted type, and the
-read's typed boundary converts it: field by field for a record, and element by
-element for a list, in a loop that builds a new list of the target's layout. The
+read's typed boundary converts it: field by field for a record, and item by
+item for a list, in a loop that builds a new list of the target's layout. The
 loop runs only where the two layouts differ.
 
 An unnamed field instantiates with its nominal and terminates as a backing does:
