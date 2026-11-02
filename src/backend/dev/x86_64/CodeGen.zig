@@ -489,19 +489,6 @@ pub fn CodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Load `value` with an encoding whose immediate `patchImm32` can
-        /// rewrite in place. Returns the immediate's offset.
-        pub fn emitPatchableImm32(self: *Self, dst: GeneralReg, value: u32) Allocator.Error!usize {
-            const start = self.currentOffset();
-            try self.emit.movRegImm32(dst, @intCast(value));
-            return start + 3;
-        }
-
-        /// Rewrite the immediate `emitPatchableImm32` placed at `site`.
-        pub fn patchImm32(code: []u8, site: usize, value: u32) void {
-            std.mem.writeInt(u32, code[site..][0..4], value, .little);
-        }
-
         pub fn emitLoadDataAddress(self: *Self, dst: GeneralReg, symbol: SymbolTable.Id) Allocator.Error!void {
             const start = self.currentOffset();
             try self.emit.leaRegRipRel(dst, 0);

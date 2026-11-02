@@ -289,6 +289,7 @@ test "loc graph follows transitive imports and aliases, deduplicates diamonds an
     const cache_dir = try std.fs.path.join(gpa, &.{ root, "cache" });
     defer gpa.free(cache_dir);
     var manager = CacheManager.init(gpa, .{ .cache_dir = cache_dir }, fs);
+    defer manager.deinit();
     for (0..3) |run| {
         manager.config.enabled = run != 2;
         var graph = Graph.init(gpa, fs, &manager, &resolved);

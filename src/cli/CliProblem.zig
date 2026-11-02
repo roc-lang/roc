@@ -122,6 +122,17 @@ pub const CliProblem = union(enum) {
     /// The command line arguments could not be parsed
     invalid_arguments: cli_args.ArgProblem,
 
+    // Target Limit Problems
+
+    /// A platform boundary function takes more wasm parameters than an engine
+    /// loads, and the host fixes its signature
+    wasm_host_parameter_limit: struct {
+        symbol: []const u8,
+        direction: WasmHostDirection,
+        param_count: u32,
+        limit: u32,
+    },
+
     // File I/O Problems
 
     /// File was not found at the specified path
@@ -406,6 +417,7 @@ pub const CliProblem = union(enum) {
         return switch (self) {
             // Fatal errors - cannot continue
             .invalid_arguments,
+            .wasm_host_parameter_limit,
             .file_not_found,
             .no_platform_found,
             .platform_requires_app,
@@ -462,6 +474,7 @@ pub const CliProblem = union(enum) {
     pub fn toReport(self: CliProblem, allocator: Allocator) Allocator.Error!Report {
         return switch (self) {
             .invalid_arguments => |problem| try createInvalidArgumentsReport(allocator, problem),
+            .wasm_host_parameter_limit => |info| try createWasmHostParameterLimitReport(allocator, info),
             .file_not_found => |info| try createFileNotFoundReport(allocator, info),
             .file_read_failed => |info| try createFileReadFailedReport(allocator, info),
             .file_write_failed => |info| try createFileWriteFailedReport(allocator, info),
@@ -509,6 +522,13 @@ pub const CliProblem = union(enum) {
             .no_exports_found => |info| try createNoExportsFoundReport(allocator, info),
         };
     }
+};
+
+/// Which side of a platform boundary defines a function the host calls or
+/// provides.
+pub const WasmHostDirection = enum {
+    provided_to_host,
+    hosted,
 };
 
 /// Context for file operations - helps generate better error messages
@@ -885,6 +905,22 @@ fn createFileWriteFailedReport(allocator: Allocator, info: anytype) Allocator.Er
 
 fn createDirectoryCreateFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     return createPathErrorNameReport(allocator, "Directory Create Failed", "I could not create the directory ", info.path, ".", .runtime_error, @errorName(info.err));
+}
+
+fn createWasmHostParameterLimitReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    var report = try Report.init(allocator, "Too Many Wasm Parameters", "A platform function has more wasm parameters than an engine will load.", .runtime_error);
+
+    try report.document.addText(switch (info.direction) {
+        .provided_to_host => "The platform provides ",
+        .hosted => "The platform's host defines ",
+    });
+    try report.document.addAnnotated(info.symbol, .path);
+    try report.document.addText(try std.fmt.allocPrint(allocator, " with {d} wasm parameters, and WebAssembly engines reject a function with more than {d}.", .{ info.param_count, info.limit }));
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Roc passes extra arguments in memory between its own functions, but the host fixes this function's signature. Grouping arguments into a record crosses the boundary as a single parameter.");
+
+    return report;
 }
 
 fn createDirectoryNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {

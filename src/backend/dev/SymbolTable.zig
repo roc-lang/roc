@@ -18,8 +18,7 @@ pub const Scope = enum {
     /// data named by content.
     shared,
     /// Meaningful only in the program whose code declared it: the value in a
-    /// static-data slot and the evaluator's cell holding its address, and the
-    /// Boxy runtime, whose calls index this program's descriptor sidecar.
+    /// static-data slot and the evaluator's cell holding its address.
     program,
 };
 

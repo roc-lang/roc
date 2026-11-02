@@ -82,22 +82,18 @@ pub const Retained = struct {
     /// Final image/object linking consumes carried data separately from code.
     /// The returned slice is caller-owned; its fields borrow this retained owner.
     pub fn dataItems(self: *const Retained, allocator: Allocator) Allocator.Error![]const Excerpt.DataItem {
-        var items: std.ArrayList(Excerpt.DataItem) = .empty;
+        var collector = Excerpt.DataCollector{ .allocator = allocator };
+        defer collector.deinit();
+        for (self.procedures.items) |proc| for (proc.fragment.set.excerpts) |excerpt| try collector.add(excerpt);
+        for (self.helpers.items) |helper| for (helper.fragment.set.excerpts) |excerpt| try collector.add(excerpt);
+        var items = std.ArrayList(Excerpt.DataItem).empty;
         errdefer items.deinit(allocator);
         var names = std.StringHashMap(void).init(allocator);
         defer names.deinit();
-        for (self.procedures.items) |proc| try collectData(allocator, &proc.fragment, &items, &names);
-        for (self.helpers.items) |helper| try collectData(allocator, &helper.fragment, &items, &names);
-        return items.toOwnedSlice(allocator);
-    }
-
-    fn collectData(allocator: Allocator, fragment: *const Excerpt.Fragment, items: *std.ArrayList(Excerpt.DataItem), names: *std.StringHashMap(void)) Allocator.Error!void {
-        for (fragment.set.excerpts) |excerpt| {
-            for (excerpt.data) |item| {
-                const entry = try names.getOrPut(item.name);
-                if (!entry.found_existing) try items.append(allocator, item);
-            }
+        for (collector.items.items) |item| {
+            if (!(try names.getOrPut(item.name)).found_existing) try items.append(allocator, item);
         }
+        return items.toOwnedSlice(allocator);
     }
 
     /// Release all fragment and collection storage.
@@ -127,8 +123,7 @@ fn reusable(source: Emitter.FragmentContract, target: Emitter.FragmentContract, 
     if (source.hot_reload != target.hot_reload or
         source.default_platform_runtime != target.default_platform_runtime or
         (source.static_data_readonly != target.static_data_readonly and deps.static_data) or
-        deps.static_data or
-        (source.initialize_boxy_runtime != target.initialize_boxy_runtime and deps.boxy_runtime_entry))
+        deps.static_data)
     {
         metrics.rejected_context +|= 1;
         return false;
@@ -162,14 +157,11 @@ fn Job(comptime CG: type) type {
 
         fn compile(self: *@This(), worker: tasks.Worker) Excerpt.ExtractError!void {
             const source = self.source;
-            var cg = try CG.initWithBoxyMetadata(
+            var cg = try CG.initWithCapturePrefix(
                 worker.scratch,
                 source.store,
                 source.layout_store,
                 source.static_strings,
-                source.erased_arg_desc_offsets,
-                source.erased_arg_desc_params,
-                source.boxy_worker_procs,
                 source.erased_capture_prefix,
                 source.cpu_level,
             );
@@ -323,7 +315,6 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
         for (storage[0..count]) |*job| {
             const fragment = &job.fragment.?;
             try requireHelpers(allocator, fragment, &helper_queue, &helper_seen);
-            destination.boxy_runtime_used = destination.boxy_runtime_used or fragment.context_dependencies.boxy_runtime;
             Excerpt.appendPrepared(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
             const id = job.proc.?;
             const spec = specs[@backingInt(id)];
@@ -365,14 +356,12 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
                 allocator.free(name);
                 return err;
             };
-            destination.boxy_runtime_used = destination.boxy_runtime_used or fragment.context_dependencies.boxy_runtime;
             Excerpt.appendPrepared(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
             try retained.helpers.append(allocator, .{ .key = job.helper, .fragment = fragment.* });
             account(&metrics, fragment, job.reused, true);
             job.fragment = null;
         }
     }
-    destination.generateBoxyDictProcThunks() catch |err| return invariant(err);
     destination.resolveAssembledSymbolicRefs() catch |err| return invariant(err);
     return retained;
 }
@@ -390,10 +379,12 @@ const TestExecutor = struct {
     lanes: usize,
 
     fn executor(self: *@This()) tasks.Executor {
-        return .{ .context = self, .worker_count = self.lanes, .beginFn = begin, .submitFn = submit, .receiveFn = receive, .endFn = end };
+        return .{ .context = self, .worker_count = self.lanes, .lane_count = self.lanes, .beginFn = begin, .submitFn = submit, .receiveFn = receive, .tryReceiveFn = tryReceive, .endFn = end };
     }
-    fn begin(_: *anyopaque) void {}
-    fn submit(context: *anyopaque, task: tasks.Task) Allocator.Error!void {
+    fn begin(context: *anyopaque) std.mem.Allocator.Error!*anyopaque {
+        return context;
+    }
+    fn submit(context: *anyopaque, _: *anyopaque, task: tasks.Task) Allocator.Error!void {
         const self: *@This() = @ptrCast(@alignCast(context));
         if (self.submitted == self.fail_after) return error.OutOfMemory;
         std.debug.assert(self.len < self.lanes);
@@ -401,7 +392,7 @@ const TestExecutor = struct {
         self.len += 1;
         self.submitted += 1;
     }
-    fn receive(context: *anyopaque) tasks.Completion {
+    fn receive(context: *anyopaque, _: *anyopaque) tasks.Completion {
         const self: *@This() = @ptrCast(@alignCast(context));
         self.len -= 1;
         const task = self.pending[self.len];
@@ -419,7 +410,10 @@ const TestExecutor = struct {
         self.received += 1;
         return .{ .id = task.id, .worker_id = self.len, .value = value };
     }
-    fn end(context: *anyopaque) void {
+    fn tryReceive(_: *anyopaque, _: *anyopaque) ?tasks.Completion {
+        return null;
+    }
+    fn end(context: *anyopaque, _: *anyopaque) void {
         const self: *@This() = @ptrCast(@alignCast(context));
         std.debug.assert(self.len == 0 and self.received == self.submitted);
     }
@@ -459,7 +453,7 @@ test "native driver serial reverse lanes own identical executable excerpts and r
     for ([_]usize{ 0, 1, 2, 4 }) |lanes| {
         var executor = TestExecutor{ .allocator = a, .lane = tasks.LaneState.init(a), .lanes = lanes };
         defer executor.lane.deinit();
-        var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
+        var cg = try CG.init(a, &store, &layouts, .{}, .default);
         defer cg.deinit();
         var metrics: Metrics = .{};
         var retained = try run(CG, a, &cg, &demand, .{
@@ -485,7 +479,7 @@ test "native driver serial reverse lanes own identical executable excerpts and r
         cache = retained;
     }
     // Every source CG, executable and executor lane is dead before reuse.
-    var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
+    var cg = try CG.init(a, &store, &layouts, .{}, .default);
     defer cg.deinit();
     var metrics: Metrics = .{};
     var reused = try run(CG, a, &cg, &demand, .{ .target = cg.getFragmentContract().target, .reuse_same_program = &cache.?, .metrics_out = &metrics });
@@ -519,7 +513,7 @@ test "native driver drains submission output and scratch OOM before cleanup" {
             .fail_scratch = failure == 2,
         };
         defer executor.lane.deinit();
-        var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
+        var cg = try CG.init(a, &store, &layouts, .{}, .default);
         defer cg.deinit();
         var metrics: Metrics = .{};
         try std.testing.expectError(error.OutOfMemory, run(CG, a, &cg, &demand, .{
@@ -539,7 +533,6 @@ test "native driver reuse contract is directional and dependency sensitive" {
         .cpu_level = .default,
         .hot_reload = false,
         .default_platform_runtime = false,
-        .initialize_boxy_runtime = false,
         .static_data_readonly = false,
     };
     var runtime = source;
@@ -549,7 +542,6 @@ test "native driver reuse contract is directional and dependency sensitive" {
     try std.testing.expect(!reusable(source, runtime, .{}, &metrics));
     runtime.hot_reload = false;
     try std.testing.expect(!reusable(source, source, .{ .static_data = true }, &metrics));
-    try std.testing.expect(reusable(source, runtime, .{ .boxy_runtime = true }, &metrics));
     runtime.target = .arm64linux;
     try std.testing.expect(!reusable(source, runtime, .{}, &metrics));
     runtime.target = source.target;
@@ -568,7 +560,6 @@ test "native driver retained libc fragments remain target specific" {
         .cpu_level = .default,
         .hot_reload = false,
         .default_platform_runtime = false,
-        .initialize_boxy_runtime = false,
         .static_data_readonly = false,
     };
     var target = source;
@@ -590,7 +581,7 @@ test "native driver reuse survives procedure compaction and rejects changed revi
     try program.root_procs.append(a, original);
     const CG = Emitter.HostLirCodeGen;
     var cache = blk: {
-        var cg = try CG.init(a, store, &program.layouts, .{}, &.{}, .default);
+        var cg = try CG.init(a, store, &program.layouts, .{}, .default);
         defer cg.deinit();
         break :blk try run(CG, a, &cg, &.{original}, .{ .target = cg.getFragmentContract().target });
     };
@@ -600,7 +591,7 @@ test "native driver reuse survives procedure compaction and rejects changed revi
     try std.testing.expect(compacted != original);
     for (0..2) |revision| {
         store.getProcSpecPtr(compacted).native_code_revision = revision;
-        var cg = try CG.init(a, store, &program.layouts, .{}, &.{}, .default);
+        var cg = try CG.init(a, store, &program.layouts, .{}, .default);
         defer cg.deinit();
         var metrics: Metrics = .{};
         var retained = try run(CG, a, &cg, &.{ compacted, compacted }, .{
@@ -635,7 +626,7 @@ test "native driver owns and reuses complete static helper closure" {
     var cache: ?Retained = null;
     defer if (cache) |*owner| owner.deinit();
     for (0..2) |iteration| {
-        var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
+        var cg = try CG.init(a, &store, &layouts, .{}, .default);
         defer cg.deinit();
         var executor = TestExecutor{ .allocator = a, .lane = tasks.LaneState.init(a), .lanes = 4 };
         defer executor.lane.deinit();
@@ -689,7 +680,7 @@ test "native driver helper waves keep the serial queue order at every lane count
     for ([_]usize{ 0, 1, 2, 4 }) |lanes| {
         var executor = TestExecutor{ .allocator = a, .lane = tasks.LaneState.init(a), .lanes = lanes };
         defer executor.lane.deinit();
-        var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
+        var cg = try CG.init(a, &store, &layouts, .{}, .default);
         defer cg.deinit();
         var metrics: Metrics = .{};
         var retained = try run(CG, a, &cg, &.{}, .{
@@ -727,7 +718,7 @@ fn testCoordinatorAllocationFailure(a: Allocator) Allocator.Error!void {
     defer layouts.deinit();
     const id = try testProc(&store, 42);
     const CG = Emitter.HostLirCodeGen;
-    var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
+    var cg = try CG.init(a, &store, &layouts, .{}, .default);
     defer cg.deinit();
     // Workers succeed independently; enumerate coordinator/append allocations.
     var executor = TestExecutor{ .allocator = backing, .lane = tasks.LaneState.init(backing), .lanes = 2 };
@@ -773,7 +764,7 @@ test "native driver shared literal data outlives source and reused fragment owne
     var cache = blk: {
         var strings = try @import("StaticStringData.zig").build(a, &store, roc_target.RocTarget.detectNative());
         defer strings.deinit();
-        var cg = try CG.init(a, &store, &layouts, strings.view(), &.{}, .default);
+        var cg = try CG.init(a, &store, &layouts, strings.view(), .default);
         defer cg.deinit();
         var executor = TestExecutor{ .allocator = a, .lane = tasks.LaneState.init(a), .lanes = 2 };
         defer executor.lane.deinit();
@@ -784,7 +775,7 @@ test "native driver shared literal data outlives source and reused fragment owne
     };
     var cache_live = true;
     defer if (cache_live) cache.deinit();
-    var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
+    var cg = try CG.init(a, &store, &layouts, .{}, .default);
     defer cg.deinit();
     var metrics: Metrics = .{};
     var retained = try run(CG, a, &cg, &demand, .{

@@ -505,6 +505,10 @@ data_segments: std.ArrayList(DataSegment),
 owned_segment_names: std.ArrayList([]u8),
 /// Symbol names this module allocated (`mergeLinkedObject`).
 owned_symbol_names: std.ArrayList([]u8),
+/// The undefined function symbol, by name, of each function a static data
+/// export's function pointer names before code defines it
+/// (`defineForwardFunction`).
+forward_functions: std.StringHashMapUnmanaged(u32) = .empty,
 omit_zero_fill_data_segments: bool,
 /// Next available offset for data placement in linear memory (grows up from 0).
 data_offset: u32,
@@ -612,6 +616,7 @@ pub fn deinit(self: *Self) void {
     self.data_segments.deinit(self.allocator);
     for (self.owned_segment_names.items) |name| self.allocator.free(name);
     self.owned_segment_names.deinit(self.allocator);
+    self.forward_functions.deinit(self.allocator);
     for (self.owned_symbol_names.items) |name| self.allocator.free(name);
     self.owned_symbol_names.deinit(self.allocator);
     self.table_func_indices.deinit(self.allocator);
@@ -1322,7 +1327,18 @@ fn staticDataRelocationSymbol(
         .index = 0,
     });
     try function_index.record(relocation.target_symbol_name, raw_symbol);
+    try self.forward_functions.put(self.allocator, relocation.target_symbol_name, raw_symbol);
     return SymbolIndex.fromRaw(raw_symbol);
+}
+
+/// Define the function a static data export's function pointer named
+/// before code defined it: the export's relocations then resolve to
+/// `function`.
+pub fn defineForwardFunction(self: *Self, name: []const u8, function: u32, flags: u32) void {
+    const entry = self.forward_functions.fetchRemove(name) orelse return;
+    const sym = &self.linking.symbol_table.items[entry.value];
+    sym.flags = flags;
+    sym.index = function;
 }
 
 /// Enable the __stack_pointer global (global index 0).
@@ -2322,6 +2338,10 @@ pub fn resolveDataRelocations(self: *Self) RelocationError!void {
 
 /// Resolve both code and data relocations in place.
 pub fn resolveRelocations(self: *Self) RelocationError!void {
+    if (self.forward_functions.count() != 0) {
+        var names = self.forward_functions.keyIterator();
+        return logInvalidRelocation("static data names function {s}, which no code defines", .{names.next().?.*});
+    }
     try self.resolveCodeRelocations();
     try self.resolveDataRelocations();
 }
@@ -2373,24 +2393,6 @@ pub fn materializeFuncBodies(self: *Self) Allocator.Error!void {
 pub fn verifyNoBuiltinImports(self: *const Self) error{UnresolvedBuiltinImport}!void {
     for (self.imports.items) |imp| {
         if (!isAllowedBuiltinImport(imp.field_name) and std.mem.startsWith(u8, imp.field_name, "roc_")) {
-            return error.UnresolvedBuiltinImport;
-        }
-    }
-}
-
-/// Verify that a relocatable object's undefined function symbols contain no
-/// references in an explicitly owned ABI namespace. Resolved symbols can leave
-/// dead import entries until the final linker compacts function indices, so
-/// symbol state—not the raw import list—is the correctness boundary for an
-/// object.
-pub fn verifyNoUndefinedFunctionSymbolsInNamespace(
-    self: *const Self,
-    namespace: []const u8,
-) error{UnresolvedBuiltinImport}!void {
-    for (self.linking.symbol_table.items) |sym| {
-        if (sym.kind != .function or !sym.isUndefined()) continue;
-        const name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse continue;
-        if (std.mem.startsWith(u8, name, namespace)) {
             return error.UnresolvedBuiltinImport;
         }
     }
@@ -6471,23 +6473,6 @@ test "verifyNoBuiltinImports—allows roc_panic platform import" {
     _ = try module.addImport("env", "roc_panic", 0);
 
     try module.verifyNoBuiltinImports();
-}
-
-test "verifyNoUndefinedFunctionSymbolsInNamespace—uses relocatable symbol resolution state" {
-    const allocator = std.testing.allocator;
-    var module = Self.init(allocator);
-    defer module.deinit();
-
-    const type_idx = try module.addFuncType(&.{}, &.{});
-    const imported = try module.addFunctionImportWithSymbol("env", "roc_boxy_register_proc", type_idx);
-    try std.testing.expectError(
-        error.UnresolvedBuiltinImport,
-        module.verifyNoUndefinedFunctionSymbolsInNamespace("roc_boxy_"),
-    );
-
-    const symbol = &module.linking.symbol_table.items[imported.symbol.raw()];
-    symbol.flags &= ~WasmLinking.SymFlag.UNDEFINED;
-    try module.verifyNoUndefinedFunctionSymbolsInNamespace("roc_boxy_");
 }
 
 test "sealRocObject keeps only provides global and localizes compiler support" {

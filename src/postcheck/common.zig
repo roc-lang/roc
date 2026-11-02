@@ -252,7 +252,7 @@ pub fn primitiveLayout(primitive: checked.CheckedPrimitive) layout.Idx {
     };
 }
 
-/// The inspection operation shared by Monotype and Boxy for a primitive type.
+/// The inspection operation for a primitive type.
 pub const PrimitiveInspectLowering = union(enum) {
     low_level: LIR.LowLevel,
     builtin_method,

@@ -65,10 +65,13 @@ pub fn call(callable: erased.CallableFnPtr, ret: ?[*]u8, args: ?[*]const u8, cap
 pub fn deferCall(callable: erased.CallableFnPtr, closure: [*]u8, args: ?[*]const u8, args_len: usize) void {
     const state = Selection.get();
     std.debug.assert(state.pending == null);
-    const ops = host.ops();
-    const bytes: [*]align(16) u8 = @ptrCast(@alignCast(ops.allocRaw(@max(args_len, 1), 16)));
-    if (args_len != 0) @memcpy(bytes[0..args_len], args.?[0..args_len]);
-    state.pending = .{ .callable = callable, .closure = closure, .args = bytes[0..args_len] };
+    // A call without arguments carries no argument bytes to copy out.
+    const bytes: []align(16) u8 = if (args_len == 0) &.{} else copy: {
+        const copied: [*]align(16) u8 = @ptrCast(@alignCast(host.ops().allocRaw(args_len, 16)));
+        @memcpy(copied[0..args_len], args.?[0..args_len]);
+        break :copy copied[0..args_len];
+    };
+    state.pending = .{ .callable = callable, .closure = closure, .args = bytes };
 }
 
 /// Tail-drive's result slot has the same concrete ABI throughout the chain.
@@ -81,7 +84,7 @@ pub fn drive(ret: ?[*]u8) void {
         // This is the ownership transfer explicitly requested by ARC's
         // deferred-call statement, not a backend-inferred capture release.
         erased.decref(pending.closure, ops);
-        ops.dealloc(pending.args.ptr, 16);
+        if (pending.args.len != 0) ops.dealloc(pending.args.ptr, 16);
     }
 }
 

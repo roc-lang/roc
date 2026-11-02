@@ -120,7 +120,7 @@ const Analysis = struct {
                 try self.joins.put(stmt.join.id, stmt_id);
             } else if (stmt.* == .assign_tag) {
                 const tag = stmt.assign_tag;
-                if (tag.payload == null and tag.target_desc == .none and defs.get(tag.target) == 1) {
+                if (tag.payload == null and defs.get(tag.target) == 1) {
                     try self.tag_defs.put(tag.target, tag.discriminant);
                 }
             } else if (stmt.* == .assign_literal) {
@@ -235,7 +235,7 @@ const Analysis = struct {
                     });
                     try skipped.put(assign.target, {});
                     cursor = assign.next;
-                } else if (stmt.* == .assign_struct and stmt.assign_struct.contents_desc == .none) {
+                } else if (stmt.* == .assign_struct) {
                     const assign = stmt.assign_struct;
                     try env.put(assign.target, .{ .fields = try self.resolveSpan(&env, assign.fields) });
                     try skipped.put(assign.target, {});
@@ -501,7 +501,6 @@ const ExitProbe = struct {
             },
             .assign_literal => return true,
             .assign_struct => |assign| {
-                if (assign.contents_desc != .none) return false;
                 const locals = store.getLocalSpan(assign.fields);
                 const fields = try probe.analysis.allocator.alloc(?Difference, locals.len);
                 var any = false;
@@ -518,19 +517,7 @@ const ExitProbe = struct {
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
+            .dyn,
             .assign_low_level,
             .assign_list,
             .assign_tag,
@@ -574,8 +561,6 @@ fn boolLiteralDiscriminant(store: *const LirStore, value: LIR.LiteralValue) ?u32
         .f32_literal,
         .dec_literal,
         .str_literal,
-        .boxy_dynamic_num_literal,
-        .boxy_dynamic_frac_literal,
         .static_data,
         .bytes_literal,
         .proc_ref,
@@ -587,9 +572,9 @@ fn boolLiteralDiscriminant(store: *const LirStore, value: LIR.LiteralValue) ?u32
 /// payload-free tags, literals, structs, and join-parameter writes.
 fn edgeStatement(store: *const LirStore, stmt: LIR.CFStmt) bool {
     if (stmt == .assign_ref) return stmt.assign_ref.op.kind == .local and store.stmtRowOrDefault(stmt.assign_ref.extra).take_kind == .none;
-    if (stmt == .assign_tag) return stmt.assign_tag.payload == null and stmt.assign_tag.target_desc == .none;
+    if (stmt == .assign_tag) return stmt.assign_tag.payload == null;
     if (stmt == .assign_literal) return true;
-    if (stmt == .assign_struct) return stmt.assign_struct.contents_desc == .none;
+    if (stmt == .assign_struct) return true;
     if (stmt == .set_local) return stmt.set_local.mode == .initialize_join_param;
     return false;
 }

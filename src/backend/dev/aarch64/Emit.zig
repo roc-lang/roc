@@ -917,6 +917,11 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.addRegRegReg(.w64, dst, base, dst);
         }
 
+        /// LDAR: acquire-load one pointer-sized word, including its publication.
+        pub fn ldarRegMem(self: *Self, dst: GeneralReg, base: GeneralReg) Allocator.Error!void {
+            try self.emit32(0xc8dffc00 | (@as(u32, base.enc()) << 5) | dst.enc());
+        }
+
         /// LDR (load register) with unsigned offset
         pub fn ldrRegMemUoff(self: *Self, width: RegisterWidth, dst: GeneralReg, base: GeneralReg, uoffset: u12) Allocator.Error!void {
             // LDR <Xt>, [<Xn|SP>, #<pimm>]
@@ -2088,4 +2093,11 @@ test "pc-relative address sequence reaches targets past ADR's range" {
             );
         }
     }
+}
+
+test "boxy composition acquire load encoding" {
+    var asm_buf = LinuxEmit.init(std.testing.allocator);
+    defer asm_buf.deinit();
+    try asm_buf.ldarRegMem(.X0, .X1);
+    try std.testing.expectEqualSlices(u8, &.{ 0x20, 0xfc, 0xdf, 0xc8 }, asm_buf.buf.items);
 }

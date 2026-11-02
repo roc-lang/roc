@@ -55,10 +55,6 @@ const ProcScan = struct {
                     result.call_count += 1;
                     try stack.append(allocator, assign.next);
                 },
-                .assign_call_dict => |assign| {
-                    result.call_count += 1;
-                    try stack.append(allocator, assign.next);
-                },
                 .switch_stmt => |switch_stmt| {
                     const branches = store.getCFSwitchBranches(switch_stmt.branches);
                     for (0..GuardedList.borrowLen(branches)) |branch_index| {
@@ -84,29 +80,15 @@ const ProcScan = struct {
                     }
                     try stack.append(allocator, str_match_set.on_miss);
                 },
-                .boxy_tag_match => |tag_match| {
-                    try stack.append(allocator, tag_match.on_match);
-                    try stack.append(allocator, tag_match.on_miss);
-                },
                 .join => |join_stmt| {
                     try stack.append(allocator, join_stmt.body);
                     try stack.append(allocator, join_stmt.remainder);
                 },
                 inline .assign_ref,
+                .dyn,
                 .assign_literal,
                 .init_uninitialized,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
                 .assign_list,
                 .assign_struct,
                 .assign_tag,

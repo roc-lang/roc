@@ -47,10 +47,15 @@ pub const Objects = struct {
     arena: Allocator,
     /// Same compiler/format/target/optimization namespace as program records.
     root: ?Cache,
+    /// The store session the link's lookups and publications go through.
+    session: ?artifacts.Session,
 
     scratch: []const u8,
     lease: std.Io.File,
     counters: Counters = .{},
+    /// Serializes the arena and the counters: units materialize their
+    /// objects from the post-check workers.
+    mutex: std.Io.Mutex = .init,
 
     /// Why taking the link lease can fail.
     pub const InitError = Allocator.Error || std.Io.File.OpenError;
@@ -60,10 +65,13 @@ pub const Objects = struct {
     pub fn init(core: CoreCtx, arena: Allocator, root: ?Cache, scratch: []const u8) InitError!Objects {
         const lock_path = try std.fs.path.join(arena, &.{ scratch, "link.lock" });
         const lease = try std.Io.Dir.cwd().createFile(core.std_io, lock_path, .{ .read = true, .exclusive = true, .lock = .exclusive });
-        return .{ .core = core, .arena = arena, .root = root, .scratch = scratch, .lease = lease };
+        errdefer lease.close(core.std_io);
+        const session: ?artifacts.Session = if (root) |cache| try artifacts.Session.init(&cache.store) else null;
+        return .{ .core = core, .arena = arena, .root = root, .session = session, .scratch = scratch, .lease = lease };
     }
 
     pub fn deinit(self: *Objects) void {
+        if (self.session) |*session| session.deinit();
         self.lease.close(self.core.std_io);
     }
 
@@ -73,11 +81,14 @@ pub const Objects = struct {
 
     fn cachePath(self: *Objects, id: Identity) Allocator.Error!?[]const u8 {
         const cache = self.root orelse return null;
-        var artifact = (cache.store.acquire(cache.key(id), cache.store.now()) catch |err| switch (err) {
+        const session = &self.session.?;
+        var artifact = (session.acquire(cache.key(id), session.now()) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return null,
         }) orelse return null;
         defer artifact.deinit();
+        self.mutex.lockUncancelable(self.core.std_io);
+        defer self.mutex.unlock(self.core.std_io);
         return try self.arena.dupe(u8, artifact.path);
     }
 
@@ -89,12 +100,13 @@ pub const Objects = struct {
 
     fn findKnown(self: *Objects, id: Identity, expected: ?[]const u8) Allocator.Error!?[]const u8 {
         const cache = self.root orelse return null;
-        var artifact = (cache.store.acquire(cache.key(id), cache.store.now()) catch |err| switch (err) {
+        const session = &self.session.?;
+        var artifact = (session.acquire(cache.key(id), session.now()) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return null,
         }) orelse return null;
         defer artifact.deinit();
-        const path = try std.fs.path.join(self.arena, &.{ self.scratch, try self.name(id) });
+        const path = try self.scratchPath(id);
         self.core.hardLink(artifact.path, path) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return null,
@@ -103,8 +115,25 @@ pub const Objects = struct {
             self.core.deleteFile(path) catch {};
             return null;
         }
-        self.counters.reused += id.size;
+        self.addCount(.reused, id.size);
         return path;
+    }
+
+    /// The object's scratch path, allocated under the mutex.
+    fn scratchPath(self: *Objects, id: Identity) Allocator.Error![]const u8 {
+        self.mutex.lockUncancelable(self.core.std_io);
+        defer self.mutex.unlock(self.core.std_io);
+        return try std.fs.path.join(self.arena, &.{ self.scratch, try self.name(id) });
+    }
+
+    fn addCount(self: *Objects, comptime counter: enum { written, reused, validated }, bytes: u64) void {
+        self.mutex.lockUncancelable(self.core.std_io);
+        defer self.mutex.unlock(self.core.std_io);
+        switch (counter) {
+            .written => self.counters.written += bytes,
+            .reused => self.counters.reused += bytes,
+            .validated => self.counters.validated += bytes,
+        }
     }
 
     fn validate(self: *Objects, path: []const u8, id: Identity, expected: ?[]const u8) bool {
@@ -118,7 +147,7 @@ pub const Objects = struct {
         while (offset < id.size) {
             const size: usize = @intCast(@min(buffer.len, id.size - offset));
             const count = file.readPositionalAll(self.core.std_io, buffer[0..size], offset) catch return false;
-            self.counters.validated += count;
+            self.addCount(.validated, count);
             if (count != size) return false;
             if (expected) |bytes| {
                 const start: usize = @intCast(offset);
@@ -144,7 +173,7 @@ pub const Objects = struct {
     pub fn materializeKnown(self: *Objects, bytes: []const u8, id: Identity) MaterializeError![]const u8 {
         std.debug.assert(bytes.len == id.size);
         if (try self.findKnown(id, bytes)) |path| return path;
-        const path = try std.fs.path.join(self.arena, &.{ self.scratch, try self.name(id) });
+        const path = try self.scratchPath(id);
         // A failed lookup removed any invalid pin. Never truncate an inode
         // which another invocation could be linking.
         self.core.deleteFile(path) catch |err| switch (err) {
@@ -152,9 +181,10 @@ pub const Objects = struct {
             else => return err,
         };
         try backend.writeFileWindowsAvSafe(self.core.std_io, path, bytes);
-        self.counters.written += bytes.len;
+        self.addCount(.written, bytes.len);
         if (self.root) |cache| {
-            var staging = cache.store.reserve(cache.key(id), bytes.len, cache.store.now()) catch |err| switch (err) {
+            const session = &self.session.?;
+            var staging = session.reserve(cache.key(id), bytes.len, session.now()) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => return path,
             };

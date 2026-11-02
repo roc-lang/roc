@@ -119,11 +119,10 @@ defer view.deinit();
 //    value the interpreter returns, since big strings point into it.
 var static_strings = try eval.LirInterpreter.buildStaticStrings(gpa, &view.store);
 defer static_strings.deinit();
-var interp = try eval.LirInterpreter.initWithBoxyTables(
+var interp = try eval.LirInterpreter.init(
     gpa,
     &view.store,
     &view.layouts,
-    eval.LirInterpreter.BoxyTables.fromImageView(&view),
     static_strings.view(),
     &my_roc_ops,
 );

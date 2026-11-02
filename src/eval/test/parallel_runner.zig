@@ -184,6 +184,7 @@ fn constScalar(value: check.CheckedArtifact.ConstValue) ?check.CheckedArtifact.C
         .tag,
         .nominal,
         .fn_value,
+        .boxy_fn,
         => null,
     };
 }
@@ -203,6 +204,7 @@ fn constList(value: check.CheckedArtifact.ConstValue) ?check.ConstStore.ConstLis
         .tag,
         .nominal,
         .fn_value,
+        .boxy_fn,
         => null,
     };
 }

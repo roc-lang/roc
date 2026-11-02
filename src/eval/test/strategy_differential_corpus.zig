@@ -458,6 +458,65 @@ pub const cases = [_]Case{
         ,
         .expected = "3",
     },
+    // Sealed result rows (design.md "Sealed Result Rows"): every annotated
+    // `Try`-returning function is a static worker under `.boxy`, and each
+    // instantiation that widens its row converts: direct calls, `?` into a
+    // wider result, and the functions as values at wider types.
+    .{
+        .name = "sealed rows: widened calls, ? returns, and function values at wider rows agree",
+        .source =
+        \\{
+        \\    read : Str -> Try(Str, [NotFound])
+        \\    read = |path| if path == "missing" Err(NotFound) else Ok(path)
+        \\    parse : Str -> Try(U8, [InvalidU8])
+        \\    parse = |s| if s == "bad" Err(InvalidU8) else Ok(7)
+        \\    load : Str -> Try(U8, [NotFound, InvalidU8])
+        \\    load = |path| {
+        \\        text = read(path)?
+        \\        parse(text)
+        \\    }
+        \\    apply : (Str -> Try(U8, [NotFound, InvalidU8, Other])), Str -> Try(U8, [NotFound, InvalidU8, Other])
+        \\    apply = |f, s| f(s)
+        \\    k = {
+        \\        dbg 1.U64
+        \\        1.U64
+        \\    }
+        \\    path = if k == 1 "missing" else "ok"
+        \\    (load(path), load("bad"), load("ok"), apply(load, path), apply(parse, "bad"), apply(load, "ok"))
+        \\}
+        ,
+        .inspects = &.{ .nominal, .tag_union, .tuple },
+    },
+    // A use of a procedure alias instantiates the alias's scheme, so each
+    // reaches its target through the alias's own scope: annotated, chained,
+    // at different types, called and as a value.
+    .{
+        .name = "procedure aliases: annotated, chained, and generic aliases reach their targets' requirements",
+        .source =
+        \\{
+        \\    via = |value| value.to_str()
+        \\    stored : U64 -> Str
+        \\    stored = via
+        \\    again = via
+        \\    once_more = again
+        \\    at_u8 : U8 -> Str
+        \\    at_u8 = once_more
+        \\    bump = |x| x + 1
+        \\    gen = bump
+        \\    at_i16 : I16 -> I16
+        \\    at_i16 = gen
+        \\    apply = |f, x| f(x)
+        \\    wrap = |x| once_more(x)
+        \\    k = {
+        \\        dbg 1.U64
+        \\        1.U64
+        \\    }
+        \\    small = 7.U8
+        \\    (stored(k), apply(stored, k), once_more(k), once_more(small), at_u8(small), apply(at_u8, small), wrap(k), wrap(small), gen(k), gen(small), at_i16(2), apply(gen, k))
+        \\}
+        ,
+        .inspects = &.{ .primitive, .tuple },
+    },
 };
 
 fn covered(comptime kind: ShapeKind, comptime field: []const u8) bool {

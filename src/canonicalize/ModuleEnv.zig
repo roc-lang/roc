@@ -660,6 +660,10 @@ pub const DispatchRelationMerge = extern struct {
 /// them to stable checked type ids before post-check compilation.
 pub const GeneratedCodecDerivation = extern struct {
     kind: u32,
+    /// The scheme relation this derivation answers for. It differs from
+    /// `source_constraint_fn_var` when checking validated a private instance
+    /// of that relation instead of the relation itself.
+    template_constraint_fn_var: u32,
     source_constraint_fn_var: u32,
     source_runtime_fn_var: u32,
     source_shape_var: u32,
@@ -4789,6 +4793,7 @@ pub fn recordSchemeUse(
 pub fn recordGeneratedCodecDerivation(
     self: *Self,
     kind: GeneratedCodecDerivation.Kind,
+    template_constraint_fn_var: TypeVar,
     source_constraint_fn_var: TypeVar,
     source_runtime_fn_var: TypeVar,
     source_shape_var: TypeVar,
@@ -4831,6 +4836,7 @@ pub fn recordGeneratedCodecDerivation(
     _ = try self.generated_codec_renamings.appendSlice(self.gpa, renamings);
     const derivation = GeneratedCodecDerivation{
         .kind = @backingInt(kind),
+        .template_constraint_fn_var = @backingInt(template_constraint_fn_var),
         .source_constraint_fn_var = @backingInt(source_constraint_fn_var),
         .source_runtime_fn_var = @backingInt(source_runtime_fn_var),
         .source_shape_var = @backingInt(source_shape_var),

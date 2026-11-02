@@ -344,16 +344,17 @@ const ReverseExecutor = struct {
         if (self.failing_lane) |*lane| lane.deinit();
     }
 
-    fn begin(context: *anyopaque) void {
+    fn begin(context: *anyopaque) std.mem.Allocator.Error!*anyopaque {
         const self: *ReverseExecutor = @ptrCast(@alignCast(context));
         std.debug.assert(self.pending_len == 0);
         self.ended = false;
         self.received = 0;
         self.accepted = 0;
         if (self.frozen_source) |source| self.frozen_prefix = source.captureBodyPrefix();
+        return context;
     }
 
-    fn submit(context: *anyopaque, task: executor.Task) std.mem.Allocator.Error!void {
+    fn submit(context: *anyopaque, _: *anyopaque, task: executor.Task) std.mem.Allocator.Error!void {
         const self: *ReverseExecutor = @ptrCast(@alignCast(context));
         if (self.fail_submit_task == task.id) return error.OutOfMemory;
         var scratch = collections.SingleThreadArena.init(testing.allocator);
@@ -372,14 +373,18 @@ const ReverseExecutor = struct {
         self.accepted += 1;
     }
 
-    fn receive(context: *anyopaque) executor.Completion {
+    fn receive(context: *anyopaque, _: *anyopaque) executor.Completion {
         const self: *ReverseExecutor = @ptrCast(@alignCast(context));
         self.pending_len -= 1;
         self.received += 1;
         return self.pending[self.pending_len];
     }
 
-    fn end(context: *anyopaque) void {
+    fn tryReceive(_: *anyopaque, _: *anyopaque) ?executor.Completion {
+        return null;
+    }
+
+    fn end(context: *anyopaque, _: *anyopaque) void {
         const self: *ReverseExecutor = @ptrCast(@alignCast(context));
         std.debug.assert(self.pending_len == 0);
         if (self.frozen_source) |source| {
@@ -393,9 +398,11 @@ const ReverseExecutor = struct {
         return .{
             .context = self,
             .worker_count = self.lanes,
+            .lane_count = self.lanes,
             .beginFn = begin,
             .submitFn = submit,
             .receiveFn = receive,
+            .tryReceiveFn = tryReceive,
             .endFn = end,
         };
     }

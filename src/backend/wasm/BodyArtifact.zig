@@ -1,7 +1,7 @@
 //! One wasm function body generated apart from the module it joins.
 //!
 //! A body worker reads the module's fixed index spaces (procedures, imports,
-//! tail drivers, Boxy thunks) but never creates a module entity. Each entity
+//! tail drivers) but never creates a module entity. Each entity
 //! that would otherwise be created the first time a body names it (an RC
 //! helper, a table slot, a data segment, a data or PIC-base symbol) is
 //! instead recorded in the body's entity list, in first-use order, and every
@@ -30,8 +30,6 @@ pub const Entity = union(enum) {
     reserved_rc_helper: u64,
     /// The table slot of the RC helper with this cache key.
     rc_helper_table: u64,
-    /// The table slot of the Boxy capture-drop callback with this key.
-    capture_drop_table: u64,
     /// The data segment holding one LIR string backing.
     static_str: u32,
     /// The data symbol of one LIR static-data id.
@@ -46,7 +44,7 @@ pub const Entity = union(enum) {
 
     fn key(self: Entity) ?Key {
         return .{ .tag = self, .id = switch (self) {
-            .rc_helper, .reserved_rc_helper, .rc_helper_table, .capture_drop_table => |id| id,
+            .rc_helper, .reserved_rc_helper, .rc_helper_table => |id| id,
             .static_str, .static_data => |id| id,
             .pic_base => |which| @backingInt(which),
             .message => return null,
@@ -67,7 +65,7 @@ pub const Recorder = struct {
     pub fn deinit(self: *Recorder) void {
         for (self.entities.items) |entity| switch (entity) {
             .message => |bytes| self.allocator.free(bytes),
-            .rc_helper, .reserved_rc_helper, .rc_helper_table, .capture_drop_table, .static_str, .static_data, .pic_base => {},
+            .rc_helper, .reserved_rc_helper, .rc_helper_table, .static_str, .static_data, .pic_base => {},
         };
         self.entities.deinit(self.allocator);
         self.refs.deinit(self.allocator);
@@ -118,7 +116,7 @@ pub const Artifact = struct {
         const entities = try a.dupe(Entity, recorder.entities.items);
         for (entities) |*entity| switch (entity.*) {
             .message => |bytes| entity.* = .{ .message = try a.dupe(u8, bytes) },
-            .rc_helper, .reserved_rc_helper, .rc_helper_table, .capture_drop_table, .static_str, .static_data, .pic_base => {},
+            .rc_helper, .reserved_rc_helper, .rc_helper_table, .static_str, .static_data, .pic_base => {},
         };
         return .{ .arena = arena, .body = copy, .entities = entities };
     }

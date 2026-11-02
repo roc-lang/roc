@@ -309,14 +309,6 @@ pub fn runBorrowed(
     lowerer.keepLoweredSpecProcs();
     try lowerer.writeRuntimeSchemas();
     lowerer.result.finishExpectSites();
-
-    // This boundary checks producer-owned columns, never scans the program.
-    inline for (@typeInfo(LirProgram.Result).@"struct".field_names) |field_name| {
-        if (comptime std.mem.startsWith(u8, field_name, "boxy_") and !std.mem.eql(u8, field_name, "boxy_frozen_method_origins")) {
-            if (@field(lowerer.result, field_name).items.len != 0) Common.invariant("LSS constructed a Boxy side table");
-        }
-    }
-    if (lowerer.result.boxy_frozen_method_origins.count() != 0) Common.invariant("LSS constructed Boxy frozen callable metadata");
     return lowerer.finish();
 }
 
@@ -997,6 +989,9 @@ const Lowerer = struct {
     next_join_point: u32 = 0,
     loop_stack: std.ArrayList(LoopContext),
     join_stack: std.ArrayList(JoinContext),
+    /// The consumer joins of the value-position joins being lowered, innermost
+    /// last.
+    value_consumers: std.ArrayList(ValueConsumer),
     current_ret_ty: ?Type.TypeId = null,
     current_proc_locals: ?*ProcLocalSet = null,
     lane_scratch: LaneScratch,
@@ -1129,6 +1124,7 @@ const Lowerer = struct {
         active_loop_params: collections.DenseMap(Lifted.LocalId, ActiveLoopParam),
         loop_stack: std.ArrayList(LoopContext),
         join_stack: std.ArrayList(JoinContext),
+        value_consumers: std.ArrayList(ValueConsumer),
         return_forwarding_locals: collections.DenseMap(LIR.LocalId, void),
         /// Erased-result demands already classified; see the lowerer's.
         erased_demands: collections.DenseMap(Type.TypeId, ErasedResultDemand),
@@ -1148,6 +1144,7 @@ const Lowerer = struct {
                 .active_loop_params = collections.DenseMap(Lifted.LocalId, ActiveLoopParam).init(allocator),
                 .loop_stack = .empty,
                 .join_stack = .empty,
+                .value_consumers = .empty,
                 .return_forwarding_locals = collections.DenseMap(LIR.LocalId, void).init(allocator),
                 .erased_demands = collections.DenseMap(Type.TypeId, ErasedResultDemand).init(allocator),
                 .tail_call_scratch = lir_core.TailCallBuilder.initScratch(allocator),
@@ -1164,6 +1161,7 @@ const Lowerer = struct {
             self.erased_demands.deinit();
             self.tail_call_scratch.deinit();
             self.lane_scratch.deinit();
+            self.value_consumers.deinit(self.allocator);
             self.join_stack.deinit(self.allocator);
             self.loop_stack.deinit(self.allocator);
             self.active_loop_params.deinit();
@@ -1201,6 +1199,22 @@ const Lowerer = struct {
         join_id: LIR.JoinPointId,
         params: LIR.LocalSpan,
         param_tys: []const Type.TypeId,
+    };
+
+    /// The join that receives a value-position join's result in `target`.
+    /// Its body is the statement that consumes the result, so a path through
+    /// the value-position join reaches that statement only by jumping here.
+    const ValueConsumer = struct {
+        join_id: LIR.JoinPointId,
+        target: LIR.LocalId,
+    };
+
+    /// The join a value form's branches write `target` and jump to. `declared`
+    /// is true when an enclosing value-position join already declares it, and
+    /// false when the form must declare it around its own branches.
+    const ValueJoin = struct {
+        id: LIR.JoinPointId,
+        declared: bool,
     };
 
     fn init(
@@ -1252,7 +1266,7 @@ const Lowerer = struct {
         errdefer padded_backing_owners.deinit();
         try collectPaddedBackingOwners(solved.types.view(), &padded_backing_owners);
 
-        const workspace_count = if (options.post_check_executor) |executor| executor.worker_count else 0;
+        const workspace_count = if (options.post_check_executor) |executor| executor.lane_count else 0;
         const worker_workspaces = try allocator.alloc(?FnBodyWorkspace, workspace_count);
         errdefer allocator.free(worker_workspaces);
         @memset(worker_workspaces, null);
@@ -1338,6 +1352,7 @@ const Lowerer = struct {
             .comptime_site_map = comptime_site_map,
             .loop_stack = .empty,
             .join_stack = .empty,
+            .value_consumers = .empty,
             .return_forwarding_locals = collections.DenseMap(LIR.LocalId, void).init(allocator),
             .erased_demands = collections.DenseMap(Type.TypeId, ErasedResultDemand).init(allocator),
             .type_set_pool = collections.DenseMapPool(Type.TypeId, void).init(allocator),
@@ -1453,6 +1468,7 @@ const Lowerer = struct {
         self.lane_scratch.deinit();
         self.erased_call_owner_uses.deinit(self.allocator);
         self.erased_owner_states.deinit(self.allocator);
+        self.value_consumers.deinit(self.allocator);
         self.join_stack.deinit(self.allocator);
         self.loop_stack.deinit(self.allocator);
         self.allocator.free(self.comptime_site_map);
@@ -1637,6 +1653,7 @@ const Lowerer = struct {
         self.comptime_site_map = &.{};
         self.loop_stack = .empty;
         self.join_stack = .empty;
+        self.value_consumers = .empty;
         self.return_forwarding_locals = collections.DenseMap(LIR.LocalId, void).init(self.allocator);
         self.erased_demands = collections.DenseMap(Type.TypeId, ErasedResultDemand).init(self.allocator);
         self.type_lowering_depth = 0;
@@ -1974,6 +1991,7 @@ const Lowerer = struct {
         worker.next_join_point = 0;
         worker.loop_stack = workspace.loop_stack;
         worker.join_stack = workspace.join_stack;
+        worker.value_consumers = workspace.value_consumers;
         worker.current_ret_ty = null;
         worker.current_proc_locals = null;
         worker.current_fn = null;
@@ -2023,6 +2041,7 @@ const Lowerer = struct {
         self.active_loop_params.clearRetainingCapacity();
         self.loop_stack.clearRetainingCapacity();
         self.join_stack.clearRetainingCapacity();
+        self.value_consumers.clearRetainingCapacity();
         self.return_forwarding_locals.clearRetainingCapacity();
         self.erased_owner_states.clearRetainingCapacity();
         self.erased_call_owner_uses.clearRetainingCapacity();
@@ -2034,6 +2053,7 @@ const Lowerer = struct {
         workspace.active_loop_params = self.active_loop_params;
         workspace.loop_stack = self.loop_stack;
         workspace.join_stack = self.join_stack;
+        workspace.value_consumers = self.value_consumers;
         workspace.return_forwarding_locals = self.return_forwarding_locals;
         workspace.erased_demands = self.erased_demands;
         workspace.tail_call_scratch = self.tail_call_scratch;
@@ -2278,7 +2298,7 @@ const Lowerer = struct {
             if (returned != @as(*anyopaque, @ptrCast(context))) {
                 Common.invariant("Solved-LIR executor returned the wrong task context");
             }
-            if (completion.worker_id >= executor.worker_count) {
+            if (completion.worker_id >= executor.lane_count) {
                 Common.invariant("Solved-LIR executor returned an invalid worker id");
             }
             if (context.shard) |shard| {
@@ -4931,6 +4951,7 @@ const Lowerer = struct {
                 .site = root.site,
                 .proc = try self.markReachableFn(root.fn_id),
                 .ret_layout = ret_layout,
+                .ret_type = try self.constTypeOfType(entry.ret),
                 .plan = try self.constPlanOfType(entry.ret),
                 .value_slot = try self.comptimeValueSlot(.{ .module = root.module, .root = .{ .literal = id }, .const_locator = null }, entry.ret, ret_layout),
             });
@@ -7284,7 +7305,7 @@ const Lowerer = struct {
         args: []const Lifted.ExprId,
         next: LIR.CFStmtId,
         callee: LIR.LocalId = undefined,
-        done: LIR.JoinPointId = undefined,
+        done: ValueJoin = undefined,
         /// Each variant's call, indexed by variant. Owned.
         bodies: []LIR.CFStmtId = &.{},
     };
@@ -7308,7 +7329,7 @@ const Lowerer = struct {
         joined: bool = false,
         scrutinee_ty: Type.TypeId = undefined,
         scrutinee_local: LIR.LocalId = undefined,
-        done: LIR.JoinPointId = undefined,
+        done: ValueJoin = undefined,
         /// Owns the decision tree and its emitter.
         arena: ?*base.SingleThreadArena = null,
         emitter: *match_tree.Compiler(MatchTreeCtx).Emitter = undefined,
@@ -7323,7 +7344,7 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
         /// Some branch falls through to the value join, so the join exists.
         joined: bool = false,
-        done: LIR.JoinPointId = undefined,
+        done: ValueJoin = undefined,
         current: LIR.CFStmtId = undefined,
         body: LIR.CFStmtId = undefined,
     };
@@ -7333,7 +7354,7 @@ const Lowerer = struct {
         target: LIR.LocalId,
         payload_switch: Lifted.InitializedPayloadSwitch,
         next: LIR.CFStmtId,
-        done: LIR.JoinPointId = undefined,
+        done: ValueJoin = undefined,
         branch_done: LIR.CFStmtId = undefined,
         initialized_body: LIR.CFStmtId = undefined,
     };
@@ -7413,6 +7434,9 @@ const Lowerer = struct {
         maybe_uninitialized_condition_masks_span: @FieldType(LIR.JoinExtra, "maybe_uninitialized_condition_masks") = undefined,
         lir_join_id: LIR.JoinPointId = undefined,
         body_stmt: LIR.CFStmtId = undefined,
+        /// Where the body and remainder deliver the result, when either does.
+        consumer: ?ValueJoin = null,
+        consumer_pushed: bool = false,
     };
 
     const LowerTask = union(enum) {
@@ -7507,6 +7531,45 @@ const Lowerer = struct {
         if (try self.exprDiverges(body)) return exprTask(where, target, body, result_ty, next);
         if (!joined) Common.invariant("a value join branch fell through to a join its lowering did not declare");
         return try self.valueJoinBranchTask(where, target, body, result_ty, try self.joinJump(where, done));
+    }
+
+    /// The join a value form delivers `target` through when its continuation
+    /// is `next`. A continuation that jumps to the consumer of a value-position
+    /// join for the same target already is that form's join, so the form's
+    /// branches arrive at the consumer themselves. Any other form declares its
+    /// own join.
+    fn valueJoinFor(self: *Lowerer, next: LIR.CFStmtId, target: LIR.LocalId) ValueJoin {
+        const stmt = self.result.store.getCFStmtImmediate(next);
+        if (stmt.* == .jump) {
+            var index = self.value_consumers.items.len;
+            while (index > 0) {
+                index -= 1;
+                const consumer = self.value_consumers.items[index];
+                if (consumer.join_id == stmt.jump.target and consumer.target == target) {
+                    return .{ .id = consumer.join_id, .declared = true };
+                }
+            }
+        }
+        return .{ .id = self.freshJoinPointId(), .declared = false };
+    }
+
+    /// Wrap `remainder` in the value join a form delivers through, unless an
+    /// enclosing value-position join has already declared it.
+    fn declareValueJoin(
+        self: *Lowerer,
+        where: LowerSite,
+        done: ValueJoin,
+        target: LIR.LocalId,
+        next: LIR.CFStmtId,
+        remainder: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        if (done.declared) return remainder;
+        return try self.result.store.addCFStmt(.{ .join = .{
+            .id = done.id,
+            .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{target}),
+            .body = next,
+            .remainder = remainder,
+        } }, where.glue());
     }
 
     /// True when `root` never hands a value to its consumer: every path
@@ -9394,24 +9457,19 @@ const Lowerer = struct {
         switch (frame.cursor) {
             0 => {
                 task.callee = try self.addTemp(task.callee_ty);
-                task.done = self.freshJoinPointId();
+                task.done = self.valueJoinFor(task.next, task.target);
                 task.bodies = try self.allocator.alloc(LIR.CFStmtId, task.variants.len);
                 frame.index = task.variants.len;
                 frame.cursor = 1;
             },
             1 => task.bodies[frame.index] = input.?,
-            else => return .{ .ret = try self.result.store.addCFStmt(.{ .join = .{
-                .id = task.done,
-                .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{task.target}),
-                .body = task.next,
-                .remainder = input.?,
-            } }, task.where.glue()) },
+            else => return .{ .ret = try self.declareValueJoin(task.where, task.done, task.target, task.next, input.?) },
         }
         if (frame.index > 0) {
             frame.index -= 1;
             const variant = task.variants[frame.index];
             const variant_index: layout.VariantIndex = @intCast(frame.index);
-            const branch_done = try self.joinJump(task.where, task.done);
+            const branch_done = try self.joinJump(task.where, task.done.id);
             return .{ .call = try self.callableVariantCallTask(task.where, task.target, task.result_ty, task.callee, variant, variant_index, task.args, branch_done) };
         }
         frame.cursor = 2;
@@ -9501,7 +9559,9 @@ const Lowerer = struct {
     }
 
     fn lowLevelStep(self: *Lowerer, where: LowerSite, target: LIR.LocalId, op: can.CIR.Expr.LowLevel, span: Lifted.Span(Lifted.ExprId), next: LIR.CFStmtId) Common.LowerError!LowerStep {
-        const args = self.solved.lifted.exprSpan(span);
+        var runtime_span = span;
+        runtime_span.len -= op.typeOnlyOperands();
+        const args = self.solved.lifted.exprSpan(runtime_span);
         if (op == .crash) {
             if (args.len != 1) Common.invariant("crash low-level operation received the wrong number of arguments");
             const lowered = try self.lowerExprsToTemps(args);
@@ -9779,7 +9839,7 @@ const Lowerer = struct {
         const scrutinee_local = try self.addTemp(scrutinee_ty);
         const branches = try GuardedList.dupe(self.allocator, Lifted.Branch, self.solved.lifted.branchSpan(branches_span));
         defer self.allocator.free(branches);
-        const done = self.freshJoinPointId();
+        const done = self.valueJoinFor(next, target);
         var joined = false;
         for (branches) |branch| {
             if (try self.exprDiverges(branch.body)) continue;
@@ -9819,7 +9879,7 @@ const Lowerer = struct {
             };
         }
         const built = try MT.build(arena, ctx, scrutinee_ty, mt_branches);
-        const emitter = try MT.Emitter.begin(arena, ctx, built, scrutinee_local, done);
+        const emitter = try MT.Emitter.begin(arena, ctx, built, scrutinee_local, done.id);
         return .{ .tail = .{ .match_ = .{
             .where = where,
             .target = target,
@@ -9859,12 +9919,7 @@ const Lowerer = struct {
             },
             else => {
                 if (!task.joined) return .{ .ret = input.? };
-                return .{ .ret = try self.result.store.addCFStmt(.{ .join = .{
-                    .id = task.done,
-                    .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{task.target}),
-                    .body = task.next,
-                    .remainder = input.?,
-                } }, task.where.glue()) };
+                return .{ .ret = try self.declareValueJoin(task.where, task.done, task.target, task.next, input.?) };
             },
         }
     }
@@ -9873,7 +9928,7 @@ const Lowerer = struct {
         switch (frame.cursor) {
             0 => {
                 self.noteErasedOwnerAmbiguous(task.target);
-                task.done = self.freshJoinPointId();
+                task.done = self.valueJoinFor(task.next, task.target);
                 const branches = self.solved.lifted.ifBranchSpan(task.branches);
                 task.joined = !(try self.exprDiverges(task.final_else));
                 var index: usize = 0;
@@ -9882,7 +9937,7 @@ const Lowerer = struct {
                 }
                 frame.index = GuardedList.borrowLen(branches);
                 frame.cursor = 1;
-                return .{ .call = try self.valueBranchTask(task.where, task.target, task.final_else, task.result_ty, task.joined, task.done, task.next) };
+                return .{ .call = try self.valueBranchTask(task.where, task.target, task.final_else, task.result_ty, task.joined, task.done.id, task.next) };
             },
             // A lowered branch body; lower its condition before the switch.
             2 => {
@@ -9899,15 +9954,10 @@ const Lowerer = struct {
             frame.index -= 1;
             const branch = GuardedList.at(self.solved.lifted.ifBranchSpan(task.branches), frame.index);
             frame.cursor = 2;
-            return .{ .call = try self.valueBranchTask(task.where, task.target, branch.body, task.result_ty, task.joined, task.done, task.next) };
+            return .{ .call = try self.valueBranchTask(task.where, task.target, branch.body, task.result_ty, task.joined, task.done.id, task.next) };
         }
         if (!task.joined) return .{ .ret = task.current };
-        return .{ .ret = try self.result.store.addCFStmt(.{ .join = .{
-            .id = task.done,
-            .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{task.target}),
-            .body = task.next,
-            .remainder = task.current,
-        } }, task.where.glue()) };
+        return .{ .ret = try self.declareValueJoin(task.where, task.done, task.target, task.next, task.current) };
     }
 
     fn stepPayloadSwitch(self: *Lowerer, frame: *LowerFrame, task: *PayloadSwitchTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
@@ -9916,8 +9966,8 @@ const Lowerer = struct {
         switch (frame.cursor) {
             0 => {
                 self.noteErasedOwnerAmbiguous(task.target);
-                task.done = self.freshJoinPointId();
-                task.branch_done = try self.joinJump(task.where, task.done);
+                task.done = self.valueJoinFor(task.next, task.target);
+                task.branch_done = try self.joinJump(task.where, task.done.id);
                 frame.cursor = 1;
                 return .{ .call = exprTask(task.where, task.target, payload_switch.initialized, null, task.branch_done) };
             },
@@ -9951,12 +10001,7 @@ const Lowerer = struct {
     }
 
     fn payloadSwitchJoin(self: *Lowerer, task: *PayloadSwitchTask, remainder: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        return try self.result.store.addCFStmt(.{ .join = .{
-            .id = task.done,
-            .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{task.target}),
-            .body = task.next,
-            .remainder = remainder,
-        } }, task.where.glue());
+        return try self.declareValueJoin(task.where, task.done, task.target, task.next, remainder);
     }
 
     /// The Err branch of a Try sequence without a shared error target: the
@@ -10353,12 +10398,20 @@ const Lowerer = struct {
                 });
                 task.join_pushed = true;
                 frame.cursor = 1;
-                return .{ .call = exprTask(task.where, task.target, join_point.body, task.result_ty, task.next) };
+                if (!(try self.exprDiverges(join_point.body)) or !(try self.exprDiverges(join_point.remainder))) {
+                    const consumer = self.valueJoinFor(task.next, task.target);
+                    task.consumer = consumer;
+                    if (!consumer.declared) {
+                        try self.value_consumers.append(self.allocator, .{ .join_id = consumer.id, .target = task.target });
+                        task.consumer_pushed = true;
+                    }
+                }
+                return .{ .call = try self.joinPointArrivalTask(task, join_point.body) };
             },
             1 => {
                 task.body_stmt = input.?;
                 frame.cursor = 2;
-                return .{ .call = exprTask(task.where, task.target, task.join_point.remainder, task.result_ty, task.next) };
+                return .{ .call = try self.joinPointArrivalTask(task, task.join_point.remainder) };
             },
             else => {
                 const stmt = try self.result.store.addCFStmt(.{ .join = .{
@@ -10373,14 +10426,34 @@ const Lowerer = struct {
                         .retained = task.retained_span,
                     }),
                 } }, task.where.glue());
+                const consumer = task.consumer;
+                const target = task.target;
+                const where = task.where;
+                const next = task.next;
                 self.leaveJoinPoint(task);
-                return .{ .ret = stmt };
+                const declared_stmt = if (consumer) |value_join|
+                    try self.declareValueJoin(where, value_join, target, next, stmt)
+                else
+                    stmt;
+                return .{ .ret = declared_stmt };
             },
         }
     }
 
+    /// Lower the body or remainder of a value-position join. Each one that
+    /// delivers a value jumps to the join's consumer with its own statement, so
+    /// a form inside it sees that jump as its continuation and arrives there
+    /// too.
+    fn joinPointArrivalTask(self: *Lowerer, task: *const JoinPointTask, expr: Lifted.ExprId) Common.LowerError!LowerTask {
+        if (try self.exprDiverges(expr)) return exprTask(task.where, task.target, expr, task.result_ty, task.next);
+        const consumer = task.consumer orelse Common.invariant("a value-position join delivered a value it declared no consumer for");
+        return try self.valueJoinBranchTask(task.where, task.target, expr, task.result_ty, try self.joinJump(task.where, consumer.id));
+    }
+
     /// Remove the join point's lowerer state. Idempotent.
     fn leaveJoinPoint(self: *Lowerer, task: *JoinPointTask) void {
+        if (task.consumer_pushed) _ = self.value_consumers.pop();
+        task.consumer_pushed = false;
         if (task.join_pushed) _ = self.join_stack.pop();
         task.join_pushed = false;
         if (task.entered) {
@@ -10798,7 +10871,7 @@ const Lowerer = struct {
             .hole,
             .tag_union,
             .ptr,
-            .erased_box,
+            .dynamic,
             => Common.invariant("recursive Monotype let statement must bind a boxed runtime layout"),
         };
         return .{
@@ -11261,41 +11334,9 @@ const Lowerer = struct {
         if (output_layout) |out| out.* = out_elem_idx;
 
         return layout.WidthValues(bool).both(
-            self.listMapInterchangeableAtWidth(in_elem_idx, out_elem_idx, .u32),
-            self.listMapInterchangeableAtWidth(in_elem_idx, out_elem_idx, .u64),
+            self.result.layouts.listItemsInterchangeableAt(in_elem_idx, out_elem_idx, .u32),
+            self.result.layouts.listItemsInterchangeableAt(in_elem_idx, out_elem_idx, .u64),
         );
-    }
-
-    /// Whether the input and output element layouts share one allocation at the
-    /// given pointer width. See `listMapLayoutsInterchangeable`.
-    fn listMapInterchangeableAtWidth(
-        self: *Lowerer,
-        in_elem_idx: layout.Idx,
-        out_elem_idx: layout.Idx,
-        target_usize: base.target.TargetUsize,
-    ) bool {
-        const layouts = &self.result.layouts;
-        const in_elem = layouts.getLayout(in_elem_idx);
-        // A list of zero-sized elements has no allocation to reuse.
-        const in_size = layouts.sizeAt(in_elem, target_usize);
-        if (in_size == 0) return false;
-
-        const out_elem = layouts.getLayout(out_elem_idx);
-        if (layouts.sizeAt(out_elem, target_usize) != in_size) return false;
-
-        // The allocation's hidden header and the alignment passed to the
-        // allocator both derive from max(ptr_width, element alignment) and
-        // from whether elements are refcounted (which reserves an extra
-        // element-count slot for seamless slices). Both must agree or a
-        // later free would compute the wrong allocation pointer.
-        const ptr_width = target_usize.size();
-        const in_alignment: u32 = @intCast(in_elem.alignment(target_usize).toByteUnits());
-        const out_alignment: u32 = @intCast(out_elem.alignment(target_usize).toByteUnits());
-        if (@max(ptr_width, in_alignment) != @max(ptr_width, out_alignment)) return false;
-
-        if (layouts.layoutContainsRefcounted(in_elem) != layouts.layoutContainsRefcounted(out_elem)) return false;
-
-        return true;
     }
 
     /// Feed `value` (of `value_ty`) into `hasher`, writing the resulting Hasher
@@ -14519,8 +14560,8 @@ const Lowerer = struct {
                 => return .{ .value = lhs.eql(rhs) },
                 .zst,
                 .hole,
+                .dynamic,
                 .box_of_zst,
-                .erased_box,
                 .list_of_zst,
                 => return .{ .value = true },
                 .box,
@@ -15998,7 +16039,7 @@ const Lowerer = struct {
             },
             .box => unreachable, // the loop above unwraps every box layout
             .box_of_zst, .zst, .scalar => .zst,
-            .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr, .hole => Common.invariant("tag payload operation expected tag-union layout"),
+            .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr, .hole, .dynamic => Common.invariant("tag payload operation expected tag-union layout"),
         };
     }
 
@@ -16019,7 +16060,7 @@ const Lowerer = struct {
         return switch (list_layout.tag) {
             .list => list_layout.getIdx(),
             .list_of_zst => .zst,
-            .scalar, .box, .box_of_zst, .erased_box, .struct_, .closure, .erased_callable, .zst, .hole, .tag_union, .ptr => Common.invariant("list expression target was not a list layout"),
+            .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .tag_union, .ptr, .dynamic => Common.invariant("list expression target was not a list layout"),
         };
     }
 
