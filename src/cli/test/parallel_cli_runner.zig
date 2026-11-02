@@ -17661,7 +17661,7 @@ fn damageCompletedTestCache(io: std.Io, allocator: Allocator, cache_path: []cons
     defer store.deinit();
     const entries = try indexedCacheEntries(io, allocator, cache_path);
     defer allocator.free(entries);
-    const magic = if (remove_payload) "ROC_TEST_OUTCOMES_V3" else "ROC_COMPLETED_DEV_TEST_V3";
+    const magic = if (remove_payload) "ROC_TEST_OUTCOMES_V3" else "ROC_COMPLETED_DEV_TEST_V4";
     var damaged = false;
     for (entries) |entry| {
         if (entry.state != .published or entry.family != .test_result) continue;
