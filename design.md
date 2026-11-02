@@ -14902,6 +14902,23 @@ under the destination's descriptor. Either conversion is elided when the two
 types are one or commit one layout, since a reached row's source tags are a
 subset of its destination's and equal variant counts mean equal tag sets.
 
+A generated codec family (design.md "Dictionaries") seals in the same way.
+A family's value shape, encoding, and state are closed, so its only variables
+are those of its results, and its generated code constructs only the tags its
+contract names: nothing in a family's body can produce a value at a row tail.
+So a variable of the derivation's constructor type that seals to its row
+default (`variableSealsToRowDefault`) is no variable of the family
+(`contractEnv`), and takes no hidden descriptor. A family's helpers then have
+closed results, whose descriptors are static and whose values are ordinary
+locals, however many distinct field types a record has. A rigid tail, a bare
+variable with no row default, and a tail whose constraints closing the row
+does not discharge stay variables of the family: a rigid tail names a row the
+enclosing scope chooses, and the other two may be a format's own error type or
+a producer's. Widening is the same conversion as any sealed result's, at the
+one place both rows are known: a family's constructor is adapted to the
+callable type of its use (`constructorAt`), and a stored runtime restored from
+its captures to the stored function's type (`restoreRuntime`).
+
 A conversion worker belongs to the module that emits it and is memoized
 within that module only: two modules converting the same pair each carry
 their own copy. Nothing about a module's conversions is shared or deduplicated

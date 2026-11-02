@@ -270,6 +270,102 @@ const OutputNeedleSet = struct {
     needles: []const OutputNeedle,
 };
 
+const issue_12787_row_shapes_stdout =
+    \\ok A 3 4
+    \\invalid json
+    \\missing n
+    \\ok A 3 4
+    \\invalid json
+    \\missing n
+    \\rejected before parsing: long enough for the heap
+    \\retry 9
+    \\ok A 3 4
+    \\invalid json
+    \\missing n
+    \\ok A 3 4
+    \\missing n
+    \\ok A 3 4
+    \\invalid json
+    \\missing n
+    \\{"x":1}
+    \\not a number
+    \\{"x":1}
+    \\infinity
+    \\rejected before encoding: long enough for the heap
+    \\retry 9
+    \\{"x":1}
+    \\not a number
+    \\infinity
+    \\{"x":1}
+    \\not a number
+    \\ok 4
+    \\invalid json
+    \\missing n
+    \\aardvark first second 3
+    \\zebra
+    \\ok 7
+    \\not a number
+    \\infinity
+    \\aardvark first second 3
+    \\zebra
+    \\ok 2 3 4
+    \\err seven
+    \\ok 4
+    \\err zero
+    \\
+;
+
+const issue_12787_stored_codec_stdout =
+    \\stored
+    \\ok 1 2 3
+    \\negative
+    \\negative
+    \\parse reset: a string long enough to live on the heap
+    \\skipped 200
+    \\ok 7
+    \\zero
+    \\encode reset: a string long enough to live on the heap
+    \\skipped 200
+    \\closed
+    \\ok 1 2 3
+    \\negative
+    \\negative
+    \\parse reset: a string long enough to live on the heap
+    \\skipped 200
+    \\ok 7
+    \\zero
+    \\encode reset: a string long enough to live on the heap
+    \\skipped 200
+    \\open
+    \\ok 1 2 3
+    \\negative
+    \\negative
+    \\parse reset: a string long enough to live on the heap
+    \\skipped 200
+    \\ok 7
+    \\zero
+    \\encode reset: a string long enough to live on the heap
+    \\skipped 200
+    \\
+;
+
+const issue_12787_stored_record_encoder_stdout =
+    \\ok 7
+    \\zero
+    \\reset: a string long enough to live on the heap
+    \\
+;
+
+const issue_12787_widened_question_row_stdout =
+    \\Ann <ann@example.com> ***
+    \\invalid email not an email
+    \\invalid json
+    \\missing email
+    \\aardvark first second 3
+    \\zebra
+    \\
+;
+
 const ExitExpectation = union(enum) {
     success,
     failure,
@@ -421,6 +517,10 @@ const CustomCase = enum {
     issue_11344_lir_image,
     issue_11364_interpreter_static_big_string,
     issue_12221_static_or_fresh_list_dev,
+    issue_12787_restored_codecs_interpreter,
+    issue_12787_restored_codecs_dev,
+    issue_12787_restored_codecs_speed,
+    issue_12787_restored_codecs_size,
     issue_12221_static_or_fresh_list_size,
     issue_12221_static_or_fresh_list_speed,
     cli_cache_roots_distinct,
@@ -3803,6 +3903,40 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches a numeric variable the wrapper seals whose other requirement is a derived codec (size, specialize=no)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_sealed_numeric.roc", .exit = .success, .stdout_exact = "1\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches a user literal type whose other requirement is a derived codec (speed, specialize=no)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_user_literal.roc", .exit = .success, .stdout_exact = "18\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12768: a literal argument reaches a user literal type whose other requirement is a derived codec (size, specialize=no)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12768_user_literal.roc", .exit = .success, .stdout_exact = "18\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: derived codecs at every error row shape (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_row_shapes.roc", .exit = .success, .stdout_exact = issue_12787_row_shapes_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: derived codecs at every error row shape (interpreter, specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_row_shapes.roc", .exit = .success, .stdout_exact = issue_12787_row_shapes_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: derived codecs at every error row shape (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_row_shapes.roc", .exit = .success, .stdout_exact = issue_12787_row_shapes_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: derived codecs at every error row shape (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_row_shapes.roc", .exit = .success, .stdout_exact = issue_12787_row_shapes_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: derived codecs at every error row shape (speed, specialize=no)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_row_shapes.roc", .exit = .success, .stdout_exact = issue_12787_row_shapes_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: derived codecs at every error row shape (speed, specialize=yes)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_row_shapes.roc", .exit = .success, .stdout_exact = issue_12787_row_shapes_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: derived codecs at every error row shape (size, specialize=no)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_row_shapes.roc", .exit = .success, .stdout_exact = issue_12787_row_shapes_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: derived codecs at every error row shape (size, specialize=yes)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_row_shapes.roc", .exit = .success, .stdout_exact = issue_12787_row_shapes_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: stored derived codecs used at widened error rows (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_stored_codec.roc", .exit = .success, .stdout_exact = issue_12787_stored_codec_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: stored derived codecs used at widened error rows (interpreter, specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_stored_codec.roc", .exit = .success, .stdout_exact = issue_12787_stored_codec_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: stored derived codecs used at widened error rows (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_stored_codec.roc", .exit = .success, .stdout_exact = issue_12787_stored_codec_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: stored derived codecs used at widened error rows (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_stored_codec.roc", .exit = .success, .stdout_exact = issue_12787_stored_codec_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: stored derived codecs used at widened error rows (speed, specialize=no)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_stored_codec.roc", .exit = .success, .stdout_exact = issue_12787_stored_codec_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: stored derived codecs used at widened error rows (speed, specialize=yes)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_stored_codec.roc", .exit = .success, .stdout_exact = issue_12787_stored_codec_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: stored derived codecs used at widened error rows (size, specialize=no)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_stored_codec.roc", .exit = .success, .stdout_exact = issue_12787_stored_codec_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: stored derived codecs used at widened error rows (size, specialize=yes)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_stored_codec.roc", .exit = .success, .stdout_exact = issue_12787_stored_codec_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a stored record encoder used at a widened error row (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_stored_record_encoder.roc", .exit = .success, .stdout_exact = issue_12787_stored_record_encoder_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a stored record encoder used at a widened error row (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_stored_record_encoder.roc", .exit = .success, .stdout_exact = issue_12787_stored_record_encoder_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a stored record encoder used at a widened error row (speed, specialize=no)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_stored_record_encoder.roc", .exit = .success, .stdout_exact = issue_12787_stored_record_encoder_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a stored record encoder used at a widened error row (size, specialize=no)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_stored_record_encoder.roc", .exit = .success, .stdout_exact = issue_12787_stored_record_encoder_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a stored record encoder used at a widened error row (interpreter, specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_stored_record_encoder.roc", .exit = .success, .stdout_exact = issue_12787_stored_record_encoder_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a stored record encoder used at a widened error row (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_stored_record_encoder.roc", .exit = .success, .stdout_exact = issue_12787_stored_record_encoder_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: codecs stored by specialized checking restore at widened rows (interpreter)", .backend = .interpreter, .body = .{ .custom = .issue_12787_restored_codecs_interpreter } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: codecs stored by specialized checking restore at widened rows (dev)", .backend = .dev, .body = .{ .custom = .issue_12787_restored_codecs_dev } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: codecs stored by specialized checking restore at widened rows (speed)", .backend = .speed, .body = .{ .custom = .issue_12787_restored_codecs_speed } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: codecs stored by specialized checking restore at widened rows (size)", .backend = .size, .body = .{ .custom = .issue_12787_restored_codecs_size } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a derived parser adapted to an open row its callers widen (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_widened_question_row.roc", .exit = .success, .stdout_exact = issue_12787_widened_question_row_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a derived parser adapted to an open row its callers widen (interpreter, specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_widened_question_row.roc", .exit = .success, .stdout_exact = issue_12787_widened_question_row_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a derived parser adapted to an open row its callers widen (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_widened_question_row.roc", .exit = .success, .stdout_exact = issue_12787_widened_question_row_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a derived parser adapted to an open row its callers widen (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_widened_question_row.roc", .exit = .success, .stdout_exact = issue_12787_widened_question_row_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a derived parser adapted to an open row its callers widen (speed, specialize=no)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_widened_question_row.roc", .exit = .success, .stdout_exact = issue_12787_widened_question_row_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a derived parser adapted to an open row its callers widen (speed, specialize=yes)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_widened_question_row.roc", .exit = .success, .stdout_exact = issue_12787_widened_question_row_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a derived parser adapted to an open row its callers widen (size, specialize=no)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_widened_question_row.roc", .exit = .success, .stdout_exact = issue_12787_widened_question_row_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a derived parser adapted to an open row its callers widen (size, specialize=yes)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_widened_question_row.roc", .exit = .success, .stdout_exact = issue_12787_widened_question_row_stdout } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12783: a derived record encoder whose error type nothing fixes (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12783_record.roc", .exit = .success, .stdout_exact = "{\"n\":1}\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12783: a derived record encoder whose error type nothing fixes (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12783_record.roc", .exit = .success, .stdout_exact = "{\"n\":1}\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12783: a derived record encoder whose error type nothing fixes (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12783_record.roc", .exit = .success, .stdout_exact = "{\"n\":1}\n" } } },
@@ -5444,6 +5578,10 @@ fn runCustomCase(
         .issue_11344_lir_image => customIssue11344LirImage(io, allocator, &env, &timer, timeout_ms),
         .issue_11364_interpreter_static_big_string => customIssue11364InterpreterStaticBigString(io, allocator, &env, &timer, timeout_ms),
         .issue_12221_static_or_fresh_list_dev => customIssue12221StaticOrFreshList(io, allocator, &env, &timer, timeout_ms, "dev"),
+        .issue_12787_restored_codecs_interpreter => customIssue12787RestoredCodecs(io, allocator, &env, &timer, timeout_ms, "--opt=interpreter"),
+        .issue_12787_restored_codecs_dev => customIssue12787RestoredCodecs(io, allocator, &env, &timer, timeout_ms, "--opt=dev"),
+        .issue_12787_restored_codecs_speed => customIssue12787RestoredCodecs(io, allocator, &env, &timer, timeout_ms, "--opt=speed"),
+        .issue_12787_restored_codecs_size => customIssue12787RestoredCodecs(io, allocator, &env, &timer, timeout_ms, "--opt=size"),
         .issue_12221_static_or_fresh_list_size => customIssue12221StaticOrFreshList(io, allocator, &env, &timer, timeout_ms, "size"),
         .issue_12221_static_or_fresh_list_speed => customIssue12221StaticOrFreshList(io, allocator, &env, &timer, timeout_ms, "speed"),
         .cli_cache_roots_distinct => customCliCacheRootsDistinct(io, allocator, &timer),
@@ -16190,6 +16328,33 @@ fn customBoxyBuiltEchoApp(
 }
 
 /// Building the module's object-cache pack must preserve alias transparency.
+/// `roc check` evaluates the fixture's constants with the specialized
+/// evaluator and files them in the checked module, so the `--specialize=no`
+/// run that follows restores the stored codecs instead of evaluating them.
+fn customIssue12787RestoredCodecs(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    opt_arg: []const u8,
+) ?TestResult {
+    const fixture = "test/fx/issue_12787_stored_codec.roc";
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{"check"},
+        .roc_file = fixture,
+        .exit = .success,
+    })) |failure| return failure;
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = allocator.dupe([]const u8, &.{ opt_arg, "--specialize=no" }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate args: {}", .{err}),
+        .roc_file = fixture,
+        .exit = .success,
+        .stdout_exact = issue_12787_stored_codec_stdout,
+    })) |failure| return failure;
+    return null;
+}
+
 fn customIssue11453NestedAliasJsonEncode(
     io: std.Io,
     allocator: Allocator,
