@@ -15035,7 +15035,12 @@ the components its descriptor's slots box.
 Every descriptor a body needs depends only on its hidden parameters, so the
 lowerer hoists all composition statements to the worker's entry block. A body
 composes each descriptor it needs once per activation, and a descriptor's
-address is stable for the whole activation.
+address is stable for the whole activation. Argument-block descriptors also
+share one entry-chain result for an identical ordered list of descriptor
+locals. This interning is local to lowering one worker and only records
+compositions emitted after all opened recursive members have closed. A
+composition emitted while a member is open is not shared across its close.
+There is no new ownership pass or persistent cache key.
 
 A nominal whose overrides are instantiated at types that mention the nominal
 (a method generic in its receiver) holds its own descriptor through its
@@ -15110,8 +15115,14 @@ descriptor explicitly as an operand:
 - `dyn_tag_discriminant(dst, base, desc)` reads a tag union's discriminant;
   `dyn_tag_discriminant_of(dst, desc, name)` is the discriminant a tag name
   has under the descriptor, so a match arm compares two runtime values;
-  `dyn_tag_payload_addr(dst, base, desc, name, payload_index)` yields a payload
-  address; `dyn_tag_write(base, desc, name)` writes a discriminant.
+  `dyn_tag_payload_addr(dst, base, desc, payload_index)` yields a payload
+  address from the active variant. Its producer has established the payload's
+  type through a matched arm or known constructor. The runtime reads the
+  stored discriminant and directly indexes the descriptor's variant table;
+  it does not search for the tag name again. Nominal unwrapping, recursion
+  boxes, and zero-sized payload addressing remain explicit descriptor rules.
+  No lookup is speculated into an unexecuted branch.
+  `dyn_tag_write(base, desc, name)` writes a discriminant.
 - `dyn_eq`, `dyn_hash`, and `dyn_inspect` call the descriptor-guided runtime
   walkers, which honor nominal method overrides recorded in the descriptor.
 - The list low-level operations a generic body emits pass the item
@@ -15362,6 +15373,16 @@ not have that guarantee and is still packed into separate frame storage.
 Deferred calls copy the argument block before returning from the invocation,
 as they do for multi-field blocks. No backend infers ownership or elides a
 copy on its own.
+
+An erased entry with exactly one complete argument and no hidden words binds
+that argument directly as its parameter, with the argument's own descriptor.
+It does not compose a one-field wrapper and borrow a view of the field. The
+incoming ownership unit is the parameter itself; ARC handles its use,
+forwarding, or release normally. This applies to lambda, adapter, method,
+structural, and codec entries. Multiple arguments and blocks with hidden words
+keep their declared-order argument-record representation. Caller-side views
+still require independent packing; removing the callee wrapper does not grant
+views an independent lifetime or change the external byte-level ABI.
 
 #### Ownership
 

@@ -1402,12 +1402,12 @@ const Gen = struct {
         }
         b.var_descs = try b.program.arena.allocator().dupe(LocalId, start.captures[worker.capture_types.len..]);
         var record: ?LocalId = null;
-        if (worker.params.len != 0) record = try b.argsRecordLocal(worker.params, .param);
+        if (worker.params.len != 0) record = try b.erasedParamLocal(worker.params);
         const ret_layout = try self.resultLayout(worker.ret);
         const body_start = try b.newHole();
         b.hole = body_start;
         const args = try b.allocator.alloc(LocalId, worker.params.len);
-        for (args, worker.params, 0..) |*arg, ty, index| arg.* = try b.argsRecordField(record.?, @intCast(index), ty);
+        for (args, 0..) |*arg, index| arg.* = try b.erasedParamValue(record.?, worker.params, @intCast(index));
         return .{ .start = start, .record = record, .ret_layout = ret_layout, .body_start = body_start, .args = args, .captures = start.captures[0..worker.capture_types.len] };
     }
 

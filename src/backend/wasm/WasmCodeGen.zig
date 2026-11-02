@@ -8965,7 +8965,6 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
         .tag_payload_addr => |t| {
             try self.emitProcLocal(t.desc);
             try self.emitBytesAddress(t.base);
-            try self.emitProcLocal(t.name);
             try self.emitI32Const(@bitCast(t.payload_index));
             try self.emitBoxyRuntimeCall(.tag_payload_addr);
             try self.bindComponentAddress(dst);

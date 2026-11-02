@@ -706,7 +706,7 @@ test "tag lookup finds every member of sorted composed and nominal descriptors" 
                 compiled.buildTag(desc, &queried_name, slot.ptr(), &.{@ptrCast(&value)}, ops);
                 try testing.expectEqual(@as(u32, @intCast(index)), compiled.tagDiscriminantOf(desc, &queried_name, ops));
                 try testing.expectEqual(@as(u32, @intCast(index)), compiled.tagDiscriminant(desc, slot.ptr(), ops));
-                const result: *const i64 = @ptrCast(@alignCast(compiled.tagPayloadAddr(desc, slot.ptr(), &queried_name, 0, ops)));
+                const result: *const i64 = @ptrCast(@alignCast(compiled.tagPayloadAddr(desc, slot.ptr(), 0, ops)));
                 try testing.expectEqual(value, result.*);
             }
         }
@@ -832,5 +832,32 @@ test "reference field tables remain exact when recursive placeholders close" {
     walk.decref(closed, value.ptr(), ops);
     try testing.expectEqual(baseline + 1, env.allocations());
     walk.decref(closed, value.ptr(), ops);
+    try testing.expectEqual(baseline, env.allocations());
+}
+
+test "active tag payloads preserve physical ordering, zero size, and recursive boxes" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    const boxed = compose.recursiveBox(&env.cache, ops, compose.strDesc());
+    const payloads = [_]*const TypeDesc{ compose.scalarDesc(.u8), compose.zstDesc(), boxed, compose.scalarDesc(.u64) };
+    const union_desc = compose.tagUnion(&env.cache, ops, &.{
+        .{ .name = &name_a, .payload_count = 0, .payloads = &.{} },
+        .{ .name = &name_b, .payload_count = payloads.len, .payloads = &payloads },
+    });
+    const desc = compose.nominal(&env.cache, ops, union_desc, &name_point, null, false);
+    const baseline = env.allocations();
+    const small: u8 = 37;
+    const large: u64 = 0x123456789abcdef0;
+    const text = bigStr("a recursively boxed payload selected by the active tag", ops);
+    var value: Slot = .{};
+    compiled.buildTag(desc, &name_b, value.ptr(), &.{ @ptrCast(&small), walk.zeroSizedPtr(), @ptrCast(&text), @ptrCast(&large) }, ops);
+    try testing.expectEqual(small, compiled.tagPayloadAddr(desc, value.ptr(), 0, ops)[0]);
+    try testing.expectEqual(value.ptr() + fieldOffset(union_desc.variants()[1].payload, 1), compiled.tagPayloadAddr(desc, value.ptr(), 1, ops));
+    const loaded: *const RocStr = @ptrCast(@alignCast(compiled.tagPayloadAddr(desc, value.ptr(), 2, ops)));
+    try testing.expectEqualStrings(text.asSlice(), loaded.asSlice());
+    const loaded_large: *const u64 = @ptrCast(@alignCast(compiled.tagPayloadAddr(desc, value.ptr(), 3, ops)));
+    try testing.expectEqual(large, loaded_large.*);
+    walk.decref(desc, value.ptr(), ops);
     try testing.expectEqual(baseline, env.allocations());
 }

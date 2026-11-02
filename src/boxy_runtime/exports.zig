@@ -204,8 +204,8 @@ pub fn roc_desc_tag_discriminant_of(desc: *const TypeDesc, name: *const Name) ca
 }
 
 /// The C-ABI form of `compiled.tagPayloadAddr`.
-pub fn roc_desc_tag_payload_addr(desc: *const TypeDesc, base: ?[*]u8, name: *const Name, payload_index: u32) callconv(.c) [*]u8 {
-    return compiled.tagPayloadAddr(desc, valuePtr(base), name, payload_index, ops());
+pub fn roc_desc_tag_payload_addr(desc: *const TypeDesc, base: ?[*]u8, payload_index: u32) callconv(.c) [*]u8 {
+    return compiled.tagPayloadAddr(desc, valuePtr(base), payload_index, ops());
 }
 
 /// The C-ABI form of `compiled.buildRecord`.
