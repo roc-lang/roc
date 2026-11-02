@@ -15196,6 +15196,7 @@ fn checkedRuntimeLoweringConfig(
             .target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
             .erased_capture_prefix = devCapturePrefix(roots, opt, target),
             .specialization_strategy = specialization_strategy,
+            .boxy_composition_sites = readsCompositionSites(opt, target),
             .inline_mode = postCheckInlineModeForOpt(opt),
             .specialize_arc_modes = optimizeLirForOpt(opt),
             .spec_constr_clone_inlining = specConstrCloneInliningForOpt(opt),
@@ -15227,6 +15228,16 @@ fn checkedRuntimeLoweringConfig(
 /// native dev build, like compile-time evaluation, reserves the hot-reload
 /// prefix and compiles the same erased callables; other backends and the
 /// interpreter reserve none.
+/// Whether the code `opt` runs for `target` reads composition sites: the
+/// interpreter and the native dev backend do, LLVM and the wasm backend do not.
+fn readsCompositionSites(opt: cli_args.OptLevel, target: RocTarget) bool {
+    return switch (opt) {
+        .interpreter => true,
+        .dev => target.toCpuArch() != .wasm32,
+        .size, .speed => false,
+    };
+}
+
 fn devCapturePrefix(roots: CheckedLirRoots, opt: cli_args.OptLevel, target: RocTarget) u32 {
     if (opt != .dev) return 0;
     switch (roots) {
@@ -15237,6 +15248,15 @@ fn devCapturePrefix(roots: CheckedLirRoots, opt: cli_args.OptLevel, target: RocT
         .linked_output, .test_plan => {},
     }
     return if (backend.dev.isa.isaOfOrNull(target) != null) @import("builtins").erased_callable.hot_reload_capture_prefix_size else 0;
+}
+
+test "only the interpreter and the native dev backend get composition sites" {
+    try std.testing.expect(readsCompositionSites(.interpreter, .x64musl));
+    try std.testing.expect(readsCompositionSites(.dev, .x64musl));
+    try std.testing.expect(!readsCompositionSites(.dev, .wasm32));
+    try std.testing.expect(!readsCompositionSites(.size, .x64musl));
+    try std.testing.expect(!readsCompositionSites(.speed, .x64musl));
+    try std.testing.expect(!readsCompositionSites(.speed, .wasm32));
 }
 
 test "native test generic procedures use the ordinary native dev representation and ownership policy" {

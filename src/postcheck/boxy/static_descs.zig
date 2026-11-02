@@ -51,10 +51,12 @@ pub const StaticDescs = struct {
     extra_nodes: u32 = 0,
     /// The key word of each recursive member type composed at runtime.
     recursion_keys: collections.DenseMapUnmanaged(TypeId, LIR.StaticDataId) = .empty,
+    /// Each static dictionary, by its procedure and capture words.
+    dictionaries: std.StringHashMapUnmanaged(Reserved) = .empty,
 
     /// A descriptor's identity: a type, or the recursion box around one.
     const Key = struct { ty: TypeId, recursive_box: bool };
-    const Reserved = struct { slot: LIR.StaticDataId, node: ExportIndex };
+    pub const Reserved = struct { slot: LIR.StaticDataId, node: ExportIndex };
     const Pending = struct { key: Key, node: ExportIndex };
 
     pub fn init(allocator: Allocator, store: *types.Store, layouts: *Layouts, result: *LirProgram.Result, target_usize: base.target.TargetUsize) StaticDescs {
@@ -83,6 +85,9 @@ pub const StaticDescs = struct {
         self.desc_slots.deinit(self.allocator);
         self.name_slots.deinit(self.allocator);
         self.recursion_keys.deinit(self.allocator);
+        var dictionary_keys = self.dictionaries.keyIterator();
+        while (dictionary_keys.next()) |key| self.allocator.free(key.*);
+        self.dictionaries.deinit(self.allocator);
         self.pending.deinit(self.allocator);
     }
 
@@ -139,6 +144,36 @@ pub const StaticDescs = struct {
         const node = try self.addExport(name, self.ptrSize(), self.ptrSize(), slot);
         self.exports.items[node].is_mutable = true;
         return slot;
+    }
+
+    /// The static dictionary of `proc` capturing `words`: an immortal callable
+    /// node, and the slot whose value points at its payload as a composed
+    /// dictionary's word does.
+    pub fn dictionary(self: *StaticDescs, proc: LIR.LirProcSpecId, words: []const CaptureWord) Allocator.Error!Reserved {
+        var key: std.ArrayList(u8) = .empty;
+        defer key.deinit(self.allocator);
+        try key.appendSlice(self.allocator, std.mem.asBytes(&@backingInt(proc)));
+        for (words) |word| {
+            try key.append(self.allocator, @backingInt(std.meta.activeTag(word)));
+            const id: u32 = switch (word) {
+                .desc => |ty| @backingInt(ty),
+                .callable => |node| node,
+                .zero => 0,
+            };
+            try key.appendSlice(self.allocator, std.mem.asBytes(&id));
+        }
+        if (self.dictionaries.get(key.items)) |existing| return existing;
+
+        const slot = try self.addSlot();
+        const slot_export = try self.addExport(try LirProgram.staticDataSymbolName(self.allocator, slot), self.ptrSize(), self.ptrSize(), slot);
+        const node = try self.staticCallableOf(@backingInt(slot), 1, proc, words);
+        try self.setRelocations(slot_export, &.{.{ .offset = 0, .target = node, .addend = static_callable_header }});
+        try self.drain();
+        const reserved: Reserved = .{ .slot = slot, .node = node };
+        const owned_key = try self.allocator.dupe(u8, key.items);
+        errdefer self.allocator.free(owned_key);
+        try self.dictionaries.put(self.allocator, owned_key, reserved);
+        return reserved;
     }
 
     /// The static-data slot holding a null pointer.
@@ -245,9 +280,9 @@ pub const StaticDescs = struct {
     /// zero (static) refcount word immediately before the payload.
     const static_callable_header: u32 = @intCast(boxy_runtime.compiled.static_callable_header);
 
-    /// One word a static callable captures: a descriptor, or another static
-    /// callable (a dictionary).
-    const CaptureWord = union(enum) { desc: TypeId, callable: ExportIndex };
+    /// One word a static callable captures: a descriptor, another static
+    /// callable (a dictionary), or a word no body reads.
+    pub const CaptureWord = union(enum) { desc: TypeId, callable: ExportIndex, zero };
 
     /// An immortal erased callable of `override`'s entry whose capture is
     /// the descriptors of its scheme's types then its dictionaries, one word
@@ -348,7 +383,9 @@ pub const StaticDescs = struct {
     fn fillStaticCallable(self: *StaticDescs, node: ExportIndex, proc: LIR.LirProcSpecId, words: []const CaptureWord) Allocator.Error!void {
         const ptr = self.ptrSize();
         const capture_offset = self.staticCallableCaptureOffset();
-        const relocations = try self.allocator.alloc(StaticDataRelocation, 1 + words.len);
+        var relocation_count: usize = 1;
+        for (words) |word| relocation_count += @intFromBool(word != .zero);
+        const relocations = try self.allocator.alloc(StaticDataRelocation, relocation_count);
         errdefer self.allocator.free(relocations);
         relocations[0] = .{
             .offset = static_callable_header,
@@ -360,17 +397,20 @@ pub const StaticDescs = struct {
             .procedure = proc,
             .callable_capture_offset = capture_offset,
         };
-        for (words, relocations[1..], 0..) |word, *relocation, position| {
+        var next: usize = 1;
+        for (words, 0..) |word, position| {
             const target, const addend = switch (word) {
                 .desc => |ty| .{ (try self.reserveDescriptor(.{ .ty = ty, .recursive_box = false })).node, 0 },
                 .callable => |callable| .{ callable, static_callable_header },
+                .zero => continue,
             };
-            relocation.* = .{
+            relocations[next] = .{
                 .offset = static_callable_header + capture_offset + @as(u32, @intCast(position)) * ptr,
                 .target_symbol_name = self.exports.items[target].symbol_name,
                 .target = .{ .data_symbol = @fromBackingInt(target) },
                 .addend = addend,
             };
+            next += 1;
         }
         self.exports.items[node].relocations = relocations;
     }

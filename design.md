@@ -15328,10 +15328,18 @@ hidden arguments the worker needs, bound as captures: the descriptors for the
 target scheme's variables under the edge's `subst`, and the dictionaries for
 the target scheme's own evidence parameters under the edge's nested evidence.
 A dictionary whose target and captures are all static is emitted as static,
-immortal data. One whose captures mention the enclosing worker's hidden
-parameters is composed at runtime, hoisted to entry like a descriptor, and
-interned in the same immortal cache keyed by the target worker and its capture
-identities, so composition allocates nothing after the first evaluation.
+immortal data, interned by procedure and capture words: its callable is a
+static-data node of the same shape a composed callable has, with a static
+refcount, and its slot's value points at the callable's payload. A local's
+static content (a static descriptor, a static dictionary, or the null word of
+an unread literal argument) is what decides this, so a closed type's dictionary
+is static in a generic body too. One whose captures mention the enclosing
+worker's hidden parameters is composed at runtime, hoisted to entry like a
+descriptor, and interned in the same immortal cache keyed by the target worker
+and its capture identities, so composition allocates nothing after the first
+evaluation. A compile-time program with stored functions composes every
+dictionary, because reading a function value back resolves its captured
+descriptors through what the program's compositions noted.
 
 A method whose scheme requires itself has a dictionary that captures itself,
 directly or through other dictionaries: resolving a requirement can reach a
@@ -15633,8 +15641,11 @@ adding it, takes the lock, probes the current table again, and interns on a
 true miss. Only insertion and growth hold the lock. Keys are a few words of
 constructor tags and operand addresses, hashed by mixing each word.
 
-Each descriptor or dictionary composition statement also owns a one-entry site
-cache in zero-initialized writable static data. The lowerer assigns its slot
+Where the consumer is the interpreter or the native dev backend, each descriptor
+or dictionary composition statement also owns a one-entry site cache in
+zero-initialized writable static data; LLVM and wasm consumers read no sites, so
+their lowering emits no slots and every composition reaches the interner. The
+lowerer assigns its slot
 and stable worker/site identity; LIR cloning and compaction preserve that
 reference. Mutable slots are never content-deduplicated or pooled between
 program images. Dev run images place them on separate writable pages outside
