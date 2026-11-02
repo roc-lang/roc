@@ -4119,7 +4119,7 @@ pub const Builder = struct {
         // A use checking recorded no evidence for (one inside a rejected
         // expression, evaluated only for its effects) resolves the
         // procedure's dictionaries from its types.
-        return try self.localProcInstanceValue(local, try self.exprType(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id), .{ .use = expr_id });
+        return try self.localProcInstanceValue(local, try self.exprType(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id), .{ .use = expr_id }, self.siteSubstitution(expr_id));
     }
 
     /// The function value of local procedure `local` used at the function
@@ -4128,14 +4128,16 @@ pub const Builder = struct {
     /// `localProcInstanceValue` resolving the procedure's dictionaries from
     /// its types.
     fn localProcInstanceValueAt(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId) Allocator.Error!LocalId {
-        return try self.localProcInstanceValue(local, use_ty, null, null);
+        return try self.localProcInstanceValue(local, use_ty, null, null, &.{});
     }
 
     /// `edge` is the checked edge the use is (design.md "Literal
     /// Arguments"), whose literal arguments the procedure's own scheme's
     /// literal requirements take; null derives them from the use's types, as the
-    /// dictionaries are derived when `evidence` is null.
-    pub fn localProcInstanceValue(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId, evidence: ?[]const static_dispatch.CheckedEvidence, edge: ?checked.LiteralEdge) Allocator.Error!LocalId {
+    /// dictionaries are derived when `evidence` is null. `subst` is the use's
+    /// checked instantiation of the procedure's scheme, when it recorded one,
+    /// for the variables its type does not relate.
+    pub fn localProcInstanceValue(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId, evidence: ?[]const static_dispatch.CheckedEvidence, edge: ?checked.LiteralEdge, subst: []const checked.CheckedTypeId) Allocator.Error!LocalId {
         const lambda_expr = switch (self.bodies().expr(local.expr).data) {
             .lambda => local.expr,
             .closure => |closure| closure.lambda,
@@ -4182,8 +4184,11 @@ pub const Builder = struct {
         @memcpy(descs[0..outer_count], self.var_descs[0..outer_count]);
         const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
         defer self.allocator.free(own_types);
-        for (own_types, related[outer_count..], scheme.scheme_vars) |*own_ty, ty, variable| {
-            own_ty.* = ty orelse try self.program.converter().sealedScheme(self.module, variable);
+        for (own_types, related[outer_count..], scheme.scheme_vars, 0..) |*own_ty, ty, variable, index| {
+            own_ty.* = ty orelse if (index < subst.len and self.view.types().payload(subst[index]) != .err)
+                try self.convert(subst[index])
+            else
+                try self.program.converter().sealedScheme(self.module, variable);
         }
         try self.resolveOwnKinds(lambda_ty, scheme, own_types);
         for (descs[outer_count..], own_types) |*desc, own_ty| desc.* = try self.descOf(own_ty);
@@ -4253,7 +4258,8 @@ pub const Builder = struct {
             .from_callable => null,
             .through_alias => invariant("alias-scope evidence accompanies only an alias instantiation"),
         };
-        return try self.localProcInstanceValue(local, fn_ty, evidence, null);
+        const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
+        return try self.localProcInstanceValue(local, fn_ty, evidence, null, subst);
     }
 
     /// The worker that declares local procedure `local` (this worker or one
