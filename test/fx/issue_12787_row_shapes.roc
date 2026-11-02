@@ -52,6 +52,46 @@ encode_open = |doc| Json.to_str_try(doc)
 
 encode_generic = |doc| Json.to_str_try(doc)
 
+# `?` leaves the error rows of these two open, and each caller's row sorts tags
+# before and after the codec's own and gives one a larger payload.
+parse_question = |json| {
+    parsed : Model
+    parsed = Json.parse(json)?
+    Ok(parsed.n)
+}
+
+encode_question = |doc| {
+    encoded : Str
+    encoded = Json.to_str_try(doc)?
+    Ok(Str.count_utf8_bytes(encoded))
+}
+
+QuestionParse : [Aardvark(Str, Str, U64), InvalidJson(Str), MissingRequiredField(Str), Zebra]
+
+QuestionEncode : [Aardvark(Str, Str, U64), Infinity, NaN, NegativeInfinity, Zebra]
+
+question_parse_row : Str -> Try(U64, QuestionParse)
+question_parse_row = |json| {
+    if json == "aardvark" {
+        Err(Aardvark("first", "second", 3))
+    } else if json == "zebra" {
+        Err(Zebra)
+    } else {
+        parse_question(json)
+    }
+}
+
+question_encode_row : Doc -> Try(U64, QuestionEncode)
+question_encode_row = |doc| {
+    if doc.x == 2 {
+        Err(Aardvark("first", "second", 3))
+    } else if doc.x == 3 {
+        Err(Zebra)
+    } else {
+        encode_question(doc)
+    }
+}
+
 # A format whose error type is a `Str` rather than a tag union.
 StrFormat := [Default].{
     rename_field : StrFormat, Str -> Str
@@ -141,6 +181,29 @@ show_encoded_wide = |result| {
     }
 }
 
+show_question_parse : Try(U64, QuestionParse) -> Str
+show_question_parse = |result| {
+    match result {
+        Ok(n) => "ok ${n.to_str()}"
+        Err(Aardvark(first, second, count)) => "aardvark ${first} ${second} ${count.to_str()}"
+        Err(InvalidJson(_)) => "invalid json"
+        Err(MissingRequiredField(name)) => "missing ${name}"
+        Err(Zebra) => "zebra"
+    }
+}
+
+show_question_encode : Try(U64, QuestionEncode) -> Str
+show_question_encode = |result| {
+    match result {
+        Ok(n) => "ok ${n.to_str()}"
+        Err(Aardvark(first, second, count)) => "aardvark ${first} ${second} ${count.to_str()}"
+        Err(Infinity) => "infinity"
+        Err(NaN) => "not a number"
+        Err(NegativeInfinity) => "negative infinity"
+        Err(Zebra) => "zebra"
+    }
+}
+
 show_str_parse : Try({ value : (U64, U64), rest : U64 }, Str) -> Str
 show_str_parse = |result| {
     match result {
@@ -192,6 +255,17 @@ main! = || {
     Stdout.line!(show_encoded(encode_open({ x: one / zero })))
     Stdout.line!(show_encoded(encode_generic({ x: one })))
     Stdout.line!(show_encoded_wide(encode_generic({ x: zero / zero })))
+
+    Stdout.line!(show_question_parse(question_parse_row(good)))
+    Stdout.line!(show_question_parse(question_parse_row(bad)))
+    Stdout.line!(show_question_parse(question_parse_row(no_field)))
+    Stdout.line!(show_question_parse(question_parse_row("aardvark")))
+    Stdout.line!(show_question_parse(question_parse_row("zebra")))
+    Stdout.line!(show_question_encode(question_encode_row({ x: one })))
+    Stdout.line!(show_question_encode(question_encode_row({ x: zero / zero })))
+    Stdout.line!(show_question_encode(question_encode_row({ x: one / zero })))
+    Stdout.line!(show_question_encode(question_encode_row({ x: 2 })))
+    Stdout.line!(show_question_encode(question_encode_row({ x: 3 })))
 
     Stdout.line!(show_str_parse(str_parse(2)))
     Stdout.line!(show_str_parse(str_parse(6)))

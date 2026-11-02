@@ -298,6 +298,16 @@ const issue_12787_row_shapes_stdout =
     \\infinity
     \\{"x":1}
     \\not a number
+    \\ok 4
+    \\invalid json
+    \\missing n
+    \\aardvark first second 3
+    \\zebra
+    \\ok 7
+    \\not a number
+    \\infinity
+    \\aardvark first second 3
+    \\zebra
     \\ok 2 3 4
     \\err seven
     \\ok 4
@@ -343,6 +353,16 @@ const issue_12787_stored_record_encoder_stdout =
     \\ok 7
     \\zero
     \\reset: a string long enough to live on the heap
+    \\
+;
+
+const issue_12787_widened_question_row_stdout =
+    \\Ann <ann@example.com> ***
+    \\invalid email not an email
+    \\invalid json
+    \\missing email
+    \\aardvark first second 3
+    \\zebra
     \\
 ;
 
@@ -3904,6 +3924,14 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12787: codecs stored by specialized checking restore at widened rows (dev)", .backend = .dev, .body = .{ .custom = .issue_12787_restored_codecs_dev } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12787: codecs stored by specialized checking restore at widened rows (speed)", .backend = .speed, .body = .{ .custom = .issue_12787_restored_codecs_speed } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12787: codecs stored by specialized checking restore at widened rows (size)", .backend = .size, .body = .{ .custom = .issue_12787_restored_codecs_size } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a derived parser adapted to an open row its callers widen (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_widened_question_row.roc", .exit = .success, .stdout_exact = issue_12787_widened_question_row_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a derived parser adapted to an open row its callers widen (interpreter, specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_widened_question_row.roc", .exit = .success, .stdout_exact = issue_12787_widened_question_row_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a derived parser adapted to an open row its callers widen (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_widened_question_row.roc", .exit = .success, .stdout_exact = issue_12787_widened_question_row_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a derived parser adapted to an open row its callers widen (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_widened_question_row.roc", .exit = .success, .stdout_exact = issue_12787_widened_question_row_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a derived parser adapted to an open row its callers widen (speed, specialize=no)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_widened_question_row.roc", .exit = .success, .stdout_exact = issue_12787_widened_question_row_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a derived parser adapted to an open row its callers widen (speed, specialize=yes)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_widened_question_row.roc", .exit = .success, .stdout_exact = issue_12787_widened_question_row_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a derived parser adapted to an open row its callers widen (size, specialize=no)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_widened_question_row.roc", .exit = .success, .stdout_exact = issue_12787_widened_question_row_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a derived parser adapted to an open row its callers widen (size, specialize=yes)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_widened_question_row.roc", .exit = .success, .stdout_exact = issue_12787_widened_question_row_stdout } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12783: a derived record encoder whose error type nothing fixes (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12783_record.roc", .exit = .success, .stdout_exact = "{\"n\":1}\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12783: a derived record encoder whose error type nothing fixes (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12783_record.roc", .exit = .success, .stdout_exact = "{\"n\":1}\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12783: a derived record encoder whose error type nothing fixes (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12783_record.roc", .exit = .success, .stdout_exact = "{\"n\":1}\n" } } },
