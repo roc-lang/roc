@@ -10,6 +10,7 @@ platform ""
         "roc_trimmed_string": trimmed_string_for_host,
         "roc_any_string": any_string_for_host,
         "roc_direct_string": direct_string_for_host,
+        "roc_local_string": local_string_for_host,
     }
     targets: {
         inputs_dir: "targets/",
@@ -44,6 +45,13 @@ any_string_for_host = trim_any
 
 direct_string_for_host : Str -> Str
 direct_string_for_host = |input| process_string(input)
+
+local_string_for_host : Str -> Str
+local_string_for_host = |input| {
+    local = process_string
+    local_again = local
+    local_again(input)
+}
 
 # The requirement is reached through this module's own alias, whatever the app
 # binds it to.
