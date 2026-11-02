@@ -110,23 +110,6 @@ byte list and `str_from_utf8_validated`, without a validation rescan. Successful
 decoding allocates at most once and leaves input unchanged. Output encoders
 (`to_utf16`/`to_utf32`) remain a separate API addition.
 
-## LSP workspace trust
-
-The LSP starts untrusted. Only an explicit boolean
-`initializationOptions.trustedWorkspace: true` authorizes compilation for the
-session, including dependency downloads and compile-time evaluation. Editor
-clients must obtain this authorization from the user, not repository settings,
-and restart the server when trust changes. Trust covers every document and
-transitive dependency processed by that server; clients must isolate untrusted
-folders in separate server sessions.
-
-Untrusted sessions retain document text and provide formatting, folding ranges,
-and selection ranges using parsing alone. They do not create builds or send
-compiler diagnostics, and every request that needs checked types or names
-receives an explicit trust-required error. Request registrations declare
-whether they require trust. This gate precedes compiler entry; it does not skip
-stages or produce partially checked modules as checked module data.
-
 ## LSP document checks
 
 Opening or editing a document schedules a check of it rather than checking it
