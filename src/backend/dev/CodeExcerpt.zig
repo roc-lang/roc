@@ -253,7 +253,7 @@ pub const Set = struct {
 
     /// Allocate the owner list before transferring the arena to a result.
     /// No retain happens until the last fallible allocation has succeeded.
-    fn retainOwners(a: Allocator, excerpts: []const Excerpt) Allocator.Error![]const Owner {
+    pub fn retainOwners(a: Allocator, excerpts: []const Excerpt) Allocator.Error![]const Owner {
         var owners = std.AutoHashMap(Owner, void).init(a);
         defer owners.deinit();
         for (excerpts) |excerpt| {

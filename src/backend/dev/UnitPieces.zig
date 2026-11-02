@@ -6,6 +6,11 @@
 //! unit. The unit's constants travel with the excerpts that name them, under
 //! their content names, so a piece is the same bytes wherever it lands.
 //!
+//! The unit's constants are written once, as a table, and each excerpt
+//! names the constants it points into by index; decoding rebuilds the
+//! constant graph, so every excerpt carries the closure it reaches without
+//! a copy of it.
+//!
 //! The encoding is a pure function of its inputs: fixed-width little-endian
 //! integers, length-prefixed bytes, excerpts in set order. Two builds of the
 //! same unit write identical bytes.
@@ -19,7 +24,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RUPC";
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 1;
+pub const format_version: u32 = 2;
 
 /// One source file the pieces' lines name, in the order the set indexes them.
 pub const SourceFile = struct {
@@ -39,6 +44,9 @@ pub const Pieces = struct {
     /// Owns every slice below except the set's own.
     arena: collections.SingleThreadArena,
     set: CodeExcerpt.Set,
+    /// The constant graph decoded excerpts point into; null for pieces the
+    /// backend produced, whose excerpts retain their producer's graph.
+    graph: ?CodeExcerpt.PreparedData = null,
     /// The erased-callable capture prefix the unit's code was generated
     /// for; every piece of one program shares it.
     erased_capture_prefix: u32,
@@ -51,6 +59,7 @@ pub const Pieces = struct {
 
     pub fn deinit(self: *Pieces) void {
         self.set.deinit();
+        if (self.graph) |*graph| graph.deinit();
         self.arena.deinit();
         self.* = undefined;
     }
@@ -77,10 +86,31 @@ pub fn encode(allocator: Allocator, pieces: *const Pieces) Allocator.Error![]u8 
         try writer.str(file.qualified_name);
         try writer.raw(&file.identity);
     }
-    try writer.word(@intCast(set.excerpts.len));
+    // Every constant any excerpt reaches, once, in first-use order.
+    var table: std.StringArrayHashMapUnmanaged(CodeExcerpt.DataItem) = .empty;
+    defer table.deinit(allocator);
+    var roots = std.ArrayList([]const u32).empty;
+    defer {
+        for (roots.items) |list| allocator.free(list);
+        roots.deinit(allocator);
+    }
     var carried = CodeExcerpt.DataCollector{ .allocator = allocator };
     defer carried.deinit();
     for (set.excerpts) |excerpt| {
+        carried.restart();
+        try carried.add(excerpt);
+        var indices = std.ArrayList(u32).empty;
+        errdefer indices.deinit(allocator);
+        for (carried.items.items) |item| {
+            const gop = try table.getOrPut(allocator, item.name);
+            if (!gop.found_existing) gop.value_ptr.* = item;
+            try indices.append(allocator, @intCast(gop.index));
+        }
+        try roots.append(allocator, try indices.toOwnedSlice(allocator));
+    }
+    try writeData(&writer, table.values());
+    try writer.word(@intCast(set.excerpts.len));
+    for (set.excerpts, roots.items) |excerpt, excerpt_roots| {
         switch (excerpt.kind) {
             .proc => |identity| {
                 try writer.byte(0);
@@ -171,9 +201,8 @@ pub fn encode(allocator: Allocator, pieces: *const Pieces) Allocator.Error![]u8 
             try writer.str(relocation.name);
             try writer.byte(@backingInt(relocation.scope));
         }
-        carried.restart();
-        try carried.add(excerpt);
-        try writeData(&writer, carried.items.items);
+        try writer.word(@intCast(excerpt_roots.len));
+        for (excerpt_roots) |index| try writer.word(index);
     }
     try writeData(&writer, pieces.exported_data);
     try writer.word(@intCast(pieces.helper_aliases.len));
@@ -207,6 +236,9 @@ pub fn decode(allocator: Allocator, bytes: []const u8) ReadError!Pieces {
     const sa = set_arena.allocator();
     const set_files = try sa.alloc([32]u8, source_files.len);
     for (source_files, set_files) |file, *identity| identity.* = file.identity;
+    const table = try readData(a, &reader);
+    var graph = try CodeExcerpt.PreparedData.init(allocator, &.{}, &.{}, table);
+    errdefer graph.deinit();
     const excerpt_count = try reader.word();
     const excerpts = try sa.alloc(CodeExcerpt.Excerpt, excerpt_count);
     for (excerpts) |*excerpt| {
@@ -296,7 +328,11 @@ pub fn decode(allocator: Allocator, bytes: []const u8) ReadError!Pieces {
                 },
             };
         }
-        const data = try readData(sa, &reader);
+        const roots = try sa.alloc(u32, try reader.word());
+        for (roots) |*index| {
+            index.* = try reader.word();
+            if (index.* >= table.len) return error.MalformedPieces;
+        }
         excerpt.* = .{
             .kind = kind,
             .code = code,
@@ -307,7 +343,8 @@ pub fn decode(allocator: Allocator, bytes: []const u8) ReadError!Pieces {
             .lines = lines,
             .failure_sites = failure_sites,
             .relocations = relocations,
-            .data = data,
+            .data = &.{},
+            .data_graph = if (roots.len == 0) null else .{ .graph = graph.graph, .roots = roots },
             .loc = loc,
         };
     }
@@ -317,9 +354,11 @@ pub fn decode(allocator: Allocator, bytes: []const u8) ReadError!Pieces {
         alias.* = .{ .helper = try a.dupe(u8, try reader.str()), .alias = try a.dupe(u8, try reader.str()) };
     }
     if (reader.at != bytes.len) return error.MalformedPieces;
+    const owners = try CodeExcerpt.Set.retainOwners(sa, excerpts);
     return .{
         .arena = arena,
-        .set = .{ .arena = set_arena, .excerpts = excerpts, .source_files = set_files },
+        .set = .{ .arena = set_arena, .excerpts = excerpts, .source_files = set_files, .owners = owners },
+        .graph = graph,
         .erased_capture_prefix = erased_capture_prefix,
         .source_files = source_files,
         .exported_data = exported_data,
@@ -594,6 +633,11 @@ test "pieces round-trip through their encoding" {
     try std.testing.expectEqual(@as(u32, 16), decoded.erased_capture_prefix);
     try std.testing.expectEqualStrings("Main.roc", decoded.source_files[0].name);
     try std.testing.expectEqualStrings("roc_answer", decoded.exported_data[0].name);
+    const carried = try CodeExcerpt.materializeData(allocator, decoded.set.excerpts[0]);
+    defer allocator.free(carried);
+    try std.testing.expectEqual(@as(usize, 1), carried.len);
+    try std.testing.expectEqualStrings("roc__hcafe", carried[0].name);
+    try std.testing.expectEqualStrings("constant", carried[0].bytes);
     try std.testing.expectEqualStrings("roc__helper_static", decoded.helper_aliases[0].alias);
     try std.testing.expectError(error.MalformedPieces, decode(allocator, bytes[0 .. bytes.len - 1]));
 }
