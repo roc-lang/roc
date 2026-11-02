@@ -326,3 +326,95 @@ test "a stored encoder means the same to every Solved policy when its optimized 
         \\}
     );
 }
+
+/// Build an app, edit it, and build it again against one cache. The second
+/// build restores the imported module's stored functions while evaluating the
+/// app's constants, and stores them again in the app's own module.
+fn expectRestoredFunctionsStoreAgain(app_source: []const u8, module_name: []const u8, module_source: []const u8) ExpectError!void {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(io, "cache");
+    try tmp_dir.dir.createDirPath(io, "app/.roc_echo_platform");
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "app/main.roc", .data = app_source });
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = module_name, .data = module_source });
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "app/.roc_echo_platform/main.roc", .data = platform_main });
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "app/.roc_echo_platform/Echo.roc", .data = platform_echo });
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(io, "cache", gpa);
+    defer gpa.free(cache_dir);
+    const app_path = try tmp_dir.dir.realPathFileAlloc(io, "app/main.roc", gpa);
+    defer gpa.free(app_path);
+
+    const first = try buildWithCacheAtTarget(gpa, cache_dir, app_path, .{});
+    defer gpa.free(first.program);
+    const edited = try std.fmt.allocPrint(gpa, "{s}\n# edited\n", .{app_source});
+    defer gpa.free(edited);
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "app/main.roc", .data = edited });
+    const second = try buildWithCacheAtTarget(gpa, cache_dir, app_path, .{});
+    defer gpa.free(second.program);
+    try std.testing.expect(second.respecialized);
+    try std.testing.expectEqualStrings(first.program, second.program);
+}
+
+test "an encoder restored from an imported module stores its captures again" {
+    try expectRestoredFunctionsStoreAgain(
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\import Codecs
+        \\held : { empty : ({}, U64 -> Try(U64, [Zero])), pair : ({ n : U64 }, U64 -> Try(U64, [Zero])) }
+        \\held = { empty: Codecs.stored_empty, pair: Codecs.stored_pair }
+        \\main! = |args| {
+        \\    state = List.len(args)
+        \\    Echo.line!(Str.inspect((held.empty)({}, state)))
+        \\    Echo.line!(Str.inspect((held.pair)({ n: state }, state)))
+        \\    Ok({})
+        \\}
+    , "app/Codecs.roc",
+        \\Format := [Plain, Other].{
+        \\    rename_field : Format, Str -> Str
+        \\    rename_field = |_, name| name
+        \\    encode_record : U64, U64, (U64, (U64, Str, (U64 -> Try(U64, err)) -> Try(U64, err)) -> Try(U64, err)) -> Try(U64, err)
+        \\    encode_record = |state, _, write_fields| write_fields(state, |field_state, _, write_value| write_value(field_state))
+        \\    encode_u64 : U64, U64 -> Try(U64, [Zero])
+        \\    encode_u64 = |value, state| if value == 0 { Err(Zero) } else { Ok(state + value) }
+        \\}
+        \\Codecs := [].{
+        \\    encoder_with : Format, shape -> (shape, U64 -> Try(U64, err))
+        \\        where [shape.encoder_for : Format -> (shape, U64 -> Try(U64, err))]
+        \\    encoder_with = |format, _| {
+        \\        Shape : shape
+        \\        Shape.encoder_for(format)
+        \\    }
+        \\    stored_empty : {}, U64 -> Try(U64, [Zero])
+        \\    stored_empty = encoder_with(Format.Other, {})
+        \\    stored_pair : { n : U64 }, U64 -> Try(U64, [Zero])
+        \\    stored_pair = encoder_with(Format.Other, { n: 0 })
+        \\}
+    );
+}
+
+test "a closure restored from an imported module stores its captures again" {
+    try expectRestoredFunctionsStoreAgain(
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\import Closures
+        \\held : { call : (Str -> Str) }
+        \\held = { call: Closures.stored }
+        \\main! = |args| {
+        \\    Echo.line!((held.call)(Str.inspect(List.len(args))))
+        \\    Ok({})
+        \\}
+    , "app/Closures.roc",
+        \\Closures := [].{
+        \\    make : Str -> (Str -> Str)
+        \\    make = |captured| |text| {
+        \\        pair = { first: captured, second: text }
+        \\        pair.second
+        \\    }
+        \\    stored : Str -> Str
+        \\    stored = make("a captured string long enough to live on the heap")
+        \\}
+    );
+}
