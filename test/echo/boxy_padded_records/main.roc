@@ -86,7 +86,7 @@ Encoded := { z : U32, _ : U32, a : Str ?? "fallback" }.{
 	parser_for : _
 }
 
-EncodedSlot(a) := { y : U32, _ : U8, a : a }.{
+EncodedSlot(a) := { z : U32, _ : U8, a : a }.{
 	encoder_for : _
 	parser_for : _
 }
@@ -266,7 +266,7 @@ main! = |args| {
 	encoded : Encoded
 	encoded = { z: 4, a: "text" }
 	encoded_slot : EncodedSlot(Str)
-	encoded_slot = { y: 5, a: "slot" }
+	encoded_slot = { z: 5, a: "slot" }
 	encoded_outer : EncodedOuter
 	encoded_outer = { p: encoded, n: 11 }
 	echo!("${Json.to_str(encoded)} ${Json.to_str(encoded_slot)} ${Json.to_str(encoded_outer)}\n")
@@ -275,7 +275,7 @@ main! = |args| {
 	defaulted_parse : Try(Encoded, _)
 	defaulted_parse = Json.parse(Str.concat("{\"z\": 7}", suffix))
 	parsed_slot : Try(EncodedSlot(U64), _)
-	parsed_slot = Json.parse(Str.concat("{\"a\": 7, \"y\": 8}", suffix))
+	parsed_slot = Json.parse(Str.concat("{\"a\": 7, \"z\": 8}", suffix))
 	parsed_outer : Try(EncodedOuter, _)
 	parsed_outer = Json.parse(Str.concat("{\"p\": {\"z\": 9}, \"n\": 10}", suffix))
 	echo!("${Str.inspect(parsed.map_ok(|v| v.a))} ${Str.inspect(parsed.map_ok(|v| v.z))} ${Str.inspect(defaulted_parse.map_ok(|v| v.a))} ${Str.inspect(parsed_slot.map_ok(|v| v.a))} ${Str.inspect(parsed_outer.map_ok(|v| v.p.a))} ${Str.inspect(parsed_outer.map_ok(|v| v.n))}\n")

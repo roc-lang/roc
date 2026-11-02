@@ -356,6 +356,21 @@ const issue_12787_stored_record_encoder_stdout =
     \\
 ;
 
+const padded_nominals_share_a_row_stdout =
+    \\3 7 11 15 19
+    \\4 8 10
+    \\2 4 8 10
+    \\2 4
+    \\2 4 [6, 6] [8, 8]
+    \\2 4
+    \\[2, 4] [2, 4] [2, 4] [2, 4]
+    \\[[6], []] []
+    \\["a stored string long enough to be on the heap"] [7] 2
+    \\[9, 0] [11] 12 [17]
+    \\14 [16]
+    \\
+;
+
 const boxy_padded_records_stdout =
     \\2 a string that is too long to be stored inline 9 13 c
     \\[1, 2, 5, 8] 2 a string that is too long to be stored inline
@@ -373,7 +388,7 @@ const boxy_padded_records_stdout =
     \\5 5 5 21
     \\8 [8, 10] 3 3 {}
     \\12 [12, 14] 15 2 a stored table with a name too long to be inline a stored pair with a string too long to be inline 16
-    \\{"a":"text","z":4} {"a":"slot","y":5} {"n":11,"p":{"a":"text","z":4}}
+    \\{"a":"text","z":4} {"a":"slot","z":5} {"n":11,"p":{"a":"text","z":4}}
     \\Ok("parsed") Ok(6) Ok("fallback") Ok(7) Ok("fallback") Ok(10)
     \\
 ;
@@ -1451,6 +1466,21 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal whose padding depends on its type parameter (dev, --specialize=no)", .backend = .dev, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/boxy_padding_type_parameter.roc", .stdout_exact = "3 7 4 5 long enough to be stored outside the record 2\n4 8 4 8 1 1\na stored string too long to be inline 4\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal whose padding depends on its type parameter (size, --specialize=no)", .backend = .size, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/boxy_padding_type_parameter.roc", .stdout_exact = "3 7 4 5 long enough to be stored outside the record 2\n4 8 4 8 1 1\na stored string too long to be inline 4\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal whose padding depends on its type parameter (speed, --specialize=no)", .backend = .speed, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/boxy_padding_type_parameter.roc", .stdout_exact = "3 7 4 5 long enough to be stored outside the record 2\n4 8 4 8 1 1\na stored string too long to be inline 4\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal whose padding depends on its type parameter (interpreter, --specialize=yes)", .backend = .interpreter, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/boxy_padding_type_parameter.roc", .stdout_exact = "3 7 4 5 long enough to be stored outside the record 2\n4 8 4 8 1 1\na stored string too long to be inline 4\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal whose padding depends on its type parameter (dev, --specialize=yes)", .backend = .dev, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/boxy_padding_type_parameter.roc", .stdout_exact = "3 7 4 5 long enough to be stored outside the record 2\n4 8 4 8 1 1\na stored string too long to be inline 4\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal whose padding depends on its type parameter (size, --specialize=yes)", .backend = .size, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/boxy_padding_type_parameter.roc", .stdout_exact = "3 7 4 5 long enough to be stored outside the record 2\n4 8 4 8 1 1\na stored string too long to be inline 4\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal whose padding depends on its type parameter (speed, --specialize=yes)", .backend = .speed, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/boxy_padding_type_parameter.roc", .stdout_exact = "3 7 4 5 long enough to be stored outside the record 2\n4 8 4 8 1 1\na stored string too long to be inline 4\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal keeps its declared order (interpreter, --specialize=yes)", .backend = .interpreter, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/boxy_padded_records/main.roc", .stdout_exact = boxy_padded_records_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal keeps its declared order (size, --specialize=yes)", .backend = .size, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/boxy_padded_records/main.roc", .stdout_exact = boxy_padded_records_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: a padded nominal keeps its declared order (speed, --specialize=yes)", .backend = .speed, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/boxy_padded_records/main.roc", .stdout_exact = boxy_padded_records_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: padded nominals share a record row (interpreter, --specialize=no)", .backend = .interpreter, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/padded_nominals_share_a_row/main.roc", .stdout_exact = padded_nominals_share_a_row_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: padded nominals share a record row (interpreter, --specialize=yes)", .backend = .interpreter, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/padded_nominals_share_a_row/main.roc", .stdout_exact = padded_nominals_share_a_row_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: padded nominals share a record row (dev, --specialize=no)", .backend = .dev, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/padded_nominals_share_a_row/main.roc", .stdout_exact = padded_nominals_share_a_row_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: padded nominals share a record row (dev, --specialize=yes)", .backend = .dev, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/padded_nominals_share_a_row/main.roc", .stdout_exact = padded_nominals_share_a_row_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: padded nominals share a record row (size, --specialize=no)", .backend = .size, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/padded_nominals_share_a_row/main.roc", .stdout_exact = padded_nominals_share_a_row_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: padded nominals share a record row (size, --specialize=yes)", .backend = .size, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/padded_nominals_share_a_row/main.roc", .stdout_exact = padded_nominals_share_a_row_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: padded nominals share a record row (speed, --specialize=no)", .backend = .speed, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/padded_nominals_share_a_row/main.roc", .stdout_exact = padded_nominals_share_a_row_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: padded nominals share a record row (speed, --specialize=yes)", .backend = .speed, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/padded_nominals_share_a_row/main.roc", .stdout_exact = padded_nominals_share_a_row_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: Boxy composes a generic type recursive through a list (dev, --specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=no" }, .roc_file = "test/echo/boxy_generic_recursive_through_list.roc", .stdout_exact = "4 3 1" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: Boxy composes a generic type recursive through a list (interpreter, --specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache", "--specialize=no" }, .roc_file = "test/echo/boxy_generic_recursive_through_list.roc", .stdout_exact = "4 3 1" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: a method whose scheme requires itself (interpreter, --specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache", "--specialize=yes" }, .roc_file = "test/echo/boxy_recursive_method_dispatch.roc", .stdout_exact = "True False False3 3kept 2 generic5 23end 0 []" } } },
