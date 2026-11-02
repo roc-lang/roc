@@ -44379,7 +44379,15 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
         } else {
             const content = self.types.resolveVar(gathered.tail).desc.content;
             if (content == .err or (content == .structure and content.structure == .empty_tag_union)) continue;
-            plan.relation = .{ .tail = .{ .var_ = gathered.tail, .nested = gathered.nested } };
+            // Only an open row is a tagless contribution. Any other error,
+            // such as a nominal tag union, has no residual extension to
+            // become the result's tail, so it is related whole like a source
+            // with tags (design.md "Try Return-Row Composition").
+            plan.relation = switch (content) {
+                .flex, .rigid => .{ .tail = .{ .var_ = gathered.tail, .nested = gathered.nested } },
+                .structure, .field_presence => .whole,
+                .alias, .err => unreachable, // the gather follows aliases, and an erroneous tail continues above
+            };
         }
     }
 
