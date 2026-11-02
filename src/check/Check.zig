@@ -41527,7 +41527,16 @@ fn activateSchemeDeferredCodecConstraints(
 ) Allocator.Error!void {
     for (roots) |root| {
         const scheme_idx = self.typeSchemeIndexForRoot(root.owner) orelse continue;
-        for (self.type_schemes.items[scheme_idx].dispatch_requirements.items) |requirement| {
+        for (self.type_schemes.items[scheme_idx].dispatch_requirements.items) |*requirement| {
+            // A relation still parked for finalization that reaches this
+            // scheme's quantified variables is a template too: validating it
+            // in place would rewrite variables its uses already copied.
+            if (!requirement.pristine_codec_is_scheme_only and
+                self.final_codec_dispatch_constraint_fns.get(requirement.constraint.fn_var) == .final and
+                try self.typeHasGeneralizedVar(requirement.constraint.fn_var))
+            {
+                requirement.pristine_codec_is_scheme_only = true;
+            }
             if (!requirement.pristine_codec_is_scheme_only) continue;
             std.debug.assert(requirement.deferred_generated_codec);
             const fn_root = self.types.resolveVar(requirement.constraint.fn_var).var_;
@@ -48851,6 +48860,45 @@ fn deferGeneratedCodecConstraintToFinalization(
     return true;
 }
 
+/// A private instance of a parked relation whose scheme quantifies some of
+/// its variables. Each use validates its own copy of the relation at its own
+/// types; this instance validates the definition itself, so a relation no type
+/// can satisfy is reported even when nothing uses the definition. It keeps the
+/// definition's rigid variables rigid, so a body that cannot deliver its
+/// annotation is rejected, and shares its monomorphic variables, so the relation
+/// still determines them. Nothing else reaches the copied variables.
+fn finalCodecRelationInstance(
+    self: *Self,
+    pending: FinalCodecDispatchConstraint,
+    env: *Env,
+) Allocator.Error!FinalCodecDispatchConstraint {
+    const region = self.getRegionAt(pending.dispatcher_var);
+    const relation_root = try self.freshFromContent(
+        try self.types.mkFuncUnbound(&.{pending.dispatcher_var}, pending.constraint.fn_var),
+        env,
+        region,
+    );
+    self.var_map.clearRetainingCapacity();
+    var instantiator = self.baseInstantiator(env.rank(), .fresh_rigid);
+    instantiator.polarity_var_behavior = .close;
+    const copied_root = try instantiator.instantiateTypeScheme(relation_root);
+    var copied_iter = instantiator.var_map.valueIterator();
+    while (copied_iter.next()) |copied| {
+        try self.fillInRegionsThrough(copied.*);
+        self.setRegionAt(copied.*, region);
+    }
+    const copied_relation = self.types.resolveVar(copied_root).desc.content.unwrapFunc() orelse
+        unreachable; // instantiating the function type relation_root yields a function type
+    var relation = pending;
+    relation.dispatcher_var = self.types.sliceVars(copied_relation.args)[0];
+    relation.constraint.fn_var = copied_relation.ret;
+    const previous_scheme_root = self.active_scheme_root;
+    defer self.active_scheme_root = previous_scheme_root;
+    self.active_scheme_root = self.dispatchRelationOwner(pending.constraint.fn_var);
+    try self.recordDispatchRelationOwner(relation.constraint.fn_var);
+    return relation;
+}
+
 fn checkFinalGeneratedCodecConstraints(self: *Self, env: *Env) Allocator.Error!void {
     if (self.final_codec_dispatch_constraints.items.len == 0) return;
     std.debug.assert(self.probe_depth == 0);
@@ -48861,12 +48909,16 @@ fn checkFinalGeneratedCodecConstraints(self: *Self, env: *Env) Allocator.Error!v
 
     for (self.final_codec_dispatch_constraints.items) |pending| {
         if (self.settled_static_dispatch_constraint_fns.contains(pending.constraint.fn_var)) continue;
-        const range = try self.types.appendStaticDispatchConstraints(&.{pending.constraint});
+        const relation = if (self.schemeDefersGeneratedCodecConstraint(pending.constraint.fn_var))
+            try self.finalCodecRelationInstance(pending, env)
+        else
+            pending;
+        const range = try self.types.appendStaticDispatchConstraints(&.{relation.constraint});
         try self.enqueueDeferredDispatchConstraint(env, .{
-            .var_ = pending.dispatcher_var,
+            .var_ = relation.dispatcher_var,
             .constraints = range,
-            .failure_expr = pending.failure_expr,
-        }, pending.owner);
+            .failure_expr = relation.failure_expr,
+        }, relation.owner);
     }
     self.final_codec_dispatch_constraints.clearRetainingCapacity();
     self.final_codec_dispatch_constraint_fns.clearRetainingCapacity();
