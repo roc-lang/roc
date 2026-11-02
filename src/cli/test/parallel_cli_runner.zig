@@ -378,6 +378,32 @@ const boxy_padded_records_stdout =
     \\
 ;
 
+const stored_closure_captures_stdout =
+    \\call
+    \\field
+    \\held call
+    \\held field
+    \\
+;
+
+const stored_encoder_captures_stdout =
+    \\4
+    \\9
+    \\zero
+    \\5
+    \\10
+    \\zero
+    \\
+;
+
+const stored_parser_captures_stdout =
+    \\5
+    \\missing 5
+    \\format error
+    \\missing 6
+    \\
+;
+
 const issue_12787_widened_question_row_stdout =
     \\Ann <ann@example.com> ***
     \\invalid email not an email
@@ -3987,6 +4013,32 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a stored record encoder used at a widened error row (size, specialize=no)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/issue_12787_stored_record_encoder.roc", .exit = .success, .stdout_exact = issue_12787_stored_record_encoder_stdout } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a stored record encoder used at a widened error row (interpreter, specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_stored_record_encoder.roc", .exit = .success, .stdout_exact = issue_12787_stored_record_encoder_stdout } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a stored record encoder used at a widened error row (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_stored_record_encoder.roc", .exit = .success, .stdout_exact = issue_12787_stored_record_encoder_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a stored record encoder used at a widened error row (speed, specialize=yes)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_stored_record_encoder.roc", .exit = .success, .stdout_exact = issue_12787_stored_record_encoder_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12787: a stored record encoder used at a widened error row (size, specialize=yes)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/issue_12787_stored_record_encoder.roc", .exit = .success, .stdout_exact = issue_12787_stored_record_encoder_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored closures keep captures their optimized bodies drop (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/stored_closure_captures.roc", .exit = .success, .stdout_exact = stored_closure_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored closures keep captures their optimized bodies drop (interpreter, specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/stored_closure_captures.roc", .exit = .success, .stdout_exact = stored_closure_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored closures keep captures their optimized bodies drop (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/stored_closure_captures.roc", .exit = .success, .stdout_exact = stored_closure_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored closures keep captures their optimized bodies drop (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/stored_closure_captures.roc", .exit = .success, .stdout_exact = stored_closure_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored closures keep captures their optimized bodies drop (speed, specialize=no)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/stored_closure_captures.roc", .exit = .success, .stdout_exact = stored_closure_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored closures keep captures their optimized bodies drop (speed, specialize=yes)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/stored_closure_captures.roc", .exit = .success, .stdout_exact = stored_closure_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored closures keep captures their optimized bodies drop (size, specialize=no)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/stored_closure_captures.roc", .exit = .success, .stdout_exact = stored_closure_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored closures keep captures their optimized bodies drop (size, specialize=yes)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/stored_closure_captures.roc", .exit = .success, .stdout_exact = stored_closure_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored encoders keep their encoding and every field name (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/stored_encoder_captures.roc", .exit = .success, .stdout_exact = stored_encoder_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored encoders keep their encoding and every field name (interpreter, specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/stored_encoder_captures.roc", .exit = .success, .stdout_exact = stored_encoder_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored encoders keep their encoding and every field name (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/stored_encoder_captures.roc", .exit = .success, .stdout_exact = stored_encoder_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored encoders keep their encoding and every field name (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/stored_encoder_captures.roc", .exit = .success, .stdout_exact = stored_encoder_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored encoders keep their encoding and every field name (speed, specialize=no)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/stored_encoder_captures.roc", .exit = .success, .stdout_exact = stored_encoder_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored encoders keep their encoding and every field name (speed, specialize=yes)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/stored_encoder_captures.roc", .exit = .success, .stdout_exact = stored_encoder_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored encoders keep their encoding and every field name (size, specialize=no)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/stored_encoder_captures.roc", .exit = .success, .stdout_exact = stored_encoder_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored encoders keep their encoding and every field name (size, specialize=yes)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/stored_encoder_captures.roc", .exit = .success, .stdout_exact = stored_encoder_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored parsers keep their encoding and every field name (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/stored_parser_captures.roc", .exit = .success, .stdout_exact = stored_parser_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored parsers keep their encoding and every field name (interpreter, specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/stored_parser_captures.roc", .exit = .success, .stdout_exact = stored_parser_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored parsers keep their encoding and every field name (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/stored_parser_captures.roc", .exit = .success, .stdout_exact = stored_parser_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored parsers keep their encoding and every field name (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/stored_parser_captures.roc", .exit = .success, .stdout_exact = stored_parser_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored parsers keep their encoding and every field name (speed, specialize=no)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/stored_parser_captures.roc", .exit = .success, .stdout_exact = stored_parser_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored parsers keep their encoding and every field name (speed, specialize=yes)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/stored_parser_captures.roc", .exit = .success, .stdout_exact = stored_parser_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored parsers keep their encoding and every field name (size, specialize=no)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/stored_parser_captures.roc", .exit = .success, .stdout_exact = stored_parser_captures_stdout } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored parsers keep their encoding and every field name (size, specialize=yes)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=yes", "--no-cache" }, .roc_file = "test/fx/stored_parser_captures.roc", .exit = .success, .stdout_exact = stored_parser_captures_stdout } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12787: codecs stored by specialized checking restore at widened rows (interpreter)", .backend = .interpreter, .body = .{ .custom = .issue_12787_restored_codecs_interpreter } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12787: codecs stored by specialized checking restore at widened rows (dev)", .backend = .dev, .body = .{ .custom = .issue_12787_restored_codecs_dev } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12787: codecs stored by specialized checking restore at widened rows (speed)", .backend = .speed, .body = .{ .custom = .issue_12787_restored_codecs_speed } },

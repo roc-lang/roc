@@ -2720,7 +2720,9 @@ root ("Demand-Driven Compile-Time Evaluation"). Its Solved policy is that of the
 being built, so evaluation runs inside that program's one specialization;
 with no runtime program, as in `roc check`, it is a dev build's
 (`CheckedPipeline.dev_inline_mode`). Inlining and SpecConstr preserve meaning,
-so the policy changes how evaluation's code is built, never what it computes.
+and every function value keeps the captures the checked program gives it
+("Stored Function Capture Contract"), so the policy changes how evaluation's
+code is built, never what it computes or stores.
 Every LIR setting evaluation lowers under is a dev build's too: the rewrites
 that only speed up the produced program stay off, tag-case fusion (which
 bounds list copying) stays on, ARC may consume dead boxes, and `Dict`'s
@@ -8668,9 +8670,7 @@ names, for dictionaries and descriptors alike. A
 generated codec runtime body reads its edge in that body's module when that
 module holds an equal contract; otherwise, as for a custom format's contract
 reached through a Builtin method, it reads the edge the same way, from the storing
-module's import closure. A generated runtime whose encoding operand reads the frame
-that built it, rather than being a value any frame can rebuild, always captures
-the encoding, so a stored one has its value when that frame is gone. Completed-body records
+module's import closure. Completed-body records
 retain recorded edges and are rejected when their recording module is absent.
 
 The checker's derived-codec walk records each nominal application whose
@@ -9407,7 +9407,9 @@ value. The iterator-only pass used by `.none` and `.procedures` preserves
 this ownership boundary: the pipeline must not repeat capture analysis.
 SpecConstr can change free-variable use while cloning and rewriting function
 bodies, so SpecConstr owns one exact capture finalization before it returns its
-Monotype Lifted output. No later pipeline stage repeats that finalization.
+Monotype Lifted output. No later pipeline stage repeats that finalization. A
+program that evaluates compile-time roots keeps every declared capture through
+it ("Stored Function Capture Contract").
 
 SpecConstr also owns the exact procedure-use inventory for its final rewritten
 graph. Its last graph snapshot records each function's external direct-call
@@ -24964,6 +24966,39 @@ When a later compilation materializes a cached const, Monotype lowering turns
   materializes generated captures such as transformed field-name strings by their
   generated capture ids, and regenerates the runtime parser lambda directly
   around those materialized constants
+
+#### Stored Function Capture Contract
+
+A stored function holds every capture a restore of it reads, and that set is a
+function of the checked program alone, never of the Solved policy that evaluated
+it. A restore lowers the checked template, not the code that ran, so a capture
+an optimized body stopped reading is still one the restored body names. If the
+stored set followed the optimized body, a value stored by one `--opt` would be
+unreadable by another command sharing the checked module cache, and by the
+compilation that stored it.
+
+Two explicit rules establish the set:
+
+- Lifting decides the declared captures. A source lambda declares its free
+  locals. A generated codec's lambda also declares `LambdaExpr.stored_captures`,
+  its encoding and every renamed field name, because a restore reads those by
+  generated capture id whether or not the generated body read them (an empty
+  record's encoder reads neither). The operand that constructed the codec is
+  not consulted: it can read binders of the enclosing scope, which a restore
+  does not have. The stored encoding is that operand.
+- Capture finalization keeps what is declared in a program that evaluates
+  compile-time roots (`Program.retains_declared_captures`). `recomputeCaptures`
+  treats each function's declared captures as reads of its body, so the operands
+  that supply them stay at every reference, and a SpecConstr clone or worker,
+  which starts from its source's captures, keeps them too.
+
+Only such a program retains them. A runtime program stores nothing, so it
+finalizes each function's captures from its rewritten body and pays for nothing
+the body does not read. The two never meet: `finalizeProgram` specializes the
+runtime program again whenever the evaluation's program had a compile-time root,
+and a procedure's identity renders its capture slots and those of every
+lambda-set member its signature names, so a cached procedure is never spliced
+into the program kind it was not built for.
 
 Materialization records an active `(module, ConstNodeId, representation)` before
 descending into that node. The first exact graph back-edge reserves and uses a

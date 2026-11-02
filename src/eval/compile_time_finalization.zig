@@ -1145,10 +1145,11 @@ const check_solved_policy = lir.CheckedPipeline.SolvedPolicy.fromTarget(.{
 
 /// The target compile-time evaluation lowers under. Its Solved policy is
 /// that of the program being built, so evaluation runs inside that program's
-/// one specialization; inlining and SpecConstr preserve meaning, so every
-/// command evaluates the same roots to the same values and reports. Every
-/// other setting is fixed: evaluation runs on the host, runs expects, and
-/// hoists every literal conversion.
+/// one specialization; inlining and SpecConstr preserve meaning and every
+/// function keeps its declared captures (design.md "Stored Function Capture
+/// Contract"), so every command evaluates the same roots to the same values
+/// and reports. Every other setting is fixed: evaluation runs on the host,
+/// runs expects, and hoists every literal conversion.
 fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.SolvedPolicy) lir.CheckedPipeline.TargetConfig {
     var target: lir.CheckedPipeline.TargetConfig = .{
         .target_usize = base.target.TargetUsize.native,
@@ -1627,6 +1628,11 @@ fn specializeAndEvaluate(
     try published.init(allocator, modules, monotype.program.rootsView()[0..compile_time_root_count], monotype.program.view().lowering_modules);
     // An LSS runtime consumer continues this Solved program.
     const shares_solved = lss_runtime;
+    // Function values this program evaluates are stored, and a stored
+    // function holds its declared captures. A program with compile-time
+    // roots is never a runtime program: `finalizeProgram` specializes the
+    // runtime program again, without them.
+    monotype.program.retains_declared_captures = compile_time_root_count != 0;
     monotype_owned = false;
     var prepared = try lir.CheckedPipeline.prepareMonotypeToSolved(monotype);
     var prepared_owned = true;

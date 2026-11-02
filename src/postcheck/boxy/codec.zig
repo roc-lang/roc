@@ -882,15 +882,8 @@ pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.Const
         const needle = check.CheckedIds.CaptureId.generatedCheck(@intCast(index));
         const node = for (stored.captures) |capture| {
             if (capture.id == needle) break capture.value;
-        } else null;
-        if (node) |stored_node| {
-            try b.push(.{ .restore = .{ .source = source, .node = stored_node, .ty = captures[index] } });
-        } else if (index == 0 and try program.layouts.layoutOf(captures[0]) == .zst) {
-            // Compile-time evaluation stores no zero-sized encoding.
-            try b.push(.{ .push_value = try b.unitValue() });
-        } else {
-            invariant("a stored generated codec runtime lacks one of its captures");
-        }
+        } else invariant("a stored generated codec runtime lacks one of its captures");
+        try b.push(.{ .restore = .{ .source = source, .node = node, .ty = captures[index] } });
     }
 }
 
