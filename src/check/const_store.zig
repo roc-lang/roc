@@ -550,6 +550,11 @@ pub const ConstFn = struct {
     fn_def: FnDef,
     source_fn_ty: checked_ids.CheckedTypeId,
     source_fn_key: names.TypeDigest,
+    /// For a nested function, the function type of the template specialization
+    /// that built it. A variable of that template can reach neither this
+    /// function's type nor its captures, such as the format of an encoder a
+    /// generic method returned.
+    owner_fn_ty: ?ConstTypeId = null,
     captures: []const ConstCapture = &.{},
     evidence: ConstFnEvidenceVector = .{},
     evidence_frames: []const ConstFnEvidenceFrame = &.{},
@@ -699,6 +704,7 @@ const StoredFn = struct {
     fn_def: FnDef,
     source_fn_ty: checked_ids.CheckedTypeId,
     source_fn_key: names.TypeDigest,
+    owner_fn_ty: ?ConstTypeId = null,
     captures: ConstRange = .{},
     evidence: ConstRange = .{},
     evidence_targets: ConstRange = .{},
@@ -1483,6 +1489,7 @@ pub const ConstStore = struct {
             .fn_def = fn_value.fn_def,
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
+            .owner_fn_ty = fn_value.owner_fn_ty,
             .captures = captures_range,
             .evidence = evidence_range,
             .evidence_targets = evidence_targets,
@@ -1699,6 +1706,7 @@ pub const ConstStore = struct {
             .fn_def = stored.fn_def,
             .source_fn_ty = stored.source_fn_ty,
             .source_fn_key = stored.source_fn_key,
+            .owner_fn_ty = stored.owner_fn_ty,
             .captures = self.capture_pool.items[stored.captures.start .. stored.captures.start + stored.captures.len],
             .evidence = .{
                 .nodes = self.evidence_pool.items[stored.evidence.start .. stored.evidence.start + stored.evidence.len],

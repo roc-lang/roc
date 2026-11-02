@@ -3003,7 +3003,8 @@ const RequestDeterminedResultRow = union(enum) {
 /// result holds there (design.md "Closed Result Rows At Template
 /// Boundaries"). The type reaches the variable only through the chain of
 /// links from the result down to it; any other path—an argument, a payload,
-/// a link shared with another position—makes the variable an input the
+/// a link shared with another position, the signature of a where-clause
+/// constraint on a variable the type reaches—makes the variable an input the
 /// request does not determine.
 fn requestDeterminedResultRowVariable(
     allocator: Allocator,
@@ -3068,7 +3069,8 @@ fn requestDeterminedResultRowVariable(
         try visited.put(ty, {});
         switch (checkedPayload(view, ty)) {
             .pending => Common.invariant("pending checked type reached Monotype result row scan"),
-            .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+            .err, .empty_record, .empty_tag_union => {},
+            .flex, .rigid => |other_variable| for (other_variable.constraints) |constraint| try others.append(allocator, constraint.fn_ty),
             .alias => |alias| {
                 try others.appendSlice(allocator, alias.args);
                 try others.append(allocator, alias.backing);
@@ -11274,6 +11276,7 @@ const Builder = struct {
             try body_ctx.instantiateTemplateDispatchRelations(template, null);
         }
         body_ctx.owner_context_fn_key = source_fn_key;
+        body_ctx.owner_fn_node = root_node;
         body_ctx.current_fn_key = source_fn_key;
         const lowered = try body_ctx.lowerTemplateBodyAtNode(template_ref, template, root_node);
         const final_signature_relation = self.active_template_root.?.signature_relation;
@@ -11779,6 +11782,7 @@ const Builder = struct {
             Common.invariant("hosted template specialization depended on a local procedure context");
         }
         body_ctx.owner_context_fn_key = source_fn_key;
+        body_ctx.owner_fn_node = root_node;
         body_ctx.current_fn_key = source_fn_key;
         // A generated-private request is the exact runtime interface owned by
         // this specialization. The checked root remains the public interface
@@ -11914,6 +11918,7 @@ const Builder = struct {
         try body_ctx.instantiateTemplateDispatchRelations(template, null);
         try body_ctx.applyCheckedTemplateInterfaceRelations(template, root_node);
         body_ctx.owner_context_fn_key = spec.source_fn_key;
+        body_ctx.owner_fn_node = root_node;
         body_ctx.current_fn_key = spec.source_fn_key;
 
         // A generated-private request is the exact runtime interface owned by
@@ -14170,6 +14175,7 @@ const Builder = struct {
                 fn_ctx.current_fn_key = nested.context_fn_key;
                 const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, nested.context_fn_key);
                 defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
+                try fn_ctx.restoreConstFnOwner(store_view, fn_value);
                 const fn_target = try self.lowerDraftNestedFromContext(
                     &fn_ctx,
                     fn_ctx.draft.current_owner,
@@ -14618,6 +14624,7 @@ const Builder = struct {
             .source_fn_ty = source_fn_ty,
             .source_fn_key = source_fn_key,
             .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
+            .owner_fn_ty = if (source_ctx.owner_fn_node) |owner_fn_node| DraftTypeCell.fromGraphNode(owner_fn_node) else null,
             .evidence_digest = evidence_digest,
             .const_evidence = draft_evidence.entries,
             .const_evidence_frames = draft_evidence.frames,
@@ -17224,6 +17231,7 @@ const Builder = struct {
         for (captures, capture_entry_guards) |capture, *node|
             node.* = try fn_ctx.activeNodeFromType(capture.ty);
         if (lambda_expr.data != .lambda) Common.invariant("stored capturing function did not reference a checked lambda");
+        try fn_ctx.restoreConstFnOwner(store_view, fn_value);
         const restored_fn = try self.lowerDraftNestedFromContext(
             &fn_ctx,
             fn_ctx.draft.current_owner,
@@ -17414,6 +17422,10 @@ const Builder = struct {
                 ),
             };
         };
+        const retained_body = if (encoding_let) |let_|
+            try fn_ctx.retainGeneratedEncoding(try fn_ctx.localExpr(let_.local, arg_tys.get(0)), arg_tys.get(0), body, runtime_fn.ret)
+        else
+            body;
         const runtime_fn_id = try self.program.addFn(.{
             .fn_def = switch (kind) {
                 .parser => .{ .parser_runtime = .{
@@ -17442,7 +17454,7 @@ const Builder = struct {
         var codec_expr = try fn_ctx.addExpr(.{ .ty = ty, .data = .{ .lambda = .{
             .fn_id = draftFinalFn(runtime_fn_id),
             .args = lambda_args,
-            .body = body,
+            .body = retained_body,
         } } });
         var capture_index = precomputed_plan.captures.items.len;
         while (capture_index > 0) {
@@ -17741,10 +17753,21 @@ const DraftFnTemplate = struct {
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     mono_fn_ty: DraftTypeCell,
+    owner_fn_ty: ?DraftTypeCell = null,
     evidence_digest: Ast.EvidenceDigest = .{},
     const_evidence: DraftConstEvidence = .{},
     const_evidence_frames: DraftSpan(check.ConstStore.ConstFnEvidenceFrame) = DraftSpan(check.ConstStore.ConstFnEvidenceFrame).empty(),
     const_evidence_frame_head: ?u32 = null,
+
+    fn sealTypeCellsInPlace(self: *DraftFnTemplate, graph: *InstGraph, sealer: *GraphTypeFinals) Allocator.Error!void {
+        try self.mono_fn_ty.sealInPlace(graph, sealer);
+        if (self.owner_fn_ty) |*owner_fn_ty| try owner_fn_ty.sealInPlace(graph, sealer);
+    }
+
+    fn assertTypeCellsSealed(self: DraftFnTemplate) void {
+        self.mono_fn_ty.assertSealed();
+        if (self.owner_fn_ty) |owner_fn_ty| owner_fn_ty.assertSealed();
+    }
 };
 
 const DraftFn = struct {
@@ -21186,14 +21209,14 @@ const BodyDraftStore = struct {
     /// discarded maps below are graph-qualified lowering memoization.
     fn sealTypeCellsInPlace(self: *BodyDraftStore, graph: *InstGraph, sealer: *GraphTypeFinals) Allocator.Error!void {
         for (self.fns.items) |*fn_| {
-            try fn_.source.mono_fn_ty.sealInPlace(graph, sealer);
+            try fn_.source.sealTypeCellsInPlace(graph, sealer);
         }
         for (self.defs.items) |*def| {
-            if (def.fn_def) |*template| try template.mono_fn_ty.sealInPlace(graph, sealer);
+            if (def.fn_def) |*template| try template.sealTypeCellsInPlace(graph, sealer);
             try def.ret.sealInPlace(graph, sealer);
         }
         for (self.nested_defs.items) |*def| {
-            try def.fn_def.mono_fn_ty.sealInPlace(graph, sealer);
+            try def.fn_def.sealTypeCellsInPlace(graph, sealer);
             try def.ret.sealInPlace(graph, sealer);
         }
         for (self.locals.items) |*local| {
@@ -21264,13 +21287,13 @@ const BodyDraftStore = struct {
     /// type-cell position. Graph-node queues are deliberately excluded because
     /// Builder still consumes them before it can release the graph.
     fn assertTypeCellsSealed(self: *const BodyDraftStore) void {
-        for (self.fns.items) |fn_| fn_.source.mono_fn_ty.assertSealed();
+        for (self.fns.items) |fn_| fn_.source.assertTypeCellsSealed();
         for (self.defs.items) |def| {
-            if (def.fn_def) |template| template.mono_fn_ty.assertSealed();
+            if (def.fn_def) |template| template.assertTypeCellsSealed();
             def.ret.assertSealed();
         }
         for (self.nested_defs.items) |def| {
-            def.fn_def.mono_fn_ty.assertSealed();
+            def.fn_def.assertTypeCellsSealed();
             def.ret.assertSealed();
         }
         for (self.locals.items) |local| local.ty.assertSealed();
@@ -21835,6 +21858,7 @@ const BodyDraftStore = struct {
             .source_fn_ty = template.source_fn_ty,
             .source_fn_key = template.source_fn_key,
             .mono_fn_ty = try template.mono_fn_ty.sealCommitted(committed_types),
+            .owner_fn_ty = if (template.owner_fn_ty) |owner_fn_ty| try owner_fn_ty.sealCommitted(committed_types) else null,
             .evidence_digest = template.evidence_digest,
             .const_evidence = .{
                 .nodes = .{ .start = evidence_base.nodes.start + template.const_evidence.nodes.start, .len = template.const_evidence.nodes.len },
@@ -23289,6 +23313,8 @@ const BodyContext = struct {
     source_file_id: ?u32,
     owner_template: names.ProcTemplate,
     owner_context_fn_key: names.TypeDigest,
+    /// The function node of the template specialization this body belongs to.
+    owner_fn_node: ?NodeId = null,
     current_fn_key: names.TypeDigest,
     comptime_exhaustiveness_context: ExhaustivenessContext.Context,
     generated_encoder_source_fn_ty: ?checked.CheckedTypeId,
@@ -26262,6 +26288,7 @@ const BodyContext = struct {
         child.evidence = self.evidence;
         errdefer child.deinit();
         child.owner_context_fn_key = self.owner_context_fn_key;
+        child.owner_fn_node = self.owner_fn_node;
         child.current_fn_key = current_fn_key;
         child.comptime_exhaustiveness_context = self.comptime_exhaustiveness_context;
         child.generated_encoder_source_fn_ty = self.generated_encoder_source_fn_ty;
@@ -48630,6 +48657,40 @@ const BodyContext = struct {
         return &workspace.const_type_cache;
     }
 
+    /// Whether a generated codec's encoding operand reads the frame that builds
+    /// the codec, rather than being a tag any frame can lower. A stored runtime
+    /// is restored with no such frame.
+    fn generatedEncodingReadsFrame(self: *const BodyContext, operand: static_dispatch.StaticDispatchOperand) bool {
+        var expr_id = operand.checked_expr;
+        while (true) {
+            const expr = self.view.bodies.expr(expr_id);
+            if (expr.data == .nominal) {
+                expr_id = expr.data.nominal.backing_expr;
+                continue;
+            }
+            return expr.data != .zero_argument_tag;
+        }
+    }
+
+    /// `body` reading the encoding, so the generated runtime captures it though
+    /// a shape's body may not.
+    fn retainGeneratedEncoding(
+        self: *BodyContext,
+        encoding: DraftExprId,
+        encoding_ty: Type.TypeId,
+        body: DraftExprId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        return try self.wrapLet(try self.addLocal(self.builder.symbols.fresh(), encoding_ty), encoding_ty, encoding, body, ret_ty);
+    }
+
+    /// A restored function belongs to the template specialization that built
+    /// it, so the nested functions lowered from it keep that type.
+    fn restoreConstFnOwner(self: *BodyContext, store_view: ModuleView, fn_value: check.ConstStore.ConstFn) Allocator.Error!void {
+        const owner_fn_ty = fn_value.owner_fn_ty orelse return;
+        self.owner_fn_node = try self.activeNodeFromType(try self.lowerConstCaptureType(store_view, owner_fn_ty));
+    }
+
     fn lowerConstCaptureType(
         self: *BodyContext,
         store_view: ModuleView,
@@ -49017,6 +49078,7 @@ const BodyContext = struct {
             .node => |node| node,
         };
         const restored_fn = try self.restoreConstFnTemplateAt(
+            store_view,
             fn_value,
             try self.builder.constFnDefToMono(fn_value.fn_def),
             fn_value.source_fn_ty,
@@ -49039,6 +49101,7 @@ const BodyContext = struct {
     /// hold, because that choice is the caller's and not this function's.
     fn restoreConstFnTemplateAt(
         self: *BodyContext,
+        store_view: ModuleView,
         fn_value: check.ConstStore.ConstFn,
         fn_def: Ast.FnDef,
         source_fn_ty: checked.CheckedTypeId,
@@ -49067,6 +49130,7 @@ const BodyContext = struct {
                 defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
                 const restored_owner_scope = try fn_ctx.enterRestoredConstFnOwner();
                 defer restored_owner_scope.leave();
+                try fn_ctx.restoreConstFnOwner(store_view, fn_value);
                 return try self.builder.lowerDraftNestedFromContext(
                     &fn_ctx,
                     restored_owner_scope.previous,
@@ -49169,6 +49233,7 @@ const BodyContext = struct {
             .lambda => restored: {
                 const restored_owner_scope = try fn_ctx.enterRestoredConstFnOwner();
                 defer restored_owner_scope.leave();
+                try fn_ctx.restoreConstFnOwner(store_view, fn_value);
                 break :restored try self.builder.lowerDraftNestedFromContext(
                     &fn_ctx,
                     restored_owner_scope.previous,
@@ -49353,6 +49418,16 @@ const BodyContext = struct {
             Common.invariant("stored " ++ codec_name ++ " runtime body differed from its sealed return type");
         }
         self.draft.exprs.items[@backingInt(body)].ty = ret_cell;
+        const retained_body = if (boundary.encoding_let) |let_| retained: {
+            const retained = try self.retainGeneratedEncoding(
+                try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(boundary.encoding_node), .{ .local = let_.local }),
+                encoding_ty,
+                body,
+                ret_ty,
+            );
+            self.draft.exprs.items[@backingInt(retained)].ty = ret_cell;
+            break :retained retained;
+        } else body;
 
         const stored_evidence = try self.storedEvidence(self.evidence);
         const evidence_digest = stored_evidence.digest;
@@ -49388,7 +49463,7 @@ const BodyContext = struct {
         var codec_expr = try self.addExprWithTypeCell(request_cell, .{ .lambda = .{
             .fn_id = .{ .draft = runtime_fn_id },
             .args = lambda_args,
-            .body = body,
+            .body = retained_body,
         } });
         var capture_index = precomputed_plan.captures.items.len;
         while (capture_index > 0) {
@@ -49481,6 +49556,11 @@ const BodyContext = struct {
         try fn_ctx.restoreGeneratedRuntimeEvidence(store_view, fn_value, plan);
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const plan_args = callable_plan.operands;
+        // The encoding operand can read a binder of the constructing frame,
+        // which is gone; the stored capture holds its value at this type.
+        if (constGeneratedCapture(fn_value, encoding_capture_id)) |capture| {
+            try fn_ctx.recordExprTypeRead(plan_args[0].checked_expr, try fn_ctx.activeNodeFromType(try fn_ctx.lowerConstCaptureType(store_view, capture.ty)));
+        }
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
             callable_plan,
             &fn_ctx,
@@ -56728,6 +56808,10 @@ const BodyContext = struct {
                 &precomputed_plan,
             );
         };
+        const parser_body = if (self.generatedEncodingReadsFrame(plan_args[0]))
+            try self.retainGeneratedEncoding(try self.localExpr(encoding_local, arg_tys.get(0)), arg_tys.get(0), parsed, runtime_fn.ret)
+        else
+            parsed;
         const fn_id = try self.addFn(.{
             .fn_def = .{ .parser_runtime = .{
                 .owner = self.owner_template,
@@ -56743,7 +56827,7 @@ const BodyContext = struct {
             .args = try self.addTypedLocalSpan(&.{
                 .{ .local = state_local, .ty = runtime_arg_tys.get(0) },
             }),
-            .body = parsed,
+            .body = parser_body,
         } } });
         var capture_index = precomputed_plan.captures.items.len;
         while (capture_index > 0) {
@@ -56836,6 +56920,10 @@ const BodyContext = struct {
                 &precomputed_plan,
             );
         };
+        const encoder_body = if (self.generatedEncodingReadsFrame(plan_args[0]))
+            try self.retainGeneratedEncoding(try self.localExpr(encoding_local, arg_tys.get(0)), arg_tys.get(0), encoded, runtime_fn.ret)
+        else
+            encoded;
         const fn_id = try self.addFn(.{
             .fn_def = .{ .encoder_for_runtime = .{
                 .owner = self.owner_template,
@@ -56852,7 +56940,7 @@ const BodyContext = struct {
                 .{ .local = value_local, .ty = runtime_arg_tys[0] },
                 .{ .local = state_local, .ty = runtime_arg_tys[1] },
             }),
-            .body = encoded,
+            .body = encoder_body,
         } } });
         var capture_index = precomputed_plan.captures.items.len;
         while (capture_index > 0) {
@@ -70406,12 +70494,16 @@ fn constCaptureBinder(id: check.ConstStore.CaptureId) checked.PatternBinderId {
     return id.binder();
 }
 
-fn constGeneratedCaptureNode(fn_value: check.ConstStore.ConstFn, capture_id: u32) ?checked.ConstNodeId {
+fn constGeneratedCapture(fn_value: check.ConstStore.ConstFn, capture_id: u32) ?check.ConstStore.ConstCapture {
     const needle = checked.CaptureId.generatedCheck(capture_id);
     for (fn_value.captures) |capture| {
-        if (capture.id == needle) return capture.value;
+        if (capture.id == needle) return capture;
     }
     return null;
+}
+
+fn constGeneratedCaptureNode(fn_value: check.ConstStore.ConstFn, capture_id: u32) ?checked.ConstNodeId {
+    return (constGeneratedCapture(fn_value, capture_id) orelse return null).value;
 }
 
 fn monotypePrimitive(primitive: check.ConstStore.Primitive) Type.Primitive {

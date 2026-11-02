@@ -92,7 +92,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         const HandlerFn = fn (*Self, *protocol.JsonId, ?std.json.Value) HandlerError!void;
         const HandlerRegistration = struct {
             call: *const HandlerFn,
-            requires_trust: bool,
+            requires_check: bool,
         };
         const NotificationFn = fn (*Self, ?std.json.Value) NotificationError!void;
         const NotificationPtr = *const NotificationFn;
@@ -113,22 +113,22 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         const InlayHintHandler = inlay_hint_handler_mod.handler(Self);
         const CodeActionHandler = code_action_handler_mod.handler(Self);
         const request_handlers = std.StaticStringMap(HandlerRegistration).initComptime(.{
-            .{ "initialize", HandlerRegistration{ .call = &InitializeHandler.call, .requires_trust = false } },
-            .{ "shutdown", HandlerRegistration{ .call = &ShutdownHandler.call, .requires_trust = false } },
-            .{ "textDocument/semanticTokens/full", HandlerRegistration{ .call = &SemanticTokensHandler.call, .requires_trust = true } },
-            .{ "textDocument/hover", HandlerRegistration{ .call = &HoverHandler.call, .requires_trust = true } },
-            .{ "textDocument/definition", HandlerRegistration{ .call = &DefinitionHandler.call, .requires_trust = true } },
-            .{ "textDocument/formatting", HandlerRegistration{ .call = &FormattingHandler.call, .requires_trust = false } },
-            .{ "textDocument/documentSymbol", HandlerRegistration{ .call = &DocumentSymbolHandler.call, .requires_trust = true } },
-            .{ "textDocument/foldingRange", HandlerRegistration{ .call = &FoldingRangeHandler.call, .requires_trust = false } },
-            .{ "textDocument/selectionRange", HandlerRegistration{ .call = &SelectionRangeHandler.call, .requires_trust = false } },
-            .{ "textDocument/documentHighlight", HandlerRegistration{ .call = &DocumentHighlightHandler.call, .requires_trust = true } },
-            .{ "textDocument/completion", HandlerRegistration{ .call = &CompletionHandler.call, .requires_trust = true } },
-            .{ "textDocument/rename", HandlerRegistration{ .call = &RenameHandler.call, .requires_trust = true } },
-            .{ "textDocument/prepareRename", HandlerRegistration{ .call = &PrepareRenameHandler.call, .requires_trust = true } },
-            .{ "textDocument/references", HandlerRegistration{ .call = &ReferencesHandler.call, .requires_trust = true } },
-            .{ "textDocument/inlayHint", HandlerRegistration{ .call = &InlayHintHandler.call, .requires_trust = true } },
-            .{ "textDocument/codeAction", HandlerRegistration{ .call = &CodeActionHandler.call, .requires_trust = true } },
+            .{ "initialize", HandlerRegistration{ .call = &InitializeHandler.call, .requires_check = false } },
+            .{ "shutdown", HandlerRegistration{ .call = &ShutdownHandler.call, .requires_check = false } },
+            .{ "textDocument/semanticTokens/full", HandlerRegistration{ .call = &SemanticTokensHandler.call, .requires_check = true } },
+            .{ "textDocument/hover", HandlerRegistration{ .call = &HoverHandler.call, .requires_check = true } },
+            .{ "textDocument/definition", HandlerRegistration{ .call = &DefinitionHandler.call, .requires_check = true } },
+            .{ "textDocument/formatting", HandlerRegistration{ .call = &FormattingHandler.call, .requires_check = false } },
+            .{ "textDocument/documentSymbol", HandlerRegistration{ .call = &DocumentSymbolHandler.call, .requires_check = true } },
+            .{ "textDocument/foldingRange", HandlerRegistration{ .call = &FoldingRangeHandler.call, .requires_check = false } },
+            .{ "textDocument/selectionRange", HandlerRegistration{ .call = &SelectionRangeHandler.call, .requires_check = false } },
+            .{ "textDocument/documentHighlight", HandlerRegistration{ .call = &DocumentHighlightHandler.call, .requires_check = true } },
+            .{ "textDocument/completion", HandlerRegistration{ .call = &CompletionHandler.call, .requires_check = true } },
+            .{ "textDocument/rename", HandlerRegistration{ .call = &RenameHandler.call, .requires_check = true } },
+            .{ "textDocument/prepareRename", HandlerRegistration{ .call = &PrepareRenameHandler.call, .requires_check = true } },
+            .{ "textDocument/references", HandlerRegistration{ .call = &ReferencesHandler.call, .requires_check = true } },
+            .{ "textDocument/inlayHint", HandlerRegistration{ .call = &InlayHintHandler.call, .requires_check = true } },
+            .{ "textDocument/codeAction", HandlerRegistration{ .call = &CodeActionHandler.call, .requires_check = true } },
         });
         const DidOpenHandler = did_open_handler_mod.handler(Self);
         const DidChangeHandler = did_change_handler_mod.handler(Self);
@@ -256,7 +256,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         }
 
         fn installCoverage(self: *Self) (Allocator.Error || error{WriteFailed})!void {
-            if (self.watch_failed or !self.client.trusted_workspace or self.state != .running) return;
+            if (self.watch_failed or self.state != .running) return;
             var paths: std.StringHashMapUnmanaged(void) = .empty;
             defer paths.deinit(self.allocator);
             var roots = self.root_inputs.valueIterator();
@@ -321,7 +321,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         }
 
         fn refreshInputs(self: *Self) (Allocator.Error || error{WriteFailed})!void {
-            if (self.state != .running or !self.client.trusted_workspace) {
+            if (self.state != .running) {
                 self.stopWatching();
                 return;
             }
@@ -502,15 +502,11 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             }
 
             if (request_handlers.get(method)) |handler| {
-                if (handler.requires_trust and !self.client.trusted_workspace) {
-                    try self.sendError(id, .request_failed, "Semantic features require initializationOptions.trustedWorkspace: true; restart the server after granting trust.");
-                    return;
-                }
-                if (handler.requires_trust) try self.refreshInputs();
+                if (handler.requires_check) try self.refreshInputs();
                 // A semantic request answers from the build of its document's
                 // current text, which a scheduled check of that document
                 // produces, so the check runs first and is not canceled.
-                if (handler.requires_trust) {
+                if (handler.requires_check) {
                     if (requestDocumentUri(maybe_params)) |uri| {
                         if (self.scheduled_checks.getKey(uri)) |scheduled_uri| {
                             try self.checkScheduledDocument(scheduled_uri, .uncancelable);
@@ -622,7 +618,6 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         /// Schedule a check of the document, which runs once no message is
         /// pending, or before a semantic request about it.
         pub fn onDocumentChanged(self: *Self, uri: []const u8) Allocator.Error!void {
-            if (!self.client.trusted_workspace) return;
             if (self.scheduled_checks.contains(uri)) return;
             const owned = try self.allocator.dupe(u8, uri);
             errdefer self.allocator.free(owned);

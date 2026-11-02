@@ -35,7 +35,6 @@ pub const specs = [_]spec.Spec{
     .{ .name = "ROC-12252 injected idle runtime failure is visible", .run = checked(runtimeFailure) },
     .{ .name = "ROC-12252 unchanged bytes and unrelated writes do not check", .run = checked(unchangedInputs) },
     .{ .name = "ROC-12252 truncation before identical restore legitimately checks", .run = checked(truncatedInputs) },
-    .{ .name = "ROC-12252 untrusted idle session never checks or registers", .run = checked(untrustedIdle) },
     .{ .name = "ROC-12252 replacement registration reconciles consumed state", .run = checked(replacementRace) },
     .{ .name = "ROC-12252 checked hover refreshes with compiler caches disabled", .run = checked(featuresUncached) },
     .{ .name = "ROC-12252 checked hover refreshes with warm compiler caches", .run = checked(featuresCached) },
@@ -566,33 +565,9 @@ fn harnessTimeout() LiveSpecError!void {
     try h.waitFinished(live.deadline(5000));
 }
 
-fn untrustedIdle() LiveSpecError!void {
-    var h: live.Live = undefined;
-    try h.init(".zig-cache");
-    defer h.deinit();
-    var control: live.Control = .{};
-    control.init(&h);
-    try h.start();
-    try h.sendBody(
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"capabilities":{}}}
-    );
-    var initialized = try responseById(&h, 1);
-    initialized.deinit();
-    try h.sendBody("{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}");
-    try h.send(.{ .jsonrpc = "2.0", .method = "textDocument/didOpen", .params = .{ .textDocument = .{ .uri = "file:///tmp/roc-12252-untrusted.roc", .version = 1, .text = "invalid source" } } });
-    // This response follows didOpen in the serialized loop and is the observed
-    // boundary for checking that the notification did not enter the compiler.
-    try h.send(.{ .jsonrpc = "2.0", .id = @as(i64, 3), .method = "textDocument/semanticTokens/full", .params = .{ .textDocument = .{ .uri = "file:///tmp/roc-12252-untrusted.roc" } } });
-    var response = try responseById(&h, 3);
-    defer response.deinit();
-    try std.testing.expect(response.value.object.get("error") != null);
-    try std.testing.expectEqual(@as(usize, 0), control.hooks.checks.load(.seq_cst));
-    try std.testing.expectEqual(@as(usize, 0), control.count(.before_registration));
-}
-
 fn initialize(h: *live.Live) (live.WaitError || error{TestUnexpectedResult})!void {
     try h.sendBody(
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"capabilities":{}}}
     );
     var response = try responseById(h, 1);
     defer response.deinit();

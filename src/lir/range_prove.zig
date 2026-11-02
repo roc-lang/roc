@@ -596,6 +596,205 @@ test "range prove folds a threaded Bool join site that wrote the parameter as a 
     try testing.expectEqual(one, chosen.ret.value);
 }
 
+// Lowering shares a value's consumer between a join declared for the result
+// and a path that writes the result and arrives at the consumer directly. A
+// literal written on that path says nothing about the join's own jump.
+test "range prove keeps a join body's arms when another path arrives at it with a literal" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+    const input = try store.addLocal(.{ .layout_idx = .bool });
+    const flag = try store.addLocal(.{ .layout_idx = .bool });
+    const copy = try store.addLocal(.{ .layout_idx = .bool });
+    const one = try store.addLocal(.{ .layout_idx = .u64 });
+    const zero = try store.addLocal(.{ .layout_idx = .u64 });
+    var fixture_join_ids = BodyClone.JoinParamIndex.init(testing.allocator);
+    defer fixture_join_ids.deinit();
+    const arrival_join = fixture_join_ids.freshJoinPoint();
+    const result_join = fixture_join_ids.freshJoinPoint();
+
+    // consumer = copy = flag; switch copy { 1 => ret one, _ => ret zero }
+    const ret_true = try store.addCFStmt(.{ .ret = .{ .value = one } }, .test_fixture);
+    const ret_false = try store.addCFStmt(.{ .ret = .{ .value = zero } }, .test_fixture);
+    const consumer_switch = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = copy,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = ret_true }}),
+        .default_branch = ret_false,
+    } }, .test_fixture);
+    const consumer = try store.addCFStmt(.{ .assign_ref = .{
+        .target = copy,
+        .op = .{ .kind = .local, .source = flag },
+        .next = consumer_switch,
+    } }, .test_fixture);
+    // arrival = flag = literal 0; consumer
+    const arrival = try store.addCFStmt(.{ .assign_literal = .{
+        .target = flag,
+        .value = .{ .i128_literal = try store.addStmtRow(LIR.I128Literal, .{ .value = 0, .layout_idx = .bool }) },
+        .next = consumer,
+    } }, .test_fixture);
+    // switch input { 1 => flag := input; jump result, _ => jump arrival }
+    const jump_result = try store.addCFStmt(.{ .jump = .{ .target = result_join } }, .test_fixture);
+    const write_flag = try store.addCFStmt(.{ .set_local = .{
+        .target = flag,
+        .value = input,
+        .mode = .initialize_join_param,
+        .next = jump_result,
+    } }, .test_fixture);
+    const jump_arrival = try store.addCFStmt(.{ .jump = .{ .target = arrival_join } }, .test_fixture);
+    const dispatch = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = input,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = write_flag }}),
+        .default_branch = jump_arrival,
+    } }, .test_fixture);
+    const inner = try store.addCFStmt(.{ .join = .{
+        .id = result_join,
+        .params = try store.addLocalSpan(&.{flag}),
+        .body = consumer,
+        .remainder = dispatch,
+    } }, .test_fixture);
+    const outer = try store.addCFStmt(.{ .join = .{
+        .id = arrival_join,
+        .params = try store.addLocalSpan(&.{}),
+        .body = arrival,
+        .remainder = inner,
+    } }, .test_fixture);
+    const set_zero = try store.addCFStmt(.{ .assign_literal = .{
+        .target = zero,
+        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
+        .next = outer,
+    } }, .test_fixture);
+    const set_one = try store.addCFStmt(.{ .assign_literal = .{
+        .target = one,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+        .next = set_zero,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .identity = LIR.ProcIdentity.forTest(0),
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{input}),
+        .body = set_one,
+        .ret_layout = .u64,
+    }, .none);
+
+    var scratch = collections.SingleThreadArena.init(testing.allocator);
+    defer scratch.deinit();
+    try runProc(&store, &layouts, proc, scratch.allocator());
+
+    var returns_one = false;
+    var returns_zero = false;
+    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.?, testing.allocator);
+    defer walk.deinit();
+    while (try walk.next()) |stmt| {
+        const cf = store.getCFStmt(stmt);
+        if (cf != .ret) continue;
+        returns_one = returns_one or cf.ret.value == one;
+        returns_zero = returns_zero or cf.ret.value == zero;
+    }
+    try testing.expect(returns_one);
+    try testing.expect(returns_zero);
+}
+
+// Lowering gives a value's consumer to every join declared for that result. A
+// literal one join's only jump writes says nothing about the other join's.
+test "range prove keeps a body's arms when two joins share it" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+    const input = try store.addLocal(.{ .layout_idx = .bool });
+    const unknown = try store.addLocal(.{ .layout_idx = .bool });
+    const flag = try store.addLocal(.{ .layout_idx = .bool });
+    const copy = try store.addLocal(.{ .layout_idx = .bool });
+    const one = try store.addLocal(.{ .layout_idx = .u64 });
+    const zero = try store.addLocal(.{ .layout_idx = .u64 });
+    var fixture_join_ids = BodyClone.JoinParamIndex.init(testing.allocator);
+    defer fixture_join_ids.deinit();
+    const literal_join = fixture_join_ids.freshJoinPoint();
+    const unknown_join = fixture_join_ids.freshJoinPoint();
+
+    // consumer = copy = flag; switch copy { 1 => ret one, _ => ret zero }
+    const ret_true = try store.addCFStmt(.{ .ret = .{ .value = one } }, .test_fixture);
+    const ret_false = try store.addCFStmt(.{ .ret = .{ .value = zero } }, .test_fixture);
+    const consumer_switch = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = copy,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = ret_true }}),
+        .default_branch = ret_false,
+    } }, .test_fixture);
+    const consumer = try store.addCFStmt(.{ .assign_ref = .{
+        .target = copy,
+        .op = .{ .kind = .local, .source = flag },
+        .next = consumer_switch,
+    } }, .test_fixture);
+    // switch input { 1 => flag = literal 0; jump literal, _ => flag := unknown; jump unknown }
+    const jump_unknown = try store.addCFStmt(.{ .jump = .{ .target = unknown_join } }, .test_fixture);
+    const write_unknown = try store.addCFStmt(.{ .set_local = .{
+        .target = flag,
+        .value = unknown,
+        .mode = .initialize_join_param,
+        .next = jump_unknown,
+    } }, .test_fixture);
+    const jump_literal = try store.addCFStmt(.{ .jump = .{ .target = literal_join } }, .test_fixture);
+    const write_literal = try store.addCFStmt(.{ .assign_literal = .{
+        .target = flag,
+        .value = .{ .i128_literal = try store.addStmtRow(LIR.I128Literal, .{ .value = 0, .layout_idx = .bool }) },
+        .next = jump_literal,
+    } }, .test_fixture);
+    const dispatch = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = input,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = write_literal }}),
+        .default_branch = write_unknown,
+    } }, .test_fixture);
+    const inner = try store.addCFStmt(.{ .join = .{
+        .id = literal_join,
+        .params = try store.addLocalSpan(&.{flag}),
+        .body = consumer,
+        .remainder = dispatch,
+    } }, .test_fixture);
+    const outer = try store.addCFStmt(.{ .join = .{
+        .id = unknown_join,
+        .params = try store.addLocalSpan(&.{flag}),
+        .body = consumer,
+        .remainder = inner,
+    } }, .test_fixture);
+    const set_zero = try store.addCFStmt(.{ .assign_literal = .{
+        .target = zero,
+        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
+        .next = outer,
+    } }, .test_fixture);
+    const set_one = try store.addCFStmt(.{ .assign_literal = .{
+        .target = one,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+        .next = set_zero,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .identity = LIR.ProcIdentity.forTest(0),
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{ input, unknown }),
+        .body = set_one,
+        .ret_layout = .u64,
+    }, .none);
+
+    var scratch = collections.SingleThreadArena.init(testing.allocator);
+    defer scratch.deinit();
+    try runProc(&store, &layouts, proc, scratch.allocator());
+
+    var returns_one = false;
+    var returns_zero = false;
+    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.?, testing.allocator);
+    defer walk.deinit();
+    while (try walk.next()) |stmt| {
+        const cf = store.getCFStmt(stmt);
+        if (cf != .ret) continue;
+        returns_one = returns_one or cf.ret.value == one;
+        returns_zero = returns_zero or cf.ret.value == zero;
+    }
+    try testing.expect(returns_one);
+    try testing.expect(returns_zero);
+}
+
 test "range prove reads a static list of copies' stated item count as its length" {
     const testing = std.testing;
     // `list = static s0; n = list_len(list); switch 512 < n { 1 => ret one, _ => ret zero }`:
@@ -1416,6 +1615,8 @@ const Pass = struct {
     jump_records: std.ArrayList(JumpRecord),
     merge_states: collections.DenseMap(CFStmtId, MergeState),
     body_joins: collections.DenseMap(CFStmtId, JoinPointId),
+    /// Join bodies other paths also arrive at without a jump.
+    shared_join_bodies: collections.DenseMap(CFStmtId, void),
     len_roots: collections.DenseMap(NodeId, LocalId),
     value_roots: collections.DenseMap(NodeId, LocalId),
     /// Cross-round bounds per (loop join, parameter).
@@ -1611,6 +1812,7 @@ const Pass = struct {
             .jump_records = .empty,
             .merge_states = collections.DenseMap(CFStmtId, MergeState).init(allocator),
             .body_joins = collections.DenseMap(CFStmtId, JoinPointId).init(allocator),
+            .shared_join_bodies = collections.DenseMap(CFStmtId, void).init(allocator),
             .len_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
             .value_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
             .loop_bounds = PairMap(JoinPointId, LoopBounds).init(allocator),
@@ -1765,6 +1967,7 @@ const Pass = struct {
         self.freeMergeStates();
         self.merge_states.deinit();
         self.body_joins.deinit();
+        self.shared_join_bodies.deinit();
         self.len_roots.deinit();
         self.value_roots.deinit();
         self.freePersisted();
@@ -1855,6 +2058,7 @@ const Pass = struct {
         self.jump_records.clearRetainingCapacity();
         self.retireMergeStates();
         self.body_joins.clearRetainingCapacity();
+        self.shared_join_bodies.clearRetainingCapacity();
         self.enclosing_join.clearRetainingCapacity();
         self.join_parent.clearRetainingCapacity();
         self.join_assigned.clearRetainingCapacity();
@@ -2796,6 +3000,7 @@ const Pass = struct {
                     if (count.value_ptr.* == 1) {
                         if (self.join_stmts.get(s.target)) |join_stmt| {
                             const body = self.store.getCFStmtImmediate(join_stmt).join.body;
+                            if (self.body_joins.contains(body)) try self.shared_join_bodies.put(body, {});
                             try self.body_joins.put(body, s.target);
                             if (!seen.contains(body)) try self.scratch.append(self.allocator, body);
                         }
@@ -2844,10 +3049,31 @@ const Pass = struct {
             if (BodyClone.definedTarget(stmt)) |target| try self.bumpAssign(target);
             try BodyClone.forEachFlowSuccessor(self.store, stmt, self, edgeTo);
         }
+        try self.collectSharedJoinBodies();
         try self.scanJoinNesting(proc.body.?);
         if (self.body_joins.count() != 0) try self.buildLoopScan(proc.body.?);
         var loop_it = self.body_joins.iterator();
         while (loop_it.next()) |kv| try self.scanLoopAssigned(kv.value_ptr.*, kv.key_ptr.*);
+    }
+
+    /// Lowering may let a join body be a statement another path also arrives
+    /// at without a jump, or the body of another join. Such a body is not
+    /// entered only through one join's jumps, and its edges come from
+    /// different regions, whose nodes cannot be met. It is a merge that starts
+    /// from nothing: no edge's bindings or facts reach it.
+    fn collectSharedJoinBodies(self: *Pass) ResourceError!void {
+        var bodies = self.body_joins.iterator();
+        while (bodies.next()) |kv| {
+            if (self.predCount(kv.key_ptr.*) != 0) try self.shared_join_bodies.put(kv.key_ptr.*, {});
+        }
+        for (self.joins_in_order.items) |join_stmt| {
+            const join = self.store.getCFStmtImmediate(join_stmt).join;
+            if (!self.shared_join_bodies.contains(join.body)) continue;
+            _ = self.body_joins.remove(join.body);
+            const entry = try self.pred_counts.getOrPut(join.body);
+            if (!entry.found_existing) entry.value_ptr.* = 0;
+            entry.value_ptr.* += self.jumpCount(join.id);
+        }
     }
 
     fn edgeTo(self: *Pass, stmt: CFStmtId) ResourceError!void {
@@ -3542,6 +3768,7 @@ const Pass = struct {
     /// only what every captured edge established, and each path-bound local
     /// keeps a common root with a widened offset window.
     fn captureMergeEdge(self: *Pass, head: CFStmtId) ResourceError!void {
+        if (self.shared_join_bodies.contains(head)) return;
         const entry = try self.merge_states.getOrPut(head);
         if (!entry.found_existing) {
             entry.value_ptr.* = .{ .live = true, .captures = 0, .facts = .empty, .stable = .{}, .env = .empty, .entry_captures = 0, .entry_stable = .{} };
@@ -3873,6 +4100,7 @@ const Pass = struct {
     }
 
     fn mergeIncomplete(self: *const Pass, head: CFStmtId) bool {
+        if (self.shared_join_bodies.contains(head)) return false;
         const expected = self.mergeExpected(head);
         if (expected <= 1) return false;
         const state = self.merge_states.getPtrConst(head) orelse return true;
@@ -3889,6 +4117,7 @@ const Pass = struct {
     /// captured this round. Facts hold because they were present on all
     /// edges; met locals bind to their windows.
     fn seedFromMerge(self: *Pass, head: CFStmtId) ResourceError!void {
+        if (self.shared_join_bodies.contains(head)) return;
         // A loop body walks before its back edge can be captured, so its
         // in-round meet never completes; bounds persisted by an earlier
         // round stand in for it.
@@ -5383,7 +5612,7 @@ const Pass = struct {
                         try self.visited.put(current, {});
                         if (self.join_stmts.get(s.target)) |join_stmt| {
                             const join = self.store.getCFStmtImmediate(join_stmt).join;
-                            if (self.jumpCount(s.target) == 1) {
+                            if (self.jumpCount(s.target) == 1 and self.predCount(join.body) == 0) {
                                 if (!self.visited.contains(join.body)) {
                                     // Sole entry into the join body: bindings
                                     // for its freshly written parameters and

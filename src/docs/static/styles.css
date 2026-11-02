@@ -1697,7 +1697,6 @@ main > .main-content[aria-busy="true"] {
   color: var(--link-color);
   background: transparent;
   border: 1px solid var(--violet-border-subtle);
-  border-radius: 4px;
   cursor: pointer;
   font-size: var(--font-sm);
   line-height: 1.25;

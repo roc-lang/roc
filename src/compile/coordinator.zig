@@ -6726,6 +6726,10 @@ pub const Coordinator = struct {
         errdefer destroyModuleEnvAndSource(env);
         errdefer parse_ast.deinit();
 
+        if (self.cache_manager) |manager| {
+            try @import("source_inventory.zig").publishAst(task_allocs.scratch, manager, parse_ast);
+        }
+
         // The result payloads outlive this task, so they use the result
         // allocator. Only import-discovery intermediates use task scratch below.
         const worker_alloc = task_allocs.result;

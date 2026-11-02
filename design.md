@@ -110,27 +110,10 @@ byte list and `str_from_utf8_validated`, without a validation rescan. Successful
 decoding allocates at most once and leaves input unchanged. Output encoders
 (`to_utf16`/`to_utf32`) remain a separate API addition.
 
-## LSP workspace trust
-
-The LSP starts untrusted. Only an explicit boolean
-`initializationOptions.trustedWorkspace: true` authorizes compilation for the
-session, including dependency downloads and compile-time evaluation. Editor
-clients must obtain this authorization from the user, not repository settings,
-and restart the server when trust changes. Trust covers every document and
-transitive dependency processed by that server; clients must isolate untrusted
-folders in separate server sessions.
-
-Untrusted sessions retain document text and provide formatting, folding ranges,
-and selection ranges using parsing alone. They do not create builds or send
-compiler diagnostics, and every request that needs checked types or names
-receives an explicit trust-required error. Request registrations declare
-whether they require trust. This gate precedes compiler entry; it does not skip
-stages or produce partially checked modules as checked module data.
-
 ## LSP compiler-input live updates
 
-Trusted LSP sessions watch the exact mutable disk inputs recorded by compilation
-for currently open documents. Saved changes refresh affected documents even while
+The LSP watches the exact mutable disk inputs recorded by compilation for
+currently open documents. Saved changes refresh affected documents even while
 client input is idle, without editor file-watch support. Inputs include imported
 Roc modules, file imports, and explicitly consumed local package/platform roots.
 Missing or unreadable explicit inputs remain eligible for repair after failed
@@ -170,11 +153,10 @@ newer diagnostic or semantic state. Shutdown stops new watch/compiler work and
 watch-driven publication; exit, EOF, transport failure and partial initialization
 release owned resources. Transport output remains serialized and correctly framed.
 
-Untrusted sessions neither compile nor establish compiler-input watching. Initial,
-replacement and runtime watch failures are user-visible, including with idle
-client input. Failed coverage is not presented as working live updates, and no
-alternate silent watcher is used. Ordinary document checking remains available
-where the failure permits it.
+Initial, replacement and runtime watch failures are user-visible, including
+with idle client input. Failed coverage is not presented as working live
+updates, and no alternate silent watcher is used. Ordinary document checking
+remains available where the failure permits it.
 
 ## LSP document checks
 
@@ -1562,7 +1544,8 @@ layout indices and the starts of runs of erased argument layouts. A program
 numbers both in the order its lowering reached them, which depends on which
 procedures it lowered and which a pack served, so code loads each such number
 with a fixed-width instruction sequence and records it as a runtime number
-(`RuntimeNumber`) that its excerpt carries. Once the image's code is placed,
+(`RuntimeNumber`) that its excerpt carries. Once the image's code and its entry
+wrappers, which register each dictionary worker's return layout, are placed,
 each number is given its arranged one in the order the placed code first
 loads it, and every load is patched to it (`LirCodeGen.renumberRuntimeNumbers`,
 `RuntimeTables.Numbering`); the fixed layouts keep their indices. The sidecar
@@ -5618,6 +5601,33 @@ in the canonicalize task, after the canonicalized-cache entry is stored and
 before the module leaves that task, so every module's source-input identity is
 complete by the time the checked cache is probed.
 
+### Source import inventory and line counting
+
+A successful parse also publishes a small source import inventory, keyed by
+normalized source bytes within the compiler compatibility namespace. It holds
+parser-produced local import spellings, bases and parent counts, qualified
+imports, and public-name-to-source-module mappings. Syntax errors never produce
+a reusable inventory. The inventory contains no filesystem paths or checked
+state. Graph tools consume these same producer facts; a missing or corrupt
+optional record causes a fresh parse, never a guess about imports.
+
+`roc loc` resolves packages through the ordinary resolver and its downloaded
+package sidecars, then traverses source imports without initializing builtins,
+canonicalizing, checking, or evaluating. Its roots are the requested source and
+the selected platform. A used dependency's header is counted, but only public
+modules selected by imports and their transitive imports are traversed. A root
+package's exposed modules and platform hosted modules are parser-recorded
+implicit imports, just as during compilation. Unimported directory neighbors,
+unused dependencies, embedded compiler sources, and non-Roc file imports are
+not code in this count.
+
+Traversal is deduplicated by package and logical module; counting is separately
+deduplicated by canonical filesystem path. This preserves distinct dependency
+alias contexts for a shared file. Root ownership takes precedence over local,
+then HTTPS ownership if a file is reached in multiple categories. Each physical
+line counts once, including a final unterminated line. The second count excludes
+whitespace-only lines and lines whose first non-whitespace byte is `#`.
+
 ### Coordinator phases
 
 `Parse` (probe the canonicalized cache; on a hit load the env, read the file
@@ -8619,8 +8629,22 @@ bodies that closure reaches, so one of its modules recorded an equal contract.
 Boxy resolves a stored function's codec dictionary edge from the same module,
 and builds the generated codec worker in it: the dictionary's requirement comes
 from the template's module and the shape from the use's module, and neither
-need hold the contract. A generated codec runtime body reads its edge in that
-body's module, which must hold an equal contract. Completed-body records
+need hold the contract. A generic method selected for that dictionary, such as
+`List.encoder_for`, names its item and its format only in the encoder it
+returns, so Boxy relates the method to the requirement's position at the call,
+and the method's own codec requirements are read at what that relation binds.
+A variable of the template that built a stored nested function can reach neither
+the function's type nor its captures, as the format of an encoder a generic method
+returned does not, so the function keeps its template specialization's concrete
+type (`ConstFn.owner_fn_ty`) and Boxy relates the template to it. Relating a
+requirement to its selected method then binds the variables only that requirement
+names, for dictionaries and descriptors alike. A
+generated codec runtime body reads its edge in that body's module when that
+module holds an equal contract; otherwise, as for a custom format's contract
+reached through a Builtin method, it reads the edge the same way, from the storing
+module's import closure. A generated runtime whose encoding operand reads the frame
+that built it, rather than being a value any frame can rebuild, always captures
+the encoding, so a stored one has its value when that frame is gone. Completed-body records
 retain recorded edges and are rejected when their recording module is absent.
 
 The checker's derived-codec walk records each nominal application whose
@@ -10358,6 +10382,17 @@ or `continue` for an enclosing loop retains the typed join, because moving that
 body beneath a different loop would retarget the transfer. Otherwise its body
 is cloned directly at the site against the site's full symbolic values.
 
+Case-of-case distribution follows the same rule by counting, before it clones
+anything, how many inner leaves select each outer arm from the arm values
+recorded for the scrutinee. An arm one leaf selects is cloned at that leaf,
+where its value stays recorded for an enclosing distribution. An arm several
+leaves select becomes a join each of those leaves jumps to, unless its body
+only builds a value out of locals and constants: such a body holds no
+continuation code, so copying it adds no branch for a later distribution to
+multiply, and keeps the value known at each leaf. A source arm reused unchanged
+has no recorded value until it is cloned, so it counts as reaching every outer
+arm more than once.
+
 Call-pattern specialization may also expose a tail-recursive worker whose
 entire specialized ABI is scalar even though its only external call remains in
 the function that initiated specialization. When such a generated worker has
@@ -11400,18 +11435,34 @@ value's own row (Value Rows: Uses Share One Row) the relation only ties the
 read to the root's slot.
 
 A join follows a value, so Lambda Solved must hold one node per OCCURRENCE of
-a row-bearing type, not one per type. Its lazy Monotype leaves share clones
-to save work: a callable-free type used to be one node wherever it occurred,
-and within one expanded type every occurrence of one sub-type was one node.
-Both ties are kept only for types that cannot change under unification
-(`Solver.isCloneInvariant`: no callable slot, no tag row) and, within a
-clone context, for rows that lie on a cycle, whose back-references the tie
-exists for. A callable-free type holding a tag row and reaching no cycle is
-POSITIONAL (`Solver.LeafSharing`): each occurrence is its own leaf, in no
-context. Otherwise two unrelated unions that both receive a value of one
-narrower type would be joined through it by type identity rather than by
-flow, and one tag label standing in both with two payload types would then
-be unified.
+a row-bearing type that a join can change, not one per type. Its lazy
+Monotype leaves share clones to save work: within one expanded type every
+occurrence of one sub-type is one node, and a callable-free type that no join
+can change is one node wherever it occurs. Both ties are kept only for types
+that cannot change under unification (`Solver.isCloneInvariant`: no callable
+slot, and no tag row a join can change) and, within a clone context, for rows
+that lie on a cycle, whose back-references the tie exists for. A callable-free
+type holding a row a join can change and reaching no cycle is POSITIONAL
+(`Solver.LeafSharing`): each occurrence is its own leaf, in no context.
+Otherwise two unrelated unions that both receive a value of one narrower type
+would be joined through it by type identity rather than by flow, and one tag
+label standing in both with two payload types would then be unified.
+
+Which rows a join can change is found before solving
+(`findRowJoinedTypes`). A row changes only where unification relates two
+types instantiated from DIFFERENT Monotypes; relating two instances of one
+Monotype unites rows that are already equal. An analysis solve relates every
+body exactly as the real solve does, but with one clone per callable-free
+Monotype, and records both Monotypes of every such pair. Sharing a clone only
+adds relations, so the analysis relates every pair the real solve does. The
+recorded row-bearing Monotypes, every Monotype structurally equal to one
+(equal equality digests), and every Monotype containing one are row-joined;
+the analysis's solution is then discarded and the real solve shares every
+other callable-free Monotype. A declared nominal row that no value is ever
+joined into, such as a large parse tree's, is thus one node for the whole
+program instead of a copy of its whole row per occurrence. Debug builds
+assert that a shared row-bearing clone never meets a different Monotype in
+unification.
 
 A fresh callable-free cyclic leaf may join an existing instance without
 expansion only after an exact clone proof. That proof reads the immutable
@@ -11873,8 +11924,9 @@ position—the `Err` payload and the `Try` argument—at the request's row rathe
 than by rewriting the node.
 
 When the closed row ends in a variable the template QUANTIFIES, and nothing
-else in the template's type reaches that variable—no argument, payload or
-other position—the variable is determined by the result alone
+else in the template's type reaches that variable—no argument, payload,
+other position, or signature of a where-clause constraint on a variable the
+type reaches—the variable is determined by the result alone
 (`requestDeterminedResultRowVariable`). The specialization's substitution
 gives that slot a fresh cell instead of the variable the use site recorded
 (`requestDeterminedSubstitution`), so relating the template's root to the
@@ -18516,8 +18568,12 @@ body that consumes those parameters, and a remainder that enters the shared
 control region. The id is in scope in both body and remainder; the parameters
 are in scope only in the body. A jump names an in-scope id and supplies exactly
 one argument of the declared type for every parameter. The join body and
-remainder both produce the enclosing expression's result type. These forms
-express shared control only; they do not choose layouts or ownership.
+remainder both produce the enclosing expression's result type. Lowering gives
+both the same consumer statement, so a value-position join's body, any join
+declared inside its remainder for the same result, and a direct arrival may all
+enter one LIR statement: LIR consumers treat such a statement as a merge of
+every edge into it, not as a body entered only through one join's jumps. These
+forms express shared control only; they do not choose layouts or ownership.
 
 Case-of-case and let-of-case rewrites use these forms to thread branch results
 to one continuation. They never clone that continuation into each branch. Join
@@ -23771,14 +23827,15 @@ against the borrow typing rules:
   a forward dataflow fixpoint—summaries agreeing on every name's ownership
   mode share one abstraction whose must-alias partition is the meet of
   theirs (with per-fine-class balances re-attributed by constraint
-  propagation), and the body is re-certified only when a jump strictly
-  refines that abstraction. Mode disagreements split the abstraction along
-  exactly the entry-state modes real in-edges disagree about, so refinement never
-  manufactures entry states no jump produced; in the worst case it
-  degenerates to one walk per distinct summary, with no capacity cap and no
-  skip path. The join is monotone over a finite-height lattice (partition
-  refinement is bounded by the name count; balance divergence across
-  mode-identical entries is itself a finding—per-iteration accumulation),
+  propagation) and whose lender conjunctions are the union of theirs, and the
+  body is re-certified only when a jump strictly refines that abstraction.
+  Mode disagreements split the abstraction along exactly the entry-state modes
+  real in-edges disagree about, so refinement never manufactures entry states
+  no jump produced; in the worst case it degenerates to one walk per distinct
+  summary, with no capacity cap and no skip path. The join is monotone over a
+  finite-height lattice (partition refinement and lender growth are bounded by
+  the name count; balance divergence across mode-identical entries is itself a
+  finding—per-iteration accumulation),
   so certification of every procedure runs to completion
 - an intermediate aggregate field read needed to claim a selected field
   keeps its carrier local across inner-join frames as well as join summaries.
@@ -23786,11 +23843,18 @@ against the borrow typing rules:
   exact ownership path when the enclosing loop is summarized again. Copying
   reachable frame values therefore also copies the carrier bindings of their
   payload sources, including field reads defined inside an exited region.
-- distinct borrow-lender and holder proofs remain separate at every join;
-  a group-count threshold must never discard provenance and manufacture a
-  borrowed entry with no owner. Valid incoming paths with different owners
-  are certified with their respective owners, and an incoming path that
-  releases its owner before the borrow is used is still rejected
+- no join discards a lifetime proof; a group-count threshold must never
+  discard provenance and manufacture a borrowed entry with no owner. Valid
+  incoming paths with different lenders join to a value that needs every one
+  of those lenders live, so a read after any of them dies is still rejected.
+  A union is taken only when it is exact: the paths share a partition and
+  balances, and each lender has one proof on both. Every other disagreement,
+  including different holders and a proof with no lenders, stays a separate
+  abstraction certified with its own owners
+- a summary names only what the join body can observe. A borrow the body
+  never reads, holding no ownership and with no container above it, has
+  exactly its lenders' liveness, so the summary names those lenders' anchors
+  instead of it
 - explicit initialized-payload control flow refines conditional ownership:
   the initialized edge promotes the payload to ordinary owned state and the
   uninitialized edge removes its possible unit and binding. Presence
@@ -23848,7 +23912,9 @@ edges the solver already walks:
   the constructed value, and payload reads link to their source—storing a
   visible value makes the container visible, and anything read out of a
   visible container is visible
-- direct-call argument-to-parameter and return-to-result relations
+- direct-call argument-to-parameter and return-to-result relations, and the
+  return-to-result relation of a read's fresh form, which that read may become
+  (see "Fresh forms of static lists")
 - low-level ops, from explicit `RcEffect` data
 
 Bidirectional containment keeps every reachable-value tree uniformly
@@ -24674,6 +24740,23 @@ same call names. The packed function's argument pack is a fresh caller buffer,
 so it is `noalias`, `readonly`, and `nocapture`. The erased ABI's result,
 capture, and reuse pointers carry no `noalias`, since the result can be written
 into a reused allocation that the capture points into.
+
+## Dev Backend Instruction Sets
+
+The dev backend's shared driver (`LirCodeGen`, `FrameBuilder`,
+`CallingConvention`) serves every instruction set listed in
+`backend/dev/isa.zig`'s `Isa`. Each component computes its `Isa` once from the
+target with `isaOf`, and every instruction-set choice is an exhaustive
+`switch (isa)` that names each instruction set's answer. The driver never
+compares `isa` with `==` or `!=` and never gives a `switch (isa)` an `else`
+prong: adding an instruction set must make every choice a compile error until
+it has an answer for the new one. A `bool` may hold an instruction-set choice
+only when an exhaustive `switch (isa)` computes it, as `use_swar` does; a
+`bool` set from `isa == .x86_64` would silently answer for the new instruction
+set. Code that builds a backend for a specific target asks `isaOfOrNull`, so
+the list of instruction sets lives only in `isa.zig`. Code that runs generated
+code in-process asks `isa.host`, never `RocTarget.detectNative`, which maps an
+architecture without a code generator to one that has one.
 
 ## Dev Backend Register Lifetimes
 

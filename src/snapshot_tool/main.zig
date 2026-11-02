@@ -3904,8 +3904,7 @@ fn processDevObjectSnapshot(
         hash_results[i].target_name = field_name;
 
         target_snapshot: {
-            const arch = target.toCpuArch();
-            if (arch != .x86_64 and arch != .aarch64 and arch != .aarch64_be) {
+            if (backend.dev.isa.isaOfOrNull(target) == null) {
                 hash_results[i].hash_hex = undefined;
                 hash_results[i].supported = false;
                 break :target_snapshot;

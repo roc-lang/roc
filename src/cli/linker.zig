@@ -20,6 +20,7 @@ const RocTarget = roc_target.RocTarget;
 const cli_ctx = @import("CliCtx.zig");
 const CliCtx = cli_ctx.CliCtx;
 const Io = cli_ctx.Io;
+const link_artifacts = @import("link_artifacts.zig");
 
 /// Suppress embedded LLD warnings by default. Build the compiler with
 /// `-Dlinker-warnings=true` to surface all LLD diagnostics (including ignored
@@ -29,6 +30,14 @@ const suppress_linker_warnings = !build_options.linker_warnings;
 /// The embedded LLD entrypoints are only linked into LLVM-enabled CLI builds.
 const llvm_available = if (@import("builtin").is_test) false else @import("config").llvm;
 const binaryen_available = if (@import("builtin").is_test) false else @import("config").binaryen;
+
+/// The libSystem stub (src/cli/darwin) every Mach-O link without a platform
+/// sysroot links against. Test builds embed an empty file.
+const libsystem_tbd = if (builtin.is_test) "" else @import("embedded_assets").file("darwin/libSystem.tbd");
+const libsystem_tbd_digest = if (builtin.is_test) blk: {
+    @setEvalBranchQuota(20_000);
+    break :blk link_artifacts.Identity.of("").digest;
+} else @import("embedded_digests").darwin_libsystem_tbd_blake3;
 
 const RocBinaryenOptimizeConfig = extern struct {
     optimize_level: c_int,
@@ -270,6 +279,20 @@ pub const LinkConfig = struct {
     /// command space for the extra segment.
     macho_dwarf_object: ?[]const u8 = null,
 };
+
+/// Writes a link input `roc` embeds where this link can read it, and returns
+/// its path: the build's immutable objects when it has them, else the
+/// per-build scratch dir, so parallel `roc build` invocations never race on one
+/// file (a truncated write from one linker can corrupt what another is reading).
+fn embeddedLinkInput(ctx: *CliCtx, config: LinkConfig, bytes: []const u8, digest: [32]u8, filename: []const u8) LinkError![]const u8 {
+    if (config.immutable_objects) |objects| {
+        return objects.materializeKnown(bytes, .{ .digest = digest, .size = bytes.len }) catch LinkError.LinkFailed;
+    }
+    const dir = config.scratch_dir orelse (std.process.executableDirPathAlloc(ctx.io.std_io, ctx.arena) catch return LinkError.OutOfMemory);
+    const path = std.fs.path.join(ctx.arena, &.{ dir, filename }) catch return LinkError.OutOfMemory;
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, path, bytes) catch return LinkError.OutOfMemory;
+    return path;
+}
 
 fn appendForceUndefinedSymbol(
     ctx: *CliCtx,
@@ -584,19 +607,21 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 try args.append("-S");
             }
 
-            // Try to find a platform-provided sysroot first (for cross-compilation with bundled frameworks)
-            // Falls back to Roc's bundled darwin sysroot (minimal, only has libSystem.tbd)
-            try args.append("-syslibroot");
-            if (try findPlatformSysroot(ctx.arena, ctx.io.std_io, config.platform_files_dir)) |platform_sysroot| {
-                try args.append(platform_sysroot);
+            // A platform-provided sysroot (for cross-compilation with bundled
+            // frameworks) wins. Without one, link roc's own libSystem stub and
+            // nothing from the standard search paths, on any host.
+            const platform_sysroot = try findPlatformSysroot(ctx.arena, ctx.io.std_io, config.platform_files_dir);
+            if (platform_sysroot) |sysroot| {
+                try args.append("-syslibroot");
+                try args.append(sysroot);
 
                 // Add framework search path to help linker resolve framework dependencies
-                const fw_path = std.fs.path.join(ctx.arena, &.{ platform_sysroot, "System", "Library", "Frameworks" }) catch return LinkError.OutOfMemory;
+                const fw_path = std.fs.path.join(ctx.arena, &.{ sysroot, "System", "Library", "Frameworks" }) catch return LinkError.OutOfMemory;
                 try args.append("-F");
                 try args.append(fw_path);
 
                 // Add library path for libobjc and other usr/lib dependencies
-                const lib_path = std.fs.path.join(ctx.arena, &.{ platform_sysroot, "usr", "lib" }) catch return LinkError.OutOfMemory;
+                const lib_path = std.fs.path.join(ctx.arena, &.{ sysroot, "usr", "lib" }) catch return LinkError.OutOfMemory;
                 try args.append("-L");
                 try args.append(lib_path);
 
@@ -604,13 +629,11 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 // This keeps the compiler generic - platforms explicitly control their
                 // dependencies by choosing which frameworks to bundle in their sysroot.
                 try discoverAndLinkFrameworks(ctx.arena, ctx.io.std_io, &args, fw_path);
+                try args.append("-lSystem");
             } else {
-                const darwin_sysroot = embedded_lld.darwin_sysroot.find(ctx.arena, ctx.io.std_io) catch return LinkError.OutOfMemory;
-                try args.append(darwin_sysroot);
+                try args.append("-Z");
+                try args.append(try embeddedLinkInput(ctx, config, libsystem_tbd, libsystem_tbd_digest, "libSystem.tbd"));
             }
-
-            // Link against system libraries on macOS
-            try args.append("-lSystem");
 
             // ELF resolves an undefined weak reference to null; Mach-O needs
             // each one the executable leaves undefined named explicitly.
@@ -767,19 +790,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             // This is needed when linking Zig-compiled code (like platform hosts) that uses
             // the MinGW ABI, which requires ___chkstk_ms for functions with large stack frames.
             if (target_arch == .x86_64) {
-                const stack_probe_obj = &stack_probe.object;
-                // Prefer a per-build scratch dir so parallel `roc build` invocations
-                // don't race on a shared zig-out/bin/stack_probe.obj (truncated
-                // writes from one linker can corrupt what another linker is reading).
-                const probe_dir = config.scratch_dir orelse (std.process.executableDirPathAlloc(ctx.io.std_io, ctx.arena) catch return LinkError.OutOfMemory);
-                const stack_probe_path = if (config.immutable_objects) |objects|
-                    objects.materializeKnown(stack_probe_obj, .{ .digest = stack_probe.digest, .size = stack_probe_obj.len }) catch return LinkError.LinkFailed
-                else blk: {
-                    const path = std.fs.path.join(ctx.arena, &.{ probe_dir, "stack_probe.obj" }) catch return LinkError.OutOfMemory;
-                    @import("backend").writeFileWindowsAvSafe(ctx.io.std_io, path, stack_probe_obj) catch return LinkError.OutOfMemory;
-                    break :blk path;
-                };
-                try args.append(stack_probe_path);
+                try args.append(try embeddedLinkInput(ctx, config, &stack_probe.object, stack_probe.digest, "stack_probe.obj"));
             }
         },
         .freebsd, .openbsd, .netbsd => {
@@ -1592,6 +1603,8 @@ test "macOS platform archives use scoped force_load" {
 
     const archive_path = try tmp.dir.realPathFileAlloc(std.testing.io, "libhost.a", std.testing.allocator);
     defer std.testing.allocator.free(archive_path);
+    const scratch_dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(scratch_dir);
 
     var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena_instance.deinit();
@@ -1608,6 +1621,7 @@ test "macOS platform archives use scoped force_load" {
         .output_path = "test_output",
         .object_files = &.{"libroc_interpreter_shim.a"},
         .platform_files_pre = &.{archive_path},
+        .scratch_dir = scratch_dir,
     };
 
     const args = try buildLinkArgs(&ctx, config);
@@ -1628,6 +1642,8 @@ test "macOS non-archive platform files are passed directly" {
 
     const object_path = try tmp.dir.realPathFileAlloc(std.testing.io, "host.o", std.testing.allocator);
     defer std.testing.allocator.free(object_path);
+    const scratch_dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(scratch_dir);
 
     var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena_instance.deinit();
@@ -1644,6 +1660,7 @@ test "macOS non-archive platform files are passed directly" {
         .output_path = "test_output",
         .object_files = &.{"libroc_interpreter_shim.a"},
         .platform_files_pre = &.{object_path},
+        .scratch_dir = scratch_dir,
     };
 
     const args = try buildLinkArgs(&ctx, config);
@@ -1654,6 +1671,11 @@ test "macOS non-archive platform files are passed directly" {
 }
 
 test "macOS executables leave the in-process recorders undefined" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const scratch_dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(scratch_dir);
+
     var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena_instance.deinit();
 
@@ -1668,6 +1690,7 @@ test "macOS executables leave the in-process recorders undefined" {
         .target_arch = .aarch64,
         .output_path = "test_output",
         .object_files = &.{"app.o"},
+        .scratch_dir = scratch_dir,
     };
 
     const args = try buildLinkArgs(&ctx, config);
@@ -1678,6 +1701,42 @@ test "macOS executables leave the in-process recorders undefined" {
         try std.testing.expect(at > 0);
         try std.testing.expectEqualStrings("-U", args.items[at - 1]);
     }
+}
+
+test "macOS links without a platform sysroot use roc's own libSystem stub and no search paths" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const scratch_dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(scratch_dir);
+
+    var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena_instance.deinit();
+
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    const config = LinkConfig{
+        .target_format = .macho,
+        .target_os = .macos,
+        .target_arch = .aarch64,
+        .output_path = "test_output",
+        .object_files = &.{"app.o"},
+        .scratch_dir = scratch_dir,
+    };
+
+    const args = try buildLinkArgs(&ctx, config);
+
+    // Nothing names a directory on the machine that built `roc`.
+    try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-syslibroot"));
+    try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-lSystem"));
+    _ = findArg(args.items, "-Z") orelse return error.MissingNoStandardSearchPaths;
+    const stub_path = try std.fs.path.join(arena_instance.allocator(), &.{ scratch_dir, "libSystem.tbd" });
+    _ = findArg(args.items, stub_path) orelse return error.MissingLibSystemStub;
+    const written = try tmp.dir.readFileAlloc(std.testing.io, "libSystem.tbd", std.testing.allocator, .unlimited);
+    defer std.testing.allocator.free(written);
+    try std.testing.expectEqualStrings(libsystem_tbd, written);
 }
 
 test "native glibc executables name the canonical program interpreter" {

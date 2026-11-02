@@ -15,6 +15,7 @@ const std = @import("std");
 const invariant = @import("base").invariant;
 const dev_diagnostics = @import("base").dev_diagnostics;
 const builtin = @import("builtin");
+const isaOfOrNull = @import("isa.zig").isaOfOrNull;
 const Allocator = std.mem.Allocator;
 
 const layout = @import("layout");
@@ -532,11 +533,6 @@ fn compileWithCodeGen(
     }
     const starts = CodeExcerpt.assembleArranged(CodeGen, allocator, &final, &canonical.set, &procs_by_identity, &helper_keys) catch return CompilationError.OutOfMemory;
     defer allocator.free(starts);
-    // The placed code loads the Boxy runtime's table numbers in canonical
-    // order; number them by it, so they depend on nothing but that code.
-    var runtime_numbering: lir.RuntimeTables.Numbering = .{};
-    defer runtime_numbering.deinit(allocator);
-    final.renumberRuntimeNumbers(&runtime_numbering) catch return CompilationError.OutOfMemory;
 
     var symbols = std.ArrayList(SymbolDefinition).empty;
     defer symbols.deinit(allocator);
@@ -703,6 +699,13 @@ fn compileWithCodeGen(
         };
     }
     if (timing) |timings| timings.finish(entrypoint_instructions_started_ns, .entrypoint_instructions);
+
+    // The placed code, entry wrappers included, loads the Boxy runtime's table
+    // numbers in canonical order; number them by it, so they depend on nothing
+    // but that code.
+    var runtime_numbering: lir.RuntimeTables.Numbering = .{};
+    defer runtime_numbering.deinit(allocator);
+    final.renumberRuntimeNumbers(&runtime_numbering) catch return CompilationError.OutOfMemory;
 
     // Get generated code and relocations
     symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;
@@ -1162,8 +1165,7 @@ fn crossCompileDispatch(
         const comptime_target: RocTarget = @fromBackingInt(@intCast(field_value));
         if (comptime comptime_target.defaultCpuTarget() != comptime_target) continue;
         if (default_target == comptime_target) {
-            const arch = comptime comptime_target.toCpuArch();
-            if (comptime (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be)) {
+            if (comptime isaOfOrNull(comptime_target) != null) {
                 return compileWithCodeGen(
                     LirCodeGenMod.LirCodeGen(comptime_target),
                     allocator,
