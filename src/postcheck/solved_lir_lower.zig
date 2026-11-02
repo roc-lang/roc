@@ -952,6 +952,7 @@ const Lowerer = struct {
     layout_owner_types: collections.DenseMap(Type.TypeId, Type.TypeId),
     const_plan_map: collections.DenseMap(Type.TypeId, LirProgram.ConstPlanId),
     const_type_map: collections.DenseMap(Type.TypeId, const_store.ConstTypeId),
+    const_mono_type_map: collections.DenseMap(MonoType.TypeId, const_store.ConstTypeId),
     callable_source_fn_map: collections.DenseMap(Type.TypeId, SolvedType.TypeVarId),
     static_initializer_map: std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId),
     /// The fresh-form procedure of each static list of copies, by the
@@ -1332,6 +1333,7 @@ const Lowerer = struct {
             .layout_owner_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(allocator),
             .const_plan_map = collections.DenseMap(Type.TypeId, LirProgram.ConstPlanId).init(allocator),
             .const_type_map = collections.DenseMap(Type.TypeId, const_store.ConstTypeId).init(allocator),
+            .const_mono_type_map = collections.DenseMap(MonoType.TypeId, const_store.ConstTypeId).init(allocator),
             .callable_source_fn_map = collections.DenseMap(Type.TypeId, SolvedType.TypeVarId).init(allocator),
             .static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(allocator),
             .uniform_constructors = std.AutoHashMap(LIR.ProcIdentity, LIR.LirProcSpecId).init(allocator),
@@ -1477,6 +1479,7 @@ const Lowerer = struct {
         self.local_map.deinit();
         self.const_plan_map.deinit();
         self.const_type_map.deinit();
+        self.const_mono_type_map.deinit();
         self.callable_source_fn_map.deinit();
         self.deinitPackedPlans();
         self.static_initializer_queue.deinit(self.allocator);
@@ -6558,6 +6561,115 @@ const Lowerer = struct {
             .module = try self.result.const_type_names.internModuleIdentity(self.solved.lifted.names.moduleIdentityBytes(field_default.module)),
             .expr_node = field_default.expr_node,
         };
+    }
+
+    /// The stored form of a Monotype type, whose functions are its source
+    /// signatures. Every reachable type is reserved before any is filled, so a
+    /// recursive type refers to its own reservation.
+    fn constTypeOfMono(self: *Lowerer, root: MonoType.TypeId) std.mem.Allocator.Error!const_store.ConstTypeId {
+        var pending = std.ArrayList(MonoType.TypeId).empty;
+        defer pending.deinit(self.allocator);
+        const root_id = try self.reserveConstMonoType(root, &pending);
+        var ids = std.ArrayList(const_store.ConstTypeId).empty;
+        defer ids.deinit(self.allocator);
+        var fields = std.ArrayList(const_store.TypeField).empty;
+        defer fields.deinit(self.allocator);
+        var tags = std.ArrayList(const_store.TypeTag).empty;
+        defer tags.deinit(self.allocator);
+        var declared = std.ArrayList(const_store.TypeDeclaredField).empty;
+        defer declared.deinit(self.allocator);
+        const types = self.solved.lifted.types.view();
+        while (pending.pop()) |ty| {
+            const id = self.const_mono_type_map.get(ty) orelse
+                Common.invariant("a pending stored type had no reservation");
+            ids.clearRetainingCapacity();
+            const stored: const_store.ConstType = switch (types.get(ty)) {
+                .primitive => |primitive| .{ .primitive = constPrimitive(primitive) },
+                .named => |named| blk: {
+                    for (types.span(named.args)) |arg| try ids.append(self.allocator, try self.reserveConstMonoType(arg, &pending));
+                    declared.clearRetainingCapacity();
+                    for (types.declaredFieldSpan(named.declared_order)) |field| {
+                        try declared.append(self.allocator, switch (field) {
+                            .named => |name| .{ .named = try self.constRecordFieldName(name) },
+                            .padding => |padding| .{ .padding = try self.reserveConstMonoType(padding, &pending) },
+                        });
+                    }
+                    break :blk .{ .named = .{
+                        .named_type = .{
+                            .module = named.named_type.module,
+                            .ty = named.named_type.ty,
+                            .ty_module = named.named_type.ty_module,
+                        },
+                        .def = try self.constTypeDef(named.def),
+                        .kind = constNamedKind(named.kind),
+                        .builtin_owner = named.builtin_owner,
+                        .args = try self.result.const_types.appendTypeSpan(ids.items),
+                        .backing = if (named.backing) |backing| .{
+                            .ty = try self.reserveConstMonoType(backing.ty, &pending),
+                            .use = constBackingUse(backing.use),
+                            .authority = constBackingAuthority(backing.authority),
+                        } else null,
+                        .declared_order = try self.result.const_types.appendDeclaredFieldSpan(declared.items),
+                    } };
+                },
+                .record => |span| blk: {
+                    fields.clearRetainingCapacity();
+                    for (types.fieldSpan(span)) |field| {
+                        try fields.append(self.allocator, .{
+                            .name = try self.constRecordFieldName(field.name),
+                            .ty = try self.reserveConstMonoType(field.ty, &pending),
+                            .value_ty = if (field.value_ty.get()) |value_ty| try self.reserveConstMonoType(value_ty, &pending) else null,
+                            .default = try self.constFieldDefault(field.default),
+                        });
+                    }
+                    break :blk .{ .record = try self.result.const_types.appendFieldSpan(fields.items) };
+                },
+                .tuple => |span| blk: {
+                    for (types.span(span)) |item| try ids.append(self.allocator, try self.reserveConstMonoType(item, &pending));
+                    break :blk .{ .tuple = try self.result.const_types.appendTypeSpan(ids.items) };
+                },
+                .tag_union => |span| blk: {
+                    tags.clearRetainingCapacity();
+                    for (types.tagSpan(span)) |tag| {
+                        ids.clearRetainingCapacity();
+                        for (types.span(tag.payloads)) |payload| try ids.append(self.allocator, try self.reserveConstMonoType(payload, &pending));
+                        try tags.append(self.allocator, .{
+                            .name = try self.constTagName(tag.name),
+                            .checked_name = try self.constTagName(tag.checked_name),
+                            .payloads = try self.result.const_types.appendTypeSpan(ids.items),
+                        });
+                    }
+                    break :blk .{ .tag_union = try self.result.const_types.appendTagSpan(tags.items) };
+                },
+                .list => |elem| .{ .list = try self.reserveConstMonoType(elem, &pending) },
+                .box => |elem| .{ .box = try self.reserveConstMonoType(elem, &pending) },
+                .func => |func| blk: {
+                    for (types.span(func.args)) |arg| try ids.append(self.allocator, try self.reserveConstMonoType(arg, &pending));
+                    break :blk .{ .func = .{
+                        .args = try self.result.const_types.appendTypeSpan(ids.items),
+                        .ret = try self.reserveConstMonoType(func.ret, &pending),
+                    } };
+                },
+                .erased => |digest| .{ .erased = digest },
+                // A demand hole's variable has no demanded value, so no
+                // position of it holds bytes.
+                .zst, .hole => .zst,
+            };
+            try self.result.const_types.fill(id, stored);
+        }
+        return root_id;
+    }
+
+    fn reserveConstMonoType(
+        self: *Lowerer,
+        ty: MonoType.TypeId,
+        pending: *std.ArrayList(MonoType.TypeId),
+    ) std.mem.Allocator.Error!const_store.ConstTypeId {
+        if (self.const_mono_type_map.get(ty)) |existing| return existing;
+        const id = try self.result.const_types.reserve();
+        try self.const_mono_type_map.put(ty, id);
+        try pending.append(self.allocator, ty);
+        return id;
     }
 
     fn constTypeDef(self: *Lowerer, def: MonoType.TypeDef) std.mem.Allocator.Error!const_store.TypeDef {
@@ -16052,6 +16164,7 @@ fn constFnTemplateForFn(self: *Lowerer, fn_id: Type.FnId) std.mem.Allocator.Erro
         .fn_def = constFnDefFromMono(template.fn_def),
         .source_fn_ty = template.source_fn_ty,
         .source_fn_key = template.source_fn_key,
+        .owner_fn_ty = if (template.owner_fn_ty) |owner_fn_ty| try self.constTypeOfMono(owner_fn_ty) else null,
         .evidence = evidence,
         .evidence_frames = evidence_frames,
         .evidence_frame_head = template.const_evidence_frame_head,

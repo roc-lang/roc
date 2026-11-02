@@ -172,6 +172,7 @@ const renderProblem = cli_context.renderProblem;
 comptime {
     if (builtin.is_test) {
         std.testing.refAllDecls(cli_args);
+        std.testing.refAllDecls(@import("loc.zig"));
         std.testing.refAllDecls(default_app);
         std.testing.refAllDecls(progress);
         std.testing.refAllDecls(targets_validator);
@@ -536,6 +537,7 @@ const CliMainError =
         Crash,
         DivisionByZero,
         DepsFailed,
+        LocFailed,
         DocsFailed,
         EmptyArchive,
         EntrypointNotFound,
@@ -1242,7 +1244,7 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
 
 fn parsedArgsUseCache(args: cli_args.CliArgs) bool {
     return switch (args) {
-        .run, .build, .check, .test_cmd, .docs, .deps, .bump, .glue, .install, .experimental_lsp => true,
+        .run, .build, .check, .test_cmd, .docs, .deps, .loc, .bump, .glue, .install, .experimental_lsp => true,
         .fmt, .bundle, .unbundle, .repl, .version, .help, .licenses, .problem => false,
     };
 }
@@ -1289,7 +1291,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .unbundle => .unbundle,
         .bump => .bump,
         .install => .install,
-        .docs, .deps, .glue, .experimental_lsp, .repl, .version, .help, .licenses, .problem => .unknown,
+        .docs, .deps, .loc, .glue, .experimental_lsp, .repl, .version, .help, .licenses, .problem => .unknown,
     };
 
     // Create CLI context at the top level - this is passed to all command handlers
@@ -1354,6 +1356,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{@import("compiler_version").compiler_version}),
         .docs => |docs_args| rocDocs(&ctx, docs_args),
         .deps => |deps_args| rocDeps(&ctx, deps_args),
+        .loc => |loc_args| rocLoc(&ctx, loc_args),
         .bump => |bump_args| rocBump(&ctx, bump_args),
         .install => |install_args| rocInstall(&ctx, install_args),
         .experimental_lsp => |lsp_args| try lsp.runWithStdIo(gpa, std_io, ctx.coreCtx(), .{
@@ -10835,21 +10838,24 @@ fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
     };
 }
 
-fn devBackendPhaseName(target_arch: std.Target.Cpu.Arch) []const u8 {
-    if (target_arch == .x86_64) return "x64 Backend";
-    if (target_arch == .aarch64) return "arm64 Backend";
-    if (target_arch == .wasm32) return "wasm32 Bytecode Generation";
+fn devBackendPhaseName(target: RocTarget) []const u8 {
+    if (backend.dev.isa.isaOfOrNull(target)) |isa| return switch (isa) {
+        .x86_64 => "x64 Backend",
+        .aarch64 => "arm64 Backend",
+    };
+    if (target.toCpuArch() == .wasm32) return "wasm32 Bytecode Generation";
     base.invariant(
-        "dev code-generation timing invariant violated: unsupported architecture {s}",
-        .{@tagName(target_arch)},
+        "dev code-generation timing invariant violated: unsupported target {s}",
+        .{@tagName(target)},
     );
 }
 
-fn devInstructionGenerationPhaseName(target_arch: std.Target.Cpu.Arch) []const u8 {
-    if (target_arch == .x86_64) return "x64 Instruction Generation";
-    if (target_arch == .aarch64) return "arm64 Instruction Generation";
-    if (target_arch == .wasm32) return "wasm32 Bytecode Generation";
-    return devBackendPhaseName(target_arch);
+fn devInstructionGenerationPhaseName(target: RocTarget) []const u8 {
+    if (backend.dev.isa.isaOfOrNull(target)) |isa| return switch (isa) {
+        .x86_64 => "x64 Instruction Generation",
+        .aarch64 => "arm64 Instruction Generation",
+    };
+    return devBackendPhaseName(target);
 }
 
 fn devBackendBreakdown(timing: backend.ObjectFileCompiler.TimingSnapshot) [8]progress.SubTiming {
@@ -10895,11 +10901,12 @@ test "native artifact counters preserve every measured field" {
 }
 
 test "dev backend timing labels name the backend and emitted instruction format" {
-    try std.testing.expectEqualStrings("x64 Backend", devBackendPhaseName(.x86_64));
-    try std.testing.expectEqualStrings("arm64 Backend", devBackendPhaseName(.aarch64));
+    try std.testing.expectEqualStrings("x64 Backend", devBackendPhaseName(.x64musl));
+    try std.testing.expectEqualStrings("arm64 Backend", devBackendPhaseName(.arm64mac));
     try std.testing.expectEqualStrings("wasm32 Bytecode Generation", devBackendPhaseName(.wasm32));
-    try std.testing.expectEqualStrings("x64 Instruction Generation", devInstructionGenerationPhaseName(.x86_64));
-    try std.testing.expectEqualStrings("arm64 Instruction Generation", devInstructionGenerationPhaseName(.aarch64));
+    try std.testing.expectEqualStrings("x64 Instruction Generation", devInstructionGenerationPhaseName(.x64v1win));
+    try std.testing.expectEqualStrings("arm64 Instruction Generation", devInstructionGenerationPhaseName(.arm64linux));
+    try std.testing.expectEqualStrings("wasm32 Bytecode Generation", devInstructionGenerationPhaseName(.wasm32));
 }
 
 fn noTargetLibcallsForLlvmBuild(target: RocTarget) bool {
@@ -12204,14 +12211,14 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         return error.UnsupportedCrossCompilation;
     }
 
-    if (target_arch != .x86_64 and target_arch != .aarch64 and target_arch != .wasm32) {
+    if (target_arch != .wasm32 and backend.dev.isa.isaOfOrNull(target) == null) {
         try ctx.io.stderr().print(
             "Error: The native object backend does not support the '{s}' architecture.\n",
             .{@tagName(target_arch)},
         );
         return error.UnsupportedTarget;
     }
-    const code_generation_phase_name = devBackendPhaseName(target_arch);
+    const code_generation_phase_name = devBackendPhaseName(target);
 
     const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
     try removeStaleBuildOutput(ctx, final_output_path);
@@ -15229,8 +15236,7 @@ fn devCapturePrefix(roots: CheckedLirRoots, opt: cli_args.OptLevel, target: RocT
         },
         .linked_output, .test_plan => {},
     }
-    const arch = target.toCpuArch();
-    return if (arch == .x86_64 or arch == .aarch64) @import("builtins").erased_callable.hot_reload_capture_prefix_size else 0;
+    return if (backend.dev.isa.isaOfOrNull(target) != null) @import("builtins").erased_callable.hot_reload_capture_prefix_size else 0;
 }
 
 test "native test generic procedures use the ordinary native dev representation and ownership policy" {
@@ -17468,7 +17474,7 @@ test "watch child argv forwards every dependency replacement" {
             .check => |args| args.resolve_limits,
             .build => |args| args.resolve_limits,
             .test_cmd => |args| args.resolve_limits,
-            .run, .docs, .deps, .help, .problem, .fmt, .bundle, .unbundle, .repl, .glue, .version, .bump, .install, .experimental_lsp, .licenses => return error.TestUnexpectedResult,
+            .run, .docs, .deps, .help, .problem, .fmt, .bundle, .unbundle, .repl, .glue, .version, .bump, .install, .loc, .experimental_lsp, .licenses => return error.TestUnexpectedResult,
         };
         try std.testing.expectEqual(@as(usize, 2), limits.replace_deps.len);
         try std.testing.expectEqualStrings(url, limits.replace_deps.slice()[0].old);
@@ -19434,7 +19440,7 @@ fn compileTimeEvaluationBreakdown(timing: eval.CompileTimeFinalization.TimingSna
         .{ .name = "Shared LIR Passes", .ns = timing.lowering.lir_passes_ns },
         .{ .name = "Shared ARC", .ns = timing.lowering.arc_ns },
         .{ .name = "Static Data", .ns = timing.static_data_ns },
-        .{ .name = devInstructionGenerationPhaseName(backend.dev.LirCodeGenMod.host_lir_codegen_target.toCpuArch()), .ns = timing.code_generation_ns },
+        .{ .name = devInstructionGenerationPhaseName(backend.dev.LirCodeGenMod.host_lir_codegen_target), .ns = timing.code_generation_ns },
         .{ .name = "Execution", .ns = timing.execution_ns },
         .{ .name = "Store Results", .ns = timing.store_results_ns },
         .{ .name = "Shared Boxy Lowering", .ns = timing.lowering.boxy_lowering_ns },
@@ -21847,6 +21853,56 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
             return ctx.fail(.{ .bump_failed = .{ .title = "Cannot Extract Public API", .message = message } });
         },
     };
+}
+
+/// Count the source import graph using the resolver and parser inventories;
+/// no BuildEnv or builtin artifacts are needed for this command.
+fn rocLoc(ctx: *CliCtx, args: cli_args.LocArgs) CliMainError!void {
+    const start = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
+    const source = try resolveSourceArg(ctx, args.path, false);
+    const fs = ctx.coreCtx();
+    const root = fs.canonicalize(source.path, ctx.arena) catch |err| {
+        try ctx.io.stderr().print("Could not count {f}: {s}\n", .{ base.bidi.Display{ .bytes = source.path }, @errorName(err) });
+        return error.LocFailed;
+    };
+    const package_cache = compile.build.packagesCacheDir(fs, ctx.arena) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.NoCacheDir => null,
+    };
+    var fetcher: compile.package_resolution.CtxFetcher = .{ .fs = fs, .gpa = ctx.gpa, .cache_packages_dir = package_cache };
+    var resolver = compile.package_resolution.Resolver.init(ctx.gpa, fetcher.fetcher(), resolutionConfigFromLimits(args.resolve_limits));
+    defer resolver.deinit();
+    if (source.url) |url| resolver.setRootUrl(url);
+    var resolved = resolver.resolve(root) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.ResolutionFailed => {
+            const config = ctx.reportConfig(.stderr);
+            for (resolver.diagnostics.items) |*diagnostic| {
+                if (diagnostic.located) |*report| {
+                    try reporting.renderReportToTerminal(report, ctx.io.stderr(), reporting.ColorUtils.getPaletteForConfig(config), config);
+                } else {
+                    try ctx.io.stderr().print("{s}: {s}\n", .{ diagnostic.title, diagnostic.message });
+                }
+            }
+            return error.LocFailed;
+        },
+    };
+    defer resolved.deinit();
+    var manager = CacheManager.init(ctx.gpa, .{ .enabled = !args.no_cache, .roc_ctx = fs }, fs);
+    var graph = compile.source_graph.Graph.init(ctx.gpa, fs, &manager, &resolved);
+    defer graph.deinit();
+    graph.run() catch |err| {
+        try ctx.io.stderr().print("Could not count {f}", .{base.bidi.Display{ .bytes = graph.failure.path }});
+        if (graph.failure.import_name) |name| try ctx.io.stderr().print(" (import {f})", .{base.bidi.Display{ .bytes = name }});
+        try ctx.io.stderr().print(": {s}\n", .{@errorName(err)});
+        return error.LocFailed;
+    };
+    const stdout = ctx.io.stdout();
+    try @import("loc.zig").render(stdout, graph.rootKind(), graph.totals());
+    const elapsed: u64 = @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - start);
+    try stdout.writeAll("Counted in ");
+    try formatElapsedTimeMs(stdout, elapsed);
+    try stdout.writeByte('\n');
 }
 
 /// `roc deps`: resolve the root's dependency graph and print it as a tree

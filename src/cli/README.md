@@ -19,3 +19,18 @@ The CLI coordinates between the compiler frontend (parsing, type checking) and b
 The terminal REPL keeps consecutive multiline string lines in one statement.
 A blank line, a following non-string statement, or EOF submits the pending string.
 String payloads retain their trailing spaces.
+
+## Counting source lines
+
+`roc loc [main.roc]` counts the root source and its import graph, defaulting to
+`./main.roc`. It prints total physical lines and lines excluding whitespace-only
+and comment-only lines (including indented `#` comments), grouped by the root
+application, package, or platform and by local and HTTPS dependencies. Dependency
+rows and the combined total appear only when needed. The final line reports
+elapsed time in milliseconds.
+
+The command uses dependency resolution and cached parser import inventories,
+without checking types or executing code. Shared files count once. Used package
+headers are included, while unimported modules, unused dependencies, non-Roc file
+imports, and compiler-owned sources are excluded. `--replace-dep` and the usual
+download limits work as for `roc check`; `--no-cache` disables import caching.

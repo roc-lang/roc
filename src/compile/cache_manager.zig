@@ -70,6 +70,7 @@ pub const CacheManager = struct {
 
     /// Flush the session's retention observations and close its shards.
     pub fn deinit(self: *Self) void {
+        if (comptime threading.is_freestanding) return;
         if (self.session) |session| {
             session.deinit();
             self.allocator.destroy(session);

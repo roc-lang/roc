@@ -11322,6 +11322,7 @@ const Builder = struct {
             try body_ctx.instantiateTemplateDispatchRelations(template, null);
         }
         body_ctx.owner_context_fn_key = source_fn_key;
+        body_ctx.owner_fn_node = root_node;
         body_ctx.current_fn_key = source_fn_key;
         const lowered = try body_ctx.lowerTemplateBodyAtNode(template_ref, template, root_node);
         const final_signature_relation = self.active_template_root.?.signature_relation;
@@ -11829,6 +11830,7 @@ const Builder = struct {
             Common.invariant("hosted template specialization depended on a local procedure context");
         }
         body_ctx.owner_context_fn_key = source_fn_key;
+        body_ctx.owner_fn_node = root_node;
         body_ctx.current_fn_key = source_fn_key;
         // A generated-private request is the exact runtime interface owned by
         // this specialization. The checked root remains the public interface
@@ -11964,6 +11966,7 @@ const Builder = struct {
         try body_ctx.instantiateTemplateDispatchRelations(template, null);
         try body_ctx.applyCheckedTemplateInterfaceRelations(template, root_node);
         body_ctx.owner_context_fn_key = spec.source_fn_key;
+        body_ctx.owner_fn_node = root_node;
         body_ctx.current_fn_key = spec.source_fn_key;
 
         // A generated-private request is the exact runtime interface owned by
@@ -14225,6 +14228,7 @@ const Builder = struct {
                 fn_ctx.current_fn_key = nested.context_fn_key;
                 const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, nested.context_fn_key);
                 defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
+                try fn_ctx.restoreConstFnOwner(store_view, fn_value);
                 const fn_target = try self.lowerDraftNestedFromContext(
                     &fn_ctx,
                     fn_ctx.draft.current_owner,
@@ -14672,6 +14676,7 @@ const Builder = struct {
             .source_fn_ty = source_fn_ty,
             .source_fn_key = source_fn_key,
             .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
+            .owner_fn_ty = if (source_ctx.owner_fn_node) |owner_fn_node| DraftTypeCell.fromGraphNode(owner_fn_node) else null,
             .evidence_digest = evidence_digest,
             .const_evidence = draft_evidence.entries,
             .const_evidence_frames = draft_evidence.frames,
@@ -17277,6 +17282,7 @@ const Builder = struct {
         for (captures, capture_entry_guards) |capture, *node|
             node.* = try fn_ctx.activeNodeFromType(capture.ty);
         if (lambda_expr.data != .lambda) Common.invariant("stored capturing function did not reference a checked lambda");
+        try fn_ctx.restoreConstFnOwner(store_view, fn_value);
         const restored_fn = try self.lowerDraftNestedFromContext(
             &fn_ctx,
             fn_ctx.draft.current_owner,
@@ -17800,10 +17806,21 @@ const DraftFnTemplate = struct {
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     mono_fn_ty: DraftTypeCell,
+    owner_fn_ty: ?DraftTypeCell = null,
     evidence_digest: Ast.EvidenceDigest = .{},
     const_evidence: DraftConstEvidence = .{},
     const_evidence_frames: DraftSpan(check.ConstStore.ConstFnEvidenceFrame) = DraftSpan(check.ConstStore.ConstFnEvidenceFrame).empty(),
     const_evidence_frame_head: ?u32 = null,
+
+    fn sealTypeCellsInPlace(self: *DraftFnTemplate, graph: *InstGraph, sealer: *GraphTypeFinals) Allocator.Error!void {
+        try self.mono_fn_ty.sealInPlace(graph, sealer);
+        if (self.owner_fn_ty) |*owner_fn_ty| try owner_fn_ty.sealInPlace(graph, sealer);
+    }
+
+    fn assertTypeCellsSealed(self: DraftFnTemplate) void {
+        self.mono_fn_ty.assertSealed();
+        if (self.owner_fn_ty) |owner_fn_ty| owner_fn_ty.assertSealed();
+    }
 };
 
 const DraftFn = struct {
@@ -21246,14 +21263,14 @@ const BodyDraftStore = struct {
     /// discarded maps below are graph-qualified lowering memoization.
     fn sealTypeCellsInPlace(self: *BodyDraftStore, graph: *InstGraph, sealer: *GraphTypeFinals) Allocator.Error!void {
         for (self.fns.items) |*fn_| {
-            try fn_.source.mono_fn_ty.sealInPlace(graph, sealer);
+            try fn_.source.sealTypeCellsInPlace(graph, sealer);
         }
         for (self.defs.items) |*def| {
-            if (def.fn_def) |*template| try template.mono_fn_ty.sealInPlace(graph, sealer);
+            if (def.fn_def) |*template| try template.sealTypeCellsInPlace(graph, sealer);
             try def.ret.sealInPlace(graph, sealer);
         }
         for (self.nested_defs.items) |*def| {
-            try def.fn_def.mono_fn_ty.sealInPlace(graph, sealer);
+            try def.fn_def.sealTypeCellsInPlace(graph, sealer);
             try def.ret.sealInPlace(graph, sealer);
         }
         for (self.locals.items) |*local| {
@@ -21324,13 +21341,13 @@ const BodyDraftStore = struct {
     /// type-cell position. Graph-node queues are deliberately excluded because
     /// Builder still consumes them before it can release the graph.
     fn assertTypeCellsSealed(self: *const BodyDraftStore) void {
-        for (self.fns.items) |fn_| fn_.source.mono_fn_ty.assertSealed();
+        for (self.fns.items) |fn_| fn_.source.assertTypeCellsSealed();
         for (self.defs.items) |def| {
-            if (def.fn_def) |template| template.mono_fn_ty.assertSealed();
+            if (def.fn_def) |template| template.assertTypeCellsSealed();
             def.ret.assertSealed();
         }
         for (self.nested_defs.items) |def| {
-            def.fn_def.mono_fn_ty.assertSealed();
+            def.fn_def.assertTypeCellsSealed();
             def.ret.assertSealed();
         }
         for (self.locals.items) |local| local.ty.assertSealed();
@@ -21895,6 +21912,7 @@ const BodyDraftStore = struct {
             .source_fn_ty = template.source_fn_ty,
             .source_fn_key = template.source_fn_key,
             .mono_fn_ty = try template.mono_fn_ty.sealCommitted(committed_types),
+            .owner_fn_ty = if (template.owner_fn_ty) |owner_fn_ty| try owner_fn_ty.sealCommitted(committed_types) else null,
             .evidence_digest = template.evidence_digest,
             .const_evidence = .{
                 .nodes = .{ .start = evidence_base.nodes.start + template.const_evidence.nodes.start, .len = template.const_evidence.nodes.len },
@@ -23350,6 +23368,8 @@ const BodyContext = struct {
     source_file_id: ?u32,
     owner_template: names.ProcTemplate,
     owner_context_fn_key: names.TypeDigest,
+    /// The function node of the template specialization this body belongs to.
+    owner_fn_node: ?NodeId = null,
     current_fn_key: names.TypeDigest,
     comptime_exhaustiveness_context: ExhaustivenessContext.Context,
     generated_encoder_source_fn_ty: ?checked.CheckedTypeId,
@@ -26323,6 +26343,7 @@ const BodyContext = struct {
         child.evidence = self.evidence;
         errdefer child.deinit();
         child.owner_context_fn_key = self.owner_context_fn_key;
+        child.owner_fn_node = self.owner_fn_node;
         child.current_fn_key = current_fn_key;
         child.comptime_exhaustiveness_context = self.comptime_exhaustiveness_context;
         child.generated_encoder_source_fn_ty = self.generated_encoder_source_fn_ty;
@@ -48725,6 +48746,13 @@ const BodyContext = struct {
         return &workspace.const_type_cache;
     }
 
+    /// A restored function belongs to the template specialization that built
+    /// it, so the nested functions lowered from it keep that type.
+    fn restoreConstFnOwner(self: *BodyContext, store_view: ModuleView, fn_value: check.ConstStore.ConstFn) Allocator.Error!void {
+        const owner_fn_ty = fn_value.owner_fn_ty orelse return;
+        self.owner_fn_node = try self.activeNodeFromType(try self.lowerConstCaptureType(store_view, owner_fn_ty));
+    }
+
     fn lowerConstCaptureType(
         self: *BodyContext,
         store_view: ModuleView,
@@ -49112,6 +49140,7 @@ const BodyContext = struct {
             .node => |node| node,
         };
         const restored_fn = try self.restoreConstFnTemplateAt(
+            store_view,
             fn_value,
             try self.builder.constFnDefToMono(fn_value.fn_def),
             fn_value.source_fn_ty,
@@ -49134,6 +49163,7 @@ const BodyContext = struct {
     /// hold, because that choice is the caller's and not this function's.
     fn restoreConstFnTemplateAt(
         self: *BodyContext,
+        store_view: ModuleView,
         fn_value: check.ConstStore.ConstFn,
         fn_def: Ast.FnDef,
         source_fn_ty: checked.CheckedTypeId,
@@ -49162,6 +49192,7 @@ const BodyContext = struct {
                 defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
                 const restored_owner_scope = try fn_ctx.enterRestoredConstFnOwner();
                 defer restored_owner_scope.leave();
+                try fn_ctx.restoreConstFnOwner(store_view, fn_value);
                 return try self.builder.lowerDraftNestedFromContext(
                     &fn_ctx,
                     restored_owner_scope.previous,
@@ -49263,6 +49294,7 @@ const BodyContext = struct {
             .lambda => restored: {
                 const restored_owner_scope = try fn_ctx.enterRestoredConstFnOwner();
                 defer restored_owner_scope.leave();
+                try fn_ctx.restoreConstFnOwner(store_view, fn_value);
                 break :restored try self.builder.lowerDraftNestedFromContext(
                     &fn_ctx,
                     restored_owner_scope.previous,

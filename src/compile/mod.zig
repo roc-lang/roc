@@ -9,6 +9,8 @@ pub const build = @import("compile_build.zig");
 pub const targets_config = @import("targets_config.zig");
 pub const TargetsConfig = targets_config.TargetsConfig;
 pub const single_module = @import("compile_module.zig");
+pub const source_inventory = @import("source_inventory.zig");
+pub const source_graph = @import("source_graph.zig");
 pub const module_discovery = @import("module_discovery.zig");
 pub const threading = @import("threading.zig");
 pub const static_data_exports = @import("static_data");
@@ -84,6 +86,8 @@ test "compile tests" {
     std.testing.refAllDecls(@import("compile_module.zig"));
     std.testing.refAllDecls(@import("compile_package.zig"));
     std.testing.refAllDecls(@import("module_discovery.zig"));
+    std.testing.refAllDecls(source_inventory);
+    std.testing.refAllDecls(source_graph);
     std.testing.refAllDecls(static_data_exports);
     std.testing.refAllDecls(@import("package_source.zig"));
     std.testing.refAllDecls(@import("package_resolution.zig"));

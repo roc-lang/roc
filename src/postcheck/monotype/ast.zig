@@ -324,6 +324,11 @@ pub const FnTemplate = struct {
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     mono_fn_ty: Type.TypeId,
+    /// For a nested function, the function type of the template specialization
+    /// it was lowered in, which names the variables a stored value of it keeps
+    /// no other record of. Not part of the function's identity: a body that
+    /// depended on one would have a different request or evidence.
+    owner_fn_ty: ?Type.TypeId = null,
     evidence_digest: EvidenceDigest = .{},
     /// `specIdentityKey` of the specialization this template was reserved
     /// for: the key an object-cache lookup can compute at reservation time,
