@@ -548,7 +548,7 @@ pub const StaticDescs = struct {
 
     /// The `Field` entries of a record or tuple, in the committed layout's
     /// memory order. `names` is null for a tuple; `storage` holds a slot for
-    /// each of them by semantic index, and past them the slots of a padded
+    /// each of them by storage index, and past them the slots of a padded
     /// record's unnamed fields, which `declared` orders.
     fn fillFields(
         self: *StaticDescs,
