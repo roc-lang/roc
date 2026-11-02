@@ -13739,12 +13739,13 @@ test "check type - self-recursive where-clause dispatch is rejected as recursive
     try test_env.assertOneTypeError("Recursive Dispatch");
 }
 
-test "check type - self-dispatch method over module receiver is rejected as recursive dispatch" {
+test "check type - self-dispatch method over module receiver closes as recursion" {
     // The receiver is a module-level numeral pinned to `N` by annotation, and
     // the unannotated method re-dispatches the same method on it: satisfying
-    // the dispatch re-enters the same binding with an equal state, which the
-    // exact-repeat rule rejects. No self-edge ever enters the derivation
-    // graph on the way there.
+    // the dispatch re-enters the same binding with the same state, which
+    // closes as a recursive call. The method never returns, so its result is
+    // quantified, as `loop = |x| loop(x)`'s is. No self-edge ever enters the
+    // derivation graph on the way there.
     var test_env = try TestEnv.init("Test",
         \\n = 3
         \\N := [Val(I64)].{
@@ -13757,7 +13758,7 @@ test "check type - self-dispatch method over module receiver is rejected as recu
         \\main = N.Val(7).poke()
     );
     defer test_env.deinit();
-    try test_env.assertOneTypeError("Recursive Dispatch");
+    try test_env.assertNoErrors();
 }
 
 // Instantiation depth pin for the explicit-worklist graph copier
