@@ -13,9 +13,12 @@ pub const Digest = [32]u8;
 /// Binds record paths to one invocation. A record never names the checkout,
 /// the package cache or a staging directory: a file of a package whose root
 /// is placed by the compiler is named by that package, and any other file
-/// relative to the current working directory.
+/// relative to the directory of the file under test.
 pub const Paths = struct {
+    /// Resolves a relative path the compiler recorded.
     cwd: []const u8,
+    /// The directory of the file under test, which a project moves with.
+    base: []const u8,
     placed: []const Placed,
 
     /// A package whose name identifies it wherever its root directory lands.
@@ -32,7 +35,7 @@ pub const Paths = struct {
             if (!isInside(package.root_dir, path)) continue;
             if (owner == null or package.root_dir.len > owner.?.root_dir.len) owner = package;
         }
-        const package = owner orelse return std.fs.path.relative(allocator, self.cwd, null, self.cwd, path);
+        const package = owner orelse return std.fs.path.relative(allocator, self.cwd, null, self.base, path);
         const inner = try std.fs.path.relative(allocator, self.cwd, null, package.root_dir, path);
         return std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ package.name, separator, inner });
     }
@@ -41,9 +44,9 @@ pub const Paths = struct {
     /// when it names a placed package this invocation does not have.
     pub fn bind(self: Paths, allocator: Allocator, path: []const u8) Allocator.Error!?[]const u8 {
         const split = std.mem.findScalar(u8, path, separator) orelse
-            return try std.fs.path.resolve(allocator, &.{ self.cwd, path });
+            return try std.fs.path.resolve(allocator, &.{ self.base, path });
         for (self.placed) |package| {
-            if (std.mem.eql(u8, package.name, path[0..split])) return try std.fs.path.resolve(allocator, &.{ package.root_dir, path[split + 1..] });
+            if (std.mem.eql(u8, package.name, path[0..split])) return try std.fs.path.resolve(allocator, &.{ package.root_dir, path[split + 1 ..] });
         }
         return null;
     }
@@ -274,8 +277,8 @@ test "record paths name placed packages, never the checkout or cache root" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    const first = Paths{ .cwd = "/checkout/a", .placed = &.{.{ .name = "https://example.com/pkg.tar.zst", .root_dir = "/cache/one/pkg" }} };
-    const second = Paths{ .cwd = "/elsewhere/deep/b", .placed = &.{.{ .name = "https://example.com/pkg.tar.zst", .root_dir = "/other/cache/pkg" }} };
+    const first = Paths{ .cwd = "/", .base = "/checkout/a", .placed = &.{.{ .name = "https://example.com/pkg.tar.zst", .root_dir = "/cache/one/pkg" }} };
+    const second = Paths{ .cwd = "/other", .base = "/elsewhere/deep/b", .placed = &.{.{ .name = "https://example.com/pkg.tar.zst", .root_dir = "/other/cache/pkg" }} };
     const local = try first.portable(allocator, "/checkout/a/src/Main.roc");
     try std.testing.expectEqualStrings(local, try second.portable(allocator, "/elsewhere/deep/b/src/Main.roc"));
     try std.testing.expectEqualStrings("/elsewhere/deep/b/src/Main.roc", (try second.bind(allocator, local)).?);
@@ -284,7 +287,7 @@ test "record paths name placed packages, never the checkout or cache root" {
     try std.testing.expectEqualStrings("/other/cache/pkg/Lib.roc", (try second.bind(allocator, fetched)).?);
     // A directory that only shares a name prefix is not inside the package.
     try std.testing.expectEqualStrings("../../cache/one/pkg2/Lib.roc", try first.portable(allocator, "/cache/one/pkg2/Lib.roc"));
-    try std.testing.expect((try (Paths{ .cwd = "/checkout/a", .placed = &.{} }).bind(allocator, fetched)) == null);
+    try std.testing.expect((try (Paths{ .cwd = "/", .base = "/checkout/a", .placed = &.{} }).bind(allocator, fetched)) == null);
 }
 
 test "completed test records reject every truncated prefix and corrupted content" {
@@ -320,7 +323,7 @@ test "completed test diagnostics retain structured source and styling across pat
     const original = Diagnostic.fromReport(&report);
     const cloned_bytes = try encode(allocator, original);
     var portable = (try decode(allocator, Diagnostic, cloned_bytes)).?;
-    const paths = Paths{ .cwd = cwd, .placed = &.{} };
+    const paths = Paths{ .cwd = cwd, .base = cwd, .placed = &.{} };
     try std.testing.expect(try mapDiagnosticPaths(allocator, &portable, paths, false));
     const portable_bytes = try encode(allocator, portable);
     try std.testing.expect(std.mem.find(u8, portable_bytes, cwd) == null);

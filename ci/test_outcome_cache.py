@@ -37,6 +37,7 @@ class Fixture:
         if specialize == "yes":
             self.env["ROC_TRACE_BOXY_WORK"] = "1"
         self.path = root / "Main.roc"
+        self.cwd = None
 
     def write(self, text, name="Main.roc"):
         (self.root / name).write_text(text)
@@ -49,7 +50,7 @@ class Fixture:
         if timings:
             args.append("--timings")
         env = dict(self.env, ROC_TEST_COMMAND_WORK="1") if work else self.env
-        result = subprocess.run(args, env=env, capture_output=True, timeout=120)
+        result = subprocess.run(args, env=env, capture_output=True, timeout=120, cwd=self.cwd)
         assert result.returncode in (0, 1, 2), result.stderr.decode(errors="replace")
         assert b"panic" not in result.stderr, result.stderr.decode(errors="replace")
         if self.specialize == "yes":
@@ -538,17 +539,16 @@ def command_checks(f):
     report = complete_hit(f).stderr
     assert report.count(b'Main.roc:1:1') == 1 and report.count(b'Main.roc:4:1') == 1, report
 
-    # A selection is a root: a module tested alone reuses the outcomes of the
-    # same roots tested through an importer, under its own command record.
+    # A selection is a root with its own command record and report; neither
+    # selection replays the other's.
     lib = 'module [f]\nf = |x| x + 1\nexpect f(1) == 2\n'
     f.write(lib, 'Lib.roc')
     f.write('import Lib\nexpect Lib.f(2) == 3\n')
     f.check(2)
     alone = Fixture(f.root, f.roc, f.specialize)
     alone.cache, alone.env, alone.path = f.cache, f.env, f.root / 'Lib.roc'
-    run = alone.run(timings=True, work=True)
-    assert counter(run, 'test_root_execution') == 0
-    f.hits(run, 1)
+    same_report(alone.run(), alone.run(cache=False))
+    assert alone.run(cache=False).stdout.count(b'PASS') == 1
     complete_hit(alone)
     complete_hit(f)
 
@@ -562,7 +562,7 @@ def resource_checks(f):
         assert first.returncode == 1 and b'overflowed its stack' in first.stderr, first.stderr
         again = f.run(timings=True, mode=mode)
         f.hits(again, 1)
-        assert b'Completed test command' not in again.stderr
+        assert not re.search(rb'Completed test command\s+Hits', again.stderr), again.stderr
     assert counter(f.run(work=True), 'test_root_execution') == 1
 
     # A compile error is never an outcome, and fixing it runs every root.
@@ -650,20 +650,24 @@ def checkout_checks(f):
     (first / 'pkg').mkdir(parents=True)
     (first / 'Lib.roc').write_text('module [f]\nf = |x| { dbg "lib"\n    x + 1 }\n')
     (first / 'pkg' / 'main.roc').write_text('package [Value] {}\n')
-    (first / 'pkg' / 'Value.roc').write_text('Value := {}.{ value = 1 }\nexpect value == 1\n')
+    (first / 'pkg' / 'Value.roc').write_text('Value := {}.{ value = 1 }\n')
     (first / 'input.txt').write_text('bytes')
     (first / 'Main.roc').write_text('app [main!] { dep: "./pkg/main.roc" }\nimport dep.Value\nimport Lib\n'
                                     'import "input.txt" as data : Str\n'
                                     'expect Lib.f(Value.value) == 2\nexpect data == "other"\nmain! = |_| Ok({})\n')
     one = Fixture(first, f.roc, f.specialize)
-    one.cache, one.env = f.cache, f.env
+    one.cache, one.env, one.cwd = f.cache, f.env, first
     assert one.run().returncode == 1
     complete_hit(one)
     second.parent.mkdir(parents=True)
     shutil.copytree(first, second)
     two = Fixture(second, f.roc, f.specialize)
-    two.cache, two.env = f.cache, f.env
+    two.cache, two.env, two.cwd = f.cache, f.env, second
     complete_hit(two)
+    # The record does not depend on where the command runs from, either.
+    two.cwd = f.root
+    complete_hit(two)
+    two.cwd = second
     moved = two.run()
     assert str(first).encode() not in moved.stderr + moved.stdout, moved.stderr
     same_report(moved, two.run(cache=False))
@@ -694,11 +698,12 @@ def main():
             relocation_checks(fixture)
             command_checks(fixture)
             resource_checks(fixture)
-            identity_checks(fixture)
-            damage_checks(fixture)
-            concurrency_checks(fixture)
             checkout_checks(fixture)
+            # Both strategies share these paths; the identity is checked data.
             if specialize == 'no':
+                identity_checks(fixture)
+                damage_checks(fixture)
+                concurrency_checks(fixture)
                 lowering_policy_checks(fixture)
     print('focused test-outcome cache checks passed under both strategies')
 

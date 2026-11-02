@@ -13814,14 +13814,15 @@ const CliTestDebugCapture = struct {
 /// The packages this invocation's records name by package: fetched packages,
 /// whose root is in the package cache, and compiler-owned or synthesized ones,
 /// whose root is a staging directory. A local package's identity is its
-/// canonical path, so it stays relative to the current directory instead.
-fn cliCompletedTestPaths(allocator: Allocator, build: *BuildEnv) Allocator.Error!completed_test.Paths {
+/// canonical path, so it stays relative to the file under test instead.
+fn cliCompletedTestPaths(allocator: Allocator, build: *BuildEnv, root_path: []const u8) Allocator.Error!completed_test.Paths {
     var placed = std.ArrayList(completed_test.Paths.Placed).empty;
     var packages = build.packages.valueIterator();
     while (packages.next()) |pkg| {
         if (pkg.url != null or build.isCompilerPlacedPackage(pkg.name)) try placed.append(allocator, .{ .name = pkg.name, .root_dir = pkg.root_dir });
     }
-    return .{ .cwd = build.cwd, .placed = placed.items };
+    const root_abs = try std.fs.path.resolve(allocator, &.{ build.cwd, root_path });
+    return .{ .cwd = build.cwd, .base = std.fs.path.dirname(root_abs) orelse root_abs, .placed = placed.items };
 }
 
 /// Resolution still runs on a complete hit. Hash the resolver's explicit
@@ -17768,7 +17769,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     };
     reporter.end();
 
-    const complete_paths = if (complete_cache_enabled) try cliCompletedTestPaths(command_allocator, &build_env) else null;
+    const complete_paths = if (complete_cache_enabled) try cliCompletedTestPaths(command_allocator, &build_env, args.path) else null;
     const complete_seed = if (complete_paths) |paths| try cliCompletedTestSeed(command_allocator, &build_env, paths, args) else null;
     if (complete_seed) |seed| {
         if (try loadCliCompletedTest(ctx, command_allocator, &build_env, complete_paths.?, seed)) |loaded| {

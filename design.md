@@ -24406,13 +24406,13 @@ every literal through its literal argument roots, so a cached root has no
 discovery work left and an all-hit plan lowers nothing.
 
 No path is an identity. A command names each file by its path relative to the
-working directory, and a file of a fetched, compiler-owned or synthesized
-package by that package and its path inside it, since the package cache and
-staging directories move independently of the project
+directory of the file under test, and a file of a fetched, compiler-owned or
+synthesized package by that package and its path inside it, since the package
+cache and staging directories move independently of the project
 (`completed_test.Paths`). A local package's identity is its canonical path, so
-the command names it relative to the working directory too. A copy of a project
-at another location, with the same files at the same relative paths, therefore
-replays the same record, with its reports bound to the copy.
+the command names it relative to that directory too. A copy of a project at
+another location, run from any working directory, therefore replays the same
+record, with its reports bound to the copy.
 
 The early input plan is producer data: the source and file-import reads of a
 completed compilation, including missing-file results, and the storage source
