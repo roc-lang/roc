@@ -3602,14 +3602,16 @@ pub const Builder = struct {
     /// arguments of its edges that name scopes outside them are read by no
     /// body the thunk lowers.
     fn unreachableWord(self: *Builder) Allocator.Error!LocalId {
-        return try self.nullWord();
+        const local = try self.nullWord();
+        try self.static_words.put(self.allocator, local, .zero);
+        return local;
     }
 
-    /// A word holding null.
+    /// A word holding null. A recursive dictionary's placeholder is one, which
+    /// keeps that dictionary composed: `dict_patch` fills it at runtime.
     fn nullWord(self: *Builder) Allocator.Error!LocalId {
         const local = try self.closedLocal(.opaque_ptr);
         try self.emitEntry(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = try self.program.static_descs.nullWordSlot() } }, .next = undefined } });
-        try self.static_words.put(self.allocator, local, .zero);
         return local;
     }
 
