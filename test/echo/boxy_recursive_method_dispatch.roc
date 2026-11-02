@@ -43,6 +43,10 @@ generic_keep = |x| Expr.Next(Expr.Leaf("a")).keep(x)
 
 late_count = |e, x| e.count(x)
 
+counter = |e| |n| e.count(n)
+
+stored_counter = counter(Expr.Next(Expr.Leaf("a")))
+
 main! = |_args| {
 	a = Expr.Next(Expr.Next(Expr.Leaf("a")))
 	b = Expr.Next(Expr.Next(Expr.Leaf("a")))
@@ -60,5 +64,8 @@ main! = |_args| {
 	even : U64
 	even = d.even(3)
 	echo!("${even.to_str()} ${a.both(c).to_str()}")
+	stored : U64
+	stored = stored_counter(two)
+	echo!(stored.to_str())
 	Ok({})
 }

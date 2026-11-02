@@ -15223,6 +15223,9 @@ recursive descriptor's. At runtime, the target a back edge returns to composes
 first, with a null word in each capture slot whose dictionary reaches it, so
 those slots are no part of its identity; `dict_patch` then fills them. Equal
 compositions fill a slot with the same dictionary.
+A stored function value's types are closed, so a dictionary that captures
+itself is stored as its target and types alone and composed again on restore,
+which keeps the constant graph acyclic.
 
 Compiler-derived structural evidence (equality, hashing, inspection) is a
 callable over the dispatcher's descriptor: the dictionary for `[a.is_eq]` with

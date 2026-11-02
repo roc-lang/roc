@@ -5034,6 +5034,14 @@ pub const Builder = struct {
     /// packing what it captured.
     pub fn restoreStoredFn(self: *Builder, source: lower.ConstSource, recipe: []const u8, captures: []const checked.ConstNodeId) Allocator.Error!void {
         const decoded = try StoredFn.decode(self, recipe);
+        if (decoded.rebuilt) {
+            const target = switch (self.program.worker(decoded.worker).key) {
+                .method_entry => |target| target,
+                .template, .adapter, .default, .lambda, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a rebuilt stored dictionary is not a method entry's"),
+            };
+            const instance = try self.program.targetRequirements(target, decoded.bound);
+            return try self.pushValue(try self.dictionaryOfTree(.{ .target = .{ .target = target, .instance = instance } }));
+        }
         const shape = StoredFn.captureShape(self.program, decoded.worker);
         const arena = self.program.arena.allocator();
         const descs = try arena.alloc(LocalId, decoded.bound.len);
@@ -5820,6 +5828,10 @@ pub const Builder = struct {
     /// fills, so its identity is what remains. Nested requirements are
     /// resolved with an explicit stack.
     pub fn dictionaryFromType(self: *Builder, root: lower.DictRequirement) Allocator.Error!LocalId {
+        return try self.dictionaryOfTree(.{ .requirement = root });
+    }
+
+    fn dictionaryOfTree(self: *Builder, root: lower.DictionaryRoot) Allocator.Error!LocalId {
         const Frame = struct {
             node: u32,
             /// The entry's captures: descriptors, dictionaries, literals.
@@ -5832,7 +5844,7 @@ pub const Builder = struct {
             /// The latest of the composition and its patches.
             composed: ?LocalId,
         };
-        const tree = try self.program.dictionaryTree(.{ .requirement = root });
+        const tree = try self.program.dictionaryTree(root);
         const composed = try self.allocator.alloc(?LocalId, tree.len);
         defer self.allocator.free(composed);
         @memset(composed, null);

@@ -517,6 +517,7 @@ fn container(cache: *Cache, ops: *RocOps, comptime kind: Kind, child: *const Typ
     const built = immortal(TypeDesc, 1, ops);
     built[0] = leaf(kind, .u8, size, pointer_size, .pointer, contains_refcounted);
     built[0].child = child;
+    built[0].flags.recursive = kind == .recursive_box;
     return cache.intern(&key, &built[0], ops);
 }
 
@@ -772,6 +773,7 @@ pub fn tagUnion(cache: *Cache, ops: *RocOps, variants: []const VariantInput) *co
     var measure = shape.TagUnionMeasure.init(discriminant_size);
     const block = allocWithEntries(Variant, variants.len, 0, ops);
     var contains_refcounted = false;
+    var recursive = false;
     for (by_name, 0..) |input_index, discriminant| {
         const input = variants[input_index];
         const payload = switch (input.payload_count) {
@@ -781,6 +783,7 @@ pub fn tagUnion(cache: *Cache, ops: *RocOps, variants: []const VariantInput) *co
         };
         measure.addPayload(.{ .size = payload.size, .alignment = payload.alignment, .sort_key = sortKeyOf(payload) });
         contains_refcounted = contains_refcounted or payload.flags.contains_refcounted;
+        recursive = recursive or payload.flags.recursive;
         block.entries[discriminant] = .{
             .discriminant = @intCast(discriminant),
             .payload_count = input.payload_count,
@@ -796,7 +799,7 @@ pub fn tagUnion(cache: *Cache, ops: *RocOps, variants: []const VariantInput) *co
         .kind = .tag_union,
         .scalar = .u8,
         .sort_key = @backingInt(if (zero_sized) SortKey.align_1 else metrics.sort_key),
-        .flags = .{ .contains_refcounted = contains_refcounted },
+        .flags = .{ .contains_refcounted = contains_refcounted, .recursive = recursive },
         .count = @intCast(variants.len),
         .discriminant_offset = metrics.discriminant_offset,
         .discriminant_size = discriminant_size,
@@ -863,6 +866,7 @@ fn pushSizeComponents(d: *const TypeDesc, out: *DescWalk(*const TypeDesc), ops: 
 /// member is reachable from `composed`'s own components, since the cycle runs
 /// through them.
 fn recursiveMemberOf(composed: *const TypeDesc, ops: *RocOps) ?*const TypeDesc {
+    if (!composed.flags.recursive) return null;
     var pending: DescWalk(*const TypeDesc) = .{};
     defer pending.free(ops);
     var seen: DescWalk(*const TypeDesc) = .{};
@@ -964,7 +968,7 @@ pub fn nominal(
         .kind = .nominal,
         .scalar = .u8,
         .sort_key = backing.sort_key,
-        .flags = .{ .contains_refcounted = backing.flags.contains_refcounted, .inspect_opaque = inspect_opaque },
+        .flags = .{ .contains_refcounted = backing.flags.contains_refcounted, .inspect_opaque = inspect_opaque, .recursive = backing.flags.recursive },
         .count = 0,
         .discriminant_offset = 0,
         .discriminant_size = 0,
@@ -1025,8 +1029,11 @@ fn buildStruct(ops: *RocOps, kind: Kind, order: Order, members: []const Member) 
     }
 
     var refcounted_count: u32 = 0;
+    var recursive = false;
     for (members) |member| {
-        if (!member.is_padding and member.desc.flags.contains_refcounted) refcounted_count += 1;
+        if (member.is_padding) continue;
+        if (member.desc.flags.contains_refcounted) refcounted_count += 1;
+        recursive = recursive or member.desc.flags.recursive;
     }
     const trailing_bytes = if (refcounted_count == 0) 0 else (@as(usize, refcounted_count) + 1) * @sizeOf(u32);
     const block = allocWithEntries(Field, members.len, trailing_bytes, ops);
@@ -1070,7 +1077,7 @@ fn buildStruct(ops: *RocOps, kind: Kind, order: Order, members: []const Member) 
         .kind = kind,
         .scalar = .u8,
         .sort_key = @backingInt(if (zero_sized) SortKey.align_1 else metrics.sort_key),
-        .flags = .{ .contains_refcounted = refcounted_count != 0, .declared_order = order == .declared },
+        .flags = .{ .contains_refcounted = refcounted_count != 0, .declared_order = order == .declared, .recursive = recursive },
         .count = @intCast(members.len),
         .discriminant_offset = 0,
         .discriminant_size = 0,

@@ -91,7 +91,10 @@ pub const Flags = packed struct(u8) {
     /// (`[#Missing, #Present(payload)]`, Missing first): it inspects as its
     /// payload, or as `<missing>`.
     presence_slot: bool = false,
-    _: u4 = 0,
+    /// This type is, or stores inline, a type on a recursive size cycle: only
+    /// such a type can have recursion boxes among its components.
+    recursive: bool = false,
+    _: u3 = 0,
 };
 
 /// A field label, tag name, or nominal type name. Static and immortal.

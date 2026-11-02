@@ -1496,6 +1496,17 @@ pub const Program = struct {
         return walk.nodes.items;
     }
 
+    /// Whether the dictionary of `target` at the closed types `bound` holds a
+    /// dictionary that captures itself.
+    pub fn dictionaryCapturesItself(self: *Program, target: WorkerId, bound: []const TypeId) Allocator.Error!bool {
+        const instance = try self.targetRequirements(target, bound);
+        for (try self.dictionaryTree(.{ .target = .{ .target = target, .instance = instance } })) |node| switch (node.kind) {
+            .target => |entry| if (entry.recursive) return true,
+            .resolved, .back_edge => {},
+        };
+        return false;
+    }
+
     const DictionaryWalk = struct {
         program: *Program,
         nodes: std.ArrayList(DictionaryNode) = .empty,

@@ -428,7 +428,7 @@ pub const StaticDescs = struct {
             writeU32(bytes, desc_layout.of(.alignment), self.ptrSize());
             bytes[desc_layout.of(.kind)] = @backingInt(desc_format.Kind.recursive_box);
             bytes[desc_layout.of(.sort_key)] = @backingInt(layout.SortKey.pointer);
-            bytes[desc_layout.of(.flags)] = @bitCast(desc_format.Flags{ .contains_refcounted = true });
+            bytes[desc_layout.of(.flags)] = @bitCast(desc_format.Flags{ .contains_refcounted = true, .recursive = true });
             try pointers.append(self.allocator, .{ .offset = desc_layout.of(.child), .target = payload });
             return try self.setRelocations(item.node, pointers.items);
         }
@@ -443,7 +443,10 @@ pub const StaticDescs = struct {
         var count: u32 = 0;
         var discriminant_offset: u32 = 0;
         var discriminant_size: u32 = 0;
-        var flags: desc_format.Flags = .{ .contains_refcounted = layouts.layoutContainsRefcounted(committed_layout) };
+        var flags: desc_format.Flags = .{
+            .contains_refcounted = layouts.layoutContainsRefcounted(committed_layout),
+            .recursive = try self.layouts.onSizeCycle(ty),
+        };
 
         switch (self.store.get(ty)) {
             .primitive => |primitive| switch (primitive) {

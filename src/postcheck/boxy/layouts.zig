@@ -139,6 +139,28 @@ pub const Layouts = struct {
         return if (component == no_component) null else component;
     }
 
+    /// Whether the closed type `ty` stores itself inline, through its
+    /// components: the cycles a committed layout breaks with recursion boxes.
+    pub fn onSizeCycle(self: *Layouts, ty: TypeId) Allocator.Error!bool {
+        var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
+        defer seen.deinit(self.allocator);
+        var pending: std.ArrayList(TypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        var edges: std.ArrayList(InlineEdge) = .empty;
+        defer edges.deinit(self.allocator);
+        try pending.append(self.allocator, ty);
+        while (pending.pop()) |current| {
+            edges.clearRetainingCapacity();
+            try self.inlineEdges(current, &edges);
+            for (edges.items) |edge| {
+                if (!edge.placesInline()) continue;
+                if (edge.child == ty) return true;
+                if (!(try seen.getOrPut(self.allocator, edge.child)).found_existing) try pending.append(self.allocator, edge.child);
+            }
+        }
+        return false;
+    }
+
     /// Whether `parent` stores `edge.child` in a recursion box: a struct
     /// slot or a non-struct tag payload leading back into `parent`'s size
     /// component, which the shared layout store boxes.
