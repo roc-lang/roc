@@ -302,8 +302,7 @@ fn addElementVariant(comptime tag: std.meta.Tag(DocumentElement), doc: *Document
             &[_]u32{0},
         ),
         .source_code_with_underlines => {
-            // `addSourceCodeWithUnderlines` takes ownership of the line text.
-            const line_text = try doc.allocator.dupe(u8, "alpha payload\nbeta payload");
+            const line_text = "alpha payload\nbeta payload";
             try doc.addSourceCodeWithUnderlines(.{
                 .line_text = line_text,
                 .start_line = 1,
@@ -429,7 +428,7 @@ test "caret rows are byte-identical across all four targets" {
     try doc.addLineBreak();
 
     // Two spans on one line: gap padding between spans.
-    const line_text = try gpa.dupe(u8, "one two three");
+    const line_text = "one two three";
     try doc.addSourceCodeWithUnderlines(.{
         .line_text = line_text,
         .start_line = 1,
@@ -519,7 +518,7 @@ test "source rows preserve exact text and line count across all four targets" {
         defer doc.deinit();
         if (multiple_underlines) {
             try doc.addSourceCodeWithUnderlines(.{
-                .line_text = try gpa.dupe(u8, source),
+                .line_text = source,
                 .start_line = 3,
                 .start_column = 1,
                 .end_line = 5,
@@ -555,7 +554,7 @@ test "source lines appear on every render target" {
 
     var doc = Document.init(gpa);
     defer doc.deinit();
-    const line_text = try gpa.dupe(u8, "first source line\nsecond source line");
+    const line_text = "first source line\nsecond source line";
     try doc.addSourceCodeWithUnderlines(.{
         .line_text = line_text,
         .start_line = 3,

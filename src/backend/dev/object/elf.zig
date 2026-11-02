@@ -9,6 +9,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const invariant = @import("base").invariant;
+const FunctionRelocationKind = @import("../Relocation.zig").FunctionRelocationKind;
 const DataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
 const object = @import("mod.zig");
 const DebugReloc = object.DebugReloc;
@@ -285,10 +287,18 @@ pub const ElfWriter = struct {
     }
 
     /// Add a relocation to the text section
-    pub fn addTextRelocation(self: *Self, offset: u64, symbol_idx: u32, addend: i64) Allocator.Error!void {
-        const reloc_type: u32 = switch (self.arch) {
-            .x86_64 => ELF.R_X86_64_PLT32,
-            .aarch64 => ELF.R_AARCH64_CALL26,
+    pub fn addTextRelocation(self: *Self, offset: u64, symbol_idx: u32, kind: FunctionRelocationKind) Allocator.Error!void {
+        std.debug.assert(self.arch == switch (kind) {
+            .x86_call_rel32 => Architecture.x86_64,
+            .aarch64_call26 => Architecture.aarch64,
+        });
+        const reloc_type: u32 = switch (kind) {
+            .x86_call_rel32 => ELF.R_X86_64_PLT32,
+            .aarch64_call26 => ELF.R_AARCH64_CALL26,
+        };
+        const addend: i64 = switch (kind) {
+            .x86_call_rel32 => -4,
+            .aarch64_call26 => 0,
         };
 
         try self.text_relocs.append(self.allocator, .{
@@ -312,20 +322,20 @@ pub const ElfWriter = struct {
             .rel32 => .{
                 .kind = switch (self.arch) {
                     .x86_64 => ELF.R_X86_64_PC32,
-                    .aarch64 => unreachable,
+                    .aarch64 => invariant("ELF invariant violated: rel32 data relocation in aarch64 code, which emits page21 and pageoff12", .{}),
                 },
                 .addend = @as(i64, -4),
             },
             .page21 => .{
                 .kind = switch (self.arch) {
-                    .x86_64 => unreachable,
+                    .x86_64 => invariant("ELF invariant violated: page21 data relocation in x86_64 code, which emits rel32", .{}),
                     .aarch64 => ELF.R_AARCH64_ADR_PREL_PG_HI21,
                 },
                 .addend = @as(i64, 0),
             },
             .pageoff12 => .{
                 .kind = switch (self.arch) {
-                    .x86_64 => unreachable,
+                    .x86_64 => invariant("ELF invariant violated: pageoff12 data relocation in x86_64 code, which emits rel32", .{}),
                     .aarch64 => ELF.R_AARCH64_ADD_ABS_LO12_NC,
                 },
                 .addend = @as(i64, 0),
@@ -709,7 +719,7 @@ test "elf with external symbol" {
     const ext_idx = try writer.addExternalSymbol("external_func");
 
     // Add relocation for the call
-    try writer.addTextRelocation(1, ext_idx, -4);
+    try writer.addTextRelocation(1, ext_idx, .x86_call_rel32);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);

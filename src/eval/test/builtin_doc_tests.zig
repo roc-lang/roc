@@ -927,7 +927,7 @@ test "Builtin.roc doc code blocks check and evaluate" {
                 const message = switch (result) {
                     .failed => |msg| msg,
                     .crashed => |sig| try std.fmt.allocPrint(allocator, "in-memory evaluation crashed with signal {d}", .{sig}),
-                    .success => unreachable,
+                    .success => unreachable, // the enclosing prong matches only failed and crashed results
                 };
                 const repro = reproduceWithBinary(allocator, block, i) catch |err| blk: {
                     std.debug.print(

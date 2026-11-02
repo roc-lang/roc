@@ -307,6 +307,61 @@ test "a build continues the evaluation's program with every runtime body" {
     try std.testing.expectEqual(session.runtime_roots.requests.len, runtime.lir_result.root_procs.items.len);
 }
 
+test "a build never reserves the initializer of an unread compile-time root" {
+    if (is_freestanding) return error.SkipZigTest;
+    var checked = try checkApp(std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\import Unused
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(Unused.count(args)))
+        \\    Ok({})
+        \\}
+    , &.{.{ .path = "Unused.roc", .source =
+        \\Unused := [].{
+        \\    table : List(U64)
+        \\    table = {
+        \\        expect False
+        \\        List.repeat(9, 4)
+        \\    }
+        \\    count : List(Str) -> U64
+        \\    count = |args| List.len(args)
+        \\}
+    }}, .{});
+    defer checked.deinit();
+    try checked.expectErrors(false);
+    const lifted = &checked.coord.program_session.?.runtime_prepared.?.program.lifted;
+    var checked_roots: usize = 0;
+    var packages = checked.coord.packages.iterator();
+    while (packages.next()) |package| {
+        for (package.value_ptr.*.modules.items) |*mod| {
+            if (!std.mem.eql(u8, mod.name, "Unused")) continue;
+            const artifact = mod.checkedArtifact() orelse return error.TestUnexpectedResult;
+            for (artifact.root_requests.compile_time_requests) |request| {
+                const template = request.procedure_template orelse return error.TestUnexpectedResult;
+                checked_roots += 1;
+                try std.testing.expect(artifact.compile_time_roots.root(request.compile_time_root.?).payload == .unevaluated);
+                for (0..lifted.fnCount()) |index| {
+                    const function = lifted.getFn(@fromBackingInt(@as(u32, @intCast(index))));
+                    const source = function.source orelse continue;
+                    switch (source.fn_def) {
+                        .local_template, .imported_template, .checked_generated => |actual| try std.testing.expect(!std.meta.eql(template, actual)),
+                        .nested,
+                        .local_hosted,
+                        .imported_hosted,
+                        .parser_runtime,
+                        .encoder_for_runtime,
+                        => {},
+                    }
+                }
+            }
+        }
+    }
+    // This checks absence of the signature itself, not only absence of its
+    // evaluation. Previously an unused initializer still reserved a function.
+    try std.testing.expectEqual(@as(usize, 1), checked_roots);
+}
+
 /// A compile-time root whose helper converts literals both directly and
 /// through a generic function, and captures a callable constant.
 fn nestedHelperApp(comptime literal: []const u8) []const u8 {

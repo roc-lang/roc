@@ -120,7 +120,8 @@ fn buildDuplicateDefinitionReport(allocator: Allocator) Allocator.Error!Report {
     const source =
         "c = if args.len() < 20 { \"a\" } else { 23 }\n" ++
         "c = 5";
-    const second_line: u32 = @intCast((std.mem.findScalar(u8, source, '\n') orelse unreachable) + 1);
+    const first_newline = std.mem.findScalar(u8, source, '\n') orelse unreachable; // `source` is a two-line literal
+    const second_line: u32 = @intCast(first_newline + 1);
     const line_starts = [_]u32{ 0, second_line };
 
     var report = try Report.init(allocator, "Duplicate Definition", "", .warning);
@@ -228,7 +229,7 @@ test "terminal diagnostic headers follow the configured width up to 120 columns"
         var config = ReportingConfig.initColorTerminal();
         config.max_line_width = case.configured;
         try reporting.renderReportToPlain(&report, &writer.writer, config);
-        const first_newline = std.mem.findScalar(u8, writer.written(), '\n') orelse unreachable;
+        const first_newline = std.mem.findScalar(u8, writer.written(), '\n') orelse return error.TestUnexpectedResult;
         try testing.expectEqual(case.expected, reporting.source_region.displayWidth(writer.written()[0..first_newline]));
         writer.clearRetainingCapacity();
     }

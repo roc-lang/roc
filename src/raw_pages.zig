@@ -180,7 +180,7 @@ fn bsdMap(len: usize) ?[*]u8 {
     const addr = switch (os) {
         .netbsd => netBsdMmap(len, fd),
         .freebsd => bsdSyscall6(bsd_mmap_syscall, 0, len, prot_read_write, map_private_anonymous, fd, 0),
-        .linux, .macos, .windows, .libc => unreachable,
+        .linux, .macos, .windows, .libc => unreachable, // map calls bsdMap only on freebsd and netbsd
     };
     // A raw BSD syscall negates the errno on failure, so a value that reads as
     // negative marks the error.

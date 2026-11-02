@@ -66,7 +66,7 @@ EndOfFile,
 package
 	[]
 	{
-		d: if 0 0 else {
+		d: if (0) 0 else {
 			{}
 		},
 	}

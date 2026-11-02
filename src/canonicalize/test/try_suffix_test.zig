@@ -153,7 +153,7 @@ test "try suffix creates nominal wrapped try match" {
     var test_env = try TestEnv.init("Try.Ok(1)?");
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const match = try expectMatch(&test_env, canonical_expr.get_idx(), true);
     const ok_branch = try branchAt(&test_env, match, 0);
     const err_branch = try branchAt(&test_env, match, 1);
@@ -166,7 +166,7 @@ test "try suffix err branch returns nominal Err inside lambda" {
     var test_env = try TestEnv.init("|_| Try.Err(\"x\")?");
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const body_idx = try lambdaBodyFinalExpr(&test_env, canonical_expr.get_idx());
     const match = try expectMatch(&test_env, body_idx, true);
     const err_branch = try branchAt(&test_env, match, 1);
@@ -180,7 +180,7 @@ test "single question binop shares try suffix ok branch shape" {
     var test_env = try TestEnv.init("|_| Try.Err(\"x\") ? Bad");
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const body_idx = try lambdaBodyFinalExpr(&test_env, canonical_expr.get_idx());
     const match = try expectMatch(&test_env, body_idx, true);
     const ok_branch = try branchAt(&test_env, match, 0);
@@ -192,7 +192,7 @@ test "double question shares try branch patterns without try suffix flag" {
     var test_env = try TestEnv.init("Try.Err(\"x\") ?? 0");
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const match = try expectMatch(&test_env, canonical_expr.get_idx(), false);
     const ok_branch = try branchAt(&test_env, match, 0);
     const err_branch = try branchAt(&test_env, match, 1);

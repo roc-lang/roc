@@ -40,7 +40,19 @@ TYPE MISMATCH - interpolation_str_target_decides_parts.md:3:24:3:29
 			(annotation-start code-block)
 			(indent 1)
 			(text "Str")
-			(annotation-end))))
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Convert it to a")
+			(reflow " ")
+			(annotated code "Str")
+			(reflow " ")
+			(reflow "with")
+			(reflow " ")
+			(annotated code ".to_str()")
+			(reflow "."))))
 ~~~
 # TOKENS
 ~~~zig

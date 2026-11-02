@@ -50,7 +50,7 @@ test "issue 11444: a package method returning the open error union of a file-lev
         \\
         \\main! = |input| {
         \\    page = Browser.open({})
-        \\    match page.navigate(input) {
+        \\    match Browser.navigate(page, input) {
         \\        Ok(json) => json
         \\        Err(_) => "navigate failed"
         \\    }

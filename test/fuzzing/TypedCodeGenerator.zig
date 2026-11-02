@@ -40,20 +40,6 @@ pub const TypeError = union(enum) {
     self_import,
     /// A module that imports a later module, which imports it back.
     import_cycle,
-
-    /// Whether the error stops the modules it reaches from being checked at
-    /// all, so a program that imports them has no checked app root.
-    pub fn preventsChecking(self: TypeError) bool {
-        return switch (self) {
-            .self_import, .import_cycle => true,
-            .wrong_type,
-            .optional_access_of_required_field,
-            .required_access_of_optional_field,
-            .unset_of_required_field,
-            .effectful_top_level_value,
-            => false,
-        };
-    }
 };
 
 /// One construct deliberately written so that checking rejects it.

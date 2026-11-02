@@ -9,6 +9,7 @@ const base = @import("base");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const coff = @import("object/coff.zig");
+const host_isa = @import("isa.zig").host;
 
 // std.os.windows.VirtualAlloc / VirtualFree / VirtualProtect were removed in Zig 0.16.
 // Declare the thin extern bindings we need locally; only referenced on Windows.
@@ -24,19 +25,17 @@ const win32 = struct {
     const PAGE_READWRITE: DWORD = 0x04;
     const PAGE_EXECUTE_READ: DWORD = 0x20;
 
-    const RuntimeFunction = if (builtin.cpu.arch == .x86_64)
-        extern struct {
+    const RuntimeFunction = if (host_isa) |isa| switch (isa) {
+        .x86_64 => extern struct {
             BeginAddress: DWORD,
             EndAddress: DWORD,
             UnwindData: DWORD,
-        }
-    else if (builtin.cpu.arch == .aarch64)
-        extern struct {
+        },
+        .aarch64 => extern struct {
             BeginAddress: DWORD,
             UnwindData: DWORD,
-        }
-    else
-        void;
+        },
+    } else void;
 
     extern "kernel32" fn VirtualAlloc(
         lpAddress: LPVOID,
@@ -72,9 +71,10 @@ const WindowsUnwindState = if (builtin.os.tag == .windows) struct {
     const allocator = std.heap.smp_allocator;
 
     fn coffArch() error{UnsupportedPlatform}!coff.Architecture {
-        if (builtin.cpu.arch == .x86_64) return .x86_64;
-        if (builtin.cpu.arch == .aarch64) return .aarch64;
-        return error.UnsupportedPlatform;
+        return switch (host_isa orelse return error.UnsupportedPlatform) {
+            .x86_64 => .x86_64,
+            .aarch64 => .aarch64,
+        };
     }
 
     fn xdataSize(functions: []const coff.FunctionInfo) (Allocator.Error || error{UnsupportedPlatform})!usize {
@@ -85,31 +85,21 @@ const WindowsUnwindState = if (builtin.os.tag == .windows) struct {
         var total: usize = 0;
         for (functions) |function| {
             if (function.start_offset >= function.end_offset) {
-                if (builtin.mode == .debug) {
-                    base.invariant("JIT unwind invariant violated: invalid function range {d}-{d}", .{ function.start_offset, function.end_offset });
-                }
-                unreachable;
+                base.invariant("JIT unwind invariant violated: invalid function range {d}-{d}", .{ function.start_offset, function.end_offset });
             }
             total += try writer.functionXdataSize(function);
         }
         return total;
     }
 
-    fn lessThanFunction(_: void, lhs: coff.FunctionInfo, rhs: coff.FunctionInfo) bool {
-        return lhs.start_offset < rhs.start_offset;
-    }
-
     fn init(
         memory: []align(std.heap.page_size_min) u8,
         code_size: usize,
         xdata_offset: usize,
-        functions: []const coff.FunctionInfo,
+        /// Disjoint and sorted by start offset, as `coff.splitNestedFunctions` returns them.
+        sorted_functions: []const coff.FunctionInfo,
     ) (Allocator.Error || error{ UnsupportedPlatform, UnwindRegistrationFailed })!WindowsUnwindState {
-        if (functions.len == 0) return .{};
-
-        const sorted_functions = try allocator.dupe(coff.FunctionInfo, functions);
-        defer allocator.free(sorted_functions);
-        std.mem.sort(coff.FunctionInfo, sorted_functions, {}, lessThanFunction);
+        if (sorted_functions.len == 0) return .{};
 
         var writer = try coff.CoffWriter.init(allocator, try coffArch());
         defer writer.deinit();
@@ -123,10 +113,7 @@ const WindowsUnwindState = if (builtin.os.tag == .windows) struct {
         var previous_end: u32 = 0;
         for (sorted_functions, 0..) |function, i| {
             if (function.start_offset >= function.end_offset or function.end_offset > code_size or function.start_offset < previous_end) {
-                if (builtin.mode == .debug) {
-                    base.invariant("JIT unwind invariant violated: invalid or overlapping function range {d}-{d} for code size {d}", .{ function.start_offset, function.end_offset, code_size });
-                }
-                unreachable;
+                base.invariant("JIT unwind invariant violated: invalid or overlapping function range {d}-{d} for code size {d}", .{ function.start_offset, function.end_offset, code_size });
             }
             previous_end = function.end_offset;
 
@@ -141,19 +128,17 @@ const WindowsUnwindState = if (builtin.os.tag == .windows) struct {
 
         for (sorted_functions, xdata_offsets, 0..) |function, xdata_function_offset, i| {
             const xdata_rva: u32 = @intCast(xdata_offset + xdata_function_offset);
-            entries[i] = if (builtin.cpu.arch == .x86_64)
-                .{
+            entries[i] = if (host_isa) |isa| switch (isa) {
+                .x86_64 => .{
                     .BeginAddress = function.start_offset,
                     .EndAddress = function.end_offset,
                     .UnwindData = xdata_rva,
-                }
-            else if (builtin.cpu.arch == .aarch64)
-                .{
+                },
+                .aarch64 => .{
                     .BeginAddress = function.start_offset,
                     .UnwindData = xdata_rva,
-                }
-            else
-                unreachable;
+                },
+            } else unreachable; // coffArch above returned UnsupportedPlatform for every other architecture
         }
 
         if (win32.RtlAddFunctionTable(entries.ptr, @intCast(entries.len), @intFromPtr(memory.ptr)) == .FALSE) {
@@ -281,6 +266,14 @@ pub const ExecutableMemory = struct {
         try protectExecutable(self.memory);
     }
 
+    /// Mark the first `executable_len` bytes of a writable allocation
+    /// returned by `initWritable` executable, and leave the page-aligned rest
+    /// writable data.
+    pub fn finishWriteExecutablePrefix(self: *Self, executable_len: usize) error{ MprotectFailed, VirtualProtectFailed, UnsupportedPlatform }!void {
+        std.debug.assert(std.mem.isAligned(executable_len, std.heap.page_size_min) and executable_len <= self.memory.len);
+        try protectExecutable(self.memory[0..executable_len]);
+    }
+
     /// Free the executable memory
     pub fn deinit(self: *Self) void {
         self.windows_unwind.deinit();
@@ -292,6 +285,11 @@ pub const ExecutableMemory = struct {
     /// Get a pointer to the start of the code
     pub fn codePtr(self: *const Self) [*]const u8 {
         return self.memory.ptr;
+    }
+
+    /// The generated code.
+    pub fn generatedCode(self: *const Self) []const u8 {
+        return self.memory[0..self.code_size];
     }
 
     /// Get a pointer to the entry point (may differ from codePtr if entry_offset is non-zero)
@@ -429,16 +427,17 @@ fn freeMemory(memory: []align(std.heap.page_size_min) u8) void {
         .windows => {
             _ = win32.VirtualFree(memory.ptr, 0, win32.MEM_RELEASE);
         },
-        // allocateMemory returns error.UnsupportedPlatform for other OSes,
-        // so freeMemory should never be called on them
-        .unsupported => unreachable,
+        .unsupported => unreachable, // allocateMemory returns UnsupportedPlatform on these OSes, so no memory exists to free
     }
 }
 
 // Tests
 
 test "execute simple x86_64 code" {
-    if (builtin.cpu.arch != .x86_64) return error.SkipZigTest;
+    switch (host_isa orelse return error.SkipZigTest) {
+        .x86_64 => {},
+        .aarch64 => return error.SkipZigTest,
+    }
 
     // mov eax, 42; ret
     const code = [_]u8{ 0xB8, 0x2A, 0x00, 0x00, 0x00, 0xC3 };
@@ -451,7 +450,10 @@ test "execute simple x86_64 code" {
 }
 
 test "execute x86_64 return 64-bit value" {
-    if (builtin.cpu.arch != .x86_64) return error.SkipZigTest;
+    switch (host_isa orelse return error.SkipZigTest) {
+        .x86_64 => {},
+        .aarch64 => return error.SkipZigTest,
+    }
 
     // movabs rax, 0x123456789ABCDEF0; ret
     const code = [_]u8{ 0x48, 0xB8, 0xF0, 0xDE, 0xBC, 0x9A, 0x78, 0x56, 0x34, 0x12, 0xC3 };
@@ -464,7 +466,10 @@ test "execute x86_64 return 64-bit value" {
 }
 
 test "execute aarch64 code" {
-    if (builtin.cpu.arch != .aarch64) return error.SkipZigTest;
+    switch (host_isa orelse return error.SkipZigTest) {
+        .x86_64 => return error.SkipZigTest,
+        .aarch64 => {},
+    }
 
     // mov w0, #42; ret
     const code = [_]u8{ 0x40, 0x05, 0x80, 0x52, 0xC0, 0x03, 0x5F, 0xD6 };
@@ -477,7 +482,10 @@ test "execute aarch64 code" {
 }
 
 test "execute x86_64 with result ptr" {
-    if (builtin.cpu.arch != .x86_64) return error.SkipZigTest;
+    switch (host_isa orelse return error.SkipZigTest) {
+        .x86_64 => {},
+        .aarch64 => return error.SkipZigTest,
+    }
 
     // Entry convention: fn(result_ptr, args_ptr)
     // Windows x64: RCX = result_ptr
@@ -499,7 +507,10 @@ test "execute x86_64 with result ptr" {
 }
 
 test "execute x86_64 with full prologue/epilogue" {
-    if (builtin.cpu.arch != .x86_64) return error.SkipZigTest;
+    switch (host_isa orelse return error.SkipZigTest) {
+        .x86_64 => {},
+        .aarch64 => return error.SkipZigTest,
+    }
 
     // This mimics the generated code structure:
     // - Prologue: push rbp; mov rbp,rsp; push rbx; push r12; sub rsp,1024

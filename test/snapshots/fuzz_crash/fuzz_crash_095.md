@@ -8,28 +8,24 @@ type=file
 t=0->(0)()
 ~~~
 # EXPECTED
-MISSING METHOD - fuzz_crash_095.md:1:7:1:8
+TYPE MISMATCH - fuzz_crash_095.md:1:7:1:8
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 1 7) (end 1 8))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_numeral")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This number is being used where a non-number type is needed."))
 		(document
 			(source-region (file "fuzz_crash_095.md") (start 1 7) (end 1 8) (annotation error) (line-text "t=0->(0)()"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_numeral")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be non-numeric here:")
+			(line-break)
+			(source-region (file "fuzz_crash_095.md") (start 1 3) (end 1 11) (annotation error) (line-text "t=0->(0)()"))
+			(line-break)
+			(reflow "Other code expects this to have the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)

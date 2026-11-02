@@ -149,10 +149,10 @@ recurse = |n|
 	1 + recurse(n + 1)
 
 pingIt : U64 => U64
-pingIt = |n| if n == 0 1 else pongIt(n - 1)
+pingIt = |n| if (n == 0) 1 else pongIt(n - 1)
 
 pongIt : U64 => U64
-pongIt = |n| if n == 0 2 else pingIt(n - 1)
+pongIt = |n| if (n == 0) 2 else pingIt(n - 1)
 
 caller = |n| recurse(n)
 

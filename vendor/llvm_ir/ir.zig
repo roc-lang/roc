@@ -140,6 +140,7 @@ pub const ModuleBlock = struct {
         ModuleBlock.Variable,
         ModuleBlock.Function,
         ModuleBlock.Alias,
+        ModuleBlock.Comdat,
     };
 
     pub const Code = enum(u5) {
@@ -171,7 +172,7 @@ pub const ModuleBlock = struct {
 
         /// GCNAME: [strchr x N]
         GCNAME = 11,
-        /// COMDAT: [selection_kind, name]
+        /// COMDAT: [strtab_offset, strtab_size, selection_kind]
         COMDAT = 12,
 
         /// VSTOFFSET: [offset]
@@ -230,7 +231,7 @@ pub const ModuleBlock = struct {
             .{ .fixed = @bitSizeOf(Builder.UnnamedAddr) },
             .{ .fixed = @bitSizeOf(Builder.ExternallyInitialized) },
             .{ .fixed = @bitSizeOf(Builder.DllStorageClass) },
-            .{ .literal = 0 }, // comdat
+            .{ .vbr = 16 }, // comdat
             .{ .literal = 0 }, // attributes
             .{ .fixed = @bitSizeOf(Builder.Preemption) },
         };
@@ -247,6 +248,7 @@ pub const ModuleBlock = struct {
         unnamed_addr: Builder.UnnamedAddr,
         externally_initialized: Builder.ExternallyInitialized,
         dllstorageclass: Builder.DllStorageClass,
+        comdat: u32,
         preemption: Builder.Preemption,
     };
 
@@ -267,7 +269,7 @@ pub const ModuleBlock = struct {
             .{ .fixed = @bitSizeOf(Builder.UnnamedAddr) },
             .{ .literal = 0 }, // prologuedata
             .{ .fixed = @bitSizeOf(Builder.DllStorageClass) },
-            .{ .literal = 0 }, // comdat
+            .{ .vbr = 16 }, // comdat
             .{ .literal = 0 }, // prefixdata
             .{ .literal = 0 }, // personalityfn
             .{ .fixed = @bitSizeOf(Builder.Preemption) },
@@ -285,8 +287,21 @@ pub const ModuleBlock = struct {
         visibility: Builder.Visibility,
         unnamed_addr: Builder.UnnamedAddr,
         dllstorageclass: Builder.DllStorageClass,
+        comdat: u32,
         preemption: Builder.Preemption,
         addr_space: Builder.AddrSpace,
+    };
+
+    pub const Comdat = struct {
+        pub const ops = [_]AbbrevOp{
+            .{ .literal = @backingInt(ModuleBlock.Code.COMDAT) }, // Code
+            .{ .vbr = 16 }, // strtab_offset
+            .{ .vbr = 16 }, // strtab_size
+            .{ .fixed = @bitSizeOf(Builder.Comdat.SelectionKind) },
+        };
+        strtab_offset: usize,
+        strtab_size: usize,
+        selection_kind: Builder.Comdat.SelectionKind,
     };
 
     pub const Alias = struct {

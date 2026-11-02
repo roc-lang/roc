@@ -78,12 +78,16 @@ fn checkListWithDebug(source: []const u8, scalar: check.ConstStore.ConstPackedSc
     // Inspect the program used for the initial evaluation, before the checked
     // constant can be restored from ConstStore. Include abandoned rewrite rows:
     // even transient IR must not grow with the number of literal elements.
-    const store = &coord.program_session.?.host.?.lir_result.store;
-    var unpacked_lists: usize = 0;
-    for (store.getCFStmts()) |stmt| {
-        if (stmt == .assign_list) unpacked_lists += 1;
+    var measurement: Measurement = .{ .statements = 0, .locals = 0, .unpacked_lists = 0 };
+    for (coord.program_session.?.completed.?.programs()) |program| {
+        const store = &program.lir_result.store;
+        for (store.getCFStmts()) |stmt| {
+            if (stmt == .assign_list) measurement.unpacked_lists += 1;
+        }
+        measurement.statements += store.cfStmtCount();
+        measurement.locals += store.localCount();
     }
-    return .{ .statements = store.cfStmtCount(), .locals = store.localCount(), .unpacked_lists = unpacked_lists };
+    return measurement;
 }
 
 test "issue 11908: numeric literal list evaluation has constant LIR size" {

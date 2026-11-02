@@ -28,7 +28,6 @@ pub const BuiltinFn = enum {
     hasher_write_u128,
     simd_store_16,
     simd_append_16,
-    simd_eval,
     hasher_write_f32_bits,
     hasher_write_f64_bits,
     hasher_write_bytes,
@@ -125,6 +124,10 @@ pub const BuiltinFn = enum {
     erased_callable_decref,
     erased_callable_decref_single_thread,
     erased_callable_repack,
+    native_callable_call,
+    native_callable_defer,
+    native_callable_drive,
+    native_callable_caller_drives,
     erased_callable_free,
     hot_reload_enter,
     hot_reload_leave,
@@ -268,8 +271,6 @@ pub const BuiltinFn = enum {
 
     /// Which linkable builtins payloads carry a builtin's wrapper.
     pub const Payload = enum {
-        /// Resolved only in-process by the dev JIT; exported by no payload.
-        jit_only,
         /// Exported by the full payload only.
         full,
         /// Exported by both the full payload and the minimal core payload.
@@ -297,6 +298,10 @@ pub const BuiltinFn = enum {
             .erased_callable_free,
             .erased_callable_incref,
             .erased_callable_repack,
+            .native_callable_call,
+            .native_callable_defer,
+            .native_callable_drive,
+            .native_callable_caller_drives,
             .expect_err_str,
             .free_data_ptr,
             .i16_mod_by,
@@ -383,13 +388,6 @@ pub const BuiltinFn = enum {
             .u64_mod_by,
             .u8_mod_by,
         }) |builtin| result[@backingInt(builtin)] = .core;
-
-        for ([_]BuiltinFn{
-            .hot_reload_enter,
-            .hot_reload_erased_callable_drop,
-            .hot_reload_leave,
-            .hot_reload_retain_current,
-        }) |builtin| result[@backingInt(builtin)] = .jit_only;
 
         break :blk result;
     };
@@ -498,7 +496,6 @@ pub fn exportWrappers(comptime set: ExportSet) void {
     @setEvalBranchQuota(100_000);
     inline for (comptime std.enums.values(BuiltinFn)) |f| {
         const included = switch (comptime f.payload()) {
-            .jit_only => false,
             .full => set == .all_linked,
             .core => true,
         };

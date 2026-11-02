@@ -142,13 +142,13 @@ test "issue 11175: local destructure failure publishes" {
         \\    (3, n) = (Pt({ depth: 0, n: 0 }), 1)
         \\    n
         \\}
-    , "Missing Method");
+    , "Type Mismatch");
 }
 
 test "issue 11175: top-level destructure failure publishes" {
     try expectPublishedPatterns(
         \\(3, f) = (Pt({ depth: 0, n: 0 }), 1)
-    , "Missing Method");
+    , "Type Mismatch");
 }
 
 test "issue 11175: loop pattern failure publishes" {
@@ -159,7 +159,7 @@ test "issue 11175: loop pattern failure publishes" {
         \\    }
         \\    0
         \\}
-    , "Missing Method");
+    , "Type Mismatch");
 }
 
 test "issue 11175: builtin literal patterns remain valid" {

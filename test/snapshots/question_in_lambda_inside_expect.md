@@ -168,7 +168,7 @@ expect {
 							(e-match
 								(match
 									(cond
-										(e-call (constraint-fn-var 323)
+										(e-call (constraint-fn-var 326)
 											(e-lookup-local
 												(p-assign (ident "f")))
 											(e-lookup-local
@@ -197,7 +197,7 @@ expect {
 																	(p-assign (ident "#err")))))))))))))
 						(e-tag (name "Ok")
 							(args
-								(e-dispatch-call (method "times") (constraint-fn-var 359)
+								(e-dispatch-call (method "times") (constraint-fn-var 362)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "value"))))
@@ -205,7 +205,7 @@ expect {
 										(e-num (value "2")))))))))
 			(e-method-eq (negated "false")
 				(lhs
-					(e-call (constraint-fn-var 377)
+					(e-call (constraint-fn-var 380)
 						(e-lookup-local
 							(p-assign (ident "double")))
 						(e-num (value "3"))))

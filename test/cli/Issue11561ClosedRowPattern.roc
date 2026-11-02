@@ -1,6 +1,6 @@
-# A use that names MissingRequiredField widens the value's row, but the
-# definition itself still produces that tag through its derived parser, so
-# its annotation must list it.
+# An annotated value's row is the annotation's at every use, so a pattern that
+# names MissingRequiredField is a mismatch, and the definition itself still
+# produces that tag through its derived parser, so its annotation must list it.
 Issue11561ClosedRowPattern :: [].{}
 
 expect {

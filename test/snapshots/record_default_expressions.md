@@ -295,7 +295,39 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+base : U8
+base = 7
+
+pick : U8 -> U8
+pick = |n| if (n > 5) n else 0
+
+Accepted := { n : U8 ?? base + 3, s : Str ?? "hi", picked : U8 ?? pick(base), items : List(U8) ?? [] }
+
+accepted : Accepted
+accepted = Accepted.{}
+
+Pair(x) := { items : List(x) ?? [] }
+
+pair : Pair(U8)
+pair = Pair.{}
+
+eff! : {} => U8
+eff! = |_| 5
+
+BadEffect := { a : U8 ?? eff!({}) }
+
+bad_effect : BadEffect
+bad_effect = BadEffect.{ a: 1 }
+
+BadLiteral(t) := { value : t ?? 0 }
+
+bad_literal : BadLiteral(Str)
+bad_literal = BadLiteral.{}
+
+Cycle := { a : U8 ?? cycle_val.a }
+
+cycle_val : Cycle
+cycle_val = Cycle.{}
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -28,7 +28,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (e-call
-	(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18292") (target-def "18292"))
+	(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18446") (target-def "18446"))
 	(e-runtime-error (tag "ident_not_in_scope")))
 ~~~
 # TYPES

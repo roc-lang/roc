@@ -43,6 +43,9 @@ const imports = symbols.runtime_set ++ .{
     symbols.roc_shim_hosted_fns,
     symbols.roc_shim_hosted_count,
     symbols.roc_shim_hosted_names,
+    symbols.roc_shim_package_fns,
+    symbols.roc_shim_package_names,
+    symbols.roc_shim_package_count,
     // Referenced weakly by the builtins; a platform executable leaves it
     // undefined and the `?`-in-expect region goes unrecorded.
     symbols.roc_expect_err_region,

@@ -670,6 +670,11 @@ pub const ExposedItem = struct {
     alias: ?base.Ident.Idx,
     is_wildcard: bool,
     kind: Kind,
+    /// For an item of an `import ... exposing [...]` list, the node of the
+    /// declaration in the imported module that import resolution selected: a
+    /// value definition, or a type declaration statement. Null for a module
+    /// header's own exposes and for an item the module does not expose.
+    target: ?u32 = null,
 
     pub fn pushToSExprTree(self: *const ExposedItem, _: anytype, cir: anytype, tree: anytype) Allocator.Error!void {
         const begin = try tree.beginNamedNode("exposed");
@@ -777,7 +782,7 @@ pub const IntValue = struct {
     pub fn pushStringPair(self: IntValue, tree: *SExprTree, key: []const u8) std.mem.Allocator.Error!void {
         const begin = try tree.reserveStringBuffer(40);
         errdefer tree.discardReservedStringBuffer(begin);
-        const value_str = self.bufPrint(tree.reservedStringBuffer(begin)[0..40]) catch unreachable;
+        const value_str = self.bufPrint(tree.reservedStringBuffer(begin)[0..40]) catch unreachable; // IntValue.bufPrint only writes into the given buffer, and 40 bytes fit any i128 or u128 in decimal
         try tree.pushReservedStringPair(key, begin, value_str);
     }
 };

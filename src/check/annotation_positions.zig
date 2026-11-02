@@ -39,7 +39,7 @@ const Adapter = struct {
                 const import_name = owner.common.getString(owner.imports.imports.items.items[@backingInt(external.module_idx)]);
                 if (CIR.Import.isCompilerBuiltinImportName(import_name)) {
                     break :blk declarationReference(.{
-                        .owner = self.resolver.builtin_owner orelse unreachable,
+                        .owner = self.resolver.builtin_owner orelse base.invariant("check invariant violated: a compiler-builtin import is resolved only by modules checked with the Builtin module available", .{}),
                         .statement = @fromBackingInt(@intCast(external.target_node_idx)),
                     });
                 }
@@ -83,7 +83,7 @@ const Adapter = struct {
             .s_import,
             .s_type_anno,
             .s_type_var_alias,
-            => unreachable,
+            => unreachable, // canonicalization resolves type references only to alias, nominal, and where-alias declarations
             .s_where_alias_decl, .s_runtime_error => return null,
         };
         if (body == .placeholder) return null;
@@ -118,7 +118,7 @@ const Adapter = struct {
             .s_type_var_alias,
             .s_where_alias_decl,
             .s_runtime_error,
-            => unreachable,
+            => unreachable, // the solver walks only declarations that `declaration` admitted, which are alias or nominal
         };
         for (owner.store.sliceTypeAnnos(owner.store.getTypeHeader(header).args), 0..) |formal, index| {
             if (formal == annotation) return .{ .formal = index };
@@ -145,21 +145,33 @@ const Adapter = struct {
     }
 };
 
-/// Analyze a canonical application; null belongs to invalid-source recovery.
-pub fn analyze(allocator: Allocator, resolver: OwnerResolver, owner: *const ModuleEnv, apply: CIR.TypeAnno.Apply) Allocator.Error!?[]Positions {
+/// Where a canonical application's arguments get their positions.
+pub const Application = union(enum) {
+    /// A builtin reference: every argument stands at the reference's own
+    /// polarity (`builtin_argument`).
+    builtin,
+    /// Invalid-source recovery.
+    invalid,
+    /// Each argument takes its formal's positions in this declaration
+    /// (`analyzeDeclaration`), whose formal count matches the arguments.
+    declaration: struct { owner: *const ModuleEnv, statement: CIR.Statement.Idx },
+};
+
+/// The positions of an argument to a builtin reference.
+pub const builtin_argument: Positions = .{ .used = true, .same = true };
+
+/// Classify a canonical application by where its arguments get their
+/// positions.
+pub fn classify(allocator: Allocator, resolver: OwnerResolver, owner: *const ModuleEnv, apply: CIR.TypeAnno.Apply) Allocator.Error!Application {
     var adapter = Adapter{ .allocator = allocator, .resolver = resolver };
     const args = owner.store.sliceTypeAnnos(apply.args);
     return switch (adapter.reference(owner, apply.base)) {
-        .builtin => blk: {
-            const result = try allocator.alloc(Positions, args.len);
-            @memset(result, .{ .used = true, .same = true });
-            break :blk result;
-        },
-        .invalid => null,
+        .builtin => .builtin,
+        .invalid => .invalid,
         .declaration => |key| blk: {
-            const declaration = (try adapter.declaration(key)) orelse break :blk null;
-            if (declaration.formal_count != args.len) break :blk null;
-            break :blk try analyzeDeclaration(allocator, resolver, key.owner, key.statement);
+            const declaration = (try adapter.declaration(key)) orelse break :blk .invalid;
+            if (declaration.formal_count != args.len) break :blk .invalid;
+            break :blk .{ .declaration = .{ .owner = key.owner, .statement = key.statement } };
         },
     };
 }

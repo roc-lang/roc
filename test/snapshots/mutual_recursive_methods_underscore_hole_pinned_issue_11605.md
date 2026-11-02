@@ -197,7 +197,7 @@ EndOfFile,
 ~~~roc
 Client(effects) := { effects : effects }.{
 	first : Client(_), List(_), a -> Try(Str, [Refused(Str), ..others]) where [a.to_str : a -> Str]
-	first = |client, items, x| if List.len(items) == 0 Ok(x.to_str()) else second(client, items, x)
+	first = |client, items, x| if (List.len(items) == 0) Ok(x.to_str()) else second(client, items, x)
 
 	second : Client(_), List(_), b -> Try(Str, [Refused(Str), ..others]) where [b.to_str : b -> Str]
 	second = |client, items, y| {

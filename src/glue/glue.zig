@@ -97,13 +97,13 @@ pub const GlueError = error{
 pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, roc_ctx: compile.CoreCtx, std_io: std.Io) GlueError!void {
     rocGlueInner(gpa, stderr, stdout, args, roc_ctx, std_io) catch |err| {
         (switch (err) {
-            error.GlueSpecNotFound => stderr.print("Error: Glue spec file not found: '{s}'\n", .{args.glue_spec}),
+            error.GlueSpecNotFound => printPath(gpa, stderr, "Error: Glue spec file not found: '{s}'\n", args.glue_spec, args.report_config),
             error.NotPlatformFile => blk: {
-                stderr.print("Error: '{s}' is not a platform file.\n", .{args.platform_path}) catch {};
+                printPath(gpa, stderr, "Error: '{s}' is not a platform file.\n", args.platform_path, args.report_config) catch {};
                 break :blk stderr.print("The glue command only works with platform files.\n", .{});
             },
-            error.FileNotFound => stderr.print("Error: File not found: '{s}'\n", .{args.platform_path}),
-            error.ParseFailed => stderr.print("Error: Failed to parse '{s}'\n", .{args.platform_path}),
+            error.FileNotFound => printPath(gpa, stderr, "Error: File not found: '{s}'\n", args.platform_path, args.report_config),
+            error.ParseFailed => printPath(gpa, stderr, "Error: Failed to parse '{s}'\n", args.platform_path, args.report_config),
             error.PlatformPathResolution => stderr.print("Error: Could not resolve platform path\n", .{}),
             error.TempDirCreation => stderr.print("Error: Could not create temp directory\n", .{}),
             error.BuildEnvInit => stderr.print("Error: Failed to initialize build environment\n", .{}),
@@ -196,7 +196,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     defer artifacts_by_key.deinit();
     for (modules) |mod| {
         const artifact = mod.semantic.checked_artifact orelse continue;
-        try artifacts_by_key.put(artifact.key, artifact);
+        try artifacts_by_key.put(artifact.key.digest(), artifact);
     }
 
     var type_table = TypeTable.init(gpa, &artifacts_by_key);
@@ -324,7 +324,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     }
 
     std.Io.Dir.cwd().createDirPath(std_io, args.output_dir) catch {
-        stderr.print("Error: Could not create output directory: {s}\n", .{args.output_dir}) catch {};
+        printPath(gpa, stderr, "Error: Could not create output directory: {s}\n", args.output_dir, args.report_config) catch {};
         return error.CompilationFailed;
     };
 
@@ -340,11 +340,11 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
             .sub_path = file_path,
             .data = file.content,
         }) catch {
-            stderr.print("Error: Could not write file '{s}'\n", .{file_path}) catch {};
+            printPath(gpa, stderr, "Error: Could not write file '{s}'\n", file_path, args.report_config) catch {};
             return error.CompilationFailed;
         };
 
-        stdout.print("  Wrote: {s}\n", .{file_path}) catch {};
+        printPath(gpa, stdout, "  Wrote: {s}\n", file_path, args.report_config) catch {};
     }
 }
 
@@ -453,12 +453,8 @@ fn compileGlueSpec(
     };
     errdefer lowered.deinit();
 
-    const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, builtins.shim_symbols.roc_make_glue) orelse {
-        if (builtin.mode == .debug) {
-            base.invariant("glue invariant violated: glue spec produced no published make_glue platform root", .{});
-        }
-        unreachable;
-    };
+    const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, builtins.shim_symbols.roc_make_glue) orelse
+        glueInvariant("glue spec produced no published make_glue platform root", .{});
 
     const arg_layouts = argLayoutsForProc(gpa, &lowered.lir_result.store, glue_proc) catch {
         return error.OutOfMemory;
@@ -480,6 +476,19 @@ fn compileGlueSpec(
     };
 }
 
+/// Print a message naming `path`, spelled relative to the working directory.
+fn printPath(
+    gpa: Allocator,
+    writer: *std.Io.Writer,
+    comptime fmt: []const u8,
+    path: []const u8,
+    config: reporting.ReportingConfig,
+) (Allocator.Error || std.Io.Writer.Error)!void {
+    const display_path = try reporting.displayPath(gpa, path, config.source_path_base);
+    defer gpa.free(display_path);
+    try writer.print(fmt, .{display_path});
+}
+
 /// Compile a glue spec and write its stamped plugin object to `output_path`.
 /// `roc install` uses this so installed glue specs ship a prebuilt optimized
 /// plugin that `roc glue <shorthand>` loads without compiling on the fly.
@@ -495,7 +504,7 @@ pub fn buildGlueSpecPluginFile(
 ) GlueError!void {
     buildGlueSpecPluginFileInner(gpa, stderr, glue_spec, output_path, opt, report_config, std_io) catch |err| {
         (switch (err) {
-            error.GlueSpecNotFound => stderr.print("Error: Glue spec file not found: '{s}'\n", .{glue_spec}),
+            error.GlueSpecNotFound => printPath(gpa, stderr, "Error: Glue spec file not found: '{s}'\n", glue_spec, report_config),
             error.BuildEnvInit => stderr.print("Error: Failed to initialize build environment\n", .{}),
             error.CompilationFailed => stderr.print("Error: Compilation failed\n", .{}),
             error.OutOfMemory => stderr.print("Error: Out of memory\n", .{}),
@@ -537,7 +546,6 @@ fn buildGlueSpecPluginFileInner(
 
 const glue_plugin_stamp_magic = [8]u8{ 'R', 'O', 'C', 'P', 'L', 'G', '1', 0 };
 const glue_plugin_abi_version: u32 = 1;
-var glue_cache_temp_counter = std.atomic.Value(usize).init(0);
 
 const GluePluginKind = enum(u32) {
     glue = 1,
@@ -560,11 +568,12 @@ const GluePluginStampV1 = extern struct {
 /// came from when a stamp mismatch should evict it.
 const BuiltGluePlugin = struct {
     bytes: []u8,
-    cache_path: ?[:0]const u8,
+    cache_root: ?[]u8,
+    cache_identity: ?compile.artifacts.Identity = null,
 
     fn deinit(self: BuiltGluePlugin, allocator: Allocator) void {
         allocator.free(self.bytes);
-        if (self.cache_path) |path| allocator.free(path);
+        if (self.cache_root) |path| allocator.free(path);
     }
 };
 
@@ -590,7 +599,7 @@ fn runGlueSpecPlugin(
 
     var lib = blk: {
         const first = plugin.?;
-        break :blk loadVerifiedGluePlugin(gpa, stderr, first, &stamp, args.no_cache) catch |err| {
+        break :blk loadVerifiedGluePlugin(gpa, stderr, first, &stamp, lowered.lir_result.store.runtime_contract, args.no_cache) catch |err| {
             switch (err) {
                 error.GluePluginUnavailable, error.GluePluginStampMismatch => {},
                 error.BuildEnvInit,
@@ -609,14 +618,14 @@ fn runGlueSpecPlugin(
             }
             // An installed plugin is a managed artifact: never rebuild past a
             // failure to load it; the remedy is reinstalling the shorthand.
-            if (args.no_cache or args.installed_plugin_path != null or first.cache_path == null) return err;
+            if (args.no_cache or args.installed_plugin_path != null or first.cache_root == null) return err;
 
             deleteGluePluginCacheEntry(first, std_io);
             first.deinit(gpa);
             plugin = null;
 
             plugin = try getOrBuildGluePlugin(gpa, lowered, glue_proc, arg_layouts, executable_identity, stamp, args, roc_ctx, std_io);
-            break :blk try loadVerifiedGluePlugin(gpa, stderr, plugin.?, &stamp, true);
+            break :blk try loadVerifiedGluePlugin(gpa, stderr, plugin.?, &stamp, lowered.lir_result.store.runtime_contract, true);
         };
     };
     defer lib.deinit();
@@ -629,7 +638,7 @@ fn runGlueSpecPlugin(
     defer crash_boundary.deinit();
 
     const boxy_tables = eval_mod.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result);
-    const boxy_runtime = if (boxy_tables.needsRuntimeForStore(&lowered.lir_result.store))
+    const boxy_runtime = if (eval_mod.boxy_runtime.storeNeedsRuntime(&lowered.lir_result.store))
         try eval_mod.boxy_abi.createRuntimeFromStores(
             gpa,
             &lowered.lir_result.store,
@@ -680,53 +689,30 @@ fn getOrBuildGluePlugin(
 ) GlueError!BuiltGluePlugin {
     if (args.installed_plugin_path) |installed_path| {
         const bytes = readPluginFile(gpa, installed_path, std_io) orelse return error.GluePluginUnavailable;
-        return .{ .bytes = bytes, .cache_path = null };
+        return .{ .bytes = bytes, .cache_root = null };
     }
 
     if (args.no_cache) {
-        return .{ .bytes = try buildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args.opt, std_io), .cache_path = null };
+        return .{ .bytes = try buildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args.opt, std_io), .cache_root = null };
     }
 
-    const cache_path = gluePluginCachePath(gpa, executable_identity, stamp, args.opt, roc_ctx) catch |err| switch (err) {
+    const logical_path = gluePluginCachePath(gpa, executable_identity, stamp, args.opt, roc_ctx) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        error.NoHomeDirectory,
-        => return error.BuildEnvInit,
+        error.NoHomeDirectory => return error.BuildEnvInit,
     };
-    errdefer gpa.free(cache_path);
-
-    if (readPluginFile(gpa, cache_path, std_io)) |bytes| {
-        return .{ .bytes = bytes, .cache_path = cache_path };
-    }
-
-    const cache_dir = std.fs.path.dirname(std.mem.sliceTo(cache_path, 0)) orelse return error.BuildEnvInit;
-    std.Io.Dir.cwd().createDirPath(std_io, cache_dir) catch return error.BuildEnvInit;
-
+    defer gpa.free(logical_path);
+    const config: compile.CacheConfig = .{ .roc_ctx = roc_ctx };
+    const root = config.getEffectiveCacheDir(gpa) catch return error.BuildEnvInit;
+    errdefer gpa.free(root);
+    var store = try compile.artifacts.Store.init(gpa, std_io, root);
+    defer store.deinit();
+    var id: compile.artifacts.Identity = .{ .namespace = undefined, .family = .glue_plugin, .key = undefined, .variant = compile.artifacts.hashBytes(@tagName(args.opt)) };
+    std.crypto.hash.sha2.Sha256.hash(build_options.compiler_compatibility_id, &id.namespace, .{});
+    std.crypto.hash.sha2.Sha256.hash(logical_path, &id.key, .{});
+    if (store.read(gpa, id, store.now()) catch null) |bytes| return .{ .bytes = bytes, .cache_root = root, .cache_identity = id };
     const bytes = try buildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args.opt, std_io);
-    errdefer gpa.free(bytes);
-
-    const cache_temp_path = gluePluginCacheTempPath(gpa, cache_path) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-    defer {
-        std.Io.Dir.cwd().deleteFile(std_io, std.mem.sliceTo(cache_temp_path, 0)) catch {};
-        gpa.free(cache_temp_path);
-    }
-
-    std.Io.Dir.cwd().writeFile(std_io, .{
-        .sub_path = std.mem.sliceTo(cache_temp_path, 0),
-        .data = bytes,
-    }) catch return error.CompilationFailed;
-
-    // Another process may have published the same entry meanwhile; the
-    // bytes are the same either way.
-    std.Io.Dir.cwd().rename(
-        std.mem.sliceTo(cache_temp_path, 0),
-        std.Io.Dir.cwd(),
-        std.mem.sliceTo(cache_path, 0),
-        std_io,
-    ) catch {};
-
-    return .{ .bytes = bytes, .cache_path = cache_path };
+    store.write(id, bytes, store.now()) catch {};
+    return .{ .bytes = bytes, .cache_root = root, .cache_identity = id };
 }
 
 /// The bytes of a plugin object file, or null when it cannot be read.
@@ -792,9 +778,10 @@ fn loadVerifiedGluePlugin(
     stderr: *std.Io.Writer,
     plugin: BuiltGluePlugin,
     expected: *const GluePluginStampV1,
+    runtime_contract: lir.LIR.RuntimeContract,
     report_errors: bool,
 ) GlueError!eval_mod.object_image.Image {
-    var image = eval_mod.object_image.load(gpa, plugin.bytes) catch |err| switch (err) {
+    var image = eval_mod.object_image.load(gpa, plugin.bytes, runtime_contract) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.UnsupportedObject,
         error.MalformedObject,
@@ -874,24 +861,11 @@ fn gluePluginCachePath(
     });
 }
 
-fn gluePluginCacheTempPath(allocator: Allocator, cache_path: [:0]const u8) Allocator.Error![:0]u8 {
-    const counter = glue_cache_temp_counter.fetchAdd(1, .monotonic);
-    const pid: u64 = if (builtin.os.tag == .windows)
-        std.os.windows.GetCurrentProcessId()
-    else
-        @intCast(std.c.getpid());
-    const path = try std.fmt.allocPrint(allocator, "{s}.{x}.{x}.tmp", .{
-        std.mem.sliceTo(cache_path, 0),
-        pid,
-        counter,
-    });
-    defer allocator.free(path);
-    return try allocator.dupeSentinel(u8, path, 0);
-}
-
 fn deleteGluePluginCacheEntry(plugin: BuiltGluePlugin, std_io: std.Io) void {
-    const path = plugin.cache_path orelse return;
-    std.Io.Dir.cwd().deleteFile(std_io, std.mem.sliceTo(path, 0)) catch {};
+    const root = plugin.cache_root orelse return;
+    var store = compile.artifacts.Store.init(std.heap.page_allocator, std_io, root) catch return;
+    defer store.deinit();
+    store.invalidate(plugin.cache_identity.?) catch {};
 }
 
 fn gluePluginOutputHash(executable_identity: [32]u8, stamp: GluePluginStampV1) [32]u8 {
@@ -974,7 +948,7 @@ fn writeHostEvents(stderr: *std.Io.Writer, runtime_env: *const eval_mod.RuntimeH
             .dbg => |msg| try stderr.print("[dbg] {s}\n", .{msg}),
             .expect_failed => |msg| try stderr.print("Expect failed: {s}\n", .{msg}),
             .crashed => {},
-            .effect => unreachable,
+            .effect => unreachable, // glue never calls RuntimeHostEnv.recordEffect, the only producer of effect events
         }
     }
 }
@@ -1006,10 +980,7 @@ fn reportUnresolvedTypeVariable(stderr: *std.Io.Writer, type_table: *const TypeT
 }
 
 fn glueInvariant(comptime message: []const u8, args: anytype) noreturn {
-    if (builtin.mode == .debug) {
-        base.invariant("glue invariant violated: " ++ message, args);
-    }
-    unreachable;
+    base.invariant("glue invariant violated: " ++ message, args);
 }
 
 fn hostedProcSortKey(
@@ -1459,7 +1430,7 @@ const CollectedTypeInfo = struct {
 /// Maps checked artifact keys to artifacts. Populated once from the compiled
 /// module list before collection so nominal representation refs can resolve
 /// their declaration owners directly.
-const ArtifactKeyMap = std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, *const CheckedArtifact.CheckedModuleArtifact);
+const ArtifactKeyMap = std.AutoHashMap(CheckedArtifact.CheckedModuleDigest, *const CheckedArtifact.CheckedModuleArtifact);
 
 /// Where a checked type sits inside the value being converted.
 ///
@@ -1583,15 +1554,13 @@ const TypeTable = struct {
     };
 
     const ActiveOpen = struct {
-        decl_artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
-        source_statement: u32,
+        decl: NominalDeclIdentity,
         arg_keys: []const TypeTableKey,
         entry_idx: u64,
     };
 
     const OpenCtxEntry = struct {
-        decl_artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
-        source_statement: u32,
+        decl: NominalDeclIdentity,
         arg_keys: []const TypeTableKey,
         ctx: u32,
     };
@@ -1635,13 +1604,11 @@ const TypeTable = struct {
     /// Find or assign a stable open-context id for an open identity.
     fn ctxForOpen(
         self: *TypeTable,
-        decl_artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
-        source_statement: u32,
+        decl: NominalDeclIdentity,
         arg_keys: []const TypeTableKey,
     ) Allocator.Error!u32 {
         for (self.open_ctxs.items) |entry| {
-            if (!checkedArtifactKeysEqual(entry.decl_artifact_key, decl_artifact_key)) continue;
-            if (entry.source_statement != source_statement) continue;
+            if (!entry.decl.eql(decl)) continue;
             if (!typeTableKeysEqual(entry.arg_keys, arg_keys)) continue;
             return entry.ctx;
         }
@@ -1650,8 +1617,7 @@ const TypeTable = struct {
         const owned = try self.gpa.dupe(TypeTableKey, arg_keys);
         errdefer self.gpa.free(owned);
         try self.open_ctxs.append(self.gpa, .{
-            .decl_artifact_key = decl_artifact_key,
-            .source_statement = source_statement,
+            .decl = decl,
             .arg_keys = owned,
             .ctx = ctx,
         });
@@ -1710,7 +1676,8 @@ const TypeTable = struct {
             if (!is_bound) continue;
             const fkey = TypeTableKey{ .artifact_key = lookup.artifact.key, .checked_type = formal };
             if (slot) |prev| {
-                self.template_bindings.put(fkey, prev) catch unreachable;
+                const binding = self.template_bindings.getPtr(fkey) orelse unreachable; // bindNominalFormals put fkey, and nested bindings of it only overwrite it
+                binding.* = prev;
             } else {
                 _ = self.template_bindings.remove(fkey);
             }
@@ -2041,7 +2008,7 @@ const TypeTable = struct {
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         checked_type: CheckedArtifact.CheckedTypeId,
-    ) Allocator.Error!?struct { decl_artifact_key: CheckedArtifact.CheckedModuleArtifactKey, source_statement: u32, arg_keys: []TypeTableKey } {
+    ) Allocator.Error!?struct { decl: NominalDeclIdentity, arg_keys: []TypeTableKey } {
         const payload = checkedTypePayload(artifact, checked_type);
         if (payload != .nominal) return null;
         const nominal = payload.nominal;
@@ -2054,8 +2021,7 @@ const TypeTable = struct {
             arg_key.* = .{ .artifact_key = resolved.artifact.key, .checked_type = resolved.checked_type };
         }
         return .{
-            .decl_artifact_key = lookup.artifact.key,
-            .source_statement = lookup.declaration.source_statement,
+            .decl = lookup.identity(),
             .arg_keys = arg_keys,
         };
     }
@@ -2300,8 +2266,7 @@ const TypeTable = struct {
         defer if (open_arg_keys) |keys| self.gpa.free(keys);
         if (open_identity) |ident| {
             for (self.active_opens.items) |open| {
-                if (!checkedArtifactKeysEqual(open.decl_artifact_key, ident.decl_artifact_key)) continue;
-                if (open.source_statement != ident.source_statement) continue;
+                if (!open.decl.eql(ident.decl)) continue;
                 if (!typeTableKeysEqual(open.arg_keys, ident.arg_keys)) continue;
                 return open.entry_idx;
             }
@@ -2339,8 +2304,7 @@ const TypeTable = struct {
         var pushed_open = false;
         if (open_identity) |ident| {
             try self.active_opens.append(self.gpa, .{
-                .decl_artifact_key = ident.decl_artifact_key,
-                .source_statement = ident.source_statement,
+                .decl = ident.decl,
                 .arg_keys = ident.arg_keys,
                 .entry_idx = idx,
             });
@@ -2500,15 +2464,15 @@ const TypeTable = struct {
         }
 
         for (self.roots.keys(), self.roots.values()) |entry_idx, root| {
-            const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable;
+            const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable; // the loop above lowered every root's artifact
             const layout_idx = lowering.root_layouts.get(root.checked_type) orelse
                 glueInvariant("compiler emitted no layout for requested glue root checked type {d}", .{@backingInt(root.checked_type)});
             try self.boxRootInPlace(&lowering.abi_layouts.layouts, entry_idx, layout_idx);
         }
 
         for (self.roots.keys(), self.roots.values()) |entry_idx, root| {
-            const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable;
-            const layout_idx = lowering.root_layouts.get(root.checked_type) orelse unreachable;
+            const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable; // the first loop lowered every root's artifact
+            const layout_idx = lowering.root_layouts.get(root.checked_type) orelse unreachable; // the previous loop checked every root's layout exists
             try self.attachEntryLayout(&lowering.abi_layouts.layouts, entry_idx, layout_idx);
         }
 
@@ -2717,6 +2681,7 @@ const TypeTable = struct {
             .list => |list_repr| {
                 const elem_layout: layout.Idx = switch (layout_val.tag) {
                     .list => layout_val.getIdx(),
+                    .hole => unreachable, // glue reads only host-boundary layouts, and a hole appears only in a demand-shaped specialization's parameters
                     .list_of_zst => .zst,
                     .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .erased_box => glueInvariant("list glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)}),
                 };
@@ -2750,7 +2715,7 @@ const TypeTable = struct {
                 const inner_layout: layout.Idx = switch (layout_val.tag) {
                     .box => layout_val.getIdx(),
                     .box_of_zst => .zst,
-                    .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .tag_union, .ptr, .erased_box, .erased_callable => glueInvariant("box glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)}),
+                    .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .hole, .tag_union, .ptr, .erased_box, .erased_callable => glueInvariant("box glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)}),
                 };
                 const slot = try self.childSlotFor(store, box_repr.inner_id, inner_layout);
                 self.entries.items[@intCast(entry_idx)].repr.box.inner_id = slot.entry;
@@ -3274,7 +3239,8 @@ const TypeTable = struct {
                     if (!is_bound) continue;
                     const fkey = TypeTableKey{ .artifact_key = lookup.artifact.key, .checked_type = formal };
                     if (slot) |prev| {
-                        self.template_bindings.put(fkey, prev) catch unreachable;
+                        const binding = self.template_bindings.getPtr(fkey) orelse unreachable; // the loop above put fkey, and nested bindings of it only overwrite it
+                        binding.* = prev;
                     } else {
                         _ = self.template_bindings.remove(fkey);
                     }
@@ -3282,7 +3248,7 @@ const TypeTable = struct {
             }
 
             const prev_ctx = self.open_ctx;
-            self.open_ctx = try self.ctxForOpen(lookup.artifact.key, decl.source_statement, resolved_arg_keys);
+            self.open_ctx = try self.ctxForOpen(lookup.identity(), resolved_arg_keys);
             defer self.open_ctx = prev_ctx;
 
             // The backing may itself be a formal (`Wrapper(a) := a`), which the
@@ -3317,6 +3283,26 @@ const TypeTable = struct {
     const NominalDeclarationLookup = struct {
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         declaration: CheckedArtifact.CheckedNominalDeclaration,
+
+        fn identity(self: NominalDeclarationLookup) NominalDeclIdentity {
+            return .{
+                .module = self.artifact.canonical_names.moduleIdentityBytes(self.declaration.nominal.module).*,
+                .source_decl = self.declaration.nominal.source_decl,
+            };
+        }
+    };
+
+    /// Artifact-independent identity of a nominal declaration: its declaring
+    /// module's content identity plus its source declaration. The artifact a
+    /// lookup resolves through is not part of it, since self-contained
+    /// artifacts embed copies of the imported declarations they use.
+    const NominalDeclIdentity = struct {
+        module: [32]u8,
+        source_decl: u32,
+
+        fn eql(a: NominalDeclIdentity, b: NominalDeclIdentity) bool {
+            return a.source_decl == b.source_decl and std.mem.eql(u8, &a.module, &b.module);
+        }
     };
 
     fn nominalDeclarationFor(
@@ -3664,6 +3650,7 @@ const GlueRocValueWriter = struct {
         const list_layout = self.layouts.getLayout(list_layout_idx);
         return switch (list_layout.tag) {
             .list => list_layout.getIdx(),
+            .hole => unreachable, // glue reads only host-boundary layouts, and a hole appears only in a demand-shaped specialization's parameters
             .list_of_zst => .zst,
             .scalar, .box, .box_of_zst, .erased_box, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => glueInvariant("glue expected list layout, got {s}", .{@tagName(list_layout.tag)}),
         };

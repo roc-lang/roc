@@ -94,7 +94,7 @@ fn expectConstantListNotRebuilt(target: lir.CheckedPipeline.TargetConfig) (harne
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
-    try std.testing.expect(session.host != null);
+    try std.testing.expect(session.completed != null);
 
     var runtime = try session.takeRuntime(allocator, session.runtime_roots, target);
     defer runtime.deinit();

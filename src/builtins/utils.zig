@@ -17,6 +17,14 @@ inline fn debugPrint(comptime fmt: []const u8, args: anytype) void {
     }
 }
 
+/// A violated compiler invariant inside a builtin (design.md). Builds with
+/// runtime safety crash through `roc_ops` with the message; optimized builds
+/// treat the path as unreachable, so release builds carry no runtime check.
+pub fn builtinInvariant(roc_ops: *RocOps, comptime message: []const u8) noreturn {
+    if (std.debug.runtime_safety) roc_ops.crash("builtin invariant violated: " ++ message);
+    unreachable; // only builds without runtime safety reach this, where design.md makes a violated invariant undefined
+}
+
 /// Performs a pointer cast with debug-mode alignment verification.
 ///
 /// In debug builds, verifies that the pointer is properly aligned for the target type
@@ -37,14 +45,9 @@ pub inline fn alignedPtrCast(comptime T: type, ptr: anytype, src: std.builtin.So
         const alignment = ptr_info.pointer.attrs.@"align" orelse 0;
         const ptr_int = @intFromPtr(ptr);
         if (alignment > 0 and ptr_int % alignment != 0) {
-            // Alignment errors indicate a bug in the caller.
-            // We use unreachable here because:
-            // 1. We don't have access to roc_ops in this utility function
-            // 2. This is a debug-only check (comptime builtin.mode == .debug)
-            // 3. On non-WASM, this will trigger a trap with a stack trace
-            // 4. The @src() parameter helps identify the call site in logs
+            // No roc_ops is available here, so the @src() call site is printed before trapping.
             debugPrint("alignedPtrCast alignment failure at {s}:{d}\n", .{ src.file, src.line });
-            unreachable;
+            unreachable; // callers pass only pointers aligned for T; this debug-only check names a caller that breaks that
         }
     }
     return @ptrCast(@alignCast(ptr));
@@ -117,10 +120,8 @@ pub const TestEnv = struct {
                 8 => self.allocator.free(@as([]align(8) u8, @alignCast(slice))),
                 16 => self.allocator.free(@as([]align(16) u8, @alignCast(slice))),
                 else => {
-                    // Use unreachable since we can't call roc_ops.crash in deinit
-                    // This should never happen in properly written tests
                     debugPrint("Unsupported alignment in test deallocator cleanup: {d}\n", .{entry.value_ptr.alignment});
-                    unreachable;
+                    @trap();
                 },
             }
         }
@@ -143,13 +144,12 @@ pub const TestEnv = struct {
             8 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"8", length),
             16 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"16", length),
             else => {
-                // Use unreachable since we can't call roc_ops.crash in test allocator
                 debugPrint("Unsupported alignment in test allocator: {d}\n", .{alignment});
-                unreachable;
+                @trap();
             },
         } catch {
             debugPrint("Test allocation failed\n", .{});
-            unreachable;
+            @trap();
         };
 
         // Cast the pointer to *anyopaque
@@ -162,7 +162,7 @@ pub const TestEnv = struct {
         }) catch {
             self.allocator.free(ptr);
             debugPrint("Failed to track test allocation\n", .{});
-            unreachable;
+            @trap();
         };
 
         return result;
@@ -183,7 +183,7 @@ pub const TestEnv = struct {
                 16 => self.allocator.free(@as([]align(16) u8, @alignCast(slice))),
                 else => {
                     debugPrint("Unsupported alignment in test deallocator: {d}\n", .{entry.value.alignment});
-                    unreachable;
+                    @trap();
                 },
             }
         }
@@ -206,11 +206,11 @@ pub const TestEnv = struct {
                 16 => self.allocator.realloc(@as([]align(16) u8, @alignCast(old_slice)), new_length),
                 else => {
                     debugPrint("Unsupported alignment in test reallocator: {d}\n", .{entry.value.alignment});
-                    unreachable;
+                    @trap();
                 },
             } catch {
                 debugPrint("Test reallocation failed\n", .{});
-                unreachable;
+                @trap();
             };
 
             const result: *anyopaque = @ptrCast(new_ptr.ptr);
@@ -222,13 +222,13 @@ pub const TestEnv = struct {
             }) catch {
                 self.allocator.free(new_ptr);
                 debugPrint("Failed to track test reallocation\n", .{});
-                unreachable;
+                @trap();
             };
 
             return result;
         } else {
             debugPrint("Test realloc: pointer not found in allocation map\n", .{});
-            unreachable;
+            @trap();
         }
     }
 
@@ -265,6 +265,31 @@ pub const Dec = fn (?[*]u8) callconv(.c) void;
 /// - It makes the "constant" check very efficient
 /// - It's safe since normal refcounts should never reach 0 while still being referenced
 pub const REFCOUNT_STATIC_DATA: isize = 0;
+
+/// Low bits of a refcounted data pointer that may carry tag bits (for example a
+/// recursive tag union's tag id). They are cleared before locating the refcount.
+pub const DATA_PTR_TAG_MASK: usize = targetDataPtrTagMask(@sizeOf(usize));
+
+/// `DATA_PTR_TAG_MASK` for a target whose words are `target_word_size` bytes:
+/// the bits below the word alignment of the data pointer.
+pub fn targetDataPtrTagMask(target_word_size: u32) u64 {
+    return target_word_size - 1;
+}
+
+/// Byte offset of the refcount word from the (untagged) data pointer it
+/// guards, on a target whose words are `target_word_size` bytes. The refcount
+/// is the word immediately before the data.
+pub fn targetRefcountOffset(target_word_size: u32) i32 {
+    return -@as(i32, @intCast(target_word_size));
+}
+
+/// Scale the native byte offset of a word-sized field of an all-word extern
+/// struct (such as `RocStr` or `RocList`) to a target whose words are
+/// `target_word_size` bytes.
+pub fn targetWordOffset(comptime native_offset: usize, target_word_size: u32) u32 {
+    comptime std.debug.assert(native_offset % @sizeOf(usize) == 0);
+    return @intCast(native_offset / @sizeOf(usize) * target_word_size);
+}
 
 /// Sentinel value written to freed refcount slots to detect use-after-free.
 /// When memory is freed in debug mode, the refcount slot is poisoned with this value.
@@ -340,11 +365,11 @@ pub fn increfRcPtr(ptr_to_refcount: *isize, amount: isize, atomicity: RcAtomicit
                         }
                         roc_ops.crash("Use-after-free: incref on already-freed memory");
                     }
-                    unreachable;
+                    unreachable; // LIR ARC never increfs freed memory; only non-debug builds get past the crash above
                 }
             },
         }
-        if (comptime builtin.os.tag != .freestanding) {
+        if (comptime tracker_hooks_enabled) {
             DebugRefcountTracker.onIncref(@intFromPtr(ptr_to_refcount), amount);
         }
     }
@@ -383,11 +408,10 @@ pub fn decrefDataPtr(
     roc_ops: *RocOps,
 ) void {
     const bytes = bytes_or_null orelse return;
-    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
 
     const data_ptr = @intFromPtr(bytes);
 
-    const unmasked_ptr = data_ptr & ~tag_mask;
+    const unmasked_ptr = data_ptr & ~DATA_PTR_TAG_MASK;
     if (unmasked_ptr == 0) return;
 
     // Verify alignment before @ptrFromInt
@@ -441,8 +465,7 @@ pub fn increfDataPtr(
     const ptr = @intFromPtr(bytes);
 
     // Strip tag bits from the pointer - recursive tag unions may store tag IDs in low bits
-    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
-    const masked_ptr = ptr & ~tag_mask;
+    const masked_ptr = ptr & ~DATA_PTR_TAG_MASK;
     if (masked_ptr == 0) return;
     const rc_addr = masked_ptr - @sizeOf(usize);
 
@@ -491,8 +514,7 @@ pub fn freeDataPtrC(
     const bytes = bytes_or_null orelse return;
 
     const ptr = @intFromPtr(bytes);
-    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
-    const masked_ptr = ptr & ~tag_mask;
+    const masked_ptr = ptr & ~DATA_PTR_TAG_MASK;
     if (masked_ptr == 0) return;
 
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(masked_ptr));
@@ -544,7 +566,7 @@ inline fn free_ptr_to_refcount(
     if (RC_TYPE == .none) return;
 
     // Debug-only: Track the free in the shadow refcount tracker.
-    if (comptime builtin.os.tag != .freestanding) {
+    if (comptime tracker_hooks_enabled) {
         DebugRefcountTracker.onFree(@intFromPtr(refcount_ptr));
     }
 
@@ -600,7 +622,7 @@ inline fn decref_ptr_to_refcount(
         }
     }
 
-    if (comptime builtin.os.tag != .freestanding) {
+    if (comptime tracker_hooks_enabled) {
         DebugRefcountTracker.onDecref(@intFromPtr(refcount_ptr), site);
     }
 
@@ -632,8 +654,7 @@ pub fn isUnique(
     const bytes = bytes_or_null orelse return true;
 
     const ptr = @intFromPtr(bytes);
-    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
-    const masked_ptr = ptr & ~tag_mask;
+    const masked_ptr = ptr & ~DATA_PTR_TAG_MASK;
     if (masked_ptr == 0) return true;
 
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(masked_ptr));
@@ -762,7 +783,7 @@ pub fn allocateWithRefcount(
     const refcount_ptr: [*]usize = alignedPtrCast([*]usize, data_ptr - @sizeOf(usize), @src());
     refcount_ptr[0] = if (RC_TYPE == .none) REFCOUNT_STATIC_DATA else 1;
 
-    if (comptime builtin.os.tag != .freestanding) {
+    if (comptime tracker_hooks_enabled) {
         DebugRefcountTracker.trackAlloc(@intFromPtr(refcount_ptr));
     }
 
@@ -805,7 +826,7 @@ pub fn unsafeReallocate(
     const reallocated = roc_ops.realloc(old_allocation, new_width, allocation_alignment);
 
     const new_source = @as([*]u8, @ptrCast(reallocated)) + extra_bytes;
-    if (comptime builtin.os.tag != .freestanding) {
+    if (comptime tracker_hooks_enabled) {
         const old_rc_addr = @intFromPtr(source_ptr - @sizeOf(usize));
         const new_rc_addr = @intFromPtr(new_source - @sizeOf(usize));
         DebugRefcountTracker.onRealloc(old_rc_addr, new_rc_addr);
@@ -849,6 +870,10 @@ test "Dict runtime seed carries its internal marker" {
     const runtime_marker = @as(u64, 1) << 63;
     try std.testing.expect(dictPseudoSeed() & runtime_marker != 0);
 }
+
+/// Whether refcount operations report to `DebugRefcountTracker`. Release
+/// builds compile the hooks out entirely.
+const tracker_hooks_enabled = builtin.mode == .debug and builtin.os.tag != .freestanding;
 
 /// Debug-only shadow refcount tracker.
 ///

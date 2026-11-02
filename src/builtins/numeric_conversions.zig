@@ -16,13 +16,14 @@ pub fn f64FitsF32(value: f64) bool {
         value <= f32_max_as_f64 and value >= -f32_max_as_f64;
 }
 
+/// Exactly 2^exponent, built from its IEEE bits. A power past the type's
+/// finite range is infinity.
 fn powerOfTwo(comptime Float: type, exponent: u32) Float {
-    var result: Float = 1.0;
-    var i: u32 = 0;
-    while (i < exponent) : (i += 1) {
-        result *= 2.0;
-    }
-    return result;
+    const Bits = @Int(.unsigned, @typeInfo(Float).float.bits);
+    const exponent_bias = std.math.floatExponentMax(Float);
+    if (exponent > exponent_bias) return std.math.inf(Float);
+    const biased: Bits = @intCast(exponent + exponent_bias);
+    return @bitCast(biased << std.math.floatMantissaBits(Float));
 }
 
 /// Return whether a signed 128-bit integer fits in the target integer type.
@@ -267,4 +268,64 @@ test "raw float and Dec conversion bits preserve signed integer representation" 
     try std.testing.expectEqual(@as(?u128, 255), decToIntTryBits(255_999_000_000_000_000_000, 8, false));
     try std.testing.expectEqual(@as(?u128, null), decToIntTryBits(128_000_000_000_000_000_000, 8, true));
     try std.testing.expectEqual(@as(?u128, null), decToIntTryBits(-dec.RocDec.one_point_zero_i128, 8, false));
+}
+
+test "powerOfTwo matches repeated doubling" {
+    inline for (.{ f32, f64 }) |Float| {
+        var expected: Float = 1.0;
+        var exponent: u32 = 0;
+        while (exponent <= 128) : (exponent += 1) {
+            try std.testing.expectEqual(expected, powerOfTwo(Float, exponent));
+            expected *= 2.0;
+        }
+    }
+}
+
+/// `value` in decimal, written into the end of `buf`.
+fn decimalText(buf: []u8, value: u128) []const u8 {
+    var end = buf.len;
+    var rest = value;
+    while (true) {
+        end -= 1;
+        buf[end] = @intCast('0' + rest % 10);
+        rest /= 10;
+        if (rest == 0) break;
+    }
+    return buf[end..];
+}
+
+/// `value` in decimal with a leading `-` when negative, written into the end
+/// of `buf`.
+fn signedDecimalText(buf: []u8, value: i128) []const u8 {
+    if (value >= 0) return decimalText(buf, @intCast(value));
+    const magnitude = @as(u128, @intCast(-(value + 1))) + 1;
+    const digits = decimalText(buf, magnitude);
+    const start = buf.len - digits.len - 1;
+    buf[start] = '-';
+    return buf[start..];
+}
+
+test "integer decimal text matches digit-by-digit formatting across chunk boundaries" {
+    const samples = [_]u128{
+        0,                                                   1,                         9,                                   10,                         12345,
+        std.math.maxInt(u64) - 1,                            std.math.maxInt(u64),      @as(u128, std.math.maxInt(u64)) + 1, 10_000_000_000_000_000_000, 10_000_000_000_000_000_000 * 10,
+        100_000_000_000_000_000_000_000_000_000_000_000_000, std.math.maxInt(u128) - 1, std.math.maxInt(u128),
+    };
+    var buf: [40]u8 = undefined;
+    var expected: [40]u8 = undefined;
+    for (samples) |value| {
+        try std.testing.expectEqualStrings(
+            decimalText(&expected, value),
+            i128h.u128_to_str(&buf, value).str,
+        );
+        const signed: i128 = @bitCast(value);
+        try std.testing.expectEqualStrings(
+            signedDecimalText(&expected, signed),
+            i128h.i128_to_str(&buf, signed).str,
+        );
+    }
+    try std.testing.expectEqualStrings(
+        "-170141183460469231731687303715884105728",
+        i128h.i128_to_str(&buf, std.math.minInt(i128)).str,
+    );
 }

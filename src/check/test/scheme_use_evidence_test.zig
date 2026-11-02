@@ -153,24 +153,31 @@ fn assertBuiltinIterExtremum(
         found_plan = true;
         const plan_root = env.types.resolveVar(expr.e_dispatch_call.constraint_fn_var).var_;
 
-        var body_use_count: usize = 0;
+        var plan_signature: ?types.Var = null;
         for (env.scheme_uses.items.items) |record| {
             if (record.slot_kind != @backingInt(Slot.where_method_use)) continue;
             const pairs = env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
-            var reaches_plan_class = false;
             for (pairs) |pair| {
                 if (env.types.resolveVar(@as(types.Var, @fromBackingInt(@intCast(pair.fresh_var)))).var_ == plan_root) {
-                    reaches_plan_class = true;
+                    try std.testing.expect(plan_signature == null);
+                    plan_signature = env.types.resolveVar(@fromBackingInt(@intCast(record.scheme_root))).var_;
                     break;
                 }
             }
-            if (reaches_plan_class) body_use_count += 1;
         }
-        // Per-use instantiation copies the signature at EVERY body use, so a
-        // method used twice in one body leaves two records reaching the plan's
-        // class. `>= 1` would pass even if per-use copying silently collapsed
-        // to sharing, which is the property this whole branch exists to
-        // establish.
+        const signature = plan_signature orelse return error.TestUnexpectedResult;
+
+        var body_use_count: usize = 0;
+        for (env.scheme_uses.items.items) |record| {
+            if (record.slot_kind != @backingInt(Slot.where_method_use)) continue;
+            if (env.types.resolveVar(@fromBackingInt(@intCast(record.scheme_root))).var_ == signature) body_use_count += 1;
+        }
+        // Per-use instantiation copies the signature at EVERY body use: the
+        // dot call and the recursive call's own requirement each leave a
+        // record of the where-method signature, and only the dot call's copy
+        // reaches the plan's class. `>= 1` would pass even if per-use copying
+        // silently collapsed to sharing, which is the property this whole
+        // branch exists to establish.
         try std.testing.expect(body_use_count >= 2);
 
         const plan = artifact.static_dispatch_plans.plans[entry.val];
@@ -297,12 +304,13 @@ test "source-forward annotated recursive use records the complete body scheme" {
     try std.testing.expect(found_complete_forward_use);
 }
 
-test "annotated recursive self use whose body closes the annotation row records the body scheme" {
+test "annotated recursive self use whose body forwards a closed row records the body scheme" {
     // Issue #11526: `walk`'s predeclared annotation opens its result row (a
-    // quantified identity variable), but the body returns the closed input
-    // parameter, so the completed scheme has no quantified variables. The
+    // quantified identity variable). The body returns the closed input
+    // parameter through a widening copy (design.md "Row Subsumption"), so the
+    // completed scheme quantifies that row as the annotation does. The
     // in-flight self-use must name the body's scheme, not the standalone
-    // annotation, so artifact construction gives it an empty substitution.
+    // annotation, so artifact construction substitutes that scheme's row.
     const source =
         \\walk : [Open, Close] -> [Open, Close]
         \\walk = |token|
@@ -330,7 +338,7 @@ test "annotated recursive self use whose body closes the annotation row records 
     }
     try std.testing.expect(walk_expr_var != null);
 
-    const self_use_offset = std.mem.find(u8, source, "walk(Close)") orelse unreachable;
+    const self_use_offset = std.mem.find(u8, source, "walk(Close)") orelse return error.TestUnexpectedResult;
     var walk_self_use_records: usize = 0;
     for (env.scheme_uses.items.items) |record| {
         if (record.slot_kind != @backingInt(Slot.value_use)) continue;
@@ -343,7 +351,7 @@ test "annotated recursive self use whose body closes the annotation row records 
             env,
             @fromBackingInt(@intCast(record.scheme_root)),
         );
-        try std.testing.expect(!scheme_info.contains_identity_variables);
+        try std.testing.expect(scheme_info.contains_identity_variables);
         walk_self_use_records += 1;
     }
     try std.testing.expectEqual(@as(usize, 1), walk_self_use_records);
@@ -359,7 +367,7 @@ test "recursive reference provenance marks the annotated self use but not an ext
     defer test_env.deinit();
     try test_env.assertDefType("main", "U64");
 
-    const self_use_offset = std.mem.find(u8, source, "grow(n - 1)") orelse unreachable;
+    const self_use_offset = std.mem.find(u8, source, "grow(n - 1)") orelse return error.TestUnexpectedResult;
     const env = test_env.module_env;
     var recursive_records: usize = 0;
     for (env.scheme_uses.items.items) |record| {

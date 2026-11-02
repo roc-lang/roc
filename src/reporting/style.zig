@@ -151,7 +151,7 @@ pub const ColorPalette = struct {
                 return @field(self, palette_field_name);
             }
         }
-        unreachable;
+        unreachable; // PaletteField is the field enum of ColorPalette, so the loop covers every value
     }
 };
 

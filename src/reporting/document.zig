@@ -247,9 +247,15 @@ pub const DocumentElement = union(enum) {
 };
 
 /// A document composed of structured elements that can be rendered.
+///
+/// Every string and slice an element holds is copied into the document's own
+/// arena, so a document owns its content in a few chunks freed together.
 pub const Document = struct {
     elements: std.array_list.Managed(DocumentElement),
     allocator: Allocator,
+    /// The arena holding element content. Kept as bare state (no pointer to
+    /// the document) so the document can be moved.
+    content: base.SingleThreadArena.State = .{},
 
     pub fn init(allocator: Allocator) Document {
         return Document{
@@ -259,48 +265,34 @@ pub const Document = struct {
     }
 
     pub fn deinit(self: *Document) void {
-        // Free any allocated element arrays
-        for (self.elements.items) |element| {
-            switch (element) {
-                .text => |text| self.allocator.free(text),
-                .annotated => |annotated| self.allocator.free(annotated.content),
-                inline .raw, .reflowing_text, .link, .vertical_stack, .horizontal_concat => |raw| self.allocator.free(raw),
-                .source_code_multi_region => |multi| self.allocator.free(multi.regions),
-                .source_code_region => |region| {
-                    self.allocator.free(region.line_text);
-                    if (region.filename) |f| self.allocator.free(f);
-                },
-                .source_code_with_underlines => |underlines| {
-                    self.allocator.free(underlines.underline_regions);
-                    self.allocator.free(underlines.display_region.line_text);
-                    if (underlines.display_region.filename) |f| self.allocator.free(f);
-                },
-                .source_location => |location| {
-                    if (location.filename) |f| self.allocator.free(f);
-                },
-                .line_break,
-                .indent,
-                .space,
-                .horizontal_rule,
-                .annotation_start,
-                .annotation_end,
-                => {},
-            }
-        }
+        self.content.promote(self.allocator).deinit();
         self.elements.deinit();
+    }
+
+    /// Copy `items` into the document's content arena.
+    pub fn ownSlice(self: *Document, comptime T: type, items: []const T) std.mem.Allocator.Error![]T {
+        var arena = self.content.promote(self.allocator);
+        defer self.content = arena.state;
+        return arena.allocator().dupe(T, items);
+    }
+
+    /// Copy `text` into the document's content arena; the copy lives as long
+    /// as the document.
+    pub fn ownString(self: *Document, text: []const u8) std.mem.Allocator.Error![]const u8 {
+        return self.ownSlice(u8, text);
     }
 
     /// Add plain text to the document.
     pub fn addText(self: *Document, text: []const u8) std.mem.Allocator.Error!void {
         if (text.len == 0) return;
-        const owned_text = try self.allocator.dupe(u8, text);
+        const owned_text = try self.ownString(text);
         try self.elements.append(.{ .text = owned_text });
     }
 
     /// Add annotated text to the document.
     pub fn addAnnotated(self: *Document, text: []const u8, annotation: Annotation) std.mem.Allocator.Error!void {
         if (text.len == 0) return;
-        const owned_text = try self.allocator.dupe(u8, text);
+        const owned_text = try self.ownString(text);
         try self.elements.append(.{ .annotated = .{ .content = owned_text, .annotation = annotation } });
     }
 
@@ -339,14 +331,14 @@ pub const Document = struct {
     /// Add raw content that should not be processed.
     pub fn addRaw(self: *Document, content: []const u8) std.mem.Allocator.Error!void {
         if (content.len == 0) return;
-        const owned_content = try self.allocator.dupe(u8, content);
+        const owned_content = try self.ownString(content);
         try self.elements.append(.{ .raw = owned_content });
     }
 
     /// Add reflowing text that can wrap automatically.
     pub fn addReflowingText(self: *Document, text: []const u8) std.mem.Allocator.Error!void {
         if (text.len == 0) return;
-        const owned_text = try self.allocator.dupe(u8, text);
+        const owned_text = try self.ownString(text);
         try self.elements.append(.{ .reflowing_text = owned_text });
     }
 
@@ -395,24 +387,24 @@ pub const Document = struct {
         }
     }
 
-    /// Add a source code display with multiple underlines.
+    /// Add a source code display with multiple underlines. The line text,
+    /// filename and regions are copied.
     pub fn addSourceCodeWithUnderlines(
         self: *Document,
         display_region: SourceCodeDisplayRegion,
         underline_regions: []const UnderlineRegion,
     ) std.mem.Allocator.Error!void {
-        const owned_regions = try self.allocator.dupe(UnderlineRegion, underline_regions);
-
-        // Copy the filename to ensure lifetime safety (same as addSourceRegion)
+        const owned_regions = try self.ownSlice(UnderlineRegion, underline_regions);
+        const owned_line_text = try self.ownString(display_region.line_text);
         const owned_filename: ?[]const u8 = if (display_region.filename) |f|
-            try self.allocator.dupe(u8, f)
+            try self.ownString(f)
         else
             null;
 
         try self.elements.append(.{
             .source_code_with_underlines = .{
                 .display_region = .{
-                    .line_text = display_region.line_text,
+                    .line_text = owned_line_text,
                     .start_line = display_region.start_line,
                     .start_column = display_region.start_column,
                     .end_line = display_region.end_line,
@@ -428,14 +420,14 @@ pub const Document = struct {
     /// Add a vertical stack of elements.
     pub fn addVerticalStack(self: *Document, elements: []const DocumentElement) std.mem.Allocator.Error!void {
         if (elements.len == 0) return;
-        const owned_elements = try self.allocator.dupe(DocumentElement, elements);
+        const owned_elements = try self.ownSlice(DocumentElement, elements);
         try self.elements.append(.{ .vertical_stack = owned_elements });
     }
 
     /// Add a horizontal concatenation of elements.
     pub fn addHorizontalConcat(self: *Document, elements: []const DocumentElement) std.mem.Allocator.Error!void {
         if (elements.len == 0) return;
-        const owned_elements = try self.allocator.dupe(DocumentElement, elements);
+        const owned_elements = try self.ownSlice(DocumentElement, elements);
         try self.elements.append(.{ .horizontal_concat = owned_elements });
     }
 
@@ -534,7 +526,7 @@ pub const Document = struct {
     /// Add a link with proper formatting.
     pub fn addLink(self: *Document, url: []const u8) std.mem.Allocator.Error!void {
         if (url.len == 0) return;
-        const owned_url = try self.allocator.dupe(u8, url);
+        const owned_url = try self.ownString(url);
         try self.elements.append(.{ .link = owned_url });
     }
 
@@ -554,16 +546,12 @@ pub const Document = struct {
             std.debug.assert(region_info.end_col_idx >= region_info.start_col_idx);
         }
 
-        // Copy the line text to avoid memory safety issues
         const line_text_slice = region_info.calculateLineText(source, line_starts);
-        const owned_line_text = try self.allocator.dupe(u8, line_text_slice);
-
-        // Copy the filename to ensure lifetime safety
+        const owned_line_text = try self.ownString(line_text_slice);
         const owned_filename: ?[]const u8 = if (filename) |f|
-            try self.allocator.dupe(u8, f)
+            try self.ownString(f)
         else
             null;
-        errdefer if (owned_filename) |f| self.allocator.free(f);
 
         try self.elements.append(.{
             .source_code_region = .{
@@ -586,10 +574,9 @@ pub const Document = struct {
         filename: ?[]const u8,
     ) std.mem.Allocator.Error!void {
         const owned_filename: ?[]const u8 = if (filename) |f|
-            try self.allocator.dupe(u8, f)
+            try self.ownString(f)
         else
             null;
-        errdefer if (owned_filename) |f| self.allocator.free(f);
 
         try self.elements.append(.{
             .source_location = .{
@@ -608,7 +595,7 @@ pub const Document = struct {
         filename: ?[]const u8,
     ) std.mem.Allocator.Error!void {
         if (regions.len == 0) return;
-        const owned_regions = try self.allocator.dupe(SourceRegion, regions);
+        const owned_regions = try self.ownSlice(SourceRegion, regions);
         try self.elements.append(.{
             .source_code_multi_region = .{
                 .source = source,

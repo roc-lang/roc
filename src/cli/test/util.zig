@@ -810,7 +810,7 @@ pub fn runRocWithEnv(
 /// Spec format: "0<stdin|1>stdout|2>stderr" (pipe-separated)
 /// Returns success if the app's IO matches the spec exactly.
 pub fn runRocTest(io: std.Io, allocator: std.mem.Allocator, roc_file: []const u8, spec: []const u8) RocRunError!RocResult {
-    return runRocCommand(io, allocator, &.{ roc_file, "--", "--test", spec });
+    return runRocCommand(io, allocator, &.{ roc_file, "--test", spec });
 }
 
 /// Check if a run result indicates success (exit code 0).

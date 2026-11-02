@@ -27,8 +27,8 @@ result = multi_arg_fn(
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:25:3:27
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:33:3:35
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:41:3:43
-MISSING METHOD - lambda_multi_arg_mismatch.md:9:5:9:7
-MISSING METHOD - lambda_multi_arg_mismatch.md:11:5:11:12
+TYPE MISMATCH - lambda_multi_arg_mismatch.md:9:5:9:7
+TYPE MISMATCH - lambda_multi_arg_mismatch.md:15:5:15:9
 # PROBLEMS
 ~~~clojure
 (reports
@@ -76,22 +76,18 @@ MISSING METHOD - lambda_multi_arg_mismatch.md:11:5:11:12
 			(source-region (file "lambda_multi_arg_mismatch.md") (start 3 41) (end 3 43) (annotation error) (line-text "multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8| "))))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 9 5) (end 9 7))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_numeral")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This number is being used where a non-number type is needed."))
 		(document
 			(source-region (file "lambda_multi_arg_mismatch.md") (start 9 5) (end 9 7) (annotation error) (line-text "    42,        # x1: U64 (type 'a')"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_numeral")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be non-numeric here:")
+			(line-break)
+			(source-region (file "lambda_multi_arg_mismatch.md") (start 15 5) (end 15 9) (annotation error) (line-text "    True,      # x7: Bool (should be 'a' = U64) - MISMATCH"))
+			(line-break)
+			(reflow "Other code expects this to have the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -100,22 +96,14 @@ MISSING METHOD - lambda_multi_arg_mismatch.md:11:5:11:12
 			(annotation-end)))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 11 5) (end 11 12))
+		(title "Type Mismatch")
+		(region (start 15 5) (end 15 9))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_quote")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This string literal is being used where a non-string type is needed."))
 		(document
-			(source-region (file "lambda_multi_arg_mismatch.md") (start 11 5) (end 11 12) (annotation error) (line-text "    \"world\",   # x3: Str (should be 'a' = U64) - MISMATCH  "))
+			(source-region (file "lambda_multi_arg_mismatch.md") (start 15 5) (end 15 9) (annotation error) (line-text "    True,      # x7: Bool (should be 'a' = U64) - MISMATCH"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_quote")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)

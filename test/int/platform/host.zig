@@ -46,6 +46,7 @@ const Box = usize;
 // Roc value layouts at the boundary (record fields sorted by alignment
 // descending, then name; same convention the old args buffers used).
 const MixedResult = extern struct { value: i64, flag: bool };
+const TwoU32 = extern struct { first: u32, second: u32 };
 const FrameInput = extern struct {
     frame_count: u64,
     mouse_wheel: f32,
@@ -81,6 +82,7 @@ extern fn roc_test_simple_pure(input: SimpleInput) callconv(.c) SimpleInput;
 extern fn roc_test_simple_effectful(input: SimpleInput) callconv(.c) SimpleInput;
 extern fn roc_test_three_floats_pure(input: ThreeFloats) callconv(.c) ThreeFloats;
 extern fn roc_test_three_floats_effectful(input: ThreeFloats) callconv(.c) ThreeFloats;
+extern fn roc_test_two_u32_args(first: u32, second: u32) callconv(.c) TwoU32;
 
 // --- Symbol-ABI runtime exports
 var g_host_env = HostEnv{
@@ -400,12 +402,24 @@ fn platform_main() void {
         print("\x1b[31mFAILED\x1b[0m: EFFECTFUL ThreeFloats values corrupted! This is issue 8991.\n", .{});
     }
 
+    // Test 12: two U32 arguments, each in its own 8-byte argument-buffer slot
+    print("\n=== Test 12: test_two_u32_args(U32, U32) -> (U32, U32) ===\n", .{});
+    const two_u32_output = roc_test_two_u32_args(7, 300);
+    print("Input: first=7, second=300\n", .{});
+    print("Output: first={}, second={}\n", .{ two_u32_output.first, two_u32_output.second });
+    if (two_u32_output.first == 7 and two_u32_output.second == 300) {
+        print("\x1b[32mSUCCESS\x1b[0m: two U32 args passed correctly!\n", .{});
+        success_count += 1;
+    } else {
+        print("\x1b[31mFAILED\x1b[0m: two U32 args corrupted! Expected first=7, second=300\n", .{});
+    }
+
     // Final summary
     print("\n=== FINAL RESULT ===\n", .{});
-    if (success_count == 11) {
+    if (success_count == 12) {
         print("\x1b[32mALL TESTS PASSED\x1b[0m: Box(model) and mixed args work correctly across host boundary!\n", .{});
     } else {
-        print("\x1b[31mSOME TESTS FAILED\x1b[0m: {}/11 tests passed\n", .{success_count});
+        print("\x1b[31mSOME TESTS FAILED\x1b[0m: {}/12 tests passed\n", .{success_count});
         std.process.exit(1);
     }
 }

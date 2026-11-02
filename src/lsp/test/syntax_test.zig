@@ -25,6 +25,8 @@ const TestHarness = struct {
     platform_path: []u8,
     file_path: ?[:0]u8 = null,
     uri: ?[]u8 = null,
+    /// Results handed out by `getCompletions` and not yet freed.
+    completions: std.ArrayList(completion_handler.CompletionResult) = .empty,
 
     fn init() integration_spec.SpecError!TestHarness {
         const allocator = test_env.allocator;
@@ -43,6 +45,8 @@ const TestHarness = struct {
     }
 
     fn deinit(self: *TestHarness) void {
+        for (self.completions.items) |result| result.deinit();
+        self.completions.deinit(self.allocator);
         self.checker.deinit();
         if (self.uri) |u| self.allocator.free(u);
         if (self.file_path) |f| self.allocator.free(f);
@@ -67,7 +71,7 @@ const TestHarness = struct {
 
     /// Build the file to populate the snapshot env. Discards diagnostics.
     fn check(self: *TestHarness, override_text: ?[]const u8) integration_spec.SpecError!void {
-        const publish_sets = try self.checker.check(self.uri.?, override_text, null);
+        const publish_sets = try self.checker.check(self.uri.?, override_text, null, null);
         for (publish_sets) |*set| set.deinit(self.allocator);
         self.allocator.free(publish_sets);
     }
@@ -75,9 +79,11 @@ const TestHarness = struct {
     /// Get completion items at a line/character position.
     /// Fails the test if no completions are returned.
     fn getCompletions(self: *TestHarness, source: []const u8, line: u32, character: u32) integration_spec.SpecError![]const CompletionItem {
-        const result = try self.checker.getCompletionsAtPosition(self.uri.?, source, line, character);
-        if (result) |r| return r.items;
-        return error.TestUnexpectedResult;
+        const result = try self.checker.getCompletionsAtPosition(self.uri.?, source, line, character) orelse
+            return error.TestUnexpectedResult;
+        errdefer result.deinit();
+        try self.completions.append(self.allocator, result);
+        return result.items;
     }
 
     /// Get hover information at a line/character position.
@@ -89,14 +95,13 @@ const TestHarness = struct {
 
     /// Free completion items returned by `getCompletions`.
     fn freeCompletions(self: *TestHarness, items: []const CompletionItem) void {
-        for (items) |item| {
-            self.allocator.free(item.label);
-            if (item.detail) |d| self.allocator.free(d);
-            if (item.documentation) |doc| self.allocator.free(doc);
-            if (item.sortText) |s| self.allocator.free(s);
-            if (item.insertText) |t| self.allocator.free(t);
+        for (self.completions.items, 0..) |result, index| {
+            if (result.items.ptr != items.ptr) continue;
+            result.deinit();
+            _ = self.completions.swapRemove(index);
+            return;
         }
-        self.allocator.free(items);
+        unreachable; // callers pass only items that getCompletions returned and that are not yet freed
     }
 
     /// Assert that every label in `expected` appears in `items`.
@@ -126,6 +131,7 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "syntax checker skips rebuild when content unchanged", .run = syntaxCheckerSkipsRebuildWhenContentUnchanged },
     .{ .name = "syntax checker rebuilds when content changes", .run = syntaxCheckerRebuildsWhenContentChanges },
     .{ .name = "syntax checker reports diagnostics for invalid source", .run = syntaxCheckerReportsDiagnosticsForInvalidSource },
+    .{ .name = "syntax checker leaves no trace of a canceled check", .run = syntaxCheckerLeavesNoTraceOfCanceledCheck },
     .{ .name = "getDocumentSymbols returns symbols for valid app file", .run = getDocumentSymbolsReturnsSymbolsForValidAppFile },
     .{ .name = "getDocumentSymbols returns type declarations for type-only module", .run = getDocumentSymbolsReturnsTypeDeclarationsForTypeOnlyModule },
     .{ .name = "getCompletionsAtPosition returns basic completions", .run = getCompletionsAtPositionReturnsBasicCompletions },
@@ -147,6 +153,7 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "hover shows documentation for method call via static dispatch", .run = hoverShowsDocumentationForMethodCallViaStaticDispatch },
     .{ .name = "hover on record field does not use same-name method documentation", .run = hoverOnRecordFieldDoesNotUseSameNameMethodDocumentation },
     .{ .name = "hover without documentation shows only type", .run = hoverWithoutDocumentationShowsOnlyType },
+    .{ .name = "hover renders zero-argument function types", .run = hoverRendersZeroArgumentFunctionTypes },
 };
 
 // Syntax Checker Tests
@@ -166,7 +173,7 @@ pub fn syntaxCheckerSkipsRebuildWhenContentUnchanged() integration_spec.SpecErro
 
     try h.writeFile("test.roc", contents);
 
-    const result1 = try h.checker.check(h.uri.?, contents, null);
+    const result1 = try h.checker.check(h.uri.?, contents, null, null);
     defer {
         for (result1) |*set| set.deinit(h.allocator);
         h.allocator.free(result1);
@@ -176,7 +183,7 @@ pub fn syntaxCheckerSkipsRebuildWhenContentUnchanged() integration_spec.SpecErro
     try std.testing.expect(hash1 != null);
 
     // Same content should skip rebuild (returns empty)
-    const result2 = try h.checker.check(h.uri.?, contents, null);
+    const result2 = try h.checker.check(h.uri.?, contents, null, null);
     defer {
         for (result2) |*set| set.deinit(h.allocator);
         h.allocator.free(result2);
@@ -211,7 +218,7 @@ pub fn syntaxCheckerRebuildsWhenContentChanges() integration_spec.SpecError!void
 
     try h.writeFile("test2.roc", contents1);
 
-    const result1 = try h.checker.check(h.uri.?, contents1, null);
+    const result1 = try h.checker.check(h.uri.?, contents1, null, null);
     defer {
         for (result1) |*set| set.deinit(h.allocator);
         h.allocator.free(result1);
@@ -220,7 +227,7 @@ pub fn syntaxCheckerRebuildsWhenContentChanges() integration_spec.SpecError!void
     const hash1 = h.checker.content_hashes.get(h.file_path.?);
     try std.testing.expect(hash1 != null);
 
-    const result2 = try h.checker.check(h.uri.?, contents2, null);
+    const result2 = try h.checker.check(h.uri.?, contents2, null, null);
     defer {
         for (result2) |*set| set.deinit(h.allocator);
         h.allocator.free(result2);
@@ -229,6 +236,44 @@ pub fn syntaxCheckerRebuildsWhenContentChanges() integration_spec.SpecError!void
     const hash2 = h.checker.content_hashes.get(h.file_path.?);
     try std.testing.expect(hash2 != null);
     try std.testing.expect(!std.mem.eql(u8, &hash1.?, &hash2.?));
+}
+
+/// Verifies a canceled check retains no build and records no content hash,
+/// so checking the same text again builds and reports it.
+pub fn syntaxCheckerLeavesNoTraceOfCanceledCheck() integration_spec.SpecError!void {
+    var h = try TestHarness.init();
+    defer h.deinit();
+
+    const contents = try h.formatSource(
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\main =
+        \\
+    );
+    defer h.allocator.free(contents);
+
+    try h.writeFile("canceled.roc", contents);
+
+    var cancel_request: std.atomic.Value(bool) = .init(true);
+    if (h.checker.check(h.uri.?, contents, null, &cancel_request)) |canceled_sets| {
+        for (canceled_sets) |*set| set.deinit(h.allocator);
+        h.allocator.free(canceled_sets);
+        return error.TestUnexpectedResult;
+    } else |err| switch (err) {
+        error.Canceled => {},
+        else => return err,
+    }
+    try std.testing.expect(h.checker.content_hashes.get(h.file_path.?) == null);
+    try std.testing.expect(h.checker.build_env == null);
+
+    const publish_sets = try h.checker.check(h.uri.?, contents, null, null);
+    defer {
+        for (publish_sets) |*set| set.deinit(h.allocator);
+        h.allocator.free(publish_sets);
+    }
+    var diagnostic_count: usize = 0;
+    for (publish_sets) |set| diagnostic_count += set.diagnostics.len;
+    try std.testing.expect(diagnostic_count > 0);
 }
 
 /// Verifies invalid source produces one or more LSP diagnostics.
@@ -246,7 +291,7 @@ pub fn syntaxCheckerReportsDiagnosticsForInvalidSource() integration_spec.SpecEr
 
     try h.writeFile("bad.roc", contents);
 
-    const publish_sets = try h.checker.check(h.uri.?, null, null);
+    const publish_sets = try h.checker.check(h.uri.?, null, null, null);
     defer {
         for (publish_sets) |*set| set.deinit(h.allocator);
         h.allocator.free(publish_sets);
@@ -1067,6 +1112,42 @@ pub fn hoverWithoutDocumentationShowsOnlyType() integration_spec.SpecError!void 
     }
 }
 
+/// Regression for #12517: definitions and calls retain their zero-argument types.
+fn hoverRendersZeroArgumentFunctionTypes() integration_spec.SpecError!void {
+    var h = try TestHarness.init();
+    defer h.deinit();
+
+    const source =
+        \\answer : () -> U64
+        \\answer = || 42
+        \\
+        \\answer! : () => U64
+        \\answer! = || {
+        \\    echo!("answer")
+        \\    answer()
+        \\}
+        \\
+        \\main! = |_args| {
+        \\    echo!(answer!().to_str())
+        \\    Ok({})
+        \\}
+    ;
+    try h.writeFile("main.roc", source);
+    try h.check(source);
+
+    const cases = .{
+        .{ 1, 0, "() -> U64" },
+        .{ 6, 4, "() -> U64" },
+        .{ 4, 0, "() => U64" },
+        .{ 10, 10, "() => U64" },
+    };
+    inline for (cases) |case| {
+        const text = try h.getHover(source, case[0], case[1]) orelse return error.TestUnexpectedResult;
+        defer h.allocator.free(text);
+        try std.testing.expectEqualStrings("```roc\n" ++ case[2] ++ "\n```", text);
+    }
+}
+
 /// Exercise the shared report regions through the diagnostics sent to editors.
 fn focusedExpressionDiagnostics() integration_spec.SpecError!void {
     const cases = .{
@@ -1153,7 +1234,7 @@ fn focusedExpressionDiagnostics() integration_spec.SpecError!void {
         defer h.deinit();
         const source = case[0];
         try h.writeFile("Focused.roc", source);
-        const publish_sets = try h.checker.check(h.uri.?, null, null);
+        const publish_sets = try h.checker.check(h.uri.?, null, null, null);
         defer {
             for (publish_sets) |*set| set.deinit(h.allocator);
             h.allocator.free(publish_sets);

@@ -47,8 +47,8 @@ const LowLevelOp = LIR.LowLevel;
 pub const ResourceError = Allocator.Error;
 
 /// Rewrite string append statements to direct helper procedure calls.
-pub fn run(store: *LirStore) ResourceError!void {
-    try body_clone.CallResultFusion(Spec).run(store, {});
+pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!void {
+    try body_clone.CallResultFusion(Spec).run(store, layouts);
 }
 
 /// The consumer this pass fuses: a `str_concat` whose right operand is the
@@ -57,7 +57,7 @@ const Spec = struct {
     pub const name = "string-append";
     pub const shape = "str_call";
     pub const origin_kind: LIR.OriginKind = .str_append_fuse;
-    pub const State = void;
+    pub const State = *const layout_mod.Store;
     pub const VariantKey = struct {
         source: LIR.LirProcSpecId,
     };
@@ -73,8 +73,8 @@ const Spec = struct {
         _: layout_mod.Idx,
         forwarded: body_clone.ForwardedAlias,
     ) ?body_clone.CallResultFusion(Spec).Match {
-        const concat_stmt_node = store.getCFStmt(forwarded.next);
-        if (concat_stmt_node != .assign_low_level) return null;
+        const concat_stmt_node = store.getCFStmtImmediate(forwarded.next);
+        if (concat_stmt_node.* != .assign_low_level) return null;
         const concat_stmt = concat_stmt_node.assign_low_level;
         if (concat_stmt.op != .str_concat) return null;
         const concat_args = store.getLocalSpan(concat_stmt.args);
@@ -92,11 +92,12 @@ const Spec = struct {
         };
     }
 
-    pub fn createVariant(_: State, store: *LirStore, key: VariantKey) ResourceError!LIR.LirProcSpecId {
+    pub fn createVariant(layouts: State, store: *LirStore, key: VariantKey) ResourceError!LIR.LirProcSpecId {
         const accumulator = try store.addLocal(.{ .layout_idx = .str });
         return try body_clone.cloneCallVariant(
             AppendRewriter,
             store,
+            layouts,
             key.source,
             .{ .accumulator = accumulator },
             .{ .leading_args = &.{accumulator}, .ret_layout = .str },
@@ -172,7 +173,7 @@ fn testConcat(store: *LirStore, target: LocalId, args: []const LocalId, next: CF
     return try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = .str_concat,
-        .rc_effect = LowLevelOp.str_concat.rcEffect(),
+        .rc_effect = try store.addRcEffect(LowLevelOp.str_concat.rcEffect()),
         .args = try store.addLocalSpan(args),
         .next = next,
     } }, .test_fixture);
@@ -207,7 +208,9 @@ test "str append fuses a single-use call result into a direct append call" {
         .ret_layout = .str,
     }, .none);
 
-    try run(&store);
+    var layouts = try layout_mod.Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+    try run(&store, &layouts);
 
     const rewritten = store.getCFStmtImmediate(call).assign_call;
     try std.testing.expect(rewritten.proc != callee);
@@ -242,7 +245,7 @@ test "str append fuses through a single-use alias of the call result" {
     const concat = try testConcat(&store, out, &.{ acc, result_alias }, ret);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = result_alias,
-        .op = .{ .local = result },
+        .op = .local(result),
         .next = concat,
     } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call = .{
@@ -260,7 +263,9 @@ test "str append fuses through a single-use alias of the call result" {
         .ret_layout = .str,
     }, .none);
 
-    try run(&store);
+    var layouts = try layout_mod.Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+    try run(&store, &layouts);
 
     const rewritten = store.getCFStmtImmediate(call).assign_call;
     try std.testing.expect(rewritten.proc != callee);
@@ -288,7 +293,7 @@ test "str append does not fuse across an alias of an unrelated local" {
     const concat = try testConcat(&store, out, &.{ acc, result }, late_use);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = unrelated_alias,
-        .op = .{ .local = unrelated },
+        .op = .local(unrelated),
         .next = concat,
     } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call = .{
@@ -307,7 +312,9 @@ test "str append does not fuse across an alias of an unrelated local" {
     }, .none);
 
     const before_proc_count = store.procSpecCount();
-    try run(&store);
+    var layouts = try layout_mod.Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+    try run(&store, &layouts);
 
     const unchanged = store.getCFStmtImmediate(call).assign_call;
     try std.testing.expectEqual(callee, unchanged.proc);
@@ -348,7 +355,9 @@ test "str append does not fuse a multi-use call result" {
     }, .none);
 
     const before_proc_count = store.procSpecCount();
-    try run(&store);
+    var layouts = try layout_mod.Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+    try run(&store, &layouts);
 
     const unchanged = store.getCFStmtImmediate(call).assign_call;
     try std.testing.expectEqual(callee, unchanged.proc);

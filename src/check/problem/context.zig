@@ -15,6 +15,30 @@ const Ident = base.Ident;
 const Var = types_mod.Var;
 const CIR = can.CIR;
 
+/// A requirement a use copied out of another definition's type, failing
+/// because of the type that use gives it. The failure is reported at the use.
+pub const CopiedRequirement = struct {
+    /// The use the failure is reported at: the expression that owns the
+    /// obligation, or else the use whose type copied the requirement.
+    use_region: base.Region,
+    /// The expression in the copied definition that introduced the
+    /// requirement, when it has one.
+    requirement_region: ?base.Region = null,
+    /// The uses of one method that the copied definition's type made one
+    /// requirement, when that requirement shares a type variable with this
+    /// one other than the value both uses call it on.
+    shared_method: ?SharedMethodUses = null,
+};
+
+/// Two uses of one method on one value whose type was not known where they
+/// are, so the definition's type holds one requirement of that method for
+/// both (design.md "Evidence params").
+pub const SharedMethodUses = struct {
+    method_name: Ident.Idx,
+    first_region: base.Region,
+    second_region: base.Region,
+};
+
 /// Where a type error occurred syntactically.
 ///
 /// This tracks the syntactic context so error messages can say things like
@@ -315,6 +339,15 @@ pub const Context = union(enum) {
         dispatcher_name: Ident.Idx,
         /// The method name
         method_name: Ident.Idx,
+        /// The callable of the requirement the method's type is checked
+        /// against, when that requirement is a dispatch obligation. Only a
+        /// failure asks whether it is a copy (`copied`).
+        requirement_fn_var: ?Var = null,
+        /// The expression that owns the obligation, where a copy fails.
+        owner_expr: ?CIR.Expr.Idx = null,
+        /// Set when the check failed and the requirement is a copy a use made
+        /// out of another definition's type.
+        copied: ?CopiedRequirement = null,
     };
 
     /// Context for method type mismatch (where clause)

@@ -12,7 +12,6 @@ const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
 const CommonIdents = ModuleEnv.CommonIdents;
-const EvaluationOrder = can.DependencyGraph.EvaluationOrder;
 const CompactWriter = collections.CompactWriter;
 const CachedModule = struct {
     env: *ModuleEnv,
@@ -253,11 +252,6 @@ pub const Module = struct {
 
     pub fn commonIdents(self: @This()) CommonIdents {
         return self.env().idents;
-    }
-
-    pub fn evaluationOrder(self: @This()) ?*const EvaluationOrder {
-        if (self.env().evaluation_order) |evaluation_order| return evaluation_order;
-        return null;
     }
 
     pub fn getIdent(self: @This(), idx: Ident.Idx) []const u8 {

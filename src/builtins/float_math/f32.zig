@@ -723,7 +723,7 @@ pub fn atan2(y: f32, x: f32) f32 {
     }
 
     // 2 * sign(x) + sign(y)
-    const m = ((y_bits >> 31) & 1) | ((x_bits >> 30) & 2);
+    const m: u2 = @intCast(((y_bits >> 31) & 1) | ((x_bits >> 30) & 2));
     x_bits &= 0x7FFFFFFF;
     y_bits &= 0x7FFFFFFF;
 
@@ -732,7 +732,6 @@ pub fn atan2(y: f32, x: f32) f32 {
             0, 1 => return y, // atan(+-0, +...)
             2 => return pi, // atan(+0, -...)
             3 => return -pi, // atan(-0, -...)
-            else => unreachable,
         }
     }
 
@@ -751,7 +750,6 @@ pub fn atan2(y: f32, x: f32) f32 {
                 1 => return -pi / 4, // atan(-inf, +inf)
                 2 => return 3 * pi / 4, // atan(+inf, -inf)
                 3 => return -3 * pi / 4, // atan(-inf, -inf)
-                else => unreachable,
             }
         } else {
             switch (m) {
@@ -759,7 +757,6 @@ pub fn atan2(y: f32, x: f32) f32 {
                 1 => return -0.0, // atan(-..., +inf)
                 2 => return pi, // atan(+..., -inf)
                 3 => return -pi, // atan(-...f, -inf)
-                else => unreachable,
             }
         }
     }
@@ -787,7 +784,6 @@ pub fn atan2(y: f32, x: f32) f32 {
         1 => return -z, // atan(-, +)
         2 => return pi - (z - pi_lo), // atan(+, -)
         3 => return (z - pi_lo) - pi, // atan(-, -)
-        else => unreachable,
     }
 }
 

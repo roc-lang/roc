@@ -5,9 +5,7 @@ type=expr
 ~~~
 # SOURCE
 ~~~roc
-match person {
-    { $name } => $name
-}
+|{ $name }| $name
 ~~~
 # EXPECTED
 NIL
@@ -15,47 +13,34 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-KwMatch,LowerIdent,OpenCurly,
-OpenCurly,LowerIdent,CloseCurly,OpFatArrow,LowerIdent,
-CloseCurly,
+OpBar,OpenCurly,LowerIdent,CloseCurly,OpBar,LowerIdent,
 EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-match
-	(e-ident (raw "person"))
-	(branches
-		(branch
-			(p-record
-				(field (name "$name") (rest false)))
-			(e-ident (raw "$name")))))
+(e-lambda
+	(args
+		(p-record
+			(field (name "$name") (rest false))))
+	(e-ident (raw "$name")))
 ~~~
 # FORMATTED
 ~~~roc
-match person {
-	{ $name } => $name
-}
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-match
-	(match
-		(cond
-			(e-runtime-error (tag "ident_not_in_scope")))
-		(branches
-			(branch
-				(patterns
-					(pattern (degenerate false)
-						(p-record-destructure
-							(destructs
-								(record-destruct (label "$name") (ident "$name")
-									(required
-										(p-assign (ident "$name"))))))))
-				(value
-					(e-lookup-local
-						(p-assign (ident "$name"))))))))
+(e-lambda
+	(args
+		(p-record-destructure
+			(destructs
+				(record-destruct (label "$name") (ident "$name")
+					(required
+						(p-assign (ident "$name")))))))
+	(e-lookup-local
+		(p-assign (ident "$name"))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_a"))
+(expr (type "{ $name: a } -> a"))
 ~~~

@@ -149,7 +149,8 @@ var initialized = false;
 /// view lives for the process, so it is intentionally leaked.
 pub export fn roc_boxy_init_embedded(roc_ops: ?*const RocOps) callconv(.c) void {
     if (evaluator_flavor) {
-        evaluator_ops = (roc_ops orelse unreachable).*;
+        const ops = roc_ops orelse base.invariant("boxy runtime invariant violated: the evaluator entrypoint wrapper passed null RocOps", .{});
+        evaluator_ops = ops.*;
         startup_ops = &evaluator_ops;
     } else {
         startup_ops = builtins.in_process_host.ops();
@@ -233,6 +234,7 @@ comptime {
         "roc_boxy_caller_drives",
         "roc_boxy_return_pending",
         "roc_boxy_list_concat",
+        "roc_boxy_list_append_sublist",
         "roc_boxy_list_prepend",
         "roc_boxy_list_sublist",
         "roc_boxy_list_drop_at",

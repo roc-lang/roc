@@ -813,6 +813,62 @@ test "introduceType records every declaration kind before completing its body" {
     }
 }
 
+test "forward-referenced declarations bind their exact declaration kind" {
+    const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+
+    const source =
+        \\f : a, Nom, Opq -> Str where [a.Shows]
+        \\f = |_, _, _| "hi"
+        \\
+        \\coll.Shows : where [coll.shows : coll -> Str]
+        \\Nom := [Nom]
+        \\Opq :: [Opq]
+    ;
+
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+    var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
+    defer czer.deinit();
+
+    try czer.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    try testing.expectEqual(@as(usize, 0), countUndeclaredTypeDiagnostics(diagnostics));
+
+    const module_scope = &czer.scopes.items[0];
+
+    const shows = try env.insertIdent(Ident.for_text("Shows"));
+    const shows_binding = module_scope.type_bindings.get(shows).?;
+    try testing.expect(shows_binding == .local_where_alias);
+    try testing.expect(env.store.getStatement(shows_binding.local_where_alias) == .s_where_alias_decl);
+    try testing.expect(env.store.getStatement(shows_binding.local_where_alias).s_where_alias_decl.receiver != .placeholder);
+
+    const nom = try env.insertIdent(Ident.for_text("Nom"));
+    const nom_binding = module_scope.type_bindings.get(nom).?;
+    try testing.expect(nom_binding == .local_nominal);
+    const nom_stmt = env.store.getStatement(nom_binding.local_nominal);
+    try testing.expect(nom_stmt == .s_nominal_decl);
+    try testing.expect(!nom_stmt.s_nominal_decl.is_opaque);
+    try testing.expect(nom_stmt.s_nominal_decl.anno != .placeholder);
+
+    const opq = try env.insertIdent(Ident.for_text("Opq"));
+    const opq_binding = module_scope.type_bindings.get(opq).?;
+    try testing.expect(opq_binding == .local_nominal);
+    const opq_stmt = env.store.getStatement(opq_binding.local_nominal);
+    try testing.expect(opq_stmt == .s_nominal_decl);
+    try testing.expect(opq_stmt.s_nominal_decl.is_opaque);
+    try testing.expect(opq_stmt.s_nominal_decl.anno != .placeholder);
+}
+
 test "open ext not allowed in type decl" {
     const source =
         \\|_| {

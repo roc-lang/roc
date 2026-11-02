@@ -37,3 +37,12 @@ expect {
 
 	result.is_ok()
 }
+
+## A function whose error row is left to inference gets the required-field
+## error in its own signature, before its callers instantiate it.
+parse_length : Str -> Try({ length : F64 }, _)
+parse_length = |json| Json.parse(json)
+
+expect parse_length("{}") == Err(MissingRequiredField("length"))
+
+expect parse_length("{\"length\":2.5}") == Ok({ length: 2.5 })

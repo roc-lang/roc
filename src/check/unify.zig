@@ -41,7 +41,6 @@
 //! subsequent unification runs.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
@@ -91,11 +90,31 @@ const RawTypePair = struct {
     actual: Var,
 };
 
+/// Two requirements of one method on the same type whose method types do not
+/// agree. A type has one method of each name, so no type can satisfy both.
+const RawMethodConflict = struct {
+    method_name: Ident.Idx,
+    /// Whether one of the requirements came from an operator.
+    from_operator: bool,
+    /// The two variables whose requirements were being merged.
+    receivers: RawTypePair,
+    /// False when the requirements are an annotation's own, whose variable
+    /// keeps the requirement it declared first.
+    poison_receivers: bool,
+    /// The two required method types.
+    methods: RawTypePair,
+};
+
 const RawMismatchEvidence = struct {
     record: ?RawTypePair = null,
     /// The pair whose relation failed when the mismatch left the unifier,
     /// when that failure came from relating a pair of variables.
     leaf: ?RawTypePair = null,
+    /// The first same-method requirement pair that failed to agree.
+    method_conflict: ?RawMethodConflict = null,
+    /// The row whose own repeated label failed to relate to its other
+    /// occurrence (design.md "Row Union Normalization").
+    repeated_label_row: ?Var = null,
 };
 
 /// Exact checker evidence produced when a fresh record construction omits a
@@ -135,7 +154,9 @@ pub const Result = union(enum) {
     suppressed_by_error,
     /// A mismatch recorded as a diagnostic.
     problem: Problem.Idx,
-    /// A mismatch detected under `write_no_report`: nothing recorded and the
+    /// A mismatch detected under `write_no_report`, or under
+    /// `repeated_label_rows = .return_row` when a row's repeated label stopped
+    /// the relation (`Scratch.repeatedLabelRow`): nothing recorded and the
     /// top-level operands are not poisoned. Successful child unifications that
     /// completed before the mismatch remain committed.
     mismatch,
@@ -303,11 +324,36 @@ pub const Options = struct {
     /// Retain the outer nominal record opening with this semantic role if the
     /// relation rejects and its reporter needs the instantiated backing.
     nominal_record_mismatch_role: NominalRecordMismatchRole = .none,
+    /// Set when the two operands are requirements of one method on the same
+    /// type, so a mismatch is reported as that type needing two different
+    /// methods of one name.
+    method_requirements: ?MethodRequirements = null,
     /// Source-backed record construction whose omission decisions this
     /// relation owns. The checker publishes successful default absorptions
     /// against this exact expression when the empty row operand is an
     /// internal extension variable rather than the expression's own var.
     record_construction_var: ?Var = null,
+    /// What a relation does when a row repeats a label whose occurrences do
+    /// not relate.
+    repeated_label_rows: RepeatedLabelRows = .mismatch,
+};
+
+/// What a relation does when one operand's row repeats a label along its
+/// extension chain and the occurrences do not relate.
+pub const RepeatedLabelRows = enum {
+    /// Treat it as a mismatch of the relation.
+    mismatch,
+    /// Return `Result.mismatch` with the row in `Scratch.repeatedLabelRow`,
+    /// so the caller can normalize the row, which reports the conflict as the
+    /// row's own, and relate the operands again.
+    return_row,
+};
+
+/// The method whose two requirements on one annotation's type variable a
+/// relation compares.
+pub const MethodRequirements = struct {
+    method_name: Ident.Idx,
+    receiver: Var,
 };
 
 /// Unify two type variables.
@@ -345,7 +391,14 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
     );
     unifier.root_operands = .{ a, b };
     unifier.deferred_callables = env.deferred_callables;
-    unifier.scheduleRootPair(a, b, opts.root_relation, .propagate) catch |err| switch (err) {
+    const root_mismatch: MismatchHandling = if (opts.method_requirements) |requirements| .{ .record_method_conflict = .{
+        .method_name = requirements.method_name,
+        .from_operator = false,
+        .receivers = .{ .expected = requirements.receiver, .actual = requirements.receiver },
+        .poison_receivers = false,
+        .methods = .{ .expected = a, .actual = b },
+    } } else .propagate;
+    unifier.scheduleRootPair(a, b, opts.root_relation, root_mismatch) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
     };
     unifier.runWorkLoop() catch |err| {
@@ -353,6 +406,10 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
             error.OutOfMemory => return error.OutOfMemory,
             error.ErroneousType => return .suppressed_by_error,
             error.TypeMismatch => {},
+        }
+
+        if (opts.repeated_label_rows == .return_row and env.unify_scratch.repeatedLabelRow() != null) {
+            return Result.mismatch;
         }
 
         // write_no_report: keep completed child writes, but do not record or
@@ -364,6 +421,11 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         const actual_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, b);
         const evidence = try snapshotMismatchEvidence(env);
         const leaf = try snapshotMismatchLeaf(env);
+        env.unify_scratch.rejected_roots = .{
+            .expected = env.types.resolveThroughAliases(a).desc.content,
+            .actual = env.types.resolveThroughAliases(b).desc.content,
+        };
+        const method_conflict = try snapshotMismatchMethodConflict(env);
         const problem_idx = try env.problems.appendProblem(.{ .type_mismatch = .{
             .types = .{
                 .expected_var = a,
@@ -374,8 +436,10 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
             .context = opts.context,
             .evidence = evidence,
             .leaf = leaf,
+            .method_conflict = method_conflict,
         } });
         try env.types.poisonOnMismatch(a, b);
+        try poisonMethodConflictReceivers(env);
         return Result{ .problem = problem_idx };
     };
 
@@ -465,6 +529,33 @@ pub fn snapshotMismatchLeaf(env: *const Env) std.mem.Allocator.Error!?problem_mo
         .actual_var = raw.actual,
         .actual_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, raw.actual),
     };
+}
+
+/// Record the method requirements whose disagreement rejected the relation, so
+/// the report can say that no type has two different methods of one name.
+pub fn snapshotMismatchMethodConflict(env: *const Env) std.mem.Allocator.Error!?problem_mod.MethodConflict {
+    const raw = env.unify_scratch.mismatch_evidence.method_conflict orelse return null;
+    return .{
+        .method_name = raw.method_name,
+        .from_operator = raw.from_operator,
+        .first_type = try methodTypeDisplay(env, raw.methods.expected, raw.receivers.expected),
+        .second_type = try methodTypeDisplay(env, raw.methods.actual, raw.receivers.actual),
+    };
+}
+
+/// A method type's display text. Its where clause leaves out the receiver's
+/// own requirements, which are the ones that conflict.
+pub fn methodTypeDisplay(env: *const Env, method_var: Var, receiver: Var) std.mem.Allocator.Error!problem_mod.ExtraStringIdx {
+    env.type_writer.writeMethodType(method_var, receiver) catch return error.OutOfMemory;
+    return env.problems.putExtraString(env.type_writer.get());
+}
+
+/// A type whose requirements conflict is erroneous: no type satisfies them,
+/// so later checks of it report nothing further.
+pub fn poisonMethodConflictReceivers(env: *const Env) std.mem.Allocator.Error!void {
+    const raw = env.unify_scratch.mismatch_evidence.method_conflict orelse return;
+    if (!raw.poison_receivers) return;
+    try env.types.poisonOnMismatch(raw.receivers.expected, raw.receivers.actual);
 }
 
 /// A temporary unification context used to unify two type variables within a `Store`.
@@ -941,6 +1032,16 @@ const Unifier = struct {
                 self.scratch.mismatch_evidence.record = record;
                 return error.TypeMismatch;
             },
+            .record_method_conflict => |conflict| {
+                if (self.scratch.mismatch_evidence.method_conflict == null) {
+                    self.scratch.mismatch_evidence.method_conflict = conflict;
+                }
+                return error.TypeMismatch;
+            },
+            .record_repeated_label_row => |row| {
+                self.scratch.mismatch_evidence.repeated_label_row = row;
+                return error.TypeMismatch;
+            },
         }
     }
 
@@ -948,20 +1049,21 @@ const Unifier = struct {
         return self.types_store.resolveVar(var_).desc.flags.bounded_row_ext;
     }
 
-    /// Whether a row reaches a bounded extension along its extension chain,
-    /// so that tags added at the end of the chain would extend it.
-    fn rowChainIsBounded(self: *Self, tag_union: TagUnion) bool {
+    /// The bounded extension a row reaches along its extension chain, so that
+    /// tags added at the end of the chain would extend it; null when the chain
+    /// reaches none.
+    fn boundedExtOfRow(self: *Self, tag_union: TagUnion) ?Var {
         var ext = tag_union.ext;
         var remaining = self.types_store.len();
         while (remaining > 0) : (remaining -= 1) {
-            if (self.isBoundedRowExt(ext)) return true;
+            if (self.isBoundedRowExt(ext)) return self.types_store.resolveVar(ext).var_;
             switch (self.types_store.resolveVar(ext).desc.content) {
                 .alias => |alias| ext = self.types_store.getAliasBackingVar(alias),
                 .structure => |flat_type| switch (flat_type) {
                     .tag_union => |next| ext = next.ext,
-                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return false,
+                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return null,
                 },
-                .flex, .rigid, .field_presence, .err => return false,
+                .flex, .rigid, .field_presence, .err => return null,
             }
         }
         base.invariant("checker invariant violated: a tag row's extension chain is cyclic", .{});
@@ -991,7 +1093,7 @@ const Unifier = struct {
     /// a tagless row hands the bound to that row's own extension.
     fn refuseTagsIntoBoundedExt(self: *Self, ext: ResolvedVarDesc, other: Var) Error!void {
         if (ext.desc.content != .flex or !ext.desc.flags.bounded_row_ext) return;
-        if (self.firstRowTag(other)) |tag| return self.refuseBoundedRowTag(tag);
+        if (self.firstRowTag(other)) |tag| return self.refuseBoundedRowTag(tag, ext.var_);
         if (self.rowTail(other)) |tail| try self.types_store.markBoundedRowExt(tail);
     }
 
@@ -1017,9 +1119,9 @@ const Unifier = struct {
         base.invariant("checker invariant violated: a tag row's extension chain is cyclic", .{});
     }
 
-    fn refuseBoundedRowTag(self: *Self, tag: Ident.Idx) Error!void {
+    fn refuseBoundedRowTag(self: *Self, tag: Ident.Idx, ext: Var) Error!void {
         if (self.scratch.bounded_row_violation == null) {
-            self.scratch.bounded_row_violation = .{ .tag = tag };
+            self.scratch.bounded_row_violation = .{ .tag = tag, .ext = ext };
         }
         return error.TypeMismatch;
     }
@@ -1136,7 +1238,11 @@ const Unifier = struct {
                     }
                 };
 
-                const merged_constraints = try self.unifyStaticDispatchConstraints(a_flex.constraints, b_flex.constraints);
+                const merged_constraints = try self.unifyStaticDispatchConstraints(
+                    .{ .expected = vars.a.var_, .actual = vars.b.var_ },
+                    a_flex.constraints,
+                    b_flex.constraints,
+                );
                 try self.merge(vars, Content{ .flex = .{
                     .name = mb_ident,
                     .constraints = merged_constraints,
@@ -1678,10 +1784,7 @@ const Unifier = struct {
             if (nominal.sourceDecl().present) {
                 // Invariant: every keyed nominal application in a store can
                 // resolve its declaration in that store.
-                if (builtin.mode == .debug) {
-                    base.invariant("unify invariant violated: nominal application has a source declaration but no declaration table entry", .{});
-                }
-                unreachable;
+                base.invariant("unify invariant violated: nominal application has a source declaration but no declaration table entry", .{});
             }
             return .no_decl;
         };
@@ -2238,7 +2341,7 @@ const Unifier = struct {
             .b_is_nominal => vars.a.var_,
         };
         const evidence: RawTypePair = switch (self.nominal_record_mismatch_role) {
-            .none => unreachable,
+            .none => unreachable, // the early return above handles .none
             .expected => .{ .expected = opened_backing, .actual = anonymous_var },
             .actual => .{ .expected = anonymous_var, .actual = opened_backing },
         };
@@ -2311,12 +2414,12 @@ const Unifier = struct {
         var iter = self.types_store.iterRecordFields(fields);
         while (iter.next()) |field| {
             const unknown = switch (field.presence.decode()) {
-                .required => unreachable,
+                .required => unreachable, // validateAbsorbableRecordRow rejects required fields before recording
                 .unknown => |unknown| unknown,
             };
             const presence = switch (self.types_store.resolveVar(unknown.presence).desc.content) {
                 .field_presence => |presence| presence,
-                .flex, .rigid, .alias, .structure, .err => unreachable,
+                .flex, .rigid, .alias, .structure, .err => unreachable, // validateAbsorbableRecordRow rejects unresolved field presences before recording
             };
             switch (presence) {
                 .optional => {},
@@ -2328,7 +2431,7 @@ const Unifier = struct {
                         .enclosing_records = self.enclosing_records,
                     });
                 },
-                .required => unreachable,
+                .required => unreachable, // validateAbsorbableRecordRow rejects required presences before recording
             }
         }
     }
@@ -2361,9 +2464,9 @@ const Unifier = struct {
                     .fn_unbound,
                     .tag_union,
                     .empty_tag_union,
-                    => unreachable,
+                    => unreachable, // validateAbsorbableRecordRow rejects non-record row extensions before recording
                 },
-                .rigid, .field_presence, .err => unreachable,
+                .rigid, .field_presence, .err => unreachable, // validateAbsorbableRecordRow rejects these row extensions before recording
             }
         }
     }
@@ -2553,11 +2656,15 @@ const Unifier = struct {
 
         try self.enterRecordRelation(vars);
 
+        // Every relation drains its chain duplicates before returning, so the
+        // ones gathered here split exactly into `a`'s and then `b`'s.
+        std.debug.assert(self.scratch.chain_duplicate_fields.items.len == 0);
         // First, unwrap all fields for record, erroring if we encounter an
         // invalid record ext var
         const a_gathered_fields = try self.gatherRow(.record, .{ .fields = a_fields, .ext = a_ext });
+        const a_duplicates_end = self.scratch.chain_duplicate_fields.items.len;
         const b_gathered_fields = try self.gatherRow(.record, .{ .fields = b_fields, .ext = b_ext });
-        try self.relateChainDuplicateFields(vars);
+        try self.relateChainDuplicateFields(vars, a_duplicates_end);
 
         // Then partition the fields
         const partitioned = try self.partitionRow(
@@ -2673,27 +2780,30 @@ const Unifier = struct {
     }
     /// A field repeated along one row's extension chain is the same field:
     /// its value types and kinds are equal exactly (design.md "Row Union
-    /// Normalization"), with no relation-specific kind relaxation.
-    fn relateChainDuplicateFields(self: *Self, vars: *const ResolvedVarDescs) Error!void {
+    /// Normalization"), with no relation-specific kind relaxation. The
+    /// duplicates before `a_duplicates_end` repeat along `vars.a`'s chain and
+    /// the rest along `vars.b`'s; a failure is that row's conflict.
+    fn relateChainDuplicateFields(self: *Self, vars: *const ResolvedVarDescs, a_duplicates_end: usize) Error!void {
         while (self.scratch.chain_duplicate_fields.pop()) |duplicate| {
+            const on_mismatch: MismatchHandling = .{ .record_repeated_label_row = repeatedLabelRow(vars, self.scratch.chain_duplicate_fields.items.len, a_duplicates_end) };
             const first = duplicate.first.decode();
             const repeated = duplicate.repeated.decode();
             switch (first) {
                 .required => |first_var| switch (repeated) {
-                    .required => |repeated_var| try self.scheduleGuardedPair(first_var, repeated_var, .propagate),
+                    .required => |repeated_var| try self.scheduleGuardedPair(first_var, repeated_var, on_mismatch),
                     .unknown => |unknown| {
-                        try self.scheduleGuardedPair(first_var, unknown.var_, .propagate);
-                        try self.scheduleGuardedPair(try self.fresh(vars, .{ .field_presence = .required }), unknown.presence, .propagate);
+                        try self.scheduleGuardedPair(first_var, unknown.var_, on_mismatch);
+                        try self.scheduleGuardedPair(try self.fresh(vars, .{ .field_presence = .required }), unknown.presence, on_mismatch);
                     },
                 },
                 .unknown => |first_unknown| switch (repeated) {
                     .required => |repeated_var| {
-                        try self.scheduleGuardedPair(first_unknown.var_, repeated_var, .propagate);
-                        try self.scheduleGuardedPair(first_unknown.presence, try self.fresh(vars, .{ .field_presence = .required }), .propagate);
+                        try self.scheduleGuardedPair(first_unknown.var_, repeated_var, on_mismatch);
+                        try self.scheduleGuardedPair(first_unknown.presence, try self.fresh(vars, .{ .field_presence = .required }), on_mismatch);
                     },
                     .unknown => |unknown| {
-                        try self.scheduleGuardedPair(first_unknown.var_, unknown.var_, .propagate);
-                        try self.scheduleGuardedPair(first_unknown.presence, unknown.presence, .propagate);
+                        try self.scheduleGuardedPair(first_unknown.var_, unknown.var_, on_mismatch);
+                        try self.scheduleGuardedPair(first_unknown.presence, unknown.presence, on_mismatch);
                     },
                 },
             }
@@ -2701,20 +2811,32 @@ const Unifier = struct {
     }
 
     /// A tag repeated along one row's extension chain is the same tag: its
-    /// payloads are equal (design.md "Row Union Normalization").
-    fn relateChainDuplicateTags(self: *Self) Error!void {
+    /// payloads are equal (design.md "Row Union Normalization"). The
+    /// duplicates before `a_duplicates_end` repeat along `vars.a`'s chain and
+    /// the rest along `vars.b`'s; a failure is that row's conflict.
+    fn relateChainDuplicateTags(self: *Self, vars: *const ResolvedVarDescs, a_duplicates_end: usize) Error!void {
         while (self.scratch.chain_duplicate_tags.pop()) |duplicate| {
-            if (duplicate.first.len() != duplicate.repeated.len()) return error.TypeMismatch;
+            const row = repeatedLabelRow(vars, self.scratch.chain_duplicate_tags.items.len, a_duplicates_end);
+            if (duplicate.first.len() != duplicate.repeated.len()) {
+                self.scratch.mismatch_evidence.repeated_label_row = row;
+                return error.TypeMismatch;
+            }
+            const on_mismatch: MismatchHandling = .{ .record_repeated_label_row = row };
             var arg_idx: u32 = duplicate.first.len();
             while (arg_idx > 0) {
                 arg_idx -= 1;
                 try self.scheduleGuardedPair(
                     self.types_store.getVarAt(duplicate.first, arg_idx),
                     self.types_store.getVarAt(duplicate.repeated, arg_idx),
-                    .propagate,
+                    on_mismatch,
                 );
             }
         }
+    }
+
+    /// The operand row along whose chain the duplicate at `index` repeats.
+    fn repeatedLabelRow(vars: *const ResolvedVarDescs, index: usize, a_duplicates_end: usize) Var {
+        return if (index < a_duplicates_end) vars.a.var_ else vars.b.var_;
     }
 
     /// Recursively unwraps the entries of an extensible row, flattening all visible entries
@@ -2871,19 +2993,12 @@ const Unifier = struct {
         }
     }
 
-    /// A function made pure whose own dependencies are still being demanded.
-    const PureDemand = struct {
-        var_: Var,
-        func: Func,
-        next: u32 = 0,
-    };
-
     fn demandPureFunction(self: *Self, dep_var: Var) Error!void {
-        const allocator = self.scratch.gpa;
-        var pending = std.ArrayList(PureDemand).empty;
-        defer pending.deinit(allocator);
-        self.demandPureStep(&pending, dep_var) catch |err| return self.undoPureDemands(&pending, err);
-        while (pending.items.len > 0) {
+        const pending = &self.scratch.pure_demands;
+        const pending_base = pending.items.len;
+        defer pending.shrinkRetainingCapacity(pending_base);
+        self.demandPureStep(dep_var) catch |err| return self.undoPureDemands(pending_base, err);
+        while (pending.items.len > pending_base) {
             const top = &pending.items[pending.items.len - 1];
             const deps = top.func.effect_deps;
             if (top.next == deps.len()) {
@@ -2892,15 +3007,17 @@ const Unifier = struct {
             }
             const next = self.types_store.getVarAt(deps, top.next);
             top.next += 1;
-            self.demandPureStep(&pending, next) catch |err| return self.undoPureDemands(&pending, err);
+            self.demandPureStep(next) catch |err| return self.undoPureDemands(pending_base, err);
         }
     }
 
     /// A dependency that fails the demand fails every function waiting on
     /// it, and each of those functions' effects then still depends on it, so
     /// their pure writes are undone.
-    fn undoPureDemands(self: *Self, pending: *std.ArrayList(PureDemand), err: Error) Error {
-        while (pending.pop()) |demand| {
+    fn undoPureDemands(self: *Self, pending_base: usize, err: Error) Error {
+        const pending = &self.scratch.pure_demands;
+        while (pending.items.len > pending_base) {
+            const demand = pending.pop().?;
             try self.types_store.setVarContent(demand.var_, .{ .structure = .{ .fn_unbound = demand.func } });
         }
         return err;
@@ -2908,7 +3025,8 @@ const Unifier = struct {
 
     /// Demands one function be pure. An effect-polymorphic function becomes
     /// pure in place and is queued so its own dependencies are demanded.
-    fn demandPureStep(self: *Self, pending: *std.ArrayList(PureDemand), dep_var: Var) Error!void {
+    fn demandPureStep(self: *Self, dep_var: Var) Error!void {
+        const pending = &self.scratch.pure_demands;
         var current = dep_var;
         while (true) {
             const resolved = self.types_store.resolveVar(current);
@@ -2936,9 +3054,7 @@ const Unifier = struct {
                     .empty_tag_union,
                     => return,
                 },
-                // An effect dependency is recorded from a call, which has
-                // already given the callee a function shape.
-                .flex, .rigid, .field_presence => unreachable,
+                .flex, .rigid, .field_presence => unreachable, // effect dependencies are recorded from calls, which already gave the callee a function shape
                 .err => return,
             }
         }
@@ -3162,10 +3278,14 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
+        // Every relation drains its chain duplicates before returning, so the
+        // ones gathered here split exactly into `a`'s and then `b`'s.
+        std.debug.assert(self.scratch.chain_duplicate_tags.items.len == 0);
         // Unwrap all fields for tag unions, erroring on invalid ext var
         const a_gathered_tags = try self.gatherRow(.tag_union, a_tag_union);
+        const a_duplicates_end = self.scratch.chain_duplicate_tags.items.len;
         const b_gathered_tags = try self.gatherRow(.tag_union, b_tag_union);
-        try self.relateChainDuplicateTags();
+        try self.relateChainDuplicateTags(vars, a_duplicates_end);
 
         // Then partition the tags
         const partitioned = try self.partitionRow(
@@ -3213,11 +3333,15 @@ const Unifier = struct {
         }
         // A bounded annotation row refuses unlisted tags exactly as a closed
         // row does, and for the same reason this check precedes any merge.
-        if ((tags_ext == .b_extends_a or tags_ext == .both_extend) and self.rowChainIsBounded(a_tag_union)) {
-            return self.refuseBoundedRowTag(self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b)[0].name);
+        if (tags_ext == .b_extends_a or tags_ext == .both_extend) {
+            if (self.boundedExtOfRow(a_tag_union)) |bounded_ext| {
+                return self.refuseBoundedRowTag(self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b)[0].name, bounded_ext);
+            }
         }
-        if ((tags_ext == .a_extends_b or tags_ext == .both_extend) and self.rowChainIsBounded(b_tag_union)) {
-            return self.refuseBoundedRowTag(self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a)[0].name);
+        if (tags_ext == .a_extends_b or tags_ext == .both_extend) {
+            if (self.boundedExtOfRow(b_tag_union)) |bounded_ext| {
+                return self.refuseBoundedRowTag(self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a)[0].name, bounded_ext);
+            }
         }
 
         // Unify tags (recursion guard in unifyGuarded prevents infinite loops,
@@ -3351,6 +3475,7 @@ const Unifier = struct {
 
     fn unifyStaticDispatchConstraints(
         self: *Self,
+        receivers: RawTypePair,
         a_constraints: StaticDispatchConstraint.SafeList.Range,
         b_constraints: StaticDispatchConstraint.SafeList.Range,
     ) Error!StaticDispatchConstraint.SafeList.Range {
@@ -3380,9 +3505,23 @@ const Unifier = struct {
                 // Re-fetch on each iteration since the backing array may have moved
                 const two_constraints = self.scratch.in_both_static_dispatch_constraints.items.items[in_both_start + i];
                 // TODO: Catch type mismatch and throw a custom error message?
-                try self.unifyStaticDispatchConstraint(two_constraints.a, two_constraints.b);
+                try self.unifyStaticDispatchConstraint(receivers, two_constraints.a, two_constraints.b);
             }
         }
+
+        // A receiver gaining requirements one use at a time keeps every one
+        // it had, so its list grows in place.
+        // A receiver gaining requirements one use at a time keeps every one
+        // it had: its list is reused as it is, or grows in place, rather
+        // than being copied whole for each use.
+        const kept_a = self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a);
+        const kept_b = self.scratch.only_in_b_static_dispatch_constraints.sliceRange(partitioned.only_in_b);
+        const a_whole = self.keptWhole(kept_a, a_constraints, partitioned.a_order, &self.scratch.a_static_dispatch_constraint_indices);
+        const b_whole = self.keptWhole(kept_b, b_constraints, partitioned.b_order, &self.scratch.b_static_dispatch_constraint_indices);
+        if (a_whole and kept_b.len == 0) return a_constraints;
+        if (b_whole and kept_a.len == 0) return b_constraints;
+        if (a_whole and a_len >= b_len) return try self.types_store.appendStaticDispatchConstraintsAfter(a_constraints, kept_b);
+        if (b_whole) return try self.types_store.appendStaticDispatchConstraintsAfter(b_constraints, kept_a);
 
         const top: u32 = @intCast(self.types_store.static_dispatch_constraints.len());
 
@@ -3404,9 +3543,31 @@ const Unifier = struct {
         return self.types_store.static_dispatch_constraints.rangeToEnd(top);
     }
 
-    /// Unify two static dispatch constraints
+    /// Whether a partition kept every constraint of `range`, unchanged and in
+    /// `range`'s own order: `kept` lists them in partition order, which
+    /// `order` gives by position.
+    fn keptWhole(
+        self: *const Self,
+        kept: []const StaticDispatchConstraint,
+        range: StaticDispatchConstraint.SafeList.Range,
+        order: u32Range,
+        indices: anytype,
+    ) bool {
+        if (kept.len != range.len()) return false;
+        const original = self.types_store.static_dispatch_constraints.sliceRange(range);
+        const positions = indices.items.items[order.start..][0..order.len];
+        for (kept, positions, 0..) |constraint, position, index| {
+            if (position != index or !std.meta.eql(constraint, original[position])) return false;
+        }
+        return true;
+    }
+
+    /// Unify two static dispatch constraints. A type has one method of each
+    /// name, so two requirements of that method on the same type must agree;
+    /// when they cannot, the mismatch records them as a method conflict.
     fn unifyStaticDispatchConstraint(
         self: *Self,
+        receivers: RawTypePair,
         a_constraint: StaticDispatchConstraint,
         b_constraint: StaticDispatchConstraint,
     ) Error!void {
@@ -3432,7 +3593,13 @@ const Unifier = struct {
         defer self.scratch.constraint_visited_vars.items.items.len -= 2;
 
         // Unify the constraint function types
-        try self.unifyGuarded(a_constraint.fn_var, b_constraint.fn_var);
+        try self.scheduleGuardedPair(a_constraint.fn_var, b_constraint.fn_var, .{ .record_method_conflict = .{
+            .method_name = a_constraint.fn_name,
+            .from_operator = a_constraint.origin.isOperator() or b_constraint.origin.isOperator(),
+            .receivers = receivers,
+            .poison_receivers = true,
+            .methods = .{ .expected = a_constraint.fn_var, .actual = b_constraint.fn_var },
+        } });
     }
 
     fn linkDeferredCallable(self: *Self, resolved: ResolvedVarDesc) std.mem.Allocator.Error!void {
@@ -3441,20 +3608,26 @@ const Unifier = struct {
         try hook.link(hook.ctx, resolved.var_);
     }
 
+    /// A run of a scratch index list.
+    const u32Range = struct { start: u32, len: u32 };
+
     const PartitionedStaticDispatchConstraints = struct {
         only_in_a: StaticDispatchConstraint.SafeList.Range,
         only_in_b: StaticDispatchConstraint.SafeList.Range,
         in_both: TwoStaticDispatchConstraints.SafeList.Range,
+        /// `a`'s and `b`'s constraints by position, in partition order.
+        a_order: u32Range,
+        b_order: u32Range,
     };
 
-    fn retainDeclarativeStaticDispatchConstraint(
+    fn retainFixedLiteralStaticDispatchConstraint(
         self: *const Self,
         retained_group_start: usize,
         constraint: StaticDispatchConstraint,
     ) Error!void {
         for (self.scratch.only_in_a_static_dispatch_constraints.items.items[retained_group_start..]) |*existing| {
-            if (!sameDeclarativeOriginClass(existing.origin, constraint.origin)) continue;
-            existing.* = mergeStaticDispatchConstraintMetadata(constraint, existing.*);
+            if (!sameFixedLiteralClass(existing.origin, constraint.origin)) continue;
+            existing.* = try mergeStaticDispatchConstraintMetadata(self.types_store, constraint, existing.*);
             try self.types_store.static_dispatch_relation_merges.append(self.types_store.gpa, .{
                 .dropped_fn_var = constraint.fn_var,
                 .retained_fn_var = existing.fn_var,
@@ -3467,12 +3640,18 @@ const Unifier = struct {
         );
     }
 
-    /// Match relations that deliberately share one callable type while leaving
-    /// independent same-name method calls separate. When a same-name group
-    /// contains any declarative relation (where clause, literal, or operator),
-    /// the whole group unifies through one representative declarative; a group
-    /// of dot calls alone stays separate so each use can instantiate a selected
-    /// rank-1 method scheme independently.
+    /// Match relations that share one callable type while leaving independent
+    /// same-name requirements separate. A number or string literal's
+    /// conversion has one callable type for every literal of its kind, so a
+    /// same-name group containing one unifies through one representative
+    /// literal relation; relating them can neither fail nor bind anything
+    /// else. Every other group stays separate, so each requirement can
+    /// instantiate the selected rank-1 method scheme at its own type once the
+    /// receiver resolves: a receiver whose `parser_for` one callee requires at
+    /// `Json` and another at `Tiny`, or whose `+` one use applies to a `U8` and
+    /// another to a `Str`, holds both requirements until then. Generalization
+    /// relates a receiver's same-name requirements into one
+    /// (`relateSameMethodRequirementsAtBoundary`).
     fn partitionStaticDispatchConstraints(
         self: *const Self,
         a_constraints_range: StaticDispatchConstraint.SafeList.Range,
@@ -3512,12 +3691,11 @@ const Unifier = struct {
                     );
                 }
 
-                // Put declarative/defaulting relations before independent
-                // dot-call relations so each same-name group can be matched
-                // with a linear scan.
-                const a_is_method_call = a.origin == .method_call;
-                const b_is_method_call = b.origin == .method_call;
-                if (a_is_method_call != b_is_method_call) return !a_is_method_call;
+                // Put literal relations before independent relations so each
+                // same-name group can be matched with a linear scan.
+                const a_is_literal = isFixedLiteralOrigin(a.origin);
+                const b_is_literal = isFixedLiteralOrigin(b.origin);
+                if (a_is_literal != b_is_literal) return a_is_literal;
 
                 // Preserve producer order within each semantic class.
                 return a_index < b_index;
@@ -3539,6 +3717,7 @@ const Unifier = struct {
         if (!std.sort.isSorted(u32, a_indices, a_order, ConstraintOrder.lessThan)) {
             std.mem.sort(u32, a_indices, a_order, ConstraintOrder.lessThan);
         }
+
         const b_order = ConstraintOrder{ .unifier = self, .constraints = b_constraints };
         if (!std.sort.isSorted(u32, b_indices, b_order, ConstraintOrder.lessThan)) {
             std.mem.sort(u32, b_indices, b_order, ConstraintOrder.lessThan);
@@ -3623,78 +3802,77 @@ const Unifier = struct {
                 }
             }
 
-            var a_non_method_end = a_group_start;
-            while (a_non_method_end < a_group_end and
-                a_constraints[a_indices[a_non_method_end]].origin != .method_call)
+            var a_literal_end = a_group_start;
+            while (a_literal_end < a_group_end and
+                isFixedLiteralOrigin(a_constraints[a_indices[a_literal_end]].origin))
             {
-                a_non_method_end += 1;
+                a_literal_end += 1;
             }
-            var b_non_method_end = b_group_start;
-            while (b_non_method_end < b_group_end and
-                b_constraints[b_indices[b_non_method_end]].origin != .method_call)
+            var b_literal_end = b_group_start;
+            while (b_literal_end < b_group_end and
+                isFixedLiteralOrigin(b_constraints[b_indices[b_literal_end]].origin))
             {
-                b_non_method_end += 1;
+                b_literal_end += 1;
             }
 
-            const a_has_declarative = a_non_method_end > a_group_start;
-            const b_has_declarative = b_non_method_end > b_group_start;
-            if (a_has_declarative or b_has_declarative) {
-                // A written/defaulting requirement describes the one method
-                // available to the body, so every same-name declarative must
-                // agree on a single callable type and every independent call
-                // on either side must satisfy it. Retain one metadata-bearing
-                // declarative per semantic origin, then validate every callable
-                // against one representative. Method-call entries are subsumed
-                // by that relation; their function vars remain unified with it.
-                const representative = if (a_has_declarative)
+            const a_has_literal = a_literal_end > a_group_start;
+            const b_has_literal = b_literal_end > b_group_start;
+            if (a_has_literal or b_has_literal) {
+                // A literal conversion has one callable type per literal kind,
+                // so every same-name relation agrees with it. Retain one
+                // metadata-bearing relation per literal kind, then validate
+                // every callable against one representative. Independent
+                // entries are subsumed by that relation; their function vars
+                // remain unified with it.
+                const representative = if (a_has_literal)
                     a_constraints[a_indices[a_group_start]]
                 else
                     b_constraints[b_indices[b_group_start]];
                 const retained_group_start: usize = @intCast(
                     scratch.only_in_a_static_dispatch_constraints.len(),
                 );
-                var a_declarative = a_group_start;
-                while (a_declarative < a_non_method_end) : (a_declarative += 1) {
-                    try self.retainDeclarativeStaticDispatchConstraint(
+                var a_literal = a_group_start;
+                while (a_literal < a_literal_end) : (a_literal += 1) {
+                    try self.retainFixedLiteralStaticDispatchConstraint(
                         retained_group_start,
-                        a_constraints[a_indices[a_declarative]],
+                        a_constraints[a_indices[a_literal]],
                     );
                 }
-                var b_declarative = b_group_start;
-                while (b_declarative < b_non_method_end) : (b_declarative += 1) {
-                    try self.retainDeclarativeStaticDispatchConstraint(
+                var b_literal = b_group_start;
+                while (b_literal < b_literal_end) : (b_literal += 1) {
+                    try self.retainFixedLiteralStaticDispatchConstraint(
                         retained_group_start,
-                        b_constraints[b_indices[b_declarative]],
+                        b_constraints[b_indices[b_literal]],
                     );
                 }
-                var a_index = if (a_has_declarative) a_group_start + 1 else a_group_start;
+                var a_index = if (a_has_literal) a_group_start + 1 else a_group_start;
                 while (a_index < a_group_end) : (a_index += 1) {
                     _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{
                         .a = representative,
                         .b = a_constraints[a_indices[a_index]],
                     });
                 }
-                var b_index = if (a_has_declarative) b_group_start else b_group_start + 1;
+                var b_index = if (a_has_literal) b_group_start else b_group_start + 1;
                 while (b_index < b_group_end) : (b_index += 1) {
                     _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{
                         .a = representative,
                         .b = b_constraints[b_indices[b_index]],
                     });
                 }
-                for (a_indices[a_non_method_end..a_group_end]) |constraint_index| {
+                for (a_indices[a_literal_end..a_group_end]) |constraint_index| {
                     try self.types_store.static_dispatch_relation_merges.append(self.types_store.gpa, .{
                         .dropped_fn_var = a_constraints[constraint_index].fn_var,
                         .retained_fn_var = representative.fn_var,
                     });
                 }
-                for (b_indices[b_non_method_end..b_group_end]) |constraint_index| {
+                for (b_indices[b_literal_end..b_group_end]) |constraint_index| {
                     try self.types_store.static_dispatch_relation_merges.append(self.types_store.gpa, .{
                         .dropped_fn_var = b_constraints[constraint_index].fn_var,
                         .retained_fn_var = representative.fn_var,
                     });
                 }
             } else {
-                // Only independent dot-call relations: keep each side's calls
+                // Only independent relations: keep each side's requirements
                 // separate so every use can instantiate the selected rank-1
                 // method scheme at its own type.
                 var a_index = a_group_start;
@@ -3704,6 +3882,7 @@ const Unifier = struct {
                         a_constraints[a_indices[a_index]],
                     );
                 }
+
                 var b_index = b_group_start;
                 while (b_index < b_group_end) : (b_index += 1) {
                     _ = try scratch.only_in_b_static_dispatch_constraints.append(
@@ -3735,6 +3914,8 @@ const Unifier = struct {
             .only_in_a = scratch.only_in_a_static_dispatch_constraints.rangeToEnd(a_constraints_start),
             .only_in_b = scratch.only_in_b_static_dispatch_constraints.rangeToEnd(b_constraints_start),
             .in_both = scratch.in_both_static_dispatch_constraints.rangeToEnd(both_constraints_start),
+            .a_order = .{ .start = a_indices_start, .len = @intCast(a_constraints.len) },
+            .b_order = .{ .start = b_indices_start, .len = @intCast(b_constraints.len) },
         };
     }
 
@@ -3773,45 +3954,51 @@ const Unifier = struct {
     }
 };
 
-fn sameDeclarativeOriginClass(
-    a: StaticDispatchConstraint.Origin,
-    b: StaticDispatchConstraint.Origin,
-) bool {
-    return switch (a) {
-        .method_call => false,
-        .where_clause => b == .where_clause,
-        .desugared_unaryop => b == .desugared_unaryop,
-        .desugared_binop => |a_binop| b == .desugared_binop and
-            a_binop.negated == b.desugared_binop.negated,
-        .from_literal => |a_literal| b == .from_literal and switch (a_literal) {
-            // Each interpolation carries its own part vars and source regions;
-            // sharing one callable relation must not discard those checks.
+/// A number or string literal's conversion, whose callable type is the same
+/// for every literal of its kind. Operators, interpolations, dot calls, and
+/// instantiated where-clause requirements are independent uses of a rank-1
+/// method scheme: an interpolation's callable mentions its parts' types.
+fn isFixedLiteralOrigin(origin: StaticDispatchConstraint.Origin) bool {
+    return switch (origin) {
+        .from_literal => |literal| switch (literal) {
+            .numeral, .quote => true,
             .interpolation => false,
-            .numeral, .quote => std.meta.activeTag(a_literal) ==
-                std.meta.activeTag(b.from_literal),
         },
+        .desugared_binop, .desugared_unaryop, .method_call, .where_clause => false,
     };
 }
 
+fn sameFixedLiteralClass(
+    a: StaticDispatchConstraint.Origin,
+    b: StaticDispatchConstraint.Origin,
+) bool {
+    const a_literal = a.literalKind() orelse return false;
+    const b_literal = b.literalKind() orelse return false;
+    return a_literal == b_literal;
+}
+
 fn mergeStaticDispatchConstraintMetadata(
+    store: *types_mod.Store,
     other: StaticDispatchConstraint,
     retained: StaticDispatchConstraint,
-) StaticDispatchConstraint {
+) std.mem.Allocator.Error!StaticDispatchConstraint {
     var merged = retained;
-    if (other.origin == .from_literal and retained.origin == .from_literal) {
-        if (mergeFromNumeralLiteralInfo(
-            other.origin.numeralInfo(),
-            retained.origin.numeralInfo(),
-        )) |numeral_info| {
-            merged.origin = .{ .from_literal = .{ .numeral = numeral_info } };
+    if (retained.origin.literalKind() == .numeral) {
+        // Same-class numeral relations each carry their literal's facts.
+        // Recorded facts are never mutated: copies of either constraint
+        // share them, so a merge whose facts neither side already holds
+        // records its own. Facts equal to the retained side's keep its row,
+        // so the merged constraint stays equal to the retained one and the
+        // receiver's list is kept whole.
+        const other_info = store.constraintNumeralInfo(other).?;
+        const retained_info = store.constraintNumeralInfo(retained).?;
+        const merged_info = types_mod.NumeralInfo.merged(other_info, retained_info);
+        if (!std.meta.eql(merged_info, retained_info)) {
+            merged.numeral = if (std.meta.eql(merged_info, other_info))
+                other.numeral
+            else
+                try store.appendNumeralInfo(merged_info);
         }
-    }
-
-    const other_forced = other.origin == .where_clause and other.origin.where_clause.body_required;
-    const retained_forced = retained.origin == .where_clause and retained.origin.where_clause.body_required;
-    if (other_forced or retained_forced) {
-        std.debug.assert(merged.origin == .where_clause);
-        merged.origin.where_clause.body_required = true;
     }
 
     // Provenance is excluded from constraint identity. Keep the retained
@@ -3824,15 +4011,6 @@ fn mergeStaticDispatchConstraintMetadata(
         merged.interpolation = other.interpolation;
     }
     return merged;
-}
-
-fn mergeFromNumeralLiteralInfo(
-    a: ?types_mod.NumeralInfo,
-    b: ?types_mod.NumeralInfo,
-) ?types_mod.NumeralInfo {
-    const a_info = a orelse return b;
-    const b_info = b orelse return a;
-    return types_mod.NumeralInfo.merged(a_info, b_info);
 }
 
 /// A list of constraint that should apply to concrete type
@@ -3877,6 +4055,10 @@ const MismatchHandling = union(enum) {
     ignore,
     set_flag: u32,
     record_then_propagate: RawTypePair,
+    record_method_conflict: RawMethodConflict,
+    /// A row's repeated label failed to relate to its other occurrence: the
+    /// whole relation stops and reports the row.
+    record_repeated_label_row: Var,
 };
 
 const SameAliasAfterArgs = struct {
@@ -4083,13 +4265,28 @@ fn ChainDuplicate(comptime kind: RowKind) type {
     };
 }
 
-/// A tag a unification refused to add to a bounded annotation extension.
+/// A tag a unification refused to add to a bounded annotation extension, and
+/// that extension.
 pub const BoundedRowViolation = struct {
     tag: Ident.Idx,
+    ext: Var,
 };
 
 /// An unordered pair of resolved type descriptors.
 const VisitedPairKey = struct { low: u32, high: u32 };
+
+/// A function made pure whose own dependencies are still being demanded.
+const PureDemand = struct {
+    var_: Var,
+    func: Func,
+    next: u32 = 0,
+};
+
+/// The contents of a reported mismatch's root operands before poisoning.
+pub const RejectedRoots = struct {
+    expected: Content,
+    actual: Content,
+};
 
 /// A reusable memory arena used across unification calls to avoid per-call allocations.
 ///
@@ -4138,6 +4335,9 @@ pub const Scratch = struct {
     /// Linear, merge-local union of directed effect formulas.
     effect_dependency_seen: collections.DenseMap(Var, void),
     effect_dependencies: std.ArrayListUnmanaged(Var) = .empty,
+    /// Functions made pure whose own dependencies a pure demand is still
+    /// visiting.
+    pure_demands: std.ArrayListUnmanaged(PureDemand) = .empty,
 
     // explicit unification work stack
     unify_work_stack: WorkFrame.SafeList,
@@ -4164,6 +4364,9 @@ pub const Scratch = struct {
     /// The bounded extension and the tag the current unify call refused to add
     /// to it, when a refusal caused its mismatch.
     bounded_row_violation: ?BoundedRowViolation,
+    /// The root operands' contents, read through aliases just before the
+    /// reported mismatch of the current unify call poisoned them.
+    rejected_roots: ?RejectedRoots,
     only_in_a_tags: TagSafeList,
     only_in_b_tags: TagSafeList,
     in_both_tags: TwoTagsSafeList,
@@ -4339,6 +4542,7 @@ pub const Scratch = struct {
             .absorbed_record_defaults = try AbsorbedRecordDefault.SafeList.initCapacity(gpa, 4),
             .gathered_tags = try TagSafeList.initCapacity(gpa, 32),
             .bounded_row_violation = null,
+            .rejected_roots = null,
             .only_in_a_tags = try TagSafeList.initCapacity(gpa, 32),
             .only_in_b_tags = try TagSafeList.initCapacity(gpa, 32),
             .in_both_tags = try TwoTagsSafeList.initCapacity(gpa, 32),
@@ -4368,6 +4572,7 @@ pub const Scratch = struct {
         self.fresh_vars.deinit(self.gpa);
         self.effect_dependency_seen.deinit();
         self.effect_dependencies.deinit(self.gpa);
+        self.pure_demands.deinit(self.gpa);
         self.unify_work_stack.deinit(self.gpa);
         self.mismatch_flags.deinit(self.gpa);
         self.gathered_fields.deinit(self.gpa);
@@ -4400,6 +4605,12 @@ pub const Scratch = struct {
         self.persistent_opening_args.deinit(self.gpa);
     }
 
+    /// The row whose own repeated label stopped the last relation, when one
+    /// did (design.md "Row Union Normalization").
+    pub fn repeatedLabelRow(self: *const Scratch) ?Var {
+        return self.mismatch_evidence.repeated_label_row;
+    }
+
     /// Reset the scratch arrays, retaining the allocated memory
     pub fn reset(self: *Scratch) void {
         self.unify_work_stack.items.clearRetainingCapacity();
@@ -4412,6 +4623,7 @@ pub const Scratch = struct {
         self.absorbed_record_defaults.items.clearRetainingCapacity();
         self.gathered_tags.items.clearRetainingCapacity();
         self.bounded_row_violation = null;
+        self.rejected_roots = null;
         self.only_in_a_tags.items.clearRetainingCapacity();
         self.only_in_b_tags.items.clearRetainingCapacity();
         self.in_both_tags.items.clearRetainingCapacity();
@@ -4735,5 +4947,5 @@ fn writeActiveVariant(comptime U: type, dest: *U, src: U) void {
             return;
         }
     }
-    unreachable;
+    unreachable; // the loop covers every field of U, one of which is active
 }

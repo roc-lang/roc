@@ -65,7 +65,7 @@ test "URL dependency resolves from a warm cache with no network, and its modules
     try std.testing.expectEqualStrings(util_url, shorthand.name);
 
     // A sidecar was regenerated next to the extracted bundle.
-    tmp_dir.dir.access(io, "cache/" ++ fake_hash ++ ".deps.json", .{}) catch return error.TestUnexpectedResult;
+    tmp_dir.dir.access(io, "cache/" ++ fake_hash ++ ".deps", .{}) catch return error.TestUnexpectedResult;
 
     // Bundling the consumer must include its own modules but exclude the URL
     // dependency's modules (both by package and by cache location).

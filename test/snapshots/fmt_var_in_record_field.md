@@ -91,7 +91,7 @@ f = || {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "({}) -> {}")))
+		(patt (type "() -> {}")))
 	(expressions
-		(expr (type "({}) -> {}"))))
+		(expr (type "() -> {}"))))
 ~~~

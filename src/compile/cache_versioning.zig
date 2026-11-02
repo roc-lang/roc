@@ -26,12 +26,17 @@ const PlatformPairing = check.CheckedArtifact.PlatformPairing;
 pub const Entry = enum {
     /// One fully checked module: an env body and an artifact body.
     checked_module,
+    /// Solved source and checker-owned publication inputs, before evaluation.
+    inference,
     /// One exact platform/app composition's changed columns, written in the
     /// checked-module envelope with an empty env body.
     platform_pairing,
     /// One module's canonicalization output: an env body and the encoded
     /// parse-stage record.
     canonicalized_module,
+    /// One program root module's literal values: explicitly encoded tables
+    /// and a serialized `ConstStore`.
+    literal_values,
 };
 
 /// Layout fingerprint of `ModuleEnv.Serialized`.
@@ -39,15 +44,23 @@ pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.
 
 /// Version of the checked-module envelope: its magic, header layout, and body
 /// order. Platform-pairing entries share the envelope.
-const checked_envelope_version: u32 = 13;
+const checked_envelope_version: u32 = 14;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order.
 const canonicalized_envelope_version: u32 = 3;
 
+/// Version of the literal values file: its magic, header and table layout.
+const literal_values_version: u32 = 1;
+
 /// The running compiler's admission hash for `entry`.
 pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
     return comptime switch (entry) {
+        .inference => compose(
+            "roc-inference-entry-v1",
+            &.{ 1, check.CheckingDependencies.format_version },
+            &.{ module_env_layout, check.rootLayoutVersionHash(check.InferenceOutput.Serialized, 1) },
+        ),
         .checked_module => compose(
             "roc-checked-module-entry-v1",
             &.{checked_envelope_version},
@@ -62,6 +75,13 @@ pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
             "roc-canonicalized-module-entry-v1",
             &.{ canonicalized_envelope_version, canonicalized_cache_entry.format_version },
             &.{module_env_layout},
+        ),
+        // The literal values' const store has the checked module's
+        // `ConstStore` layout, which the artifact fingerprint covers.
+        .literal_values => compose(
+            "roc-literal-values-entry-v1",
+            &.{literal_values_version},
+            &.{CheckedModuleArtifact.SERIALIZED_VERSION_HASH},
         ),
     };
 }
@@ -111,8 +131,10 @@ fn splitmix64(x: u64) u64 {
 test "every entry kind has a distinct admission hash" {
     const hashes = [_][32]u8{
         entryVersionHash(.checked_module),
+        entryVersionHash(.inference),
         entryVersionHash(.platform_pairing),
         entryVersionHash(.canonicalized_module),
+        entryVersionHash(.literal_values),
     };
     for (hashes, 0..) |a, i| {
         for (hashes[i + 1 ..]) |b| try std.testing.expect(!std.mem.eql(u8, &a, &b));
@@ -138,8 +160,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x62, 0x75, 0x77, 0xD5, 0x4B, 0x02, 0x01, 0x0D, 0xB7, 0xCF, 0xB0, 0x29, 0x57, 0x9B, 0xE9, 0xCA,
-        0x84, 0x48, 0xE9, 0x90, 0x70, 0x45, 0xE6, 0xD4, 0x5D, 0xFD, 0xB9, 0x9E, 0x66, 0xFE, 0x37, 0xD8,
+        0x5A, 0x7C, 0xED, 0xE8, 0x50, 0x9E, 0x1D, 0xCB, 0x20, 0x43, 0xA7, 0x8B, 0x93, 0xDB, 0xE0, 0x8C,
+        0x02, 0x58, 0x9C, 0x96, 0xF0, 0x0C, 0xC8, 0x30, 0xE1, 0x40, 0x29, 0x0E, 0xDE, 0xCE, 0x96, 0x14,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }

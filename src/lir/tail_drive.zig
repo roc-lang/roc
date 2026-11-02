@@ -99,7 +99,7 @@ pub fn run(
     var late_desc_locals = std.ArrayList(LateDescLocal).empty;
     defer late_desc_locals.deinit(allocator);
     for (0..proc_count) |proc_index| {
-        const proc = store.getProcSpec(@fromBackingInt(@as(u32, @intCast(proc_index))));
+        const proc = store.getProcSpecImmediate(@fromBackingInt(@as(u32, @intCast(proc_index))));
         const body = proc.body orelse continue;
         join_bodies.clearRetainingCapacity();
         try work.append(allocator, body);
@@ -118,13 +118,14 @@ pub fn run(
                     .caller = @intCast(proc_index),
                     .callee = @backingInt(stmt.assign_call.proc),
                     .stmt = stmt_id,
-                    .returns = try returnOf(allocator, store, join_bodies.items, &late_desc_locals, stmt.assign_call),
+                    .returns = try returnOf(allocator, store, join_bodies.items, &late_desc_locals, stmt.assign_call.target, stmt.assign_call.next, store.stmtRowOrDefault(stmt.assign_call.extra).out_desc),
                 });
             } else if (stmt == .assign_call_erased) {
-                if (stmt.assign_call_erased.deferred) try deferred_calls.append(allocator, .{
+                const erased = store.stmtRow(stmt.assign_call_erased.data);
+                if (erased.deferred) try deferred_calls.append(allocator, .{
                     .caller = @intCast(proc_index),
                     .stmt = stmt_id,
-                    .returns = try returnOf(allocator, store, join_bodies.items, &late_desc_locals, stmt.assign_call_erased),
+                    .returns = try returnOf(allocator, store, join_bodies.items, &late_desc_locals, stmt.assign_call_erased.target, stmt.assign_call_erased.next, erased.out_desc),
                 });
             } else if (stmt == .assign_literal and stmt.assign_literal.value == .proc_ref) {
                 outside.set(@backingInt(stmt.assign_literal.value.proc_ref));
@@ -132,12 +133,18 @@ pub fn run(
             try body_clone.appendSuccessors(store, &work, stmt_id, allocator);
         }
     }
-    if (deferred_calls.items.len == 0) return;
 
     // A procedure can return with a call pending when it defers one itself,
     // or hands up one a callee left.
     var may_pend = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_count);
     defer may_pend.deinit(allocator);
+    // A body supplied by the native cache has already been analyzed by its
+    // producer. Its absence here says nothing about whether it leaves work
+    // pending; replay that explicit summary before propagating to callers.
+    for (0..proc_count) |index| {
+        const proc = store.getProcSpecImmediate(@fromBackingInt(@as(u32, @intCast(index))));
+        if (proc.external and proc.may_leave_pending) may_pend.set(index);
+    }
     for (deferred_calls.items) |deferred| {
         if (deferred.returns == .no) continue;
         if (handsUp(store, &outside, deferred.caller) != .never) may_pend.set(deferred.caller);
@@ -154,30 +161,38 @@ pub fn run(
         }
     }
 
+    for (0..proc_count) |index| {
+        store.getProcSpecPtr(@fromBackingInt(@as(u32, @intCast(index)))).may_leave_pending = may_pend.isSet(index);
+    }
+
     for (deferred_calls.items) |deferred| {
         const drive = driveAfter(store, &outside, deferred.caller, deferred.returns != .no);
         const updated = &store.getCFStmtPtr(deferred.stmt).assign_call_erased;
-        updated.drive = drive;
+        var data = store.stmtRow(updated.data);
+        data.drive = drive;
         // The conversions that follow would read a value that is not there
         // while the call is pending, so the procedure returns before them.
         if (deferred.returns == .converted and drive.canLeavePending()) {
-            updated.returns_pending = deferred.returns.converted;
+            data.returns_pending = deferred.returns.converted;
         }
+        updated.data = try store.addStmtRow(LIR.ErasedCallData, data);
         if (drive == .unless_caller_drives) store.getProcSpecPtr(@fromBackingInt(deferred.caller)).reads_caller_drives = true;
     }
     for (direct_calls.items) |call| {
         if (!may_pend.isSet(call.callee)) continue;
         const drive = driveAfter(store, &outside, call.caller, call.returns != .no);
         const updated = &store.getCFStmtPtr(call.stmt).assign_call;
-        updated.drive = drive;
+        var extra = store.stmtRowOrDefault(updated.extra);
+        extra.drive = drive;
         // Whatever is still pending once this statement has run its drive is
         // the caller's to make, before the conversions that follow read a
         // value that is not there yet.
         if (call.returns == .converted and drive.canLeavePending()) {
-            updated.returns_pending = call.returns.converted;
+            extra.returns_pending = call.returns.converted;
         }
         // A call that runs pending calls afterwards keeps its frame to do so.
-        if (drive.canDriveHere()) updated.replaces_frame = false;
+        if (drive.canDriveHere()) extra.replaces_frame = false;
+        updated.extra = try store.addOptionalStmtRow(LIR.CallExtra, extra);
         if (drive == .unless_caller_drives) store.getProcSpecPtr(@fromBackingInt(call.caller)).reads_caller_drives = true;
     }
 }
@@ -186,7 +201,7 @@ const HandsUp = enum { never, always, when_runtime_called };
 
 /// Whether a procedure may return with a call pending.
 fn handsUp(store: *const LirStore, outside: *const std.bit_set.DynamicBitSetUnmanaged, proc_index: u32) HandsUp {
-    const proc = store.getProcSpec(@fromBackingInt(proc_index));
+    const proc = store.getProcSpecImmediate(@fromBackingInt(proc_index));
     return switch (proc.abi) {
         .erased_callable => .when_runtime_called,
         .roc => if (outside.isSet(proc_index)) .never else .always,
@@ -216,10 +231,11 @@ fn returnOf(
     store: *const LirStore,
     join_bodies: []const ?LIR.CFStmtId,
     late_desc_locals: *std.ArrayList(LateDescLocal),
-    call: anytype,
+    value: LIR.LocalId,
+    call_next: LIR.CFStmtId,
+    out_desc: ?LIR.LocalId,
 ) Allocator.Error!Returns {
-    const value: LIR.LocalId = call.target;
-    var current: LIR.CFStmtId = call.next;
+    var current: LIR.CFStmtId = call_next;
     var returned = value;
     // The value the latest conversion consumed; its counts bracket that
     // conversion.
@@ -231,7 +247,7 @@ fn returnOf(
     // returns right after a call that left another pending has none of them,
     // so the last conversion's descriptor is named without them.
     late_desc_locals.clearRetainingCapacity();
-    if (call.out_desc) |out_desc| try late_desc_locals.append(allocator, .{ .local = out_desc, .names = .returned });
+    if (out_desc) |desc| try late_desc_locals.append(allocator, .{ .local = desc, .names = .returned });
     // Each jump enters a join body, and a body that jumps back to its own
     // join never returns, so more jumps than joins is such a cycle.
     var jumps: usize = 0;
@@ -266,16 +282,17 @@ fn returnOf(
         }
         if (stmt.* == .assign_boxy_adapt) {
             const adapt = stmt.assign_boxy_adapt;
-            if (adapt.source != returned or adapt.source_mode != .move) return .no;
+            const adapt_data = store.stmtRow(adapt.data);
+            if (adapt_data.source != returned or adapt_data.source_mode != .move) return .no;
             converted_from = returned;
             returned = adapt.target;
-            converted_to = adapt.target_desc;
+            converted_to = adapt_data.target_desc;
             converts = true;
             current = adapt.next;
             continue;
         }
         if (stmt.* == .assign_boxy_desc_ref) {
-            const desc_ref = stmt.assign_boxy_desc_ref;
+            const desc_ref = store.stmtRow(stmt.assign_boxy_desc_ref.data);
             const names_whole_descriptor = desc_ref.nested_index == null and
                 desc_ref.box_payload_layout == null and
                 desc_ref.tag_payload == null and
@@ -283,7 +300,7 @@ fn returnOf(
                 desc_ref.tag_residual_for == null and
                 desc_ref.captures.len == 0;
             try late_desc_locals.append(allocator, .{
-                .local = desc_ref.target,
+                .local = stmt.assign_boxy_desc_ref.target,
                 .names = if (names_whole_descriptor) .{ .descriptor = desc_ref.desc } else .part,
             });
             current = stmt.assign_boxy_desc_ref.next;
@@ -311,4 +328,56 @@ fn returnOf(
 
 test "tail drive declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "cached pending-call summaries propagate without a locally deferred call" {
+    const a = std.testing.allocator;
+    for ([_]bool{ false, true }) |pending| {
+        var store = LirStore.init(a);
+        defer store.deinit();
+        const external = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(1),
+            .args = .empty(),
+            .ret_layout = .u64,
+            .external = true,
+            .may_leave_pending = pending,
+        }, .none);
+        const value = try store.addLocal(.{ .layout_idx = .u64 });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+        const call = try store.addCFStmt(.{ .assign_call = .{
+            .target = value,
+            .proc = external,
+            .args = .empty(),
+            .next = ret,
+        } }, .test_fixture);
+        const relay = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(2),
+            .args = .empty(),
+            .body = call,
+            .ret_layout = .u64,
+        }, .none);
+        const result = try store.addLocal(.{ .layout_idx = .u64 });
+        const root_ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+        const root_call = try store.addCFStmt(.{ .assign_call = .{
+            .target = result,
+            .proc = relay,
+            .args = .empty(),
+            .next = root_ret,
+        } }, .test_fixture);
+        const root = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(3),
+            .args = .empty(),
+            .body = root_call,
+            .ret_layout = .u64,
+        }, .none);
+        try run(a, &store, &.{&.{root}});
+        try std.testing.expectEqual(pending, store.getProcSpecImmediate(external).may_leave_pending);
+        try std.testing.expectEqual(pending, store.getProcSpecImmediate(relay).may_leave_pending);
+        try std.testing.expect(!store.getProcSpecImmediate(root).may_leave_pending);
+        try std.testing.expectEqual(if (pending) LIR.PendingDrive.handed_up else .none, store.stmtRowOrDefault(store.getCFStmtImmediate(call).assign_call.extra).drive);
+        try std.testing.expectEqual(if (pending) LIR.PendingDrive.always else .none, store.stmtRowOrDefault(store.getCFStmtImmediate(root_call).assign_call.extra).drive);
+    }
 }

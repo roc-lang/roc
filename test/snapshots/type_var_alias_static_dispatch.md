@@ -578,18 +578,18 @@ from_str = |str| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{} -> thing where [thing.default : ({}) -> thing]"))
+		(patt (type "{} -> thing where [thing.default : () -> thing]"))
 		(patt (type "a, b -> a where [a.from_b : b -> a]"))
 		(patt (type "val -> val where [val.transform : val -> val, val.validate : val -> Bool]"))
-		(patt (type "x -> x where [x.first : ({}) -> x, x.second : x -> x]"))
+		(patt (type "x -> x where [x.first : () -> x, x.second : x -> x]"))
 		(patt (type "a, b -> (a, b) where [a.convert : a -> a, b.convert : b -> b]"))
 		(patt (type "t, Str -> t where [t.create : Str, U64 -> t]"))
 		(patt (type "Str -> thing where [thing.from_str : Str -> thing]")))
 	(expressions
-		(expr (type "{} -> thing where [thing.default : ({}) -> thing]"))
+		(expr (type "{} -> thing where [thing.default : () -> thing]"))
 		(expr (type "a, b -> a where [a.from_b : b -> a]"))
 		(expr (type "val -> val where [val.transform : val -> val, val.validate : val -> Bool]"))
-		(expr (type "x -> x where [x.first : ({}) -> x, x.second : x -> x]"))
+		(expr (type "x -> x where [x.first : () -> x, x.second : x -> x]"))
 		(expr (type "a, b -> (a, b) where [a.convert : a -> a, b.convert : b -> b]"))
 		(expr (type "t, Str -> t where [t.create : Str, U64 -> t]"))
 		(expr (type "Str -> thing where [thing.from_str : Str -> thing]"))))

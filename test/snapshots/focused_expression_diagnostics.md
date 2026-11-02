@@ -143,7 +143,7 @@ NON EXHAUSTIVE MATCH - focused_expression_diagnostics.md:16:24:16:29
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "({}) -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")
+			(text "() -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")
 			(annotation-end)
 			(line-break)
 			(line-break)

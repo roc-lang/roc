@@ -106,6 +106,20 @@ const TestEnv = struct {
         return try unify_mod.unify(&env, a, b, .{});
     }
 
+    fn unifyWithOptions(self: *Self, a: Var, b: Var, opts: unify_mod.Options) std.mem.Allocator.Error!Result {
+        const env = unify_mod.Env{
+            .ident_store = self.module_env.getIdentStoreConst(),
+            .self_module_identity = self.module_env.selfModuleIdentity(),
+            .types = &self.module_env.types,
+            .problems = &self.problems,
+            .snapshots = &self.snapshots,
+            .type_writer = &self.type_writer,
+            .unify_scratch = &self.scratch,
+            .occurs_scratch = &self.occurs_scratch,
+        };
+        return try unify_mod.unify(&env, a, b, opts);
+    }
+
     /// Helper to call the write-no-report unify variant from TestEnv.
     fn unifyWriteNoReport(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
         const env = unify_mod.Env{
@@ -421,6 +435,41 @@ test "unify - a field repeated along one row's chain relates its value and kind"
                 );
             },
             .conflicting => try std.testing.expect(result.isProblem()),
+        }
+    }
+}
+
+test "unify - a repeated label whose occurrences conflict is the repeating row's conflict" {
+    for ([_]enum { tag_payload, tag_arity, field }{ .tag_payload, .tag_arity, .field }) |case| {
+        for ([_]bool{ false, true }) |row_is_actual| {
+            var env = try TestEnv.init(std.testing.allocator);
+            defer env.deinit();
+            const store = &env.module_env.types;
+            const outer_payload = try store.freshFromContent(.{ .structure = .empty_record });
+            const inner_payload = try store.freshFromContent(.{ .structure = .empty_tag_union });
+            const row, const other = switch (case) {
+                .tag_payload, .tag_arity => blk: {
+                    const inner_args: []const Var = if (case == .tag_arity) &.{} else &.{inner_payload};
+                    const inner = try store.freshFromContent((try env.mkTagUnionOpen(&.{try env.mkTag("Oops", inner_args)})).content);
+                    break :blk .{
+                        try store.freshFromContent((try env.mkTagUnion(&.{try env.mkTag("Oops", &.{outer_payload})}, inner)).content),
+                        try store.freshFromContent((try env.mkTagUnionOpen(&.{try env.mkTag("Other", &.{})})).content),
+                    };
+                },
+                .field => blk: {
+                    const inner = try store.freshFromContent((try env.mkRecordOpen(&.{try env.mkRecordField("name", inner_payload)})).content);
+                    break :blk .{
+                        try store.freshFromContent((try env.mkRecord(&.{try env.mkRecordField("name", outer_payload)}, inner)).content),
+                        try store.freshFromContent((try env.mkRecordOpen(&.{try env.mkRecordField("other", try store.fresh())})).content),
+                    };
+                },
+            };
+            const a, const b = if (row_is_actual) .{ other, row } else .{ row, other };
+            const result = try env.unifyWithOptions(a, b, .{ .repeated_label_rows = .return_row });
+            try std.testing.expectEqual(.mismatch, result);
+            try std.testing.expectEqual(store.resolveVar(row).var_, store.resolveVar(env.scratch.repeatedLabelRow().?).var_);
+            try std.testing.expectEqual(@as(usize, 0), env.problems.len());
+            try std.testing.expect(store.resolveVar(row).desc.content != .err);
         }
     }
 }
@@ -2351,7 +2400,128 @@ test "unify - flex with constraints unifies with flex with same constraints" {
     try std.testing.expectEqual(.unified, result);
 }
 
-test "unify - declarative static dispatch representative survives repeated merges" {
+test "unify - literal static dispatch representative survives repeated merges" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const method_name = try env.module_env.getIdentStore().insert(
+        env.module_env.gpa,
+        Ident.for_text("from_quote"),
+    );
+    const argument = try env.module_env.types.fresh();
+    const result_var = try env.module_env.types.fresh();
+    const declarative_fn = try env.module_env.types.freshFromContent(
+        try env.mkFuncPure(&.{argument}, result_var),
+    );
+    const first_call_fn = try env.module_env.types.freshFromContent(
+        try env.mkFuncPure(&.{argument}, result_var),
+    );
+    const second_call_fn = try env.module_env.types.freshFromContent(
+        try env.mkFuncPure(&.{argument}, result_var),
+    );
+
+    const declarative_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = method_name,
+        .fn_var = declarative_fn,
+        .origin = .{ .from_literal = .quote },
+    };
+    const first_call_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = method_name,
+        .fn_var = first_call_fn,
+        .origin = .method_call,
+    };
+    const second_call_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = method_name,
+        .fn_var = second_call_fn,
+        .origin = .method_call,
+    };
+
+    const declarative_range = try env.module_env.types.appendStaticDispatchConstraints(
+        &.{declarative_constraint},
+    );
+    const first_call_range = try env.module_env.types.appendStaticDispatchConstraints(
+        &.{first_call_constraint},
+    );
+    const second_call_range = try env.module_env.types.appendStaticDispatchConstraints(
+        &.{second_call_constraint},
+    );
+
+    const receiver = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = declarative_range,
+    } });
+    const first_call_receiver = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = first_call_range,
+    } });
+    const second_call_receiver = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = second_call_range,
+    } });
+
+    try std.testing.expectEqual(.unified, try env.unify(receiver, first_call_receiver));
+    try std.testing.expectEqual(.unified, try env.unify(receiver, second_call_receiver));
+
+    const resolved = env.module_env.types.resolveVar(receiver);
+    try std.testing.expect(resolved.desc.content == .flex);
+    const retained = env.module_env.types.sliceStaticDispatchConstraints(
+        resolved.desc.content.flex.constraints,
+    );
+    try std.testing.expectEqual(@as(usize, 1), retained.len);
+    try std.testing.expect(retained[0].origin.literalKind() == .quote);
+}
+
+test "unify - numeral literal with unchanged facts keeps the receiver's requirement list" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const from_numeral = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("from_numeral"));
+    const is_eq = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("is_eq"));
+    const argument = try types.fresh();
+    const result_var = try types.fresh();
+    const facts = types_mod.NumeralInfo.testOnlyInt(0, false, base.Region.zero());
+
+    const retained_numeral = types_mod.StaticDispatchConstraint{
+        .fn_name = from_numeral,
+        .fn_var = try types.freshFromContent(try env.mkFuncPure(&.{argument}, result_var)),
+        .origin = .{ .from_literal = .numeral },
+        .numeral = try types.appendNumeralInfo(facts),
+    };
+    const comparison = types_mod.StaticDispatchConstraint{
+        .fn_name = is_eq,
+        .fn_var = try types.freshFromContent(try env.mkFuncPure(&.{ argument, argument }, result_var)),
+        .origin = .{ .desugared_binop = .{ .negated = false } },
+    };
+    const later_numeral = types_mod.StaticDispatchConstraint{
+        .fn_name = from_numeral,
+        .fn_var = try types.freshFromContent(try env.mkFuncPure(&.{argument}, result_var)),
+        .origin = .{ .from_literal = .numeral },
+        .numeral = try types.appendNumeralInfo(facts),
+    };
+
+    const receiver_range = try types.appendStaticDispatchConstraints(&.{ retained_numeral, comparison });
+    const receiver = try types.freshFromContent(.{ .flex = .{ .name = null, .constraints = receiver_range } });
+    const literal = try types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = try types.appendStaticDispatchConstraints(&.{later_numeral}),
+    } });
+
+    const recorded_before = types.numeral_infos.len();
+    try std.testing.expectEqual(.unified, try env.unify(receiver, literal));
+
+    // Folding in a literal whose facts change nothing reuses the receiver's
+    // list as it is: no copy of the list and no newly recorded facts, so a
+    // receiver compared against many equal literals stays linear.
+    const resolved = types.resolveVar(receiver);
+    try std.testing.expect(resolved.desc.content == .flex);
+    try std.testing.expectEqual(receiver_range, resolved.desc.content.flex.constraints);
+    try std.testing.expectEqual(recorded_before, types.numeral_infos.len());
+}
+
+test "unify - operator and dot call requirements stay separate until generalization" {
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
@@ -2419,9 +2589,7 @@ test "unify - declarative static dispatch representative survives repeated merge
     const retained = env.module_env.types.sliceStaticDispatchConstraints(
         resolved.desc.content.flex.constraints,
     );
-    try std.testing.expectEqual(@as(usize, 1), retained.len);
-    try std.testing.expect(retained[0].origin == .desugared_binop);
-    try std.testing.expect(retained[0].origin.desugared_binop.negated);
+    try std.testing.expectEqual(@as(usize, 3), retained.len);
 }
 
 test "unify - static dispatch method ordering ignores ident interning order" {
@@ -2581,7 +2749,8 @@ test "unify - rigid with from_numeral flex retains constraints on resolved rigid
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
-        .origin = .{ .from_literal = .{ .numeral = types_mod.NumeralInfo.testOnlyInt(12345, false, base.Region.zero()) } },
+        .origin = .{ .from_literal = .numeral },
+        .numeral = try env.module_env.types.appendNumeralInfo(types_mod.NumeralInfo.testOnlyInt(12345, false, base.Region.zero())),
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
 
@@ -2629,9 +2798,7 @@ test "unify - non-numeric flex with rigid keeps constraints deferred-only" {
 
     const resolved = env.module_env.types.resolveVar(rigid_var);
     try std.testing.expect(resolved.desc.content == .rigid);
-    // Range.empty() leaves .start undefined; structural expectEqual would read it
-    // and fail under ReleaseFast. Check emptiness via count instead.
-    try std.testing.expectEqual(@as(u32, 0), resolved.desc.content.rigid.constraints.count);
+    try std.testing.expectEqual(types_mod.StaticDispatchConstraint.SafeList.Range.empty(), resolved.desc.content.rigid.constraints);
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
     try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items.items[0].constraints);
 }

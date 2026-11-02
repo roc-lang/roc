@@ -83,42 +83,51 @@ pub fn powFn(
         fn pow(base: F, exponent: F) F {
             @setFloatMode(.strict);
 
-            if (exponent == 0.0 or base == 1.0) return 1.0;
-            const base_bits: L.Bits = @bitCast(base);
-            const exponent_bits: L.Bits = @bitCast(exponent);
-            const base_abs_bits = base_bits & L.abs_mask;
-            const exponent_abs_bits = exponent_bits & L.abs_mask;
-            if (base_abs_bits > L.infinity_bits or exponent_abs_bits > L.infinity_bits) return canonicalNan(F);
-            if (exponent == 1.0) return base;
-            if (exponent == -1.0) return 1.0 / base;
-            if (exponent == 2.0) return base * base;
+            // A negative infinite base has the reciprocal of `-0.0` raised to
+            // the negated exponent, so the loop runs at most twice. Builtins
+            // never recurse: a reserved-low-memory wasm module's stack checks
+            // need every compiler-owned call chain to have a static depth.
+            var b = base;
+            var e = exponent;
+            while (true) {
+                if (e == 0.0 or b == 1.0) return 1.0;
+                const base_bits: L.Bits = @bitCast(b);
+                const exponent_bits: L.Bits = @bitCast(e);
+                const base_abs_bits = base_bits & L.abs_mask;
+                const exponent_abs_bits = exponent_bits & L.abs_mask;
+                if (base_abs_bits > L.infinity_bits or exponent_abs_bits > L.infinity_bits) return canonicalNan(F);
+                if (e == 1.0) return b;
+                if (e == -1.0) return 1.0 / b;
+                if (e == 2.0) return b * b;
 
-            if (base_abs_bits == 0) {
-                if (exponent < 0.0) return if (isOddInteger(F, exponent)) @bitCast((base_bits & L.sign_bit) | L.infinity_bits) else positiveInfinity(F);
-                return if (isOddInteger(F, exponent)) base else 0.0;
-            }
-
-            if (exponent_abs_bits == L.infinity_bits) {
-                if (base == -1.0) return 1.0;
-                const tends_to_zero = (@abs(base) < 1.0) == (exponent > 0.0);
-                return if (tends_to_zero) 0.0 else positiveInfinity(F);
-            }
-            if (base_abs_bits == L.infinity_bits) {
-                if (base_bits >> (@bitSizeOf(F) - 1) != 0) {
-                    const reciprocal: F = @bitCast(base_bits & L.sign_bit);
-                    return pow(reciprocal, -exponent);
+                if (base_abs_bits == 0) {
+                    if (e < 0.0) return if (isOddInteger(F, e)) @bitCast((base_bits & L.sign_bit) | L.infinity_bits) else positiveInfinity(F);
+                    return if (isOddInteger(F, e)) b else 0.0;
                 }
-                return if (exponent < 0.0) 0.0 else positiveInfinity(F);
+
+                if (exponent_abs_bits == L.infinity_bits) {
+                    if (b == -1.0) return 1.0;
+                    const tends_to_zero = (@abs(b) < 1.0) == (e > 0.0);
+                    return if (tends_to_zero) 0.0 else positiveInfinity(F);
+                }
+                if (base_abs_bits == L.infinity_bits) {
+                    if (base_bits >> (@bitSizeOf(F) - 1) != 0) {
+                        b = @bitCast(base_bits & L.sign_bit);
+                        e = -e;
+                        continue;
+                    }
+                    return if (e < 0.0) 0.0 else positiveInfinity(F);
+                }
+                if (e == 0.5) return @sqrt(b);
+                if (e == -0.5) return 1.0 / @sqrt(b);
+
+                const exponent_is_integer = @trunc(e) == e;
+                if (b < 0.0 and !exponent_is_integer) return canonicalNan(F);
+
+                var result = finitePowerMagnitude(@abs(b), e);
+                if (b < 0.0 and isOddInteger(F, e)) result = -result;
+                return result;
             }
-            if (exponent == 0.5) return @sqrt(base);
-            if (exponent == -0.5) return 1.0 / @sqrt(base);
-
-            const exponent_is_integer = @trunc(exponent) == exponent;
-            if (base < 0.0 and !exponent_is_integer) return canonicalNan(F);
-
-            var result = finitePowerMagnitude(@abs(base), exponent);
-            if (base < 0.0 and isOddInteger(F, exponent)) result = -result;
-            return result;
         }
     }.pow;
 }

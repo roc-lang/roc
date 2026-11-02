@@ -1114,8 +1114,8 @@ pub const tests = [_]TestCase{
     .{ .name = "comptime exhaustiveness - Email.parse destructure succeeds empirically", .source_kind = .module, .source = comptime_exhaustive_destructure_email, .expected = .{ .inspect_str = "\"alice@example.com\"" } },
     .{ .name = "comptime exhaustiveness - match failure is reported empirically", .source_kind = .module, .source = comptime_non_exhaustive_match, .expected = .{ .problem = {} } },
     .{ .name = "comptime exhaustiveness - destructure failure is reported empirically", .source_kind = .module, .source = comptime_non_exhaustive_destructure, .expected = .{ .problem = {} } },
-    .{ .name = "comptime exhaustiveness - unused match alternative is reported", .source_kind = .module, .source = comptime_unused_match_alternative, .expected = .{ .problem = {} } },
-    .{ .name = "comptime exhaustiveness - unused if branch is reported", .source_kind = .module, .source = comptime_unused_if_branch, .expected = .{ .problem = {} } },
+    .{ .name = "comptime branches - a match alternative evaluation does not take reports nothing", .source_kind = .module, .source = comptime_unused_match_alternative, .expected = .{ .inspect_str = "\"yes\"" } },
+    .{ .name = "comptime branches - an if branch evaluation does not take reports nothing", .source_kind = .module, .source = comptime_unused_if_branch, .expected = .{ .inspect_str = "42.0" } },
     .{
         .name = "tag union matching with payload inside function - cross module",
         .source_kind = .module,

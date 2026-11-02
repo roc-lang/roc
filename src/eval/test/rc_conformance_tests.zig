@@ -689,6 +689,59 @@ const cases = [_]Case{
         ,
     },
     .{
+        .name = "list keep_if compacts or copies its input",
+        .source =
+        \\{
+        \\    shared = List.concat(
+        \\        ["a list element long enough to allocate", "another list element long enough"],
+        \\        ["a third list element long enough to allocate"],
+        \\    )
+        \\    holder = [shared, shared]
+        \\    unique_kept = List.keep_if(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |text| text.count_utf8_bytes() > 33,
+        \\    )
+        \\    unique_dropped = List.drop_if(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |text| text.count_utf8_bytes() > 33,
+        \\    )
+        \\    unique_none = List.keep_if(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |_| False,
+        \\    )
+        \\    shared_kept = List.keep_if(shared, |text| text.count_utf8_bytes() > 33)
+        \\    shared_all = List.keep_if(shared, |_| True)
+        \\    shared_none = List.keep_if(shared, |_| False)
+        \\    oks = List.keep_oks(shared, |text| if text.count_utf8_bytes() > 33 { Ok(text) } else { Err(text) })
+        \\    errs = List.keep_errs(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |text| if text.count_utf8_bytes() > 33 { Ok(text) } else { Err(text) },
+        \\    )
+        \\    List.len(unique_kept)
+        \\        + List.len(unique_dropped)
+        \\        + List.len(unique_none)
+        \\        + List.len(shared_kept)
+        \\        + List.len(shared_all)
+        \\        + List.len(shared_none)
+        \\        + List.len(oks)
+        \\        + List.len(errs)
+        \\        + List.len(holder)
+        \\}
+        ,
+    },
+    .{
         .name = "boxed values are allocated, read, and updated",
         .source =
         \\{
@@ -1086,6 +1139,29 @@ const cases = [_]Case{
         \\        }
         \\    }
         \\    List.len($acc)
+        \\}
+        ,
+    },
+    .{
+        // A loop whose only operation on its list is `append_le_bytes_to` is
+        // rewritten by `lir/loop_append_promote.zig` into a slack-guarded
+        // diamond whose hot side is `list_append_le_bytes_unsafe`.
+        .name = "loop byte appends promote to the unchecked word store",
+        .source_kind = .module,
+        .inline_wrappers = true,
+        .source =
+        \\main = || {
+        \\    var $out = List.with_capacity(3)
+        \\    var $i = 0.U64
+        \\    while $i < 40 {
+        \\        word = $i.times_wrap(0x0101010101010101).bitwise_xor(0x5A)
+        \\        $out = match word.append_le_bytes_to($out, 3) {
+        \\            Ok(next) => next
+        \\            Err(_) => $out
+        \\        }
+        \\        $i = $i + 1
+        \\    }
+        \\    List.len($out)
         \\}
         ,
     },

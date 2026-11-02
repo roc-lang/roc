@@ -107,6 +107,10 @@ polarity: types_mod.Polarity,
 /// rendering a type as the program wrote it before a default was chosen: a
 /// literal's own conversion is the literal, not a requirement on its type.
 omit_literal_conversion_constraints: bool = false,
+/// Leave this variable's own requirements out of where clauses. Set only
+/// while writing one of its method types, whose conflict with another of its
+/// requirements is what is being shown.
+omitted_dispatcher: ?Var = null,
 /// The allocator used to create owned fields
 gpa: std.mem.Allocator,
 
@@ -439,6 +443,14 @@ pub fn writeIntoAtPolarity(self: *TypeWriter, into: *std.array_list.Managed(u8),
     }
 }
 
+/// Writes `method_var`, a method type `receiver` is required to have, with a
+/// where clause for every requirement it mentions except `receiver`'s own.
+pub fn writeMethodType(self: *TypeWriter, method_var: Var, receiver: Var) error{ OutOfMemory, WriteFailed }!void {
+    self.omitted_dispatcher = self.types.resolveVar(receiver).var_;
+    defer self.omitted_dispatcher = null;
+    try self.write(method_var, .wrap);
+}
+
 /// Writes a type variable to the buffer WITHOUT the where clause.
 /// Use this for nested types (function arguments, record fields, etc.) where the
 /// where clause should only appear at the top level of the complete type.
@@ -532,10 +544,27 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
         StaticDispatchTmp.sort,
     );
 
+    // Requirements that print identically show once: a type still being
+    // checked can hold several uses of one method at the same type.
+    var kept: usize = 0;
+    for (self.static_dispatch_constraints_tmp.items) |constraint| {
+        const text = self.buf_tmp.items[constraint.start..][0..constraint.len];
+        const repeated = for (self.static_dispatch_constraints_tmp.items[0..kept]) |earlier| {
+            if (std.mem.eql(u8, text, self.buf_tmp.items[earlier.start..][0..earlier.len])) break true;
+        } else false;
+        if (repeated) {
+            total_constraint_len -= constraint.len;
+            continue;
+        }
+        self.static_dispatch_constraints_tmp.items[kept] = constraint;
+        kept += 1;
+    }
+    self.static_dispatch_constraints_tmp.shrinkRetainingCapacity(kept);
+
     // Calculate line lengths for different formatting options
 
     // Length of all ", " between constraints
-    const separator_len = (self.static_dispatch_constraints.items.len - 1) * 2; // ", " between each
+    const separator_len = (self.static_dispatch_constraints_tmp.items.len - 1) * 2; // ", " between each
 
     // Length of all constraints, separators, plus open/closing brackets
     const constraints_len_if_on_same_line = total_constraint_len + separator_len + 2; // extra two the open/closing []
@@ -627,7 +656,7 @@ fn driveFrames(self: *TypeWriter, writer: *ByteWrite, frames_base: usize, root_v
 /// either finish it outright (returning true) or push the frame that will
 /// render its children (returning false).
 fn requestVar(self: *TypeWriter, writer: *ByteWrite, var_: Var, context: TypeContext, root_var: Var) error{ OutOfMemory, WriteFailed }!bool {
-    if (@backingInt(var_) >= self.types.slots.backing.len()) {
+    if (@backingInt(var_) >= self.types.len()) {
         // Variable is out of bounds - this can happen with corrupted type data
         try writer.writeAll("Error");
         return true;
@@ -635,7 +664,7 @@ fn requestVar(self: *TypeWriter, writer: *ByteWrite, var_: Var, context: TypeCon
 
     const resolved = self.types.resolveVar(var_);
 
-    if (@backingInt(resolved.var_) >= self.types.slots.backing.len()) {
+    if (@backingInt(resolved.var_) >= self.types.len()) {
         // Variable is out of bounds - this can happen with corrupted type data
         try writer.writeAll("Error");
         return true;
@@ -801,7 +830,7 @@ fn startFunc(
     wrap_in_parens: bool,
 ) error{ OutOfMemory, WriteFailed }!bool {
     if (func.args.len() == 0) {
-        try writer.writeAll("({})");
+        try writer.writeAll("()");
     }
     try self.frames.append(.{ .func = .{
         .args = func.args,
@@ -1201,7 +1230,11 @@ fn RowTail(comptime kind: RowKind) type {
     };
 }
 
-fn appendRowEntries(self: *TypeWriter, comptime kind: RowKind, entries: RowEntries(kind)) std.mem.Allocator.Error!void {
+/// Append one row part's entries to the row gathered from `row_start`. A label
+/// already gathered from an outer part names the same field or tag (design.md
+/// "Row Union Normalization"), and the row means what it would mean with only
+/// the innermost occurrence, so that occurrence replaces the outer one.
+fn appendRowEntries(self: *TypeWriter, comptime kind: RowKind, entries: RowEntries(kind), row_start: usize) std.mem.Allocator.Error!void {
     const scratch = switch (kind) {
         .record => &self.scratch_record_fields,
         .tag_union => &self.scratch_tags,
@@ -1210,8 +1243,17 @@ fn appendRowEntries(self: *TypeWriter, comptime kind: RowKind, entries: RowEntri
         .record => self.types.getRecordFieldsSlice(entries),
         .tag_union => self.types.getTagsSlice(entries),
     };
+    const outer_end = scratch.items.len;
     try scratch.ensureUnusedCapacity(slice.len);
-    for (0..slice.len) |index| scratch.appendAssumeCapacity(slice.get(index));
+    for (0..slice.len) |index| {
+        const entry = slice.get(index);
+        for (scratch.items[row_start..outer_end]) |*outer| {
+            if (outer.name.eql(entry.name)) {
+                outer.* = entry;
+                break;
+            }
+        } else scratch.appendAssumeCapacity(entry);
+    }
 }
 
 /// Collect a row's entries and every entry its extension chain contributes,
@@ -1223,7 +1265,11 @@ fn gatherRow(
     initial_ext: Var,
     row_var: Var,
 ) std.mem.Allocator.Error!RowTail(kind) {
-    try self.appendRowEntries(kind, entries);
+    const row_start = switch (kind) {
+        .record => self.scratch_record_fields.items.len,
+        .tag_union => self.scratch_tags.items.len,
+    };
+    try self.appendRowEntries(kind, entries, row_start);
 
     var ext = initial_ext;
     self.ext_seen.clearRetainingCapacity();
@@ -1245,7 +1291,7 @@ fn gatherRow(
             .structure => |flat_type| switch (kind) {
                 .record => switch (flat_type) {
                     .record => |ext_record| {
-                        try self.appendRowEntries(.record, ext_record.fields);
+                        try self.appendRowEntries(.record, ext_record.fields, row_start);
                         ext = ext_record.ext;
                     },
                     .empty_record => return .empty_record,
@@ -1260,7 +1306,7 @@ fn gatherRow(
                 },
                 .tag_union => switch (flat_type) {
                     .tag_union => |ext_tag_union| {
-                        try self.appendRowEntries(.tag_union, ext_tag_union.tags);
+                        try self.appendRowEntries(.tag_union, ext_tag_union.tags, row_start);
                         ext = ext_tag_union.ext;
                     },
                     .empty_tag_union => return .empty_tag_union,
@@ -1316,6 +1362,9 @@ pub fn writeTagGet(self: *TypeWriter, tag: Tag, root_var: Var) error{ OutOfMemor
 /// Append a constraint with its dispatcher var to the list, if it doesn't already exist
 fn appendStaticDispatchConstraint(self: *TypeWriter, dispatcher_var: Var, constraint_to_add: types_mod.StaticDispatchConstraint) error{ OutOfMemory, WriteFailed }!void {
     if (self.omit_literal_conversion_constraints and constraint_to_add.origin == .from_literal) return;
+    if (self.omitted_dispatcher) |omitted| {
+        if (self.types.resolveVar(dispatcher_var).var_ == omitted) return;
+    }
     for (self.static_dispatch_constraints.items) |item| {
         if (item.constraint.fn_name == constraint_to_add.fn_name and item.constraint.fn_var == constraint_to_add.fn_var) {
             return;
@@ -1332,7 +1381,7 @@ pub fn writeFlexVarName(self: *TypeWriter, writer: *ByteWrite, var_: Var, contex
     const resolved_var = self.types.resolveVar(var_).var_;
 
     // If resolved var is out of bounds, it's corrupted - just write a simple name
-    if (@backingInt(resolved_var) >= self.types.slots.backing.len()) {
+    if (@backingInt(resolved_var) >= self.types.len()) {
         try writer.writeAll("_");
         try self.generateContextualName(writer, context);
         return;
@@ -1442,7 +1491,7 @@ fn countVarOccurrencesOutsideOwnConstraints(self: *TypeWriter, search_var: Var, 
 /// outright (returning true) or push the frame that will visit its children
 /// (returning false).
 fn countRequest(self: *TypeWriter, current_var: Var) std.mem.Allocator.Error!bool {
-    if (@backingInt(current_var) >= self.types.slots.backing.len()) return true;
+    if (@backingInt(current_var) >= self.types.len()) return true;
 
     const resolved = self.types.resolveVar(current_var);
 
@@ -1628,7 +1677,7 @@ fn generateContextualName(self: *TypeWriter, writer: *ByteWrite, context: TypeCo
             self.name_tmp.clearRetainingCapacity();
             const len = std.fmt.count("{s}{}", .{ base_name, counter + 1 });
             try self.name_tmp.resize(len);
-            _ = std.fmt.bufPrint(self.name_tmp.items, "{s}{}", .{ base_name, counter + 1 }) catch unreachable;
+            _ = std.fmt.bufPrint(self.name_tmp.items, "{s}{}", .{ base_name, counter + 1 }) catch unreachable; // name_tmp was resized to exactly the formatted length
             break :blk self.name_tmp.items;
         };
 
@@ -1804,6 +1853,28 @@ test "TypeWriter renders required and optional fields in records with a flex ext
     );
 }
 
+test "TypeWriter renders zero-argument functions distinctly from empty-record arguments" {
+    var env = try TestEnv.init(testing.allocator, 32);
+    defer env.deinit();
+
+    const empty_record = try env.types.freshFromContent(.{ .structure = .empty_record });
+    const pure = try env.types.freshFromContent(try env.types.mkFuncPure(&.{}, empty_record));
+    const effectful = try env.types.freshFromContent(try env.types.mkFuncEffectful(&.{}, empty_record));
+    const unbound = try env.types.freshFromContent(try env.types.mkFuncUnbound(&.{}, empty_record));
+
+    try env.expectRender(pure, "() -> {}");
+    try env.expectRender(effectful, "() => {}");
+    try env.expectRender(unbound, "() -> {}");
+    try env.expectRender(
+        try env.types.freshFromContent(try env.types.mkFuncPure(&.{empty_record}, empty_record)),
+        "{} -> {}",
+    );
+    try env.expectRender(
+        try env.types.freshFromContent(try env.types.mkFuncPure(&.{pure}, effectful)),
+        "(() -> {}) -> (() => {})",
+    );
+}
+
 test "TypeWriter renders every shape the walk descends through" {
     var env = try TestEnv.init(testing.allocator, 128);
     defer env.deinit();
@@ -1860,7 +1931,7 @@ test "TypeWriter renders every shape the walk descends through" {
     );
     try env.expectRender(
         try env.types.freshFromContent(try env.types.mkFuncEffectful(&.{}, empty_record)),
-        "({}) => {}",
+        "() => {}",
     );
     try env.expectRender(try env.tuple(&.{inner_fn}), "({} -> [])");
 

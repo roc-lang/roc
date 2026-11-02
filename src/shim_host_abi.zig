@@ -27,6 +27,25 @@ const roc_shim_hosted_count: *const usize =
 const roc_shim_hosted_names: [*]const ?[*:0]const u8 =
     @extern([*]const ?[*:0]const u8, .{ .name = shim_symbols.roc_shim_hosted_names });
 
+/// The C-ABI entries of the object-cache objects linked into this
+/// executable, and their names, defined by the generated platform shim.
+const roc_shim_package_fns: [*]const *const anyopaque =
+    @extern([*]const *const anyopaque, .{ .name = shim_symbols.roc_shim_package_fns });
+const roc_shim_package_names: [*]const [*:0]const u8 =
+    @extern([*]const [*:0]const u8, .{ .name = shim_symbols.roc_shim_package_names });
+const roc_shim_package_count: *const usize =
+    @extern(*const usize, .{ .name = shim_symbols.roc_shim_package_count });
+
+/// The linked object-cache entries, parallel to `packageNames`.
+pub fn packageFns() []const *const anyopaque {
+    return roc_shim_package_fns[0..roc_shim_package_count.*];
+}
+
+/// The names of `packageFns`.
+pub fn packageNames() []const [*:0]const u8 {
+    return roc_shim_package_names[0..roc_shim_package_count.*];
+}
+
 /// The hosted dispatch table, in hosted-section order.
 pub fn hostedFns() []const builtins.host_abi.HostedFn {
     return roc_shim_hosted_fns.*[0..roc_shim_hosted_count.*];

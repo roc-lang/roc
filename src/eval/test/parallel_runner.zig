@@ -949,7 +949,7 @@ fn backendImplemented(index: usize) bool {
         1 => DEV_BACKEND_IMPLEMENTED,
         2 => WASM_BACKEND_IMPLEMENTED,
         3 => LLVM_BACKEND_IMPLEMENTED,
-        else => unreachable,
+        else => unreachable, // initBackendRows passes indices below NUM_BACKENDS, which is 4
     };
 }
 
@@ -1060,7 +1060,7 @@ fn runComptimeFloatBitsTest(
         .problem,
         .crash,
         .problem_and_crash,
-        => unreachable,
+        => unreachable, // runSingleTestInner calls runComptimeFloatBitsTest only for comptime float-bit expectations
     };
     if (!matches) {
         const message = switch (expected) {
@@ -1083,7 +1083,7 @@ fn runComptimeFloatBitsTest(
             .problem,
             .crash,
             .problem_and_crash,
-            => unreachable,
+            => unreachable, // runSingleTestInner calls runComptimeFloatBitsTest only for comptime float-bit expectations
         };
         return .{
             .status = .fail,
@@ -1192,7 +1192,7 @@ fn materializedComptimeFloatBitsMatch(
         .problem,
         .crash,
         .problem_and_crash,
-        => unreachable,
+        => unreachable, // runComptimeFloatBitsTest, the only caller, receives only comptime float-bit expectations
     };
 }
 
@@ -1259,7 +1259,7 @@ fn runAllocationTest(
     const eval_fns = [NUM_BACKENDS]BackendEvalWithStatsFn{
         helpers.lirInterpreterStrWithStats,
         helpers.devEvaluatorStrWithStats,
-        helpers.wasmEvaluatorStrWithStats,
+        wasmBothCpuLevelsStrWithStats,
         helpers.devEvaluatorStrWithStats, // unused; LLVM allocation stats are not implemented
     };
 
@@ -1286,7 +1286,7 @@ fn runAllocationTest(
             continue;
         }
 
-        var timer = Timer.start() catch unreachable;
+        var timer = Timer.start() catch unreachable; // Timer.start always returns a timer; its error set is never produced
         const lowered = if (i == 2) &compiled.wasm_lowered.? else &compiled.lowered;
         const fork_result = forkAndEvalWithStats(eval_fns[i], lowered);
         const dur = timer.read();
@@ -1398,7 +1398,7 @@ fn runInspectTest(
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
         helpers.devEvaluatorInspectedStr,
-        helpers.wasmEvaluatorInspectedStr,
+        wasmBothCpuLevelsInspectedStr,
         helpers.llvmEvaluatorInspectedStr,
     };
 
@@ -1422,7 +1422,7 @@ fn runInspectTest(
         }
 
         trace.log("starting backend {s} for inspected source {s}", .{ BACKEND_NAMES[i], src });
-        var timer = Timer.start() catch unreachable;
+        var timer = Timer.start() catch unreachable; // Timer.start always returns a timer; its error set is never produced
         const lowered = if (i == 2) &compiled.wasm_lowered.? else &compiled.lowered;
         const fork_result = runBackendEval(io, i, eval_fns[i], lowered, backendTimeoutBudgetMs(io, i, deadline_ms)) catch |err|
             ForkResult{ .child_error = @errorName(err) };
@@ -1433,11 +1433,15 @@ fn runInspectTest(
             .success => |str| {
                 const expected_str = switch (expected) {
                     .inspect_str => |value| value,
-                    .allocations_at_most => unreachable,
-                    .comptime_f32_bits, .comptime_f64_bits, .comptime_f32_list_bits, .comptime_f64_list_bits => unreachable,
-                    .problem => unreachable,
-                    .crash => unreachable,
-                    .problem_and_crash => unreachable,
+                    .allocations_at_most,
+                    .comptime_f32_bits,
+                    .comptime_f64_bits,
+                    .comptime_f32_list_bits,
+                    .comptime_f64_list_bits,
+                    .problem,
+                    .crash,
+                    .problem_and_crash,
+                    => unreachable, // runSingleTestInner calls runInspectTest only for inspect_str expectations
                 };
                 const value_ok = std.mem.eql(u8, expected_str, str);
                 const agreement_ok = if (first_ok) |fok| std.mem.eql(u8, fok, str) else true;
@@ -1514,7 +1518,7 @@ fn runTestProblem(
     src: []const u8,
     imports: []const helpers.ModuleSource,
 ) RunnerError!TestOutcome {
-    var timer = Timer.start() catch unreachable;
+    var timer = Timer.start() catch unreachable; // Timer.start always returns a timer; its error set is never produced
     var resources = helpers.parseAndCheckProgramForProblems(allocator, source_kind, src, imports, null) catch {
         // Parse or canonicalize error means a problem was found—that's a pass.
         const elapsed = timer.read();
@@ -1639,7 +1643,7 @@ fn runCrashTest(
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
         helpers.devEvaluatorInspectedStr,
-        helpers.wasmEvaluatorInspectedStr,
+        wasmBothCpuLevelsInspectedStr,
         helpers.llvmEvaluatorInspectedStr,
     };
 
@@ -1661,7 +1665,7 @@ fn runCrashTest(
             break;
         }
 
-        var timer = Timer.start() catch unreachable;
+        var timer = Timer.start() catch unreachable; // Timer.start always returns a timer; its error set is never produced
         const lowered = if (i == 2) &compiled.wasm_lowered.? else &compiled.lowered;
         const fork_result = runBackendEval(io, i, eval_fns[i], lowered, backendTimeoutBudgetMs(io, i, deadline_ms)) catch |err|
             ForkResult{ .child_error = @errorName(err) };
@@ -1786,6 +1790,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .default_not_allowed_on_local_type_decl,
         .record_default_reference_cycle,
         .var_across_function_boundary,
+        .var_in_binder_pattern,
         .type_redeclared,
         .file_import_not_found,
         .file_import_io_error,
@@ -1794,6 +1799,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .module_not_found,
         .value_not_exposed,
         .type_not_exposed,
+        .public_type_not_defined,
         .private_type_in_exposed_type,
         .private_type_in_exposed_field,
         .type_from_missing_module,
@@ -1812,7 +1818,6 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .default_app_missing_main,
         .default_app_wrong_arity,
         .cannot_import_default_app,
-        .execution_requires_app_or_default_app,
         .type_name_case_mismatch,
         .redundant_expose_main_type,
         .invalid_main_type_rename_in_exposing,
@@ -1951,7 +1956,7 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
 /// The "RUN <name>" log is emitted by the parent via `onTestStarted` (gated
 /// on --verbose) so it stays coherent across N workers; see `Pool` config below.
 fn runTestForPool(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64) TestResult {
-    var timer = Timer.start() catch unreachable;
+    var timer = Timer.start() catch unreachable; // Timer.start always returns a timer; its error set is never produced
     const outcome = if (tc.stack_bytes) |stack_bytes|
         runSingleTestOnStack(io, allocator, tc, timeout_ms, stack_bytes)
     else
@@ -2780,7 +2785,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
         var passed: usize = 0;
         var failed: usize = 0;
         var skipped: usize = 0;
-        var wall_timer = Timer.start() catch unreachable;
+        var wall_timer = Timer.start() catch unreachable; // Timer.start always returns a timer; its error set is never produced
 
         for (tests, 0..) |tc, i| {
             _ = arena.reset(.retain_capacity);
@@ -2819,7 +2824,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
     defer gpa.free(spans);
     @memset(spans, null);
 
-    var wall_timer = Timer.start() catch unreachable;
+    var wall_timer = Timer.start() catch unreachable; // Timer.start always returns a timer; its error set is never produced
 
     // Native musl CI has enough process-startup variance for the larger shared
     // harness default to be more reliable, especially for heavy boundary tests.
@@ -2942,4 +2947,25 @@ pub fn main(init: std.process.Init) RunnerError!void {
     if (failed > 0 or crashed > 0 or timed_out > 0) {
         std.process.exit(1);
     }
+}
+
+/// Evaluate via the wasm backend for both CPU levels. A WebAssembly 1.0
+/// result that differs from the default one, in output or allocation count,
+/// is reported as the output, so it never agrees with the expected value.
+fn wasmBothCpuLevelsStrWithStats(allocator: std.mem.Allocator, lowered: *const LoweredProgram) helpers.Error!helpers.EvalRunResult {
+    const default = try helpers.wasmEvaluatorStrWithStats(allocator, lowered);
+    const v1 = try helpers.wasmRunAt(allocator, lowered, .v1);
+    defer allocator.free(v1.output);
+    if (std.mem.eql(u8, default.output, v1.output) and default.allocation_count == v1.allocation_count) return default;
+    defer allocator.free(default.output);
+    return .{
+        .output = try std.fmt.allocPrint(allocator, "{s} ({d} allocations), but wasm32v1: {s} ({d} allocations)", .{ default.output, default.allocation_count, v1.output, v1.allocation_count }),
+        .allocation_count = default.allocation_count,
+    };
+}
+
+/// The output of `wasmBothCpuLevelsStrWithStats`.
+fn wasmBothCpuLevelsInspectedStr(allocator: std.mem.Allocator, lowered: *const LoweredProgram) helpers.Error![]u8 {
+    const result = try wasmBothCpuLevelsStrWithStats(allocator, lowered);
+    return result.output;
 }

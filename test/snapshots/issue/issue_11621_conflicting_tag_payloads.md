@@ -54,7 +54,7 @@ CONFLICTING TAG - issue_11621_conflicting_tag_payloads.md:12:1:12:4
 			(line-break)
 			(reflow "It also comes from here:")
 			(line-break)
-			(source-region (file "issue_11621_conflicting_tag_payloads.md") (start 4 19) (end 4 46) (annotation error) (line-text "describe : U64 -> Try(U64, [StepFailed(Str)])"))
+			(source-region (file "issue_11621_conflicting_tag_payloads.md") (start 5 16) (end 5 70) (annotation error) (line-text "describe = |n| if n > 3 { Err(StepFailed(\"too big\")) } else { Ok(n) }"))
 			(line-break)
 			(line-break)
 			(reflow "where it is:")
@@ -241,7 +241,7 @@ use = |n| apply(describe, n)
 			(e-if
 				(if-branches
 					(if-branch
-						(e-dispatch-call (method "is_gt") (constraint-fn-var 380)
+						(e-dispatch-call (method "is_gt") (constraint-fn-var 383)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
@@ -280,7 +280,7 @@ use = |n| apply(describe, n)
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 407)
+								(e-call (constraint-fn-var 413)
 									(e-lookup-local
 										(p-assign (ident "step")))
 									(e-lookup-local
@@ -307,10 +307,10 @@ use = |n| apply(describe, n)
 													(args
 														(e-lookup-local
 															(p-assign (ident "#err")))))))))))))
-				(e-call (constraint-fn-var 452)
+				(e-call (constraint-fn-var 458)
 					(e-lookup-local
 						(p-assign (ident "f")))
-					(e-dispatch-call (method "plus") (constraint-fn-var 446)
+					(e-dispatch-call (method "plus") (constraint-fn-var 452)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "n"))))
@@ -321,7 +321,7 @@ use = |n| apply(describe, n)
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-call (constraint-fn-var 468)
+			(e-call (constraint-fn-var 474)
 				(e-lookup-local
 					(p-assign (ident "apply")))
 				(e-lookup-local

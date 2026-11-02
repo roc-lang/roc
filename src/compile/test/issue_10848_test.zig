@@ -129,7 +129,6 @@ fn expectCallBuiltRecordListSetHasNoRetain(
                 .set_local,
                 .debug,
                 .expect,
-                .comptime_branch_taken,
                 .decref,
                 .decref_if_initialized,
                 .free,

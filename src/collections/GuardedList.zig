@@ -8,6 +8,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
+const SupersededBackings = @import("SupersededBackings.zig");
 const debug_guards = builtin.mode == .debug;
 
 /// Growable list wrapper that checks stale borrows in Debug and erases to `std.ArrayList` otherwise.
@@ -86,6 +87,12 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
             self.bumpIfMoved(old);
         }
 
+        pub fn appendNTimes(self: *Self, allocator: Allocator, value: T, n: usize) Allocator.Error!void {
+            const old = self.moveStateBeforeGrowth();
+            try self.__guarded_backing.appendNTimes(allocator, value, n);
+            self.bumpIfMoved(old);
+        }
+
         pub fn appendSliceAssumeCapacity(self: *Self, values: []const T) void {
             self.__guarded_backing.appendSliceAssumeCapacity(values);
         }
@@ -98,6 +105,19 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
             const old = self.moveStateBeforeGrowth();
             try self.__guarded_backing.ensureUnusedCapacity(allocator, additional_count);
             self.bumpIfMoved(old);
+        }
+
+        /// `ensureUnusedCapacity` for a list whose captured prefix another
+        /// thread may be reading: growth keeps the old backing alive in
+        /// `superseded` instead of moving or freeing it.
+        pub fn ensureUnusedCapacityKeepingBacking(
+            self: *Self,
+            allocator: Allocator,
+            additional_count: usize,
+            superseded: *SupersededBackings,
+        ) Allocator.Error!void {
+            const moved = try superseded.ensureUnusedCapacity(T, &self.__guarded_backing, allocator, additional_count);
+            if (debug_guards and moved and self.__guarded_backing.items.len != 0) self.__guarded_generation +%= 1;
         }
 
         pub fn ensureTotalCapacity(self: *Self, allocator: Allocator, new_capacity: usize) Allocator.Error!void {
@@ -382,9 +402,10 @@ pub fn at(borrow: anytype, index: usize) BorrowElement(@TypeOf(borrow)) {
         const ptr = borrow_info.pointer;
         return switch (ptr.size) {
             .slice => borrow[index],
-            .one => if (@typeInfo(ptr.child) == .array)
-                if (@typeInfo(ptr.child).array.len == 0) unreachable else borrow[index]
-            else blk: {
+            .one => if (@typeInfo(ptr.child) == .array) blk: {
+                if (@typeInfo(ptr.child).array.len == 0) unreachable; // callers index within bounds, and a zero-length array has no in-bounds index
+                break :blk borrow[index];
+            } else blk: {
                 std.debug.assert(index == 0);
                 break :blk borrow.*;
             },

@@ -7,8 +7,8 @@
 
 const std = @import("std");
 const invariant = @import("base").invariant;
-const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+const FunctionRelocationKind = @import("../Relocation.zig").FunctionRelocationKind;
 const DataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
 const roc_target = @import("roc_target");
 const object = @import("mod.zig");
@@ -203,13 +203,6 @@ pub const Architecture = enum {
         };
     }
 
-    fn branchRelocType(self: Architecture) u4 {
-        return switch (self) {
-            .x86_64 => MachO.X86_64_RELOC_BRANCH,
-            .aarch64 => MachO.ARM64_RELOC_BRANCH26,
-        };
-    }
-
     /// The relocation type of an absolute address field.
     fn unsignedRelocType(self: Architecture) u4 {
         return switch (self) {
@@ -340,14 +333,21 @@ pub const MachOWriter = struct {
     }
 
     /// Add a text relocation
-    pub fn addTextRelocation(self: *Self, offset: u32, symbol_idx: u32, is_extern: bool) Allocator.Error!void {
+    pub fn addTextRelocation(self: *Self, offset: u32, symbol_idx: u32, is_extern: bool, kind: FunctionRelocationKind) Allocator.Error!void {
+        std.debug.assert(self.arch == switch (kind) {
+            .x86_call_rel32 => Architecture.x86_64,
+            .aarch64_call26 => Architecture.aarch64,
+        });
         try self.text_relocs.append(self.allocator, .{
             .offset = offset,
             .symbol_idx = symbol_idx,
             .is_extern = is_extern,
             .pcrel = true,
             .length = 2,
-            .reloc_type = self.arch.branchRelocType(),
+            .reloc_type = switch (kind) {
+                .x86_call_rel32 => MachO.X86_64_RELOC_BRANCH,
+                .aarch64_call26 => MachO.ARM64_RELOC_BRANCH26,
+            },
         });
     }
 
@@ -364,14 +364,14 @@ pub const MachOWriter = struct {
                 .length = @as(u2, 2),
                 .reloc_type = switch (self.arch) {
                     .x86_64 => MachO.X86_64_RELOC_SIGNED,
-                    .aarch64 => unreachable,
+                    .aarch64 => invariant("Mach-O invariant violated: rel32 data relocation in aarch64 code, which emits page21 and pageoff12", .{}),
                 },
             },
             .page21 => .{
                 .pcrel = true,
                 .length = @as(u2, 2),
                 .reloc_type = switch (self.arch) {
-                    .x86_64 => unreachable,
+                    .x86_64 => invariant("Mach-O invariant violated: page21 data relocation in x86_64 code, which emits rel32", .{}),
                     .aarch64 => MachO.ARM64_RELOC_PAGE21,
                 },
             },
@@ -379,7 +379,7 @@ pub const MachOWriter = struct {
                 .pcrel = false,
                 .length = @as(u2, 2),
                 .reloc_type = switch (self.arch) {
-                    .x86_64 => unreachable,
+                    .x86_64 => invariant("Mach-O invariant violated: pageoff12 data relocation in x86_64 code, which emits rel32", .{}),
                     .aarch64 => MachO.ARM64_RELOC_PAGEOFF12,
                 },
             },
@@ -396,7 +396,7 @@ pub const MachOWriter = struct {
 
     /// Add an absolute pointer relocation in the read-only data section.
     pub fn addRodataRelocation(self: *Self, offset: u32, symbol_idx: u32, is_extern: bool, addend: i64) Allocator.Error!void {
-        if (offset + 8 > self.rodata.len) unreachable;
+        if (offset + 8 > self.rodata.len) invariant("Mach-O invariant violated: rodata relocation at offset {d} exceeds rodata length {d}", .{ offset, self.rodata.len });
         try self.rodata_relocs.append(self.allocator, .{
             .offset = offset,
             .symbol_idx = symbol_idx,
@@ -707,7 +707,7 @@ pub const MachOWriter = struct {
                 1 => 0,
                 2 => text_size,
                 zero_fill_section_number => zero_fill_addr,
-                else => unreachable,
+                else => invariant("Mach-O invariant violated: symbol names unknown section {d}", .{sym.section}),
             };
 
             const nlist = Nlist64{
@@ -757,24 +757,22 @@ pub const MachOWriter = struct {
         if (is_extern) return @intCast(symbol_index_remap[@as(usize, @intCast(symbol_idx))]);
 
         const section = self.symbols.items[symbol_idx].section;
-        if (builtin.mode == .debug and section == 0) {
+        if (section == 0) {
             invariant("Mach-O invariant violated: local relocation targets undefined symbol {d}", .{symbol_idx});
         }
-        if (section == 0) unreachable;
         return @intCast(section);
     }
 
     fn localRelocationValue(self: *const Self, symbol_idx: u32, addend: i64) i64 {
         const symbol = self.symbols.items[symbol_idx];
-        if (builtin.mode == .debug and symbol.section == 0) {
+        if (symbol.section == 0) {
             invariant("Mach-O invariant violated: local relocation value requested for undefined symbol {d}", .{symbol_idx});
         }
-        if (symbol.section == 0) unreachable;
 
         const section_addr: u64 = switch (symbol.section) {
             1 => 0,
             2 => @as(u64, @intCast(self.text.len)),
-            else => unreachable,
+            else => invariant("Mach-O invariant violated: local relocation targets symbol {d} in section {d}, expected __text or __const", .{ symbol_idx, symbol.section }),
         };
         const base = section_addr + symbol.offset;
         return @as(i64, @intCast(base)) + addend;
@@ -847,7 +845,7 @@ test "macho with external call" {
     writer.setCode(&[_]u8{ 0xE8, 0x00, 0x00, 0x00, 0x00, 0xC3 });
 
     const ext_idx = try writer.addExternalSymbol("_external_func");
-    try writer.addTextRelocation(1, ext_idx, true);
+    try writer.addTextRelocation(1, ext_idx, true, .x86_call_rel32);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -938,7 +936,7 @@ test "macho segment file extent contains every declared section" {
     defer writer.deinit();
     writer.setCode(&.{ 0xc0, 0x03, 0x5f, 0xd6 });
     const external = try writer.addExternalSymbol("_external");
-    try writer.addTextRelocation(0, external, true);
+    try writer.addTextRelocation(0, external, true, .aarch64_call26);
     writer.debug.line = &(@as([256]u8, @splat(0)));
     writer.debug.abbrev = &(@as([64]u8, @splat(0)));
     writer.debug.info = &(@as([128]u8, @splat(0)));

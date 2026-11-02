@@ -176,6 +176,7 @@ test "Boxy frozen evidence compares runtime descriptor graphs and declared metho
     const gpa = std.testing.allocator;
     var program = try Program.Result.init(gpa, @import("base").target.TargetUsize.native);
     defer program.deinit();
+    program.store.runtime_contract = .boxy;
     const str_desc: Program.BoxyTypeDescId = @fromBackingInt(@intCast(program.boxy_type_descs.items.len));
     try program.boxy_type_descs.append(gpa, .{ .payload_layout = .str, .contains_refcounted = true, .shape = .primitive, .closure = .closed });
     const int_desc: Program.BoxyTypeDescId = @fromBackingInt(@intCast(program.boxy_type_descs.items.len));

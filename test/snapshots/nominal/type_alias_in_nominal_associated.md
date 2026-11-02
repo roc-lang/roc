@@ -85,12 +85,12 @@ Elem := [].{
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "({}) -> NodeKind")))
+		(patt (type "() -> NodeKind")))
 	(type_decls
 		(alias (type "NodeKind")
 			(ty-header (name "NodeKind")))
 		(nominal (type "Elem")
 			(ty-header (name "Elem"))))
 	(expressions
-		(expr (type "({}) -> NodeKind"))))
+		(expr (type "() -> NodeKind"))))
 ~~~

@@ -40,7 +40,16 @@ pub fn Index(comptime Policy: type) type {
         pub const Find = FindResult(Policy.Id);
 
         pub fn fromCells(cells: SafeList(Policy.Cell), len: u32) Self {
+            comptime std.debug.assert(!use_fingerprints);
             return .{ .cells = cells, .fingerprints = .{}, .len = len };
+        }
+
+        /// View an owner's persisted table, whose fingerprint column runs
+        /// parallel to its cells.
+        pub fn fromParts(cells: SafeList(Policy.Cell), fingerprints: SafeList(u8), len: u32) Self {
+            comptime std.debug.assert(use_fingerprints);
+            std.debug.assert(fingerprints.len() == cells.len());
+            return .{ .cells = cells, .fingerprints = fingerprints, .len = len };
         }
 
         pub fn deinit(self: *Self, gpa: Allocator) void {
@@ -189,7 +198,7 @@ pub fn Index(comptime Policy: type) type {
         }
 
         fn allocate(self: *Self, gpa: Allocator, requested_size: usize) Allocator.Error!void {
-            const table_size = powerOfTwoTableSize(requested_size);
+            const table_size = try powerOfTwoTableSize(requested_size);
             var cells = try SafeList(Policy.Cell).initCapacity(gpa, table_size);
             errdefer cells.deinit(gpa);
             try cells.items.ensureTotalCapacityPrecise(gpa, table_size);
@@ -215,9 +224,10 @@ fn wouldExceedMaxLoad(new_len: usize, table_size: usize) bool {
     return new_len * max_load_denominator >= table_size * max_load_numerator;
 }
 
-fn powerOfTwoTableSize(requested_size: usize) usize {
+fn powerOfTwoTableSize(requested_size: usize) Allocator.Error!usize {
     const min_size = @max(requested_size, 1);
-    return std.math.ceilPowerOfTwo(usize, min_size) catch unreachable;
+    // A table too large for its size to be a usize power of two cannot be allocated.
+    return std.math.ceilPowerOfTwo(usize, min_size) catch return error.OutOfMemory;
 }
 
 fn fingerprint(bytes_hash: u64) u8 {

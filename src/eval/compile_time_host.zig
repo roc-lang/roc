@@ -1,24 +1,18 @@
 //! RocOps environment for native dev-backend compile-time evaluation.
 //!
-//! Each compile-time root gets its own host env. Runtime allocations go into a
-//! root-local arena and are bulk-freed after the result has been copied into the
-//! checked ConstStore. Host effects and crash state are recorded on the env so
+//! Each compile-time root gets its own host env. Runtime allocations are freed
+//! when Roc frees them, and whatever a root still holds when it finishes is
+//! bulk-freed after the result has been copied into the checked ConstStore. Host effects and crash state are recorded on the env so
 //! the finalizer can replay them deterministically in root request order.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const builtins = @import("builtins");
-const lir = @import("lir");
-const FinalizeError = @import("check").CheckedArtifact.CompileTimeFinalizer.Error;
 
-/// Exact producer-completion callback for a compile-time static slot read.
-pub const SlotDemand = struct {
-    pub const Error = FinalizeError || error{CompileTimeDependencyCycle};
-    context: *anyopaque,
-    ensure: *const fn (*anyopaque, lir.LIR.StaticDataId) Error!void,
-};
 const sljmp = @import("sljmp");
 const crash_boundary_mod = @import("crash_boundary.zig");
+const signal_handler = base.signal_handler;
 
 const Allocator = std.mem.Allocator;
 const RocOps = builtins.host_abi.RocOps;
@@ -27,28 +21,96 @@ const longjmp = sljmp.longjmp;
 
 const CompileTimeHost = @This();
 
-const Allocation = struct {
+/// Every compile-time allocation starts with a header recording its byte
+/// length and alignment; reallocation and deallocation read the block's length
+/// from it.
+///
+/// In safety-checked builds the Roc bytes sit `alignment` bytes past the
+/// header region, so their address is a multiple of the requested alignment
+/// and never of twice it. Code that leans on more alignment than it asked for
+/// then misbehaves here instead of only on a host whose allocator differs,
+/// and a free or reallocation at a different alignment than the allocation
+/// fails loudly: production hosts locate a block from the alignment they are
+/// given. Release builds place the bytes right after the header region and
+/// check nothing.
+const allocation_header_bytes = 32;
+const max_allocation_alignment = 16;
+/// The most bytes a block sets aside between its header region and Roc's
+/// bytes. Every block reserves this much, so a block's size follows from its
+/// length alone and a reused block fits a request of any alignment.
+const max_payload_skew = if (std.debug.runtime_safety) max_allocation_alignment else 0;
+/// Debug-only stamp a live header carries, so a pointer Roc hands back that
+/// no compile-time allocation produced, or hands back twice, is caught.
+const allocation_header_stamp: u64 = 0x5f6d_6f63_7074_696d;
+
+const AllocationHeader = extern struct {
     size: usize,
     alignment: usize,
+    stamp: u64,
 };
+
+/// A small block is carved from the root's arena at a power-of-two size,
+/// header included, and a freed one waits on its size class's free list for
+/// the next request of that class. The arena takes no lock, so the many
+/// small allocations Roc makes never contend across roots.
+const min_small_block_log2 = 6;
+const max_small_block_log2 = 15;
+const small_class_count = max_small_block_log2 - min_small_block_log2 + 1;
+const max_small_payload = (1 << max_small_block_log2) - allocation_header_bytes - max_payload_skew;
+
+/// A freed small block's header, linking it into its class's free list. Its
+/// stamp overlays the live header's, so freeing a block clears the stamp.
+const FreeBlock = extern struct {
+    next: ?*FreeBlock,
+    unused: usize,
+    stamp: u64,
+};
+
+/// A large block comes from the backing allocator and goes back to it when
+/// Roc frees it. Its links precede its allocation header, so the live large
+/// blocks form a list a reset can release without a table.
+const LargeLinks = extern struct {
+    prev: ?*LargeLinks,
+    next: ?*LargeLinks,
+};
+const large_links_bytes = allocation_header_bytes;
+const large_block_overhead = large_links_bytes + allocation_header_bytes + max_payload_skew;
+
+comptime {
+    std.debug.assert(@sizeOf(AllocationHeader) <= allocation_header_bytes);
+    std.debug.assert(@sizeOf(FreeBlock) <= allocation_header_bytes);
+    std.debug.assert(@offsetOf(FreeBlock, "stamp") == @offsetOf(AllocationHeader, "stamp"));
+    std.debug.assert(@sizeOf(LargeLinks) <= large_links_bytes);
+    std.debug.assert(std.math.isPowerOfTwo(allocation_header_bytes));
+    std.debug.assert(max_allocation_alignment < allocation_header_bytes);
+}
 
 /// How a native compile-time root finished.
 pub const Termination = enum {
     returned,
     crashed,
-    comptime_exhaustiveness,
     host_oom,
-    host_error,
+};
+
+/// Where in generated code a failure happened, as the machine left it. The
+/// evaluating program resolves it to the failing statement and its meaning
+/// through its line table and failure sites (design.md "Compile-Time Failure
+/// Sites").
+pub const FailurePoint = struct {
+    /// The program counter a fault stopped at, when it stopped in generated
+    /// code.
+    fault: ?usize = null,
+    /// The return addresses into generated code on the frame-pointer chain,
+    /// innermost first: the generated call the failure came out of, then each
+    /// generated call enclosing it.
+    calls: []const usize = &.{},
 };
 
 /// A failed inline `expect` observed during native compile-time evaluation,
-/// with the failing statement's checked region and resolved location (whose
-/// file entry names the declaring module) as emitted by the dev backend's
-/// failure-region hook immediately before the expect-failed call.
+/// with the point in generated code it was reported from.
 pub const ExpectFailedEvent = struct {
     message: []u8,
-    region: ?base.Region,
-    loc: ?base.SourceLoc,
+    point: FailurePoint,
 };
 
 /// Root-local host effects captured during native compile-time evaluation.
@@ -65,42 +127,23 @@ pub const HostEvent = union(enum) {
     }
 };
 
-/// A compile-time branch marker reached by one root.
-pub const ComptimeBranchHit = struct {
-    site: lir.LIR.ComptimeSiteId,
-    branch_index: u32,
-};
-
-/// A generated call frame's checked source region plus the resolved source
-/// location stamped on the calling LIR statement. The location's file entry
-/// carries the declaring module, so a failure region is never rendered
-/// against another module's source.
-pub const CallRegion = struct {
-    region: base.Region,
-    loc: base.SourceLoc,
-};
-
 arena: base.SingleThreadArena,
 host_arena: base.SingleThreadArena,
-allocations: std.AutoHashMapUnmanaged(usize, Allocation) = .empty,
+/// Freed small blocks by size class, ready for reuse.
+free_lists: [small_class_count]?*FreeBlock = @splat(null),
+/// Live large blocks, most recently allocated first.
+large_blocks: ?*LargeLinks = null,
 roc_ops: ?RocOps = null,
 events: std.ArrayListUnmanaged(HostEvent) = .empty,
-comptime_branch_hits: std.ArrayListUnmanaged(ComptimeBranchHit) = .empty,
-call_regions: std.ArrayListUnmanaged(CallRegion) = .empty,
-comptime_failed_site: ?lir.LIR.ComptimeSiteId = null,
-failed_region: ?base.Region = null,
-/// Resolved source location of the failing LIR statement (file entry names
-/// the declaring module), captured alongside `failed_region`.
-failed_loc: ?base.SourceLoc = null,
-/// Published producer origins, indexed by the emitted LIR statement.
-failure_origins: []const ?lir.LIR.ComptimeFailureOrigin = &.{},
-/// The LIR statement whose failure-region hook ran last: the failing
-/// statement once the run fails.
-failed_stmt: ?lir.LIR.CFStmtId = null,
-slot_demand: ?SlotDemand = null,
-operational_error: ?FinalizeError = null,
+/// The address range of the generated code this host runs.
+code_start: usize = 0,
+code_end: usize = 0,
+/// The frame that called into generated code; every generated frame lies
+/// below it on the stack.
+entry_frame: usize = 0,
+/// Where the run failed, once it has.
+failure: ?FailurePoint = null,
 timing_io: ?std.Io = null,
-suspended_ns: u64 = 0,
 jmp_buf: JmpBuf = undefined,
 active_jmp_buf: ?*JmpBuf = null,
 termination: Termination = .returned,
@@ -115,6 +158,7 @@ pub fn init(allocator: Allocator) CompileTimeHost {
 
 pub fn deinit(self: *CompileTimeHost) void {
     self.clearHostState();
+    self.freeLargeBlocks();
     self.host_arena.deinit();
     self.arena.deinit();
     self.* = undefined;
@@ -141,12 +185,9 @@ pub fn ops(self: *CompileTimeHost) *RocOps {
 pub fn resetForRun(self: *CompileTimeHost) void {
     self.clearHostState();
     _ = self.host_arena.reset(.free_all);
-    self.comptime_failed_site = null;
-    self.failed_region = null;
-    self.failed_loc = null;
-    self.failed_stmt = null;
-    self.operational_error = null;
-    self.suspended_ns = 0;
+    self.failure = null;
+    self.freeLargeBlocks();
+    self.free_lists = @splat(null);
     _ = self.arena.reset(.free_all);
     self.termination = .returned;
     self.active_jmp_buf = null;
@@ -156,15 +197,85 @@ pub fn resetForRun(self: *CompileTimeHost) void {
 pub const CrashBoundary = crash_boundary_mod.CrashBoundary(CompileTimeHost, true);
 
 /// Record a caught stack overflow exactly the way a Roc `crash` is recorded,
-/// so the finalizer reports it as this root's compile-time crash.
+/// so the finalizer reports it as this root's compile-time crash: at the
+/// faulting instruction when it is generated code, otherwise at the generated
+/// call the fault happened inside of.
 pub fn noteStackOverflow(self: *CompileTimeHost) void {
-    if (self.failed_region == null and self.call_regions.items.len > 0) {
-        const frame = self.call_regions.items[self.call_regions.items.len - 1];
-        self.failed_region = frame.region;
-        self.failed_loc = frame.loc;
+    if (signal_handler.takeOverflowFrame()) |frame| {
+        self.failure = .{
+            .fault = if (self.inGeneratedCode(frame.pc)) frame.pc else null,
+            .calls = self.generatedCalls(frame.fp, frame.sp),
+        };
     }
     self.appendEvent(.crashed, crash_boundary_mod.STACK_OVERFLOW_MESSAGE);
     self.termination = .crashed;
+}
+
+/// Set the generated code this host runs, for locating its failures.
+pub fn setGeneratedCode(self: *CompileTimeHost, code: []const u8) void {
+    self.code_start = @intFromPtr(code.ptr);
+    self.code_end = self.code_start + code.len;
+}
+
+fn inGeneratedCode(self: *const CompileTimeHost, address: usize) bool {
+    return address >= self.code_start and address < self.code_end;
+}
+
+/// Every return address into generated code on the frame-pointer chain that
+/// starts at `frame`, innermost first. Generated code and the builtins and
+/// host functions between it and a failure keep frame pointers, so the chain
+/// is intact; every record read lies between `low` and the frame that called
+/// into generated code, which is live stack.
+fn generatedCalls(self: *CompileTimeHost, frame: usize, low: usize) []const usize {
+    var calls = std.ArrayListUnmanaged(usize).empty;
+    self.appendGeneratedCalls(&calls, frame, low);
+    return calls.items;
+}
+
+fn appendGeneratedCalls(self: *CompileTimeHost, calls: *std.ArrayListUnmanaged(usize), frame: usize, low: usize) void {
+    var fp = frame;
+    while (fp % @alignOf(usize) == 0 and fp >= low and fp + 2 * @sizeOf(usize) <= self.entry_frame) {
+        const record: *const [2]usize = @ptrFromInt(fp);
+        if (self.inGeneratedCode(record[1])) calls.append(self.host_arena.allocator(), record[1]) catch self.jump(.host_oom);
+        if (record[0] <= fp) break;
+        fp = record[0];
+    }
+}
+
+/// Where in generated code the failure being reported from this host
+/// callback happened.
+fn currentFailurePoint(self: *CompileTimeHost, frame: usize) FailurePoint {
+    if (comptime builtin.os.tag == .windows and builtin.cpu.arch == .x86_64) return self.windowsX64FailurePoint();
+    return .{ .calls = self.generatedCalls(frame, frame) };
+}
+
+/// On Windows x64, compiled host and builtin code points its frame pointer
+/// into the middle of its frame rather than at a saved-frame-pointer record,
+/// so the frames between this callback and generated code are unwound with
+/// the system unwind tables. Generated frames are frame-pointer records, so
+/// the chain is walked from the innermost one.
+fn windowsX64FailurePoint(self: *CompileTimeHost) FailurePoint {
+    const windows = std.os.windows;
+    var context: windows.CONTEXT = undefined;
+    windows.ntdll.RtlCaptureContext(&context);
+    var history: windows.UNWIND_HISTORY_TABLE = undefined;
+    @memset(@as(*[@sizeOf(windows.UNWIND_HISTORY_TABLE)]u8, @ptrCast(&history)), 0);
+    while (!self.inGeneratedCode(context.Rip)) {
+        if (context.Rsp >= self.entry_frame) return .{};
+        var image_base: usize = undefined;
+        if (windows.ntdll.RtlLookupFunctionEntry(context.Rip, &image_base, &history)) |function| {
+            var handler_data: ?*anyopaque = null;
+            var establisher_frame: usize = undefined;
+            _ = windows.ntdll.RtlVirtualUnwind(windows.UNW_FLAG_NHANDLER, image_base, context.Rip, function, &context, &handler_data, &establisher_frame, null);
+        } else {
+            context.Rip = @as(*const usize, @ptrFromInt(context.Rsp)).*;
+            context.Rsp += @sizeOf(usize);
+        }
+    }
+    var calls = std.ArrayListUnmanaged(usize).empty;
+    calls.append(self.host_arena.allocator(), context.Rip) catch self.jump(.host_oom);
+    self.appendGeneratedCalls(&calls, context.Rbp, context.Rsp);
+    return .{ .calls = calls.items };
 }
 
 /// Install a crash boundary before calling generated root code.
@@ -184,137 +295,28 @@ pub fn crashMessage(self: *const CompileTimeHost) ?[]const u8 {
     return null;
 }
 
-/// Start measuring time spent suspended while another root completes.
-pub fn startDemandTiming(self: *CompileTimeHost) i128 {
-    return if (self.timing_io) |io| std.Io.Timestamp.now(io, .awake).nanoseconds else 0;
-}
-
-/// Accumulate nested demand time for exclusive root timing.
-pub fn finishDemandTiming(self: *CompileTimeHost, started: i128) void {
-    if (self.timing_io) |io| self.suspended_ns += @intCast(@max(0, std.Io.Timestamp.now(io, .awake).nanoseconds - started));
-}
-
-/// A static read demands completion of its explicitly identified producer.
-pub fn rocComptimeEnsureStaticValue(slot: u32) callconv(.c) void {
-    const roc_ops = enteredOps();
-    const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
-    const demand = self.slot_demand orelse return;
-    const started = self.startDemandTiming();
-    const result = demand.ensure(demand.context, @fromBackingInt(@intCast(slot)));
-    self.finishDemandTiming(started);
-    result catch |err| switch (err) {
-        error.CompileTimeDependencyCycle => {
-            const message = "cyclic compile-time value dependency";
-            rocCrashed(roc_ops, message.ptr, message.len);
-        },
-        else => |operational| {
-            self.operational_error = operational;
-            self.jump(.host_error);
-        },
-    };
-}
-
-/// Dev-backend hook called when a compile-time branch marker is reached.
-pub fn rocComptimeBranchTaken(site_raw: u32, branch_index: u32) callconv(.c) void {
-    const self = enteredHost();
-    self.comptime_branch_hits.append(self.host_arena.allocator(), .{
-        .site = @fromBackingInt(@intCast(site_raw)),
-        .branch_index = branch_index,
-    }) catch {
-        self.jump(.host_oom);
-    };
-}
-
-/// Dev-backend hook called when empirical exhaustiveness fails.
-pub fn rocComptimeExhaustivenessFailed(site_raw: u32) callconv(.c) void {
-    const self = enteredHost();
-    self.comptime_failed_site = @fromBackingInt(@intCast(site_raw));
-    self.jump(.comptime_exhaustiveness);
-}
-
-/// Dev-backend hook recording the source region for an imminent failure,
-/// together with the failing statement's resolved location (whose file entry
-/// names the declaring module).
-pub fn rocComptimeFailureRegion(start_offset: u32, end_offset: u32, file: u32, line: u32, column: u32, stmt: u32) callconv(.c) void {
-    const self = enteredHost();
-    self.failed_stmt = @fromBackingInt(@intCast(stmt));
-    if (stmt < self.failure_origins.len) {
-        if (self.failure_origins[stmt]) |origin| {
-            self.failed_region = origin.region;
-            self.failed_loc = origin.loc;
-            return;
-        }
-    }
-    if (start_offset == end_offset) return;
-    self.failed_region = base.Region.from_raw_offsets(start_offset, end_offset);
-    self.failed_loc = .{ .file = file, .line = line, .column = column };
-}
-
-/// Dev-backend hook pushing a source region for a generated call frame.
-pub fn rocComptimeCallEnter(start_offset: u32, end_offset: u32, file: u32, line: u32, column: u32) callconv(.c) void {
-    const self = enteredHost();
-    self.call_regions.append(self.host_arena.allocator(), .{
-        .region = base.Region.from_raw_offsets(start_offset, end_offset),
-        .loc = .{ .file = file, .line = line, .column = column },
-    }) catch {
-        self.jump(.host_oom);
-    };
-}
-
-/// Dev-backend hook popping the source region for a generated call frame.
-pub fn rocComptimeCallExit() callconv(.c) void {
-    const self = enteredHost();
-    if (self.call_regions.items.len == 0) {
-        base.invariant("{s}", .{"compile-time call-region stack underflow"});
-    }
-    _ = self.call_regions.pop();
-}
-
-/// The ops of the evaluation this thread entered, which the hooks above are
-/// only ever called from.
-fn enteredOps() *RocOps {
-    return builtins.in_process_host.current() orelse base.invariant("{s}", .{"compile-time hook ran on a thread that entered no host"});
-}
-
-fn enteredHost() *CompileTimeHost {
-    return @ptrCast(@alignCast(enteredOps().env));
-}
-
 fn clearHostState(self: *CompileTimeHost) void {
     self.events = .empty;
-    self.comptime_branch_hits = .empty;
-    self.call_regions = .empty;
-    self.allocations = .empty;
 }
 
 fn appendEvent(self: *CompileTimeHost, comptime tag: std.meta.Tag(HostEvent), bytes: []const u8) void {
     const owned = self.dupeEventBytes(bytes);
     const host_allocator = self.host_arena.allocator();
-    self.events.append(host_allocator, @unionInit(HostEvent, @tagName(tag), owned)) catch {
-        self.jump(.host_oom);
-        unreachable;
-    };
+    self.events.append(host_allocator, @unionInit(HostEvent, @tagName(tag), owned)) catch self.jump(.host_oom);
 }
 
-fn appendExpectFailedEvent(self: *CompileTimeHost, bytes: []const u8, region: ?base.Region, loc: ?base.SourceLoc) void {
+fn appendExpectFailedEvent(self: *CompileTimeHost, bytes: []const u8, point: FailurePoint) void {
     const owned = self.dupeEventBytes(bytes);
     const host_allocator = self.host_arena.allocator();
     self.events.append(host_allocator, .{ .expect_failed = .{
         .message = owned,
-        .region = region,
-        .loc = loc,
-    } }) catch {
-        self.jump(.host_oom);
-        unreachable;
-    };
+        .point = point,
+    } }) catch self.jump(.host_oom);
 }
 
 fn dupeEventBytes(self: *CompileTimeHost, bytes: []const u8) []u8 {
     const host_allocator = self.host_arena.allocator();
-    return host_allocator.dupe(u8, bytes) catch {
-        self.jump(.host_oom);
-        unreachable;
-    };
+    return host_allocator.dupe(u8, bytes) catch self.jump(.host_oom);
 }
 
 fn jump(self: *CompileTimeHost, termination: Termination) noreturn {
@@ -330,41 +332,135 @@ fn jump(self: *CompileTimeHost, termination: Termination) noreturn {
 
 fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
-    const alloc_len = @max(length, 1);
-    const arena_allocator = self.arena.allocator();
-    const ptr = allocateBytes(arena_allocator, alloc_len, alignment) orelse {
-        self.jump(.host_oom);
-    };
-    self.allocations.put(self.host_arena.allocator(), @intFromPtr(ptr), .{ .size = alloc_len, .alignment = alignment }) catch {
-        self.jump(.host_oom);
-    };
-    return @ptrCast(ptr);
+    return @ptrCast(self.allocateRocBytes(length, alignment));
 }
 
-fn rocDealloc(roc_ops: *RocOps, ptr: *anyopaque, _: usize) callconv(.c) void {
+fn rocDealloc(roc_ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
-    _ = self.allocations.fetchRemove(@intFromPtr(ptr)) orelse {
-        base.invariant("{s}", .{"compile-time RocOps deallocated unknown pointer"});
-    };
+    self.freeRocBytes(ptr, alignment, "dealloc");
 }
 
 fn rocRealloc(roc_ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
-    const old_info = self.allocations.get(@intFromPtr(ptr)) orelse {
-        base.invariant("{s}", .{"compile-time RocOps reallocated unknown pointer"});
-    };
-    const alloc_len = @max(new_length, 1);
-    const arena_allocator = self.arena.allocator();
-    const new_ptr = allocateBytes(arena_allocator, alloc_len, alignment) orelse {
+    const header = allocationHeader(ptr);
+    assertLive(ptr, alignment, "realloc");
+    const old_size = header.size;
+    const new_size = @max(new_length, 1);
+    // A small block already holds every length of its size class.
+    if (old_size <= max_small_payload and new_size <= max_small_payload and smallClass(old_size) == smallClass(new_size)) {
+        if (alignment > max_allocation_alignment or !std.math.isPowerOfTwo(alignment)) {
+            base.invariant("{s}", .{"unsupported compile-time RocOps allocation alignment"});
+        }
+        header.size = new_size;
+        return ptr;
+    }
+    const new_bytes = self.allocateRocBytes(new_length, alignment);
+    const old_bytes: [*]u8 = @ptrCast(ptr);
+    const copied = @min(old_size, new_size);
+    @memcpy(new_bytes[0..copied], old_bytes[0..copied]);
+    self.freeRocBytes(ptr, alignment, "realloc");
+    return @ptrCast(new_bytes);
+}
+
+fn assertLive(ptr: *anyopaque, alignment: usize, comptime operation: []const u8) void {
+    if (!std.debug.runtime_safety) return;
+    const header = allocationHeader(ptr);
+    if (header.alignment != alignment) {
+        std.debug.panic("CompileTimeHost: " ++ operation ++ " at alignment {d} of a block allocated at alignment {d} (ptr=0x{x})", .{ alignment, header.alignment, @intFromPtr(ptr) });
+    }
+    std.debug.assert(header.stamp == allocation_header_stamp);
+}
+
+/// The size class of a small block whose payload is `size` bytes.
+fn smallClass(size: usize) usize {
+    const block_log2 = std.math.log2_int_ceil(usize, allocation_header_bytes + max_payload_skew + size);
+    return @max(block_log2, min_small_block_log2) - min_small_block_log2;
+}
+
+/// Bytes between the header region and Roc bytes at `alignment`.
+fn payloadSkew(alignment: usize) usize {
+    return if (std.debug.runtime_safety) alignment else 0;
+}
+
+/// Hand out `length` bytes (at least one) at `alignment`, after their header;
+/// exactly `alignment` in safety-checked builds.
+fn allocateRocBytes(self: *CompileTimeHost, length: usize, alignment: usize) [*]u8 {
+    if (alignment > max_allocation_alignment or !std.math.isPowerOfTwo(alignment)) {
+        base.invariant("{s}", .{"unsupported compile-time RocOps allocation alignment"});
+    }
+    const size = @max(length, 1);
+    const header: *AllocationHeader = if (size <= max_small_payload)
+        self.allocateSmallBlock(smallClass(size))
+    else
+        self.allocateLargeBlock(size);
+    header.size = size;
+    header.alignment = alignment;
+    if (std.debug.runtime_safety) header.stamp = allocation_header_stamp;
+    const bytes: [*]u8 = @ptrCast(header);
+    return bytes + allocation_header_bytes + payloadSkew(alignment);
+}
+
+fn allocateSmallBlock(self: *CompileTimeHost, class: usize) *AllocationHeader {
+    if (self.free_lists[class]) |free| {
+        self.free_lists[class] = free.next;
+        return @ptrCast(free);
+    }
+    const block_bytes = @as(usize, 1) << @intCast(class + min_small_block_log2);
+    const block = self.arena.allocator().alignedAlloc(u8, .fromByteUnits(allocation_header_bytes), block_bytes) catch {
         self.jump(.host_oom);
     };
-    const old_bytes: [*]u8 = @ptrCast(@alignCast(ptr));
-    @memcpy(new_ptr[0..@min(old_info.size, alloc_len)], old_bytes[0..@min(old_info.size, alloc_len)]);
-    self.allocations.put(self.host_arena.allocator(), @intFromPtr(new_ptr), .{ .size = alloc_len, .alignment = alignment }) catch {
+    return @ptrCast(@alignCast(block.ptr));
+}
+
+fn allocateLargeBlock(self: *CompileTimeHost, size: usize) *AllocationHeader {
+    const total = std.math.add(usize, large_block_overhead, size) catch self.jump(.host_oom);
+    const block = self.arena.child_allocator.alignedAlloc(u8, .fromByteUnits(allocation_header_bytes), total) catch {
         self.jump(.host_oom);
     };
-    _ = self.allocations.remove(@intFromPtr(ptr));
-    return @ptrCast(new_ptr);
+    const links: *LargeLinks = @ptrCast(@alignCast(block.ptr));
+    links.* = .{ .prev = null, .next = self.large_blocks };
+    if (self.large_blocks) |next| next.prev = links;
+    self.large_blocks = links;
+    return @ptrCast(@alignCast(block.ptr + large_links_bytes));
+}
+
+fn freeRocBytes(self: *CompileTimeHost, ptr: *anyopaque, alignment: usize, comptime operation: []const u8) void {
+    assertLive(ptr, alignment, operation);
+    const header = allocationHeader(ptr);
+    const size = header.size;
+    if (size <= max_small_payload) {
+        const class = smallClass(size);
+        const free: *FreeBlock = @ptrCast(header);
+        free.* = .{ .next = self.free_lists[class], .unused = 0, .stamp = 0 };
+        self.free_lists[class] = free;
+        return;
+    }
+    const header_bytes: [*]u8 = @ptrCast(header);
+    const links: *LargeLinks = @ptrCast(@alignCast(header_bytes - large_links_bytes));
+    if (std.debug.runtime_safety) header.stamp = 0;
+    self.freeLargeBlock(links, size);
+}
+
+fn freeLargeBlock(self: *CompileTimeHost, links: *LargeLinks, size: usize) void {
+    if (links.prev) |prev| prev.next = links.next else self.large_blocks = links.next;
+    if (links.next) |next| next.prev = links.prev;
+    const block: [*]align(allocation_header_bytes) u8 = @ptrCast(@alignCast(links));
+    self.arena.child_allocator.free(block[0 .. large_block_overhead + size]);
+}
+
+fn freeLargeBlocks(self: *CompileTimeHost) void {
+    while (self.large_blocks) |links| {
+        const block: [*]u8 = @ptrCast(links);
+        const header: *AllocationHeader = @ptrCast(@alignCast(block + large_links_bytes));
+        self.freeLargeBlock(links, header.size);
+    }
+}
+
+fn allocationHeader(ptr: *anyopaque) *AllocationHeader {
+    // ptr = block start + allocation_header_bytes + skew, and the skew is less
+    // than allocation_header_bytes, so rounding down recovers the start.
+    const start = (@intFromPtr(ptr) - allocation_header_bytes) & ~@as(usize, allocation_header_bytes - 1);
+    return @ptrFromInt(start);
 }
 
 fn rocDbg(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
@@ -374,38 +470,14 @@ fn rocDbg(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
 
 fn rocExpectFailed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
-    // The dev backend emits a failure-region hook call immediately before an
-    // expect-failed call, exactly as for crashes. Consume that pending
-    // location into this event: evaluation continues after a failed expect,
-    // so leaving it set would misattribute a later crash to the expect.
-    const region = self.failed_region;
-    const loc = self.failed_loc;
-    self.failed_region = null;
-    self.failed_loc = null;
-    self.failed_stmt = null;
-    self.appendExpectFailedEvent(bytes[0..len], region, loc);
+    self.appendExpectFailedEvent(bytes[0..len], self.currentFailurePoint(@frameAddress()));
 }
 
 fn rocCrashed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
-    if (self.failed_region == null and self.call_regions.items.len > 0) {
-        const frame = self.call_regions.items[self.call_regions.items.len - 1];
-        self.failed_region = frame.region;
-        self.failed_loc = frame.loc;
-    }
+    self.failure = self.currentFailurePoint(@frameAddress());
     self.appendEvent(.crashed, bytes[0..len]);
     self.jump(.crashed);
-}
-
-fn allocateBytes(allocator: Allocator, len: usize, alignment: usize) ?[*]u8 {
-    return switch (alignment) {
-        1 => (allocator.alignedAlloc(u8, .@"1", len) catch return null).ptr,
-        2 => (allocator.alignedAlloc(u8, .@"2", len) catch return null).ptr,
-        4 => (allocator.alignedAlloc(u8, .@"4", len) catch return null).ptr,
-        8 => (allocator.alignedAlloc(u8, .@"8", len) catch return null).ptr,
-        16 => (allocator.alignedAlloc(u8, .@"16", len) catch return null).ptr,
-        else => base.invariant("{s}", .{"unsupported compile-time RocOps allocation alignment"}),
-    };
 }
 
 fn hostBytesAllocator(allocator: Allocator) Allocator {
@@ -460,6 +532,94 @@ fn hostBytesAllocator(allocator: Allocator) Allocator {
         .vulkan,
         => allocator,
     };
+}
+
+test "compile-time allocations honor alignment, keep their bytes across reallocation, and churn in constant time" {
+    var host = CompileTimeHost.init(std.testing.allocator);
+    defer host.deinit();
+    const roc_ops = host.ops();
+
+    inline for (.{ 1, 2, 4, 8, 16 }) |alignment| {
+        const ptr = roc_ops.roc_alloc(roc_ops, 3, alignment);
+        try std.testing.expect(@intFromPtr(ptr) % alignment == 0);
+        if (std.debug.runtime_safety) try std.testing.expect(@intFromPtr(ptr) % (2 * alignment) != 0);
+        roc_ops.roc_dealloc(roc_ops, ptr, alignment);
+    }
+
+    // Growing keeps every old byte; shrinking keeps the bytes that fit. A
+    // realloc keeps the block's alignment: production's host_alloc finds a
+    // block's start from the alignment it is handed.
+    const first = roc_ops.roc_alloc(roc_ops, 5, 8);
+    const first_bytes: [*]u8 = @ptrCast(first);
+    @memcpy(first_bytes[0..5], "hello");
+    const grown = roc_ops.roc_realloc(roc_ops, first, 40, 8);
+    const grown_bytes: [*]u8 = @ptrCast(grown);
+    try std.testing.expectEqualStrings("hello", grown_bytes[0..5]);
+    try std.testing.expect(@intFromPtr(grown) % 8 == 0);
+    const shrunk = roc_ops.roc_realloc(roc_ops, grown, 2, 8);
+    const shrunk_bytes: [*]u8 = @ptrCast(shrunk);
+    try std.testing.expectEqualStrings("he", shrunk_bytes[0..2]);
+    roc_ops.roc_dealloc(roc_ops, shrunk, 8);
+
+    // A root that once held many blocks and then frees and allocates in a
+    // loop must not pay for the blocks it once held on every operation.
+    var live: [65_536]*anyopaque = undefined;
+    for (&live) |*slot| slot.* = roc_ops.roc_alloc(roc_ops, 16, 8);
+    for (live) |ptr| roc_ops.roc_dealloc(roc_ops, ptr, 8);
+    var cycle: usize = 0;
+    while (cycle < 1_000_000) : (cycle += 1) {
+        const ptr = roc_ops.roc_alloc(roc_ops, 16, 8);
+        roc_ops.roc_dealloc(roc_ops, ptr, 8);
+    }
+}
+
+test "memory a compile-time root frees is reused or returned to the backing allocator" {
+    var host = CompileTimeHost.init(std.testing.allocator);
+    defer host.deinit();
+    const roc_ops = host.ops();
+
+    // A root that frees each list before building the next holds one list's
+    // memory at a time, however many lists it builds.
+    const churn = struct {
+        fn run(ops_: *RocOps, cycles: usize) void {
+            for (0..cycles) |_| {
+                const ptr = ops_.roc_alloc(ops_, 1024, 8);
+                ops_.roc_dealloc(ops_, ptr, 8);
+            }
+        }
+    };
+    churn.run(roc_ops, 1);
+    const churned_once = host.arena.queryCapacity();
+    churn.run(roc_ops, 100_000);
+    try std.testing.expectEqual(churned_once, host.arena.queryCapacity());
+
+    // A list growing by reallocation releases each block it outgrows, so
+    // growing a second list reuses the first one's memory.
+    const grow = struct {
+        fn run(ops_: *RocOps) void {
+            var list = ops_.roc_alloc(ops_, 8, 8);
+            var length: usize = 8;
+            while (length < 4 * 1024 * 1024) {
+                length *= 2;
+                list = ops_.roc_realloc(ops_, list, length, 8);
+                const bytes: [*]u8 = @ptrCast(list);
+                bytes[length - 1] = 1;
+            }
+            ops_.roc_dealloc(ops_, list, 8);
+        }
+    };
+    grow.run(roc_ops);
+    const grown_once = host.arena.queryCapacity();
+    try std.testing.expect(host.large_blocks == null);
+    for (0..100) |_| grow.run(roc_ops);
+    try std.testing.expectEqual(grown_once, host.arena.queryCapacity());
+    try std.testing.expect(host.large_blocks == null);
+
+    // Large blocks still live when the root finishes are released with it.
+    _ = roc_ops.roc_alloc(roc_ops, 1024 * 1024, 16);
+    _ = roc_ops.roc_alloc(roc_ops, 3 * 1024 * 1024, 1);
+    host.resetForRun();
+    try std.testing.expect(host.large_blocks == null);
 }
 
 test "compile-time host declarations are referenced" {

@@ -11,6 +11,9 @@ const Relocation = @import("Relocation.zig").IndexedRelocation;
 const DataRelocationKind = @import("Relocation.zig").DataRelocationKind;
 const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
 const StaticDataRelocation = @import("StaticDataExport.zig").StaticDataRelocation;
+pub const StaticDataPool = @import("StaticDataPool.zig");
+
+const base = @import("base");
 
 const Allocator = std.mem.Allocator;
 
@@ -23,8 +26,10 @@ pub const BoxySidecar = lir.LirImage.BoxySidecar;
 pub const MAGIC: u32 = 0x56454452;
 
 /// Version of the shared-memory dev run image format.
-/// v5: embedded Boxy sidecars carry dense name identities and byte/range columns.
-pub const FORMAT_VERSION: u32 = 5;
+/// v6: function relocations carry their producer-selected call encoding.
+/// v7: data symbols may live in the hot-reload static pool, and images carry
+/// their static pool chunk and whether their static data names code.
+pub const FORMAT_VERSION: u32 = 7;
 
 /// Maximum bytes reserved per host jump stub on the supported dev-shim hosts.
 /// The machine-code shim owns the per-arch emitted sizes and asserts at compile
@@ -38,10 +43,8 @@ pub const ImageError = error{
 };
 
 /// Errors raised while serializing machine code and static data into shared memory.
-pub const WriteError = Allocator.Error || ImageError || error{
-    InvalidStaticDataAlignment,
+pub const WriteError = Allocator.Error || ImageError || StaticDataPool.Error || error{
     UnsupportedDevRunRelocation,
-    UnsupportedStaticDataRelocation,
 };
 
 /// Offset and length pair for image sections stored relative to the image base.
@@ -80,6 +83,13 @@ pub const Header = extern struct {
     /// tables). `boxy_sidecar` offsets are relative to this region's base.
     boxy_blob: ArrayRef,
     boxy_sidecar: BoxySidecar,
+    /// This image's static pool chunk: its `StaticDataPool.Chunk` header
+    /// through the end of the image, which holds the data section. Empty when
+    /// the image has no entries for later images to reuse.
+    static_pool: ArrayRef,
+    /// Nonzero when the image's static data holds pointers to its own code.
+    static_code_references: u32,
+    _padding: u32 = 0,
 };
 
 /// Entry wrapper exported by the generated dev code image.
@@ -91,11 +101,12 @@ pub const Entrypoint = extern struct {
 
 /// Relocation encodings stored in shared memory for the shim to apply.
 pub const RelocationKind = enum(u8) {
-    linked_function = 1,
+    linked_function_x86_call_rel32 = 1,
     linked_data_abs64 = 2,
     linked_data_rel32 = 3,
     linked_data_page21 = 4,
     linked_data_pageoff12 = 5,
+    linked_function_aarch64_call26 = 6,
 };
 
 /// Serialized relocation record that names the target symbol explicitly.
@@ -110,6 +121,14 @@ pub const RelocationRecord = extern struct {
     }
 };
 
+/// Where a data symbol's bytes live.
+pub const DataLocation = enum(u32) {
+    /// In this image's data section; `data_offset` is relative to it.
+    image = 0,
+    /// In the hot-reload static pool; `data_offset` is relative to the mapping base.
+    pool = 1,
+};
+
 /// Description of one exported readonly data symbol in the run image.
 pub const DataSymbol = extern struct {
     name: StringRef,
@@ -117,7 +136,11 @@ pub const DataSymbol = extern struct {
     len: u64,
     symbol_offset: u64,
     alignment: u32,
-    _padding: u32 = 0,
+    location: u32 = @backingInt(DataLocation.image),
+
+    pub fn dataLocation(self: DataSymbol) ImageError!DataLocation {
+        return std.enums.fromInt(DataLocation, self.location) orelse error.InvalidDevRunImage;
+    }
 };
 
 /// Description of one generated Roc procedure in the run image.
@@ -172,6 +195,9 @@ pub const ProgramView = struct {
     page_size: usize,
     boxy_blob: []u8,
     boxy_sidecar: BoxySidecar,
+    /// The whole shared mapping, which pooled data symbols point into.
+    mapping: []u8,
+    static_code_references: bool,
 
     pub fn symbolName(self: *const ProgramView, ref: StringRef) ImageError![]const u8 {
         const start = try asBoundedOffset(ref.offset, self.symbol_names.len);
@@ -187,9 +213,23 @@ pub const ProgramView = struct {
     pub fn codeSymbolName(self: *const ProgramView, symbol: CodeSymbol) ImageError![]const u8 {
         return self.symbolName(symbol.name);
     }
+
+    /// The bytes of a data symbol, wherever they live.
+    pub fn dataSymbolBytes(self: *const ProgramView, symbol: DataSymbol) ImageError![]u8 {
+        const container = switch (try symbol.dataLocation()) {
+            .image => self.data,
+            .pool => self.mapping,
+        };
+        const data_offset = try asBoundedOffset(symbol.data_offset, container.len);
+        const len = try asBoundedLen(symbol.len);
+        if (len > container.len - data_offset) return error.InvalidDevRunImage;
+        if (symbol.symbol_offset > len) return error.InvalidDevRunImage;
+        return container[data_offset..][0..len];
+    }
 };
 
-/// Serialize dev backend machine code, entrypoints, relocations, and data into shared memory.
+/// Serialize dev backend machine code, entrypoints, relocations, and data into
+/// shared memory, placing each static data export as `plan` decided.
 pub fn writeToSharedMemory(
     scratch: Allocator,
     image_allocator: Allocator,
@@ -201,10 +241,12 @@ pub fn writeToSharedMemory(
     relocation_symbol_names: []const []const u8,
     relocations: []const Relocation,
     data_exports: []const StaticDataExport,
+    plan: *const StaticDataPool.Plan,
     boxy_blob: []const u8,
     boxy_sidecar: BoxySidecar,
 ) WriteError!*Header {
     if (!std.math.isPowerOfTwo(page_size)) return error.InvalidDevRunImage;
+    if (plan.placements.len != data_exports.len) base.invariant("run image invariant violated: static data plan covers {d} of {d} exports", .{ plan.placements.len, data_exports.len });
 
     var symbol_names: SymbolNames = .{};
     defer symbol_names.deinit(scratch);
@@ -215,16 +257,18 @@ pub fn writeToSharedMemory(
 
     var relocation_records = std.ArrayList(RelocationRecord).empty;
     defer relocation_records.deinit(scratch);
+    try relocation_records.ensureTotalCapacity(scratch, relocations.len);
     var data_relocation_records = std.ArrayList(DataRelocationRecord).empty;
     defer data_relocation_records.deinit(scratch);
 
     var code_symbols = std.ArrayList(CodeSymbol).empty;
     defer code_symbols.deinit(scratch);
+    try code_symbols.ensureTotalCapacity(scratch, code_symbol_inputs.len);
 
     for (code_symbol_inputs) |input| {
         if (input.code_offset >= code.len) return error.InvalidDevRunImage;
         const name_ref = try symbol_names.intern(scratch, input.name, .code);
-        try code_symbols.append(scratch, .{
+        code_symbols.appendAssumeCapacity(.{
             .name = name_ref,
             .code_offset = @intCast(input.code_offset),
         });
@@ -233,29 +277,31 @@ pub fn writeToSharedMemory(
     for (relocations) |relocation| {
         switch (relocation) {
             .linked_function => |function| {
-                try relocation_records.append(scratch, .{
+                relocation_records.appendAssumeCapacity(.{
                     .code_offset = function.offset,
                     .symbol = symbol_refs[@backingInt(function.symbol)],
-                    .kind = @backingInt(RelocationKind.linked_function),
+                    .kind = @backingInt(switch (function.kind) {
+                        .x86_call_rel32 => RelocationKind.linked_function_x86_call_rel32,
+                        .aarch64_call26 => RelocationKind.linked_function_aarch64_call26,
+                    }),
                 });
             },
             .linked_data => |data| {
-                try relocation_records.append(scratch, .{
+                relocation_records.appendAssumeCapacity(.{
                     .code_offset = data.offset,
                     .symbol = symbol_refs[@backingInt(data.symbol)],
                     .kind = @backingInt(relocationKindForData(data.kind)),
                 });
             },
-            .local_data, .jmp_to_return => return error.UnsupportedDevRunRelocation,
-            .retired => {},
+            .local_data => return error.UnsupportedDevRunRelocation,
+            .retired, .runtime_number => {},
         }
     }
 
-    var data_bytes = std.ArrayList(u8).empty;
-    defer data_bytes.deinit(scratch);
-
     var data_symbols = std.ArrayList(DataSymbol).empty;
     defer data_symbols.deinit(scratch);
+    try data_symbols.ensureTotalCapacity(scratch, data_exports.len);
+    try data_relocation_records.ensureTotalCapacity(scratch, plan.local_relocation_count);
 
     const data_refs = try scratch.alloc(StringRef, data_exports.len);
     defer scratch.free(data_refs);
@@ -263,24 +309,23 @@ pub fn writeToSharedMemory(
         ref.* = try symbol_names.intern(scratch, data_export.symbol_name, .data);
     }
 
-    var max_data_alignment: usize = 1;
-    for (data_exports, data_refs) |data_export, name_ref| {
-        const alignment = if (data_export.alignment == 0) 1 else data_export.alignment;
+    for (data_exports, data_refs, plan.placements) |data_export, name_ref, placement| {
+        const alignment = StaticDataPool.exportAlignment(data_export);
         if (!std.math.isPowerOfTwo(alignment)) return error.InvalidStaticDataAlignment;
-        max_data_alignment = @max(max_data_alignment, alignment);
-
-        const aligned_offset = std.mem.alignForward(usize, data_bytes.items.len, alignment);
-        try data_bytes.appendNTimes(scratch, 0, aligned_offset - data_bytes.items.len);
-        const data_offset = data_bytes.items.len;
-        try data_bytes.appendSlice(scratch, data_export.bytes);
-
-        try data_symbols.append(scratch, .{
+        const data_offset, const location: DataLocation = switch (placement) {
+            .local => |local| .{ local.data_offset, .image },
+            .pooled => |pooled| .{ pooled, .pool },
+        };
+        data_symbols.appendAssumeCapacity(.{
             .name = name_ref,
             .data_offset = @intCast(data_offset),
             .len = @intCast(data_export.bytes.len),
             .symbol_offset = data_export.symbol_offset,
             .alignment = alignment,
+            .location = @backingInt(location),
         });
+        // A pooled entry's relocations were applied when its own image loaded.
+        if (location == .pool) continue;
 
         for (data_export.relocations) |relocation| {
             if (relocation.offset > std.math.maxInt(usize)) return error.InvalidDevRunImage;
@@ -295,7 +340,7 @@ pub fn writeToSharedMemory(
                 },
                 .function_pointer => symbol_names.find(relocation.target_symbol_name, .code) orelse return error.UnsupportedStaticDataRelocation,
             };
-            try data_relocation_records.append(scratch, .{
+            data_relocation_records.appendAssumeCapacity(.{
                 .data_offset = @intCast(data_offset + relocation_offset),
                 .symbol = target_ref,
                 .addend = relocation.addend,
@@ -353,15 +398,75 @@ pub fn writeToSharedMemory(
     const function_stubs = try image_allocator.alignedAlloc(u8, .@"16", function_stub_len);
     @memset(function_stubs, 0);
 
+    // Page-aligned so it never shares a page with executable code.
+    const boxy_blob_copy = try allocRuntimeAlignedBytes(image_allocator, std.mem.Alignment.fromByteUnits(page_size), boxy_blob.len);
+    @memcpy(boxy_blob_copy, boxy_blob);
+
+    // The chunk starts on its own page so that reclaiming the rest of the
+    // image never hands out a page the pool still uses.
+    const has_chunk = plan.listed_count > 0;
+    const chunk: ?*Chunk = if (has_chunk) blk: {
+        const bytes = try allocRuntimeAlignedBytes(image_allocator, std.mem.Alignment.fromByteUnits(page_size), @sizeOf(Chunk));
+        break :blk @ptrCast(@alignCast(bytes.ptr));
+    } else null;
+    const chunk_entries = try image_allocator.alloc(StaticDataPool.Entry, plan.listed_count);
+    const chunk_relocations = try image_allocator.alloc(StaticDataPool.Relocation, plan.listed_relocation_count);
+
     const data_copy = try allocRuntimeAlignedBytes(
         image_allocator,
-        std.mem.Alignment.fromByteUnits(@max(page_size, max_data_alignment)),
-        data_bytes.items.len,
+        std.mem.Alignment.fromByteUnits(@max(page_size, plan.max_local_alignment)),
+        dataSectionLen(plan),
     );
-    @memcpy(data_copy, data_bytes.items);
+    @memset(data_copy, 0);
+    for (data_exports, plan.placements) |data_export, placement| {
+        switch (placement) {
+            .local => |local| @memcpy(data_copy[local.data_offset..][0..data_export.bytes.len], data_export.bytes),
+            .pooled => {},
+        }
+    }
 
-    const boxy_blob_copy = try allocRuntimeAlignedBytes(image_allocator, .@"16", boxy_blob.len);
-    @memcpy(boxy_blob_copy, boxy_blob);
+    if (chunk) |chunk_header| {
+        const data_base = @intFromPtr(data_copy.ptr) - @intFromPtr(base_ptr);
+        var entry_index: usize = 0;
+        var relocation_index: usize = 0;
+        for (data_exports, plan.placements, plan.hashes, 0..) |data_export, placement, hash, i| {
+            const local = switch (placement) {
+                .local => |local| local,
+                .pooled => continue,
+            };
+            if (!local.listed) continue;
+            chunk_entries[entry_index] = .{
+                .hash = hash,
+                .data_offset = @intCast(data_base + local.data_offset),
+                .len = @intCast(data_export.bytes.len),
+                .symbol_offset = data_export.symbol_offset,
+                .alignment = StaticDataPool.exportAlignment(data_export),
+                .relocation_count = @intCast(data_export.relocations.len),
+                .first_relocation = @intCast(relocation_index),
+            };
+            entry_index += 1;
+            for (plan.sortedRelocations(i)) |r| {
+                const relocation = data_export.relocations[r];
+                const target_offset = switch (plan.placements[plan.relocationTarget(i, r)]) {
+                    .local => |target| data_base + target.data_offset,
+                    .pooled => |target| target,
+                };
+                chunk_relocations[relocation_index] = .{
+                    .offset = relocation.offset,
+                    .addend = relocation.addend,
+                    .target_data_offset = @intCast(target_offset),
+                };
+                relocation_index += 1;
+            }
+        }
+        if (entry_index != chunk_entries.len or relocation_index != chunk_relocations.len) base.invariant("run image invariant violated: static pool chunk tables disagree with the plan", .{});
+        chunk_header.* = .{
+            .entries_offset = (try arrayRef(base_ptr, bytesOfSlice(chunk_entries))).offset,
+            .entry_count = @intCast(chunk_entries.len),
+            .relocations_offset = (try arrayRef(base_ptr, bytesOfSlice(chunk_relocations))).offset,
+            .relocation_count = @intCast(chunk_relocations.len),
+        };
+    }
 
     const executable_end = if (function_stubs.len == 0)
         @intFromPtr(code_copy.ptr) + code_copy.len
@@ -379,9 +484,17 @@ pub fn writeToSharedMemory(
         symbol_names_copy,
         bytesOfSlice(data_symbols_copy),
         executable,
-        data_copy,
         boxy_blob_copy,
+        if (chunk) |chunk_header| bytesOf(chunk_header) else &.{},
+        bytesOfSlice(chunk_entries),
+        bytesOfSlice(chunk_relocations),
+        data_copy,
     }), page_size);
+
+    const static_pool: ArrayRef = if (chunk) |chunk_header| blk: {
+        const chunk_offset = @intFromPtr(chunk_header) - @intFromPtr(base_ptr);
+        break :blk .{ .offset = @intCast(chunk_offset), .len = @intCast(image_size - chunk_offset) };
+    } else ArrayRef.empty();
 
     header.* = .{
         .magic = MAGIC,
@@ -400,9 +513,19 @@ pub fn writeToSharedMemory(
         .data_symbols = try arrayRef(base_ptr, bytesOfSlice(data_symbols_copy)),
         .boxy_blob = try arrayRef(base_ptr, boxy_blob_copy),
         .boxy_sidecar = boxy_sidecar,
+        .static_pool = static_pool,
+        .static_code_references = @intFromBool(plan.static_code_references),
     };
 
     return header;
+}
+
+const Chunk = StaticDataPool.Chunk;
+
+/// A chunk's entries need real addresses, so a chunk's data section is never
+/// empty even when every listed entry is.
+fn dataSectionLen(plan: *const StaticDataPool.Plan) usize {
+    return if (plan.listed_count > 0) @max(plan.local_data_len, 1) else plan.local_data_len;
 }
 
 /// Return the exact allocator capacity needed to serialize this run image.
@@ -415,9 +538,10 @@ pub fn requiredCapacity(
     relocation_symbol_names: []const []const u8,
     relocations: []const Relocation,
     data_exports: []const StaticDataExport,
+    plan: *const StaticDataPool.Plan,
     boxy_blob: []const u8,
 ) WriteError!usize {
-    return requiredCapacityFromOffset(scratch, page_size, 0, code, entrypoint_inputs, code_symbol_inputs, relocation_symbol_names, relocations, data_exports, boxy_blob);
+    return requiredCapacityFromOffset(scratch, page_size, 0, code, entrypoint_inputs, code_symbol_inputs, relocation_symbol_names, relocations, data_exports, plan, boxy_blob);
 }
 
 /// Return the exact allocator offset after serializing this run image starting
@@ -432,9 +556,11 @@ pub fn requiredCapacityFromOffset(
     relocation_symbol_names: []const []const u8,
     relocations: []const Relocation,
     data_exports: []const StaticDataExport,
+    plan: *const StaticDataPool.Plan,
     boxy_blob: []const u8,
 ) WriteError!usize {
     if (!std.math.isPowerOfTwo(page_size)) return error.InvalidDevRunImage;
+    if (plan.placements.len != data_exports.len) base.invariant("run image invariant violated: static data plan covers {d} of {d} exports", .{ plan.placements.len, data_exports.len });
 
     var names: SymbolNames = .{};
     defer names.deinit(scratch);
@@ -451,21 +577,14 @@ pub fn requiredCapacityFromOffset(
             .linked_function, .linked_data => {
                 relocation_count = try addNoOverflow(relocation_count, 1);
             },
-            .local_data, .jmp_to_return => return error.UnsupportedDevRunRelocation,
-            .retired => {},
+            .local_data => return error.UnsupportedDevRunRelocation,
+            .retired, .runtime_number => {},
         }
     }
 
-    var data_len: usize = 0;
-    var max_data_alignment: usize = 1;
-    var data_relocation_count: usize = 0;
-    for (data_exports) |data_export| {
-        const alignment = if (data_export.alignment == 0) 1 else data_export.alignment;
-        if (!std.math.isPowerOfTwo(alignment)) return error.InvalidStaticDataAlignment;
-        max_data_alignment = @max(max_data_alignment, alignment);
-        data_len = std.mem.alignForward(usize, data_len, alignment);
-        data_len = try addNoOverflow(data_len, data_export.bytes.len);
-        data_relocation_count = try addNoOverflow(data_relocation_count, data_export.relocations.len);
+    for (data_exports, plan.placements) |data_export, placement| {
+        if (!std.math.isPowerOfTwo(StaticDataPool.exportAlignment(data_export))) return error.InvalidStaticDataAlignment;
+        if (placement == .pooled) continue;
         for (data_export.relocations) |relocation| {
             if (relocation.offset > std.math.maxInt(usize)) return error.InvalidDevRunImage;
             const relocation_offset: usize = @intCast(relocation.offset);
@@ -491,26 +610,33 @@ pub fn requiredCapacityFromOffset(
     capacity = try addAllocationCapacity(capacity, @alignOf(Entrypoint), try mulNoOverflow(entrypoint_inputs.len, @sizeOf(Entrypoint)));
     capacity = try addAllocationCapacity(capacity, @alignOf(CodeSymbol), try mulNoOverflow(code_symbol_inputs.len, @sizeOf(CodeSymbol)));
     capacity = try addAllocationCapacity(capacity, @alignOf(RelocationRecord), try mulNoOverflow(relocation_count, @sizeOf(RelocationRecord)));
-    capacity = try addAllocationCapacity(capacity, @alignOf(DataRelocationRecord), try mulNoOverflow(data_relocation_count, @sizeOf(DataRelocationRecord)));
+    capacity = try addAllocationCapacity(capacity, @alignOf(DataRelocationRecord), try mulNoOverflow(plan.local_relocation_count, @sizeOf(DataRelocationRecord)));
     capacity = try addAllocationCapacity(capacity, @alignOf(u8), names.byte_len);
     capacity = try addAllocationCapacity(capacity, @alignOf(DataSymbol), try mulNoOverflow(data_exports.len, @sizeOf(DataSymbol)));
     capacity = try addAllocationCapacity(capacity, page_size, code.len);
     capacity = try addAllocationCapacity(capacity, 16, function_stub_len);
+    if (boxy_blob.len > 0) capacity = try addAllocationCapacity(capacity, page_size, boxy_blob.len);
+    if (plan.listed_count > 0) capacity = try addAllocationCapacity(capacity, page_size, @sizeOf(Chunk));
+    capacity = try addAllocationCapacity(capacity, @alignOf(StaticDataPool.Entry), try mulNoOverflow(plan.listed_count, @sizeOf(StaticDataPool.Entry)));
+    capacity = try addAllocationCapacity(capacity, @alignOf(StaticDataPool.Relocation), try mulNoOverflow(plan.listed_relocation_count, @sizeOf(StaticDataPool.Relocation)));
     capacity = std.mem.alignForward(usize, capacity, page_size);
-    capacity = try addAllocationCapacity(capacity, @max(page_size, max_data_alignment), data_len);
-    capacity = try addAllocationCapacity(capacity, 16, boxy_blob.len);
+    capacity = try addAllocationCapacity(capacity, @max(page_size, plan.max_local_alignment), dataSectionLen(plan));
     return std.mem.alignForward(usize, capacity, page_size);
 }
 
-/// Validate and view an already-mapped dev run image.
-pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) u8, mapped_size: usize) ImageError!ProgramView {
+/// Validate and view an already-mapped dev run image. The image occupies the
+/// first `image_bound` bytes after `base_ptr`, inside a mapping of
+/// `mapping_size` bytes.
+pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) u8, image_bound: usize, mapping_size: usize) ImageError!ProgramView {
     if (header.magic != MAGIC) return error.InvalidDevRunImage;
     if (header.format_version != FORMAT_VERSION) return error.UnsupportedDevRunImageVersion;
-    if (header.image_size == 0 or header.image_size > mapped_size) return error.InvalidDevRunImage;
+    if (image_bound > mapping_size) return error.InvalidDevRunImage;
+    if (header.image_size == 0 or header.image_size > image_bound) return error.InvalidDevRunImage;
 
     const image_size: usize = @intCast(header.image_size);
     const page_size = try asBoundedLen(header.page_size);
     if (page_size == 0 or !std.math.isPowerOfTwo(page_size)) return error.InvalidDevRunImage;
+    _ = try bytesFromRef(base_ptr, image_size, header.static_pool);
 
     return .{
         .executable = try bytesFromRef(base_ptr, image_size, header.executable),
@@ -526,6 +652,8 @@ pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) u8, mapped_s
         .page_size = page_size,
         .boxy_blob = try bytesFromRef(base_ptr, image_size, header.boxy_blob),
         .boxy_sidecar = header.boxy_sidecar,
+        .mapping = base_ptr[0..mapping_size],
+        .static_code_references = header.static_code_references != 0,
     };
 }
 
@@ -585,8 +713,8 @@ fn countReservedFunctionStubs(
         .linked_data => |data| {
             uses[@backingInt(data.symbol)] |= 2;
         },
-        .local_data, .jmp_to_return => return error.UnsupportedDevRunRelocation,
-        .retired => {},
+        .local_data => return error.UnsupportedDevRunRelocation,
+        .retired, .runtime_number => {},
     };
     var count: usize = 0;
     for (names, uses) |name, use| {
@@ -705,7 +833,7 @@ test "writeToSharedMemory serializes only executable image sections" {
     const alloc_symbol = try symbols.intern(scratch, @import("builtins").shim_symbols.roc_alloc, .shared);
     const answer_symbol = try symbols.intern(scratch, "roc__answer", .shared);
     const relocations = [_]Relocation{
-        .{ .linked_function = .{ .offset = 1, .symbol = alloc_symbol } },
+        .{ .linked_function = .{ .offset = 1, .symbol = alloc_symbol, .kind = .x86_call_rel32 } },
         .{ .linked_data = .{ .offset = 2, .symbol = answer_symbol, .kind = .rel32 } },
     };
     const data_bytes = [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
@@ -736,7 +864,9 @@ test "writeToSharedMemory serializes only executable image sections" {
             .alignment = 1,
         },
     };
-    const capacity = try requiredCapacity(scratch, page_size, &code, &entrypoint_inputs, &code_symbol_inputs, symbols.names.items, &relocations, &data_exports, &.{});
+    var plan = try StaticDataPool.Plan.init(scratch, &data_exports, false);
+    defer plan.deinit();
+    const capacity = try requiredCapacity(scratch, page_size, &code, &entrypoint_inputs, &code_symbol_inputs, symbols.names.items, &relocations, &data_exports, &plan, &.{});
     const image_bytes = try scratch.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(page_size), capacity);
     defer scratch.free(image_bytes);
 
@@ -754,6 +884,7 @@ test "writeToSharedMemory serializes only executable image sections" {
         symbols.names.items,
         &relocations,
         &data_exports,
+        &plan,
         &.{},
         std.mem.zeroes(BoxySidecar),
     );
@@ -764,7 +895,7 @@ test "writeToSharedMemory serializes only executable image sections" {
     try std.testing.expect(header.image_size <= image_bytes.len);
     try std.testing.expect(header.image_size <= capacity);
 
-    const view = try viewMappedImage(header, image_bytes.ptr, @intCast(header.image_size));
+    const view = try viewMappedImage(header, image_bytes.ptr, @intCast(header.image_size), image_bytes.len);
 
     try std.testing.expectEqual(page_size, view.page_size);
     try std.testing.expectEqual(@as(usize, 2 * max_jump_stub_size), view.function_stubs.len);
@@ -781,7 +912,7 @@ test "writeToSharedMemory serializes only executable image sections" {
     try std.testing.expectEqual(@as(u64, 3), view.code_symbols[0].code_offset);
 
     try std.testing.expectEqual(@as(usize, relocations.len), view.relocations.len);
-    try std.testing.expectEqual(RelocationKind.linked_function, try view.relocations[0].relocationKind());
+    try std.testing.expectEqual(RelocationKind.linked_function_x86_call_rel32, try view.relocations[0].relocationKind());
     try std.testing.expectEqual(@as(u64, 1), view.relocations[0].code_offset);
     try std.testing.expectEqualStrings(@import("builtins").shim_symbols.roc_alloc, try view.symbolName(view.relocations[0].symbol));
     try std.testing.expectEqual(RelocationKind.linked_data_rel32, try view.relocations[1].relocationKind());
@@ -813,4 +944,172 @@ test "writeToSharedMemory serializes only executable image sections" {
     try std.testing.expectEqual(view.data_symbols[1].name, view.data_relocations[0].symbol);
     try std.testing.expectEqual(view.code_symbols[0].name, view.data_relocations[1].symbol);
     try std.testing.expectEqual(@as(usize, "roc_alloc".len + "roc__answer".len + "roc__p2a".len + "roc__d0".len + "roc__target".len), view.symbol_names.len);
+}
+
+const PoolTestImage = struct {
+    header: *Header,
+    view: ProgramView,
+};
+
+fn writePoolTestImage(
+    mapping: []align(std.heap.page_size_min) u8,
+    start: usize,
+    page_size: usize,
+    data_exports: []const StaticDataExport,
+    pool: StaticDataPool.Pool,
+) (WriteError || error{TestUnexpectedResult})!PoolTestImage {
+    const scratch = std.testing.allocator;
+    const code = [_]u8{0xc3};
+    const code_symbol_inputs = [_]CodeSymbolInput{.{ .name = "roc__p1", .code_offset = 0 }};
+
+    var plan = try StaticDataPool.Plan.init(scratch, data_exports, true);
+    defer plan.deinit();
+    const unpooled_end = try requiredCapacityFromOffset(scratch, page_size, start, &code, &.{}, &code_symbol_inputs, &.{}, &.{}, data_exports, &plan, &.{});
+    try plan.reusePool(data_exports, pool, start, unpooled_end);
+    const end = try requiredCapacityFromOffset(scratch, page_size, start, &code, &.{}, &code_symbol_inputs, &.{}, &.{}, data_exports, &plan, &.{});
+    try std.testing.expect(end <= unpooled_end);
+
+    var image_buffer = std.heap.FixedBufferAllocator.init(mapping[start..end]);
+    const header = try writeToSharedMemory(
+        scratch,
+        image_buffer.allocator(),
+        mapping.ptr,
+        page_size,
+        &code,
+        &.{},
+        &code_symbol_inputs,
+        &.{},
+        &.{},
+        data_exports,
+        &plan,
+        &.{},
+        std.mem.zeroes(BoxySidecar),
+    );
+    return .{
+        .header = header,
+        .view = try viewMappedImage(header, mapping.ptr, @intCast(header.image_size), mapping.len),
+    };
+}
+
+fn poolTestSymbol(view: *const ProgramView, name: []const u8) (ImageError || error{TestUnexpectedResult})!DataSymbol {
+    for (view.data_symbols) |symbol| {
+        if (std.mem.eql(u8, try view.dataSymbolName(symbol), name)) return symbol;
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "hot reload images reuse static pool entries with identical content" {
+    const page_size = std.heap.page_size_min;
+    const mapping = try std.testing.allocator.alignedAlloc(u8, .fromByteUnits(page_size), 64 * page_size);
+    defer std.testing.allocator.free(mapping);
+    @memset(mapping, 0);
+
+    const string_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0 } ++ "a static string".*;
+    var list_bytes = @as([2 * @sizeOf(usize)]u8, @splat(0));
+    list_bytes[@sizeOf(usize)] = 1;
+    const list_relocations = [_]StaticDataRelocation{.{
+        .offset = 0,
+        .target_symbol_name = "roc__string_a",
+        .addend = 8,
+    }};
+    var callable_bytes = @as([@sizeOf(usize)]u8, @splat(0));
+    const callable_relocations = [_]StaticDataRelocation{.{
+        .offset = 0,
+        .target_symbol_name = "roc__p1",
+        .kind = .function_pointer,
+    }};
+    const first_exports = [_]StaticDataExport{
+        .{ .symbol_name = "roc__string_a", .bytes = &string_bytes, .symbol_offset = 8, .alignment = 8 },
+        .{ .symbol_name = "roc__list_a", .bytes = &list_bytes, .alignment = 8, .relocations = &list_relocations },
+        .{ .symbol_name = "roc__callable_a", .bytes = &callable_bytes, .alignment = 8, .relocations = &callable_relocations },
+    };
+
+    const first = try writePoolTestImage(mapping, page_size, page_size, &first_exports, .empty);
+    try std.testing.expect(first.view.static_code_references);
+    const chunk_offset: usize = @intCast(first.header.static_pool.offset);
+    try std.testing.expect(chunk_offset != 0 and chunk_offset % page_size == 0);
+    try std.testing.expectEqual(@as(u64, first.header.image_size), first.header.static_pool.offset + first.header.static_pool.len);
+    const chunk: *const StaticDataPool.Chunk = @ptrCast(@alignCast(mapping.ptr + chunk_offset));
+    // The callable names this image's code, so only the string and the list are reusable.
+    try std.testing.expectEqual(@as(u64, 2), chunk.entry_count);
+    try std.testing.expectEqual(@as(u64, 1), chunk.relocation_count);
+
+    // Stand in for the shim's relocation: the pointer slot of a pooled entry
+    // holds an address, which reuse must ignore.
+    const first_list = try first.view.dataSymbolBytes(try poolTestSymbol(&first.view, "roc__list_a"));
+    std.mem.writeInt(usize, first_list[0..@sizeOf(usize)], 0xdead_beef, .little);
+
+    const later_string_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0 } ++ "a later string!".*;
+    const second_list_relocations = [_]StaticDataRelocation{.{
+        .offset = 0,
+        .target_symbol_name = "roc__string_b",
+        .addend = 8,
+    }};
+    const second_exports = [_]StaticDataExport{
+        .{ .symbol_name = "roc__list_b", .bytes = &list_bytes, .alignment = 8, .relocations = &second_list_relocations },
+        .{ .symbol_name = "roc__string_b", .bytes = &string_bytes, .symbol_offset = 8, .alignment = 8 },
+        .{ .symbol_name = "roc__string_c", .bytes = &later_string_bytes, .symbol_offset = 8, .alignment = 8 },
+    };
+    const pool = StaticDataPool.Pool{ .mapping = mapping, .head_offset = chunk_offset };
+    const second = try writePoolTestImage(mapping, @intCast(first.header.image_size), page_size, &second_exports, pool);
+    try std.testing.expect(!second.view.static_code_references);
+
+    const first_string = try poolTestSymbol(&first.view, "roc__string_a");
+    const reused_string = try poolTestSymbol(&second.view, "roc__string_b");
+    const reused_list = try poolTestSymbol(&second.view, "roc__list_b");
+    try std.testing.expectEqual(DataLocation.pool, try reused_string.dataLocation());
+    try std.testing.expectEqual(DataLocation.pool, try reused_list.dataLocation());
+    try std.testing.expectEqual(
+        @intFromPtr((try first.view.dataSymbolBytes(first_string)).ptr),
+        @intFromPtr((try second.view.dataSymbolBytes(reused_string)).ptr),
+    );
+    try std.testing.expectEqual(@intFromPtr(first_list.ptr), @intFromPtr((try second.view.dataSymbolBytes(reused_list)).ptr));
+    try std.testing.expectEqual(DataLocation.image, try (try poolTestSymbol(&second.view, "roc__string_c")).dataLocation());
+    // Reused entries were relocated when the first image loaded.
+    try std.testing.expectEqual(@as(usize, 0), second.view.data_relocations.len);
+    const second_chunk: *const StaticDataPool.Chunk = @ptrCast(@alignCast(mapping.ptr + @as(usize, @intCast(second.header.static_pool.offset))));
+    try std.testing.expectEqual(@as(u64, 1), second_chunk.entry_count);
+}
+
+test "static pool reuse requires identical bytes outside pointer slots" {
+    const page_size = std.heap.page_size_min;
+    const mapping = try std.testing.allocator.alignedAlloc(u8, .fromByteUnits(page_size), 64 * page_size);
+    defer std.testing.allocator.free(mapping);
+    @memset(mapping, 0);
+
+    const first_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0 } ++ "generation-1 LABEL, longer than 23 bytes".*;
+    const second_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0 } ++ "generation-2 LABEL, longer than 23 bytes".*;
+    const first_exports = [_]StaticDataExport{.{ .symbol_name = "roc__s", .bytes = &first_bytes, .symbol_offset = 8, .alignment = 8 }};
+    const second_exports = [_]StaticDataExport{.{ .symbol_name = "roc__s", .bytes = &second_bytes, .symbol_offset = 8, .alignment = 8 }};
+
+    const first = try writePoolTestImage(mapping, page_size, page_size, &first_exports, .empty);
+    const pool = StaticDataPool.Pool{ .mapping = mapping, .head_offset = @intCast(first.header.static_pool.offset) };
+    const second = try writePoolTestImage(mapping, @intCast(first.header.image_size), page_size, &second_exports, pool);
+
+    const symbol = try poolTestSymbol(&second.view, "roc__s");
+    try std.testing.expectEqual(DataLocation.image, try symbol.dataLocation());
+    try std.testing.expectEqualSlices(u8, &second_bytes, try second.view.dataSymbolBytes(symbol));
+    try std.testing.expectEqualSlices(u8, &first_bytes, try first.view.dataSymbolBytes(try poolTestSymbol(&first.view, "roc__s")));
+}
+
+test "static pool reuse stays within code-to-data displacement range" {
+    const exports = [_]StaticDataExport{.{ .symbol_name = "roc__s", .bytes = "reachable", .alignment = 1 }};
+    const page_size = std.heap.page_size_min;
+    const mapping = try std.testing.allocator.alignedAlloc(u8, .fromByteUnits(page_size), 64 * page_size);
+    defer std.testing.allocator.free(mapping);
+    @memset(mapping, 0);
+
+    const first = try writePoolTestImage(mapping, page_size, page_size, &exports, .empty);
+    const pool = StaticDataPool.Pool{ .mapping = mapping, .head_offset = @intCast(first.header.static_pool.offset) };
+
+    var near = try StaticDataPool.Plan.init(std.testing.allocator, &exports, true);
+    defer near.deinit();
+    try near.reusePool(&exports, pool, @intCast(first.header.image_size), 32 * page_size);
+    try std.testing.expect(near.placements[0] == .pooled);
+
+    var far = try StaticDataPool.Plan.init(std.testing.allocator, &exports, true);
+    defer far.deinit();
+    const far_start: usize = @as(usize, std.math.maxInt(i32)) + mapping.len;
+    try far.reusePool(&exports, pool, far_start, far_start + page_size);
+    try std.testing.expect(far.placements[0] == .local);
 }

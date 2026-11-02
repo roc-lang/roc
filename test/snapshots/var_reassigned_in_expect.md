@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=An expect cannot reassign a var declared outside it, but can reassign vars declared inside it, and for/match binders reusing an outer var's name are not reassignments
+description=An expect cannot reassign a var declared outside it, but can reassign vars declared inside it, and a for binder reusing an outer var's name is rejected rather than a reassignment
 type=snippet
 ~~~
 # SOURCE
@@ -43,6 +43,7 @@ withdraw = |balance, amount| {
 # EXPECTED
 VAR REASSIGNED IN EXPECT - var_reassigned_in_expect.md:7:3:7:13
 VAR REASSIGNED IN EXPECT - var_reassigned_in_expect.md:12:4:12:10
+VAR IN FOR PATTERN - var_reassigned_in_expect.md:26:7:26:13
 # PROBLEMS
 ~~~clojure
 (reports
@@ -105,7 +106,31 @@ VAR REASSIGNED IN EXPECT - var_reassigned_in_expect.md:12:4:12:10
 			(annotated code "expect")
 			(reflow " must not change variables declared outside of it, or the program would behave differently in optimized builds. Variables declared inside the ")
 			(annotated code "expect")
-			(reflow " can be reassigned freely."))))
+			(reflow " can be reassigned freely.")))
+	(report
+		(severity runtime_error)
+		(title "Var In For Pattern")
+		(region (start 26 7) (end 26 13))
+		(headline
+			(reflow "This for loop pattern binds ")
+			(annotated symbol-unqualified "$count")
+			(reflow ", but a pattern here cannot bind a ")
+			(annotated keyword "var")
+			(reflow "."))
+		(document
+			(source-region (file "var_reassigned_in_expect.md") (start 26 7) (end 26 13) (annotation error) (line-text "\t\tfor $count in [1, 2] {"))
+			(line-break)
+			(reflow "Only an assignment with ")
+			(annotated code "=")
+			(reflow " changes a ")
+			(annotated keyword "var")
+			(reflow ". Bind a name without ")
+			(annotated code "$")
+			(reflow " here, and assign it to the ")
+			(annotated keyword "var")
+			(reflow " with ")
+			(annotated code "=")
+			(reflow " if it should change."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -262,7 +287,7 @@ NO CHANGE
 				(s-expect
 					(e-block
 						(s-runtime-error (tag "var_reassigned_in_expect"))
-						(e-dispatch-call (method "is_gte") (constraint-fn-var 317)
+						(e-dispatch-call (method "is_gte") (constraint-fn-var 318)
 							(receiver
 								(e-lookup-local
 									(p-var-assign (ident "$remaining"))))
@@ -289,7 +314,7 @@ NO CHANGE
 								(p-assign (ident "balance"))))
 						(s-reassign
 							(p-var-assign (ident "$left"))
-							(e-dispatch-call (method "minus") (constraint-fn-var 348)
+							(e-dispatch-call (method "minus") (constraint-fn-var 349)
 								(receiver
 									(e-lookup-local
 										(p-var-assign (ident "$left"))))
@@ -305,7 +330,7 @@ NO CHANGE
 							(e-block
 								(s-reassign
 									(p-var-assign (ident "$left"))
-									(e-dispatch-call (method "plus") (constraint-fn-var 412)
+									(e-dispatch-call (method "plus") (constraint-fn-var 413)
 										(receiver
 											(e-lookup-local
 												(p-var-assign (ident "$left"))))
@@ -313,7 +338,7 @@ NO CHANGE
 											(e-lookup-local
 												(p-assign (ident "x"))))))
 								(e-empty_record)))
-						(e-dispatch-call (method "is_gte") (constraint-fn-var 427)
+						(e-dispatch-call (method "is_gte") (constraint-fn-var 428)
 							(receiver
 								(e-lookup-local
 									(p-var-assign (ident "$left"))))
@@ -322,7 +347,7 @@ NO CHANGE
 				(s-expect
 					(e-block
 						(s-for
-							(p-var-assign (ident "$count"))
+							(p-runtime-error (tag "var_in_binder_pattern"))
 							(e-list
 								(elems
 									(e-num (value "1"))
@@ -336,15 +361,15 @@ NO CHANGE
 						(e-tag (name "True"))))
 				(s-reassign
 					(p-var-assign (ident "$count"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 489)
+					(e-dispatch-call (method "plus") (constraint-fn-var 473)
 						(receiver
 							(e-lookup-local
 								(p-var-assign (ident "$count"))))
 						(args
 							(e-num (value "1")))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 495)
+				(e-dispatch-call (method "plus") (constraint-fn-var 479)
 					(receiver
-						(e-dispatch-call (method "minus") (constraint-fn-var 491)
+						(e-dispatch-call (method "minus") (constraint-fn-var 475)
 							(receiver
 								(e-lookup-local
 									(p-var-assign (ident "$remaining"))))

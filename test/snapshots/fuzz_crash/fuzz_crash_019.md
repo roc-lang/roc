@@ -193,18 +193,18 @@ DOES NOT EXIST - fuzz_crash_019.md:93:2:93:7
 TOO FEW ARGS - fuzz_crash_019.md:17:3:18:4
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:22:1:23:2
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:37:1:37:9
-MISSING METHOD - fuzz_crash_019.md:39:2:39:3
-MISSING METHOD - fuzz_crash_019.md:58:6:58:11
+TYPE MISMATCH - fuzz_crash_019.md:39:2:39:3
+TYPE MISMATCH - fuzz_crash_019.md:58:6:58:11
 TYPE MISMATCH - fuzz_crash_019.md:52:2:52:2
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:74:1:74:22
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:113:1:113:7
 TOO FEW ARGS - fuzz_crash_019.md:84:2:86:3
-MISSING METHOD - fuzz_crash_019.md:86:11:86:17
+TYPE MISMATCH - fuzz_crash_019.md:86:11:86:17
 REFERENCE HAS NO VALUE - fuzz_crash_019.md:89:3:89:6
 TYPE MISMATCH - fuzz_crash_019.md:105:2:105:54
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:116:1:116:13
-TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:66
-TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
+MISSING METHOD - fuzz_crash_019.md:105:55:105:66
+MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 # PROBLEMS
 ~~~clojure
 (reports
@@ -1134,22 +1134,14 @@ TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
 			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 39 2) (end 39 3))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_numeral")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This number is being used where a non-number type is needed."))
 		(document
 			(source-region (file "fuzz_crash_019.md") (start 39 2) (end 39 3) (annotation error) (line-text "\t1"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_numeral")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "Other code expects this to have the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -1158,22 +1150,14 @@ TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
 			(annotation-end)))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 58 6) (end 58 11))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_quote")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This string literal is being used where a non-string type is needed."))
 		(document
 			(source-region (file "fuzz_crash_019.md") (start 58 6) (end 58 11) (annotation error) (line-text "\t\t\t1\t\"for\" => 20[1, ] # t"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_quote")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -1306,22 +1290,14 @@ TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
 			(reflow "Are there any missing commas?")))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 86 11) (end 86 17))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_quote")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This string literal is being used where a non-string type is needed."))
 		(document
 			(source-region (file "fuzz_crash_019.md") (start 86 11) (end 86 17) (annotation error) (line-text "\t)crash ke\"Unr!\" #)"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_quote")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -1379,50 +1355,53 @@ TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
 			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 105 55) (end 105 66))
 		(headline
-			(reflow "Nothing in this program determines the type this")
+			(reflow "This")
 			(reflow " ")
 			(annotated code "od")
 			(reflow " ")
-			(reflow "method is called on."))
+			(reflow "call is on")
+			(reflow " ")
+			(reflow "a value whose type never resolved to a concrete type,")
+			(reflow " ")
+			(reflow "so it has no")
+			(reflow " ")
+			(annotated code "od")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "fuzz_crash_019.md") (start 105 55) (end 105 66) (annotation error) (line-text "\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?"))
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "od")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be.")))
+			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one.")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 105 55) (end 105 72))
 		(headline
-			(reflow "Nothing in this program determines the type this")
+			(reflow "This")
 			(reflow " ")
 			(annotated code "ned")
 			(reflow " ")
-			(reflow "method is called on."))
+			(reflow "call is on")
+			(reflow " ")
+			(reflow "a value of type")
+			(reflow " ")
+			(annotated code "ok")
+			(reflow ",")
+			(reflow " ")
+			(reflow "which never resolved to a concrete type,")
+			(reflow " ")
+			(reflow "so it has no")
+			(reflow " ")
+			(annotated code "ned")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "fuzz_crash_019.md") (start 105 55) (end 105 72) (annotation error) (line-text "\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?"))
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "ned")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be."))))
+			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -1919,7 +1898,7 @@ Maybe(a) : [Somne]
 Mayine(a) : [ #
 ] # )
 
-ane = |num| if num 2 else 5
+ane = |num| if (num) 2 else 5
 
 one : U6
 

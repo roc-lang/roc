@@ -126,6 +126,10 @@ pub fn forEachRecordedTypeRoot(module_env: *const ModuleEnv, visitor: anytype) A
                 try visitor.visit(@fromBackingInt(@intCast(call.subject_var)));
             }
         }
+        const renamings = module_env.generated_codec_renamings.items.items[derivation.renamings_start..][0..derivation.renamings_len];
+        for (renamings) |renaming| {
+            try visitor.visit(@fromBackingInt(@intCast(renaming.copy_var)));
+        }
     }
 }
 

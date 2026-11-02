@@ -906,3 +906,97 @@ test "every advertised token type and modifier has an index" {
     try std.testing.expectEqualStrings("declaration", capabilities.TOKEN_MODIFIERS[0]);
     try std.testing.expectEqual(@as(u32, 1), semantic_tokens.modifier_declaration);
 }
+
+test "a shadowing binding classifies its name only within its scope" {
+    try expectTokens(
+        \\value = |n| n
+        \\result = |value| {
+        \\    inner = value
+        \\    value
+        \\}
+        \\after = value(1)
+        \\item = 1
+        \\check = {
+        \\    item = |x| x
+        \\    item(2)
+        \\}
+        \\again = item
+    , &.{
+        .{ .line = 1, .at = "value|", .token = "value", .type = .parameter },
+        .{ .line = 2, .at = "value", .token = "value", .type = .parameter },
+        .{ .line = 3, .at = "value", .token = "value", .type = .parameter },
+        .{ .line = 5, .at = "value(", .token = "value", .type = .function },
+        .{ .line = 8, .at = "item", .token = "item", .type = .function },
+        .{ .line = 9, .at = "item(", .token = "item", .type = .function },
+        .{ .line = 11, .at = "item", .token = "item", .type = .variable },
+    });
+}
+
+const nesting_depth = 100_000;
+const small_stack_bytes = 4 * 1024 * 1024;
+
+fn extractOnSmallStack(source: []const u8, result: *Allocator.Error![]SemanticToken) void {
+    const allocator = std.testing.allocator;
+    const info = LineOffsets.init(allocator, source) catch |err| {
+        result.* = err;
+        return;
+    };
+    defer info.deinit();
+    result.* = semantic_tokens.extractSemanticTokens(allocator, source, &info);
+}
+
+/// Extract the tokens of `source` on a thread whose stack is far smaller than
+/// `nesting_depth` recursive frames.
+fn extractTokensOnSmallStack(source: []const u8) (std.Thread.SpawnError || Allocator.Error)![]SemanticToken {
+    var result: Allocator.Error![]SemanticToken = error.OutOfMemory;
+    const thread = try std.Thread.spawn(.{ .stack_size = small_stack_bytes }, extractOnSmallStack, .{ source, &result });
+    thread.join();
+    return result;
+}
+
+fn expectTokenAt(tokens: []const SemanticToken, start_char: u32, expected: SemanticType) error{ TokenNotFound, TestExpectedEqual }!void {
+    for (tokens) |token| {
+        if (token.line == 0 and token.start_char == start_char) {
+            try std.testing.expectEqual(expected, @as(SemanticType, @fromBackingInt(@intCast(token.token_type))));
+            return;
+        }
+    }
+    return error.TokenNotFound;
+}
+
+test "deeply nested lambdas are classified on a small stack" {
+    const allocator = std.testing.allocator;
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "f = ");
+    for (0..nesting_depth) |_| try source.appendSlice(allocator, "|a| ");
+    const last_use: u32 = @intCast(source.items.len);
+    try source.appendSlice(allocator, "a");
+
+    const tokens = try extractTokensOnSmallStack(source.items);
+    defer allocator.free(tokens);
+    try expectTokenAt(tokens, 0, .function);
+    try expectTokenAt(tokens, 5, .parameter);
+    try expectTokenAt(tokens, last_use, .parameter);
+}
+
+test "a long operator chain and deeply nested lists are classified on a small stack" {
+    const allocator = std.testing.allocator;
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "g = |x| [");
+    for (0..nesting_depth) |_| try source.appendSlice(allocator, "[");
+    const first_use: u32 = @intCast(source.items.len);
+    try source.appendSlice(allocator, "x");
+    for (0..nesting_depth) |_| try source.appendSlice(allocator, " + x");
+    for (0..nesting_depth) |_| try source.appendSlice(allocator, "]");
+    try source.appendSlice(allocator, "]");
+
+    const tokens = try extractTokensOnSmallStack(source.items);
+    defer allocator.free(tokens);
+    try expectTokenAt(tokens, 0, .function);
+    try expectTokenAt(tokens, 5, .parameter);
+    try expectTokenAt(tokens, first_use, .parameter);
+    try expectTokenAt(tokens, first_use + 4, .parameter);
+    try expectTokenAt(tokens, first_use + 4 * nesting_depth, .parameter);
+}

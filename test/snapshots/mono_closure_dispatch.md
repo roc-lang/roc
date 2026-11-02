@@ -26,7 +26,13 @@ result = func(1)
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+func = |offset| {
+	condition = offset == 1
+	f = if (condition) |x| x + offset else |x| x * 2
+	f(10)
+}
+
+result = func(1)
 ~~~
 # EXPECTED
 NIL

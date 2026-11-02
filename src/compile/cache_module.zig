@@ -43,15 +43,20 @@ pub const Header = struct {
         InvalidVersionHash,
     };
 
-    /// Verify that the given buffer begins with a valid Header
+    /// Where the data section starts: the header, padded so the data keeps the
+    /// serialization alignment. Writers and readers both use this, so a buffer
+    /// is never checked against one size and sliced at another.
+    pub const data_offset = std.mem.alignForward(usize, @sizeOf(Header), collections.SERIALIZATION_ALIGNMENT.toByteUnits());
+
+    /// Verify that the given buffer begins with a valid Header and holds the
+    /// whole data section it describes.
     pub fn initFromBytes(buf: []align(@alignOf(Header)) u8) InitError!*Header {
-        if (buf.len < @sizeOf(Header)) {
+        if (buf.len < data_offset) {
             return InitError.PartialRead;
         }
 
         const header = @as(*Header, @ptrCast(buf.ptr));
-        const data_start = @sizeOf(Header);
-        const data_end = data_start + header.data_size;
+        const data_end = data_offset + header.data_size;
 
         // The buffer might not contain complete data after the header
         if (buf.len < data_end) {
@@ -104,8 +109,7 @@ pub const CacheModule = struct {
         const total_data_size = writer.total_bytes;
 
         // Allocate cache_data for header + data
-        const header_size = std.mem.alignForward(usize, @sizeOf(Header), SERIALIZATION_ALIGNMENT.toByteUnits());
-        const total_size = header_size + total_data_size;
+        const total_size = Header.data_offset + total_data_size;
         const cache_data = try allocator.alignedAlloc(u8, SERIALIZATION_ALIGNMENT, total_size);
         errdefer allocator.free(cache_data);
 
@@ -121,7 +125,7 @@ pub const CacheModule = struct {
         };
 
         // Consolidate the scattered iovecs into the cache data buffer
-        const data_section = cache_data[header_size..];
+        const data_section = cache_data[Header.data_offset..];
         var offset: usize = 0;
         for (writer.iovecs.items) |iovec| {
             const end = offset + iovec.iov_len;
@@ -134,14 +138,9 @@ pub const CacheModule = struct {
 
     /// Load a cache from memory-mapped data
     pub fn fromMappedMemory(mapped_data: []align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8) (Allocator.Error || error{ BufferTooSmall, InvalidMagicNumber, CacheVersionHashMismatch })!CacheModule {
-        if (mapped_data.len < @sizeOf(Header)) {
-            return error.BufferTooSmall;
-        }
-
-        const header = @as(*const Header, @ptrCast(mapped_data.ptr));
-
-        // Validate header (including version hash)
-        _ = Header.initFromBytes(@constCast(mapped_data)) catch |err| {
+        // Validates the magic, the version hash, and that the buffer holds the
+        // whole data section.
+        const header = Header.initFromBytes(@constCast(mapped_data)) catch |err| {
             return switch (err) {
                 error.PartialRead => error.BufferTooSmall,
                 error.InvalidMagic => error.InvalidMagicNumber,
@@ -149,13 +148,7 @@ pub const CacheModule = struct {
             };
         };
 
-        // Validate data size
-        const expected_total_size = @sizeOf(Header) + header.data_size;
-        if (mapped_data.len < expected_total_size) return error.BufferTooSmall;
-
-        // Get data section (must be aligned)
-        const header_size = std.mem.alignForward(usize, @sizeOf(Header), SERIALIZATION_ALIGNMENT.toByteUnits());
-        const data = mapped_data[header_size .. header_size + header.data_size];
+        const data = mapped_data[Header.data_offset..][0..header.data_size];
 
         return CacheModule{
             .header = header,
@@ -224,3 +217,17 @@ pub const CacheModule = struct {
         return CacheData{ .mapped = mapped };
     }
 };
+
+test "fromMappedMemory rejects a buffer that ends before the data section starts" {
+    // A header that claims no data, in a buffer one byte short of the data offset.
+    var buf: [Header.data_offset - 1]u8 align(CacheModule.SERIALIZATION_ALIGNMENT.toByteUnits()) = @splat(0);
+    const header: *Header = @ptrCast(&buf);
+    header.* = .{
+        .magic = CACHE_MAGIC,
+        .version_hash = cache_versioning.module_env_layout,
+        .data_size = 0,
+        .error_count = 0,
+        .warning_count = 0,
+    };
+    try std.testing.expectError(error.BufferTooSmall, CacheModule.fromMappedMemory(&buf));
+}

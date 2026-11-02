@@ -656,7 +656,7 @@ EndOfFile,
 ~~~roc
 # repro for https://github.com/roc-lang/roc/issues/11030
 parse : Str -> Try(Str, [BadInput])
-parse = |s| if s == "" Err(BadInput) else Ok(s)
+parse = |s| if (s == "") Err(BadInput) else Ok(s)
 
 # The trailing `?` unwraps the Try the body would otherwise return, so the
 # earlier `?` has nothing compatible to return into.
@@ -734,7 +734,7 @@ closure_arg = |xs| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 432)
+								(e-call (constraint-fn-var 435)
 									(e-lookup-local
 										(p-assign (ident "parse")))
 									(e-lookup-local
@@ -759,7 +759,7 @@ closure_arg = |xs| {
 				(e-match
 					(match
 						(cond
-							(e-call (constraint-fn-var 465)
+							(e-call (constraint-fn-var 468)
 								(e-lookup-local
 									(p-assign (ident "parse")))
 								(e-lookup-local
@@ -792,7 +792,7 @@ closure_arg = |xs| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 498)
+								(e-call (constraint-fn-var 501)
 									(e-lookup-local
 										(p-assign (ident "parse")))
 									(e-lookup-local
@@ -814,7 +814,7 @@ closure_arg = |xs| {
 									(value
 										(e-return
 											(e-runtime-error (tag "erroneous_value_expr")))))))))
-				(e-call (constraint-fn-var 539)
+				(e-call (constraint-fn-var 542)
 					(e-lookup-external
 						(builtin))
 					(e-lookup-local
@@ -832,7 +832,7 @@ closure_arg = |xs| {
 					(e-match
 						(match
 							(cond
-								(e-dispatch-call (method "first") (constraint-fn-var 540)
+								(e-dispatch-call (method "first") (constraint-fn-var 543)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "xs"))))
@@ -854,7 +854,7 @@ closure_arg = |xs| {
 									(value
 										(e-return
 											(e-runtime-error (tag "erroneous_value_expr")))))))))
-				(e-call (constraint-fn-var 578)
+				(e-call (constraint-fn-var 581)
 					(e-lookup-external
 						(builtin))
 					(e-lookup-local

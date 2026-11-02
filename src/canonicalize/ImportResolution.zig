@@ -41,6 +41,11 @@ pub const ResolvedImport = struct {
         /// Import resolution rejected this import: it names no module at all.
         /// Every use of it is checked-error data.
         rejected,
+        /// The import names a public type its package's header exposes, but
+        /// the module that header selects it from defines no such type. The
+        /// import statement reports it, and every use of it is checked-error
+        /// data.
+        missing_public_type,
     };
 
     /// An accepted import target.
@@ -85,6 +90,10 @@ pub const Inputs = struct {
     /// which the draining module need not import itself; the checker receives
     /// those same modules as owner modules.
     reachable_envs: []const *const ModuleEnv = &.{},
+    /// The public names this package or platform root's header exposes whose
+    /// selected nested type its module does not define. Every other header
+    /// exposure names a type that exists, or is no public module target.
+    missing_public_types: []const []const u8 = &.{},
 };
 
 /// Read the `import "path" as name` file imports on the module's deferred
@@ -152,9 +161,6 @@ pub fn resolveDeferredImports(
         try resolver.resolveEntry(entry);
     }
 
-    // Method registrations the drain appended take part in sorted lookup.
-    if (resolver.registered_methods) env.finalizeMethodTables();
-
     // Diagnostics the drain recorded belong to the module's reported set, so
     // they reach reporting exactly like the ones canonicalization recorded.
     try env.publishScratchDiagnosticsFrom(unpublished_before);
@@ -165,12 +171,6 @@ fn sha256Bytes(bytes: []const u8) [32]u8 {
     base.Sha256.hash(bytes, &digest, .{});
     return digest;
 }
-
-/// One receiver-extension registration this drain made.
-const ReceiverExtension = struct {
-    table_index: ModuleEnv.MethodTableIndex,
-    region: Region,
-};
 
 /// The name an import's exposed declarations carry as their prefix.
 const Prefix = struct {
@@ -221,18 +221,12 @@ fn entryImport(entry: DeferredImportRef) CIR.Import.Idx {
 const Resolver = struct {
     env: *ModuleEnv,
     inputs: Inputs,
-    /// Import outcomes by the exact import spelling.
-    outcomes: std.StringHashMap(ResolvedImport.Resolution),
+    /// Each of this module's imports' outcome, by import index.
+    outcomes: []?ResolvedImport.Resolution,
     /// Every environment the drain may reach, by content identity.
     by_identity: std.AutoHashMap(base.ModuleIdentity.Hash, *const ModuleEnv),
     /// Scratch buffer for assembling qualified lookup names.
     scratch: std.ArrayList(u8),
-    /// Receiver-extension registrations this drain has made, so two of them
-    /// competing for one receiver call are reported like any other shadowing.
-    receiver_extensions: std.AutoHashMap(ModuleEnv.MethodKey, ReceiverExtension),
-    /// Whether any method registration was appended, which the method tables
-    /// must be re-finalized for.
-    registered_methods: bool,
     /// Owned copy of the entry's path text. Resolution interns identifiers in
     /// this module's store, which can move the interner's byte buffer, so the
     /// path it is walking cannot be a slice of that buffer.
@@ -242,33 +236,40 @@ const Resolver = struct {
         var self = Resolver{
             .env = env,
             .inputs = inputs,
-            .outcomes = std.StringHashMap(ResolvedImport.Resolution).init(env.gpa),
+            .outcomes = &.{},
             .by_identity = std.AutoHashMap(base.ModuleIdentity.Hash, *const ModuleEnv).init(env.gpa),
             .scratch = std.ArrayList(u8).empty,
-            .receiver_extensions = std.AutoHashMap(ModuleEnv.MethodKey, ReceiverExtension).init(env.gpa),
-            .registered_methods = false,
             .path_buf = std.ArrayList(u8).empty,
         };
         errdefer self.deinit();
 
+        const import_count: usize = @intCast(env.imports.imports.len());
+        self.outcomes = try env.gpa.alloc(?ResolvedImport.Resolution, import_count);
+        @memset(self.outcomes, null);
         switch (inputs.imports) {
-            .explicit => |imports| for (imports) |import| {
-                try self.outcomes.put(import.import_name, import.resolution);
-                switch (import.resolution) {
-                    .available => |available| try self.registerEnv(available.module_env),
-                    .rejected => {},
+            .explicit => |imports| {
+                // Explicit outcomes name their import by its exact spelling;
+                // the last outcome given for a spelling is the one that holds.
+                var by_name = std.StringHashMap(ResolvedImport.Resolution).init(env.gpa);
+                defer by_name.deinit();
+                for (imports) |import| {
+                    try by_name.put(import.import_name, import.resolution);
+                    switch (import.resolution) {
+                        .available => |available| try self.registerEnv(available.module_env),
+                        .rejected, .missing_public_type => {},
+                    }
+                }
+                for (self.outcomes, 0..) |*outcome, idx| {
+                    outcome.* = by_name.get(env.common.strings.get(env.imports.imports.items.items[idx]));
                 }
             },
             .resolved_store => |envs| {
-                const count: u32 = @intCast(env.imports.imports.len());
-                var idx: u32 = 0;
-                while (idx < count) : (idx += 1) {
-                    const name = env.common.strings.get(env.imports.imports.items.items[idx]);
+                for (self.outcomes, 0..) |*outcome, idx| {
                     // An import the store left unresolved names no module at
                     // all, which is exactly the absence the drain reads below.
                     const resolved = env.imports.getResolvedModule(@fromBackingInt(@intCast(idx))) orelse continue;
                     if (resolved >= envs.len) continue;
-                    try self.outcomes.put(name, .{ .available = .{ .module_env = envs[resolved] } });
+                    outcome.* = .{ .available = .{ .module_env = envs[resolved] } };
                     try self.registerEnv(envs[resolved]);
                 }
             },
@@ -278,10 +279,9 @@ const Resolver = struct {
     }
 
     fn deinit(self: *Resolver) void {
-        self.outcomes.deinit();
+        self.env.gpa.free(self.outcomes);
         self.by_identity.deinit();
         self.scratch.deinit(self.env.gpa);
-        self.receiver_extensions.deinit();
         self.path_buf.deinit(self.env.gpa);
     }
 
@@ -303,9 +303,8 @@ const Resolver = struct {
     /// The outcome recorded for one of this module's imports.
     fn outcomeFor(self: *const Resolver, import_idx: CIR.Import.Idx) ?ResolvedImport.Resolution {
         const idx: usize = @backingInt(import_idx);
-        if (idx >= self.env.imports.imports.len()) return null;
-        const name = self.env.common.strings.get(self.env.imports.imports.items.items[idx]);
-        return self.outcomes.get(name);
+        if (idx >= self.outcomes.len) return null;
+        return self.outcomes[idx];
     }
 
     /// Record the content identity each import resolved to, so that a module
@@ -318,13 +317,13 @@ const Resolver = struct {
             const import_idx: CIR.Import.Idx = @fromBackingInt(@intCast(idx));
             // The compiler's own baked `Builtin` module is part of the
             // compiler, not a module this one depends on, so it takes no
-            // entry here and owns no receiver extension.
+            // entry here.
             const import_name = self.env.common.strings.get(self.env.imports.imports.items.items[idx]);
             if (CIR.Import.isCompilerBuiltinImportName(import_name)) continue;
             const outcome = self.outcomeFor(import_idx) orelse continue;
             const available = switch (outcome) {
                 .available => |available| available,
-                .rejected => continue,
+                .rejected, .missing_public_type => continue,
             };
             const hash = available.module_env.contentIdentityHash() orelse continue;
             const display = try self.env.insertIdent(Ident.for_text(available.module_env.module_name));
@@ -617,13 +616,20 @@ const Resolver = struct {
     // Entry resolution.
 
     fn resolveEntry(self: *Resolver, entry: DeferredImportRef) std.mem.Allocator.Error!void {
-        if (entry.kind == .receiver_method_owner) {
-            return self.resolveReceiverMethodOwner(entry);
+        if (entry.kind == .header_exposure) {
+            return self.resolveHeaderExposure(entry);
         }
 
         const outcome = self.outcomeFor(entryImport(entry));
 
         if (entry.kind == .import_statement) {
+            if (outcome) |resolved| if (resolved == .missing_public_type) {
+                try self.env.pushDiagnostic(.{ .public_type_not_defined = .{
+                    .import_name = entry.moduleName(),
+                    .region = self.regionOf(entry),
+                } });
+                return;
+            };
             // Import resolution reports its own rejections, and only the
             // workspace resolver can judge a package-qualified name, so this
             // statement reports only a plain name that denotes no module.
@@ -638,7 +644,7 @@ const Resolver = struct {
 
         const available = switch (outcome orelse return self.failMissingModule(entry)) {
             .available => |available| available,
-            .rejected => return self.failMissingModule(entry),
+            .rejected, .missing_public_type => return self.failMissingModule(entry),
         };
 
         const prefix = importPrefix(available);
@@ -666,7 +672,7 @@ const Resolver = struct {
 
         switch (entry.kind) {
             .expr_value => try self.resolveValueEntry(entry, available, prefix, path_text),
-            .receiver_method_owner, .file_import => unreachable, // handled above
+            .file_import, .header_exposure => unreachable, // handled above
             .numeric_suffix,
             .type_anno_lookup,
             .type_anno_apply,
@@ -905,11 +911,11 @@ const Resolver = struct {
                 }
             },
             .expr_value,
-            .receiver_method_owner,
             .exposed_item,
             .import_statement,
             .hosted_entry,
             .file_import,
+            .header_exposure,
             => unreachable, // handled by the caller
         }
     }
@@ -949,11 +955,11 @@ const Resolver = struct {
             .numeric_suffix,
             .type_anno_lookup,
             .type_anno_apply,
-            .receiver_method_owner,
             .exposed_item,
             .import_statement,
             .hosted_entry,
             .file_import,
+            .header_exposure,
             => unreachable, // only nominal kinds reach here
         }
     }
@@ -1100,7 +1106,10 @@ const Resolver = struct {
         }
         if (target) |resolved| {
             const node = if (selects_type) resolved.typeDeclNode() else resolved.valueDefNode();
-            if (node != null) return;
+            if (node) |target_node| {
+                self.env.store.setExposedItemTarget(@fromBackingInt(entry.exposed_item), target_node);
+                return;
+            }
         }
         const region = self.regionOf(entry);
         try self.env.pushDiagnostic(if (selects_type)
@@ -1117,80 +1126,18 @@ const Resolver = struct {
             } });
     }
 
-    /// Register a receiver-extension method on an imported receiver type. The
-    /// owner's identity is only known once the receiver type reference has
-    /// resolved, which is why the registration waits here for it: the
-    /// annotation this entry names has already been rewritten above.
-    fn resolveReceiverMethodOwner(self: *Resolver, entry: DeferredImportRef) std.mem.Allocator.Error!void {
-        const anno_idx: CIR.TypeAnno.Idx = @fromBackingInt(@intCast(entry.node_idx));
-        const anno_base = switch (self.env.store.getTypeAnno(anno_idx)) {
-            .lookup => |lookup| lookup.base,
-            .apply => |apply| apply.base,
-            .rigid_var,
-            .rigid_var_lookup,
-            .underscore,
-            .tag_union,
-            .tag,
-            .tuple,
-            .record,
-            .@"fn",
-            .parens,
-            // The reference did not resolve, and its own diagnostic says so.
-            .malformed,
-            => return,
-        };
-        const owner = switch (anno_base) {
-            .external => |external| blk: {
-                // The compiler's own baked Builtin module records no import
-                // identity here, and owns no receiver extension.
-                const identity = self.env.importIdentity(external.module_idx) orelse return;
-                break :blk ModuleEnv.MethodOwner.initImported(identity, @fromBackingInt(@intCast(external.target_node_idx)));
-            },
-            .external_identity => |external| ModuleEnv.MethodOwner.initImported(
-                external.module_identity,
-                @fromBackingInt(@intCast(external.target_node_idx)),
-            ),
-            .local => |local| ModuleEnv.MethodOwner.initSelf(local.decl_idx),
-            .builtin, .pending => return,
-        };
-
-        const binding = entry.methodBinding() orelse base.invariant(
-            "compiler invariant violated: a receiver method owner reference carries its method binding",
-            .{},
-        );
-        // A method declared by its receiver wins over a namespace extension,
-        // so an extension naming a method the receiver's own module already
-        // declares registers nothing.
-        if (owner.moduleIdentity()) |identity| {
-            const owner_env = self.envForIdentity(self.env, identity) orelse base.invariant(
-                "compiler invariant violated: a resolved receiver type's module is reachable from the import drain",
-                .{},
-            );
-            if (owner_env.common.findIdent(self.env.getIdent(entry.methodIdent()))) |owner_method_ident| {
-                if (owner_env.lookupMethodBindingForMethodOwnerConst(ModuleEnv.MethodOwner.initSelf(owner.owner), owner_method_ident) != null) return;
-            }
-        }
-        const key = ModuleEnv.MethodKey.init(owner, entry.methodIdent());
-        const region = self.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(binding.def_idx));
-        const gop = try self.receiver_extensions.getOrPut(key);
-        if (gop.found_existing) {
-            // Two extensions in this module compete for one receiver call, so
-            // the later declaration wins and shadows the earlier one, exactly
-            // as two extensions on a locally declared receiver do.
-            try self.env.pushDiagnostic(.{ .shadowing_warning = .{
-                .ident = entry.methodIdent(),
-                .region = region,
-                .original_region = gop.value_ptr.region,
+    /// Report a header exposure whose module does not define the nested type
+    /// it names. The coordinator settled that once, when the module completed.
+    fn resolveHeaderExposure(self: *Resolver, entry: DeferredImportRef) std.mem.Allocator.Error!void {
+        for (self.inputs.missing_public_types) |missing| {
+            const missing_ident = self.env.common.findIdent(missing) orelse continue;
+            if (!missing_ident.eql(entry.itemName())) continue;
+            return self.env.pushDiagnostic(.{ .type_not_exposed = .{
+                .module_name = entry.moduleName(),
+                .type_name = entry.path(),
+                .region = self.regionOf(entry),
             } });
-            self.env.replaceMethodAt(gop.value_ptr.table_index, owner, entry.methodIdent(), entry.qualifiedName(), binding);
-            gop.value_ptr.region = region;
-            return;
         }
-        gop.value_ptr.* = .{
-            .table_index = try self.env.appendMethodForMethodOwner(owner, entry.methodIdent(), entry.qualifiedName(), binding),
-            .region = region,
-        };
-        self.registered_methods = true;
     }
 
     fn identityFor(
@@ -1213,14 +1160,13 @@ const Resolver = struct {
             },
             // The import statement owns the diagnostic for a name that denotes
             // no module, so its exposed items do not restate it.
-            .exposed_item, .import_statement => {},
+            .exposed_item, .import_statement, .header_exposure => {},
             .expr_value,
             .expr_nominal,
             .pattern_nominal,
             .numeric_suffix,
             .type_anno_lookup,
             .type_anno_apply,
-            .receiver_method_owner,
             .file_import,
             => try self.failEntry(entry, entry.missing_module_failure),
         }
@@ -1299,7 +1245,7 @@ const Resolver = struct {
             // A method registration has no node of its own: the receiver type
             // reference it waits on carries the diagnostic. An import
             // statement's own diagnostic is pushed directly.
-            .receiver_method_owner, .import_statement, .exposed_item, .hosted_entry, .file_import => {},
+            .import_statement, .exposed_item, .hosted_entry, .file_import, .header_exposure => {},
         }
     }
 

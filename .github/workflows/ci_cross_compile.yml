@@ -60,6 +60,13 @@ jobs:
           echo "Cross-compiling fx tests from ${{ matrix.host }} to ${{ matrix.target }}"
           zig build run-test-cli -- --suite platforms --filter test/fx/ --cross-target=${{ matrix.target }}
 
+      # `roc build` below reads the int platform's hosts from the checkout.
+      - name: Publish int platform hosts into the checkout
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build update-test-fixtures -Dplatform=int
+          retry_count: 3
+
       - name: Cross-compile int platform test app (Unix)
         if: runner.os != 'Windows'
         run: |

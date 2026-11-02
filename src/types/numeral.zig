@@ -172,8 +172,7 @@ pub fn decBits(allocator: Allocator, exact: Exact) Allocator.Error!?i128 {
     var after_normalized: u128 = undefined;
     var scale_normalized: u32 = undefined;
     if (exact.scale <= dec_decimal_places) {
-        // `after` has at most 18 decimal digits, so it always fits u128.
-        after_normalized = magnitudeU128(exact.after) orelse unreachable;
+        after_normalized = magnitudeU128(exact.after) orelse unreachable; // `after` has at most 18 decimal digits, so it always fits u128
         scale_normalized = exact.scale;
     } else if (magnitudeU128(exact.after)) |after| {
         // Digits beyond 18 places must all be zeros for the value to be
@@ -196,7 +195,7 @@ pub fn decBits(allocator: Allocator, exact: Exact) Allocator.Error!?i128 {
         scale_normalized = dec_decimal_places;
     }
 
-    const after_scale = pow10U128(dec_decimal_places - scale_normalized) orelse unreachable;
+    const after_scale = pow10U128(dec_decimal_places - scale_normalized) orelse unreachable; // every branch above leaves scale_normalized at most 18, and 10^18 fits u128
     const after_scaled = checkedMulU128(after_normalized, after_scale) orelse return null;
     const magnitude = checkedAddU128(before_scaled, after_scaled) orelse return null;
 

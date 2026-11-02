@@ -1260,7 +1260,6 @@ pub fn programFailureKind(err: eval.Inspected.Error) ProgramFailureKind {
         error.BrokenPipe,
         error.Canceled,
         error.CompilationFailed,
-        error.ComptimeExhaustiveness,
         error.ConnectionResetByPeer,
         error.CorruptEmbeddedBuiltins,
         error.Crash,

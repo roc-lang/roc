@@ -255,15 +255,8 @@ NominalTypeRecord := { x : U64 }
 destructure_nominal_type : NominalTypeRecord -> U64
 destructure_nominal_type = |NominalTypeRecord.{ x }| x
 
-# TODO not sure if still planned for implementation
-# record_update = {
-#     rec = { x: 1, y: 2 }
-#     rec2 = { rec & y: 3 }
-#     rec2
-# }
-
-record_update_2 : { name : Str, age : I64 } -> { name : Str, age : I64 }
-record_update_2 = |person| {
+record_update : { name : Str, age : I64 } -> { name : Str, age : I64 }
+record_update = |person| {
 	{ ..person, age: 31 }
 }
 
@@ -387,9 +380,6 @@ color_to_str = |color| match color {
 	_ => "other color"
 }
 
-# TODO: Closed tag unions with `..[]]` - syntax not implemented yet
-# str_to_color : Str -> [Red, Green, Blue, Other, ..[]]
-
 # Type alias for an extensible tag union. You can use a type var (`others`) like so:
 Letters(others) : [A, B, ..others]
 
@@ -457,11 +447,9 @@ main! = |_args| {
 
 	print!(destructure_nominal_type(NominalTypeRecord.{ x: 42 }))
 
-	# print!(record_update)
-
 	print!({ x: 10, y: 20 }.x)
 
-	print!(record_update_2({ name: "Alice", age: 30 }))
+	print!(record_update({ name: "Alice", age: 30 }))
 
 	print!(remove_record_field({ name: "Alice", age: 30, email: "alice@example.com" }))
 

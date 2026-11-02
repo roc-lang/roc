@@ -543,7 +543,7 @@ fn firstUncoveredByte(comptime T: type) usize {
         for (byteCoverageMask(T), 0..) |c, i| {
             if (!c) break :blk i;
         }
-        unreachable;
+        @compileError("firstUncoveredByte requires a type with an uncovered byte, and " ++ @typeName(T) ++ " has none");
     };
 }
 

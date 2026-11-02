@@ -335,10 +335,6 @@ fn runEchoView(
             return error.EvaluationFailed;
         },
         error.Crash => roc_ops.crash(interpreter.getCrashMessage()),
-        error.ComptimeExhaustiveness => {
-            diag.step("interpreter.runEntrypoint", err);
-            return error.EvaluationFailed;
-        },
         error.OutOfMemory => {
             diag.step("interpreter.runEntrypoint", err);
             return error.OutOfMemory;
@@ -347,10 +343,8 @@ fn runEchoView(
             diag.step("interpreter.runEntrypoint", err);
             return error.EntrypointNotFound;
         },
-        // expect_err statements only occur in top-level expect test roots,
-        // never in program entrypoints.
-        error.ExpectErr => unreachable,
-        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
+        error.ExpectErr => unreachable, // expect_err statements occur only in top-level expect test roots, not program entrypoints
+        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => base.invariant("echo runner invariant violated: entrypoint evaluation reported {s}", .{@errorName(err)}),
     };
 
     if (echo_env.inline_expect_failed) return 1;

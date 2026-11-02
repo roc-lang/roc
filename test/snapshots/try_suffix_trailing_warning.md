@@ -391,7 +391,23 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+# A `?` applied to a function's return value only type-checks when the Ok
+# payload is itself a Try, and even then it is confusing to read, so it warns.
+nested : Str -> Try(Try(Str, [Bad]), [Bad])
+nested = |s| if (s == "") Err(Bad) else Ok(Ok(s))
+
+tail : Str -> Try(Str, [Bad])
+tail = |s| {
+	nested(s)?
+}
+
+returned : Str -> Try(Str, [Bad])
+returned = |s| {
+	if s == "x" {
+		return nested(s)?
+	}
+	if (s == "y") nested(s)? else Ok(s)
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -440,7 +456,7 @@ NO CHANGE
 				(e-match
 					(match
 						(cond
-							(e-call (constraint-fn-var 444)
+							(e-call (constraint-fn-var 450)
 								(e-lookup-local
 									(p-assign (ident "nested")))
 								(e-lookup-local
@@ -496,7 +512,7 @@ NO CHANGE
 										(e-match
 											(match
 												(cond
-													(e-call (constraint-fn-var 507)
+													(e-call (constraint-fn-var 513)
 														(e-lookup-local
 															(p-assign (ident "nested")))
 														(e-lookup-local
@@ -538,7 +554,7 @@ NO CHANGE
 							(e-match
 								(match
 									(cond
-										(e-call (constraint-fn-var 567)
+										(e-call (constraint-fn-var 576)
 											(e-lookup-local
 												(p-assign (ident "nested")))
 											(e-lookup-local

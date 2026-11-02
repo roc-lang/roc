@@ -323,7 +323,7 @@ fn expectDevRuntimeDivisionByZero() FxPlatformTestError!void {
 fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) FxPlatformTestError!void {
     const allocator = testing.allocator;
 
-    const result = util.runRocCommand(std.testing.io, allocator, &.{ opt_flag, spec.roc_file, "--", "--test", spec.io_spec }) catch |err| {
+    const result = util.runRocCommand(std.testing.io, allocator, &.{ opt_flag, spec.roc_file, "--test", spec.io_spec }) catch |err| {
         std.debug.print("\n[FAIL] {s} ({s}): failed to run: {}\n", .{ spec.roc_file, opt_flag, err });
         return err;
     };
@@ -427,12 +427,44 @@ test "fx platform value a branch never reads is released at the branch entry (sp
     try runIoSpecTest("--opt=speed", fx_test_specs.branch_entry_release_test);
 }
 
+test "fx platform promoted byte-append loop matches a byte-at-a-time construction (interpreter)" {
+    try runIoSpecTest("--opt=interpreter", fx_test_specs.le_bytes_append_loop_test);
+}
+
+test "fx platform promoted byte-append loop matches a byte-at-a-time construction (dev backend)" {
+    try runIoSpecTest("--opt=dev", fx_test_specs.le_bytes_append_loop_test);
+}
+
+test "fx platform promoted byte-append loop matches a byte-at-a-time construction (speed backend)" {
+    try runIoSpecTest("--opt=speed", fx_test_specs.le_bytes_append_loop_test);
+}
+
 test "fx platform cold-path list literal and List.with_capacity (dev backend)" {
     try runIoSpecTest("--opt=dev", fx_test_specs.issue_12196_cold_list_builds_test);
 }
 
 test "fx platform cold-path list literal and List.with_capacity (speed backend)" {
     try runIoSpecTest("--opt=speed", fx_test_specs.issue_12196_cold_list_builds_test);
+}
+
+test "fx platform taken field passed to an owned variant is released once (interpreter)" {
+    try runIoSpecTest("--opt=interpreter", fx_test_specs.take_binding_alias_owned_variant_test);
+}
+
+test "fx platform taken field passed to an owned variant is released once (dev backend)" {
+    try runIoSpecTest("--opt=dev", fx_test_specs.take_binding_alias_owned_variant_test);
+}
+
+test "fx platform taken field passed to an owned variant is released once (speed backend)" {
+    try runIoSpecTest("--opt=speed", fx_test_specs.take_binding_alias_owned_variant_test);
+}
+
+test "fx platform inline list fast paths and their slow arms (dev backend)" {
+    try runIoSpecTest("--opt=dev", fx_test_specs.inline_list_slow_arms_test);
+}
+
+test "fx platform inline list fast paths and their slow arms (speed backend)" {
+    try runIoSpecTest("--opt=speed", fx_test_specs.inline_list_slow_arms_test);
 }
 
 /// Repro for https://github.com/roc-lang/roc/issues/10770: one boxed callable
@@ -518,7 +550,6 @@ test "fx platform direct run preserves RocOps after F32.abs before list allocati
     // direct-run should preserve RocOps across F32.abs and the later list allocation.
     const result = try util.runRocCommand(std.testing.io, allocator, &.{
         "test/fx/issue_9846_direct_abs_list.roc",
-        "--",
         "--test",
         "1>count 1",
     });
@@ -1766,10 +1797,10 @@ test "fx platform fold_rev static dispatch regression" {
 }
 
 test "fx platform invalid nested where-clause static dispatch fails in check" {
-    // Regression test for #9657: nothing in the program determines the types
-    // this where-clause constrains, and the default chosen for them lacks the
+    // Regression test for #9657: the types this where-clause constrains never
+    // resolve to concrete types, and the default chosen for them lacks the
     // required methods, so check must reject the contract before post-check
-    // lowering, reporting the type as undetermined.
+    // lowering, reporting the type as one that never resolved.
     const allocator = testing.allocator;
 
     var env = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
@@ -1792,7 +1823,7 @@ test "fx platform invalid nested where-clause static dispatch fails in check" {
         .stderr = check_result.stderr,
         .term = check_result.term,
     });
-    try testing.expect(std.mem.find(u8, check_result.stderr, "type not determined") != null);
+    try testing.expect(std.mem.find(u8, check_result.stderr, "never resolved to a") != null);
     try testing.expect(std.mem.find(u8, check_result.stderr, "postcheck invariant violated") == null);
 }
 
@@ -2512,6 +2543,103 @@ test "a build evaluates a root that an earlier build's cached module left uneval
         try testing.expect(run.read_by_app_b);
         try testing.expect(run.never_read);
     }
+}
+
+// repro for https://github.com/roc-lang/roc/issues/12437
+test "roc test passes against the object cache a roc check wrote" {
+    const allocator = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const cache_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(cache_path);
+    var cache_env = std.process.Environ.Map.init(allocator);
+    defer cache_env.deinit();
+    try cache_env.put("ROC_CACHE_DIR", cache_path);
+
+    // The app's parser combinator chain specializes package lambda-set
+    // members at an app type. `roc test` must compile its own copy of each
+    // one the cached entries `roc check` wrote call by identity.
+    const check_result = try util.runRocWithEnv(
+        std.testing.io,
+        allocator,
+        &.{"check"},
+        "test/fx/check_then_test_served_callees.roc",
+        &cache_env,
+    );
+    defer allocator.free(check_result.stdout);
+    defer allocator.free(check_result.stderr);
+    try util.checkSuccess(check_result);
+
+    const test_result = try util.runRocWithEnv(
+        std.testing.io,
+        allocator,
+        &.{"test"},
+        "test/fx/check_then_test_served_callees.roc",
+        &cache_env,
+    );
+    defer allocator.free(test_result.stdout);
+    defer allocator.free(test_result.stderr);
+    try util.checkSuccess(test_result);
+    try testing.expect(std.mem.find(u8, test_result.stdout, "All (1) tests passed") != null);
+}
+
+// repro for https://github.com/roc-lang/roc/issues/12693
+test "roc build of an app succeeds against the cache a roc check of another app sharing its package wrote" {
+    const allocator = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "roc-cache" });
+    defer allocator.free(cache_path);
+    try tmp_dir.dir.createDirPath(std.testing.io, "roc-cache");
+    var cache_env = std.process.Environ.Map.init(allocator);
+    defer cache_env.deinit();
+    try cache_env.put("ROC_CACHE_DIR", cache_path);
+
+    // Both apps import the same package. The first app's check stores the
+    // package's compile-time constants `Form.submit` and the closure
+    // `Form.adder`, whose capture is an `Api` nominal `Form` never mentions,
+    // and the second app's build reuses those stored constants: it must
+    // build and run exactly as it does from an empty cache.
+    const check_result = try util.runRocWithEnv(
+        std.testing.io,
+        allocator,
+        &.{"check"},
+        "test/fx/issue_12693_check_first.roc",
+        &cache_env,
+    );
+    defer allocator.free(check_result.stdout);
+    defer allocator.free(check_result.stderr);
+    try util.checkSuccess(check_result);
+
+    const output_path = try std.fs.path.join(allocator, &.{ tmp_path, "app.bin" });
+    defer allocator.free(output_path);
+    const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
+    defer allocator.free(output_arg);
+    const build_result = try util.runRocWithEnv(
+        std.testing.io,
+        allocator,
+        &.{ "build", "--opt=dev", output_arg },
+        "test/fx/issue_12693_build_second.roc",
+        &cache_env,
+    );
+    defer allocator.free(build_result.stdout);
+    defer allocator.free(build_result.stderr);
+    try util.checkSuccess(build_result);
+
+    const run_result = try util.runChildWithTimeout(std.testing.io, allocator, &.{output_path}, .{
+        .max_output_bytes = 1024 * 1024,
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+    switch (run_result.term) {
+        .exited => |code| try testing.expectEqual(@as(u8, 0), code),
+        .signal, .stopped, .unknown => return error.UnexpectedTermination,
+    }
+    try testing.expectEqualStrings("400 400\n", run_result.stdout);
 }
 
 /// Build a compile-time demand pack test app for the dev backend against the

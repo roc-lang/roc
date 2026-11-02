@@ -58,8 +58,8 @@ pub fn findResultConsumer(store: *const LirStore, predicate_stmt: LIR.CFStmtId) 
         const stmt = store.getCFStmtImmediate(current);
         if (std.meta.activeTag(stmt.*) == .assign_ref) {
             const assign = stmt.assign_ref;
-            if (assign.op != .local) return null;
-            const source = assign.op.local;
+            if (assign.op.kind != .local) return null;
+            const source = assign.op.source;
             var followed = false;
             if (source == lhs_alias) {
                 lhs_alias = assign.target;
@@ -114,18 +114,18 @@ test "finds an overflow result through false-arm aliases" {
     const consumer = try store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
         .op = .num_int_add_wrap,
-        .rc_effect = .none(),
+        .rc_effect = try store.addRcEffect(.none()),
         .args = consumer_args,
         .next = done,
     } }, .test_fixture);
     const alias_rhs = try store.addCFStmt(.{ .assign_ref = .{
         .target = rhs_alias,
-        .op = .{ .local = rhs },
+        .op = .local(rhs),
         .next = consumer,
     } }, .test_fixture);
     const alias_lhs = try store.addCFStmt(.{ .assign_ref = .{
         .target = lhs_alias,
-        .op = .{ .local = lhs },
+        .op = .local(lhs),
         .next = alias_rhs,
     } }, .test_fixture);
     const overflow_path = try store.addCFStmt(.runtime_error, .test_fixture);
@@ -139,7 +139,7 @@ test "finds an overflow result through false-arm aliases" {
     const predicate = try store.addCFStmt(.{ .assign_low_level = .{
         .target = overflowed,
         .op = .num_int_add_overflows,
-        .rc_effect = .none(),
+        .rc_effect = try store.addRcEffect(.none()),
         .args = predicate_args,
         .next = choose,
     } }, .test_fixture);
@@ -163,7 +163,7 @@ test "does not commute subtraction operands" {
     const consumer = try store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
         .op = .num_int_sub_wrap,
-        .rc_effect = .none(),
+        .rc_effect = try store.addRcEffect(.none()),
         .args = consumer_args,
         .next = done,
     } }, .test_fixture);
@@ -178,7 +178,7 @@ test "does not commute subtraction operands" {
     const predicate = try store.addCFStmt(.{ .assign_low_level = .{
         .target = overflowed,
         .op = .num_int_sub_overflows,
-        .rc_effect = .none(),
+        .rc_effect = try store.addRcEffect(.none()),
         .args = predicate_args,
         .next = choose,
     } }, .test_fixture);

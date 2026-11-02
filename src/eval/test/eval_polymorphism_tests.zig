@@ -89,6 +89,15 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "42.0" },
     },
     .{
+        // The lambda returned by `|n|` is that function's result, not a
+        // scheme of its own, so `id`'s result type is the call's `Dec` all
+        // the way down; the non-tail call keeps the result from being
+        // delivered by a pending erased call.
+        .name = "interpreter higher-order: non-tail call through a captured function in a returned lambda",
+        .source = "(((|n| (|id| (|x| { v = id(x + n)\n v })))(1))(|y| y))(41)",
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
         .name = "interpreter if: else-if chain selects middle branch",
         .source =
         \\{

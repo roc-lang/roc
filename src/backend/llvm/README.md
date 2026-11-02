@@ -136,7 +136,9 @@ const args = &.{
     "libhost.a",           // platform host library
     "-o", "my_program",
 };
-try embedded_lld.link(allocator, .elf, args, .{});
+const outcome = try embedded_lld.link(allocator, .elf, args, .{});
+defer allocator.free(outcome.diagnostics); // everything lld wrote to its error stream
+if (!outcome.succeeded) return error.LinkFailed;
 ```
 
 For different platforms, pass the appropriate linker format:

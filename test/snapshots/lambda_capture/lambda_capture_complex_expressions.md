@@ -41,7 +41,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+(|outer| |inner| if (outer > 0) (outer + inner) else inner)(1)(-2)
 ~~~
 # CANONICALIZE
 ~~~clojure

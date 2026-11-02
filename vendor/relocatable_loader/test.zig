@@ -345,6 +345,88 @@ test "a COFF object's call is bound and run" {
     try testing.expectEqual(@as(i32, 42), entry());
 }
 
+/// A minimal ARM64 COFF object whose function reads a word eight bytes into
+/// `.data`, addressing it as `base + 8` with the offset kept in both the ADRP
+/// and the LDR immediates, as LLVM emits it.
+fn buildArm64CoffDataReadObject(allocator: std.mem.Allocator) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    // adrp x8, base+8; ldr w0, [x8, :lo12:base+8]; ret
+    const text = [_]u8{ 0x48, 0x00, 0x00, 0x90, 0x00, 0x09, 0x40, 0xb9, 0xc0, 0x03, 0x5f, 0xd6 };
+    const data = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0x2a, 0, 0, 0 };
+    const text_offset: u32 = 20 + 2 * 40;
+    const data_offset: u32 = text_offset + text.len;
+    const reloc_offset: u32 = data_offset + data.len;
+    const symtab_offset: u32 = reloc_offset + 2 * 10;
+    // File header
+    try writeLe(&out, allocator, u16, 0xaa64);
+    try writeLe(&out, allocator, u16, 2);
+    try writeLe(&out, allocator, u32, 0);
+    try writeLe(&out, allocator, u32, symtab_offset);
+    try writeLe(&out, allocator, u32, 2);
+    try writeLe(&out, allocator, u16, 0);
+    try writeLe(&out, allocator, u16, 0);
+    // Section header: .text
+    try out.appendSlice(allocator, ".text\x00\x00\x00");
+    try writeLe(&out, allocator, u32, 0);
+    try writeLe(&out, allocator, u32, 0);
+    try writeLe(&out, allocator, u32, text.len);
+    try writeLe(&out, allocator, u32, text_offset);
+    try writeLe(&out, allocator, u32, reloc_offset);
+    try writeLe(&out, allocator, u32, 0);
+    try writeLe(&out, allocator, u16, 2);
+    try writeLe(&out, allocator, u16, 0);
+    try writeLe(&out, allocator, u32, 0x60500020); // code | execute | read | align 16
+    // Section header: .data
+    try out.appendSlice(allocator, ".data\x00\x00\x00");
+    try writeLe(&out, allocator, u32, 0);
+    try writeLe(&out, allocator, u32, 0);
+    try writeLe(&out, allocator, u32, data.len);
+    try writeLe(&out, allocator, u32, data_offset);
+    try writeLe(&out, allocator, u32, 0);
+    try writeLe(&out, allocator, u32, 0);
+    try writeLe(&out, allocator, u16, 0);
+    try writeLe(&out, allocator, u16, 0);
+    try writeLe(&out, allocator, u32, 0xc0300040); // initialized data | read | write | align 4
+    try out.appendSlice(allocator, &text);
+    try out.appendSlice(allocator, &data);
+    // Relocations against symbol 1 (`base`): PAGEBASE_REL21 at 0, PAGEOFFSET_12L at 4
+    try writeLe(&out, allocator, u32, 0);
+    try writeLe(&out, allocator, u32, 1);
+    try writeLe(&out, allocator, u16, 4);
+    try writeLe(&out, allocator, u32, 4);
+    try writeLe(&out, allocator, u32, 1);
+    try writeLe(&out, allocator, u16, 7);
+    // Symbols: entry (section 1), base (section 2)
+    try out.appendSlice(allocator, "entry\x00\x00\x00");
+    try writeLe(&out, allocator, u32, 0);
+    try writeLe(&out, allocator, u16, 1);
+    try writeLe(&out, allocator, u16, 0x20);
+    try out.append(allocator, 2);
+    try out.append(allocator, 0);
+    try out.appendSlice(allocator, "base\x00\x00\x00\x00");
+    try writeLe(&out, allocator, u32, 0);
+    try writeLe(&out, allocator, u16, 2);
+    try writeLe(&out, allocator, u16, 0);
+    try out.append(allocator, 2);
+    try out.append(allocator, 0);
+    // Empty string table
+    try writeLe(&out, allocator, u32, 4);
+    return out.toOwnedSlice(allocator);
+}
+
+test "an ARM64 COFF page reference keeps its byte offset into the target" {
+    if (builtin.cpu.arch != .aarch64 or builtin.os.tag == .freestanding) return error.SkipZigTest;
+    const allocator = testing.allocator;
+    const object = try buildArm64CoffDataReadObject(allocator);
+    defer allocator.free(object);
+    var host = HostSymbols{};
+    var image = try loader.Image.load(allocator, object, host.resolver());
+    defer image.deinit();
+    const entry = image.lookup(EntryFn, "entry") orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(i32, 42), entry());
+}
+
 /// A minimal x86-64 Mach-O object with the same function.
 fn buildMachOObject(allocator: std.mem.Allocator) ![]u8 {
     var out: std.ArrayList(u8) = .empty;

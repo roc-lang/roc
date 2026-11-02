@@ -74,6 +74,13 @@ pub const WasmTargetConfig = struct {
     initial_stack_size_ident: ?[]const u8 = null,
     global_base_ident: ?[]const u8 = null,
 
+    /// Whether the host owns the addresses below `global_base`, so the stack
+    /// sits above static data and compiled code checks its bounds. Known from
+    /// the header alone, before a `global_base` naming a constant resolves.
+    pub fn reservesLowMemory(self: WasmTargetConfig) bool {
+        return self.global_base != null or self.global_base_ident != null;
+    }
+
     fn deinit(self: WasmTargetConfig, allocator: Allocator) void {
         if (self.exports) |exports| {
             for (exports) |name| allocator.free(name);
@@ -96,6 +103,7 @@ pub const TargetConfigResolveReason = enum {
     expected_import_memory,
     expected_unsigned_integer,
     integer_out_of_range,
+    expected_positive_integer,
 
     pub fn message(self: TargetConfigResolveReason) []const u8 {
         return switch (self) {
@@ -106,6 +114,7 @@ pub const TargetConfigResolveReason = enum {
             .expected_import_memory => "must resolve to Zeroed, Uninitialized, or No",
             .expected_unsigned_integer => "must resolve to a non-negative whole number",
             .integer_out_of_range => "resolves to a number outside the supported range",
+            .expected_positive_integer => "must resolve to a whole number greater than 0",
         };
     }
 };
@@ -202,6 +211,149 @@ pub const InvalidTargetPathDiagnostic = struct {
         const owned_filename = try report.addOwnedString(filename);
         try report.addSourceContext(region_info, owned_filename, env.source, env.line_starts.items.items);
         return report;
+    }
+};
+
+/// A field of a target entry's config record. Some fields have a second
+/// accepted spelling; both name the same field.
+pub const TargetConfigField = enum {
+    inputs,
+    output,
+    exports,
+    import_memory,
+    minimum_memory,
+    maximum_memory,
+    initial_stack_size,
+    global_base,
+
+    pub fn fromName(name: []const u8) ?TargetConfigField {
+        const spellings = [_]struct { []const u8, TargetConfigField }{
+            .{ "inputs", .inputs },
+            .{ "output", .output },
+            .{ "exports", .exports },
+            .{ "import_memory", .import_memory },
+            .{ "minimum_memory", .minimum_memory },
+            .{ "initial_memory", .minimum_memory },
+            .{ "maximum_memory", .maximum_memory },
+            .{ "max_memory", .maximum_memory },
+            .{ "initial_stack_size", .initial_stack_size },
+            .{ "stack_size", .initial_stack_size },
+            .{ "global_base", .global_base },
+        };
+        for (spellings) |spelling| {
+            if (std.mem.eql(u8, name, spelling[0])) return spelling[1];
+        }
+        return null;
+    }
+
+    /// Whether the field configures a wasm module, and so belongs only on a
+    /// wasm target.
+    pub fn wasmOnly(self: TargetConfigField) bool {
+        return switch (self) {
+            .inputs, .output => false,
+            .exports, .import_memory, .minimum_memory, .maximum_memory, .initial_stack_size, .global_base => true,
+        };
+    }
+};
+
+/// Why a target entry's config record was rejected.
+pub const TargetEntryProblem = enum {
+    unknown_field,
+    duplicate_field,
+    wasm_only_field,
+    unknown_input,
+    expected_input_files,
+    expected_output_kind,
+    expected_export_names,
+    expected_import_memory,
+    expected_unsigned_integer,
+    integer_out_of_range,
+    expected_positive_integer,
+};
+
+/// A target entry config field in a platform header that `fromAST` rejected.
+pub const InvalidTargetEntryDiagnostic = struct {
+    problem: TargetEntryProblem,
+    target: RocTarget,
+    /// The field name as written, or for `unknown_input` the input as
+    /// written; borrowed from the AST's source.
+    field_name: []const u8,
+    /// Source region of `field_name`.
+    region: base.Region,
+
+    /// Build a report that points at the rejected field in the platform
+    /// source. `env` must be the environment the AST was parsed from, with
+    /// its line starts calculated.
+    pub fn toReport(
+        self: InvalidTargetEntryDiagnostic,
+        allocator: Allocator,
+        env: *const base.CommonEnv,
+        filename: []const u8,
+    ) Allocator.Error!reporting.Report {
+        const target_name = @tagName(self.target);
+        const headline = switch (self.problem) {
+            .unknown_field => try std.fmt.allocPrint(allocator, "The {s} target has a field named `{s}`, which is not a target configuration field.", .{ target_name, self.field_name }),
+            .duplicate_field => try std.fmt.allocPrint(allocator, "The {s} target sets `{s}` more than once.", .{ target_name, self.field_name }),
+            .wasm_only_field => try std.fmt.allocPrint(allocator, "The {s} target sets `{s}`, which only applies to WebAssembly targets.", .{ target_name, self.field_name }),
+            .unknown_input => try std.fmt.allocPrint(allocator, "The {s} target's inputs include `{s}`, which is not a known input.", .{ target_name, self.field_name }),
+            .expected_input_files => try std.fmt.allocPrint(allocator, "The {s} target's `{s}` must be a list of input files.", .{ target_name, self.field_name }),
+            .expected_output_kind => try std.fmt.allocPrint(allocator, "The {s} target's `{s}` must be `Exe`, `Archive`, or `Shared`.", .{ target_name, self.field_name }),
+            .expected_export_names => try std.fmt.allocPrint(allocator, "The {s} target's `{s}` must be a list of function names written as strings.", .{ target_name, self.field_name }),
+            .expected_import_memory => try std.fmt.allocPrint(allocator, "The {s} target's `{s}` must be `Zeroed`, `Uninitialized`, `No`, or the name of a top-level constant.", .{ target_name, self.field_name }),
+            .expected_unsigned_integer => try std.fmt.allocPrint(allocator, "The {s} target's `{s}` must be a non-negative whole number or the name of a top-level constant.", .{ target_name, self.field_name }),
+            .integer_out_of_range => try std.fmt.allocPrint(allocator, "The {s} target's `{s}` is outside the supported range.", .{ target_name, self.field_name }),
+            .expected_positive_integer => try std.fmt.allocPrint(allocator, "The {s} target's `{s}` must be greater than 0.", .{ target_name, self.field_name }),
+        };
+        defer allocator.free(headline);
+
+        var report = try reporting.Report.init(allocator, "Invalid Target Configuration", headline, .runtime_error);
+        errdefer report.deinit();
+        switch (self.problem) {
+            .unknown_field => try report.document.addReflowingTextWithBackticks(
+                "A target's fields are `inputs` and `output`, and on WebAssembly targets also `exports`, `import_memory`, `minimum_memory`, `maximum_memory`, `initial_stack_size`, and `global_base`.",
+            ),
+            .unknown_input => try report.document.addReflowingTextWithBackticks(
+                "Each input is a file path string, `app` for the compiled application, or `win_gui`.",
+            ),
+            .duplicate_field,
+            .wasm_only_field,
+            .expected_input_files,
+            .expected_output_kind,
+            .expected_export_names,
+            .expected_import_memory,
+            .expected_unsigned_integer,
+            .integer_out_of_range,
+            => {},
+            .expected_positive_integer => try report.document.addReflowingTextWithBackticks(
+                "Every address below `global_base` belongs to the host. A platform whose host reserves no low memory leaves `global_base` out.",
+            ),
+        }
+        const region_info = base.RegionInfo.position(env.source, env.line_starts.items.items, self.region.start.offset, self.region.end.offset) catch {
+            return report;
+        };
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
+        try report.addSourceContext(region_info, owned_filename, env.source, env.line_starts.items.items);
+        return report;
+    }
+};
+
+/// What `fromAST` rejected in a platform header's targets section.
+pub const TargetsConfigDiagnostic = union(enum) {
+    path: InvalidTargetPathDiagnostic,
+    entry: InvalidTargetEntryDiagnostic,
+
+    pub fn toReport(
+        self: TargetsConfigDiagnostic,
+        allocator: Allocator,
+        env: *const base.CommonEnv,
+        filename: []const u8,
+    ) Allocator.Error!reporting.Report {
+        return switch (self) {
+            .path => |diagnostic| diagnostic.toReport(allocator, env, filename),
+            .entry => |diagnostic| diagnostic.toReport(allocator, env, filename),
+        };
     }
 };
 
@@ -361,14 +513,16 @@ pub const TargetsConfig = struct {
     /// empty `targets: {}` section returns a hostless config with zero targets.
     /// All string values are duped with the provided allocator, so the
     /// returned TargetsConfig owns its memory and is independent of the AST.
-    /// Returns error.InvalidTargetPath, describing the offending string in
+    /// Returns error.InvalidTargetConfig, describing what it rejected in
     /// `diagnostic`, when `inputs_dir` or a target input file is not a
-    /// relative path that stays inside the platform directory.
+    /// relative path that stays inside the platform directory, or when a
+    /// target's config record has a field or value `parseTargetConfig`
+    /// rejects.
     pub fn fromAST(
         allocator: Allocator,
         ast: anytype,
-        diagnostic: *InvalidTargetPathDiagnostic,
-    ) (Allocator.Error || error{InvalidTargetPath})!?TargetsConfig {
+        diagnostic: *TargetsConfigDiagnostic,
+    ) (Allocator.Error || error{InvalidTargetConfig})!?TargetsConfig {
         const NodeStore = parse.NodeStore;
 
         const store: *const NodeStore = &ast.store;
@@ -409,27 +563,28 @@ pub const TargetsConfig = struct {
         ast: anytype,
         tok: parse.tokenize.Token.Idx,
         field: TargetPathField,
-        diagnostic: *InvalidTargetPathDiagnostic,
-    ) error{InvalidTargetPath}!void {
+        diagnostic: *TargetsConfigDiagnostic,
+    ) error{InvalidTargetConfig}!void {
         const path = ast.resolve(tok);
         const problem = TargetPathProblem.of(path) orelse return;
-        diagnostic.* = .{
+        diagnostic.* = .{ .path = .{
             .field = field,
             .problem = problem,
             .path = path,
             .region = ast.tokens.resolve(tok),
-        };
-        return error.InvalidTargetPath;
+        } };
+        return error.InvalidTargetConfig;
     }
 
     fn appendTargetFiles(
         allocator: Allocator,
         store: *const parse.NodeStore,
         ast: anytype,
+        target: RocTarget,
         files: parse.AST.TargetFile.Span,
         link_items: *std.array_list.Managed(LinkItem),
-        diagnostic: *InvalidTargetPathDiagnostic,
-    ) (Allocator.Error || error{InvalidTargetPath})!void {
+        diagnostic: *TargetsConfigDiagnostic,
+    ) (Allocator.Error || error{InvalidTargetConfig})!void {
         const file_indices = store.targetFileSlice(files);
         for (file_indices) |file_idx| {
             const target_file = store.getTargetFile(file_idx);
@@ -446,47 +601,20 @@ pub const TargetsConfig = struct {
                         try link_items.append(.app);
                     } else if (std.mem.eql(u8, ident, "win_gui")) {
                         try link_items.append(.win_gui);
+                    } else {
+                        diagnostic.* = .{ .entry = .{
+                            .problem = .unknown_input,
+                            .target = target,
+                            .field_name = ident,
+                            .region = ast.tokens.resolve(tok),
+                        } };
+                        return error.InvalidTargetConfig;
                     }
                 },
+                // The parser has already reported a malformed input.
                 .malformed => continue,
             }
         }
-    }
-
-    fn clearTargetFiles(allocator: Allocator, link_items: *std.array_list.Managed(LinkItem)) void {
-        for (link_items.items) |item| switch (item) {
-            .file_path => |fp| allocator.free(fp),
-            .app, .win_gui => {},
-        };
-        link_items.clearRetainingCapacity();
-    }
-
-    fn replaceWasmExports(
-        allocator: Allocator,
-        store: *const parse.NodeStore,
-        ast: anytype,
-        values: parse.AST.TargetConfigValue.Span,
-        wasm: *WasmTargetConfig,
-    ) Allocator.Error!void {
-        if (wasm.exports) |old_exports| {
-            for (old_exports) |name| allocator.free(name);
-            allocator.free(old_exports);
-            wasm.exports = null;
-        }
-
-        var exports = std.array_list.Managed([]const u8).init(allocator);
-        errdefer {
-            for (exports.items) |name| allocator.free(name);
-            exports.deinit();
-        }
-
-        for (store.targetConfigValueSlice(values)) |value_idx| {
-            const value = store.getTargetConfigValue(value_idx);
-            if (value != .string_literal) continue;
-            const name = value.string_literal orelse continue;
-            try exports.append(try allocator.dupe(u8, ast.resolve(name)));
-        }
-        wasm.exports = try exports.toOwnedSlice();
     }
 
     fn storeIdent(
@@ -499,141 +627,171 @@ pub const TargetsConfig = struct {
         field.* = try allocator.dupe(u8, ast.resolve(ident));
     }
 
-    fn targetConfigIdentToken(value: parse.AST.TargetConfigValue) ?parse.tokenize.Token.Idx {
-        if (value == .ident) return value.ident;
-        return null;
-    }
+    const ParsedUnsigned = union(enum) {
+        value: usize,
+        out_of_range,
+        not_unsigned,
+    };
 
-    fn parseUnsignedToken(allocator: Allocator, ast: anytype, tok: parse.tokenize.Token.Idx) Allocator.Error!?usize {
+    fn parseUnsignedToken(allocator: Allocator, ast: anytype, tok: parse.tokenize.Token.Idx) Allocator.Error!ParsedUnsigned {
         const raw = ast.resolve(tok);
         var compact = try std.array_list.Managed(u8).initCapacity(allocator, raw.len);
         defer compact.deinit();
         for (raw) |byte| {
             if (byte != '_') compact.appendAssumeCapacity(byte);
         }
-        return std.fmt.parseInt(usize, compact.items, 0) catch null;
+        if (compact.items.len > 0 and compact.items[0] == '-') return .not_unsigned;
+        const parsed = std.fmt.parseInt(usize, compact.items, 0) catch |err| return switch (err) {
+            error.Overflow => .out_of_range,
+            error.InvalidCharacter => .not_unsigned,
+        };
+        return .{ .value = parsed };
     }
 
-    fn parseUnsignedValue(
+    /// The names in a wasm `exports` list, or null when an item is not a
+    /// non-empty string literal.
+    fn parseWasmExports(
         allocator: Allocator,
         store: *const parse.NodeStore,
         ast: anytype,
-        value_idx: parse.AST.TargetConfigValue.Idx,
-    ) Allocator.Error!?usize {
-        const value = store.getTargetConfigValue(value_idx);
-        if (value == .int_literal) return try parseUnsignedToken(allocator, ast, value.int_literal);
-        return null;
+        values: parse.AST.TargetConfigValue.Span,
+    ) Allocator.Error!?[]const []const u8 {
+        var exports = std.array_list.Managed([]const u8).init(allocator);
+        defer {
+            for (exports.items) |name| allocator.free(name);
+            exports.deinit();
+        }
+
+        for (store.targetConfigValueSlice(values)) |value_idx| {
+            const value = store.getTargetConfigValue(value_idx);
+            if (value != .string_literal) return null;
+            const name = value.string_literal orelse return null;
+            try exports.append(try allocator.dupe(u8, ast.resolve(name)));
+        }
+        return try exports.toOwnedSlice();
     }
 
-    fn parseWasmImportMemoryValue(
-        store: *const parse.NodeStore,
-        ast: anytype,
-        value_idx: parse.AST.TargetConfigValue.Idx,
-    ) ?WasmImportMemory {
-        const value = store.getTargetConfigValue(value_idx);
-        if (value == .tag_literal) return WasmImportMemory.fromTagName(ast.resolve(value.tag_literal));
-        return null;
-    }
+    /// The output kind and wasm settings one target entry's config record
+    /// declares.
+    const ParsedTargetConfig = struct {
+        output: OutputKind,
+        wasm: ?WasmTargetConfig,
+    };
 
-    fn parseWasmConfig(
+    /// Parse one target entry's config record. Every field must be a known
+    /// field given at most once, wasm settings may only appear on a wasm
+    /// target, and every value must have its field's shape; anything else is
+    /// reported in `diagnostic` rather than ignored, because linking without
+    /// a setting the platform wrote would silently change its output.
+    fn parseTargetConfig(
         allocator: Allocator,
         store: *const parse.NodeStore,
         ast: anytype,
+        target: RocTarget,
         config_idx: parse.AST.TargetConfig.Idx,
         link_items: *std.array_list.Managed(LinkItem),
-        diagnostic: *InvalidTargetPathDiagnostic,
-    ) (Allocator.Error || error{InvalidTargetPath})!?WasmTargetConfig {
+        diagnostic: *TargetsConfigDiagnostic,
+    ) (Allocator.Error || error{InvalidTargetConfig})!ParsedTargetConfig {
         const config = store.getTargetConfig(config_idx);
         const entries = store.targetConfigEntrySlice(config.entries);
+        var output: OutputKind = .exe;
         var wasm = WasmTargetConfig{};
         errdefer wasm.deinit(allocator);
-        var has_wasm_config = false;
+        var seen: std.EnumSet(TargetConfigField) = .empty;
 
         for (entries) |entry_idx| {
             const entry = store.getTargetConfigEntry(entry_idx);
             const name = ast.resolve(entry.name);
             const value = store.getTargetConfigValue(entry.value);
+            const reject = struct {
+                fn at(
+                    diag: *TargetsConfigDiagnostic,
+                    problem: TargetEntryProblem,
+                    target_tag: RocTarget,
+                    field_name: []const u8,
+                    region: base.Region,
+                ) error{InvalidTargetConfig} {
+                    diag.* = .{ .entry = .{ .problem = problem, .target = target_tag, .field_name = field_name, .region = region } };
+                    return error.InvalidTargetConfig;
+                }
+            }.at;
+            const name_region = ast.tokens.resolve(entry.name);
 
-            if (std.mem.eql(u8, name, "inputs")) {
-                if (value == .files) {
-                    clearTargetFiles(allocator, link_items);
-                    try appendTargetFiles(allocator, store, ast, value.files, link_items, diagnostic);
-                }
-            } else if (std.mem.eql(u8, name, "exports")) {
-                if (value == .list) {
-                    try replaceWasmExports(allocator, store, ast, value.list, &wasm);
-                    has_wasm_config = true;
-                }
-            } else if (std.mem.eql(u8, name, "import_memory")) {
-                if (parseWasmImportMemoryValue(store, ast, entry.value)) |import_memory| {
-                    wasm.import_memory = import_memory;
-                    has_wasm_config = true;
-                } else if (targetConfigIdentToken(value)) |ident| {
-                    try storeIdent(allocator, ast, ident, &wasm.import_memory_ident);
-                    has_wasm_config = true;
-                }
-            } else if (std.mem.eql(u8, name, "minimum_memory") or std.mem.eql(u8, name, "initial_memory")) {
-                if (try parseUnsignedValue(allocator, store, ast, entry.value)) |bytes| {
-                    wasm.minimum_memory = bytes;
-                    has_wasm_config = true;
-                } else if (targetConfigIdentToken(value)) |ident| {
-                    try storeIdent(allocator, ast, ident, &wasm.minimum_memory_ident);
-                    has_wasm_config = true;
-                }
-            } else if (std.mem.eql(u8, name, "maximum_memory") or std.mem.eql(u8, name, "max_memory")) {
-                if (try parseUnsignedValue(allocator, store, ast, entry.value)) |bytes| {
-                    wasm.maximum_memory = bytes;
-                    has_wasm_config = true;
-                } else if (targetConfigIdentToken(value)) |ident| {
-                    try storeIdent(allocator, ast, ident, &wasm.maximum_memory_ident);
-                    has_wasm_config = true;
-                }
-            } else if (std.mem.eql(u8, name, "initial_stack_size") or std.mem.eql(u8, name, "stack_size")) {
-                if (try parseUnsignedValue(allocator, store, ast, entry.value)) |bytes| {
-                    wasm.initial_stack_size = bytes;
-                    has_wasm_config = true;
-                } else if (targetConfigIdentToken(value)) |ident| {
-                    try storeIdent(allocator, ast, ident, &wasm.initial_stack_size_ident);
-                    has_wasm_config = true;
-                }
-            } else if (std.mem.eql(u8, name, "global_base")) {
-                if (try parseUnsignedValue(allocator, store, ast, entry.value)) |bytes| {
-                    if (std.math.cast(u32, bytes)) |global_base| {
-                        wasm.global_base = global_base;
-                        has_wasm_config = true;
-                    }
-                } else if (targetConfigIdentToken(value)) |ident| {
-                    try storeIdent(allocator, ast, ident, &wasm.global_base_ident);
-                    has_wasm_config = true;
-                }
+            const field = TargetConfigField.fromName(name) orelse
+                return reject(diagnostic, .unknown_field, target, name, name_region);
+            if (seen.contains(field)) return reject(diagnostic, .duplicate_field, target, name, name_region);
+            seen.insert(field);
+            if (field.wasmOnly() and target.toCpuArch() != .wasm32) {
+                return reject(diagnostic, .wasm_only_field, target, name, name_region);
+            }
+            // The parser has already reported a malformed value.
+            if (value == .malformed) continue;
+
+            switch (field) {
+                .inputs => {
+                    if (value != .files) return reject(diagnostic, .expected_input_files, target, name, name_region);
+                    try appendTargetFiles(allocator, store, ast, target, value.files, link_items, diagnostic);
+                },
+                .output => {
+                    if (value != .tag_literal) return reject(diagnostic, .expected_output_kind, target, name, name_region);
+                    output = OutputKind.fromTagName(ast.resolve(value.tag_literal)) orelse
+                        return reject(diagnostic, .expected_output_kind, target, name, name_region);
+                },
+                .exports => {
+                    if (value != .list) return reject(diagnostic, .expected_export_names, target, name, name_region);
+                    wasm.exports = try parseWasmExports(allocator, store, ast, value.list) orelse
+                        return reject(diagnostic, .expected_export_names, target, name, name_region);
+                },
+                .import_memory => switch (value) {
+                    .tag_literal => |tag| wasm.import_memory = WasmImportMemory.fromTagName(ast.resolve(tag)) orelse
+                        return reject(diagnostic, .expected_import_memory, target, name, name_region),
+                    .ident => |ident| try storeIdent(allocator, ast, ident, &wasm.import_memory_ident),
+                    .int_literal, .string_literal, .list, .files, .malformed => return reject(diagnostic, .expected_import_memory, target, name, name_region),
+                },
+                .minimum_memory => try parseUnsignedField(usize, allocator, ast, value, &wasm.minimum_memory, &wasm.minimum_memory_ident, target, name, name_region, diagnostic),
+                .maximum_memory => try parseUnsignedField(usize, allocator, ast, value, &wasm.maximum_memory, &wasm.maximum_memory_ident, target, name, name_region, diagnostic),
+                .initial_stack_size => try parseUnsignedField(usize, allocator, ast, value, &wasm.initial_stack_size, &wasm.initial_stack_size_ident, target, name, name_region, diagnostic),
+                .global_base => {
+                    try parseUnsignedField(u32, allocator, ast, value, &wasm.global_base, &wasm.global_base_ident, target, name, name_region, diagnostic);
+                    if (wasm.global_base == 0) return reject(diagnostic, .expected_positive_integer, target, name, name_region);
+                },
             }
         }
 
-        return if (has_wasm_config) wasm else null;
+        var has_wasm_config = false;
+        var fields = seen.iterator();
+        while (fields.next()) |field| has_wasm_config = has_wasm_config or field.wasmOnly();
+        return .{ .output = output, .wasm = if (has_wasm_config) wasm else null };
     }
 
-    /// Parse the output kind from a target entry's config record.
-    /// Defaults to .exe when no output: field is present.
-    fn parseOutputKind(
-        store: *const parse.NodeStore,
+    /// Store an unsigned wasm setting written as a literal that fits in `T`,
+    /// or the top-level identifier that will supply it after checking.
+    fn parseUnsignedField(
+        comptime T: type,
+        allocator: Allocator,
         ast: anytype,
-        config_idx: parse.AST.TargetConfig.Idx,
-    ) OutputKind {
-        const config = store.getTargetConfig(config_idx);
-        const entries = store.targetConfigEntrySlice(config.entries);
-        for (entries) |entry_idx| {
-            const entry = store.getTargetConfigEntry(entry_idx);
-            const name = ast.resolve(entry.name);
-            if (std.mem.eql(u8, name, "output")) {
-                const value = store.getTargetConfigValue(entry.value);
-                if (value == .tag_literal) {
-                    if (OutputKind.fromTagName(ast.resolve(value.tag_literal))) |kind| {
-                        return kind;
-                    }
-                }
-            }
-        }
-        return .exe;
+        value: parse.AST.TargetConfigValue,
+        out: *?T,
+        ident_slot: *?[]const u8,
+        target: RocTarget,
+        field_name: []const u8,
+        region: base.Region,
+        diagnostic: *TargetsConfigDiagnostic,
+    ) (Allocator.Error || error{InvalidTargetConfig})!void {
+        const problem: TargetEntryProblem = switch (value) {
+            .ident => |ident| return storeIdent(allocator, ast, ident, ident_slot),
+            .int_literal => |tok| switch (try parseUnsignedToken(allocator, ast, tok)) {
+                .value => |parsed| if (std.math.cast(T, parsed)) |narrowed| {
+                    out.* = narrowed;
+                    return;
+                } else .integer_out_of_range,
+                .out_of_range => .integer_out_of_range,
+                .not_unsigned => .expected_unsigned_integer,
+            },
+            .string_literal, .tag_literal, .list, .files, .malformed => .expected_unsigned_integer,
+        };
+        diagnostic.* = .{ .entry = .{ .problem = problem, .target = target, .field_name = field_name, .region = region } };
+        return error.InvalidTargetConfig;
     }
 
     /// Parse per-target specs from the targets section entries.
@@ -642,8 +800,8 @@ pub const TargetsConfig = struct {
         store: *const parse.NodeStore,
         ast: anytype,
         entries: parse.AST.TargetEntry.Span,
-        diagnostic: *InvalidTargetPathDiagnostic,
-    ) (Allocator.Error || error{InvalidTargetPath})![]const TargetLinkSpec {
+        diagnostic: *TargetsConfigDiagnostic,
+    ) (Allocator.Error || error{InvalidTargetConfig})![]const TargetLinkSpec {
         const entry_indices = store.targetEntrySlice(entries);
 
         var specs = std.array_list.Managed(TargetLinkSpec).init(allocator);
@@ -668,13 +826,14 @@ pub const TargetsConfig = struct {
                 link_items.deinit();
             }
 
-            const wasm_config = try parseWasmConfig(allocator, store, ast, entry.config, &link_items, diagnostic);
+            const parsed = try parseTargetConfig(allocator, store, ast, target, entry.config, &link_items, diagnostic);
+            errdefer if (parsed.wasm) |wasm| wasm.deinit(allocator);
 
             try specs.append(.{
                 .target = target,
-                .output = parseOutputKind(store, ast, entry.config),
+                .output = parsed.output,
                 .items = try link_items.toOwnedSlice(),
-                .wasm = wasm_config,
+                .wasm = parsed.wasm,
             });
         }
 
@@ -758,10 +917,10 @@ fn resolveWasmCheckedConstants(
     diagnostic: *TargetConfigResolveDiagnostic,
 ) error{TargetConfigInvalid}!void {
     try resolveWasmImportMemoryField(allocator, checked_module, target, output, "import_memory", &wasm.import_memory, &wasm.import_memory_ident, diagnostic);
-    try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "minimum_memory", &wasm.minimum_memory, &wasm.minimum_memory_ident, diagnostic);
-    try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "maximum_memory", &wasm.maximum_memory, &wasm.maximum_memory_ident, diagnostic);
-    try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "initial_stack_size", &wasm.initial_stack_size, &wasm.initial_stack_size_ident, diagnostic);
-    try resolveWasmUnsignedField(u32, allocator, checked_module, target, output, "global_base", &wasm.global_base, &wasm.global_base_ident, diagnostic);
+    try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "minimum_memory", 0, &wasm.minimum_memory, &wasm.minimum_memory_ident, diagnostic);
+    try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "maximum_memory", 0, &wasm.maximum_memory, &wasm.maximum_memory_ident, diagnostic);
+    try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "initial_stack_size", 0, &wasm.initial_stack_size, &wasm.initial_stack_size_ident, diagnostic);
+    try resolveWasmUnsignedField(u32, allocator, checked_module, target, output, "global_base", 1, &wasm.global_base, &wasm.global_base_ident, diagnostic);
 }
 
 fn resolveWasmImportMemoryField(
@@ -790,7 +949,7 @@ fn resolveWasmImportMemoryField(
 }
 
 /// Resolves an unsigned wasm config field named by `ident_slot` to a value
-/// that fits in `T`.
+/// that fits in `T` and is at least `minimum`, which is 0 or 1.
 fn resolveWasmUnsignedField(
     comptime T: type,
     allocator: Allocator,
@@ -798,6 +957,7 @@ fn resolveWasmUnsignedField(
     target: RocTarget,
     output: OutputKind,
     field_name: []const u8,
+    minimum: T,
     out: *?T,
     ident_slot: *?[]const u8,
     diagnostic: *TargetConfigResolveDiagnostic,
@@ -816,6 +976,10 @@ fn resolveWasmUnsignedField(
         diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = .integer_out_of_range };
         return error.TargetConfigInvalid;
     };
+    if (narrowed < minimum) {
+        diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = .expected_positive_integer };
+        return error.TargetConfigInvalid;
+    }
     out.* = narrowed;
     allocator.free(ident);
     ident_slot.* = null;
@@ -969,7 +1133,7 @@ test "fromAST accepts explicit hostless targets section" {
 
     try testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-    var diagnostic: InvalidTargetPathDiagnostic = undefined;
+    var diagnostic: TargetsConfigDiagnostic = undefined;
     const maybe_config = try TargetsConfig.fromAST(allocator, ast, &diagnostic);
     try testing.expect(maybe_config != null);
 
@@ -1011,7 +1175,7 @@ test "fromAST captures explicit wasm exports" {
 
     try testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-    var diagnostic: InvalidTargetPathDiagnostic = undefined;
+    var diagnostic: TargetsConfigDiagnostic = undefined;
     const maybe_config = try TargetsConfig.fromAST(allocator, ast, &diagnostic);
     try testing.expect(maybe_config != null);
 
@@ -1067,7 +1231,7 @@ test "fromAST captures punned wasm identifier config" {
 
     try testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-    var diagnostic: InvalidTargetPathDiagnostic = undefined;
+    var diagnostic: TargetsConfigDiagnostic = undefined;
     const maybe_config = try TargetsConfig.fromAST(allocator, ast, &diagnostic);
     try testing.expect(maybe_config != null);
 
@@ -1192,21 +1356,22 @@ fn expectInvalidTargetPath(
 
     try testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-    var diagnostic: InvalidTargetPathDiagnostic = undefined;
+    var diagnostic: TargetsConfigDiagnostic = undefined;
     const result = TargetsConfig.fromAST(allocator, ast, &diagnostic);
     if (result) |maybe_config| {
         if (maybe_config) |config| config.deinit(allocator);
         return error.TestExpectedError;
     } else |err| {
-        try testing.expectEqual(error.InvalidTargetPath, err);
+        try testing.expectEqual(error.InvalidTargetConfig, err);
     }
 
-    try testing.expectEqual(expected_field, diagnostic.field);
-    try testing.expectEqual(expected_problem, diagnostic.problem);
-    try testing.expectEqualStrings(expected_path, diagnostic.path);
+    const path_diagnostic = diagnostic.path;
+    try testing.expectEqual(expected_field, path_diagnostic.field);
+    try testing.expectEqual(expected_problem, path_diagnostic.problem);
+    try testing.expectEqualStrings(expected_path, path_diagnostic.path);
     try testing.expectEqualStrings(
         expected_path,
-        source_copy[diagnostic.region.start.offset..diagnostic.region.end.offset],
+        source_copy[path_diagnostic.region.start.offset..path_diagnostic.region.end.offset],
     );
 }
 
@@ -1292,6 +1457,114 @@ test "fromAST rejects inputs_dir with UNC prefix" {
     , .inputs_dir, .windows_prefix, "\\\\\\\\server\\\\share");
 }
 
+fn expectInvalidTargetEntry(
+    comptime targets: []const u8,
+    expected_problem: TargetEntryProblem,
+    expected_target: RocTarget,
+    expected_name: []const u8,
+) (Allocator.Error || error{ TestExpectedEqual, TestExpectedError })!void {
+    const allocator = testing.allocator;
+
+    const source_copy = try allocator.dupe(u8, platformSourceWithTargets(targets));
+    defer allocator.free(source_copy);
+
+    var env = try base.CommonEnv.init(allocator, source_copy);
+    defer env.deinit(allocator);
+
+    const ast = try parse.file(allocator, &env);
+    defer ast.deinit();
+
+    try testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    var diagnostic: TargetsConfigDiagnostic = undefined;
+    const result = TargetsConfig.fromAST(allocator, ast, &diagnostic);
+    if (result) |maybe_config| {
+        if (maybe_config) |config| config.deinit(allocator);
+        return error.TestExpectedError;
+    } else |err| {
+        try testing.expectEqual(error.InvalidTargetConfig, err);
+    }
+
+    const entry_diagnostic = diagnostic.entry;
+    try testing.expectEqual(expected_problem, entry_diagnostic.problem);
+    try testing.expectEqual(expected_target, entry_diagnostic.target);
+    try testing.expectEqualStrings(expected_name, entry_diagnostic.field_name);
+    try testing.expectEqualStrings(
+        expected_name,
+        source_copy[entry_diagnostic.region.start.offset..entry_diagnostic.region.end.offset],
+    );
+}
+
+test "fromAST rejects an unknown target field" {
+    try expectInvalidTargetEntry(
+        \\        wasm32: { inputs: ["host.wasm", app], exports: [], stack_first: False },
+        \\
+    , .unknown_field, .wasm32, "stack_first");
+}
+
+test "fromAST rejects a field given twice, including through its other spelling" {
+    try expectInvalidTargetEntry(
+        \\        wasm32: { inputs: ["host.wasm", app], exports: [], minimum_memory: 65536, initial_memory: 131072 },
+        \\
+    , .duplicate_field, .wasm32, "initial_memory");
+}
+
+test "fromAST rejects a wasm field on a native target" {
+    try expectInvalidTargetEntry(
+        \\        x64linux: { inputs: ["host.o", app], global_base: 1024 },
+        \\
+    , .wasm_only_field, .x64linux, "global_base");
+}
+
+test "fromAST rejects an unknown input identifier" {
+    try expectInvalidTargetEntry(
+        \\        x64linux: { inputs: ["host.o", ap] },
+        \\
+    , .unknown_input, .x64linux, "ap");
+}
+
+test "fromAST rejects an unknown output kind" {
+    try expectInvalidTargetEntry(
+        \\        x64linux: { inputs: ["host.o", app], output: Library },
+        \\
+    , .expected_output_kind, .x64linux, "output");
+}
+
+test "fromAST rejects an export that is not a string" {
+    try expectInvalidTargetEntry(
+        \\        wasm32: { inputs: ["host.wasm", app], exports: ["start", 7] },
+        \\
+    , .expected_export_names, .wasm32, "exports");
+}
+
+test "fromAST rejects an unknown import_memory tag" {
+    try expectInvalidTargetEntry(
+        \\        wasm32: { inputs: ["host.wasm", app], exports: [], import_memory: Shared },
+        \\
+    , .expected_import_memory, .wasm32, "import_memory");
+}
+
+test "fromAST rejects a memory size that is not a whole number" {
+    try expectInvalidTargetEntry(
+        \\        wasm32: { inputs: ["host.wasm", app], exports: [], maximum_memory: "lots" },
+        \\
+    , .expected_unsigned_integer, .wasm32, "maximum_memory");
+}
+
+test "fromAST rejects a global_base literal outside u32" {
+    try expectInvalidTargetEntry(
+        \\        wasm32: { inputs: ["host.wasm", app], exports: [], global_base: 0x1_0000_0000 },
+        \\
+    , .integer_out_of_range, .wasm32, "global_base");
+}
+
+test "fromAST rejects a zero global_base" {
+    try expectInvalidTargetEntry(
+        \\        wasm32: { inputs: ["host.wasm", app], exports: [], global_base: 0 },
+        \\
+    , .expected_positive_integer, .wasm32, "global_base");
+}
+
 test "fromAST accepts nested relative target paths" {
     const allocator = testing.allocator;
 
@@ -1310,7 +1583,7 @@ test "fromAST accepts nested relative target paths" {
 
     try testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 
-    var diagnostic: InvalidTargetPathDiagnostic = undefined;
+    var diagnostic: TargetsConfigDiagnostic = undefined;
     const config = (try TargetsConfig.fromAST(allocator, ast, &diagnostic)) orelse return error.TestUnexpectedResult;
     defer config.deinit(allocator);
 

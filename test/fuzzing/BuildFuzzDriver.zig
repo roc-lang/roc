@@ -23,8 +23,7 @@ pub const Mode = enum {
     well_typed,
     /// Programs where a few constructs are written so that checking rejects
     /// them. A rejected program must still lower to LIR, with checked
-    /// crashes in place of the rejected code, unless an import cycle keeps
-    /// its app from being checked at all.
+    /// crashes in place of the rejected code.
     type_errors,
 };
 
@@ -122,12 +121,9 @@ pub fn run(buf: [*]u8, len: isize, debug: bool, mode: Mode) void {
         };
     }
 
-    // Only an import cycle keeps the app from being checked, and with it the
-    // program from existing; every other rejection must still lower.
+    // Every rejection, import cycles included, leaves the app checked, so the
+    // program must exist and lower.
     if (!build_env.executable_artifacts_finalized) {
-        for (type_error_sites) |site| {
-            if (site.err.preventsChecking()) return;
-        }
         if (!debug) FuzzHarness.printGeneratedFiles(generated_files);
         @panic("generated build fuzz app finished checking without a program");
     }

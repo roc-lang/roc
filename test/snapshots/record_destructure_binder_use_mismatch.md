@@ -8,7 +8,7 @@ type=snippet
 first_tag : { name : Str, tags : List(Str) } -> Str
 first_tag = |item| {
 	{ tags, .. } = item
-	tags
+	Str.concat(tags, "!")
 }
 ~~~
 # EXPECTED
@@ -47,7 +47,7 @@ TYPE MISMATCH - record_destructure_binder_use_mismatch.md:3:4:3:8
 LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseCurly,OpArrow,UpperIdent,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
 OpenCurly,LowerIdent,Comma,DoubleDot,CloseCurly,OpAssign,LowerIdent,
-LowerIdent,
+UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,Comma,StringStart,StringPart,StringEnd,CloseRound,
 CloseCurly,
 EndOfFile,
 ~~~
@@ -78,7 +78,11 @@ EndOfFile,
 								(field (name "tags") (rest false))
 								(field (rest true)))
 							(e-ident (raw "item")))
-						(e-ident (raw "tags"))))))))
+						(e-apply
+							(e-ident (raw "Str.concat"))
+							(e-ident (raw "tags"))
+							(e-string
+								(e-string-part (raw "!"))))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -94,7 +98,12 @@ NO CHANGE
 				(p-assign (ident "item")))
 			(e-block
 				(s-runtime-error (tag "erroneous_value_expr"))
-				(e-runtime-error (tag "erroneous_value_use"))))
+				(e-call (constraint-fn-var 268)
+					(e-lookup-external
+						(builtin))
+					(e-runtime-error (tag "erroneous_value_use"))
+					(e-string
+						(e-literal (string "!"))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-record

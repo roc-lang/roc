@@ -330,7 +330,7 @@ fn rawSyscall3(number: usize, arg1: usize, arg2: usize, arg3: usize) usize {
 
 fn rawExit(code: usize) noreturn {
     _ = rawSyscall1(syscall_number.exit, code);
-    unreachable;
+    unreachable; // the exit syscall terminates the process instead of returning
 }
 
 fn isSyscallError(value: usize) bool {

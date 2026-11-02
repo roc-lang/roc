@@ -118,6 +118,31 @@ the same.
 An [`expect`](#expect) cannot reassign a `var` declared outside of it. (See
 [control flow and variables inside `expect`](#expect-control-flow).)
 
+Only an assignment with `=` changes a `var`. A [`match`](pattern-matching) branch
+pattern or a [`for`](loops) pattern can't bind a `var` at all, so this gives an
+error at compile time:
+
+```roc
+var $latest = ""
+
+for $latest in names { # Error: a for pattern can't bind a var
+    …
+}
+```
+
+That's because a pattern there looks like it might change the `var` but doesn't
+read like an assignment, so it's not obvious whether the `var` changes. Bind an
+ordinary name in the pattern, and assign it to the `var` with `=` if you want the
+`var` to change:
+
+```roc
+var $latest = ""
+
+for name in names {
+    $latest = name
+}
+```
+
 ## [`import`](#import) {#import}
 
 The `import` statement imports a [type](types) into scope from a [type module](modules#type-modules).
@@ -337,7 +362,7 @@ The `break` statement immediately exits the innermost `for` or `while` loop. See
 
 ## [`continue`](#continue) {#continue}
 
-(This has not been implemented yet. It will continue to the next iteration of a `for` or `while` loop.)
+⚠️ `continue` is planned for after 0.1.0 and has not been implemented yet. It is intended to skip to the next iteration of a `for` or `while` loop.
 
 ## [`crash`](#crash) {#crash}
 

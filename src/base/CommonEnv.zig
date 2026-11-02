@@ -7,7 +7,6 @@
 const std = @import("std");
 const invariant = @import("invariant.zig").invariant;
 const Allocator = std.mem.Allocator;
-const builtin = @import("builtin");
 const collections = @import("collections");
 
 const Ident = @import("Ident.zig");
@@ -147,19 +146,10 @@ pub const Serialized = extern struct {
     ) Allocator.Error!CommonEnv {
         const frozen = self.deserializeInto(base_addr, source);
 
-        // `enableRuntimeInserts` copies the interner's bytes and hash table;
-        // the parallel attribute column is copied here so `genUnique` can
-        // extend both halves of an owned store and `deinit` releases both.
+        // `enableRuntimeInserts` copies the interner's columns into owned,
+        // growable memory that `deinit` releases.
         var idents = frozen.idents;
         try idents.enableRuntimeInserts(gpa);
-        idents.attributes = frozen.idents.attributes.clone(gpa) catch |err| {
-            // The interner copy above is owned now, but the attribute column
-            // still aliases the serialized buffer, so it is emptied before the
-            // store is released rather than freed through this allocator.
-            idents.attributes = .{};
-            idents.deinit(gpa);
-            return err;
-        };
         errdefer idents.deinit(gpa);
 
         var strings = try frozen.strings.clone(gpa);
@@ -253,11 +243,7 @@ pub fn getString(self: *const CommonEnv, idx: StringLiteral.Idx) []const u8 {
 
 fn assertStringsInsertable(self: *const CommonEnv) void {
     if (self.strings_insertable) return;
-
-    if (comptime builtin.mode == .debug) {
-        invariant("CommonEnv invariant violated: attempted to insert into frozen string literal store", .{});
-    }
-    unreachable;
+    invariant("CommonEnv invariant violated: attempted to insert into frozen string literal store", .{});
 }
 
 /// Adds an identifier to the exposed items list by its index.

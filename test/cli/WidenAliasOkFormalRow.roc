@@ -1,15 +1,11 @@
-# A negative control for the alias type-argument walk.
-# `OkRes(a) : Try(a, [IoErr])` puts its formal in the `Try`'s OK position, and
-# the result-row widening adapter NEVER re-tags that cell:
-# `resultRowWideningOrNull` widens only `args[1]` and relates every other
-# argument exactly (src/postcheck/monotype/lower.zig:1806-1812), and
-# `hostedTryReturnInjectionExpr` rejects an Ok-type change outright.
-#
-# So `applyTryErrorArgIndex` must decline this alias and the row must be
-# contributed as written: the body use that widens it is an ordinary type
-# mismatch at the use rather than a widening no lowering can express. Without
-# this control the alias walk would be indistinguishable from "open every
-# argument of every alias over `Try`".
+# An alias whose formal sits in the `Try`'s OK position. Per-use opening is
+# withheld from that position, so `x.status()` has the closed ok row the where
+# clause writes. The ok row is within the row coercion's reach (a tag payload
+# of `Try`'s backing), so the body's value relates to the annotated result
+# through a widening copy and crosses into it through a row coercion
+# (design.md "Row Subsumption"): the body use widens the ok row rather than
+# rejecting it, and the two ok rows are one row on every backend (design.md
+# "Row Joins").
 WidenAliasOkFormalRow := {}
 
 OkRes(a) : Try(a, [IoErr])
@@ -25,4 +21,4 @@ Job := [Pending].{
     status = |_| closed_value
 }
 
-main = describe(Job.Pending)
+expect describe(Job.Pending) == Ok(Red)

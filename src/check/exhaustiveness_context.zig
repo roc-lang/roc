@@ -8,7 +8,6 @@ const ProblemStore = @import("problem/store.zig").Store;
 pub const SiteKind = enum {
     match,
     destructure,
-    if_,
 };
 
 /// Returns whether checking records a static pending diagnostic for this site.
@@ -17,7 +16,6 @@ pub fn siteHasPendingStaticDiagnostic(kind: SiteKind) bool {
         .match,
         .destructure,
         => true,
-        .if_ => false,
     };
 }
 
@@ -26,7 +24,6 @@ pub fn siteCanBeObservedAtCompileTime(kind: SiteKind) bool {
     return switch (kind) {
         .match,
         .destructure,
-        .if_,
         => true,
     };
 }
@@ -93,9 +90,7 @@ test "compile-time exhaustiveness context records active roots" {
 test "site kinds declare whether they have checked pending diagnostics" {
     try std.testing.expect(siteHasPendingStaticDiagnostic(.match));
     try std.testing.expect(siteHasPendingStaticDiagnostic(.destructure));
-    try std.testing.expect(!siteHasPendingStaticDiagnostic(.if_));
 
     try std.testing.expect(siteCanBeObservedAtCompileTime(.match));
     try std.testing.expect(siteCanBeObservedAtCompileTime(.destructure));
-    try std.testing.expect(siteCanBeObservedAtCompileTime(.if_));
 }

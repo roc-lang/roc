@@ -193,11 +193,11 @@ NO CHANGE
 	(defs
 		(patt (type "[Ok({})]"))
 		(patt (type "[Ok({})]"))
-		(patt (type "({}) -> [Ok({})]"))
-		(patt (type "({}) -> [Ok({})]")))
+		(patt (type "() -> [Ok({})]"))
+		(patt (type "() -> [Ok({})]")))
 	(expressions
 		(expr (type "[Ok({})]"))
 		(expr (type "[Ok({})]"))
-		(expr (type "({}) -> [Ok({})]"))
-		(expr (type "({}) -> [Ok({})]"))))
+		(expr (type "() -> [Ok({})]"))
+		(expr (type "() -> [Ok({})]"))))
 ~~~

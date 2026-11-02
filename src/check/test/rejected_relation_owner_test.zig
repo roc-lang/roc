@@ -49,7 +49,7 @@ test "a destructured binder whose use demands another type rejects its binding s
         \\first_tag : { name : Str, tags : List(Str) } -> Str
         \\first_tag = |item| {
         \\    { tags, .. } = item
-        \\    tags
+        \\    Str.concat(tags, "!")
         \\}
         \\
         \\name_of : { name : Str, tags : List(Str) } -> Str

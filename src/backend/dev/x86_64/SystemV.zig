@@ -7,6 +7,7 @@ const std = @import("std");
 const Registers = @import("Registers.zig");
 const GeneralReg = Registers.GeneralReg;
 const FloatReg = Registers.FloatReg;
+const abi = @import("layout").abi;
 
 /// System V AMD64 ABI calling convention
 pub const SystemV = @This();
@@ -43,6 +44,11 @@ pub const FLOAT_PARAM_REGS = [_]FloatReg{
 pub const FLOAT_RETURN_REGS = [_]FloatReg{
     .XMM0, .XMM1,
 };
+
+comptime {
+    std.debug.assert(GENERAL_PARAM_REGS.len == abi.sysv_gp_registers);
+    std.debug.assert(FLOAT_PARAM_REGS.len == abi.simd_argument_registers);
+}
 
 /// Caller-saved (volatile) general registers
 /// These registers may be modified by a called function

@@ -148,7 +148,6 @@ const Pass = struct {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
@@ -294,7 +293,6 @@ fn referenceCount(stmt: LIR.CFStmt) ?struct { LocalId, LIR.CFStmtId } {
         .set_local,
         .debug,
         .expect,
-        .comptime_branch_taken,
         .free,
         .jump,
         .ret,
@@ -324,10 +322,7 @@ fn verifyNothingToElide(gpa: Allocator, store: *LirStore) Allocator.Error!void {
 }
 
 fn immortalInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) {
-        invariant("{s}", .{"immortal locals invariant violated: " ++ message});
-    }
-    unreachable;
+    invariant("{s}", .{"immortal locals invariant violated: " ++ message});
 }
 
 test {

@@ -12,7 +12,7 @@ test "issue 12318: undetermined type from an interpolation beside a quote report
     ;
     var env = try TestEnv.init("Test", source);
     defer env.deinit();
-    try env.assertOneTypeErrorHighlightsWithin("Type Not Determined", .{ .line = 1, .start_column = 5, .end_column = 15 });
+    try env.assertOneTypeErrorHighlightsWithin("Missing Method", .{ .line = 1, .start_column = 5, .end_column = 15 });
 }
 
 test "issue 12318: undetermined type from an interpolation in a body reports at the interpolation" {
@@ -24,5 +24,5 @@ test "issue 12318: undetermined type from an interpolation in a body reports at 
     ;
     var env = try TestEnv.init("Test", source);
     defer env.deinit();
-    try env.assertOneTypeErrorHighlightsWithin("Type Not Determined", .{ .line = 2, .start_column = 9, .end_column = 17 });
+    try env.assertOneTypeErrorHighlightsWithin("Missing Method", .{ .line = 2, .start_column = 9, .end_column = 17 });
 }

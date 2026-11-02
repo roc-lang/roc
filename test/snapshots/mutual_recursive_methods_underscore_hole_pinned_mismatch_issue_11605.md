@@ -67,7 +67,19 @@ TYPE MISMATCH - mutual_recursive_methods_underscore_hole_pinned_mismatch_issue_1
 			(annotation-start code-block)
 			(indent 1)
 			(text "Str")
-			(annotation-end))))
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Convert it to a")
+			(reflow " ")
+			(annotated code "Str")
+			(reflow " ")
+			(reflow "with")
+			(reflow " ")
+			(annotated code ".to_str()")
+			(reflow "."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -229,7 +241,7 @@ Client(effects) := { effects : effects }.{
 	first = |client, items, n| {
 		pinned : List(Str)
 		pinned = items
-		if n == 0 Ok(Str.join_with(pinned, "")) else second(client, items, n - 1)
+		if (n == 0) Ok(Str.join_with(pinned, "")) else second(client, items, n - 1)
 	}
 
 	second : Client(_), List(_), U64 -> Try(Str, [Refused(Str), ..others])
