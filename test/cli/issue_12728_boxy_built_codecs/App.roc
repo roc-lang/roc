@@ -20,6 +20,60 @@ Wrap(a) := { inner : a }.{
 	}
 }
 
+# A custom format's method names neither the format nor the state its callback
+# threads, so a stored encoder's own type reaches neither. Its evidence selected
+# the method, whose owner is the format.
+Format := [Format].{
+	encode_list : Str, U64, ({ text : Str }, ({ text : Str }, (Str -> Try(Str, err)) -> Try({ text : Str }, err)) -> Try({ text : Str }, err)) -> Try(Str, err)
+	encode_list = |state, count, write_items| {
+		write = |current, write_item| {
+			match write_item(current.text) {
+				Ok(text) => Ok({ text: Str.concat(text, ";") })
+				Err(err) => Err(err)
+			}
+		}
+		match write_items({ text: Str.concat(Str.concat(state, Str.inspect(count)), ":") }, write) {
+			Ok(done) => Ok(done.text)
+			Err(err) => Err(err)
+		}
+	}
+}
+
+Tagged(tag) := [Tagged].{
+	encode_list : Str, U64, ({ text : Str }, ({ text : Str }, (Str -> Try(Str, err)) -> Try({ text : Str }, err)) -> Try({ text : Str }, err)) -> Try(Str, err)
+	encode_list = |state, _count, write_items| {
+		write = |current, write_item| {
+			match write_item(current.text) {
+				Ok(text) => Ok({ text: Str.concat(text, "|") })
+				Err(err) => Err(err)
+			}
+		}
+		match write_items({ text: Str.concat(state, "<") }, write) {
+			Ok(done) => Ok(Str.concat(done.text, ">"))
+			Err(err) => Err(err)
+		}
+	}
+}
+
+Item := { value : I64 }.{
+	encoder_for : encoding -> (Item, Str -> Try(Str, err))
+	encoder_for = |_| |self, state| Ok(Str.concat(state, Str.inspect(self.value)))
+}
+
+format_encoder : {} -> (a, Str -> Try(Str, []))
+	where [a.encoder_for : Format -> (a, Str -> Try(Str, []))]
+format_encoder = |{}| {
+	A : a
+	A.encoder_for(Format.Format)
+}
+
+tagged_encoder : {} -> (a, Str -> Try(Str, []))
+	where [a.encoder_for : Tagged(U8) -> (a, Str -> Try(Str, []))]
+tagged_encoder = |{}| {
+	A : a
+	A.encoder_for(Tagged.Tagged)
+}
+
 parser : {} -> (Str -> Try(a, [InvalidJson(Str)])) where [a.Json.Parseable([InvalidJson(Str)])]
 parser = |{}| |text| Json.parse(text)
 
@@ -53,6 +107,15 @@ stored_nested_list_encoder = encoder({})
 stored_wrap_encoder : Wrap(List(Str)) -> Str
 stored_wrap_encoder = encoder({})
 
+stored_format_encoder : List(Item), Str -> Try(Str, [])
+stored_format_encoder = format_encoder({})
+
+stored_nested_format_encoder : List(List(Item)), Str -> Try(Str, [])
+stored_nested_format_encoder = format_encoder({})
+
+stored_tagged_encoder : List(Item), Str -> Try(Str, [])
+stored_tagged_encoder = tagged_encoder({})
+
 main! = |args| {
 	count = Str.inspect(args.len())
 	quoted = Str.inspect(count)
@@ -78,5 +141,9 @@ main! = |args| {
 	Stdout.line!(stored_list_encoder([args.len().to_i64_wrap()]))
 	Stdout.line!(stored_nested_list_encoder([[count]]))
 	Stdout.line!(stored_wrap_encoder(Wrap.{ inner: [count] }))
+	items = [Item.{ value: 7 }, Item.{ value: args.len().to_i64_wrap() }]
+	Stdout.line!(Str.inspect(stored_format_encoder(items, "items=")))
+	Stdout.line!(Str.inspect(stored_nested_format_encoder([items, []], "nested=")))
+	Stdout.line!(Str.inspect(stored_tagged_encoder(items, "tagged=")))
 	Ok({})
 }

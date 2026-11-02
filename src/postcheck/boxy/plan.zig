@@ -1024,6 +1024,12 @@ pub const StoredFnSource = struct {
     fn_id: checked.ConstFnId,
 };
 
+const StoredEvidenceSubstitutionKey = struct {
+    stored: StoredFnSource,
+    worker: WorkerPlanId,
+    relation: Span,
+};
+
 const StoredCodecEdgeKey = struct {
     store: PlanModuleId,
     edge: check.ConstStore.StoredCodecEdge,
@@ -4163,6 +4169,9 @@ const Builder = struct {
     quantified_variables: std.AutoHashMap(CheckedTypeIdentity, void),
     /// The stored function whose use is having its dictionaries planned.
     active_stored_fn: ?StoredFnSource = null,
+    /// The worker of `active_stored_fn`'s use, whose lexical scopes its stored
+    /// evidence frames follow.
+    active_stored_worker: ?WorkerPlanId = null,
     /// The scheme substitution relating that stored function's worker to its
     /// use's type, standing in for the site substitution checking records
     /// at an instantiating use.
@@ -4170,6 +4179,7 @@ const Builder = struct {
     /// Variable bindings of a stored-type instance check in progress.
     stored_instance_bindings: ?*StoredInstanceBindings = null,
     stored_use_substitutions: std.AutoHashMapUnmanaged(u64, Span) = .empty,
+    stored_evidence_substitutions: std.AutoHashMapUnmanaged(StoredEvidenceSubstitutionKey, Span) = .empty,
     /// Stored codec edges already resolved in their storing module's import
     /// closure.
     stored_codec_edges: std.AutoHashMapUnmanaged(StoredCodecEdgeKey, StoredCodecEdgeIn) = .empty,
@@ -4370,6 +4380,7 @@ const Builder = struct {
         self.row_join_members.deinit();
         self.quantified_variables.deinit();
         self.stored_use_substitutions.deinit(self.allocator);
+        self.stored_evidence_substitutions.deinit(self.allocator);
         self.stored_codec_edges.deinit(self.allocator);
         self.nominal_declaration_formals.deinit();
         self.generated_callable_uses.deinit(self.allocator);
@@ -13503,6 +13514,23 @@ const Builder = struct {
         };
     }
 
+    /// The scheme variables of the template enclosing a nested worker.
+    fn nestedWorkerTemplateSchemeVars(self: *Builder, source: WorkerSource) ?WorkerSchemeVars {
+        const expr = switch (source) {
+            .nested_expr => |expr| expr,
+            .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator, .derived_map => return null,
+        };
+        const view = self.moduleForId(expr.module);
+        const site_expr = nestedCallableSiteExprFor(view, expr.expr) orelse expr.expr;
+        const site = for (view.nested_proc_sites.sites) |candidate| {
+            if (candidate.checked_expr == site_expr) break candidate;
+        } else return null;
+        return switch (site.owner) {
+            .template => |template| self.templateSchemeVars(template),
+            .default_root => null,
+        };
+    }
+
     fn templateSchemeVars(self: *Builder, template_ref: checked_names.ProcedureTemplateRef) WorkerSchemeVars {
         const view = self.moduleForCheckedModuleId(template_ref.artifact);
         const template = &view.checked_procedure_templates.templates.items[@backingInt(template_ref.template)];
@@ -14228,7 +14256,7 @@ const Builder = struct {
             if (args.len != params.len) boxyPlanInvariant("stored callable use did not plan every worker descriptor");
             const enclosing_start = worker.enclosing_descs.start - worker.hidden_descs.start;
             for (params[enclosing_start..][0..worker.enclosing_descs.len], args[enclosing_start..][0..worker.enclosing_descs.len]) |param, *arg| {
-                const rep = try self.storedCallableDescriptorRep(stored_fn, worker, value_rep, param.rep);
+                const rep = try self.storedCallableDescriptorRep(stored_fn, worker, use.hidden_dict_args, value_rep, param.rep);
                 arg.* = .{
                     .worker_desc = param.desc,
                     .worker_rep = param.rep,
@@ -14241,11 +14269,13 @@ const Builder = struct {
 
     /// The concrete representation a stored callable gives one worker
     /// descriptor representation. `value_rep` is the callable value's own
-    /// concrete function type.
+    /// concrete function type. A variable no value of the function reaches is
+    /// fixed by a method its dictionaries selected.
     fn storedCallableDescriptorRep(
         self: *Builder,
         stored_fn: StoredFnSource,
         worker: WorkerPlan,
+        hidden_dict_args: Span,
         value_rep: TypeRepId,
         desc_rep: TypeRepId,
     ) Allocator.Error!TypeRepId {
@@ -14265,7 +14295,40 @@ const Builder = struct {
                 boxyPlanInvariant("stored callable capture type was not analyzed");
             if (try self.repAtPosition(.type_position, capture.rep, desc_rep, persisted_rep)) |found| return found;
         }
+        if (try self.selectedMethodDescriptorRep(hidden_dict_args, desc_rep)) |found| return found;
         boxyPlanInvariant("stored callable worker descriptor was absent from its stored types");
+    }
+
+    /// The representation a call's planned dictionary methods give `desc_rep`,
+    /// where a requirement names it: relating the requirement to the selected
+    /// method's call types binds it.
+    fn selectedMethodDescriptorRep(self: *Builder, hidden_dict_args: Span, desc_rep: TypeRepId) Allocator.Error!?TypeRepId {
+        // Read by index: relating representations can grow these tables.
+        for (0..hidden_dict_args.len) |arg_index| {
+            const arg = self.plan.direct_call_hidden_dict_args.items[hidden_dict_args.start + arg_index];
+            if (arg.method_evidence.len != arg.worker_dictionaries.len) continue;
+            for (0..arg.method_evidence.len) |method_index| {
+                const method = self.plan.dictionary_method_evidence.items[arg.method_evidence.start + method_index];
+                if (method.resolution != .worker) continue;
+                const requirement = self.plan.dictionaries.items[arg.worker_dictionaries.start + method_index];
+                const requirement_rep = self.plan.repForSourceType(requirement.fn_ty) orelse
+                    boxyPlanInvariant("dictionary requirement type was not analyzed");
+                const function = self.repQuery().functionChildren(requirement_rep) orelse
+                    boxyPlanInvariant("dictionary requirement type was not callable");
+                const shape = try self.dictionaryMethodCallShape(method, method.instantiation_rep != null or method.instantiation_ret_type != null);
+                defer self.allocator.free(shape.arg_reps);
+                for (0..function.arg_count + 1) |position| {
+                    const requirement_position = if (position == function.arg_count)
+                        function.ret
+                    else
+                        self.plan.children.items[self.plan.representations.items[@backingInt(function.rep)].children.start + function.args_start + position].rep;
+                    const call_position = if (position == function.arg_count) shape.ret_rep else shape.arg_reps[position];
+                    const found = try self.repAtPosition(.type_position, requirement_position, desc_rep, call_position) orelse continue;
+                    if (!try self.plan.namesTypeVariable(self.allocator, found)) return found;
+                }
+            }
+        }
+        return null;
     }
 
     fn appendStoredCallableCaptureSources(
@@ -15733,11 +15796,18 @@ const Builder = struct {
             const worker = self.plan.workers.items[@backingInt(static_fn.worker)];
             if (worker.hidden_dicts.len == 0 or static_fn.hidden_dict_args.len != 0) continue;
             const outer_stored_fn = self.active_stored_fn;
+            const outer_stored_worker = self.active_stored_worker;
             const outer_stored_substitution = self.active_stored_substitution;
             self.active_stored_fn = .{ .module = static_fn.store_module, .fn_id = static_fn.fn_id };
-            self.active_stored_substitution = try self.staticFnSchemeRepSubstitutions(static_fn);
+            self.active_stored_worker = static_fn.worker;
+            self.active_stored_substitution = try self.storedEvidenceSubstitution(
+                self.active_stored_fn.?,
+                static_fn.worker,
+                try self.staticFnSchemeRepSubstitutions(static_fn),
+            );
             defer {
                 self.active_stored_fn = outer_stored_fn;
+                self.active_stored_worker = outer_stored_worker;
                 self.active_stored_substitution = outer_stored_substitution;
             }
             const hidden_dict_args = try self.materializeWorkerHiddenDictionaryArgsAtCallTypes(
@@ -17658,15 +17728,21 @@ const Builder = struct {
     /// it when it instantiates the requirement against that method.
     fn bindRequirementVariables(self: *Builder, state: *DictionaryCallArgs) Allocator.Error!void {
         const worker = self.plan.workers.items[@backingInt(state.worker_id)];
-        const scheme = self.workerSchemeVars(worker.source) orelse return;
         var bound = collections.DenseMapUnmanaged(TypeRepId, TypeRepId).empty;
         defer bound.deinit(self.allocator);
         var scheme_reps = collections.DenseMapUnmanaged(TypeRepId, void).empty;
         defer scheme_reps.deinit(self.allocator);
-        for (scheme.vars) |scheme_var| {
-            const rep = self.plan.repForSourceType(typeRef(scheme.view, scheme_var)) orelse continue;
-            try scheme_reps.put(self.allocator, rep, {});
+        // A stored function's dictionaries are planned at its use, where no
+        // frame of the template that built it binds that template's variables.
+        const enclosing = if (self.active_stored_worker == state.worker_id) self.nestedWorkerTemplateSchemeVars(worker.source) else null;
+        for ([_]?WorkerSchemeVars{ self.workerSchemeVars(worker.source), enclosing }) |maybe_scheme| {
+            const scheme = maybe_scheme orelse continue;
+            for (scheme.vars) |scheme_var| {
+                const rep = self.plan.repForSourceType(typeRef(scheme.view, scheme_var)) orelse continue;
+                try scheme_reps.put(self.allocator, rep, {});
+            }
         }
+        if (scheme_reps.count() == 0) return;
         for (self.plan.schemeRepSubstitutionSlice(state.requirement_substitution)) |pair| {
             try bound.put(self.allocator, pair.scheme_rep, pair.site_rep);
         }
@@ -17699,7 +17775,8 @@ const Builder = struct {
                         self.plan.children.items[self.plan.representations.items[@backingInt(function.rep)].children.start + function.args_start + position].rep;
                     const call_position = if (position == function.arg_count) shape.ret_rep else shape.arg_reps[position];
                     const pairs = try self.storedUseSchemeRepSubstitutions(requirement_position, call_position);
-                    for (self.plan.schemeRepSubstitutionSlice(pairs)) |pair| {
+                    for (0..pairs.len) |pair_index| {
+                        const pair = self.plan.scheme_rep_substitutions.items[pairs.start + pair_index];
                         if (!scheme_reps.contains(pair.scheme_rep)) continue;
                         const entry = try bound.getOrPut(self.allocator, pair.scheme_rep);
                         if (entry.found_existing) continue;
@@ -20602,6 +20679,100 @@ const Builder = struct {
         return self.moduleForId(source.module).checked_types.rootKey(source.ty);
     }
 
+    /// A stored function use's substitution: the relation of its worker to its
+    /// type, and the owner of the method its evidence selected for each
+    /// requirement of the scopes enclosing the worker. A dispatcher that
+    /// reaches neither the function's type nor its captures, such as the format
+    /// of an encoder a generic method returned, is known only by that evidence.
+    fn storedEvidenceSubstitution(
+        self: *Builder,
+        stored: StoredFnSource,
+        worker_id: WorkerPlanId,
+        relation: Span,
+    ) Allocator.Error!Span {
+        const key = StoredEvidenceSubstitutionKey{ .stored = stored, .worker = worker_id, .relation = relation };
+        if (self.stored_evidence_substitutions.get(key)) |existing| return existing;
+        const span = try self.computeStoredEvidenceSubstitution(stored, worker_id, relation);
+        try self.stored_evidence_substitutions.put(self.allocator, key, span);
+        return span;
+    }
+
+    fn computeStoredEvidenceSubstitution(
+        self: *Builder,
+        stored: StoredFnSource,
+        worker_id: WorkerPlanId,
+        relation: Span,
+    ) Allocator.Error!Span {
+        const expr = switch (self.plan.workers.items[@backingInt(worker_id)].source) {
+            .nested_expr => |expr| expr,
+            .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator, .derived_map => return relation,
+        };
+        const view = self.moduleForId(expr.module);
+        const fn_value = (self.moduleForId(stored.module).const_store orelse boxyPlanInvariant("stored function had no ConstStore")).getFn(stored.fn_id);
+        var added = std.ArrayList(SchemeRepSubstitution).empty;
+        defer added.deinit(self.allocator);
+        var next_frame = fn_value.evidence_frame_head;
+        while (next_frame) |frame_index| {
+            const frame = fn_value.evidence_frames[frame_index];
+            next_frame = frame.parent;
+            const params = self.storedEvidenceFrameParams(view, expr.expr, frame.scope()) orelse continue;
+            if (frame.roots_len != params.len) boxyPlanInvariant("stored function evidence frame disagreed with its scope's scheme");
+            var cursor: usize = frame.roots_start;
+            params: for (params) |param| {
+                const entry = fn_value.evidence.nodes[cursor];
+                skipStoredEvidenceEntries(fn_value.evidence, &cursor, 1);
+                const target = switch (entry) {
+                    .target => |target_index| fn_value.evidence.target(target_index),
+                    .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => continue,
+                };
+                const scheme_rep = self.plan.repForSourceType(typeRef(view, param.dispatcher_ty)) orelse continue;
+                for (self.plan.schemeRepSubstitutionSlice(relation)) |pair| {
+                    if (pair.scheme_rep == scheme_rep) continue :params;
+                }
+                for (added.items) |pair| {
+                    if (pair.scheme_rep == scheme_rep) continue :params;
+                }
+                const target_view = self.moduleForKey(.{ .bytes = target.view.bytes });
+                const owner_type = methodTargetOwnerType(target_view, target.method) orelse continue;
+                try added.append(self.allocator, .{ .scheme_rep = scheme_rep, .site_rep = try self.analyzeType(target_view, owner_type) });
+            }
+        }
+        if (added.items.len == 0) return relation;
+        const start: u32 = @intCast(self.plan.scheme_rep_substitutions.items.len);
+        try self.plan.scheme_rep_substitutions.ensureUnusedCapacity(self.allocator, relation.len + added.items.len);
+        for (0..relation.len) |index| {
+            self.plan.scheme_rep_substitutions.appendAssumeCapacity(self.plan.scheme_rep_substitutions.items[relation.start + index]);
+        }
+        self.plan.scheme_rep_substitutions.appendSliceAssumeCapacity(added.items);
+        return .{ .start = start, .len = relation.len + @as(u32, @intCast(added.items.len)) };
+    }
+
+    /// The scheme requirements a stored evidence frame of the nested site
+    /// `expr` holds roots for.
+    fn storedEvidenceFrameParams(
+        self: *Builder,
+        view: ModuleView,
+        expr: checked.CheckedExprId,
+        scope: check.ConstStore.ConstFnEvidenceScope,
+    ) ?[]const static_dispatch.EvidenceParamRecord {
+        switch (scope) {
+            .generalized => |scope_index| {
+                const span = view.checked_procedure_templates.dispatch_scopes[scope_index].evidence_params;
+                return view.checked_procedure_templates.evidence_params_pool[span.start..][0..span.len];
+            },
+            .root => {
+                const site_expr = nestedCallableSiteExprFor(view, expr) orelse expr;
+                const site = for (view.nested_proc_sites.sites) |candidate| {
+                    if (candidate.checked_expr == site_expr) break candidate;
+                } else return null;
+                return switch (site.owner) {
+                    .template => |template| self.templateEvidenceParams(template).params,
+                    .default_root => null,
+                };
+            },
+        }
+    }
+
     /// The structural codec evidence a stored function retained for this
     /// dispatcher shape: the entry its value was produced with, resolved in
     /// the storing module's import closure.
@@ -21485,17 +21656,20 @@ const Builder = struct {
             }
             const evidence = self.checkedEvidenceForProcedureUse(use.use);
             const outer_stored_fn = self.active_stored_fn;
+            const outer_stored_worker = self.active_stored_worker;
             const outer_stored_substitution = self.active_stored_substitution;
             self.active_stored_fn = use.stored_fn;
+            self.active_stored_worker = use.worker;
             // A stored function's value was produced at one instantiation of
             // its worker, which its use's type fixes: the substitution checking
             // records at an instantiating use comes from relating the two.
-            self.active_stored_substitution = if (use.stored_fn != null)
-                try self.storedUseSchemeRepSubstitutions(worker.rep, callable_rep)
+            self.active_stored_substitution = if (use.stored_fn) |stored|
+                try self.storedEvidenceSubstitution(stored, use.worker, try self.storedUseSchemeRepSubstitutions(worker.rep, callable_rep))
             else
                 null;
             defer {
                 self.active_stored_fn = outer_stored_fn;
+                self.active_stored_worker = outer_stored_worker;
                 self.active_stored_substitution = outer_stored_substitution;
             }
             const planned_hidden_dict_args = try self.materializeWorkerCallHiddenDictionaryArgsWithEvidence(
@@ -23713,6 +23887,27 @@ fn methodOwnerForModuleType(view: ModuleView, ty: checked.CheckedTypeId) ?static
         if (payload != .alias) return methodOwnerForCheckedPayload(payload);
         current = payload.alias.backing;
     }
+}
+
+/// The type of the owner the method registry files a target under in `view`,
+/// the module declaring the target: the owner's one type, or its declared form
+/// when its arguments are variables, which the target selected at no argument.
+fn methodTargetOwnerType(view: ModuleView, target: static_dispatch.MethodTarget) ?checked.CheckedTypeId {
+    const owner = for (view.method_registry.entries) |entry| {
+        const registered = entry.target orelse continue;
+        if (registered.module_idx == target.module_idx and registered.def_idx == target.def_idx) break entry.key.owner;
+    } else return null;
+    for (0..view.checked_types.payloadCount()) |index| {
+        const ty: checked.CheckedTypeId = @fromBackingInt(@intCast(index));
+        const payload = view.checked_types.payload(ty);
+        if (payload != .nominal or !std.meta.eql(methodOwnerForCheckedPayload(payload), owner)) continue;
+        const generic = for (payload.nominal.args) |arg| {
+            const arg_payload = view.checked_types.payload(arg);
+            if (arg_payload != .flex and arg_payload != .rigid) break false;
+        } else true;
+        if (generic) return ty;
+    }
+    return null;
 }
 
 /// The method owner a resolved (non-alias) checked type payload dispatches on.
