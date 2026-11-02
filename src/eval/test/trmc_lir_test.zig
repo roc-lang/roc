@@ -1393,6 +1393,7 @@ test "tail-call proof consumes the explicit boxy adapter operation" {
     const allocator = std.testing.allocator;
     for ([_]lir.Program.BoxyAdapterOperation{ .relabel, .materialize }) |operation| {
         var store = LirStore.init(allocator);
+        store.runtime_contract = .boxy;
         defer store.deinit();
         var b = ProcBuilder.init(&store);
         defer b.deinit(allocator);

@@ -243,7 +243,7 @@ pub const LiteralDemand = struct {
                     }
                     switch (node.nested) {
                         .resolved => try pending.appendSlice(allocator, plans.nestedEvidence(node)),
-                        .from_callable => return Flags.all,
+                        .from_callable, .through_alias => return Flags.all,
                     }
                 },
                 .structural, .checked_error, .unreachable_value => {},
@@ -502,6 +502,7 @@ const Builder = struct {
             switch (node.nested) {
                 .resolved => for (plans.nestedEvidence(node)) |nested| try self.addCheckedEvidence(from, plans, nested, &pending),
                 .from_callable => self.markUnbounded(from, "callable nested evidence"),
+                .through_alias => self.markUnbounded(from, "evidence composed through a procedure alias"),
             }
         }
     }

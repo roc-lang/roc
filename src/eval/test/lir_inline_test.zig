@@ -157,6 +157,7 @@ const LowerModuleOptions = struct {
     tag_reachability: bool = false,
     promote_loop_appends: bool = true,
     prove_ranges: bool = false,
+    spec_constr_clone_inlining: lir.CheckedPipeline.SpecConstrCloneInlining = .all_calls,
     imports: []const helpers.ModuleSource = &.{},
     /// TEMPORARY SCAFFOLDING: rewrites the root module's checked bodies after
     /// checking and before lowering, for post-check forms no checker site emits
@@ -215,6 +216,7 @@ fn lowerModuleWithOptions(
             .promote_loop_appends = .{ .value = options.promote_loop_appends },
             .prove_ranges = options.prove_ranges,
             .tag_reachability = options.tag_reachability,
+            .spec_constr_clone_inlining = options.spec_constr_clone_inlining,
         },
     );
     errdefer lowered.deinit();
@@ -1249,6 +1251,11 @@ fn expectInlinePlanDecision(
     fn_name: []const u8,
     expected: bool,
 ) TestError!void {
+    try std.testing.expectEqual(expected, try inlinePlanDecision(source, fn_name));
+}
+
+/// Whether the inline plan inlines the function named `fn_name`.
+fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
     const allocator = std.testing.allocator;
     var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
@@ -1297,18 +1304,19 @@ fn expectInlinePlanDecision(
     defer inline_plan.deinit();
     const plan = inline_plan.view();
 
-    var found = false;
+    var decision: ?bool = null;
     for (solved.lifted.fnsView(), 0..) |fn_, index| {
         const name_id = solved.lifted.procDebugName(fn_.symbol) orelse continue;
         const actual_name = solved.lifted.names.exportNameText(name_id);
         if (!std.mem.eql(u8, actual_name, fn_name)) continue;
 
-        found = true;
         const fn_id: postcheck.MonotypeLifted.Ast.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-        try std.testing.expectEqual(expected, plan.bodyForFn(fn_id) != null);
+        const inlined = plan.bodyForFn(fn_id) != null;
+        if (decision) |earlier| try std.testing.expectEqual(earlier, inlined);
+        decision = inlined;
     }
 
-    try std.testing.expect(found);
+    return decision orelse error.TestUnexpectedResult;
 }
 
 fn rootProc(lowered: *const lir.CheckedPipeline.LoweredProgram) TestError!LIR.LirProcSpecId {
@@ -1716,11 +1724,22 @@ fn markReachableLiftedStmt(
     }
 }
 
-fn directRecordWorkerIsSpecialized(shape: ProcShape) bool {
-    return shape.arg_count == 2 and
-        shape.self_call_count == 0 and
+/// A specialized loop over `leaves` state leaves: a worker taking the leaves
+/// as its arguments, or that worker localized as a join in a caller that
+/// takes no arguments, which happens when the caller is the worker's only
+/// user.
+fn loopCarriesLeaves(shape: ProcShape, leaves: usize) bool {
+    return shape.self_call_count == 0 and
         shape.jump_count >= 1 and
-        shape.struct_assign_count == 0;
+        (shape.arg_count == leaves or (shape.arg_count == 0 and shape.max_join_param_count >= leaves));
+}
+
+fn loopCarriesTwoLeaves(shape: ProcShape) bool {
+    return loopCarriesLeaves(shape, 2);
+}
+
+fn directRecordWorkerIsSpecialized(shape: ProcShape) bool {
+    return loopCarriesTwoLeaves(shape) and shape.struct_assign_count == 0;
 }
 
 fn directRecordWorkerIsGeneric(shape: ProcShape) bool {
@@ -1745,23 +1764,31 @@ fn whileRecordStateWorkerIsGeneric(shape: ProcShape) bool {
         shape.jump_count >= 2;
 }
 
-/// The shape aggregate loop state takes without call specialization now that
-/// join scalarization sees through lowered aliases: the loop carries the
-/// fields as separate join parameters, while the seeded initializer builds
-/// remain live outside the loop.
+/// The shape aggregate loop state takes without call specialization: join
+/// scalarization carries the fields as separate join parameters. Pruning then
+/// deletes the initializer builds that only fed them, so the loop has the
+/// specialized worker's shape.
 fn whileRecordStateWorkerIsScalarizedUnspecialized(shape: ProcShape) bool {
     return shape.self_call_count == 0 and
         shape.join_count >= 1 and
         shape.max_join_param_count >= 2 and
+        shape.jump_count >= 2;
+}
+
+/// Loop state of a counter and a zero-capture callable without call
+/// specialization: the callable's field is a parameter nothing reads, so
+/// pruning removes it, and the loop carries only the counter and builds no
+/// struct.
+fn whileRecordStateWithUnreadCallableIsScalarized(shape: ProcShape) bool {
+    return shape.self_call_count == 0 and
+        shape.join_count >= 1 and
+        shape.max_join_param_count == 1 and
         shape.jump_count >= 2 and
-        shape.struct_assign_count >= 1;
+        shape.struct_assign_count == 0;
 }
 
 fn directTupleWorkerIsSpecialized(shape: ProcShape) bool {
-    return shape.arg_count == 2 and
-        shape.self_call_count == 0 and
-        shape.jump_count >= 1 and
-        shape.struct_assign_count == 0;
+    return loopCarriesTwoLeaves(shape) and shape.struct_assign_count == 0;
 }
 
 fn directTupleWorkerIsGeneric(shape: ProcShape) bool {
@@ -1798,10 +1825,7 @@ fn unusedStateWorkerIsGeneric(shape: ProcShape) bool {
 }
 
 fn taggedStepWorkerIsSpecialized(shape: ProcShape) bool {
-    return shape.arg_count == 2 and
-        shape.self_call_count == 0 and
-        shape.jump_count >= 1 and
-        shape.tag_assign_count == 0;
+    return loopCarriesTwoLeaves(shape) and shape.tag_assign_count == 0;
 }
 
 fn taggedStepWorkerIsGeneric(shape: ProcShape) bool {
@@ -1812,10 +1836,7 @@ fn taggedStepWorkerIsGeneric(shape: ProcShape) bool {
 }
 
 fn multiTupleWorkerIsFullySpecialized(shape: ProcShape) bool {
-    return shape.arg_count == 5 and
-        shape.self_call_count == 0 and
-        shape.jump_count >= 1 and
-        shape.struct_assign_count == 0;
+    return loopCarriesLeaves(shape, 5) and shape.struct_assign_count == 0;
 }
 
 fn multiTupleWorkerIsGeneric(shape: ProcShape) bool {
@@ -2828,7 +2849,7 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         .exact_type_checks = 0,
         // A template's interface relations' summarized expansion
         // instantiates its root once per summary, and summaries are keyed by
-        // template and method scope rather than by each call site's spelling
+        // template rather than by each call site's spelling
         // of the callee's type. The `unwrap(v6)` request is shaped by demand
         // (design.md "Specialization By Demand"): `unwrap` demands only the
         // layout of its payload, so the record becomes its tuple
@@ -3341,6 +3362,21 @@ test "zero statement block wrapper is inlined" {
     , .wrappers, 0);
 }
 
+test "a wrapper that hands its callee a function it names stays one procedure" {
+    // `sum`'s body is one call, but the function reference it passes inlines
+    // the fold's loop into it, so each copy of `sum` would be a whole loop.
+    try expectRootDirectCallCount(
+        \\add : U64, U64 -> U64
+        \\add = |a, b| a + b
+        \\
+        \\sum : List(U64) -> U64
+        \\sum = |xs| xs.fold(0, add)
+        \\
+        \\main : List(U64) -> U64
+        \\main = |xs| sum(xs) + sum(xs)
+    , .wrappers, 2);
+}
+
 test "low level wrapper is inlined when inline mode is enabled" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,
@@ -3427,9 +3463,9 @@ test "single-use block helper nested in a multi-use wrapper is not duplicated" {
     , "helper", false);
 }
 
-test "bodies on interlocking call cycles stay procedures in every definition order" {
-    // `a` and `b` call each other, and so do `b` and `c`. All three lie on
-    // one cycle of candidate bodies, so none is inlined, whichever order the
+test "bodies on interlocking call cycles are decided alike in every definition order" {
+    // `a` and `b` call each other, and so do `b` and `c`. Which of them are
+    // inlined depends on the call graph alone, never on the order the
     // program numbers them in.
     const forward =
         \\a : U64 -> U64
@@ -3457,10 +3493,11 @@ test "bodies on interlocking call cycles stay procedures in every definition ord
         \\main : U64
         \\main = c(5)
     ;
-    for ([_][]const u8{ forward, backward }) |source| {
-        for ([_][]const u8{ "a", "b", "c" }) |name| {
-            try expectInlinePlanDecision(source, name, false);
-        }
+    // Each program is the other with `a` and `c` swapped, so each function
+    // is decided as its counterpart is.
+    const mirrored = [_][2][]const u8{ .{ "a", "c" }, .{ "b", "b" }, .{ "c", "a" } };
+    for (mirrored) |pair| {
+        try std.testing.expectEqual(try inlinePlanDecision(forward, pair[0]), try inlinePlanDecision(backward, pair[1]));
     }
 }
 
@@ -3972,6 +4009,257 @@ test "issue 11099 boxy dispatches an imported procedure stored in a record" {
     try std.testing.expectEqualStrings("\"hi!\"", output);
 }
 
+// repro for https://github.com/roc-lang/roc/issues/12609
+// An unannotated inline lambda that dispatches a method on its parameter,
+// stored in a record in another module, must run when read out and called.
+test "issue 12609 boxy dispatches an imported inline lambda stored in a record" {
+    const allocator = std.testing.allocator;
+    const hooks_module =
+        \\Hooks :: [].{
+        \\    hooks = {
+        \\        shout: |s| s.concat("!"),
+        \\    }
+        \\}
+    ;
+    const source =
+        \\import Hooks
+        \\
+        \\main = {
+        \\    shout = Hooks.hooks.shout
+        \\    shout("hi")
+        \\}
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{.{ .name = "Hooks", .source = hooks_module }},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("\"hi!\"", output);
+}
+
+test "issue 12609 lss dispatches an imported inline lambda stored in a record" {
+    const allocator = std.testing.allocator;
+    const hooks_module =
+        \\Hooks :: [].{
+        \\    hooks = {
+        \\        shout: |s| s.concat("!"),
+        \\    }
+        \\}
+    ;
+    const source =
+        \\import Hooks
+        \\
+        \\main = {
+        \\    shout = Hooks.hooks.shout
+        \\    shout("hi")
+        \\}
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{.{ .name = "Hooks", .source = hooks_module }},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("\"hi!\"", output);
+}
+
+test "issue 12609 boxy runs imported stored inline lambdas at two types" {
+    const allocator = std.testing.allocator;
+    const hooks_module =
+        \\Hooks :: [].{
+        \\    pair = (|s| s.concat("!"), 1)
+        \\    fns = [|s| s.concat(s)]
+        \\}
+    ;
+    const source =
+        \\import Hooks
+        \\
+        \\main = {
+        \\    (shout, _) = Hooks.pair
+        \\    text = match Hooks.fns {
+        \\        [twice] => twice("ab")
+        \\        _ => ""
+        \\    }
+        \\    bytes = match Hooks.fns {
+        \\        [twice] => twice([1.U8, 2])
+        \\        _ => []
+        \\    }
+        \\    (shout("hi"), text, bytes)
+        \\}
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{.{ .name = "Hooks", .source = hooks_module }},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("(\"hi!\", \"abab\", [1, 2, 1, 2])", output);
+}
+
+test "issue 12609 lss runs imported stored inline lambdas at two types" {
+    const allocator = std.testing.allocator;
+    const hooks_module =
+        \\Hooks :: [].{
+        \\    pair = (|s| s.concat("!"), 1)
+        \\    fns = [|s| s.concat(s)]
+        \\}
+    ;
+    const source =
+        \\import Hooks
+        \\
+        \\main = {
+        \\    (shout, _) = Hooks.pair
+        \\    text = match Hooks.fns {
+        \\        [twice] => twice("ab")
+        \\        _ => ""
+        \\    }
+        \\    bytes = match Hooks.fns {
+        \\        [twice] => twice([1.U8, 2])
+        \\        _ => []
+        \\    }
+        \\    (shout("hi"), text, bytes)
+        \\}
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{.{ .name = "Hooks", .source = hooks_module }},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("(\"hi!\", \"abab\", [1, 2, 1, 2])", output);
+}
+
+test "issue 12609 boxy runs imported lambdas a stored conditional, match, or block selects" {
+    const allocator = std.testing.allocator;
+    const hooks_module =
+        \\Hooks :: [].{
+        \\    flag = Bool.True
+        \\    hooks = {
+        \\        dup: if flag |s| s.concat(s) else |s| s,
+        \\        shout: match 1 {
+        \\            1 => |s| s.concat("!")
+        \\            _ => |s| s
+        \\        },
+        \\        suffix: {
+        \\            tail = "?"
+        \\            |s| s.concat(tail)
+        \\        },
+        \\    }
+        \\}
+    ;
+    const source =
+        \\import Hooks
+        \\
+        \\main = ((Hooks.hooks.dup)("ab"), (Hooks.hooks.dup)([1.U8]), (Hooks.hooks.shout)("hi"), (Hooks.hooks.suffix)("ok"))
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{.{ .name = "Hooks", .source = hooks_module }},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("(\"abab\", [1, 1], \"hi!\", \"ok?\")", output);
+}
+
+test "issue 12609 lss runs imported lambdas a stored conditional, match, or block selects" {
+    const allocator = std.testing.allocator;
+    const hooks_module =
+        \\Hooks :: [].{
+        \\    flag = Bool.True
+        \\    hooks = {
+        \\        dup: if flag |s| s.concat(s) else |s| s,
+        \\        shout: match 1 {
+        \\            1 => |s| s.concat("!")
+        \\            _ => |s| s
+        \\        },
+        \\        suffix: {
+        \\            tail = "?"
+        \\            |s| s.concat(tail)
+        \\        },
+        \\    }
+        \\}
+    ;
+    const source =
+        \\import Hooks
+        \\
+        \\main = ((Hooks.hooks.dup)("ab"), (Hooks.hooks.dup)([1.U8]), (Hooks.hooks.shout)("hi"), (Hooks.hooks.suffix)("ok"))
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{.{ .name = "Hooks", .source = hooks_module }},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("(\"abab\", [1, 1], \"hi!\", \"ok?\")", output);
+}
+
 test "issue 11170 boxy generic inspect preserves SIMD descriptor methods" {
     const allocator = std.testing.allocator;
     const source =
@@ -4267,7 +4555,6 @@ test "spec constr specializes record state carried by while loop" {
     try std.testing.expectEqual(@as(usize, 0), optimized_root_shape.struct_assign_count);
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsGeneric));
 
-    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
     try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
 }
@@ -5260,9 +5547,11 @@ test "ARC keeps a loop-invariant record field out of the loop body keep" {
         \\    if i == 0 acc else count_from(state, i - 1, List.append(acc, List.len(state.a)))
         \\
         \\main : U64
-        \\main = List.len(count_from({ a: [1, 2], b: [3, 4] }, 4, []))
+        \\main = List.len(count_from({ a: [1, 2], b: [3, 4] }, 4, [])) + List.len(List.append([], 5.U64))
     ;
 
+    // The second append keeps `List.append` a procedure the loop calls, as
+    // slack versioning expects, rather than a single-use body inlined there.
     for ([_]bool{ false, true }) |promote_loop_appends| {
         var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{
             .promote_loop_appends = promote_loop_appends,
@@ -7934,7 +8223,6 @@ test "spec constr specializes primitive-start record state carried by while loop
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsGeneric));
 
-    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
     try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
 }
@@ -8018,9 +8306,7 @@ test "spec constr splits loop record state with opaque callable field" {
 
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWithZeroCaptureCallableIsSpecialized));
 
-    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsSpecialized));
-    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
-    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWithUnreadCallableIsScalarized));
 }
 
 test "spec constr splits loop record state with direct callable captures" {
@@ -8251,7 +8537,6 @@ test "spec constr specializes if-joined record state carried by while loop" {
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
 
-    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
     try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
 }
@@ -8292,7 +8577,6 @@ test "spec constr specializes match-joined record state carried by while loop" {
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
 
-    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
     try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
 }
@@ -9900,6 +10184,105 @@ test "issue 11626: a shared callee's closed result row is specialized per caller
     );
 }
 
+test "issue 12625: a construction forwarding a parameter crosses its composed result's return boundary" {
+    const allocator = std.testing.allocator;
+    // The body `Err(tag)` builds its own `Try`, but its error row is the
+    // parameter's, which the `?` result widens with `Early`. The parameter
+    // read keeps its own row and the body crosses the return boundary
+    // (design.md "Closed Result Rows At Template Boundaries").
+    const source =
+        \\check = |ok| if ok Ok({}) else Err(Early)
+        \\fail = |ok, tag| {
+        \\    _x = check(ok)?
+        \\    Err(tag)
+        \\}
+        \\
+        \\main = (fail(Bool.True, Missing), fail(Bool.False, Missing), fail(Bool.True, Named("owned payload longer than an inline string")))
+        \\
+    ;
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings(
+        "(Err(Missing), Err(Early), Err(Named(\"owned payload longer than an inline string\")))",
+        output,
+    );
+}
+
+test "issue 12625: a construction forwarding a closed parameter widens like its constructing twin" {
+    const allocator = std.testing.allocator;
+    // Each forwarder's payload is its closed parameter's row; its constructing
+    // twin builds the same payload itself. Identical signatures are used
+    // identically (design.md "Row Subsumption"), so both are called at a
+    // wider row.
+    const source =
+        \\fwd_err : [A] -> Try(Str, [A])
+        \\fwd_err = |x| Err(x)
+        \\
+        \\con_err : [A] -> Try(Str, [A])
+        \\con_err = |x| match x {
+        \\    A => Err(A)
+        \\}
+        \\
+        \\fwd_ok : [A] -> Try([A], Str)
+        \\fwd_ok = |x| Ok(x)
+        \\
+        \\fwd_wrap : [A] -> [W([A])]
+        \\fwd_wrap = |x| W(x)
+        \\
+        \\err_name : Try(Str, [A, B]) -> Str
+        \\err_name = |t| match t {
+        \\    Ok(s) => s
+        \\    Err(A) => "err a"
+        \\    Err(B) => "err b"
+        \\}
+        \\
+        \\ok_name : Try([A, B], Str) -> Str
+        \\ok_name = |t| match t {
+        \\    Ok(A) => "ok a"
+        \\    Ok(B) => "ok b"
+        \\    Err(s) => s
+        \\}
+        \\
+        \\wrap_name : [W([A, B])] -> Str
+        \\wrap_name = |w| match w {
+        \\    W(A) => "w a"
+        \\    W(B) => "w b"
+        \\}
+        \\
+        \\main = (err_name(fwd_err(A)), err_name(con_err(A)), ok_name(fwd_ok(A)), wrap_name(fwd_wrap(A)))
+        \\
+    ;
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("(\"err a\", \"err a\", \"ok a\", \"w a\")", output);
+}
+
 test "issue 11626: a closed-row callee gets one specialization per widened caller row" {
     const allocator = std.testing.allocator;
     const source =
@@ -11318,7 +11701,9 @@ test "a field take assigned into a join result cell keeps a loop list unique" {
 // uniqueness check, so the append grows the list in place. A string-pattern
 // `match` elsewhere in the loop body is unrelated to the record and must not
 // change that choice; the `==` form of the same loops is the control. Two
-// loops give `add` and `at_pos` two call sites, so neither is inlined.
+// loops give `add` and `at_pos` two call sites, so the inline plan keeps both
+// procedures. Release SpecConstr inlines both where the loops take their
+// records apart, so the program is lowered as dev builds lower it.
 test "issue 12420 a string match in a loop keeps dying call arguments on the owned variant" {
     const allocator = std.testing.allocator;
     const cases = [_]struct { name: []const u8, k: []const u8 }{
@@ -11376,7 +11761,10 @@ test "issue 12420 a string match in a loop keeps dying call arguments on the own
         });
         defer allocator.free(source);
 
-        var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .proc_debug_names = true });
+        var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+            .proc_debug_names = true,
+            .spec_constr_clone_inlining = lir.CheckedPipeline.dev_spec_constr_clone_inlining,
+        });
         defer lowered.deinit(allocator);
 
         const store = &lowered.lowered.lir_result.store;

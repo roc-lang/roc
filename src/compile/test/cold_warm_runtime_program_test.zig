@@ -200,3 +200,33 @@ test "a function value a constant holds lowers the same whether evaluated or rea
         \\}
     );
 }
+
+test "issue 12595 shared row callables lower identically from fresh and stored values" {
+    try expectColdEqualsWarm(
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\Payload : { call : (U64 -> U64), offset : U64 }
+        \\Message : [First(Payload), Second(Payload), Third(Payload)]
+        \\make : U64 -> (U64 -> U64)
+        \\make = |offset| |value| value + offset
+        \\stored = make(7)
+        \\run : Message -> U64
+        \\run = |message| {
+        \\    payload = match message {
+        \\        First(value) => value
+        \\        Second(value) => value
+        \\        Third(value) => value
+        \\    }
+        \\    callback = payload.call
+        \\    callback(payload.offset)
+        \\}
+        \\main! = |args| {
+        \\    n = args.len()
+        \\    Echo.line!(Str.inspect(run(First({ call: stored, offset: n }))))
+        \\    Echo.line!(Str.inspect(run(Second({ call: make(n), offset: n }))))
+        \\    callback = Box.unbox(Box.box(make(n)))
+        \\    Echo.line!(Str.inspect(run(Third({ call: callback, offset: n }))))
+        \\    Ok({})
+        \\}
+    );
+}

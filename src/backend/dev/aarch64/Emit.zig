@@ -22,8 +22,8 @@ const Relocation = @import("../Relocation.zig").Relocation;
 /// Parameterized by target for cross-compilation support.
 pub fn Emit(comptime target: RocTarget) type {
     // Validate this is an aarch64 target
-    if (target.toCpuArch() != .aarch64 and target.toCpuArch() != .aarch64_be) {
-        @compileError("aarch64.Emit requires an aarch64 target");
+    if (target.toCpuArch() != .aarch64) {
+        @compileError("aarch64.Emit requires a little-endian aarch64 target");
     }
 
     return struct {

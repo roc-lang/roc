@@ -25,6 +25,7 @@
 //! for the Boxy runtime's descriptor-driven equality and hashing.
 
 const std = @import("std");
+const stack_guard = @import("builtins").stack_guard;
 
 /// One component of an aggregate as a lowering reads it: its type, and the
 /// index LIR reads it at.
@@ -692,6 +693,7 @@ pub fn EqEval(comptime Ctx: type) type {
         };
 
         pub fn eq(ctx: Ctx, lhs: Operand, rhs: Operand) Error!bool {
+            stack_guard.check();
             switch (try ctx.eqStep(lhs, rhs)) {
                 .done => |equal| return equal,
                 .retarget => |pair| return try eq(ctx, pair.lhs, pair.rhs),
@@ -781,6 +783,7 @@ pub fn HashEval(comptime Ctx: type) type {
         };
 
         pub fn hash(ctx: Ctx, value: Operand, hasher: Hasher) Error!Hasher {
+            stack_guard.check();
             switch (try ctx.hashStep(value, hasher)) {
                 .done => |result| return result,
                 .retarget => |operand| return try hash(ctx, operand, hasher),

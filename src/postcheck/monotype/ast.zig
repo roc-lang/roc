@@ -341,6 +341,12 @@ pub const FnTemplate = struct {
     /// whose closed types commit the same layouts share one procedure
     /// (design.md "Layout-Keyed Builtin Procedures").
     procedure_keyed_by_layout: bool = false,
+    /// Set for a specialization of a Builtin template whose body is its
+    /// checked provided low-level operation
+    /// (`CheckedProcedureTemplate.provided_low_level`). The compiler defines
+    /// that body, so a caller that substitutes it at a call depends on no
+    /// source but its own.
+    provides_low_level: bool = false,
     /// The checked template is called at exactly one site of its module's
     /// source and from nowhere else (`templateHasSingleSourceCall`), stamped
     /// when Monotype finalizes the program. Dev inline analysis decides
@@ -429,7 +435,7 @@ pub const CallableIdentity = union(enum(u8)) {
 /// from is deliberately absent. The callable says which checked body to
 /// lower; that type is the requesting graph's instantiation context, which
 /// the graph may memoize by. Two call sites reaching the same callable at the
-/// same closed Monotype type, evidence, codec context, and method scope name
+/// same closed Monotype type, evidence, and codec context name
 /// ONE specialization even when their checked source types differ—as they do
 /// when one is annotated with a transparent alias of the other's type
 /// (`design.md`). No identity derived from the record may reintroduce that
@@ -442,7 +448,6 @@ pub const CallableIdentity = union(enum(u8)) {
 /// additional lookup alias—never a rekey of this identity.
 pub const SpecIdentity = struct {
     callable: CallableIdentity,
-    method_scope: names.CheckedModuleDigest,
     evidence_digest: EvidenceDigest,
     /// Exact lowering-only context required by generated codec method bodies.
     /// Zero for ordinary specializations.
@@ -455,10 +460,8 @@ pub const SpecIdentity = struct {
 };
 
 /// Content key of a specialization identity: the callable rendered by tag
-/// and content plus every digest field except the requesting method scope.
-/// The scope only decides how
-/// dispatch evidence was derived, and the evidence digest already names the
-/// result, so two modules requesting the same specialization get one key.
+/// and content plus every digest field, so two modules requesting the same
+/// specialization get one key.
 /// The request type uses the same cached equality digest as local reservation,
 /// so checked type ids and alias provenance do not change the key. Identical
 /// for the same request in every program, and computable at reservation.
@@ -619,6 +622,33 @@ pub fn fnEvidenceDigest(
     return .{ .bytes = hasher.finalResult() };
 }
 
+/// Name evidence's checked type views by explicit producer value contexts.
+/// Procedure targets keep their exact body identities. Callers must exclude
+/// local-procedure targets, whose view also owns the local body address.
+pub fn fnEvidenceContextDigest(
+    evidence: check.ConstStore.ConstFnEvidenceVector,
+    frames: []const check.ConstStore.ConstFnEvidenceFrame,
+    head: ?u32,
+    contexts: anytype,
+) EvidenceDigest {
+    const ContextNames = struct {
+        contexts: @TypeOf(contexts),
+        fn module(_: @This(), _: *const [32]u8) ?void {
+            return null;
+        }
+        fn template(_: @This(), _: names.ProcTemplate) ?names.TypeDigest {
+            return null;
+        }
+        /// Producer context for an evidence view, when supplied.
+        pub fn moduleContext(self: @This(), key: *const [32]u8) ?[32]u8 {
+            return self.contexts.get(key.*);
+        }
+    };
+    var hasher = TypeDigestHasher.init();
+    writeFnEvidence(&hasher, evidence, frames, head, ContextNames{ .contexts = contexts });
+    return .{ .bytes = hasher.finalResult() };
+}
+
 /// Names evidence's modules and method templates by content.
 const ContentEvidenceNames = struct {
     fn module(_: ContentEvidenceNames, _: *const [32]u8) ?void {
@@ -698,15 +728,15 @@ fn writeFnEvidence(
                 writeStructuralDerivation(hasher, structural.derivation);
                 if (structural.checked) |checked_structural| {
                     writeU8(hasher, 1);
-                    if (checked_structural.generated_codec_content) |content| {
+                    if (checked_structural.codecContent()) |content| {
                         writeU8(hasher, 1);
                         writeBytes(hasher, &content.bytes);
                     } else {
                         writeU8(hasher, 0);
-                        writeEvidenceModule(hasher, &checked_structural.view.bytes, site_names);
+                        writeEvidenceModule(hasher, &checked_structural.recorded.view.bytes, site_names);
                     }
-                    writeBytes(hasher, &checked_structural.dispatcher_key.bytes);
-                    writeBytes(hasher, &checked_structural.callable_key.bytes);
+                    writeBytes(hasher, &checked_structural.dispatcherKey().bytes);
+                    writeBytes(hasher, &checked_structural.callableKey().bytes);
                 } else writeU8(hasher, 0);
             },
             .from_callable => |use| {
@@ -840,6 +870,13 @@ fn methodTargetIdentityEql(
 }
 
 fn writeEvidenceModule(hasher: anytype, bytes: *const [32]u8, site_names: anytype) void {
+    if (comptime @hasDecl(@TypeOf(site_names), "moduleContext")) {
+        if (site_names.moduleContext(bytes)) |context| {
+            writeBytes(hasher, "checked-value-context");
+            writeBytes(hasher, &context);
+            return;
+        }
+    }
     if (site_names.module(bytes)) |_| {
         writeBytes(hasher, "app-module");
     } else {
@@ -2900,7 +2937,6 @@ test "monotype program view exposes read-only side arrays" {
     _ = try program.addSpec(.{
         .identity = .{
             .callable = .{ .proc_template = .{ .module = .{}, .proc_base = 0, .template = 0 } },
-            .method_scope = .{},
             .evidence_digest = fnEvidenceDigest(.{}, &.{}, null),
             .codec_contract_digest = .{},
             .codec_contract = null,
@@ -3270,7 +3306,7 @@ test "codec function evidence identity excludes per-use replay addresses" {
     const nodes = [_]Evidence{.{ .structural = 0 }};
     const left_structurals = [_]check.ConstStore.ConstFnStructuralEvidence{.{
         .derivation = .encoder,
-        .checked = .{
+        .checked = .{ .recorded = .{
             .view = .{ .bytes = @as([32]u8, @splat(1)) },
             .dispatcher_key = types.view().rootKey(replay_types[0]),
             .dispatcher_ty = replay_types[0],
@@ -3278,22 +3314,29 @@ test "codec function evidence identity excludes per-use replay addresses" {
             .callable_ty = replay_types[1],
             .generated_codec_derivation = derivation_ids[0],
             .generated_codec_content = .{ .bytes = @as([32]u8, @splat(4)) },
-        },
+        } },
     }};
     var right_structurals = left_structurals;
     const left: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &nodes, .structurals = &left_structurals };
     const right: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &nodes, .structurals = &right_structurals };
-    right_structurals[0].checked.?.dispatcher_ty = replay_types[2];
-    right_structurals[0].checked.?.callable_ty = replay_types[3];
-    right_structurals[0].checked.?.generated_codec_derivation = derivation_ids[1];
+    right_structurals[0].checked.?.recorded.dispatcher_ty = replay_types[2];
+    right_structurals[0].checked.?.recorded.callable_ty = replay_types[3];
+    right_structurals[0].checked.?.recorded.generated_codec_derivation = derivation_ids[1];
     try std.testing.expect(fnEvidenceEql(left, &frames, 0, right, &frames, 0));
     try std.testing.expectEqual(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(right, &frames, 0));
     // Equal contracts recorded by different modules are one identity.
-    right_structurals[0].checked.?.view = .{ .bytes = @as([32]u8, @splat(5)) };
+    right_structurals[0].checked.?.recorded.view = .{ .bytes = @as([32]u8, @splat(5)) };
     try std.testing.expect(fnEvidenceEql(left, &frames, 0, right, &frames, 0));
     try std.testing.expectEqual(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(right, &frames, 0));
-    right_structurals[0].checked.?.generated_codec_derivation = derivation_ids[2];
-    right_structurals[0].checked.?.generated_codec_content = .{ .bytes = @as([32]u8, @splat(6)) };
+    // A ConstStore's form names the contract without its recording module
+    // and keeps the identity.
+    const stored_structurals = [_]check.ConstStore.ConstFnStructuralEvidence{right_structurals[0].storedForm()};
+    try std.testing.expect(stored_structurals[0].checked.? == .codec);
+    const stored: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &nodes, .structurals = &stored_structurals };
+    try std.testing.expect(fnEvidenceEql(left, &frames, 0, stored, &frames, 0));
+    try std.testing.expectEqual(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(stored, &frames, 0));
+    right_structurals[0].checked.?.recorded.generated_codec_derivation = derivation_ids[2];
+    right_structurals[0].checked.?.recorded.generated_codec_content = .{ .bytes = @as([32]u8, @splat(6)) };
     try std.testing.expect(!fnEvidenceEql(left, &frames, 0, right, &frames, 0));
     try std.testing.expect(!std.meta.eql(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(right, &frames, 0)));
 }

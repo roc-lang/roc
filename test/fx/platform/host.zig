@@ -7,7 +7,7 @@
 //!
 //! Run with `--test <spec>` to simulate IO and verify behavior:
 //! ```
-//! ./zig-out/bin/roc app.roc -- --test "1>Hello, world!"
+//! ./zig-out/bin/roc app.roc --test "1>Hello, world!"
 //! ```
 //!
 //! Spec format uses pipe-separated operations:
@@ -1139,6 +1139,50 @@ fn hostedHostCallBoxed(boxed: ?[*]u8, value: i64) callconv(.c) i64 {
     return consumeBoxedI64ToI64(g_roc_ops.?, boxed, value);
 }
 
+const TryU64Result = extern struct {
+    payload: extern union {
+        err: RocStr,
+        ok: u64,
+    },
+    tag: u8,
+};
+
+fn assertLiveHandle(handle: ?[*]u8) *u64 {
+    const ops = g_roc_ops.?;
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
+    const ptr = handle orelse ops.crash("null handle");
+    const base = host_alloc.basePtr(@ptrCast(ptr - @sizeOf(usize)), @alignOf(u64));
+    for (host.roc_allocations.items) |alloc| {
+        if (alloc.ptr == base) return @ptrCast(@alignCast(ptr));
+    }
+    ops.crash("handle is not live: it has already been freed");
+}
+
+fn hostedHostHandleNew(value: u64) callconv(.c) ?[*]u8 {
+    const ptr = builtins.utils.allocateWithRefcount(@sizeOf(u64), @alignOf(u64), false, g_roc_ops.?);
+    @as(*u64, @ptrCast(@alignCast(ptr))).* = value;
+    return ptr;
+}
+
+fn hostedHostHandlePoll(handle: ?[*]u8) callconv(.c) TryU64Result {
+    const value = assertLiveHandle(handle).*;
+    builtins.utils.decrefDataPtrC(handle, @alignOf(u64), false, g_roc_ops.?);
+    return .{ .payload = .{ .ok = value }, .tag = 1 };
+}
+
+const TryUnitResult = extern struct {
+    payload: extern union {
+        err: RocStr,
+    },
+    tag: u8,
+};
+
+fn hostedHostHandleClose(handle: ?[*]u8) callconv(.c) TryUnitResult {
+    _ = assertLiveHandle(handle);
+    builtins.utils.decrefDataPtrC(handle, @alignOf(u64), false, g_roc_ops.?);
+    return .{ .payload = undefined, .tag = 1 };
+}
+
 fn hostedHostCallBoxedTransition(boxed: ?[*]u8) callconv(.c) i64 {
     return callBoxedTransitionWithoutReuse(g_roc_ops.?, boxed);
 }
@@ -1328,6 +1372,9 @@ comptime {
     @export(&hostedHostTakeSeed, .{ .name = "roc_host_take_seed", .visibility = .hidden });
     @export(&hostedHostStoredBoxedCall, .{ .name = "roc_host_stored_boxed_call", .visibility = .hidden });
     @export(&hostedHostSumStrBytes, .{ .name = "roc_host_sum_str_bytes", .visibility = .hidden });
+    @export(&hostedHostHandleNew, .{ .name = "roc_proc_handle_new", .visibility = .hidden });
+    @export(&hostedHostHandlePoll, .{ .name = "roc_proc_handle_poll", .visibility = .hidden });
+    @export(&hostedHostHandleClose, .{ .name = "roc_proc_handle_close", .visibility = .hidden });
     @export(&hostedPaddedCheck, .{ .name = "roc_padded_check", .visibility = .hidden });
     @export(&hostedStderrLine, .{ .name = "roc_stderr_line", .visibility = .hidden });
     @export(&hostedStdinLine, .{ .name = "roc_stdin_line", .visibility = .hidden });

@@ -2,7 +2,7 @@ platform ""
     requires {
         main! : () => {}
     }
-    exposes [Stdout, Stderr, Stdin, Builder, Host, NodeA, NodeB, Element, Padded, Rb]
+    exposes [Stdout, Stderr, Stdin, Builder, Host, NodeA, NodeB, Element, Padded, Proc, Rb]
     packages {}
     provides { "roc_main": main_for_host! }
     hosted {
@@ -24,6 +24,9 @@ platform ""
         "roc_host_take_seed": Host.take_seed!,
         "roc_host_stored_boxed_call": Host.stored_boxed_call!,
         "roc_host_sum_str_bytes": Host.sum_str_bytes!,
+        "roc_proc_handle_new": Proc.handle_new!,
+        "roc_proc_handle_poll": Proc.handle_poll!,
+        "roc_proc_handle_close": Proc.handle_close!,
         "roc_padded_check": Padded.check!,
         "roc_stderr_line": Stderr.line!,
         "roc_stdin_line": Stdin.line!,
@@ -52,6 +55,7 @@ import NodeA
 import NodeB
 import Element
 import Padded
+import Proc
 import Rb
 
 main_for_host! : () => {}

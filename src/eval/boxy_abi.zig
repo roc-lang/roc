@@ -58,6 +58,7 @@ pub const BoxyNativeFnTable = backend.LirCodeGenMod.BoxyNativeFnTable;
 /// output used by test roots; non-test entrypoints initialize them to zero.
 /// Build the explicit function table consumed by in-process machine code.
 pub fn nativeFnTable() BoxyNativeFnTable {
+    @import("base").dev_diagnostics.traceBoxyWork("native-functions");
     var table: BoxyNativeFnTable = undefined;
     inline for (@typeInfo(BoxyBuiltinFn).@"enum".field_values) |field_value| {
         const boxy_fn: BoxyBuiltinFn = @fromBackingInt(@intCast(field_value));
@@ -500,6 +501,9 @@ pub fn swapActiveRuntime(runtime: ?*GlobalBoxyRuntime) ?*GlobalBoxyRuntime {
     return ActiveRuntimeSelection.swap(runtime);
 }
 
+/// Runtime archives linked into user programs reach this through a sidecar
+/// view, so it reads none of the compiler's developer diagnostics; the
+/// compiler-side entry points trace Boxy runtime creation themselves.
 fn createRuntime(
     gpa: Allocator,
     store: *const LirStore,
@@ -555,6 +559,8 @@ pub fn createRuntimeFromStores(
     tables: BoxyTables,
     roc_ops: *RocOps,
 ) error{OutOfMemory}!*GlobalBoxyRuntime {
+    store.requireBoxy();
+    @import("base").dev_diagnostics.traceBoxyWork("runtime");
     return createRuntime(gpa, store, layout_store, tables, roc_ops);
 }
 
@@ -568,6 +574,7 @@ pub fn initGlobal(
     roc_ops: *RocOps,
 ) error{ OutOfMemory, AlreadyInitialized }!void {
     if (global != null) return error.AlreadyInitialized;
+    @import("base").dev_diagnostics.traceBoxyWork("runtime");
     global = try createRuntime(gpa, store, layout_store, tables, roc_ops);
 }
 
@@ -617,6 +624,7 @@ pub fn createRuntimeFromSidecarView(
         .erased_arg_desc_params = view.tables.erased_arg_desc_params,
     };
     const g = try createRuntime(gpa, undefined, &view.layouts, tables, roc_ops);
+    g.store_shell.runtime_contract = .boxy;
     g.store_shell.boxy_names = view.names;
     g.runtime.store = &g.store_shell;
     return g;

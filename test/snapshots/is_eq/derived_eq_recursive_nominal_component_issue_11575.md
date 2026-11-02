@@ -59,7 +59,12 @@ MISSING METHOD - derived_eq_recursive_nominal_component_issue_11575.md:12:5:12:1
 			(reflow " ")
 			(annotated code "frob")
 			(reflow " ")
-			(reflow "associated with it in the type's declaration."))))
+			(reflow "associated with it in the type's declaration.")
+			(line-break)
+			(line-break)
+			(reflow "This use needs that because of this code in the definition it uses:")
+			(line-break)
+			(source-region (file "derived_eq_recursive_nominal_component_issue_11575.md") (start 4 20) (end 4 28) (annotation error) (line-text "        Leaf(v) => v.frob()")))))
 ~~~
 # TOKENS
 ~~~zig

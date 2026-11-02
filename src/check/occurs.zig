@@ -63,12 +63,36 @@ pub fn occurs(types_store: *Store, scratch: *Scratch, var_: Var) std.mem.Allocat
     return occursWithMode(types_store, scratch, var_, .args_only);
 }
 
+/// Check `var_`'s own type, without the method requirements of the
+/// variables in it. A cycle through a requirement is never closed, so this
+/// finds exactly the cycles within `var_`'s type; each requirement's type is
+/// a type of its own, which `occurs` checks as a root.
+pub fn occursOwnType(types_store: *Store, scratch: *Scratch, var_: Var) std.mem.Allocator.Error!Result {
+    scratch.reset();
+    var check_occurs = CheckOccurs.init(types_store, scratch, .args_only);
+    check_occurs.requirements = .skip;
+    const result = try check_occurs.occurs(var_, Edge.none);
+    std.debug.assert(!check_occurs.found_valid_cycle);
+    return result;
+}
+
 /// Check a nominal declaration for invalid recursion, resolving nominal
 /// backings through the store's declaration table (see
 /// `NominalBackingMode.declaration_table`). `var_` is the declaration's
 /// statement var, whose content is a nominal application of the declaration.
 pub fn occursDeclarationGraph(types_store: *Store, scratch: *Scratch, var_: Var) std.mem.Allocator.Error!Result {
     return occursWithMode(types_store, scratch, var_, .declaration_table);
+}
+
+/// Add every variable a value-graph `occurs` check of `var_` traverses to
+/// `reached`, without classifying cycles. A variable already in `reached` is
+/// not traversed again, so `reached` must only hold complete earlier results.
+pub fn collectReachable(types_store: *Store, scratch: *Scratch, var_: Var, reached: *DenseMap(Var, void)) std.mem.Allocator.Error!void {
+    scratch.reset();
+    var check_occurs = CheckOccurs.init(types_store, scratch, .args_only);
+    check_occurs.reached = reached;
+    const result = try check_occurs.occurs(var_, Edge.none);
+    std.debug.assert(result == .valid);
 }
 
 fn occursWithMode(types_store: *Store, scratch: *Scratch, var_: Var, mode: NominalBackingMode) std.mem.Allocator.Error!Result {
@@ -78,8 +102,33 @@ fn occursWithMode(types_store: *Store, scratch: *Scratch, var_: Var, mode: Nomin
     // empty edge. Whether the recursion is nominal/anonymous/infinite is decided
     // from the edges *within* the detected cycle, not from the root downward.
     var check_occurs = CheckOccurs.init(types_store, scratch, mode);
-    return try check_occurs.occurs(var_, Edge.none);
+    const result = try check_occurs.occurs(var_, Edge.none);
+    if (result != .valid or !check_occurs.found_valid_cycle) return result;
+
+    // A depth-first traversal classifies only the cycles its back edges
+    // close, each along the path it happened to take. A valid cycle can
+    // finish a variable that an invalid cycle also passes through, and the
+    // invalid cycle's own edge into that variable is then never followed. Only
+    // a declaration graph has valid cycles: one is valid exactly when it
+    // passes through both a recursion-allowed position and a nominal's
+    // backing. So there is no invalid cycle exactly when the graph without
+    // its recursion-allowed edges has no cycle, and neither does the graph
+    // without its nominal-backing edges; each is checked by a traversal that
+    // never follows that kind of edge, in which every cycle is invalid.
+    std.debug.assert(mode == .declaration_table);
+    for ([_]CutEdge{ .recursion_allowed, .nominal_backing }) |cut| {
+        scratch.reset();
+        var without_edge = CheckOccurs.init(types_store, scratch, mode);
+        without_edge.cut = cut;
+        const cut_result = try without_edge.occurs(var_, Edge.none);
+        if (cut_result != .valid) return cut_result;
+    }
+    return .valid;
 }
+
+/// A kind of edge a traversal does not follow as part of a cycle: its target
+/// is checked as a root of its own instead.
+const CutEdge = enum { none, recursion_allowed, nominal_backing };
 
 /// Performs an occurs check on a type variable.
 ///
@@ -99,6 +148,16 @@ const CheckOccurs = struct {
     types_store: *Store,
     scratch: *Scratch,
     nominal_backing_mode: NominalBackingMode,
+    /// When set, the traversal collects every variable it reaches here and
+    /// classifies no cycle (`collectReachable`).
+    reached: ?*DenseMap(Var, void) = null,
+    /// The kind of edge this traversal checks as roots of their own.
+    cut: CutEdge = .none,
+    /// Whether the traversal closed a valid cycle.
+    found_valid_cycle: bool = false,
+    /// Whether the traversal checks each method requirement it reaches as a
+    /// root of its own (`pushConstraintCutRoots`).
+    requirements: enum { check, skip } = .check,
 
     /// Init CheckOccurs
     ///
@@ -121,8 +180,20 @@ const CheckOccurs = struct {
         return try self.occursIter();
     }
 
-    /// Iteratively process frames
+    /// Iteratively process frames, then each root a requirement or a cut edge
+    /// reached (see `Scratch.cut_roots`).
     fn occursIter(self: *Self) std.mem.Allocator.Error!Result {
+        while (true) {
+            if (try self.occursFrames()) |invalid| return invalid;
+            std.debug.assert(self.scratch.seen.len() == 0);
+            const cut_root = self.scratch.cut_roots.pop() orelse return .valid;
+            try self.pushVarToProcess(cut_root, Edge.none);
+        }
+    }
+
+    /// Process frames until the work stack is empty or an invalid cycle is
+    /// found.
+    fn occursFrames(self: *Self) std.mem.Allocator.Error!?Result {
         while (self.scratch.stack.items.pop()) |frame| {
             switch (frame) {
                 .process_var => |start| {
@@ -133,6 +204,8 @@ const CheckOccurs = struct {
                         // If we've already visited this var and not returned, then it's not recursive
                         continue;
                     } else if (self.scratch.hasSeenVar(root_var)) |match_idx| {
+                        if (self.reached != null) continue;
+
                         // Recursion point!
 
                         // We've already seen this var during traversal. `edge`
@@ -145,6 +218,7 @@ const CheckOccurs = struct {
                         if (classified == .valid) {
                             // It the recursion was valid (ie passed thru
                             // nominal) then continue processing
+                            self.found_valid_cycle = true;
                             continue;
                         }
 
@@ -160,6 +234,10 @@ const CheckOccurs = struct {
 
                         return classified;
                     } else {
+                        if (self.reached) |reached| {
+                            if ((try reached.getOrPut(root_var)).found_existing) continue;
+                        }
+
                         // Push this var to the seen stack
                         try self.scratch.pushSeen(root_var, start.edge);
 
@@ -250,11 +328,8 @@ const CheckOccurs = struct {
                                     try self.pushVarToProcess(arg_var, Edge.none);
                                 }
                             },
-                            .flex => {
-                                // Flex variables are not checked for cycles - they are allowed to have
-                                // self-referential constraints. Only structural content is checked.
-                            },
-                            .rigid => {},
+                            .flex => |flex| try self.pushConstraintCutRoots(flex.constraints),
+                            .rigid => |rigid| try self.pushConstraintCutRoots(rigid.constraints),
                             .field_presence => {
                                 // A resolved field kind is a leaf: the field's
                                 // type lives on the field slot, not here, so
@@ -272,7 +347,7 @@ const CheckOccurs = struct {
             }
         }
 
-        return .valid;
+        return null;
     }
 
     /// Classify a detected cycle using only the edges that lie *within* it.
@@ -307,12 +382,37 @@ const CheckOccurs = struct {
         }
     }
 
+    /// A type variable's method requirements are a condition on the variable,
+    /// not part of its type, so a cycle back through one is valid. Cycles
+    /// within a requirement's own types are not, so each requirement's
+    /// function type is checked later as a root of its own, with nothing on
+    /// the seen stack: a cycle through the requirement is never closed, while
+    /// cycles within its types still are.
+    fn pushConstraintCutRoots(self: *Self, range: types.StaticDispatchConstraint.SafeList.Range) std.mem.Allocator.Error!void {
+        switch (self.requirements) {
+            .check => {},
+            .skip => return,
+        }
+        for (self.types_store.sliceStaticDispatchConstraints(range)) |constraint| {
+            try self.scratch.cut_roots.append(self.scratch.gpa, constraint.fn_var);
+        }
+    }
+
     /// Push a single sub var onto the work stack to be processed later.
     fn pushVarToProcess(self: *Self, sub_var: Var, edge: Edge) std.mem.Allocator.Error!void {
+        if (self.cutsEdge(edge)) return self.scratch.cut_roots.append(self.scratch.gpa, sub_var);
         _ = try self.scratch.stack.append(self.scratch.gpa, Frame{ .process_var = .{
             .var_ = sub_var,
             .edge = edge,
         } });
+    }
+
+    fn cutsEdge(self: *const Self, edge: Edge) bool {
+        return switch (self.cut) {
+            .none => false,
+            .recursion_allowed => edge.recursion_allowed,
+            .nominal_backing => edge.nominal_backing,
+        };
     }
 
     /// Push a record field's reachable variables onto the work stack.
@@ -333,6 +433,7 @@ const CheckOccurs = struct {
 
     /// Push a slice of sub vars onto the work stack to be processed later.
     fn pushVarsToProcess(self: *Self, sub_vars: []Var, edge: Edge) std.mem.Allocator.Error!void {
+        if (self.cutsEdge(edge)) return self.scratch.cut_roots.appendSlice(self.scratch.gpa, sub_vars);
         try self.scratch.stack.items.ensureUnusedCapacity(self.scratch.gpa, sub_vars.len);
         for (sub_vars) |sub_var| {
             _ = self.scratch.stack.appendAssumeCapacity(Frame{ .process_var = .{
@@ -399,6 +500,11 @@ pub const Scratch = struct {
     seen_positions: DenseMap(Var, u32),
     visited: DenseMap(DescStoreIdx, void),
 
+    /// The function types of the method requirements the traversal reached,
+    /// and the targets of the edges it cuts, each checked as a root of its own
+    /// once the work stack is empty.
+    cut_roots: std.ArrayListUnmanaged(Var) = .empty,
+
     /// The var to report when a cycle is detected: the deepest var on the seen
     /// stack (the parent of the cycle-closing edge). Null until a cycle is found.
     err_var: ?Var = null,
@@ -427,6 +533,7 @@ pub const Scratch = struct {
         self.seen.deinit(self.gpa);
         self.seen_positions.deinit();
         self.visited.deinit();
+        self.cut_roots.deinit(self.gpa);
     }
 
     pub fn reset(self: *Self) void {
@@ -434,6 +541,7 @@ pub const Scratch = struct {
         self.seen.items.clearRetainingCapacity();
         self.seen_positions.clearRetainingCapacity();
         self.visited.clearRetainingCapacity();
+        self.cut_roots.clearRetainingCapacity();
         self.err_var = null;
     }
 

@@ -19,14 +19,16 @@ const SnapshotContentIdx = snapshot.SnapshotContentIdx;
 
 pub const Context = context_mod.Context;
 pub const Category = context_mod.Category;
+pub const CopiedRequirement = context_mod.CopiedRequirement;
+pub const SharedMethodUses = context_mod.SharedMethodUses;
 
-const ByteListRange = struct { start: usize, count: usize };
+const ByteListRange = struct { start: u64, count: u64 };
 
 /// Alias into the Store.extra_strings_backing array
 pub const ExtraStringIdx = ByteListRange;
 
 /// A range of patterns
-pub const MissingPatternsRange = struct { start: usize, count: usize };
+pub const MissingPatternsRange = struct { start: u64, count: u64 };
 
 /// The checker relation that recorded a problem, or whose unification queued
 /// a dispatch obligation whose problems then belong to it, unless the
@@ -926,6 +928,9 @@ pub const DispatcherNotNominal = struct {
     /// Source region of the string literal for `from_literal` constraints of
     /// kind `quote` or `interpolation`
     string_literal_region: ?base.Region = null,
+    /// Set when the obligation is a copy a use made out of another
+    /// definition's type.
+    copied: ?CopiedRequirement = null,
 };
 
 /// Error when you try to static dispatch but the dispatcher does not have that method
@@ -953,6 +958,9 @@ pub const DispatcherDoesNotImplMethod = struct {
     /// How the report suggests turning the literal into the builtin `Str`
     /// when the dispatcher is `Str`.
     str_conversion: StrConversion = .none,
+    /// Set when the obligation is a copy a use made out of another
+    /// definition's type.
+    copied: ?CopiedRequirement = null,
 
     /// Type of the dispatcher
     pub const DispatcherType = enum { nominal, rigid };

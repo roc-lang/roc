@@ -30,6 +30,9 @@ pub const RootMetadata = struct {
     abi: RootAbi,
     exposure: RootExposure,
     test_plan: ?TestPlanMetadata = null,
+    /// The platform entrypoint's host boundary digest
+    /// (`layout.host_boundary_digest`), when the consumer asked for one.
+    host_boundary_digest: ?[32]u8 = null,
 
     pub fn fromCheckedRoot(root: checked.RootRequest) RootMetadata {
         return .{ .order = root.order, .kind = root.kind, .abi = root.abi, .exposure = root.exposure };

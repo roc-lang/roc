@@ -88,6 +88,7 @@ const WasmLayout = @import("WasmLayout.zig");
 const Storage = @import("Storage.zig");
 const CodeBuilder = @import("CodeBuilder.zig");
 const BodyArtifact = @import("BodyArtifact.zig");
+const StackRoom = @import("StackRoom.zig");
 const task_waves = @import("../task_waves.zig");
 const tasks = base.post_check_task_executor;
 const BuiltinSignatures = @import("builtin_signatures.zig");
@@ -384,6 +385,12 @@ external_calls: ExternalCalls = .unconfigured,
 stack_pointer_symbol: ?SymbolIndex = null,
 /// Undefined `__indirect_function_table` symbol used only while emitting relocatable app objects.
 indirect_table_symbol: ?SymbolIndex = null,
+/// Set when the platform reserves low memory, so the stack sits above static
+/// data and generated code must check its bounds; see `prependStackChecks`.
+stack_checks: ?StackCheckSymbols = null,
+/// The host-callable entry wrappers, each of which checks the stack bounds
+/// when `stack_checks` is set.
+stack_check_entries: std.ArrayList(LocalFunctionIndex) = .empty,
 /// Undefined `__memory_base` symbol used only while emitting relocatable app objects.
 memory_base_symbol: ?SymbolIndex = null,
 /// Undefined `__table_base` symbol used only while emitting relocatable app objects.
@@ -491,6 +498,30 @@ pub fn configureStackPointerReloc(self: *Self, symbol: SymbolIndex) void {
     self.stack_pointer_symbol = symbol;
 }
 
+/// The symbols a stack-bound check names.
+pub const StackCheckSymbols = struct {
+    /// The undefined `__stack_low` data symbol; a check's bound is relocated
+    /// against it, with the room the check needs as the addend.
+    stack_low: SymbolIndex,
+    /// The undefined `roc_wasm_stack_overflow` function a failed check calls.
+    overflow: SymbolIndex,
+    /// Functions static data calls through the function table, by symbol name.
+    static_data_callees: []const []const u8,
+};
+
+/// Check the stack bounds in generated code, for a platform that reserves
+/// low memory. Call before any defined function exists, since the overflow
+/// function is an import.
+pub fn configureStackChecks(self: *Self, static_data_callees: []const []const u8) Allocator.Error!void {
+    const overflow_type = try self.internFuncType(&.{}, &.{});
+    const overflow = try self.module.addFunctionImportWithSymbol("env", builtins.shim_symbols.roc_wasm_stack_overflow, overflow_type);
+    self.stack_checks = .{
+        .stack_low = try self.module.addUndefinedDataSymbol(StackRoom.stack_low_symbol),
+        .overflow = overflow.symbol,
+        .static_data_callees = static_data_callees,
+    };
+}
+
 /// Configure relocatable indirect-call table operands to target the imported table symbol.
 pub fn configureTableReloc(self: *Self, symbol: SymbolIndex) void {
     self.indirect_table_symbol = symbol;
@@ -516,6 +547,7 @@ pub fn deinit(self: *Self) void {
     }
     self.pending_bodies.deinit();
     self.active_fn_stack.deinit(self.allocator);
+    self.stack_check_entries.deinit(self.allocator);
     self.storage.deinit();
     self.registered_procs.deinit();
     for (self.tail_drivers.items) |*driver| driver.members.deinit(self.allocator);
@@ -1545,6 +1577,7 @@ fn prependStackPrefix(
     prefix: []const u8,
     prefix_relocs: []const CodeBuilder.Relocation,
 ) Allocator.Error!void {
+    self.currentBody().frame_bytes = self.stack_frame_size;
     try self.currentBody().prependToCode(self.allocator, prefix);
     for (prefix_relocs) |reloc| {
         switch (reloc) {
@@ -1570,6 +1603,8 @@ pub fn flushPendingBodies(self: *Self) Allocator.Error!void {
         }
     }.lessThan);
 
+    if (self.stack_checks) |symbols| try self.prependStackChecks(symbols, keys.items);
+
     for (keys.items) |local_idx| {
         const expected: u32 = @intCast(self.module.function_offsets.items.len);
         if (local_idx.raw() != expected) {
@@ -1582,6 +1617,117 @@ pub fn flushPendingBodies(self: *Self) Allocator.Error!void {
         defer body.deinit(self.allocator);
         _ = try body.insertIntoModule(self.allocator, &self.module);
     }
+}
+
+/// Prepend a stack-bound check to every pending body that needs one, before
+/// its prologue reserves anything. Code compiled for a platform that reserves
+/// low memory has its stack above static data, where nothing traps an
+/// overflow, so a check must run wherever the stack can grow without limit:
+///
+/// - in every host-callable entry wrapper, since the host can call in with
+///   any amount of stack left;
+/// - in every function in the table, since builtins and the runtime call
+///   back into them on cycles code generation cannot see;
+/// - in every function with a frame on a cycle of direct calls.
+///
+/// A cycle of functions without frames leaves the stack the same height at
+/// every pass around it, so it needs no check. Each check's room is filled in
+/// once the object is composed (`StackRoom.fillCheckRooms`).
+fn prependStackChecks(self: *Self, symbols: StackCheckSymbols, locals: []const LocalFunctionIndex) Allocator.Error!void {
+    const import_count = self.module.importCount();
+    const count = locals.len;
+    const first = if (count == 0) 0 else locals[0].raw();
+    const position = struct {
+        fn of(local: LocalFunctionIndex, first_local: u32, total: usize) ?u32 {
+            const raw = local.raw();
+            if (raw < first_local or raw - first_local >= total) return null;
+            return raw - first_local;
+        }
+    }.of;
+
+    const needs_check = try self.allocator.alloc(bool, count);
+    defer self.allocator.free(needs_check);
+    @memset(needs_check, false);
+    for (self.stack_check_entries.items) |local| if (position(local, first, count)) |pos| {
+        needs_check[pos] = true;
+    };
+    for (self.module.table_func_indices.items) |func_idx| {
+        if (func_idx < import_count) continue;
+        if (position(self.localFunctionIndexFromGlobal(func_idx), first, count)) |pos| needs_check[pos] = true;
+    }
+    for (symbols.static_data_callees) |name| {
+        const symbol = self.module.findDefinedFunctionSymbolExact(name) catch |err|
+            wasmInvariantFmt("WASM/codegen invariant violated: static data names function {s} ({s})", .{ name, @errorName(err) });
+        const func_idx = self.module.linking.symbol_table.items[symbol.raw()].index;
+        if (position(self.localFunctionIndexFromGlobal(func_idx), first, count)) |pos| needs_check[pos] = true;
+    }
+
+    // Direct calls between pending bodies, as a compressed graph.
+    var succ_starts = try self.allocator.alloc(u32, count + 1);
+    defer self.allocator.free(succ_starts);
+    var succs = std.ArrayList(u32).empty;
+    defer succs.deinit(self.allocator);
+    for (locals, 0..) |local, pos| {
+        succ_starts[pos] = @intCast(succs.items.len);
+        const body = self.pending_bodies.getPtr(local).?;
+        for (body.import_relocations.items) |reloc| {
+            const index = switch (reloc) {
+                .index => |index| index,
+                .offset => continue,
+            };
+            if (index.type_id != .function_index_leb) continue;
+            const sym = self.module.linking.symbol_table.items[index.symbol_index.raw()];
+            if (sym.isUndefined() or sym.index < import_count) continue;
+            if (position(self.localFunctionIndexFromGlobal(sym.index), first, count)) |callee| try succs.append(self.allocator, callee);
+        }
+    }
+    succ_starts[count] = @intCast(succs.items.len);
+
+    var scc_arena = base.SingleThreadArena.init(self.allocator);
+    defer scc_arena.deinit();
+    const arena = scc_arena.allocator();
+    const preds = try collections.csr.transpose(arena, succ_starts, succs.items);
+    const components = try collections.scc.compute(arena, succ_starts, succs.items, preds.starts, preds.targets);
+    for (0..components.count()) |component| {
+        const members = components.membersOf(component);
+        var cyclic = members.len > 1;
+        if (!cyclic) {
+            const member = members[0];
+            for (succs.items[succ_starts[member]..succ_starts[member + 1]]) |callee| cyclic = cyclic or callee == member;
+        }
+        if (!cyclic) continue;
+        for (members) |member| {
+            if (self.pending_bodies.getPtr(locals[member]).?.frame_bytes != 0) needs_check[member] = true;
+        }
+    }
+
+    for (locals, needs_check) |local, needed| {
+        if (needed) try self.prependStackCheck(self.pending_bodies.getPtr(local).?, symbols);
+    }
+}
+
+/// Prepend `if (__stack_pointer < __stack_low + room) roc_wasm_stack_overflow()`.
+fn prependStackCheck(self: *Self, body: *CodeBuilder, symbols: StackCheckSymbols) Allocator.Error!void {
+    var check = std.ArrayList(u8).empty;
+    defer check.deinit(self.allocator);
+    var relocs: [3]CodeBuilder.Relocation = undefined;
+
+    try check.append(self.allocator, Op.global_get);
+    relocs[0] = .{ .index = .{ .type_id = .global_index_leb, .code_pos = @intCast(check.items.len), .symbol_index = self.stack_pointer_symbol.? } };
+    try WasmModule.appendPaddedU32(self.allocator, &check, 0);
+    try check.append(self.allocator, Op.i32_const);
+    relocs[1] = .{ .offset = .{ .type_id = .memory_addr_sleb, .code_pos = @intCast(check.items.len), .symbol_index = symbols.stack_low, .addend = 0 } };
+    try WasmModule.appendPaddedI32(self.allocator, &check, 0);
+    try check.appendSlice(self.allocator, &.{ Op.i32_lt_u, Op.@"if", 0x40, Op.call });
+    relocs[2] = .{ .index = .{ .type_id = .function_index_leb, .code_pos = @intCast(check.items.len), .symbol_index = symbols.overflow } };
+    try WasmModule.appendPaddedU32(self.allocator, &check, self.module.linking.symbol_table.items[symbols.overflow.raw()].index);
+    try check.append(self.allocator, Op.end);
+
+    try body.prependToCode(self.allocator, check.items);
+    for (relocs) |reloc| switch (reloc) {
+        .index => |idx| try body.addIndexRelocation(self.allocator, idx.type_id, idx.code_pos, idx.symbol_index),
+        .offset => |off| try body.addOffsetRelocation(self.allocator, off.type_id, off.code_pos, off.symbol_index, off.addend),
+    };
 }
 
 fn localFunctionIndexFromGlobal(self: *const Self, global_func_idx: u32) LocalFunctionIndex {
@@ -1658,6 +1804,7 @@ pub fn generateEntrypointWrapper(
     const type_idx = try self.internFuncType(param_types.items, result_types.items);
     const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
     const func_idx = defined.function.raw();
+    if (self.stack_checks != null) try self.stack_check_entries.append(self.allocator, defined.local);
     _ = try self.addTrackedDefinedFunctionSymbol(defined, symbol_name, 0);
 
     const saved = self.saveState() catch return error.OutOfMemory;
@@ -6120,7 +6267,7 @@ fn tailArgOffsets(self: *Self, proc: LirProcSpec, offsets: ?[]u32) Allocator.Err
     for (0..args.len) |i| {
         const arg_layout = self.procLocalLayoutIdx(GuardedList.at(args, i));
         const size: u32 = if (try self.isCompositeLayout(arg_layout))
-            try self.layoutByteSize(self.runtimeRepresentationLayoutIdx(arg_layout))
+            try self.layoutStorageByteSize(self.runtimeRepresentationLayoutIdx(arg_layout))
         else
             16;
         if (offsets) |out| out[i] = offset;
@@ -6306,7 +6453,7 @@ fn generateFrameReplacingCall(self: *Self, proc_id: LIR.LirProcSpecId, call_args
         const param_layout = self.procLocalLayoutIdx(GuardedList.at(params, i));
         const slot_offset: i32 = @intCast(tail_area_args_offset + offsets[i]);
         if (try self.isCompositeLayout(param_layout)) {
-            const size = try self.layoutByteSize(self.runtimeRepresentationLayoutIdx(param_layout));
+            const size = try self.layoutStorageByteSize(self.runtimeRepresentationLayoutIdx(param_layout));
             const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitProcLocal(arg);
             try self.emitLocalSet(src_local);
@@ -6607,7 +6754,10 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
             try self.emitFunctionTableIndexConst(table_idx)
         else
             try self.emitNullPtr();
-        try self.emitBoxyCall("roc_boxy_caller_drives");
+        if (self.store.runtime_contract == .specialized)
+            try self.emitBuiltinCall(.native_callable_caller_drives)
+        else
+            try self.emitBoxyCall("roc_boxy_caller_drives");
         try self.emitLocalSet(flag);
         self.caller_drives_local = flag;
     }
@@ -6627,7 +6777,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
             const arg = GuardedList.at(args, i);
             const arg_layout = self.procLocalLayoutIdx(arg);
             if (!try self.isCompositeLayout(arg_layout)) continue;
-            const size = try self.layoutByteSize(self.runtimeRepresentationLayoutIdx(arg_layout));
+            const size = try self.layoutStorageByteSize(self.runtimeRepresentationLayoutIdx(arg_layout));
             const param_info = self.storage.getLocalInfo(arg) orelse unreachable; // tail-group members use the Roc ABI, whose params were all bound above
             const param_local = param_info.idx;
             try self.emitLocalGet(param_local);
@@ -6733,7 +6883,23 @@ const HostedArgOrder = struct {
     size: u32,
 };
 
-fn computeHostedArgOffsets(self: *Self, arena: Allocator, arg_layouts: []const layout.Idx, offsets: []u32) Allocator.Error!u32 {
+/// Lay out a hosted call's arguments in a fresh stack slot, most-aligned first,
+/// writing each argument's offset into `offsets`; returns the slot's frame offset.
+/// The slot is aligned to its most-aligned argument, because an `.indirect`
+/// argument hands the host a pointer into it typed at that argument's alignment.
+fn allocHostedArgsSlot(self: *Self, arena: Allocator, arg_layouts: []const layout.Idx, offsets: []u32) Allocator.Error!u32 {
+    const extent = try self.computeHostedArgOffsets(arena, arg_layouts, offsets);
+    // Pad by 8 bytes so a register piece loaded as a full 64-bit word from the tail of the
+    // slot never reads past it.
+    return try self.allocStackMemory(@max(extent.size, 4) + 8, @max(extent.alignment, 4));
+}
+
+const HostedArgsExtent = struct {
+    size: u32,
+    alignment: u32,
+};
+
+fn computeHostedArgOffsets(self: *Self, arena: Allocator, arg_layouts: []const layout.Idx, offsets: []u32) Allocator.Error!HostedArgsExtent {
     std.debug.assert(arg_layouts.len == offsets.len);
 
     var ordered = try arena.alloc(HostedArgOrder, arg_layouts.len);
@@ -6762,7 +6928,10 @@ fn computeHostedArgOffsets(self: *Self, arena: Allocator, arg_layouts: []const l
         offsets[arg.index] = total;
         total += arg.size;
     }
-    return total;
+    return .{
+        .size = total,
+        .alignment = if (ordered.len == 0) 1 else ordered[0].alignment,
+    };
 }
 
 fn copyProcLocalToHostedArgs(
@@ -6841,6 +7010,7 @@ fn registerBoxySymbol(self: *Self, name: []const u8, params: []const ValType, re
 /// may already define these symbols in a surgically merged module; relocatable
 /// app objects receive imports that the final wasm link resolves instead.
 pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
+    if (self.store.runtime_contract == .specialized) return;
     try self.registerBoxySymbol("roc_boxy_init_embedded", &.{.i32}, &.{});
     try self.registerBoxySymbol("roc_boxy_static_desc", &.{.i32}, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_static_dict", &.{.i32}, &.{.i32});
@@ -6888,6 +7058,7 @@ pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
 }
 
 fn emitBoxyCall(self: *Self, name: []const u8) Allocator.Error!void {
+    if (self.store.runtime_contract != .boxy) wasmInvariantFmt("specialized code requested a Boxy runtime dependency", .{});
     const target = self.tables().boxy_symbol_targets.get(name) orelse wasmInvariantFmt(
         "WASM/codegen invariant violated: Boxy symbol {s} was not registered before proc compilation",
         .{name},
@@ -7345,10 +7516,7 @@ fn emitCAbiCall(
     const ret_ptr_local = try self.emitFpOffsetToNewLocal(ret_slot);
 
     const arg_offsets = try arena.alloc(u32, args.len);
-    const args_size = try self.computeHostedArgOffsets(arena, arg_layouts, arg_offsets);
-    // Pad by 8 bytes so a register piece loaded as a full 64-bit word from the tail of the
-    // slot never reads past it.
-    const args_slot = try self.allocStackMemory(@max(args_size, 4) + 8, 4);
+    const args_slot = try self.allocHostedArgsSlot(arena, arg_layouts, arg_offsets);
     const args_ptr_local = try self.emitFpOffsetToNewLocal(args_slot);
 
     for (0..args.len) |i| {
@@ -8753,7 +8921,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
     }
 
     if (try self.isCompositeLayout(c.ret_layout)) {
-        const result_size = try self.layoutByteSize(self.runtimeRepresentationLayoutIdx(c.ret_layout));
+        const result_size = try self.layoutStorageByteSize(self.runtimeRepresentationLayoutIdx(c.ret_layout));
         const stable_local = try self.stabilizeCompositeResult(result_size);
         try self.emitLocalGet(stable_local);
     }
@@ -8820,6 +8988,32 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
         }
     }
 
+    const ret_size = try self.layoutStorageByteSize(self.runtimeRepresentationLayoutIdx(c.ret_layout));
+    const ret_offset = if (ret_size == 0) null else try self.allocStackMemory(ret_size, try self.layoutStorageByteAlign(c.ret_layout));
+    if (self.store.runtime_contract == .specialized) {
+        try self.emitLocalGet(fn_ptr);
+        if (c.deferred) {
+            try self.emitLocalGet(payload_ptr);
+            if (args_ptr) |offset| try self.emitFpOffset(offset) else try self.emitNullPtr();
+            try self.emitI32Const(@intCast(plan.size));
+            try self.emitBuiltinCall(.native_callable_defer);
+        } else {
+            if (ret_offset) |offset| try self.emitFpOffset(offset) else try self.emitNullPtr();
+            if (args_ptr) |offset| try self.emitFpOffset(offset) else try self.emitNullPtr();
+            try self.emitLocalGet(capture_ptr);
+            if (c.reuse_closure) try self.emitLocalGet(payload_ptr) else try self.emitNullPtr();
+            try self.emitBuiltinCall(.native_callable_call);
+        }
+        if (ret_size == 0 or c.deferred) {
+            try self.emitZeroValue(try self.resolveValType(c.ret_layout));
+        } else if (try self.isCompositeLayout(c.ret_layout)) {
+            try self.emitFpOffset(ret_offset.?);
+        } else {
+            try self.emitFpOffset(ret_offset.?);
+            try self.emitLoadOpSized(try self.resolveValType(c.ret_layout), ret_size, 0);
+        }
+        return;
+    }
     const arg_descs_ptr = if (arg_desc_refs.len == 0)
         null
     else
@@ -8837,8 +9031,6 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
         }
     }
 
-    const ret_size = try self.layoutStorageByteSize(self.runtimeRepresentationLayoutIdx(c.ret_layout));
-    const ret_offset = if (ret_size == 0) null else try self.allocStackMemory(ret_size, try self.layoutStorageByteAlign(c.ret_layout));
     if (c.deferred) {
         // The runtime records the call; whoever awaits this procedure's
         // result makes it, so the value pushed here is never read.
@@ -8928,7 +9120,7 @@ fn emitDrivePending(self: *Self, drive: LIR.PendingDrive, ret_layout: layout.Idx
     }
     // The descriptor a pending call returns replaces the statement's own,
     // which stays in place when nothing is pending.
-    const out_desc_ptr = try self.allocBoxyOutDescPtr();
+    const out_desc_ptr = if (self.store.runtime_contract == .boxy) try self.allocBoxyOutDescPtr() else 0;
     if (out_desc) |desc_local| {
         try self.emitProcLocal(desc_local);
         try self.emitStoreToMemSized(out_desc_ptr, 0, .i32, 4);
@@ -8943,10 +9135,14 @@ fn emitDrivePending(self: *Self, drive: LIR.PendingDrive, ret_layout: layout.Idx
         self.currentCode().append(self.allocator, @backingInt(BlockType.void)) catch return error.OutOfMemory;
     }
     if (slot_local) |slot| try self.emitLocalGet(slot) else try self.emitNullPtr();
-    try self.emitLocalGet(out_desc_ptr);
-    if (result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-    try self.emitI32Const(@intCast(@backingInt(runtime_layout)));
-    try self.emitBoxyCall("roc_boxy_drive_pending");
+    if (self.store.runtime_contract == .specialized) {
+        try self.emitBuiltinCall(.native_callable_drive);
+    } else {
+        try self.emitLocalGet(out_desc_ptr);
+        if (result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
+        try self.emitI32Const(@intCast(@backingInt(runtime_layout)));
+        try self.emitBoxyCall("roc_boxy_drive_pending");
+    }
     if (drive == .unless_caller_drives) {
         self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
     }
@@ -9000,7 +9196,7 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
         );
     };
     const on_drop_table_idx = try self.erasedCallableOnDropTableIndex(c.on_drop);
-    const metadata_offset: u32 = @intCast(builtins.erased_callable.compilerMetadataOffset(capture_size));
+    const metadata_offset: u32 = if (self.store.runtime_contract == .boxy) @intCast(builtins.erased_callable.compilerMetadataOffset(capture_size)) else 0;
     const payload_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     if (c.reuse) |reuse| {
         const reuse_ptr = try self.emitProcLocalToNewLocal(reuse, .i32);
@@ -9069,15 +9265,16 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
         }
     }
 
-    try self.emitLocalGet(payload_ptr);
-    if (c.result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-    try self.emitStoreOpSized(
-        .i32,
-        4,
-        @intCast(builtins.erased_callable.capture_offset + metadata_offset + @offsetOf(builtins.erased_callable.CompilerMetadata, "result_desc")),
-    );
-    try self.emitErasedProcRegistration(c.proc, table_idx, metadata_offset);
-
+    if (self.store.runtime_contract == .boxy) {
+        try self.emitLocalGet(payload_ptr);
+        if (c.result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
+        try self.emitStoreOpSized(
+            .i32,
+            4,
+            @intCast(builtins.erased_callable.capture_offset + metadata_offset + @offsetOf(builtins.erased_callable.CompilerMetadata, "result_desc")),
+        );
+        try self.emitErasedProcRegistration(c.proc, table_idx, metadata_offset);
+    }
     try self.emitLocalGet(payload_ptr);
 }
 
@@ -9085,6 +9282,7 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
 /// metadata with the Boxy runtime under its function table index, the value
 /// stored at an erased callable's function-pointer field.
 fn emitErasedProcRegistration(self: *Self, proc_id: LIR.LirProcSpecId, table_idx: u32, metadata_offset: u32) Allocator.Error!void {
+    if (self.store.runtime_contract == .specialized) return;
     const proc_spec = self.store.getProcSpec(proc_id);
     try self.emitFunctionTableIndexConst(table_idx);
     try self.emitI32Const(@intCast(@backingInt(self.runtimeRepresentationLayoutIdx(proc_spec.ret_layout))));
@@ -9150,7 +9348,7 @@ fn boxyCaptureDropTableIndex(self: *Self, capture_layout: layout.Idx, desc_field
 }
 
 fn emitFreshErasedCallablePayload(self: *Self, payload_ptr: u32, capture_size: u32) Allocator.Error!void {
-    const payload_size = builtins.erased_callable.compilerPayloadSize(capture_size);
+    const payload_size = if (self.store.runtime_contract == .boxy) builtins.erased_callable.compilerPayloadSize(capture_size) else builtins.erased_callable.payloadSize(capture_size);
     try self.emitHeapAllocWithRefcountConst(
         @intCast(payload_size),
         builtins.erased_callable.payload_alignment,
@@ -9219,19 +9417,10 @@ fn getLayoutStore(self: *const Self) *const LayoutStore {
     return self.layout_store;
 }
 
-/// Get the byte size of a layout index using the layout store.
-fn layoutByteSize(self: *const Self, layout_idx: layout.Idx) Allocator.Error!u32 {
-    const ls = self.getLayoutStore();
-    return switch (try WasmLayout.wasmReprWithStore(layout_idx, ls, self.cpu_level != .v1)) {
-        .primitive => |vt| switch (vt) {
-            .i32, .f32 => 4,
-            .i64, .f64 => 8,
-            .v128 => 16,
-        },
-        .stack_memory => |size| size,
-    };
-}
-
+/// The number of bytes a value of this layout occupies in memory. A scalar
+/// narrower than its wasm value type (Bool, U8, I16, ...) occupies only its own
+/// bytes, so every load and store of one must use this size, not the width of
+/// the wasm value that holds it.
 fn layoutStorageByteSize(self: *const Self, layout_idx: layout.Idx) Allocator.Error!u32 {
     const ls = self.getLayoutStore();
     const l = ls.getLayout(layout_idx);
@@ -9258,7 +9447,13 @@ fn layoutStorageByteSize(self: *const Self, layout_idx: layout.Idx) Allocator.Er
         .box, .box_of_zst, .erased_box => 4,
         .tag_union => (try WasmLayout.tagUnionLayoutWithStore(l.getTagUnion().idx, ls)).size,
         .struct_ => try WasmLayout.structSizeWithStore(l.getStruct().idx, ls),
-        .closure, .erased_callable, .ptr => try self.layoutByteSize(layout_idx),
+        .erased_callable, .ptr => 4,
+        // A closure is represented by its captures, except that captures held
+        // in stack memory are sized to the outermost closure.
+        .closure => switch (try WasmLayout.wasmReprWithStore(layout_idx, ls, self.cpu_level != .v1)) {
+            .stack_memory => |size| size,
+            .primitive => try self.layoutStorageByteSize(l.getClosure().captures_layout_idx),
+        },
     };
 }
 
@@ -9725,11 +9920,8 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
 
     const base_local = try self.emitFpOffsetToNewLocal(frame_offset);
 
-    // Store payload FIRST (payload may overlap discriminant if it is wider than
-    // the payload slot, e.g. i64 for a u32 tag payload—the i64 store would
-    // clobber the discriminant).
     if (t.payload) |payload_local| {
-        const payload_byte_size = try self.layoutByteSize(variant_payload_layout);
+        const payload_byte_size = try self.layoutStorageByteSize(variant_payload_layout);
         if (builtin.mode == .debug and self.procLocalLayoutIdx(payload_local) != variant_payload_layout) {
             base.invariant(
                 "WASM/codegen invariant violated: tag payload local layout {d} did not match variant payload layout {d}",
@@ -9748,7 +9940,6 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
         }
     }
 
-    // Store discriminant AFTER payload (so it can't be overwritten)
     const disc_size: u32 = tu_layout.discriminant_size;
     if (disc_size != 0) {
         try self.emitI32Const(@intCast(t.discriminant));
@@ -9787,7 +9978,7 @@ fn generateStoreAggregateValue(self: *Self, dest: ProcLocalId, value_layout: lay
         payload: ?ProcLocalId,
     },
 }) Allocator.Error!void {
-    const value_size = try self.layoutByteSize(value_layout);
+    const value_size = try self.layoutStorageByteSize(value_layout);
 
     const ptr_local = try self.emitProcLocalToNewLocal(dest, .i32);
 
@@ -11422,7 +11613,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const erased_box_ptr = box_layout.tag == .scalar and box_layout.getScalar().tag == .opaque_ptr;
 
             if (box_layout.tag == .box_of_zst or
-                (erased_box_ptr and try self.layoutByteSize(ll.ret_layout) == 0))
+                (erased_box_ptr and try self.layoutStorageByteSize(ll.ret_layout) == 0))
             {
                 // The input is an already-evaluated LIR local. A zero-sized
                 // payload needs no load; pushing its pointer here would leave
@@ -11430,7 +11621,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 try self.emitZeroValue(try self.resolveValType(ll.ret_layout));
             } else {
                 const elem_size = if (erased_box_ptr)
-                    try self.layoutByteSize(ll.ret_layout)
+                    try self.layoutStorageByteSize(ll.ret_layout)
                 else
                     ls.builtinBoxAbi(box_layout_idx).elem_size;
                 if (elem_size == 0) {
@@ -11440,17 +11631,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 } else {
                     try self.emitProcLocal(box_expr);
 
-                    const result_repr = try WasmLayout.wasmReprWithStore(ll.ret_layout, ls, self.cpu_level != .v1);
-                    const result_vt: ValType = switch (result_repr) {
-                        .stack_memory => .i32,
-                        .primitive => |val_type| val_type,
-                    };
-                    const result_is_composite = switch (result_repr) {
-                        .stack_memory => true,
-                        .primitive => false,
-                    };
-                    const result_size = try self.layoutByteSize(ll.ret_layout);
-                    if (result_is_composite) {
+                    if (try self.isCompositeLayout(ll.ret_layout)) {
+                        const result_size = try self.layoutStorageByteSize(ll.ret_layout);
                         const src_local = try self.emitSetNewLocal(.i32);
 
                         const result_align: u32 = @intCast(@max(self.getLayoutStore().layoutSizeAlign(self.getLayoutStore().getLayout(ll.ret_layout)).alignment.toByteUnits(), 1));
@@ -11460,17 +11642,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                         try self.emitMemCopy(dst_local, 0, src_local, result_size);
                         try self.emitLocalGet(dst_local);
                     } else {
-                        const box_ptr = try self.emitSetNewLocal(.i32);
-                        if (result_size == 0) {
-                            try self.emitZeroValue(result_vt);
-                        } else {
-                            const temp_offset = try self.allocStackMemory(@max(result_size, 4), 4);
-                            const temp_ptr = try self.emitFpOffsetToNewLocal(temp_offset);
-
-                            try self.emitMemCopy(temp_ptr, 0, box_ptr, result_size);
-                            try self.emitLocalGet(temp_ptr);
-                            try self.emitLoadOpSized(result_vt, result_size, 0);
-                        }
+                        try self.emitLoadOpForLayout(ll.ret_layout, 0);
                     }
                 }
             }
@@ -11550,7 +11722,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .erased_capture_load => {
             const capture_ptr_expr = GuardedList.at(args, 0);
-            const result_size = try self.layoutByteSize(ll.ret_layout);
+            const result_size = try self.layoutStorageByteSize(ll.ret_layout);
             const result_vt = try self.resolveValType(ll.ret_layout);
 
             if (result_size == 0) {
@@ -11567,8 +11739,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     try self.emitLocalGet(dst_local);
                 } else {
                     try self.emitLocalGet(capture_ptr);
-                    try self.emitLoadOpSized(result_vt, result_size, 0);
-                    try self.emitCanonicalizeScalarForLayout(ll.ret_layout);
+                    try self.emitLoadOpForLayout(ll.ret_layout, 0);
                 }
             }
         },
@@ -11578,7 +11749,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // and leave its i32 address on the stack. Target layout is ptr(T).
             const ls = self.getLayoutStore();
             const elem_idx = ls.getLayout(ll.ret_layout).getIdx();
-            const elem_size = try self.layoutByteSize(elem_idx);
+            const elem_size = try self.layoutStorageByteSize(elem_idx);
             const elem_align: u32 = @intCast(@max(ls.layoutSizeAlign(ls.getLayout(elem_idx)).alignment.toByteUnits(), 1));
 
             const slot_offset = try self.allocStackMemory(@max(elem_size, 1), @max(elem_align, 4));
@@ -11613,7 +11784,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // ptr_store: (Ptr(T), T) -> {}. Copy sizeOf(T) bytes into *ptr.
             // Result is unit; leave a dummy i32 0 (zst convention).
             const value_expr = GuardedList.at(args, 1);
-            const value_size = try self.layoutByteSize(self.procLocalLayoutIdx(value_expr));
+            const value_size = try self.layoutStorageByteSize(self.procLocalLayoutIdx(value_expr));
 
             if (value_size != 0) {
                 const value_repr = try WasmLayout.wasmReprWithStore(self.procLocalLayoutIdx(value_expr), self.getLayoutStore(), self.cpu_level != .v1);
@@ -11640,7 +11811,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .ptr_load => {
             // ptr_load: (Ptr(T)) -> T. Copy sizeOf(T) bytes out of *ptr.
             // Same shape as erased_capture_load above.
-            const result_size = try self.layoutByteSize(ll.ret_layout);
+            const result_size = try self.layoutStorageByteSize(ll.ret_layout);
             const result_repr = try WasmLayout.wasmReprWithStore(ll.ret_layout, self.getLayoutStore(), self.cpu_level != .v1);
             const result_vt: ValType = switch (result_repr) {
                 .stack_memory => .i32,
@@ -11666,8 +11837,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     try self.emitLocalGet(dst_local);
                 } else {
                     try self.emitLocalGet(src_ptr);
-                    try self.emitLoadOpSized(result_vt, result_size, 0);
-                    try self.emitCanonicalizeScalarForLayout(ll.ret_layout);
+                    try self.emitLoadOpForLayout(ll.ret_layout, 0);
                 }
             }
         },
@@ -16967,6 +17137,42 @@ test "rcAllocationLayout matches wasm32 builtin refcount allocation layout" {
     try expectEqual(@as(u32, 16), refcounted_aligned.allocation_alignment);
 }
 
+test "a hosted call's args slot is aligned to its most-aligned argument" {
+    const allocator = std.testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+
+    // A record holding a Dec: wasm32 passes it to the host by pointer into the slot.
+    const dec_record = try layouts.putTuple(&.{ layout.Layout.frac(.dec), layout.Layout.int(.u8) });
+    const arg_layouts = [_]layout.Idx{ .u8, dec_record };
+    const lowered = try layout.abi.lower(arena, &layouts, .wasm32, &arg_layouts, .zst, false);
+    try std.testing.expect(lowered.args[1] == .indirect);
+
+    var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
+    defer codegen.deinit();
+    const type_idx = try codegen.module.addFuncType(&.{}, &.{});
+    const defined = try codegen.module.addDefinedFunction(type_idx);
+    const saved = try codegen.saveState();
+    try codegen.beginFunction(defined.local);
+
+    // emitCAbiCall allocates the return slot first; a small one leaves the frame 4-aligned.
+    _ = try codegen.allocStackMemory(4, 4);
+    var offsets: [arg_layouts.len]u32 = undefined;
+    const slot = try codegen.allocHostedArgsSlot(arena, &arg_layouts, &offsets);
+
+    try std.testing.expectEqual(@as(u32, 0), offsets[1]);
+    try std.testing.expectEqual(@as(u32, 0), (slot + offsets[1]) % 16);
+
+    codegen.endFunction();
+    codegen.restoreState(saved);
+}
+
 test "wasm backend fuses overflow predicate with matching wrapping result" {
     const allocator = std.testing.allocator;
     var store = LirStore.init(allocator);
@@ -17849,6 +18055,7 @@ test "a metadata-only descriptor out local binds once and reads back that slot" 
     const allocator = std.testing.allocator;
     var store = LirStore.init(allocator);
     defer store.deinit();
+    store.runtime_contract = .boxy;
     var layouts = try layout.Store.init(allocator, .u32);
     defer layouts.deinit();
 

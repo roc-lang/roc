@@ -110,6 +110,7 @@ pub const Artifact = struct {
         errdefer arena.deinit();
         const a = arena.allocator();
         var copy = CodeBuilder.init();
+        copy.frame_bytes = body.frame_bytes;
         try copy.code.appendSlice(a, body.code.items);
         try copy.preamble.appendSlice(a, body.preamble.items);
         try copy.import_relocations.appendSlice(a, body.import_relocations.items);

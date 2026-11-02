@@ -546,7 +546,6 @@ fn buildGlueSpecPluginFileInner(
 
 const glue_plugin_stamp_magic = [8]u8{ 'R', 'O', 'C', 'P', 'L', 'G', '1', 0 };
 const glue_plugin_abi_version: u32 = 1;
-var glue_cache_temp_counter = std.atomic.Value(usize).init(0);
 
 const GluePluginKind = enum(u32) {
     glue = 1,
@@ -569,11 +568,12 @@ const GluePluginStampV1 = extern struct {
 /// came from when a stamp mismatch should evict it.
 const BuiltGluePlugin = struct {
     bytes: []u8,
-    cache_path: ?[:0]const u8,
+    cache_root: ?[]u8,
+    cache_identity: ?compile.artifacts.Identity = null,
 
     fn deinit(self: BuiltGluePlugin, allocator: Allocator) void {
         allocator.free(self.bytes);
-        if (self.cache_path) |path| allocator.free(path);
+        if (self.cache_root) |path| allocator.free(path);
     }
 };
 
@@ -599,7 +599,7 @@ fn runGlueSpecPlugin(
 
     var lib = blk: {
         const first = plugin.?;
-        break :blk loadVerifiedGluePlugin(gpa, stderr, first, &stamp, args.no_cache) catch |err| {
+        break :blk loadVerifiedGluePlugin(gpa, stderr, first, &stamp, lowered.lir_result.store.runtime_contract, args.no_cache) catch |err| {
             switch (err) {
                 error.GluePluginUnavailable, error.GluePluginStampMismatch => {},
                 error.BuildEnvInit,
@@ -618,14 +618,14 @@ fn runGlueSpecPlugin(
             }
             // An installed plugin is a managed artifact: never rebuild past a
             // failure to load it; the remedy is reinstalling the shorthand.
-            if (args.no_cache or args.installed_plugin_path != null or first.cache_path == null) return err;
+            if (args.no_cache or args.installed_plugin_path != null or first.cache_root == null) return err;
 
             deleteGluePluginCacheEntry(first, std_io);
             first.deinit(gpa);
             plugin = null;
 
             plugin = try getOrBuildGluePlugin(gpa, lowered, glue_proc, arg_layouts, executable_identity, stamp, args, roc_ctx, std_io);
-            break :blk try loadVerifiedGluePlugin(gpa, stderr, plugin.?, &stamp, true);
+            break :blk try loadVerifiedGluePlugin(gpa, stderr, plugin.?, &stamp, lowered.lir_result.store.runtime_contract, true);
         };
     };
     defer lib.deinit();
@@ -638,7 +638,7 @@ fn runGlueSpecPlugin(
     defer crash_boundary.deinit();
 
     const boxy_tables = eval_mod.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result);
-    const boxy_runtime = if (boxy_tables.needsRuntimeForStore(&lowered.lir_result.store))
+    const boxy_runtime = if (eval_mod.boxy_runtime.storeNeedsRuntime(&lowered.lir_result.store))
         try eval_mod.boxy_abi.createRuntimeFromStores(
             gpa,
             &lowered.lir_result.store,
@@ -689,53 +689,30 @@ fn getOrBuildGluePlugin(
 ) GlueError!BuiltGluePlugin {
     if (args.installed_plugin_path) |installed_path| {
         const bytes = readPluginFile(gpa, installed_path, std_io) orelse return error.GluePluginUnavailable;
-        return .{ .bytes = bytes, .cache_path = null };
+        return .{ .bytes = bytes, .cache_root = null };
     }
 
     if (args.no_cache) {
-        return .{ .bytes = try buildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args.opt, std_io), .cache_path = null };
+        return .{ .bytes = try buildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args.opt, std_io), .cache_root = null };
     }
 
-    const cache_path = gluePluginCachePath(gpa, executable_identity, stamp, args.opt, roc_ctx) catch |err| switch (err) {
+    const logical_path = gluePluginCachePath(gpa, executable_identity, stamp, args.opt, roc_ctx) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        error.NoHomeDirectory,
-        => return error.BuildEnvInit,
+        error.NoHomeDirectory => return error.BuildEnvInit,
     };
-    errdefer gpa.free(cache_path);
-
-    if (readPluginFile(gpa, cache_path, std_io)) |bytes| {
-        return .{ .bytes = bytes, .cache_path = cache_path };
-    }
-
-    const cache_dir = std.fs.path.dirname(std.mem.sliceTo(cache_path, 0)) orelse return error.BuildEnvInit;
-    std.Io.Dir.cwd().createDirPath(std_io, cache_dir) catch return error.BuildEnvInit;
-
+    defer gpa.free(logical_path);
+    const config: compile.CacheConfig = .{ .roc_ctx = roc_ctx };
+    const root = config.getEffectiveCacheDir(gpa) catch return error.BuildEnvInit;
+    errdefer gpa.free(root);
+    var store = try compile.artifacts.Store.init(gpa, std_io, root);
+    defer store.deinit();
+    var id: compile.artifacts.Identity = .{ .namespace = undefined, .family = .glue_plugin, .key = undefined, .variant = compile.artifacts.hashBytes(@tagName(args.opt)) };
+    std.crypto.hash.sha2.Sha256.hash(build_options.compiler_compatibility_id, &id.namespace, .{});
+    std.crypto.hash.sha2.Sha256.hash(logical_path, &id.key, .{});
+    if (store.read(gpa, id, store.now()) catch null) |bytes| return .{ .bytes = bytes, .cache_root = root, .cache_identity = id };
     const bytes = try buildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args.opt, std_io);
-    errdefer gpa.free(bytes);
-
-    const cache_temp_path = gluePluginCacheTempPath(gpa, cache_path) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-    defer {
-        std.Io.Dir.cwd().deleteFile(std_io, std.mem.sliceTo(cache_temp_path, 0)) catch {};
-        gpa.free(cache_temp_path);
-    }
-
-    std.Io.Dir.cwd().writeFile(std_io, .{
-        .sub_path = std.mem.sliceTo(cache_temp_path, 0),
-        .data = bytes,
-    }) catch return error.CompilationFailed;
-
-    // Another process may have published the same entry meanwhile; the
-    // bytes are the same either way.
-    std.Io.Dir.cwd().rename(
-        std.mem.sliceTo(cache_temp_path, 0),
-        std.Io.Dir.cwd(),
-        std.mem.sliceTo(cache_path, 0),
-        std_io,
-    ) catch {};
-
-    return .{ .bytes = bytes, .cache_path = cache_path };
+    store.write(id, bytes, store.now()) catch {};
+    return .{ .bytes = bytes, .cache_root = root, .cache_identity = id };
 }
 
 /// The bytes of a plugin object file, or null when it cannot be read.
@@ -801,9 +778,10 @@ fn loadVerifiedGluePlugin(
     stderr: *std.Io.Writer,
     plugin: BuiltGluePlugin,
     expected: *const GluePluginStampV1,
+    runtime_contract: lir.LIR.RuntimeContract,
     report_errors: bool,
 ) GlueError!eval_mod.object_image.Image {
-    var image = eval_mod.object_image.load(gpa, plugin.bytes) catch |err| switch (err) {
+    var image = eval_mod.object_image.load(gpa, plugin.bytes, runtime_contract) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.UnsupportedObject,
         error.MalformedObject,
@@ -883,24 +861,11 @@ fn gluePluginCachePath(
     });
 }
 
-fn gluePluginCacheTempPath(allocator: Allocator, cache_path: [:0]const u8) Allocator.Error![:0]u8 {
-    const counter = glue_cache_temp_counter.fetchAdd(1, .monotonic);
-    const pid: u64 = if (builtin.os.tag == .windows)
-        std.os.windows.GetCurrentProcessId()
-    else
-        @intCast(std.c.getpid());
-    const path = try std.fmt.allocPrint(allocator, "{s}.{x}.{x}.tmp", .{
-        std.mem.sliceTo(cache_path, 0),
-        pid,
-        counter,
-    });
-    defer allocator.free(path);
-    return try allocator.dupeSentinel(u8, path, 0);
-}
-
 fn deleteGluePluginCacheEntry(plugin: BuiltGluePlugin, std_io: std.Io) void {
-    const path = plugin.cache_path orelse return;
-    std.Io.Dir.cwd().deleteFile(std_io, std.mem.sliceTo(path, 0)) catch {};
+    const root = plugin.cache_root orelse return;
+    var store = compile.artifacts.Store.init(std.heap.page_allocator, std_io, root) catch return;
+    defer store.deinit();
+    store.invalidate(plugin.cache_identity.?) catch {};
 }
 
 fn gluePluginOutputHash(executable_identity: [32]u8, stamp: GluePluginStampV1) [32]u8 {

@@ -1033,7 +1033,7 @@ test "Monotype closed direct low-level lowering stays sealed and allocation disc
         "fn scopedNode(self: *BodyContext",
     );
     try expectContains(fresh_inst_node, "TypeInstantiationContext.init");
-    try expectNotContains(fresh_inst_node, "BodyContext.initWithMethodScope");
+    try expectNotContains(fresh_inst_node, "BodyContext.init(");
 
     const source_mapping = sourceSliceBetween(
         lower_source,
@@ -1164,7 +1164,9 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
         "pub const GraphTypeFinals = struct {",
     );
     try expectContains(durable_scan, "const types = self.graph.types;");
-    try expectContains(durable_scan, "self.visiting.fetchRemove(ty)");
+    // Cycles are resolved by the shared emptiness evaluation, not a local
+    // visiting set.
+    try expectContains(durable_scan, "@import(\"../inhabitation.zig\").Evaluation(Type.TypeId, TypeUninhabitedScan)");
     try expectNotContains(durable_scan, "activeNodeFromType");
     try expectNotContains(durable_scan, "self.graph.content(");
     const inspect_call = sourceSliceBetween(
@@ -2184,7 +2186,7 @@ test "Monotype lowering scopes share one definition of each type-shape, name-imp
     const lookups = [_][]const u8{ "lookupMethodTarget", "lookupMethodTargetByName", "inspectOverrideFor" };
     inline for (lookups) |name| {
         try std.testing.expectEqual(@as(usize, 1), countDefinitions(source, "fn " ++ name ++ "("));
-        try expectContains(source, "    fn " ++ name ++ "(\n        self: *Builder,\n        scope: ModuleView,\n        owner_names: *const names.NameStore,");
+        try expectContains(source, "    fn " ++ name ++ "(\n        self: *Builder,\n        owner_names: *const names.NameStore,");
     }
     // The restore walker reads shapes through the shared queries, so the
     // restorer interface carries no shape queries of its own.

@@ -1024,6 +1024,17 @@ pub const StoredFnSource = struct {
     fn_id: checked.ConstFnId,
 };
 
+const StoredCodecEdgeKey = struct {
+    store: PlanModuleId,
+    edge: check.ConstStore.StoredCodecEdge,
+};
+
+/// A stored codec edge resolved in the module that holds its contract.
+const StoredCodecEdgeIn = struct {
+    view: ModuleView,
+    edge: check.ConstStore.RecordedStructuralEdge,
+};
+
 /// An open record's descriptor read from a worker's dictionary: requirement
 /// descriptor `hidden_index` of the requirement's method.
 pub const WorkerDictionaryDescriptor = struct {
@@ -1469,6 +1480,7 @@ pub const ProgramPlan = struct {
     recursive_slot_reps: std.ArrayList(RecursiveSlotRep) = .empty,
 
     pub fn init(allocator: Allocator) ProgramPlan {
+        base.dev_diagnostics.traceBoxyWork("planning");
         return .{
             .allocator = allocator,
             .roots = .empty,
@@ -2391,6 +2403,9 @@ pub const ModuleView = struct {
     const_store: ?*const check.ConstStore.ConstStore = null,
     const_templates: ?*const checked.ConstTemplateTable = null,
     module_env: ?*const can.ModuleEnv = null,
+    /// The CheckedModule keys of the modules this module imports directly,
+    /// in import order.
+    direct_import_module_keys: []const checked.CheckedModuleArtifactKey = &.{},
 };
 
 /// A type variable, or a type checking left unresolved, constrains no shape.
@@ -4155,6 +4170,9 @@ const Builder = struct {
     /// Variable bindings of a stored-type instance check in progress.
     stored_instance_bindings: ?*StoredInstanceBindings = null,
     stored_use_substitutions: std.AutoHashMapUnmanaged(u64, Span) = .empty,
+    /// Stored codec edges already resolved in their storing module's import
+    /// closure.
+    stored_codec_edges: std.AutoHashMapUnmanaged(StoredCodecEdgeKey, StoredCodecEdgeIn) = .empty,
     nominal_declaration_formals: std.AutoHashMap(NominalDeclarationKey, Span),
     optional_slots: std.AutoHashMap(CheckedTypeIdentity, TypeRepId),
     /// Presence slots built around a representation rather than a checked
@@ -4352,6 +4370,7 @@ const Builder = struct {
         self.row_join_members.deinit();
         self.quantified_variables.deinit();
         self.stored_use_substitutions.deinit(self.allocator);
+        self.stored_codec_edges.deinit(self.allocator);
         self.nominal_declaration_formals.deinit();
         self.generated_callable_uses.deinit(self.allocator);
         self.observed_numeral_evidence.deinit(self.allocator);
@@ -5593,7 +5612,7 @@ const Builder = struct {
                 };
                 const nested = switch (node.nested) {
                     .resolved => |span| span,
-                    .from_callable => boxyPlanInvariant("generated codec call retained callable-derived evidence"),
+                    .from_callable, .through_alias => boxyPlanInvariant("generated codec call retained callable-derived evidence"),
                 };
                 source = workerSourceForMethodTarget(lookup, dispatch_type, null);
                 source_fn_type = .{ .module = viewModule(target_view), .ty = node.target.callable_ty };
@@ -6474,7 +6493,7 @@ const Builder = struct {
         var relation: ?Span = null;
         if (evidence) |inspect_evidence| {
             try self.analyzeEvidenceEdgeSchemeSubstitution(inspect_evidence);
-            if (inspectUseNestedEvidence(lookup.view, inspect_evidence.node)) |nested| {
+            if (self.inspectUseNestedEvidence(lookup.view, inspect_evidence.node)) |nested| {
                 try self.observeNumeralEvidence(lookup.view, nested, self.workerEvidenceParams(source));
                 for (nested) |entry| _ = try self.analyzeType(lookup.view, entry.dispatcher_ty);
             } else {
@@ -8623,11 +8642,9 @@ const Builder = struct {
             },
             .evidence_dependent => |dependent| blk: {
                 const evidence = storedStructuralEvidence(stored, dependent.index, dependent.callable_contract);
-                const checked_evidence = evidence.checked orelse
-                    boxyPlanInvariant("stored generated codec evidence had no checked structural identity");
-                if (!std.meta.eql(checked_evidence.view.bytes, view.key.bytes)) {
+                const checked_evidence = storedCheckedStructuralIn(view, evidence.checked orelse
+                    boxyPlanInvariant("stored generated codec evidence had no checked structural identity")) orelse
                     boxyPlanInvariant("stored generated codec evidence named a contract outside its runtime's module");
-                }
                 break :blk .{
                     .kind = evidence.derivation.kind(),
                     .derivation = checked_evidence.generated_codec_derivation,
@@ -8670,6 +8687,33 @@ const Builder = struct {
     /// The structural evidence entry a stored function retained at a checked
     /// evidence coordinate: `depth` frames out from its innermost frame, the
     /// `index`th root there, or that root's selected callable contract.
+    /// A stored function's checked structural edge read in `view`, the
+    /// module that must hold it: a recorded edge names that module, and a
+    /// codec edge resolves to `view`'s first contract with its content.
+    /// Null when `view` does not hold the edge.
+    fn storedCheckedStructuralIn(view: ModuleView, stored: check.ConstStore.CheckedStructuralEdge) ?check.ConstStore.RecordedStructuralEdge {
+        switch (stored) {
+            .recorded => |recorded| return if (std.meta.eql(recorded.view.bytes, view.key.bytes)) recorded else null,
+            .codec => |codec| {
+                const dispatcher_ty = view.checked_types.rootForKey(codec.dispatcher_key) orelse return null;
+                const callable_ty = view.checked_types.rootForKey(codec.callable_key) orelse return null;
+                for (view.static_dispatch_plans.generated_codec_derivations, 0..) |contract, index| {
+                    if (!std.mem.eql(u8, &contract.content.bytes, &codec.content.bytes)) continue;
+                    return .{
+                        .view = .{ .bytes = view.key.bytes },
+                        .dispatcher_key = codec.dispatcher_key,
+                        .dispatcher_ty = dispatcher_ty,
+                        .callable_key = codec.callable_key,
+                        .callable_ty = callable_ty,
+                        .generated_codec_derivation = @fromBackingInt(@intCast(index)),
+                        .generated_codec_content = codec.content,
+                    };
+                }
+                return null;
+            },
+        }
+    }
+
     fn storedStructuralEvidence(
         stored: check.ConstStore.ConstFn,
         coordinate: static_dispatch.EvidenceChainIndex,
@@ -12402,11 +12446,11 @@ const Builder = struct {
                 .local_proc => |local| self.nestedExprEvidenceParams(view, nestedCallableSiteExprFor(view, local.expr) orelse local.expr),
                 .structural => null,
             };
-            switch (node.nested) {
-                .resolved => try cursors.append(self.allocator, .{ .view = view, .entries = view.static_dispatch_plans.nestedEvidence(node), .schema = nested_schema }),
-                // The target's nested evidence travels with the callable value
-                // and is observed through that callable's own use.
-                .from_callable => {},
+            // Evidence that derives from the target's callable travels with
+            // the callable value and is observed through that callable's own
+            // use.
+            if (self.targetOwnEvidence(view, node)) |entries| {
+                try cursors.append(self.allocator, .{ .view = view, .entries = entries, .schema = nested_schema });
             }
         }
     }
@@ -13537,7 +13581,7 @@ const Builder = struct {
         const dispatch_plan = directCallDispatchPlan(call_expr);
         if (dispatchResolutionIsStructural(site_view, dispatch_plan)) return null;
         const node = site_view.static_dispatch_plans.evidenceNode(directDispatchEvidenceNode(site_view, dispatch_plan));
-        if (node.nested != .from_callable or carriesTargetSubstitution(node)) return null;
+        if (self.targetOwnEvidence(site_view, node) != null or carriesTargetSubstitution(node)) return null;
         const call_rep = self.plan.repForSourceType(direct.source_fn_type) orelse
             boxyPlanInvariant("boxy direct call function type was not analyzed");
         return try self.storedUseSchemeRepSubstitutions(self.plan.workers.items[@backingInt(direct.worker)].rep, call_rep);
@@ -13695,6 +13739,37 @@ const Builder = struct {
             },
             .checked_error, .callable_eval_template => null,
         };
+    }
+
+    /// Give each dictionary group its checked evidence slot. Checking emits
+    /// a dispatcher's constraints consecutively, in the order its group
+    /// lists them, but orders dispatchers by its own walk of the scheme, so a
+    /// group's position among this worker's groups says nothing about where
+    /// its evidence is. Its slot is the first checked param whose dispatcher
+    /// has the group's representation and whose method is the group's first.
+    fn indexDictionaryGroupEvidence(self: *Builder, worker: WorkerPlan, groups: []HiddenDictionaryParam) Allocator.Error!void {
+        var unindexed: usize = 0;
+        for (groups) |group| {
+            if (group.evidence_index == null and group.dictionaries.len != 0) unindexed += 1;
+        }
+        if (unindexed == 0) return;
+        const schema = self.workerEvidenceParams(worker.source) orelse return;
+        const schema_names = moduleNamesOf(schema.view);
+        for (schema.params, 0..) |param, index| {
+            const binding = self.by_type.get(typeRef(schema.view, param.dispatcher_ty)) orelse continue;
+            const rep = self.plan.type_reps.items[@backingInt(binding)].rep orelse continue;
+            const dictionaries = self.plan.representations.items[@backingInt(rep)].dictionaries;
+            if (dictionaries.len == 0) continue;
+            for (groups) |*group| {
+                if (group.evidence_index != null or !std.meta.eql(group.dictionaries, dictionaries)) continue;
+                const first = self.plan.dictionaries.items[dictionaries.start];
+                if (!methodNameMatches(schema_names, param.method, moduleNamesOf(self.moduleForId(first.source_type.module)), first.fn_name)) break;
+                group.evidence_index = @intCast(index);
+                unindexed -= 1;
+                if (unindexed == 0) return;
+                break;
+            }
+        }
     }
 
     /// Requirements outside the callable signature, and independent callable
@@ -13896,6 +13971,8 @@ const Builder = struct {
                 if (use.worker != worker.id) continue;
                 try self.collectHiddenDictionariesForRep(use.rep, &pending, &seen_reps);
             }
+
+            try self.indexDictionaryGroupEvidence(worker, pending.items);
 
             const start: u32 = @intCast(self.plan.hidden_dictionary_params.items.len);
             try self.plan.hidden_dictionary_params.appendSlice(self.allocator, pending.items);
@@ -15371,7 +15448,7 @@ const Builder = struct {
                 arg_types[0..arg_count],
                 ret_type,
                 evidence_view,
-                if (edge) |e| inspectUseNestedEvidence(evidence_view.?, e.node) else null,
+                if (edge) |e| self.inspectUseNestedEvidence(evidence_view.?, e.node) else null,
                 if (method.kind == .inspect) try self.inspectUseSchemeSubstitution(method, &bindings) else null,
                 method.relation,
                 &.{},
@@ -15938,7 +16015,7 @@ const Builder = struct {
     }
 
     fn nestedEvidenceForDirectDispatch(
-        _: *Builder,
+        self: *Builder,
         view: ModuleView,
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
     ) ?[]const static_dispatch.CheckedEvidence {
@@ -15951,12 +16028,7 @@ const Builder = struct {
         return switch (view.static_dispatch_plans.plans[raw].resolution) {
             .direct_closed, .direct_parametric => |direct| blk: {
                 const node = view.static_dispatch_plans.evidenceNode(direct.evidence);
-                // A target reached through a procedure alias derives its
-                // evidence from its callable.
-                break :blk switch (node.nested) {
-                    .resolved => view.static_dispatch_plans.nestedEvidence(node),
-                    .from_callable => null,
-                };
+                break :blk self.targetOwnEvidence(view, node);
             },
             .direct_pending => boxyPlanInvariant("unfinalized direct call reached Boxy planning"),
             .evidence_dependent,
@@ -15994,7 +16066,7 @@ const Builder = struct {
                 .arg_types = &.{source_type},
                 .ret_type = ret_type,
                 .evidence_view = evidence_view,
-                .evidence = inspectUseNestedEvidence(evidence_view, edge.node),
+                .evidence = self.inspectUseNestedEvidence(evidence_view, edge.node),
                 .scheme_substitution = try self.inspectUseSchemeSubstitution(method, &bindings),
                 .relation = method.relation,
                 .env = 0,
@@ -16019,11 +16091,23 @@ const Builder = struct {
     /// The nested evidence of inspection's use of an override, or null when
     /// the override is reached through a procedure alias and derives its
     /// evidence from its callable.
-    fn inspectUseNestedEvidence(view: ModuleView, node_id: static_dispatch.EvidenceNodeId) ?[]const static_dispatch.CheckedEvidence {
-        const node = view.static_dispatch_plans.evidenceNode(node_id);
+    fn inspectUseNestedEvidence(self: *Builder, view: ModuleView, node_id: static_dispatch.EvidenceNodeId) ?[]const static_dispatch.CheckedEvidence {
+        return self.targetOwnEvidence(view, view.static_dispatch_plans.evidenceNode(node_id));
+    }
+
+    /// The evidence an edge supplies for its target's own requirements, or
+    /// null when the target's evidence derives from its callable. Boxy calls
+    /// a target reached through a procedure alias at the call's types; such
+    /// a target with requirements takes their evidence from its callable,
+    /// and one with none takes no evidence.
+    fn targetOwnEvidence(self: *Builder, view: ModuleView, node: static_dispatch.EvidenceNode) ?[]const static_dispatch.CheckedEvidence {
         return switch (node.nested) {
             .resolved => view.static_dispatch_plans.nestedEvidence(node),
             .from_callable => null,
+            .through_alias => switch (node.target.kind) {
+                .procedure => |procedure| if (self.templateEvidenceParams(procedure.template).params.len == 0) &.{} else null,
+                .local_proc, .structural => boxyPlanInvariant("a method alias reached a target that is not a procedure"),
+            },
         };
     }
 
@@ -16152,7 +16236,7 @@ const Builder = struct {
             const node = view.static_dispatch_plans.evidenceNode(node_id);
             // A target reached through a procedure alias derives its evidence
             // from its callable, related to the call's function type.
-            const relation: ?Span = if (node.nested == .from_callable and !carriesTargetSubstitution(node)) blk: {
+            const relation: ?Span = if (self.targetOwnEvidence(view, node) == null and !carriesTargetSubstitution(node)) blk: {
                 const call_rep = self.plan.repForSourceType(call.source_fn_type) orelse
                     boxyPlanInvariant("boxy iterator call function type was not analyzed");
                 break :blk try self.storedUseSchemeRepSubstitutions(self.plan.workers.items[@backingInt(call.worker)].rep, call_rep);
@@ -16165,10 +16249,7 @@ const Builder = struct {
                 .arg_types = arg_types,
                 .ret_type = call.ret_type,
                 .evidence_view = view,
-                .evidence = switch (node.nested) {
-                    .resolved => view.static_dispatch_plans.nestedEvidence(node),
-                    .from_callable => null,
-                },
+                .evidence = self.targetOwnEvidence(view, node),
                 .scheme_substitution = self.evidenceEdgeSchemeSubstitution(call.worker, .{ .module = call.module, .node = node_id }),
                 .relation = relation,
                 .env = 0,
@@ -17497,6 +17578,12 @@ const Builder = struct {
         };
     }
 
+    /// The call's representation at `rep`. Read through the call each time:
+    /// planning grows the tables its instantiation views.
+    fn requirementCallRep(self: *const Builder, call: *const DictionaryCallArgs, rep: TypeRepId) ?TypeRepId {
+        return self.requirementCallInstantiation(call).get(&self.plan, rep);
+    }
+
     fn stepDictionaryCallArgs(self: *Builder, machine: *DictionaryArgsMachine, state: *DictionaryCallArgs) Allocator.Error!bool {
         switch (state.stage) {
             .next_param => {},
@@ -17645,9 +17732,9 @@ const Builder = struct {
                 const requirement = self.plan.dictionaries.items[hidden.dictionaries.start + method_index];
                 const method_id = arg.method_evidence.start + method_index;
                 const method = self.plan.dictionary_method_evidence.items[method_id];
-                if (method.resolution != .worker or method.instantiation_rep != null or method.instantiation_ret_type == null) continue;
-                const instantiation = try self.staticDictionaryMethodInstantiation(self.requirementCallInstantiation(state), arg.rep, requirement, method.callable_type);
-                if (instantiation.rep == null) continue;
+                if (method.resolution != .worker or method.instantiation_ret_type == null) continue;
+                const instantiation = try self.staticDictionaryMethodInstantiation(state, arg.rep, requirement, method.callable_type);
+                if (instantiation.rep == null or instantiation.rep == method.instantiation_rep) continue;
                 // Nested dictionaries are planned at the method's
                 // instantiation, and a method's own positions bind none of
                 // the variables only its caller's requirements name.
@@ -18048,12 +18135,7 @@ const Builder = struct {
                         worker,
                         callable_type,
                         view,
-                        // A target reached through a procedure alias derives
-                        // its evidence from its callable.
-                        switch (node.nested) {
-                            .resolved => view.static_dispatch_plans.nestedEvidence(node),
-                            .from_callable => null,
-                        },
+                        self.targetOwnEvidence(view, node),
                         evidence_edge,
                         state.caller_id,
                     ) orelse {
@@ -18269,13 +18351,16 @@ const Builder = struct {
                             .resolution = .{ .structural = kind },
                         };
                     },
-                    .parser, .encoder, .map, .map_effectful => {},
+                    // A declared structural codec method has no callable type
+                    // of its own: the checked contract supplies the worker.
+                    .parser, .encoder => return try self.structuralDictionaryMethodEvidence(source_rep, requirement, requirement_view, state.call),
+                    .map, .map_effectful => {},
                 };
                 const source = workerSourceForMethodTarget(lookup, source_rep.source_type, null);
                 const callable_type = CheckedTypeIdentity{ .module = viewModule(lookup.view), .ty = lookup.target.callable_ty };
                 _ = try self.analyzeType(lookup.view, lookup.target.callable_ty);
                 const worker = try self.ensureWorker(source, callable_type, null);
-                const instantiation = try self.staticDictionaryMethodInstantiation(self.requirementCallInstantiation(state.call), source_rep_id, requirement, callable_type);
+                const instantiation = try self.staticDictionaryMethodInstantiation(state.call, source_rep_id, requirement, callable_type);
                 const method: DictionaryMethodEvidence = .{
                     .requirement_type = requirement.fn_ty,
                     .callable_type = callable_type,
@@ -18293,6 +18378,14 @@ const Builder = struct {
                     .evidence_view = null,
                     .evidence = null,
                     .scheme_substitution = null,
+                    // The method's checked positions leave a variable open
+                    // when only a position built around the dispatcher names
+                    // it, as a returned encoder does: the call's position
+                    // binds it.
+                    .relation = if (instantiation.rep) |rep|
+                        try self.storedUseSchemeRepSubstitutions(self.plan.workers.items[@backingInt(worker)].rep, rep)
+                    else
+                        null,
                     .env = state.env,
                 }) orelse return null;
                 state.awaiting = null;
@@ -18311,7 +18404,7 @@ const Builder = struct {
                 },
             }
         }
-        return try self.structuralDictionaryMethodEvidence(source_rep, requirement, requirement_view);
+        return try self.structuralDictionaryMethodEvidence(source_rep, requirement, requirement_view, state.call);
     }
 
     /// A nominal's argument where the call holds the structure the
@@ -19586,8 +19679,9 @@ const Builder = struct {
         callable_type: CheckedTypeIdentity,
         edge: DictionaryMethodEvidence.EvidenceEdge,
     ) Allocator.Error!?Span {
-        const node = self.moduleForId(edge.module).static_dispatch_plans.evidenceNode(edge.node);
-        if (node.nested != .from_callable or carriesTargetSubstitution(node)) return null;
+        const edge_view = self.moduleForId(edge.module);
+        const node = edge_view.static_dispatch_plans.evidenceNode(edge.node);
+        if (self.targetOwnEvidence(edge_view, node) != null or carriesTargetSubstitution(node)) return null;
         const callable_rep = self.plan.repForSourceType(callable_type) orelse
             boxyPlanInvariant("dictionary method callable type was not analyzed");
         return try self.storedUseSchemeRepSubstitutions(self.plan.workers.items[@backingInt(worker_id)].rep, callable_rep);
@@ -19687,8 +19781,15 @@ const Builder = struct {
     }
 
     fn appendStoredUseSchemePair(self: *Builder, scheme_rep: TypeRepId, site_rep: TypeRepId, start: u32) Allocator.Error!void {
-        for (self.plan.scheme_rep_substitutions.items[start..]) |pair| {
+        for (self.plan.scheme_rep_substitutions.items[start..]) |*pair| {
             if (pair.scheme_rep != scheme_rep) continue;
+            // A position left at the variable itself binds nothing, so
+            // another position's binding stands.
+            if (site_rep == scheme_rep) return;
+            if (pair.site_rep == scheme_rep) {
+                pair.site_rep = site_rep;
+                return;
+            }
             if (!self.storedRepsSameType(pair.site_rep, site_rep)) boxyPlanInvariant("a stored function's use put two types in one variable's position");
             return;
         }
@@ -20013,7 +20114,7 @@ const Builder = struct {
     /// edge instantiated it to.
     fn staticDictionaryMethodInstantiation(
         self: *Builder,
-        call: RequirementCallInstantiation,
+        call: *const DictionaryCallArgs,
         source_rep_id: TypeRepId,
         requirement: DictionaryRequirement,
         target_callable_type: CheckedTypeIdentity,
@@ -20080,7 +20181,7 @@ const Builder = struct {
     /// is called there. Null for every other position.
     fn requirementPositionAtCall(
         self: *Builder,
-        call: RequirementCallInstantiation,
+        call: *const DictionaryCallArgs,
         dispatcher_rep: TypeRepId,
         source_rep_id: TypeRepId,
         rep_id: TypeRepId,
@@ -20088,7 +20189,7 @@ const Builder = struct {
     ) Allocator.Error!?TypeRepId {
         if (rep_id == dispatcher_rep) return null;
         if (!try self.plan.namesTypeVariable(self.allocator, target_rep_id)) return null;
-        if (call.get(&self.plan, rep_id) != null) return null;
+        if (self.requirementCallRep(call, rep_id) != null) return null;
         if (!try self.plan.namesTypeVariable(self.allocator, rep_id)) return null;
 
         // The key is the position followed by each of its variables and the
@@ -20107,7 +20208,7 @@ const Builder = struct {
                 const site = if (current == dispatcher_rep)
                     source_rep_id
                 else
-                    call.get(&self.plan, current) orelse return null;
+                    self.requirementCallRep(call, current) orelse return null;
                 try key.appendSlice(self.allocator, &.{ @backingInt(current), @backingInt(site) });
                 continue;
             }
@@ -20269,7 +20370,7 @@ const Builder = struct {
 
     fn instantiatedRequirementType(
         self: *Builder,
-        call: RequirementCallInstantiation,
+        call: *const DictionaryCallArgs,
         dispatcher_rep: TypeRepId,
         source_type: CheckedTypeIdentity,
         rep_id: TypeRepId,
@@ -20280,7 +20381,7 @@ const Builder = struct {
         // The selected target's declared type is the position's exact type
         // wherever it names no variable of the target's own scheme.
         if (!try self.plan.namesTypeVariable(self.allocator, target_rep_id)) return target_type;
-        if (call.get(&self.plan, rep_id)) |call_rep| return self.plan.representations.items[@backingInt(call_rep)].source_type;
+        if (self.requirementCallRep(call, rep_id)) |call_rep| return self.plan.representations.items[@backingInt(call_rep)].source_type;
         if (!try self.plan.namesTypeVariable(self.allocator, rep_id)) {
             return self.plan.representations.items[@backingInt(rep_id)].source_type;
         }
@@ -20348,6 +20449,7 @@ const Builder = struct {
         source_rep: TypeRepresentation,
         requirement: DictionaryRequirement,
         requirement_view: ModuleView,
+        call: *const DictionaryCallArgs,
     ) Allocator.Error!DictionaryMethodEvidence {
         const kind = self.structuralKindForRequirement(requirement, requirement_view) orelse
             boxyPlanInvariant("static boxy dictionary could not resolve a checked method target or structural method");
@@ -20363,6 +20465,7 @@ const Builder = struct {
                 requirement,
                 requirement_view,
                 kind,
+                call,
             ),
             .map, .map_effectful => boxyPlanInvariant("derived map evidence reached Boxy runtime dictionary planning"),
         };
@@ -20374,6 +20477,7 @@ const Builder = struct {
         requirement: DictionaryRequirement,
         requirement_view: ModuleView,
         kind: static_dispatch.StructuralKind,
+        call: *const DictionaryCallArgs,
     ) Allocator.Error!DictionaryMethodEvidence {
         const expected_kind: static_dispatch.GeneratedCodecDerivationKind = switch (kind) {
             .parser => .parser,
@@ -20381,10 +20485,8 @@ const Builder = struct {
             .equality, .hash, .map, .map_effectful => boxyPlanInvariant("non-codec dictionary requested a generated codec worker"),
         };
         const source_view = self.moduleForId(source_rep.source_type.module);
-        if (viewModule(source_view) != viewModule(requirement_view) or
-            requirement.fn_ty.module != viewModule(requirement_view))
-        {
-            boxyPlanInvariant("generated codec dictionary types belonged to different checked modules");
+        if (requirement.fn_ty.module != viewModule(requirement_view)) {
+            boxyPlanInvariant("generated codec dictionary requirement types belonged to different checked modules");
         }
 
         const constructor = checkedFunctionPayload(requirement_view, requirement.fn_ty.ty);
@@ -20405,30 +20507,33 @@ const Builder = struct {
         const try_payloads = checkedTryPayloads(requirement_view, runtime.ret) orelse
             boxyPlanInvariant("generated codec dictionary runtime did not return Try");
         const shape_key = source_view.checked_types.rootKey(source_rep.source_type.ty);
-        const encoding_key = requirement_view.checked_types.rootKey(constructor.args[0]);
-        const state_key = requirement_view.checked_types.rootKey(state_type);
-        const error_key = requirement_view.checked_types.rootKey(try_payloads.err);
+        const encoding_key = self.requirementPositionKey(call, requirement_view, constructor.args[0]);
+        const state_key = self.requirementPositionKey(call, requirement_view, state_type);
+        const error_key = self.requirementPositionKey(call, requirement_view, try_payloads.err);
         if (self.active_stored_fn) |stored| {
             // A stored function carries the evidence its value was produced
             // with. Its structural entry for this shape is the dictionary's
             // method, exactly as the same entry is at a live checked use.
-            if (self.storedCodecEvidenceForShape(stored, source_view, expected_kind, shape_key)) |evidence| {
-                const derivation_id = evidence.generated_codec_derivation.?;
-                const derivation = source_view.static_dispatch_plans.generated_codec_derivations[@backingInt(derivation_id)];
-                if (!std.meta.eql(encoding_key, source_view.checked_types.rootKey(derivation.encoding_ty)) or
-                    !std.meta.eql(state_key, source_view.checked_types.rootKey(derivation.state_ty)))
+            if (try self.storedCodecEvidenceForShape(stored, expected_kind, shape_key)) |found| {
+                const evidence_view = found.view;
+                const evidence = found.edge;
+                const derivation_id = evidence.generated_codec_derivation orelse
+                    boxyPlanInvariant("stored codec evidence resolved without a contract");
+                const derivation = evidence_view.static_dispatch_plans.generated_codec_derivations[@backingInt(derivation_id)];
+                if (!std.meta.eql(encoding_key, evidence_view.checked_types.rootKey(derivation.encoding_ty)) or
+                    !std.meta.eql(state_key, evidence_view.checked_types.rootKey(derivation.state_ty)))
                 {
                     boxyPlanInvariant("stored codec evidence named a contract for another format");
                 }
-                const callable_type = typeRef(source_view, evidence.callable_ty);
-                _ = try self.analyzeType(source_view, evidence.callable_ty);
+                const callable_type = typeRef(evidence_view, evidence.callable_ty);
+                _ = try self.analyzeType(evidence_view, evidence.callable_ty);
                 return .{
                     .requirement_type = requirement.fn_ty,
                     .callable_type = callable_type,
                     .resolution = .{ .worker = try self.ensureWorker(
                         .{ .generated_codec = .{
                             .kind = if (expected_kind == .parser) .parser_constructor else .encoder_constructor,
-                            .shape = typeRef(source_view, evidence.dispatcher_ty),
+                            .shape = typeRef(evidence_view, evidence.dispatcher_ty),
                             .contract_derivation = derivation_id,
                         } },
                         callable_type,
@@ -20481,51 +20586,91 @@ const Builder = struct {
         };
     }
 
+    /// The checked key of a requirement's position at this call. A requirement
+    /// a generic method forwards names the format in that method's variables,
+    /// which the call binds.
+    fn requirementPositionKey(
+        self: *const Builder,
+        call: *const DictionaryCallArgs,
+        requirement_view: ModuleView,
+        ty: checked.CheckedTypeId,
+    ) checked_names.CanonicalTypeKey {
+        const rep = self.plan.repForSourceType(typeRef(requirement_view, ty)) orelse
+            boxyPlanInvariant("generated codec requirement position was not analyzed");
+        const bound = self.requirementCallRep(call, rep) orelse return requirement_view.checked_types.rootKey(ty);
+        const source = self.plan.representations.items[@backingInt(bound)].source_type;
+        return self.moduleForId(source.module).checked_types.rootKey(source.ty);
+    }
+
     /// The structural codec evidence a stored function retained for this
-    /// dispatcher shape: the entry its value was produced with.
+    /// dispatcher shape: the entry its value was produced with, resolved in
+    /// the storing module's import closure.
     fn storedCodecEvidenceForShape(
         self: *Builder,
         stored: StoredFnSource,
-        shape_view: ModuleView,
         kind: static_dispatch.GeneratedCodecDerivationKind,
-        shape_key: anytype,
-    ) ?static_dispatch.StructuralEvidence {
+        shape_key: checked_names.CanonicalTypeKey,
+    ) Allocator.Error!?StoredCodecEdgeIn {
         const store_view = self.moduleForId(stored.module);
         const fn_value = (store_view.const_store orelse boxyPlanInvariant("stored function had no ConstStore")).getFn(stored.fn_id);
         const expected: static_dispatch.StructuralKind = switch (kind) {
             .parser => .parser,
             .encoder => .encoder,
         };
-        var selected: ?static_dispatch.StructuralEvidence = null;
+        var selected: ?check.ConstStore.StoredCodecEdge = null;
         for (fn_value.evidence.nodes) |entry| {
             const structural = switch (entry) {
                 .structural => |structural| fn_value.evidence.structural(structural).*,
                 .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => continue,
             };
             if (structural.derivation.kind() != expected) continue;
-            const checked_evidence = structural.checked orelse continue;
-            if (checked_evidence.generated_codec_derivation == null) continue;
-            if (!std.meta.eql(checked_evidence.view.bytes, shape_view.key.bytes)) {
-                boxyPlanInvariant("stored codec evidence named a contract outside its shape's module");
-            }
-            if (!std.meta.eql(shape_view.checked_types.rootKey(checked_evidence.dispatcher_ty), shape_key)) continue;
-            const evidence = static_dispatch.StructuralEvidence{
-                .derivation = structural.derivation,
-                .dispatcher_ty = checked_evidence.dispatcher_ty,
-                .callable_ty = checked_evidence.callable_ty,
-                .generated_codec_derivation = checked_evidence.generated_codec_derivation,
+            const codec = switch (structural.checked orelse continue) {
+                .codec => |codec| codec,
+                .recorded => |recorded| if (recorded.generated_codec_content == null)
+                    continue
+                else
+                    boxyPlanInvariant("stored function kept a recorded codec edge"),
             };
+            if (!std.meta.eql(codec.dispatcher_key, shape_key)) continue;
             if (selected) |existing| {
-                if (existing.generated_codec_derivation != evidence.generated_codec_derivation or
-                    !std.meta.eql(shape_view.checked_types.rootKey(existing.callable_ty), shape_view.checked_types.rootKey(evidence.callable_ty)))
-                {
-                    boxyPlanInvariant("stored codec evidence named two contracts for one shape");
-                }
+                if (!std.meta.eql(existing, codec)) boxyPlanInvariant("stored codec evidence named two contracts for one shape");
             } else {
-                selected = evidence;
+                selected = codec;
             }
         }
-        return selected;
+        return try self.storedCodecEdge(stored.module, selected orelse return null);
+    }
+
+    /// A stored codec edge read in the first module of its storing module's
+    /// reflexive import closure, breadth-first in direct-import order, that
+    /// holds a contract with its content and roots with its keys. Monotype
+    /// restores the edge from the same module (design.md "Structural evidence").
+    fn storedCodecEdge(
+        self: *Builder,
+        store: PlanModuleId,
+        codec: check.ConstStore.StoredCodecEdge,
+    ) Allocator.Error!StoredCodecEdgeIn {
+        const key = StoredCodecEdgeKey{ .store = store, .edge = codec };
+        if (self.stored_codec_edges.get(key)) |known| return known;
+        var reached = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.plan.module_views.items.len);
+        defer reached.deinit(self.allocator);
+        var pending = std.ArrayList(PlanModuleId).empty;
+        defer pending.deinit(self.allocator);
+        reached.set(@backingInt(store));
+        try pending.append(self.allocator, store);
+        var next: usize = 0;
+        const found: StoredCodecEdgeIn = while (next < pending.items.len) : (next += 1) {
+            const view = self.moduleForId(pending.items[next]);
+            if (storedCheckedStructuralIn(view, .{ .codec = codec })) |edge| break .{ .view = view, .edge = edge };
+            for (view.direct_import_module_keys) |imported| {
+                const imported_id = self.plan.moduleIdForKey(imported.digest()) orelse continue;
+                if (reached.isSet(@backingInt(imported_id))) continue;
+                reached.set(@backingInt(imported_id));
+                try pending.append(self.allocator, imported_id);
+            }
+        } else boxyPlanInvariant("a stored codec edge's contract was not held by its storing module's import closure");
+        try self.stored_codec_edges.put(self.allocator, key, found);
+        return found;
     }
 
     fn structuralKindForRequirement(
@@ -22818,6 +22963,24 @@ pub fn recordFieldNameMatches(
     );
 }
 
+/// True when two method names name the same method, comparing by text when
+/// the names come from different modules.
+pub fn methodNameMatches(
+    source: ModuleNames,
+    source_name: MethodNameId,
+    target: ModuleNames,
+    target_name: MethodNameId,
+) bool {
+    if (source.module == target.module) return source_name == target_name;
+    const source_names = source.canonical_names orelse return source_name == target_name;
+    const target_names = target.canonical_names orelse return source_name == target_name;
+    return std.mem.eql(
+        u8,
+        source_names.methodNameText(source_name),
+        target_names.methodNameText(target_name),
+    );
+}
+
 /// True when two tag labels name the same tag, comparing by text when the
 /// labels come from different modules.
 pub fn tagLabelNameMatches(
@@ -23457,6 +23620,7 @@ pub fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
         .const_store = imported.const_store,
         .const_templates = imported.const_templates,
         .module_env = imported.module_env,
+        .direct_import_module_keys = imported.direct_import_module_keys,
     };
 }
 
@@ -23484,6 +23648,7 @@ pub fn moduleViewFromCheckedModule(checked_module: *const checked.CheckedModuleA
         .const_store = &checked_module.const_store,
         .const_templates = &checked_module.const_templates,
         .module_env = checked_module.moduleEnvConst(),
+        .direct_import_module_keys = checked_module.direct_import_module_keys,
     };
 }
 

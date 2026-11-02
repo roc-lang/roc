@@ -2554,3 +2554,20 @@ test "numeric prefix Str and List(U8) wrappers agree on generated inputs" {
         }
     }
 }
+
+/// Invoke a monomorphic callable using its exact LIR ABI.
+pub fn roc_builtins_native_callable_call(callable: erased_callable.CallableFnPtr, ret: ?[*]u8, args: ?[*]const u8, capture: ?[*]u8, reuse: ?[*]u8) callconv(.c) void {
+    @import("native_callable.zig").call(callable, ret, args, capture, reuse);
+}
+/// Transfer ARC's deferred call to the monomorphic trampoline.
+pub fn roc_builtins_native_callable_defer(callable: erased_callable.CallableFnPtr, closure: [*]u8, args: ?[*]const u8, args_len: usize) callconv(.c) void {
+    @import("native_callable.zig").deferCall(callable, closure, args, args_len);
+}
+/// Run a producer-declared chain of pending monomorphic calls.
+pub fn roc_builtins_native_callable_drive(ret: ?[*]u8) callconv(.c) void {
+    @import("native_callable.zig").drive(ret);
+}
+/// Whether this callable's caller owns the monomorphic trampoline.
+pub fn roc_builtins_native_callable_caller_drives(callee: erased_callable.CallableFnPtr) callconv(.c) u8 {
+    return @import("native_callable.zig").callerDrives(callee);
+}

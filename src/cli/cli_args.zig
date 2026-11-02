@@ -58,21 +58,26 @@ pub const ParsedArgs = struct {
     no_color: bool,
 };
 
+/// The settings of `global_flags`, which every command accepts.
+const Globals = struct {
+    no_color: bool = false,
+};
+
 /// Errors that can occur due to bad input while parsing the arguments
 pub const ArgProblem = union(enum) {
     missing_flag_value: struct {
         flag: []const u8,
     },
     unexpected_argument: struct { cmd: []const u8, arg: []const u8 },
-    /// A dash-prefixed argument, before any `--`, that names none of the
-    /// command's flags.
+    /// A dash-prefixed argument, where the command reads flags, that names
+    /// none of its flags.
     unknown_flag: struct {
         /// The command's name; empty for the command that runs with no word.
         cmd: []const u8,
         arg: []const u8,
         /// The command's flag whose name `arg` most likely misspells.
         suggestion: ?[]const u8,
-        /// Whether the command passes the arguments after `--` to the app it runs.
+        /// Whether the command passes the arguments after its source to the app it runs.
         passes_args_to_app: bool,
     },
     // Bare `roc <shorthand>` is rejected so the subcommand namespace can never
@@ -166,64 +171,6 @@ pub const ReplaceDepArgs = struct {
         return self.items[0..self.len];
     }
 };
-
-const replace_dep_flag = "--replace-dep";
-
-const ReplaceDepExtraction = struct {
-    /// The arguments with every `--replace-dep OLD NEW` triple removed.
-    /// Owned by the caller; the strings themselves are borrowed.
-    args: []const []const u8,
-    replace_deps: ReplaceDepArgs,
-    problem: ?ArgProblem,
-};
-
-/// Pull every `--replace-dep OLD NEW` out of `args`. The flag takes two
-/// separate arguments so URLs and paths need no escaping rules. Arguments
-/// after `--` belong to the app being run and are left alone.
-fn extractReplaceDeps(alloc: mem.Allocator, args: []const []const u8) mem.Allocator.Error!ReplaceDepExtraction {
-    var rest = try std.array_list.Managed([]const u8).initCapacity(alloc, args.len);
-    errdefer rest.deinit();
-    var replace_deps: ReplaceDepArgs = .{};
-    var problem: ?ArgProblem = null;
-
-    var i: usize = 0;
-    while (i < args.len) : (i += 1) {
-        const arg = args[i];
-        if (mem.eql(u8, arg, "--")) {
-            rest.appendSliceAssumeCapacity(args[i..]);
-            break;
-        }
-        if (!mem.eql(u8, arg, replace_dep_flag)) {
-            if (mem.startsWith(u8, arg, replace_dep_flag ++ "=") and problem == null) {
-                problem = .{ .invalid_flag_value = .{
-                    .flag = replace_dep_flag,
-                    .value = arg[replace_dep_flag.len + 1 ..],
-                    .expected = .{ .stated = "The flag takes two separate arguments instead: --replace-dep OLD NEW." },
-                } };
-                continue;
-            }
-            rest.appendAssumeCapacity(arg);
-            continue;
-        }
-        if (i + 2 >= args.len or mem.eql(u8, args[i + 1], "--") or mem.eql(u8, args[i + 2], "--")) {
-            if (problem == null) problem = .{ .missing_flag_value = .{ .flag = replace_dep_flag ++ " OLD NEW" } };
-            break;
-        }
-        if (replace_deps.len == ReplaceDepArgs.max) {
-            if (problem == null) problem = .{ .invalid_flag_value = .{
-                .flag = replace_dep_flag,
-                .value = args[i + 1],
-                .expected = .{ .stated = std.fmt.comptimePrint("A single invocation can replace at most {d} dependencies.", .{ReplaceDepArgs.max}) },
-            } };
-        } else {
-            replace_deps.items[replace_deps.len] = .{ .old = args[i + 1], .new = args[i + 2] };
-            replace_deps.len += 1;
-        }
-        i += 2;
-    }
-
-    return .{ .args = try rest.toOwnedSlice(), .replace_deps = replace_deps, .problem = problem };
-}
 
 /// The file a command reads when no path is given.
 const default_roc_file = "main.roc";
@@ -347,6 +294,7 @@ pub const DocsArgs = struct {
     no_cache: bool = false, // disable cache
     verbose: bool = false, // enable verbose output
     serve: bool = false, // start an HTTP server after generating docs
+    search_config: ?[]const u8 = null, // optional tab-separated search categories, documents, and terms
     with_lang_ref: bool = false, // include the language reference articles from docs/langref
     builtins: bool = false, // document the builtin module embedded in this compiler instead of a file
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
@@ -408,6 +356,11 @@ const FlagForm = enum {
     attached,
     /// `--name <value>`, matched exactly, taking the next argument as its value.
     separate,
+    /// `--name <old> <new>`, matched exactly, taking the next two arguments as
+    /// one more replacement in a `ReplaceDepArgs` field.
+    pair,
+    /// `--name`, matched exactly. Sets a `bool` field of `Globals`.
+    global,
     /// `--`: every later argument is positional.
     terminator,
     /// Matched exactly; the command answers with the compiler's version.
@@ -449,8 +402,8 @@ const Flag = struct {
     fn spelling(comptime flag: Flag) []const u8 {
         const value = switch (flag.form) {
             .attached => "=" ++ flag.value_name,
-            .separate => " " ++ flag.value_name,
-            .toggle, .terminator, .version, .rejected, .documented => "",
+            .separate, .pair => " " ++ flag.value_name,
+            .toggle, .global, .terminator, .version, .rejected, .documented => "",
         };
         return (if (flag.short) |short| "  " ++ short ++ ", " else "      ") ++ flag.name ++ value;
     }
@@ -578,6 +531,10 @@ const Command = struct {
     rest: ?[]const u8 = null,
     /// The one element `rest` holds when no argument reached it.
     rest_default: ?[]const u8 = null,
+    /// Whether `rest` holds the arguments of the app the command runs. Every
+    /// argument after the last positional then reaches `rest` exactly as
+    /// written, so the command reads its flags only before then.
+    rest_is_app_args: bool = false,
     /// The fields no argument sets: the command's implementation fills them.
     derived: []const []const u8 = &.{},
 
@@ -589,15 +546,16 @@ const Command = struct {
     /// The command's own flags followed by the shared ones it accepts.
     fn allFlags(comptime cmd: Command) []const Flag {
         const shared: []const Flag = switch (cmd.resolve) {
-            .none => &.{},
-            .limits => &limit_flags,
+            .none => &.{rejected_replace_dep_flag},
+            .limits => &(limit_flags ++ [_]Flag{rejected_replace_dep_flag}),
             .limits_and_replace_deps => &replace_dep_and_limit_flags,
         };
-        return cmd.flags ++ shared;
+        return cmd.flags ++ shared ++ global_flags;
     }
 
     /// Whether leaving `flag` out is a problem: it sets a field that has no default.
     fn requires(comptime cmd: Command, comptime flag: Flag) bool {
+        if (flag.form == .global) return false;
         const path = flag.field orelse return false;
         if (fieldInfoAt(cmd.Args(), path).defaultValue() != null) return false;
         if (flag.form != .attached and flag.form != .separate) {
@@ -613,6 +571,14 @@ const Command = struct {
     fn check(comptime cmd: Command) void {
         @setEvalBranchQuota(100_000);
         const flags = cmd.allFlags();
+        if (cmd.rest_is_app_args and (cmd.rest == null or cmd.positionals.len == 0)) {
+            @compileError(cmd.name ++ " passes the arguments after its positionals to the app, so it needs both");
+        }
+        for (flags) |flag| {
+            if (flag.form == .pair and fieldInfoAt(cmd.Args(), flag.field.?).type != ReplaceDepArgs) {
+                @compileError(flag.name ++ " takes two arguments, so it must set a ReplaceDepArgs field");
+            }
+        }
         const Parsed = cmd.Args();
         if (Parsed == void) return;
         for (cmd.derived) |name| {
@@ -633,6 +599,7 @@ const Command = struct {
             }
             var flagged = false;
             for (flags) |flag| {
+                if (flag.form == .global) continue;
                 if (flag.marks) |name| flagged = flagged or mem.eql(u8, name, field.name);
                 if (flag.field) |path| flagged = flagged or mem.eql(u8, mem.sliceTo(path, '.'), field.name);
             }
@@ -648,9 +615,8 @@ const Command = struct {
         const names = comptime flag_names: {
             var names: []const []const u8 = &.{"--help"};
             for (cmd.allFlags()) |flag| {
-                if (flag.form == .terminator or flag.form == .rejected) continue;
-                // A documented flag's name may be followed by its arguments.
-                names = names ++ .{flag.name[0 .. mem.findScalar(u8, flag.name, ' ') orelse flag.name.len]};
+                if (flag.form == .terminator or flag.form == .rejected or flag.form == .documented) continue;
+                names = names ++ .{flag.name};
             }
             break :flag_names names;
         };
@@ -736,17 +702,24 @@ const limit_flags = [_]Flag{
     },
 };
 
-/// `extractReplaceDeps` consumes `--replace-dep` before any command parses, so
-/// the commands that accept it only document it.
 const replace_dep_and_limit_flags = [_]Flag{.{
-    .name = replace_dep_flag ++ " OLD NEW",
-    .form = .documented,
+    .name = "--replace-dep",
+    .form = .pair,
+    .field = "resolve_limits.replace_deps",
+    .value_name = "OLD NEW",
     .help =
     \\Load NEW wherever a dependency declares exactly OLD, for this invocation only.
     \\Each is a complete package URL or a path to a root .roc file; repeatable.
     \\Run `roc deps` to see the declared sources
     ,
 }} ++ limit_flags;
+
+/// Commands that resolve no dependencies have none to replace.
+const rejected_replace_dep_flag: Flag = .{ .name = "--replace-dep", .form = .rejected };
+
+/// The flags every command accepts, wherever it reads flags. They may also
+/// come before the command's name.
+const global_flags = [_]Flag{.{ .name = "--no-color", .form = .global, .field = "no_color" }};
 
 const specialize_flag: Flag = .{
     .name = "--specialize",
@@ -801,7 +774,7 @@ const commands = [_]Command{
         .tag = .run,
         .summary = "Run a .roc file, a bundle URL, or an installed shorthand",
         .about = "Run a Roc application",
-        .usage = " [OPTIONS] [SOURCE] [-- [ARGS_FOR_APP]...]",
+        .usage = " [OPTIONS] [SOURCE] [ARGS_FOR_APP]...",
         .details =
         \\SOURCE may be:
         \\  a .roc file path        roc run main.roc
@@ -811,12 +784,14 @@ const commands = [_]Command{
         \\Running an installed shorthand executes the optimized binary that was
         \\built at install time; no compilation or network access is needed.
         \\File and URL sources accept the same options as the default `roc` command.
+        \\Every argument after SOURCE is passed to the app exactly as written.
         ,
         .flags = &run_flags,
         .resolve = .limits_and_replace_deps,
         .min_column = 33,
         .positionals = &.{.{ .field = "path" }},
         .rest = "app_args",
+        .rest_is_app_args = true,
         .derived = &run_derived,
     },
     .{
@@ -1025,6 +1000,7 @@ const commands = [_]Command{
             .{ .name = "--main", .form = .attached, .field = "main", .value_name = "<main>", .help = "The .roc file of the main app/package module to resolve dependencies from" },
             .{ .name = "--output", .form = .attached, .field = "output", .value_name = "<dir>", .help = "Output directory for generated documentation" },
             .{ .name = "--serve", .field = "serve", .help = "Start an HTTP server to view the documentation" },
+            .{ .name = "--search-config", .form = .attached, .field = "search_config", .value_name = "<file>", .help = "Add search categories, documents, and curated terms from a TSV file" },
             .{ .name = "--with-lang-ref", .field = "with_lang_ref", .help = "Include the language reference articles from docs/langref" },
             .{ .name = "--builtins", .field = "builtins", .help = "Document the builtins of this roc compiler instead of a .roc file" },
             .{ .name = "--time", .field = "time", .help = "Print timing information for each compilation phase. Will not print anything if everything is cached." },
@@ -1158,13 +1134,14 @@ const default_command: Command = .{
         break :command_roster lines;
     },
     .arguments = "  [ROC_FILE]         The .roc file of an app to run [default: " ++ default_roc_file ++ "]\n" ++
-        "  [ARGS_FOR_APP]...  Arguments to pass into the app being run\n" ++
-        "                     e.g. `roc app.roc -- arg1 arg2`",
+        "  [ARGS_FOR_APP]...  Arguments to pass into the app being run, exactly as written\n" ++
+        "                     e.g. `roc app.roc arg1 --flag2`",
     .flags = &run_flags,
     .resolve = .limits_and_replace_deps,
     .min_column = 37,
     .positionals = &.{.{ .field = "path" }},
     .rest = "app_args",
+    .rest_is_app_args = true,
     .derived = &run_derived,
 };
 
@@ -1173,92 +1150,56 @@ pub fn parse(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) Par
     return (try parseWithGlobalOptions(alloc, std_io, args)).command;
 }
 
-/// Parse CLI-wide options before dispatching to a command parser.
+/// Parse the arguments, along with the CLI-wide options of `global_flags`.
 ///
-/// `--no-color` is consumed before command parsing so every command shares one
-/// explicit output setting. Arguments after `--` belong to the executed Roc
-/// application and remain untouched.
+/// A global flag may come before the command's name, and every command also
+/// reads it among its own flags, so it never reaches an app as one of its
+/// arguments.
 pub fn parseWithGlobalOptions(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) ParseError!ParsedArgs {
-    var command_args = try alloc.alloc([]const u8, args.len);
-    defer alloc.free(command_args);
-
-    var no_color = false;
-    var after_separator = false;
-    var command_arg_count: usize = 0;
-    for (args) |arg| {
-        if (mem.eql(u8, arg, "--")) after_separator = true;
-        if (!after_separator and mem.eql(u8, arg, "--no-color")) {
-            no_color = true;
-            continue;
+    var globals: Globals = .{};
+    var first: usize = 0;
+    leading: while (first < args.len) : (first += 1) {
+        inline for (global_flags) |flag| {
+            if (mem.eql(u8, args[first], flag.name)) {
+                @field(globals, flag.field.?) = true;
+                continue :leading;
+            }
         }
-        command_args[command_arg_count] = arg;
-        command_arg_count += 1;
+        break;
     }
-
-    return .{
-        .command = try parseCommand(alloc, std_io, command_args[0..command_arg_count]),
-        .no_color = no_color,
-    };
+    const command = try parseCommand(alloc, std_io, &globals, args[first..]);
+    return .{ .command = command, .no_color = globals.no_color };
 }
 
-fn parseCommand(alloc: mem.Allocator, std_io: std.Io, all_args: []const []const u8) ParseError!CliArgs {
-    const extraction = try extractReplaceDeps(alloc, all_args);
-    defer alloc.free(extraction.args);
-    if (extraction.problem) |problem| return CliArgs{ .problem = problem };
-    const args = extraction.args;
-    const replace_deps = extraction.replace_deps;
-
+fn parseCommand(alloc: mem.Allocator, std_io: std.Io, globals: *Globals, args: []const []const u8) ParseError!CliArgs {
     if (args.len > 0) {
         inline for (commands) |cmd| {
             if (mem.eql(u8, args[0], cmd.name)) {
-                // Only commands that load a dependency graph acquire replacement
-                // behavior. The others reject the flag by command name before
-                // command-specific parsing, so a `--help` or a missing-argument
-                // problem in that command cannot hide it.
-                if (cmd.resolve != .limits_and_replace_deps and replace_deps.len > 0) {
-                    return unexpectedArgument(cmd.name, replace_dep_flag);
-                }
-                const parsed = if (cmd.tag == .help)
+                return if (cmd.tag == .help)
                     CliArgs{ .help = main_help }
                 else if (cmd.tag == .run)
                     // `roc run` accepts everything the default run accepts, plus
                     // installed shorthands (which the default run rejects to keep
                     // the subcommand namespace separate from the shorthand namespace).
-                    try parseRun(cmd, alloc, args[1..])
+                    try parseRun(cmd, alloc, globals, args[1..])
                 else if (cmd.tag == .unbundle)
-                    try parseUnbundle(cmd, alloc, std_io, args[1..])
+                    try parseUnbundle(cmd, alloc, std_io, globals, args[1..])
                 else if (cmd.tag == .docs)
-                    try parseDocs(cmd, alloc, args[1..])
+                    try parseDocs(cmd, alloc, globals, args[1..])
                 else
-                    try parseArgsFor(cmd, alloc, args[1..]);
-                return withReplaceDeps(cmd, alloc, parsed, replace_deps, all_args[0]);
+                    try parseArgsFor(cmd, alloc, globals, args[1..]);
             }
         }
     }
-    const parsed = try parseRun(default_command, alloc, args);
-    return withReplaceDeps(default_command, alloc, parsed, replace_deps, if (all_args.len > 0) all_args[0] else "");
-}
-
-/// Hands a parsed command the invocation's `--replace-dep` occurrences. Help
-/// and problems pass through; any other outcome that is not the command's own
-/// variant has nowhere to put them, so the flag is unexpected there.
-fn withReplaceDeps(comptime cmd: Command, alloc: mem.Allocator, parsed: CliArgs, replace_deps: ReplaceDepArgs, first_arg: []const u8) CliArgs {
-    if (replace_deps.len == 0 or parsed == .help or parsed == .problem) return parsed;
-    if (cmd.resolve == .limits_and_replace_deps and parsed == cmd.tag) {
-        var result = parsed;
-        @field(result, @tagName(cmd.tag)).resolve_limits.replace_deps = replace_deps;
-        return result;
-    }
-    parsed.deinit(alloc);
-    return unexpectedArgument(first_arg, replace_dep_flag);
+    return parseRun(default_command, alloc, globals, args);
 }
 
 const main_help = default_command.helpText();
 
 /// `roc docs`. `--builtins` documents the compiler's embedded builtin module,
 /// so there is no file to document and no main file to resolve packages from.
-fn parseDocs(comptime cmd: Command, alloc: mem.Allocator, args: []const []const u8) mem.Allocator.Error!CliArgs {
-    const parsed = try parseArgsFor(cmd, alloc, args);
+fn parseDocs(comptime cmd: Command, alloc: mem.Allocator, globals: *Globals, args: []const []const u8) mem.Allocator.Error!CliArgs {
+    const parsed = try parseArgsFor(cmd, alloc, globals, args);
     if (parsed != .docs or !parsed.docs.builtins) return parsed;
     for (args) |arg| {
         if (arg.len == 0 or arg[0] != '-') {
@@ -1278,10 +1219,11 @@ fn unexpectedArgument(cmd: []const u8, arg: []const u8) CliArgs {
 }
 
 /// Parses the arguments after a command's name from its `Command` declaration.
-/// Each flag is recognized by the comparison its form names. Before `--`, a
-/// dash-prefixed argument no flag recognizes is an unknown flag, and any other
-/// argument is positional.
-fn parseArgsFor(comptime cmd: Command, alloc: mem.Allocator, args: []const []const u8) mem.Allocator.Error!CliArgs {
+/// Each flag is recognized by the comparison its form names. Flags end at
+/// `--`, and also at the last positional of a command that passes the rest to
+/// an app. Before then, a dash-prefixed argument no flag recognizes is an
+/// unknown flag; any other argument fills the next positional, then `rest`.
+fn parseArgsFor(comptime cmd: Command, alloc: mem.Allocator, globals: *Globals, args: []const []const u8) mem.Allocator.Error!CliArgs {
     comptime cmd.check();
     const Parsed = cmd.Args();
     const flags = comptime cmd.allFlags();
@@ -1340,6 +1282,33 @@ fn parseArgsFor(comptime cmd: Command, alloc: mem.Allocator, args: []const []con
                         flags_given[flag_index] = true;
                         continue :next_arg;
                     },
+                    .pair => {
+                        const spelled = flag.name ++ " " ++ flag.value_name;
+                        if (mem.eql(u8, arg, flag.name)) {
+                            if (i + 2 >= args.len or mem.eql(u8, args[i + 1], "--") or mem.eql(u8, args[i + 2], "--")) {
+                                return .{ .problem = .{ .missing_flag_value = .{ .flag = spelled } } };
+                            }
+                            const replacements = fieldAt(&parsed, flag.field.?);
+                            if (replacements.len == ReplaceDepArgs.max) return .{ .problem = .{ .invalid_flag_value = .{
+                                .flag = flag.name,
+                                .value = args[i + 1],
+                                .expected = .{ .stated = std.fmt.comptimePrint("A single invocation can replace at most {d} dependencies.", .{ReplaceDepArgs.max}) },
+                            } } };
+                            replacements.items[replacements.len] = .{ .old = args[i + 1], .new = args[i + 2] };
+                            replacements.len += 1;
+                            i += 2;
+                            continue :next_arg;
+                        }
+                        if (mem.startsWith(u8, arg, flag.name ++ "=")) return .{ .problem = .{ .invalid_flag_value = .{
+                            .flag = flag.name,
+                            .value = arg[flag.name.len + 1 ..],
+                            .expected = .{ .stated = "The flag takes two separate arguments instead: " ++ spelled ++ "." },
+                        } } };
+                    },
+                    .global => if (mem.eql(u8, arg, flag.name)) {
+                        @field(globals, flag.field.?) = true;
+                        continue :next_arg;
+                    },
                     .terminator => if (mem.eql(u8, arg, flag.name)) {
                         flags_ended = true;
                         continue :next_arg;
@@ -1354,15 +1323,15 @@ fn parseArgsFor(comptime cmd: Command, alloc: mem.Allocator, args: []const []con
                 .cmd = cmd.name,
                 .arg = arg,
                 .suggestion = cmd.closestFlag(arg),
-                .passes_args_to_app = cmd.tag == .run,
+                .passes_args_to_app = cmd.rest_is_app_args,
             } } };
-
-            inline for (cmd.positionals, 0..) |positional, index| {
-                if (positional_count == index) {
-                    @field(parsed, positional.field) = arg;
-                    positional_count += 1;
-                    continue :next_arg;
-                }
+        }
+        inline for (cmd.positionals, 0..) |positional, index| {
+            if (positional_count == index) {
+                @field(parsed, positional.field) = arg;
+                positional_count += 1;
+                if (cmd.rest_is_app_args and positional_count == cmd.positionals.len) flags_ended = true;
+                continue :next_arg;
             }
         }
         if (cmd.rest == null) return unexpectedArgument(cmd.name, arg);
@@ -1427,8 +1396,8 @@ fn setFlagValue(comptime flag: Flag, field: anytype, written: []const u8, value:
     return null;
 }
 
-fn parseRun(comptime cmd: Command, alloc: mem.Allocator, args: []const []const u8) mem.Allocator.Error!CliArgs {
-    var parsed = try parseArgsFor(cmd, alloc, args);
+fn parseRun(comptime cmd: Command, alloc: mem.Allocator, globals: *Globals, args: []const []const u8) mem.Allocator.Error!CliArgs {
+    var parsed = try parseArgsFor(cmd, alloc, globals, args);
     if (parsed != .run) return parsed;
 
     const run = &parsed.run;
@@ -1442,8 +1411,8 @@ fn parseRun(comptime cmd: Command, alloc: mem.Allocator, args: []const []const u
     return parsed;
 }
 
-fn parseUnbundle(comptime cmd: Command, alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) ParseError!CliArgs {
-    const parsed = try parseArgsFor(cmd, alloc, args);
+fn parseUnbundle(comptime cmd: Command, alloc: mem.Allocator, std_io: std.Io, globals: *Globals, args: []const []const u8) ParseError!CliArgs {
+    const parsed = try parseArgsFor(cmd, alloc, globals, args);
     if (parsed != .unbundle or parsed.unbundle.paths.len > 0) return parsed;
 
     // If no paths specified, default to all .tar.zst files in current directory
@@ -1483,15 +1452,15 @@ test "specialization strategy parsing" {
         try testing.expectEqual(SpecializationStrategy.lss, result.run.specialization_strategy.?);
     }
     {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "foo.roc", "--specialize=no" });
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "--specialize=no", "foo.roc" });
         defer result.deinit(gpa);
         try testing.expectEqual(SpecializationStrategy.boxy, result.run.specialization_strategy.?);
     }
     {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "foo.roc", "--", "--specialize=no" });
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "foo.roc", "--specialize=no" });
         defer result.deinit(gpa);
         try testing.expectEqual(@as(?SpecializationStrategy, null), result.run.specialization_strategy);
-        try testing.expectEqualStrings("--specialize=no", result.run.app_args[0]);
+        try testing.expectEqualSlices([]const u8, &.{"--specialize=no"}, result.run.app_args);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{"--specialize"});
@@ -1586,7 +1555,7 @@ test "default roc command" {
         try testing.expectEqual(.version, std.meta.activeTag(result));
     }
     {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "ignored.roc", "--version" });
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "--version", "ignored.roc" });
         defer result.deinit(gpa);
         try testing.expectEqual(.version, std.meta.activeTag(result));
     }
@@ -1601,12 +1570,12 @@ test "default roc command" {
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "ignored.roc", "--help" });
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "--help", "ignored.roc" });
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "foo.roc", "--opt=speed" });
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "--opt=speed", "foo.roc" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.run.path);
         try testing.expectEqual(.speed, result.run.opt);
@@ -1621,46 +1590,43 @@ test "default roc command" {
         defer result.deinit(gpa);
         try testing.expectEqualStrings("notreal", result.problem.invalid_flag_value.value);
     }
-    // Test -- separator: args after -- should go to app_args
+    // Every argument after the file reaches the app as written, `--` included.
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "foo.roc", "--", "arg1", "arg2" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.run.path);
-        try testing.expectEqual(@as(usize, 2), result.run.app_args.len);
-        try testing.expectEqualStrings("arg1", result.run.app_args[0]);
-        try testing.expectEqualStrings("arg2", result.run.app_args[1]);
+        try testing.expectEqualSlices([]const u8, &.{ "--", "arg1", "arg2" }, result.run.app_args);
     }
-    // Test -- separator is not included in app_args
+    // roc's own flag names after the file are the app's arguments.
     {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "foo.roc", "--", "onlyarg" });
-        defer result.deinit(gpa);
-        try testing.expectEqual(@as(usize, 1), result.run.app_args.len);
-        try testing.expectEqualStrings("onlyarg", result.run.app_args[0]);
-    }
-    // Test flags after -- are treated as app args, not roc flags
-    {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "foo.roc", "--", "--help", "-v", "--version" });
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "foo.roc", "--help", "-v", "--version", "--opt=speed", "--watch", "-j4" });
         defer result.deinit(gpa);
         try testing.expectEqual(.run, std.meta.activeTag(result));
-        try testing.expectEqual(@as(usize, 3), result.run.app_args.len);
-        try testing.expectEqualStrings("--help", result.run.app_args[0]);
-        try testing.expectEqualStrings("-v", result.run.app_args[1]);
-        try testing.expectEqualStrings("--version", result.run.app_args[2]);
+        try testing.expectEqual(.dev, result.run.opt);
+        try testing.expect(!result.run.explicit_watch);
+        try testing.expectEqual(@as(?usize, null), result.run.max_threads);
+        try testing.expectEqualSlices([]const u8, &.{ "--help", "-v", "--version", "--opt=speed", "--watch", "-j4" }, result.run.app_args);
     }
-    // Test -- with flags before it still parses roc flags
+    // Flags before the file are roc's.
     {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "--opt=speed", "foo.roc", "--", "arg1" });
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "--opt=speed", "foo.roc", "arg1" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("foo.roc", result.run.path);
         try testing.expectEqual(.speed, result.run.opt);
-        try testing.expectEqual(@as(usize, 1), result.run.app_args.len);
-        try testing.expectEqualStrings("arg1", result.run.app_args[0]);
+        try testing.expectEqualSlices([]const u8, &.{"arg1"}, result.run.app_args);
     }
-    // Test -- without any args after it
+    // `--` before the file ends roc's flags; the next argument is the file.
     {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "foo.roc", "--" });
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "--opt=speed", "--", "-x.roc", "--fast", "--" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("foo.roc", result.run.path);
+        try testing.expectEqualStrings("-x.roc", result.run.path);
+        try testing.expectEqual(.speed, result.run.opt);
+        try testing.expectEqualSlices([]const u8, &.{ "--fast", "--" }, result.run.app_args);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{"--"});
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("main.roc", result.run.path);
         try testing.expectEqual(@as(usize, 0), result.run.app_args.len);
     }
 }
@@ -2116,14 +2082,32 @@ test "roc repl" {
     }
 }
 
-test "global no-color is not forwarded to the app" {
+test "global no-color before the app's file is roc's, and after it is the app's" {
     const gpa = testing.allocator;
-
-    const parsed = try parseWithGlobalOptions(gpa, testing.io, &[_][]const u8{ "--no-color", "app.roc", "--", "--no-color" });
-    defer parsed.command.deinit(gpa);
-
-    try testing.expect(parsed.no_color);
-    try testing.expectEqualSlices([]const u8, &.{"--no-color"}, parsed.command.run.app_args);
+    {
+        const parsed = try parseWithGlobalOptions(gpa, testing.io, &[_][]const u8{ "--no-color", "app.roc", "--no-color" });
+        defer parsed.command.deinit(gpa);
+        try testing.expect(parsed.no_color);
+        try testing.expectEqualSlices([]const u8, &.{"--no-color"}, parsed.command.run.app_args);
+    }
+    {
+        const parsed = try parseWithGlobalOptions(gpa, testing.io, &[_][]const u8{ "--opt=dev", "--no-color", "app.roc" });
+        defer parsed.command.deinit(gpa);
+        try testing.expect(parsed.no_color);
+        try testing.expectEqual(@as(usize, 0), parsed.command.run.app_args.len);
+    }
+    {
+        const parsed = try parseWithGlobalOptions(gpa, testing.io, &[_][]const u8{ "run", "app.roc", "--no-color" });
+        defer parsed.command.deinit(gpa);
+        try testing.expect(!parsed.no_color);
+        try testing.expectEqualSlices([]const u8, &.{"--no-color"}, parsed.command.run.app_args);
+    }
+    {
+        const parsed = try parseWithGlobalOptions(gpa, testing.io, &[_][]const u8{ "--no-color", "check", "--no-color", "app.roc" });
+        defer parsed.command.deinit(gpa);
+        try testing.expect(parsed.no_color);
+        try testing.expectEqualStrings("app.roc", parsed.command.check.path);
+    }
 }
 
 test "roc glue" {
@@ -2218,6 +2202,12 @@ test "roc version" {
         defer result.deinit(gpa);
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
+}
+
+test "roc docs search config" {
+    const result = try parse(testing.allocator, testing.io, &.{ "docs", "--search-config=search.tsv" });
+    defer result.deinit(testing.allocator);
+    try testing.expectEqualStrings("search.tsv", result.docs.search_config.?);
 }
 
 test "roc docs" {
@@ -2471,12 +2461,11 @@ test "roc install" {
 test "roc run subcommand" {
     const gpa = testing.allocator;
     {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "run", "tokei", "--", "arg1", "arg2" });
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "run", "tokei", "arg1", "--arg2" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("tokei", result.run.path);
         try testing.expect(result.run.via_run_subcommand);
-        try testing.expectEqual(@as(usize, 2), result.run.app_args.len);
-        try testing.expectEqualStrings("arg1", result.run.app_args[0]);
+        try testing.expectEqualSlices([]const u8, &.{ "arg1", "--arg2" }, result.run.app_args);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "run", "app.roc" });
@@ -2500,13 +2489,13 @@ test "roc run subcommand" {
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "run", "tokei", "--watch" });
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "run", "--watch", "tokei" });
         defer result.deinit(gpa);
         try testing.expect(result.run.explicit_watch);
         try testing.expect(!result.run.explicit_opt);
     }
     {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "run", "tokei", "--opt=dev" });
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "run", "--opt=dev", "tokei" });
         defer result.deinit(gpa);
         try testing.expect(result.run.explicit_opt);
     }
@@ -2620,13 +2609,14 @@ test "--replace-dep takes two arguments, repeats, and is position-independent" {
         try testing.expectEqual(@as(usize, 1), result.deps.resolve_limits.replace_deps.len);
         try testing.expectEqualStrings("main.roc", result.deps.path);
     }
-    // Implicit and explicit run both accept it; app args after `--` are untouched.
+    // Implicit and explicit run both accept it before the app's file; after
+    // the file, it is one of the app's arguments.
     {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "app.roc", "--replace-dep", url, "../pkg/main.roc", "--", "--replace-dep", "x", "y" });
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "--replace-dep", url, "../pkg/main.roc", "app.roc", "--replace-dep", "x", "y" });
         defer result.deinit(gpa);
         try testing.expectEqual(@as(usize, 1), result.run.resolve_limits.replace_deps.len);
-        try testing.expectEqual(@as(usize, 3), result.run.app_args.len);
-        try testing.expectEqualStrings("--replace-dep", result.run.app_args[0]);
+        try testing.expectEqualStrings("app.roc", result.run.path);
+        try testing.expectEqualSlices([]const u8, &.{ "--replace-dep", "x", "y" }, result.run.app_args);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "run", "--replace-dep", url, "../pkg/main.roc", "app.roc" });
@@ -2675,10 +2665,6 @@ test "--replace-dep rejects missing values, the = form, and non-resolving comman
         try testing.expectEqualStrings("glue", result.problem.unexpected_argument.cmd);
         try testing.expectEqualStrings("--replace-dep", result.problem.unexpected_argument.arg);
     }
-    {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "help", "--replace-dep", url, "../pkg/main.roc" });
-        try testing.expectEqualStrings("help", result.problem.unexpected_argument.cmd);
-    }
     // Resolving commands still get their own help and problems.
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "check", "--replace-dep", url, "../pkg/main.roc", "--help" });
@@ -2704,9 +2690,8 @@ test "issue 12353: an unknown flag is reported as one, for every command" {
     const Case = struct { args: []const []const u8, cmd: []const u8, suggestion: ?[]const u8, passes_args_to_app: bool };
     for ([_]Case{
         .{ .args = &.{ "run", "--bork" }, .cmd = "run", .suggestion = null, .passes_args_to_app = true },
-        .{ .args = &.{ "run", "app.roc", "--bork" }, .cmd = "run", .suggestion = null, .passes_args_to_app = true },
         .{ .args = &.{"--bork"}, .cmd = "", .suggestion = null, .passes_args_to_app = true },
-        .{ .args = &.{ "app.roc", "-x" }, .cmd = "", .suggestion = null, .passes_args_to_app = true },
+        .{ .args = &.{ "--opt=dev", "-x" }, .cmd = "", .suggestion = null, .passes_args_to_app = true },
         // spellchecker:ignore-next-line
         .{ .args = &.{ "run", "--targt=x64mac" }, .cmd = "run", .suggestion = "--target", .passes_args_to_app = true },
         .{ .args = &.{ "run", "--optimise" }, .cmd = "run", .suggestion = null, .passes_args_to_app = true },
@@ -2740,15 +2725,53 @@ test "issue 12353: a flag-like file or app argument is written with ./ or after 
         try testing.expectEqualStrings("./--bork", result.run.path);
     }
     {
-        const result = try parse(gpa, testing.io, &.{ "run", "app.roc", "--", "--bork" });
+        const result = try parse(gpa, testing.io, &.{ "run", "--", "--bork" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("app.roc", result.run.path);
-        try testing.expectEqualSlices([]const u8, &.{"--bork"}, result.run.app_args);
+        try testing.expectEqualStrings("--bork", result.run.path);
     }
     {
         const result = try parse(gpa, testing.io, &.{ "check", "./-x.roc" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("./-x.roc", result.check.path);
+    }
+}
+
+test "issue 12623: dash arguments after the app file go to the app, so shebang scripts can take flags" {
+    // repro for https://github.com/roc-lang/roc/issues/12623
+    // `./script.roc --fast x` runs as `roc ./script.roc --fast x`; the app
+    // receives `--fast` and `x` rather than roc reporting an unknown flag.
+    const gpa = testing.allocator;
+    {
+        const result = try parse(gpa, testing.io, &.{ "./script.roc", "--fast", "x" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.run, std.meta.activeTag(result));
+        try testing.expectEqualStrings("./script.roc", result.run.path);
+        try testing.expectEqualSlices([]const u8, &.{ "--fast", "x" }, result.run.app_args);
+    }
+    {
+        const result = try parse(gpa, testing.io, &.{ "run", "./script.roc", "--fast", "x" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.run, std.meta.activeTag(result));
+        try testing.expectEqualStrings("./script.roc", result.run.path);
+        try testing.expectEqualSlices([]const u8, &.{ "--fast", "x" }, result.run.app_args);
+    }
+}
+
+test "issue 12623: a shebang line may end roc's flags with --, and the app still gets every argument" {
+    const gpa = testing.allocator;
+    // `#!/usr/bin/env -S roc --` runs `./script.roc -- --fast` as
+    // `roc -- ./script.roc -- --fast`.
+    {
+        const result = try parse(gpa, testing.io, &.{ "--", "./script.roc", "--", "--fast" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("./script.roc", result.run.path);
+        try testing.expectEqualSlices([]const u8, &.{ "--", "--fast" }, result.run.app_args);
+    }
+    {
+        const result = try parse(gpa, testing.io, &.{ "run", "--", "./script.roc", "--help" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("./script.roc", result.run.path);
+        try testing.expectEqualSlices([]const u8, &.{"--help"}, result.run.app_args);
     }
 }
 
@@ -2785,10 +2808,17 @@ test "every flag sets the field its table entry names" {
             };
 
             inline for (comptime cmd.allFlags()) |flag| {
-                if (flag.field) |path| {
+                if (comptime flag.form == .global) {
+                    var globals: Globals = .{};
+                    const result = try parseArgsFor(cmd, gpa, &globals, required ++ &[_][]const u8{flag.name});
+                    defer result.deinit(gpa);
+                    try testing.expectEqual(cmd.tag, std.meta.activeTag(result));
+                    try testing.expect(@field(globals, flag.field.?));
+                } else if (flag.field) |path| {
                     const spellings: []const []const u8 = comptime if (flag.short) |short| &.{ flag.name, short } else &.{flag.name};
                     inline for (spellings) |written| {
-                        const result = try parseArgsFor(cmd, gpa, required ++ comptime flagSample(cmd, flag, written));
+                        var globals: Globals = .{};
+                        const result = try parseArgsFor(cmd, gpa, &globals, required ++ comptime flagSample(cmd, flag, written));
                         defer result.deinit(gpa);
                         try testing.expectEqual(cmd.tag, std.meta.activeTag(result));
 
@@ -2805,6 +2835,10 @@ test "every flag sets the field its table entry names" {
                             try testing.expectEqualStrings("sample", value);
                         } else if (Field == ?[]const u8) {
                             try testing.expectEqualStrings("sample", value.?);
+                        } else if (Field == ReplaceDepArgs) {
+                            try testing.expectEqual(@as(usize, 1), value.len);
+                            try testing.expectEqualStrings("old", value.items[0].old);
+                            try testing.expectEqualStrings("new", value.items[0].new);
                         } else {
                             try testing.expectEqual(@as(Field, 7), value);
                         }
@@ -2832,7 +2866,8 @@ fn flagSample(comptime cmd: Command, comptime flag: Flag, comptime written: []co
         .toggle => &.{written},
         .attached => &.{written ++ (if (mem.eql(u8, written, flag.name)) "=" else "") ++ sample},
         .separate => &.{ written, sample },
-        .terminator, .version, .rejected, .documented => @compileError(flag.name ++ " takes no value, so it has no sample command line"),
+        .pair => &.{ written, "old", "new" },
+        .global, .terminator, .version, .rejected, .documented => @compileError(flag.name ++ " takes no value, so it has no sample command line"),
     };
 }
 
@@ -2841,6 +2876,8 @@ test "every listed flag is in its command's help, and no unlisted one is" {
         if (cmd.tag != .help) {
             const help = comptime cmd.helpText();
             inline for (comptime cmd.allFlags()) |flag| {
+                // A command documents a global flag with an entry of its own.
+                if (comptime flag.form == .global) continue;
                 const listed = std.mem.find(u8, help, comptime flag.spelling() ++ " ") != null or
                     std.mem.find(u8, help, comptime flag.spelling() ++ "\n") != null;
                 try testing.expectEqual(flag.help != null, listed);
@@ -2959,8 +2996,8 @@ test "golden help: roc --help" {
         \\
         \\Arguments:
         \\  [ROC_FILE]         The .roc file of an app to run [default: main.roc]
-        \\  [ARGS_FOR_APP]...  Arguments to pass into the app being run
-        \\                     e.g. `roc app.roc -- arg1 arg2`
+        \\  [ARGS_FOR_APP]...  Arguments to pass into the app being run, exactly as written
+        \\                     e.g. `roc app.roc arg1 --flag2`
         \\
         \\Options:
         \\      --opt=<opt>                    Execution mode: dev (native dev backend, fast compilation), interpreter (interpreted, no code generation), speed (LLVM, optimized for execution speed), or size (LLVM, optimized for binary size) [default: dev]
@@ -2993,7 +3030,7 @@ test "golden help: roc run --help" {
     try expectHelp(&.{ "run", "--help" },
         \\Run a Roc application
         \\
-        \\Usage: roc run [OPTIONS] [SOURCE] [-- [ARGS_FOR_APP]...]
+        \\Usage: roc run [OPTIONS] [SOURCE] [ARGS_FOR_APP]...
         \\
         \\SOURCE may be:
         \\  a .roc file path        roc run main.roc
@@ -3003,6 +3040,7 @@ test "golden help: roc run --help" {
         \\Running an installed shorthand executes the optimized binary that was
         \\built at install time; no compilation or network access is needed.
         \\File and URL sources accept the same options as the default `roc` command.
+        \\Every argument after SOURCE is passed to the app exactly as written.
         \\
         \\Options:
         \\      --opt=<opt>                Execution mode: dev (native dev backend, fast compilation), interpreter (interpreted, no code generation), speed (LLVM, optimized for execution speed), or size (LLVM, optimized for binary size) [default: dev]
@@ -3277,14 +3315,15 @@ test "golden help: roc docs --help" {
         \\  [ROC_FILE]  The .roc file to generate docs for [default: main.roc]
         \\
         \\Options:
-        \\      --main=<main>    The .roc file of the main app/package module to resolve dependencies from
-        \\      --output=<dir>   Output directory for generated documentation [default: generated-docs]
-        \\      --serve          Start an HTTP server to view the documentation
-        \\      --with-lang-ref  Include the language reference articles from docs/langref
-        \\      --builtins       Document the builtins of this roc compiler instead of a .roc file
-        \\      --time           Print timing information for each compilation phase. Will not print anything if everything is cached.
-        \\      --no-cache       Disable caching
-        \\      --verbose        Enable verbose output including cache statistics
+        \\      --main=<main>           The .roc file of the main app/package module to resolve dependencies from
+        \\      --output=<dir>          Output directory for generated documentation [default: generated-docs]
+        \\      --serve                 Start an HTTP server to view the documentation
+        \\      --search-config=<file>  Add search categories, documents, and curated terms from a TSV file
+        \\      --with-lang-ref         Include the language reference articles from docs/langref
+        \\      --builtins              Document the builtins of this roc compiler instead of a .roc file
+        \\      --time                  Print timing information for each compilation phase. Will not print anything if everything is cached.
+        \\      --no-cache              Disable caching
+        \\      --verbose               Enable verbose output including cache statistics
         \\      --replace-dep OLD NEW    Load NEW wherever a dependency declares exactly OLD, for this invocation only.
         \\                               Each is a complete package URL or a path to a root .roc file; repeatable.
         \\                               Run `roc deps` to see the declared sources
@@ -3292,7 +3331,7 @@ test "golden help: roc docs --help" {
         \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages
         \\                               (defaults: packages 100, platforms 512; 0 for unlimited)
         \\                               Also caps each platform bundle during extraction
-        \\  -h, --help           Print help
+        \\  -h, --help                  Print help
         \\
     );
 }

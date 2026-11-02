@@ -692,9 +692,9 @@ pub const MethodTarget = struct {
     callable_ty: CheckedTypeId,
     /// The exact procedure alias the method is bound to (`method = f`), when
     /// this target is the procedure the alias chain reaches. A dispatch edge
-    /// instantiates the alias's scheme, so the target's substitution composes
-    /// through the alias's forwarded lookup, and its own evidence follows
-    /// from its callable, which that instantiation fixes.
+    /// instantiates the alias's scheme and resolves the alias's obligations,
+    /// so the target's substitution and evidence both compose through the
+    /// alias's forwarded lookup.
     alias: ?MethodAlias = null,
 };
 
@@ -824,7 +824,6 @@ pub const MethodRegistry = struct {
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
         local_templates: *const ProcedureTemplateLookup,
-        available_artifacts: anytype,
         checked_types: anytype,
         checked_bodies: anytype,
     ) Allocator.Error!MethodRegistry {
@@ -852,12 +851,7 @@ pub const MethodRegistry = struct {
             };
             const def_idx = entry.value.def_idx;
             if (unsupportedGeneratedMethodBinding(module, entry.value)) continue;
-            const method_owner = try methodOwnerForRegistryEntry(
-                module,
-                names,
-                available_artifacts,
-                entry.key.ownerIdent(),
-            );
+            const method_owner = try methodOwnerForRegistryEntry(module, names, entry.key.ownerIdent());
             const method_key: MethodKey = .{
                 .owner = method_owner,
                 .method = try names.internMethodIdent(idents, entry.key.methodIdent()),
@@ -1231,10 +1225,9 @@ fn statementDeclForBoundPattern(module: TypedCIR.Module, pattern_idx: CIR.Patter
 fn methodOwnerForRegistryEntry(
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    available_artifacts: anytype,
     owner: ModuleEnv.MethodOwner,
 ) Allocator.Error!MethodOwner {
-    const owner_env = methodOwnerEnvForRegistryEntry(module, available_artifacts, owner);
+    const owner_env = module.moduleEnvConst();
     if (builtinOwnerForRegistryEntry(owner_env, owner.owner)) |builtin_owner| {
         return .{ .builtin = builtin_owner };
     }
@@ -1256,47 +1249,6 @@ fn methodOwnerForRegistryEntry(
         .module = try names.internModuleIdentity(identity_hash),
         .source_decl = @backingInt(owner.owner),
     } };
-}
-
-fn methodOwnerEnvForRegistryEntry(
-    module: TypedCIR.Module,
-    available_artifacts: anytype,
-    owner: ModuleEnv.MethodOwner,
-) *const ModuleEnv {
-    const module_env = module.moduleEnvConst();
-    const owner_hash = methodOwnerIdentityHashForRegistryEntry(module_env, owner);
-
-    if (ownerEnvIdentityMatches(module_env, owner_hash)) return module_env;
-
-    for (available_artifacts) |artifact| {
-        const candidate = artifact.module_env;
-        if (ownerEnvIdentityMatches(candidate, owner_hash)) return candidate;
-    }
-
-    base.invariant(
-        "checked static dispatch registry invariant violated: could not find owner module for receiver method on declaration {d} of module '{s}'",
-        .{ @backingInt(owner.owner), module_env.module_name },
-    );
-}
-
-fn methodOwnerIdentityHashForRegistryEntry(
-    module_env: *const ModuleEnv,
-    owner: ModuleEnv.MethodOwner,
-) *const base.ModuleIdentity.Hash {
-    const owner_identity = owner.moduleIdentity() orelse {
-        return module_env.contentIdentityHash() orelse {
-            base.invariant(
-                "checked static dispatch registry invariant violated: local module '{s}' has no content identity",
-                .{module_env.module_name},
-            );
-        };
-    };
-    return module_env.moduleIdentityHash(owner_identity);
-}
-
-fn ownerEnvIdentityMatches(candidate: *const ModuleEnv, owner_hash: *const base.ModuleIdentity.Hash) bool {
-    const candidate_hash = candidate.contentIdentityHash() orelse return false;
-    return base.ModuleIdentity.eql(candidate_hash, owner_hash);
 }
 
 fn builtinOwnerForRegistryEntry(
@@ -1664,9 +1616,9 @@ pub const EvidenceTargetInstantiation = union(enum(u8)) {
     /// Exact callable relation produced while discharging this edge, which
     /// instantiated the scheme of the exact procedure alias the target was
     /// reached through (`MethodTarget.alias`). The node's
-    /// substitution substitutes that alias scope's quantified variables;
-    /// the target's own substitution composes through the alias's forwarded
-    /// lookup.
+    /// substitution substitutes that alias scope's quantified variables and
+    /// its nested evidence is `through_alias`; the target's own substitution
+    /// and evidence compose through the alias's forwarded lookup.
     alias: CheckedTypeId,
     /// Checking performed no instantiation of the target's scheme for this
     /// edge: publication selected it as the numeric default owner of an
@@ -1686,6 +1638,12 @@ pub const EvidenceNested = union(enum(u8)) {
     /// checker-recorded paths over its concrete callable, and from the
     /// callables of the requirement targets it selects.
     from_callable,
+    /// The edge instantiated the scheme of the exact procedure alias the
+    /// target was reached through (`EvidenceTargetInstantiation.alias`), and
+    /// publication resolved every obligation of that alias's scheme, in its
+    /// canonical order. The target's own evidence is the alias's forwarded
+    /// lookup's evidence in the alias's scope under these entries.
+    through_alias: artifact_serialize.Span,
 };
 
 /// Exact checked target and nested evidence selected for one dispatch edge.
@@ -2713,6 +2671,21 @@ pub const StaticDispatchPlanTable = struct {
             .resolved => |resolved| resolved,
             .from_callable => {
                 base.invariant("callable-derived target evidence has no resolved checked-evidence span", .{});
+            },
+            .through_alias => {
+                base.invariant("alias-scope evidence was read as its target's own evidence", .{});
+            },
+        };
+        return self.evidence_refs[span.start .. span.start + span.len];
+    }
+
+    /// The evidence an edge that instantiated a procedure alias's scheme
+    /// resolved for that alias's own obligations.
+    pub fn aliasScopeEvidence(self: *const StaticDispatchPlanTable, node: EvidenceNode) []const CheckedEvidence {
+        const span = switch (node.nested) {
+            .through_alias => |through_alias| through_alias,
+            .resolved, .from_callable => {
+                base.invariant("target evidence was read as an alias scope's evidence", .{});
             },
         };
         return self.evidence_refs[span.start .. span.start + span.len];

@@ -64,6 +64,10 @@ roc bundle main.roc Parser.roc Encoder.roc
 This creates a file with a name like `7AfjuYkuixaofoi12pAudKZpk557rKy1aSW3Ugxr6dab.tar.zst`, which can
 then be uploaded anywhere that can serve static files over HTTPS.
 
+The files can be listed in any order, but one of them has to be the package's `main.roc`. That's
+because anyone who downloads the bundle loads the package from the `main.roc` at its root, so
+`roc bundle` builds the bundle from that file, and gives an error if it's missing.
+
 ### Package Versions
 
 A package URL can include a version number in `MAJOR.MINOR.PATCH` format, such as the `2.1.0` in

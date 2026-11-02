@@ -112,6 +112,9 @@ const RawMismatchEvidence = struct {
     leaf: ?RawTypePair = null,
     /// The first same-method requirement pair that failed to agree.
     method_conflict: ?RawMethodConflict = null,
+    /// The row whose own repeated label failed to relate to its other
+    /// occurrence (design.md "Row Union Normalization").
+    repeated_label_row: ?Var = null,
 };
 
 /// Exact checker evidence produced when a fresh record construction omits a
@@ -151,7 +154,9 @@ pub const Result = union(enum) {
     suppressed_by_error,
     /// A mismatch recorded as a diagnostic.
     problem: Problem.Idx,
-    /// A mismatch detected under `write_no_report`: nothing recorded and the
+    /// A mismatch detected under `write_no_report`, or under
+    /// `repeated_label_rows = .return_row` when a row's repeated label stopped
+    /// the relation (`Scratch.repeatedLabelRow`): nothing recorded and the
     /// top-level operands are not poisoned. Successful child unifications that
     /// completed before the mismatch remain committed.
     mismatch,
@@ -328,6 +333,20 @@ pub const Options = struct {
     /// against this exact expression when the empty row operand is an
     /// internal extension variable rather than the expression's own var.
     record_construction_var: ?Var = null,
+    /// What a relation does when a row repeats a label whose occurrences do
+    /// not relate.
+    repeated_label_rows: RepeatedLabelRows = .mismatch,
+};
+
+/// What a relation does when one operand's row repeats a label along its
+/// extension chain and the occurrences do not relate.
+pub const RepeatedLabelRows = enum {
+    /// Treat it as a mismatch of the relation.
+    mismatch,
+    /// Return `Result.mismatch` with the row in `Scratch.repeatedLabelRow`,
+    /// so the caller can normalize the row, which reports the conflict as the
+    /// row's own, and relate the operands again.
+    return_row,
 };
 
 /// The method whose two requirements on one annotation's type variable a
@@ -387,6 +406,10 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
             error.OutOfMemory => return error.OutOfMemory,
             error.ErroneousType => return .suppressed_by_error,
             error.TypeMismatch => {},
+        }
+
+        if (opts.repeated_label_rows == .return_row and env.unify_scratch.repeatedLabelRow() != null) {
+            return Result.mismatch;
         }
 
         // write_no_report: keep completed child writes, but do not record or
@@ -1013,6 +1036,10 @@ const Unifier = struct {
                 if (self.scratch.mismatch_evidence.method_conflict == null) {
                     self.scratch.mismatch_evidence.method_conflict = conflict;
                 }
+                return error.TypeMismatch;
+            },
+            .record_repeated_label_row => |row| {
+                self.scratch.mismatch_evidence.repeated_label_row = row;
                 return error.TypeMismatch;
             },
         }
@@ -2629,11 +2656,15 @@ const Unifier = struct {
 
         try self.enterRecordRelation(vars);
 
+        // Every relation drains its chain duplicates before returning, so the
+        // ones gathered here split exactly into `a`'s and then `b`'s.
+        std.debug.assert(self.scratch.chain_duplicate_fields.items.len == 0);
         // First, unwrap all fields for record, erroring if we encounter an
         // invalid record ext var
         const a_gathered_fields = try self.gatherRow(.record, .{ .fields = a_fields, .ext = a_ext });
+        const a_duplicates_end = self.scratch.chain_duplicate_fields.items.len;
         const b_gathered_fields = try self.gatherRow(.record, .{ .fields = b_fields, .ext = b_ext });
-        try self.relateChainDuplicateFields(vars);
+        try self.relateChainDuplicateFields(vars, a_duplicates_end);
 
         // Then partition the fields
         const partitioned = try self.partitionRow(
@@ -2749,27 +2780,30 @@ const Unifier = struct {
     }
     /// A field repeated along one row's extension chain is the same field:
     /// its value types and kinds are equal exactly (design.md "Row Union
-    /// Normalization"), with no relation-specific kind relaxation.
-    fn relateChainDuplicateFields(self: *Self, vars: *const ResolvedVarDescs) Error!void {
+    /// Normalization"), with no relation-specific kind relaxation. The
+    /// duplicates before `a_duplicates_end` repeat along `vars.a`'s chain and
+    /// the rest along `vars.b`'s; a failure is that row's conflict.
+    fn relateChainDuplicateFields(self: *Self, vars: *const ResolvedVarDescs, a_duplicates_end: usize) Error!void {
         while (self.scratch.chain_duplicate_fields.pop()) |duplicate| {
+            const on_mismatch: MismatchHandling = .{ .record_repeated_label_row = repeatedLabelRow(vars, self.scratch.chain_duplicate_fields.items.len, a_duplicates_end) };
             const first = duplicate.first.decode();
             const repeated = duplicate.repeated.decode();
             switch (first) {
                 .required => |first_var| switch (repeated) {
-                    .required => |repeated_var| try self.scheduleGuardedPair(first_var, repeated_var, .propagate),
+                    .required => |repeated_var| try self.scheduleGuardedPair(first_var, repeated_var, on_mismatch),
                     .unknown => |unknown| {
-                        try self.scheduleGuardedPair(first_var, unknown.var_, .propagate);
-                        try self.scheduleGuardedPair(try self.fresh(vars, .{ .field_presence = .required }), unknown.presence, .propagate);
+                        try self.scheduleGuardedPair(first_var, unknown.var_, on_mismatch);
+                        try self.scheduleGuardedPair(try self.fresh(vars, .{ .field_presence = .required }), unknown.presence, on_mismatch);
                     },
                 },
                 .unknown => |first_unknown| switch (repeated) {
                     .required => |repeated_var| {
-                        try self.scheduleGuardedPair(first_unknown.var_, repeated_var, .propagate);
-                        try self.scheduleGuardedPair(first_unknown.presence, try self.fresh(vars, .{ .field_presence = .required }), .propagate);
+                        try self.scheduleGuardedPair(first_unknown.var_, repeated_var, on_mismatch);
+                        try self.scheduleGuardedPair(first_unknown.presence, try self.fresh(vars, .{ .field_presence = .required }), on_mismatch);
                     },
                     .unknown => |unknown| {
-                        try self.scheduleGuardedPair(first_unknown.var_, unknown.var_, .propagate);
-                        try self.scheduleGuardedPair(first_unknown.presence, unknown.presence, .propagate);
+                        try self.scheduleGuardedPair(first_unknown.var_, unknown.var_, on_mismatch);
+                        try self.scheduleGuardedPair(first_unknown.presence, unknown.presence, on_mismatch);
                     },
                 },
             }
@@ -2777,20 +2811,32 @@ const Unifier = struct {
     }
 
     /// A tag repeated along one row's extension chain is the same tag: its
-    /// payloads are equal (design.md "Row Union Normalization").
-    fn relateChainDuplicateTags(self: *Self) Error!void {
+    /// payloads are equal (design.md "Row Union Normalization"). The
+    /// duplicates before `a_duplicates_end` repeat along `vars.a`'s chain and
+    /// the rest along `vars.b`'s; a failure is that row's conflict.
+    fn relateChainDuplicateTags(self: *Self, vars: *const ResolvedVarDescs, a_duplicates_end: usize) Error!void {
         while (self.scratch.chain_duplicate_tags.pop()) |duplicate| {
-            if (duplicate.first.len() != duplicate.repeated.len()) return error.TypeMismatch;
+            const row = repeatedLabelRow(vars, self.scratch.chain_duplicate_tags.items.len, a_duplicates_end);
+            if (duplicate.first.len() != duplicate.repeated.len()) {
+                self.scratch.mismatch_evidence.repeated_label_row = row;
+                return error.TypeMismatch;
+            }
+            const on_mismatch: MismatchHandling = .{ .record_repeated_label_row = row };
             var arg_idx: u32 = duplicate.first.len();
             while (arg_idx > 0) {
                 arg_idx -= 1;
                 try self.scheduleGuardedPair(
                     self.types_store.getVarAt(duplicate.first, arg_idx),
                     self.types_store.getVarAt(duplicate.repeated, arg_idx),
-                    .propagate,
+                    on_mismatch,
                 );
             }
         }
+    }
+
+    /// The operand row along whose chain the duplicate at `index` repeats.
+    fn repeatedLabelRow(vars: *const ResolvedVarDescs, index: usize, a_duplicates_end: usize) Var {
+        return if (index < a_duplicates_end) vars.a.var_ else vars.b.var_;
     }
 
     /// Recursively unwraps the entries of an extensible row, flattening all visible entries
@@ -3232,10 +3278,14 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
+        // Every relation drains its chain duplicates before returning, so the
+        // ones gathered here split exactly into `a`'s and then `b`'s.
+        std.debug.assert(self.scratch.chain_duplicate_tags.items.len == 0);
         // Unwrap all fields for tag unions, erroring on invalid ext var
         const a_gathered_tags = try self.gatherRow(.tag_union, a_tag_union);
+        const a_duplicates_end = self.scratch.chain_duplicate_tags.items.len;
         const b_gathered_tags = try self.gatherRow(.tag_union, b_tag_union);
-        try self.relateChainDuplicateTags();
+        try self.relateChainDuplicateTags(vars, a_duplicates_end);
 
         // Then partition the tags
         const partitioned = try self.partitionRow(
@@ -4006,6 +4056,9 @@ const MismatchHandling = union(enum) {
     set_flag: u32,
     record_then_propagate: RawTypePair,
     record_method_conflict: RawMethodConflict,
+    /// A row's repeated label failed to relate to its other occurrence: the
+    /// whole relation stops and reports the row.
+    record_repeated_label_row: Var,
 };
 
 const SameAliasAfterArgs = struct {
@@ -4550,6 +4603,12 @@ pub const Scratch = struct {
         self.persistent_opening_index.deinit(self.gpa);
         self.persistent_openings.deinit(self.gpa);
         self.persistent_opening_args.deinit(self.gpa);
+    }
+
+    /// The row whose own repeated label stopped the last relation, when one
+    /// did (design.md "Row Union Normalization").
+    pub fn repeatedLabelRow(self: *const Scratch) ?Var {
+        return self.mismatch_evidence.repeated_label_row;
     }
 
     /// Reset the scratch arrays, retaining the allocated memory

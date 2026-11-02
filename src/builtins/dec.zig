@@ -415,18 +415,28 @@ pub const RocDec = extern struct {
         exponent: i128,
         roc_ops: *RocOps,
     ) RocDec {
-        if (exponent == 0) {
-            return RocDec.one_point_zero;
-        } else if (exponent > 0) {
-            if (exponent & 1 == 0) {
-                const half_power = RocDec.powInt(base, i128h.shr_i128(exponent, 1), roc_ops); // `>> 1` == `/ 2`
-                return RocDec.mul(half_power, half_power, roc_ops);
-            } else {
-                return RocDec.mul(base, RocDec.powInt(base, exponent - 1, roc_ops), roc_ops);
-            }
-        } else {
-            return RocDec.div(RocDec.one_point_zero, RocDec.powInt(base, -exponent, roc_ops), roc_ops);
+        if (exponent < 0) {
+            return RocDec.div(RocDec.one_point_zero, base.powNonNegative(-exponent, roc_ops), roc_ops);
         }
+        return base.powNonNegative(exponent, roc_ops);
+    }
+
+    /// `base` raised to `exponent` by squaring, multiplying in the same
+    /// order as `x^(2k) = x^k * x^k` and `x^(2k+1) = x * x^(2k)`, so every
+    /// rounding matches. Builtins never recurse: a reserved-low-memory wasm
+    /// module's stack checks need every compiler-owned call chain to have a
+    /// static depth.
+    fn powNonNegative(base: RocDec, exponent: i128, roc_ops: *RocOps) RocDec {
+        if (exponent == 0) return RocDec.one_point_zero;
+        const magnitude: u128 = @intCast(exponent);
+        var bit_index: u7 = @intCast(127 - @clz(magnitude));
+        var result = RocDec.mul(base, RocDec.one_point_zero, roc_ops);
+        while (bit_index > 0) {
+            bit_index -= 1;
+            result = RocDec.mul(result, result, roc_ops);
+            if ((magnitude >> bit_index) & 1 != 0) result = RocDec.mul(base, result, roc_ops);
+        }
+        return result;
     }
 
     pub fn pow(

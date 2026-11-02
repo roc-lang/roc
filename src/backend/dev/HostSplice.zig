@@ -21,11 +21,12 @@ const builtin = @import("builtin");
 const builtins = @import("builtins");
 const lir = @import("lir");
 const LirCodeGenMod = @import("LirCodeGen.zig");
-const ProcArtifact = @import("ProcArtifact.zig");
+const CodeExcerpt = @import("CodeExcerpt.zig");
 const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
 const StaticDataImage = @import("StaticDataImage.zig").StaticDataImage;
 const relocation_mod = @import("Relocation.zig");
 const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
+const host_isa = @import("isa.zig").host;
 const SpliceSource = @import("ObjectFileCompiler.zig").SpliceSource;
 const spliceExternalProcs = @import("ObjectFileCompiler.zig").spliceExternalProcs;
 
@@ -51,7 +52,7 @@ const stub_size = 16;
 pub const HostSplice = struct {
     allocator: Allocator,
     /// The carried data items in placement order, one per name.
-    data: std.ArrayList(ProcArtifact.DataItem) = .empty,
+    data: std.ArrayList(CodeExcerpt.DataItem) = .empty,
     /// Each carried data item's index in `data`, by name.
     data_names: std.StringHashMap(u32),
     /// Each data item's offset in the mapping once `link` has laid it out.
@@ -116,17 +117,17 @@ pub const HostSplice = struct {
             try external.append(self.allocator, proc_id);
         }
         if (external.items.len == 0) return;
-        var carried = std.ArrayList(ProcArtifact.DataItem).empty;
+        var carried = std.ArrayList(CodeExcerpt.DataItem).empty;
         defer carried.deinit(self.allocator);
         try spliceExternalProcs(HostLirCodeGen, self.allocator, codegen, codegen.store.getProcSpecs(), external.items, source, &carried);
         try self.addDataItems(carried.items);
         self.spliced_procs += external.items.len;
     }
 
-    /// Carry artifact data into the executable mapping, once per exact name.
+    /// Carry excerpt data into the executable mapping, once per exact name.
     /// Records are copied; their names, bytes, and relocations remain borrowed
     /// and must outlive this splice and its `link` call.
-    pub fn addDataItems(self: *HostSplice, items: []const ProcArtifact.DataItem) Allocator.Error!void {
+    pub fn addDataItems(self: *HostSplice, items: []const CodeExcerpt.DataItem) Allocator.Error!void {
         for (items) |item| {
             const gop = try self.data_names.getOrPut(item.name);
             if (gop.found_existing) continue;
@@ -142,7 +143,7 @@ pub const HostSplice = struct {
     /// evaluator's own code names one where it takes a hosted function as a
     /// value. Runs after every procedure is compiled and before the image
     /// is finished.
-    pub fn generateHostedStubs(self: *HostSplice, codegen: *HostLirCodeGen, boxy_native_fns: *const BoxyNativeFnTable) Allocator.Error!void {
+    pub fn generateHostedStubs(self: *HostSplice, codegen: *HostLirCodeGen, boxy_native_fns: ?*const BoxyNativeFnTable) Allocator.Error!void {
         var code_symbols = std.StringHashMap(usize).init(self.allocator);
         defer {
             var keys = code_symbols.keyIterator();
@@ -161,7 +162,7 @@ pub const HostSplice = struct {
                     if (self.static_data) |layout| if (layout.symbolOffset(name) != null) continue;
                     break :blk name;
                 },
-                .local_data, .retired, .runtime_ref => continue,
+                .local_data, .retired, .runtime_number => continue,
             };
             if (compilerFunction(name, boxy_native_fns) != null or code_symbols.contains(name) or self.data_names.contains(name) or self.hosted_stubs.contains(name)) continue;
             if (!containsName(needed.items, name)) try needed.append(self.allocator, name);
@@ -185,7 +186,7 @@ pub const HostSplice = struct {
     /// Map the finished image executable: copy the code, give every function
     /// of the compiler it calls a stub, define the carried data, and patch
     /// every relocation.
-    pub fn link(self: *HostSplice, codegen: *HostLirCodeGen, boxy_native_fns: *const BoxyNativeFnTable) LinkError!ExecutableMemory {
+    pub fn link(self: *HostSplice, codegen: *HostLirCodeGen, boxy_native_fns: ?*const BoxyNativeFnTable) LinkError!ExecutableMemory {
         const code = codegen.getGeneratedCode();
         const names = codegen.getSymbolNames();
 
@@ -194,7 +195,7 @@ pub const HostSplice = struct {
         for (codegen.getRelocations()) |indexed| {
             try relocations.append(self.allocator, switch (indexed) {
                 // The image keeps the program's own table numbers.
-                .retired, .runtime_ref => continue,
+                .retired, .runtime_number => continue,
                 .linked_function => |function| .{ .linked_function = .{ .offset = function.offset, .name = names[@backingInt(function.symbol)], .kind = function.kind } },
                 .linked_data => |data| .{ .linked_data = .{ .offset = data.offset, .name = names[@backingInt(data.symbol)], .kind = data.kind } },
                 .local_data => |data| .{ .local_data = data },
@@ -312,7 +313,7 @@ const Binding = enum { compiler_function, image, unresolved };
 /// Resolves relocation names against the compiler and the image.
 const Binder = struct {
     splice: *HostSplice,
-    boxy_native_fns: *const BoxyNativeFnTable,
+    boxy_native_fns: ?*const BoxyNativeFnTable,
     code_symbols: *const std.StringHashMap(usize),
     stub_targets: *std.AutoArrayHashMapUnmanaged(usize, void),
     allocator: Allocator,
@@ -372,13 +373,15 @@ const Binder = struct {
 /// of the in-process host, a boxy runtime function, or a compiler-rt or C
 /// routine. The dict seed is the compile-time evaluator's fixed zero, as it
 /// is in the evaluator's own code.
-fn compilerFunction(name: []const u8, boxy_native_fns: *const BoxyNativeFnTable) ?usize {
+fn compilerFunction(name: []const u8, boxy_native_fns: ?*const BoxyNativeFnTable) ?usize {
     if (BuiltinFn.fromSymbolName(name)) |builtin_fn| {
         if (builtin_fn == .dict_pseudo_seed) return @intFromPtr(&comptimeDictSeed);
         return builtin_fn.wrapperAddress();
     }
     if (builtins.in_process_host.Symbol.fromName(name)) |symbol| return symbol.address();
-    if (BoxyBuiltinFn.fromSymbolName(name)) |boxy_fn| return boxy_native_fns[@backingInt(boxy_fn)];
+    if (boxy_native_fns) |table| {
+        if (BoxyBuiltinFn.fromSymbolName(name)) |boxy_fn| return table[@backingInt(boxy_fn)];
+    }
     return builtins.native_runtime_libcalls.resolve(name);
 }
 
@@ -411,13 +414,16 @@ fn collectCodeSymbols(allocator: Allocator, codegen: *const HostLirCodeGen, out:
 /// AArch64 `ldr x16, #8; br x16` over it.
 fn writeStub(stub: *[stub_size]u8, target: usize) void {
     @memset(stub, 0);
-    if (builtin.cpu.arch == .x86_64) {
-        stub[0..6].* = .{ 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-        std.mem.writeInt(u64, stub[6..14], target, .little);
-    } else if (builtin.cpu.arch == .aarch64) {
-        std.mem.writeInt(u32, stub[0..4], 0x58000050, .little);
-        std.mem.writeInt(u32, stub[4..8], 0xD61F0200, .little);
-        std.mem.writeInt(u64, stub[8..16], target, .little);
+    if (host_isa) |isa| switch (isa) {
+        .x86_64 => {
+            stub[0..6].* = .{ 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+            std.mem.writeInt(u64, stub[6..14], target, .little);
+        },
+        .aarch64 => {
+            std.mem.writeInt(u32, stub[0..4], 0x58000050, .little);
+            std.mem.writeInt(u32, stub[4..8], 0xD61F0200, .little);
+            std.mem.writeInt(u64, stub[8..16], target, .little);
+        },
     } else @import("base").invariant("HostSplice invariant violated: in-process stubs are written only on x86_64 and aarch64 hosts, not {t}", .{builtin.cpu.arch});
 }
 
@@ -432,7 +438,7 @@ test "compiler functions resolve and the dict seed is the evaluator's zero" {
 }
 
 test "a stub jumps to its target" {
-    if (builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) return error.SkipZigTest;
+    if (comptime host_isa == null) return error.SkipZigTest;
     const Target = struct {
         fn answer() callconv(.c) u64 {
             return 42;
@@ -474,7 +480,7 @@ test "compiler symbols keep precedence over image definitions" {
 }
 
 test "static data is placed in the mapping and stays writable" {
-    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) return error.SkipZigTest;
+    if (comptime host_isa == null) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var store = lir.LirStore.init(allocator);
     defer store.deinit();
@@ -496,7 +502,7 @@ test "static data is placed in the mapping and stays writable" {
     var splice = HostSplice.init(allocator);
     defer splice.deinit();
     // A carried item that points at the slot.
-    const pointers = [_]ProcArtifact.DataItem{.{
+    const pointers = [_]CodeExcerpt.DataItem{.{
         .name = "test_slot_pointer",
         .bytes = &(@as([8]u8, @splat(0))),
         .alignment = 8,
@@ -530,7 +536,7 @@ test "static data is placed in the mapping and stays writable" {
 test "linking many data items resolves each pointer through its target's own symbol offset" {
     // Every item points at the next one. Finding a target by scanning all
     // items makes linking quadratic, which at this count runs for minutes.
-    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) return error.SkipZigTest;
+    if (comptime host_isa == null) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var store = lir.LirStore.init(allocator);
     defer store.deinit();
@@ -543,13 +549,13 @@ test "linking many data items resolves each pointer through its target's own sym
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const count = 100_000;
-    const items = try arena.allocator().alloc(ProcArtifact.DataItem, count);
+    const items = try arena.allocator().alloc(CodeExcerpt.DataItem, count);
     const names = try arena.allocator().alloc([]const u8, count);
     for (names, 0..) |*name, index| name.* = try std.fmt.allocPrint(arena.allocator(), "test_item_{d}", .{index});
     for (items, 0..) |*item, index| {
         const bytes = try arena.allocator().alloc(u8, 2 * @sizeOf(usize));
         @memset(bytes, 0);
-        const relocations = try arena.allocator().alloc(ProcArtifact.DataRelocation, 1);
+        const relocations = try arena.allocator().alloc(CodeExcerpt.DataRelocation, 1);
         relocations[0] = .{ .offset = @sizeOf(usize), .name = names[(index + 1) % count], .addend = 0, .function = false };
         item.* = .{
             .name = names[index],

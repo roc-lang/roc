@@ -261,9 +261,14 @@ pub const Solution = struct {
     /// Flat conditional-return rows referenced by `RcSig.ret_conditions`.
     ret_conditions: []arc_sig.RetCondition,
     /// Bit set => the proc's signature is pinned by ABI (roots, hosted,
-    /// erased-callable, bodyless, and address-escaping procs). Pinned procs
-    /// are never mode-specialized.
+    /// erased-callable, bodyless, and address-escaping procs) or for
+    /// stability (`LIR.LirProcSpec.stable_signature`). Pinned procs are never
+    /// mode-specialized.
     pinned: std.bit_set.DynamicBitSetUnmanaged,
+    /// Bit set => the proc is pinned only for stability: its body is this
+    /// program's, so code compiled with the same body may still call its
+    /// outcome variant (`outcomeSpanForCall`).
+    stability_pinned: std.bit_set.DynamicBitSetUnmanaged = .{},
     /// Store-shaped settlement inputs built by the first uniqueness
     /// settlement and reused by every later one on this solution.
     uniqueness_structure: ?*UniquenessStructure = null,
@@ -302,6 +307,7 @@ pub const Solution = struct {
         self.unique_origins_ok.deinit(self.allocator);
         self.fresh_reads.deinit(self.allocator);
         self.pinned.deinit(self.allocator);
+        self.stability_pinned.deinit(self.allocator);
         if (self.uniqueness_structure) |structure| structure.destroy();
     }
 
@@ -497,6 +503,16 @@ pub const Solution = struct {
 
     pub fn sigOf(self: *const Solution, proc: LIR.LirProcSpecId) arc_sig.RcSig {
         return self.sigTable().get(proc);
+    }
+
+    /// The outcome span a call from `caller` to `callee` may demand. A stable
+    /// procedure's outcome rows follow its current body, which code without
+    /// a code key does not change with, so only a caller with one may demand
+    /// them.
+    pub fn outcomeSpanForCall(self: *const Solution, store: *const LirStore, caller: LIR.LirProcSpecId, callee: LIR.LirProcSpecId) arc_sig.OutcomeSpan {
+        const index = @backingInt(callee);
+        if (index < self.stability_pinned.capacity() and self.stability_pinned.isSet(index) and store.getProcSpec(caller).code_key == null) return .empty;
+        return self.availableOutcomeSpanOf(callee);
     }
 
     pub fn availableOutcomeSpanOf(self: *const Solution, proc: LIR.LirProcSpecId) arc_sig.OutcomeSpan {
@@ -704,6 +720,8 @@ const BindingFact = union(enum) {
     consuming_result: OwnershipFlow,
 };
 
+const FreshFormRead = struct { target: LIR.LocalId, fresh_form: LIR.LirProcSpecId };
+
 const VisibilityFact = union(enum) {
     link: struct { a: LIR.LocalId, b: LIR.LocalId },
     seed: LIR.LocalId,
@@ -833,6 +851,7 @@ const Solver = struct {
     domain: *const ArcLocalDomain,
     sigs: []arc_sig.RcSig,
     pinned: std.bit_set.DynamicBitSetUnmanaged,
+    stability_pinned: std.bit_set.DynamicBitSetUnmanaged,
     /// Call-graph SCC id per proc, for the tail-call rule.
     scc: []u32,
     defs: []DefKind,
@@ -864,6 +883,8 @@ const Solver = struct {
     /// Later analyses consume these typed facts without decoding LIR again.
     binding_facts: std.ArrayList(BindingFact),
     visibility_facts: std.ArrayList(VisibilityFact),
+    /// Reads that name a fresh form. Each may become a call of that procedure.
+    fresh_form_reads: std.ArrayList(FreshFormRead),
     unique_facts: std.ArrayList(UniqueFact),
     address_taken: std.bit_set.DynamicBitSetUnmanaged,
     /// Reachable returned locals and joins, partitioned by source proc.
@@ -934,6 +955,7 @@ pub fn solveWithOptions(
         .domain = &domain,
         .sigs = &.{},
         .pinned = .{},
+        .stability_pinned = .{},
         .scc = &.{},
         .defs = &.{},
         .demand = &.{},
@@ -947,6 +969,7 @@ pub fn solveWithOptions(
         .param_uses = .empty,
         .binding_facts = .empty,
         .visibility_facts = .empty,
+        .fresh_form_reads = .empty,
         .unique_facts = .empty,
         .address_taken = .{},
         .proc_stmts = .{},
@@ -964,6 +987,7 @@ pub fn solveWithOptions(
     };
     defer {
         solver.pinned.deinit(allocator);
+        solver.stability_pinned.deinit(allocator);
         allocator.free(solver.scc);
         allocator.free(solver.defs);
         allocator.free(solver.demand);
@@ -977,6 +1001,7 @@ pub fn solveWithOptions(
         solver.param_uses.deinit(allocator);
         solver.binding_facts.deinit(allocator);
         solver.visibility_facts.deinit(allocator);
+        solver.fresh_form_reads.deinit(allocator);
         solver.unique_facts.deinit(allocator);
         solver.address_taken.deinit(allocator);
         solver.proc_stmts.deinit(allocator);
@@ -998,6 +1023,7 @@ pub fn solveWithOptions(
     // nested inventories. Moved result tables are reset to empty at handoff.
     solver.sigs = try allocator.alloc(arc_sig.RcSig, proc_count);
     solver.pinned = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_count);
+    solver.stability_pinned = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_count);
     solver.scc = try allocator.alloc(u32, proc_count);
     solver.defs = try allocator.alloc(DefKind, arc_local_count);
     solver.demand = try allocator.alloc(bool, arc_local_count);
@@ -1268,10 +1294,12 @@ pub fn solveWithOptions(
             .fresh_reads = fresh_reads,
             .ret_conditions = initial_ret_conditions,
             .pinned = solver.pinned,
+            .stability_pinned = solver.stability_pinned,
         };
     };
     solver.sigs = &.{};
     solver.pinned = .{};
+    solver.stability_pinned = .{};
     solver.join_index_by_stmt = &.{};
     solver.jump_target_join_index_by_stmt = &.{};
     solver.jump_site_index_by_stmt = &.{};
@@ -1553,7 +1581,7 @@ fn computeOutcomeRestitution(
 
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        if (solution.isPinnedProc(proc_id)) continue;
+        if (solution.isPinnedProc(proc_id) and !solution.stability_pinned.isSet(proc_index)) continue;
         const proc = store.getProcSpec(proc_id);
         const body = proc.arcBody() orelse continue;
         if (layouts.getLayout(proc.ret_layout).tag != .tag_union) continue;
@@ -1926,6 +1954,14 @@ fn computeOutcomeRestitution(
         if (!valid or accum.count() == 0) {
             continue;
         }
+
+        // A complete table can still return no ownership unit on any path.
+        // Such a convention is identical to the base and cannot be demanded;
+        // do not publish it as a variant capability or duplicate its liveness.
+        var restituted_params: arc_sig.ParamMask = 0;
+        var capabilities = accum.valueIterator();
+        while (capabilities.next()) |outcome| restituted_params |= outcome.remaining_on_all_paths;
+        if (restituted_params == 0) continue;
 
         const start = all_outcomes.items.len;
         var iter = accum.iterator();
@@ -2909,6 +2945,9 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             } else if (assign.value == .str_literal or assign.value == .static_data or assign.value == .bytes_literal) {
                 try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
             }
+            if (store.literalExtra(assign.value).fresh_alternative) |fresh_form| {
+                try solver.fresh_form_reads.append(allocator, .{ .target = assign.target, .fresh_form = fresh_form });
+            }
             switch (assign.value) {
                 .str_literal, .static_data, .bytes_literal => {},
                 .i64_literal,
@@ -3457,6 +3496,7 @@ fn lowLevelBorrowSource(
 
 fn computePins(solver: *Solver, roots: []const LIR.LirProcSpecId) SolveError!void {
     fillPinnedProcContracts(solver.store, roots, &solver.pinned);
+    fillStabilityPins(solver.store, roots, &solver.stability_pinned);
     debugAssertAddressTakenPinned(solver.store, &solver.address_taken, &solver.pinned);
 }
 
@@ -3502,13 +3542,31 @@ fn fillPinnedProcContracts(
     }
     for (0..store.procSpecCount()) |proc_index| {
         const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-        // A procedure named by site keeps its identity when its body changes,
-        // so code compiled against an earlier body calls it; its signature is
-        // the one its types determine (`LIR.LirProcSpec.code_key`).
-        if (proc.arcBody() == null or proc.hosted != null or proc.abi == .erased_callable or proc.code_key != null) {
+        // Code compiled against an earlier body of a stable procedure calls
+        // it by identity; its signature is the one its types determine
+        // (`LIR.LirProcSpec.stable_signature`).
+        if (pinnedByAbi(proc) or proc.stable_signature) {
             pinned.set(proc_index);
         }
     }
+}
+
+fn pinnedByAbi(proc: *const LIR.LirProcSpec) bool {
+    return proc.arcBody() == null or proc.hosted != null or proc.abi == .erased_callable;
+}
+
+/// The procedures pinned only because they are stable: no root and no ABI
+/// pins them, and their body is this program's.
+fn fillStabilityPins(
+    store: *const LirStore,
+    roots: []const LIR.LirProcSpecId,
+    stability_pinned: *std.bit_set.DynamicBitSetUnmanaged,
+) void {
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+        if (proc.stable_signature and !pinnedByAbi(proc)) stability_pinned.set(proc_index);
+    }
+    for (roots) |root| stability_pinned.unset(@backingInt(root));
 }
 
 fn computeVisibilityFromFacts(
@@ -3534,6 +3592,21 @@ fn computeVisibilityFromFacts(
         if (solver.store.getProcSpecImmediate(call.callee).body == null) continue;
         const target = domain.indexOf(call.target) orelse continue;
         for (solver.proc_returns.of(@backingInt(call.callee))) |return_local| {
+            const returned = domain.indexOfRaw(return_local) orelse continue;
+            sets.unite(target, returned);
+        }
+    }
+
+    // A read that names a fresh form may be emitted as a call of it, and which
+    // reads are is settled after this analysis. Visibility is a may-property,
+    // so every such read flows from the procedure's returns.
+    for (solver.fresh_form_reads.items) |read| {
+        const target = domain.indexOf(read.target) orelse continue;
+        if (solver.store.getProcSpecImmediate(read.fresh_form).body == null) {
+            seeds.set(target);
+            continue;
+        }
+        for (solver.proc_returns.of(@backingInt(read.fresh_form))) |return_local| {
             const returned = domain.indexOfRaw(return_local) orelse continue;
             sets.unite(target, returned);
         }
@@ -3732,6 +3805,18 @@ fn computeVisibilityFromLift(
                     .discriminant => {},
                 }
             },
+            .assign_literal => |assign| {
+                // A read that names a fresh form may be emitted as a call of it.
+                if (store.literalExtra(assign.value).fresh_alternative) |fresh_form| {
+                    if (store.getProcSpecImmediate(fresh_form).body == null) {
+                        seedLocal(&visible, rc_local, @backingInt(assign.target));
+                    } else {
+                        for (ret_values.of(@backingInt(fresh_form))) |value| {
+                            addEdge(&sets, rc_local, @backingInt(assign.target), value);
+                        }
+                    }
+                }
+            },
             .assign_struct => |assign| {
                 if (store.optionalStmtRow(assign.contents_desc)) |contents_desc| {
                     if (contents_desc.localOrNull()) |local| {
@@ -3918,7 +4003,6 @@ fn computeVisibilityFromLift(
                 }
             },
             .init_uninitialized,
-            .assign_literal,
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_inspect,
@@ -7891,6 +7975,49 @@ test "uniqueness carries a candidate read's origin through a returned record fie
     try UniquenessOracleState.compare(&f, rc, &solution, .stamped, &metrics);
     try std.testing.expect(solution.fresh_reads.isSet(@backingInt(read)));
     try std.testing.expect(!solution.fresh_reads.isSet(@backingInt(idle_read)));
+}
+
+test "a read's possible fresh form joins every read of that form in host visibility" {
+    const allocator = std.testing.allocator;
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    // fresh() = []: the procedure both reads name.
+    const built = try f.local(f.list);
+    const fresh_body = try f.store.addCFStmt(.{ .assign_list = .{
+        .target = built,
+        .elems = LIR.LocalSpan.empty(),
+        .next = try f.ret(built),
+    } }, .test_fixture);
+    const fresh_form = try f.proc(&.{}, fresh_body, f.list);
+    const static_list = try f.staticData(fresh_form, f.list);
+    const readOf = struct {
+        fn stmt(fixture: anytype, target: LIR.LocalId, id: LIR.StaticDataId, form: LIR.LirProcSpecId) SolveError!LIR.CFStmtId {
+            return fixture.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .static_data = .{
+                    .id = id,
+                    .copies = try fixture.store.addOptionalStmtRow(LIR.LiteralExtra, .{ .fresh_alternative = form }),
+                } },
+                .next = try fixture.ret(target),
+            } }, .test_fixture);
+        }
+    }.stmt;
+    // The root's read reaches the host; the other's stays in the program.
+    const host_read = try f.local(f.list);
+    const root = try f.proc(&.{}, try readOf(&f, host_read, static_list, fresh_form), f.list);
+    const program_read = try f.local(f.list);
+    _ = try f.proc(&.{}, try readOf(&f, program_read, static_list, fresh_form), f.list);
+
+    const rc = try allocator.alloc(bool, f.store.localCount());
+    defer allocator.free(rc);
+    @memset(rc, true);
+    var solution = try solveWithOptions(allocator, &f.store, &f.layouts, rc, .{}, &.{root}, true, true, .{});
+    defer solution.deinit();
+    // Either read may become a call, and the procedure's returns connect the
+    // calls, so the visibility of one is the visibility of all.
+    try std.testing.expect(solution.isVisible(host_read));
+    try std.testing.expect(solution.isVisible(built));
+    try std.testing.expect(solution.isVisible(program_read));
 }
 
 test "uniqueness vetoes a join cell's field that a call definition does not vouch for" {

@@ -199,7 +199,7 @@ TYPE MISMATCH - fuzz_crash_020.md:58:6:58:11
 TYPE MISMATCH - fuzz_crash_020.md:52:2:52:2
 DECLARATION HAS NO VALUE - fuzz_crash_020.md:74:1:74:22
 DECLARATION HAS NO VALUE - fuzz_crash_020.md:113:1:113:7
-TYPE MISMATCH - fuzz_crash_020.md:58:4:58:5
+TYPE MISMATCH - fuzz_crash_020.md:84:2:84:4
 TYPE MISMATCH - fuzz_crash_020.md:86:11:86:17
 REFERENCE HAS NO VALUE - fuzz_crash_020.md:89:3:89:6
 TYPE MISMATCH - fuzz_crash_020.md:105:2:105:54
@@ -1257,17 +1257,17 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 58 4) (end 58 5))
+		(region (start 84 2) (end 84 4))
 		(headline
-			(reflow "This number is being used where a non-number type is needed."))
+			(reflow "This use needs a number in the definition it uses to have a non-number type."))
 		(document
+			(source-region (file "fuzz_crash_020.md") (start 84 2) (end 84 4) (annotation error) (line-text "\tme("))
+			(line-break)
+			(reflow "The number is here:")
+			(line-break)
 			(source-region (file "fuzz_crash_020.md") (start 58 4) (end 58 5) (annotation error) (line-text "\t\t\t1\t\"for\" => 20[1, ] # t"))
 			(line-break)
-			(reflow "The type was determined to be non-numeric here:")
-			(line-break)
-			(source-region (file "fuzz_crash_020.md") (start 84 2) (end 86 3) (annotation error) (line-text "\tme(\n\t\t..., # r\n\t)crash ke\"Unr!\" #)"))
-			(line-break)
-			(reflow "Other code expects this to have the type:")
+			(reflow "The type was determined to be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)

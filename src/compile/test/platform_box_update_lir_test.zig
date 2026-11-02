@@ -170,7 +170,9 @@ fn expectWrapperInlineOwnership(store: *const lir.LirStore, layouts: *const layo
     try std.testing.expectEqual(@as(usize, 6), total.box_release);
     try std.testing.expectEqual(@as(usize, 5), total.list_set);
     try std.testing.expectEqual(@as(usize, 2), total.list_replace);
-    try std.testing.expectEqual(@as(usize, 4), total.list_append);
+    // Both platform appends call the shared `List.append`, which holds one
+    // append; `List.repeat` holds the other.
+    try std.testing.expectEqual(@as(usize, 2), total.list_append);
     try std.testing.expectEqual(@as(usize, 0), total.box_retain);
     try std.testing.expectEqual(@as(usize, 0), total.list_retain);
 }

@@ -496,6 +496,7 @@ const GroupLivenessIndex = struct {
 
 /// Public `insert` function.
 pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: InsertOptions) ResourceError!void {
+    @import("base").dev_diagnostics.countTestWork(.arc, 1);
     if (options.metrics_out) |metrics| metrics.* = .{};
     var inserter = Inserter{
         .store = store,
@@ -737,7 +738,12 @@ fn recordObjectCacheFacts(
         spec.rc_ret_unique_fields = sig.ret_unique_fields;
         spec.rc_ret_conditions = conditions;
         spec.rc_variant_demandable = false;
-        if (solution.isPinnedProc(proc)) continue;
+        if (solution.isPinnedProc(proc)) {
+            // A proc pinned only for stability still has its outcome
+            // variant, for callers compiled with its current body.
+            spec.rc_variant_demandable = solution.stability_pinned.isSet(proc_index) and !solution.availableOutcomeSpanOf(proc).isEmpty();
+            continue;
+        }
         const borrowed = sig.borrowed_params;
         const specialized_demand = specialize and
             (solution.uniqueSeedMaskOf(proc) != 0 or
@@ -1308,6 +1314,14 @@ fn variantIdentity(sig_table: arc_sig.SigTable, source: LIR.ProcIdentity, demand
     return key.finish();
 }
 
+/// The code key of a variant of a procedure with code key `source_key`: the
+/// source's code with the variant's demand, which its identity names.
+fn variantCodeKey(source_key: [32]u8, identity: LIR.ProcIdentity) [32]u8 {
+    var key = (LIR.ProcIdentity{ .bytes = source_key }).deriving("arc-variant-code");
+    key.update(&identity.bytes);
+    return key.finish().bytes;
+}
+
 /// Mode-specialized proc variants keyed by demanded ownership vector.
 const VariantTable = struct {
     map: std.AutoHashMap(VariantSelector, LIR.LirProcSpecId),
@@ -1327,9 +1341,13 @@ const VariantTable = struct {
         const source_spec = store.getProcSpec(callee);
         if (source_spec.external) arcInvariant("ARC demanded a variant of an object-cache procedure, whose signature is fixed");
         if (source_spec.is_static_initializer) arcInvariant("ARC demanded a variant of a static initializer, which nothing calls");
+        const identity = variantIdentity(self.sig_table, source_spec.identity, request.demanded);
         const variant = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
-            .identity = variantIdentity(self.sig_table, source_spec.identity, request.demanded),
+            .identity = identity,
+            // A site-named source's code is named by its code key, and so is
+            // every variant emitted from that code.
+            .code_key = if (source_spec.code_key) |source_key| variantCodeKey(source_key, identity) else null,
             .args = source_spec.args,
             .erased_reuse_arg = source_spec.erased_reuse_arg,
             .erased_call_args = source_spec.erased_call_args,
@@ -2648,7 +2666,7 @@ const Inserter = struct {
                 const summary = maybe_summary orelse continue;
                 if (summary.body_reachable) continue;
                 var params_only = OwnedSet.init(self.domain());
-                try self.placeSolveJoinParamsInto(summary, &params_only);
+                try self.placeSolveJoinParamsInto(summary, null, &params_only);
                 if (!summary.body_keep_is_seed and params_only.eql(&summary.body_keep)) continue;
                 summary.body_keep_is_seed = false;
                 assignOwnedSet(&summary.body_keep, &params_only);
@@ -3603,6 +3621,9 @@ const Inserter = struct {
             if (!owned.contains(param)) {
                 arcInvariant("ARC restitution boundary did not carry its exact entry parameter unit");
             }
+            if (owned.residualMask(param) != owned.fullResidualMask(param)) {
+                arcInvariant("ARC restitution boundary carried a parameter with a field taken out of it");
+            }
             try keep.copyResourceFrom(owned, param);
         }
     }
@@ -4158,7 +4179,7 @@ const Inserter = struct {
     /// stays represented by its membership predicate.
     fn seedSolveBodyKeep(self: *Inserter, summary: *JoinSummary) ResourceError!void {
         try self.placeJoinRetainedInto(summary, null, &summary.seed_placed);
-        try self.placeSolveJoinParamsInto(summary, &summary.seed_placed);
+        try self.placeSolveJoinParamsInto(summary, null, &summary.seed_placed);
     }
 
     /// Whether `local` belongs to the join's body keep. While the keep is
@@ -4262,7 +4283,8 @@ const Inserter = struct {
     }
 
     /// Places a join's params owned, skipping any the back edges leave
-    /// loop-invariant.
+    /// loop-invariant and, given the body's reads, any ordinary param the
+    /// body never reads.
     ///
     /// A join param is only freshly owned in the body when every arrival
     /// hands it a new unit. An entry edge always does, but a back edge that
@@ -4273,19 +4295,51 @@ const Inserter = struct {
     /// param set and narrowed by the lattice's exact resource intersection,
     /// so filtering by it keeps this placement monotone and carries residual
     /// field masks through.
-    fn placeSolveJoinParamsInto(self: *Inserter, summary: *const JoinSummary, keep: *OwnedSet) ResourceError!void {
+    ///
+    /// An ordinary param the body never reads before rebinding it is dead
+    /// where the body begins, exactly like any other unit of the jump meet
+    /// the body does not read. Leaving it out of the keep makes every arrival
+    /// release it at the jump, right after the value was produced; placing it
+    /// would hold the value until the body's exits. A maybe-initialized param
+    /// is always placed: its producer makes the overwrite of the cell the
+    /// lifetime end of the previous payload, even on a solved-borrowed
+    /// binding that no arrival owns.
+    fn placeSolveJoinParamsInto(
+        self: *Inserter,
+        summary: *const JoinSummary,
+        body_reads: ?*const Row,
+        keep: *OwnedSet,
+    ) ResourceError!void {
         if (!summary.back_edge_seen) {
-            try self.placeAllSolveJoinParamsInto(summary, keep);
+            const params = self.store.getLocalSpan(summary.params);
+            for (0..GuardedList.borrowLen(params)) |index| {
+                const param = GuardedList.at(params, index);
+                if (!self.bodyMayReadParam(body_reads, param)) continue;
+                try self.placeUnit(keep, param);
+            }
+            const maybe_params = self.store.getLocalSpan(summary.maybe_uninitialized_params);
+            for (0..GuardedList.borrowLen(maybe_params)) |index| {
+                try self.placeConditionalUnit(keep, GuardedList.at(maybe_params, index));
+            }
             return;
         }
         const params = self.store.getLocalSpan(summary.params);
         for (0..GuardedList.borrowLen(params)) |index| {
-            try placeSurvivingParam(keep, &summary.back_edge_params, GuardedList.at(params, index));
+            const param = GuardedList.at(params, index);
+            if (!self.bodyMayReadParam(body_reads, param)) continue;
+            try placeSurvivingParam(keep, &summary.back_edge_params, param);
         }
         const maybe_params = self.store.getLocalSpan(summary.maybe_uninitialized_params);
         for (0..GuardedList.borrowLen(maybe_params)) |index| {
             try placeSurvivingParam(keep, &summary.back_edge_params, GuardedList.at(maybe_params, index));
         }
+    }
+
+    /// Whether the body reads a param's liveness group; every param counts
+    /// as read when no body reads are given.
+    fn bodyMayReadParam(self: *Inserter, body_reads: ?*const Row, param: LIR.LocalId) bool {
+        const reads = body_reads orelse return true;
+        return self.groupUsedFromTable(reads, param);
     }
 
     /// Copies exactly what the back-edge meet still proves for one param:
@@ -4330,8 +4384,8 @@ const Inserter = struct {
     }
 
     /// Recomputes a join's body keep from its jump-site states: intersect,
-    /// filter to units read in the body, then place params. The stored keep
-    /// can only shrink.
+    /// filter to units read in the body, then place the params the body
+    /// reads. The stored keep can only shrink.
     fn recomputeSolveBodyKeep(self: *Inserter, summary: *JoinSummary) ResourceError!bool {
         if (!summary.body_reachable) return false;
         const reads = try self.computeReadsBeforeRebind(summary.body);
@@ -4350,7 +4404,7 @@ const Inserter = struct {
             if (summary.retained_resources.isSet(resource)) continue;
             try merged.putEntry(@intCast(resource), .{});
         }
-        try self.placeSolveJoinParamsInto(summary, &merged);
+        try self.placeSolveJoinParamsInto(summary, reads, &merged);
         if (!summary.body_keep_is_seed and merged.eql(&summary.body_keep)) return false;
         summary.body_keep_is_seed = false;
         assignOwnedSet(&summary.body_keep, &merged);
@@ -4855,7 +4909,7 @@ const Inserter = struct {
                 }
                 if (carrier_position) |position| {
                     var sig = self.solution.sigOf(stmt.assign_call.proc);
-                    sig.outcomes = self.solution.availableOutcomeSpanOf(stmt.assign_call.proc);
+                    sig.outcomes = self.solution.outcomeSpanForCall(self.store, self.current_source_proc, stmt.assign_call.proc);
                     if (!self.outcomeArgumentsHaveDistinctPlaces(stmt.assign_call.args, sig)) return null;
                     return try self.outcomeRestitutionGuard(
                         root,
@@ -6318,7 +6372,7 @@ const Inserter = struct {
             demanded.ret_lenders = 0;
         }
         var outcome_sig = callee_sig;
-        if (callee) |direct| outcome_sig.outcomes = self.solution.availableOutcomeSpanOf(direct);
+        if (callee) |direct| outcome_sig.outcomes = self.solution.outcomeSpanForCall(self.store, self.current_source_proc, direct);
         const outcome_places_distinct = !outcome_sig.outcomes.isEmpty() and
             self.outcomeArgumentsHaveDistinctPlaces(span, outcome_sig);
         const outcome_mask = self.outcomeRestitutableMask(outcome_sig);
@@ -9152,6 +9206,7 @@ test "ARC emission exclusions copy once and preserve solver resources on allocat
 
 test "ARC uses erased capture views as solver-only Boxy borrow anchors" {
     var f = try ArcTest.init(testing.allocator);
+    f.store.runtime_contract = .boxy;
     defer f.deinit();
 
     const erased_box = try f.layouts.insertLayout(layout_mod.Layout.erasedBox());
@@ -9199,6 +9254,7 @@ test "ARC uses erased capture views as solver-only Boxy borrow anchors" {
 test "ARC preserves erased callable repack reuse" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
+    f.store.runtime_contract = .boxy;
 
     const erased_callable = try f.layouts.insertErasedCallable();
     const capture = try f.local(.str);
@@ -9308,6 +9364,7 @@ test "ARC preserves erased callable repack reuse" {
 test "ARC preserves erased call ABI metadata" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
+    f.store.runtime_contract = .boxy;
 
     const erased_callable = try f.layouts.insertErasedCallable();
     const closure = try f.local(erased_callable);
@@ -11296,6 +11353,93 @@ test "RC join param move excludes old source from loop body ownership" {
     try f.run();
     try f.expectRc(source, 0, 0, 0);
     try f.expectRc(state, 0, 1, 0);
+}
+
+/// Asserts `start` is the call that writes `param`, followed immediately by
+/// the param's release and then the jump into its join.
+fn expectReleasedRightAfterCall(f: *const ArcTest, start: LIR.CFStmtId, param: LIR.LocalId) ArcTest.ExpectError!void {
+    const call = f.store.getCFStmt(start);
+    if (call != .assign_call) return error.TestUnexpectedResult;
+    try testing.expectEqual(param, call.assign_call.target);
+    const release = f.store.getCFStmt(call.assign_call.next);
+    if (release != .decref) return error.TestUnexpectedResult;
+    try testing.expectEqual(param, release.decref.value);
+    if (f.store.getCFStmt(release.decref.next) != .jump) return error.TestUnexpectedResult;
+}
+
+test "RC join param the body never reads is released at the jump, not at the body's exit" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const param = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    // join j(param) { result = hosted(); ret result }
+    // remainder: param = call(); jump j
+    // The call writes the param directly, as a call inlined into a join
+    // does, so no statement death after the call can release the value;
+    // only the body keep decides where it dies.
+    const ret = try f.ret(result);
+    const body = try f.assignHostedCall(result, &.{}, ret);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const remainder = try f.assignCall(param, &.{}, jump);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{param}),
+        .body = body,
+        .remainder = remainder,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{}, join, .i64);
+    try f.run();
+
+    try f.expectRc(param, 0, 1, 0);
+    const joined = f.store.getCFStmt(f.procBody());
+    if (joined != .join) return error.TestUnexpectedResult;
+    try expectReleasedRightAfterCall(&f, joined.join.remainder, param);
+}
+
+test "RC loop join param the body never reads is released at every arrival" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const param = try f.local(f.list_i64);
+    const flag = try f.local(.bool);
+    const next_flag = try f.local(.bool);
+    const first_flag = try f.local(.bool);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    // join j(param, flag) {
+    //   switch flag { 1 => param = call(); flag := 0; jump j
+    //                 _ => result = hosted(); ret result } }
+    // remainder: param = call(); flag := 1; jump j
+    const ret = try f.ret(result);
+    const exit_branch = try f.assignHostedCall(result, &.{}, ret);
+    const back_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const rebind_flag = try f.setLocal(flag, next_flag, .initialize_join_param, back_jump);
+    const next_flag_assign = try f.assignI64(next_flag, 0, rebind_flag);
+    const loop_call = try f.assignCall(param, &.{}, next_flag_assign);
+    const dispatch = try f.switchStmt(flag, loop_call, exit_branch, null);
+    const entry_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const initialize_flag = try f.setLocal(flag, first_flag, .initialize_join_param, entry_jump);
+    const first_flag_assign = try f.assignI64(first_flag, 1, initialize_flag);
+    const entry_call = try f.assignCall(param, &.{}, first_flag_assign);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{ param, flag }),
+        .body = dispatch,
+        .remainder = entry_call,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{}, join, .i64);
+    try f.run();
+
+    // One release per write, at the jump that carries it; the exit branch
+    // owns nothing of the param.
+    try f.expectRc(param, 0, 2, 0);
+    const dispatched = f.walkToSwitch(f.joinBody(join_id));
+    try testing.expectError(
+        error.ExpectedRcBeforeStop,
+        f.expectReachableRcBefore(dispatched.default_branch, .decref, param, .ret),
+    );
 }
 
 test "RC switch continuation analysis stops at join ownership boundary" {
@@ -15836,6 +15980,71 @@ test "RC outcome restitution releases every returned argument before a nested jo
     try testing.expect(remaining > 0);
 }
 
+test "RC outcome restitution keeps a field a callee passes to a hosted call inside the returned record" {
+    // A stable procedure owns a record whose first field it passes to a
+    // hosted call, then returns a tag chosen by the hosted result without
+    // touching the record again. Every outcome hands the record's exact
+    // entry unit back to a caller that demands restitution, so the field
+    // must be retained for the hosted call rather than taken out of the
+    // record: certification rejects a returned record missing a field.
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const outcome_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.list_i64,
+    });
+
+    const record = try f.local(f.pair_list);
+    const handle = try f.local(f.list_i64);
+    const status = try f.local(.i64);
+    const fresh = try f.local(f.list_i64);
+    const result = try f.local(outcome_layout);
+    const ok_ret = try f.ret(result);
+    const ok_tag = try f.assignTag(result, 1, fresh, ok_ret);
+    const ok_body = try f.assignList(fresh, &.{}, ok_tag);
+    const err_ret = try f.ret(result);
+    const err_body = try f.assignTag(result, 0, null, err_ret);
+    const choose = try f.switchStmt(status, ok_body, err_body, null);
+    const hosted = try f.assignHostedCall(status, &.{handle}, choose);
+    const project = try f.assignRefField(handle, record, 0, hosted);
+    const callee = try f.addProc(&.{record}, project, outcome_layout);
+    f.store.getProcSpecPtr(callee).stable_signature = true;
+
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const input = try f.local(f.pair_list);
+    const call_result = try f.local(outcome_layout);
+    const discriminant = try f.local(.u8);
+    const ok_value = try f.local(.i64);
+    const err_value = try f.local(.i64);
+    const caller_ok_ret = try f.ret(ok_value);
+    const caller_ok_done = try f.assignI64(ok_value, 1, caller_ok_ret);
+    const caller_ok = try f.expectStmt(input, caller_ok_done);
+    const caller_err_ret = try f.ret(err_value);
+    const caller_err_done = try f.assignI64(err_value, 0, caller_err_ret);
+    const caller_err = try f.expectStmt(input, caller_err_done);
+    const refine = try f.switchStmt(discriminant, caller_ok, caller_err, null);
+    const read_discriminant = try f.assignDiscriminant(discriminant, call_result, refine);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = call_result,
+        .proc = callee,
+        .args = try f.span(&.{input}),
+        .next = read_discriminant,
+    } }, .test_fixture);
+    const make_input = try f.assignStruct(input, &.{ first, second }, call);
+    const make_second = try f.assignList(second, &.{}, make_input);
+    const caller_body = try f.assignList(first, &.{}, make_second);
+    const caller = try f.addProc(&.{}, caller_body, .i64);
+    f.store.getProcSpecPtr(caller).code_key = @splat(1);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{});
+
+    // The caller lends its record to the outcome variant without a retain.
+    try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+    try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
+}
+
 test "ARC outcome capability rejects a stale discriminant after return-local rebind" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -16952,6 +17161,7 @@ test "RC field-take demand crosses complete tag payload and wrapper calls" {
 test "RC specialization: caller body survives variant proc append" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
+    f.store.runtime_contract = .boxy;
 
     // Callee returns its string parameter at position 1, so that parameter
     // and return solve borrowed.
@@ -17775,6 +17985,7 @@ test "RC alias into set_local moves the leader unit" {
 
 test "RC releases descriptor-backed old set_local value before immutable replacement" {
     var f = try ArcTest.init(testing.allocator);
+    f.store.runtime_contract = .boxy;
     defer f.deinit();
 
     const desc = try f.local(.opaque_ptr);
@@ -17801,6 +18012,7 @@ test "RC releases descriptor-backed old set_local value before immutable replace
 
 test "RC descriptor updates scan only the current proc frame" {
     var f = try ArcTest.init(testing.allocator);
+    f.store.runtime_contract = .boxy;
     defer f.deinit();
 
     const unrelated = try f.local(.str);
@@ -17852,6 +18064,7 @@ test "RC descriptor updates scan only the current proc frame" {
 
 test "RC descriptor snapshot owns an alias across source descriptor reuse" {
     var f = try ArcTest.init(testing.allocator);
+    f.store.runtime_contract = .boxy;
     defer f.deinit();
 
     const source_desc = try f.local(.opaque_ptr);
@@ -17891,6 +18104,7 @@ test "RC descriptor snapshot owns an alias across source descriptor reuse" {
 
 test "RC preserves a surviving source before a consuming boxy adapter" {
     var f = try ArcTest.init(testing.allocator);
+    f.store.runtime_contract = .boxy;
     defer f.deinit();
 
     const source = try f.local(f.list_i64);
@@ -17926,6 +18140,7 @@ test "RC preserves a surviving source before a consuming boxy adapter" {
 test "RC descriptor-bearing tag aliases and aggregates follow their committed layout" {
     for ([_]layout_mod.Idx{ .i64, .str }) |payload_layout| {
         var f = try ArcTest.init(testing.allocator);
+        f.store.runtime_contract = .boxy;
         defer f.deinit();
 
         const tag_layout = try f.layouts.putTagUnion(&.{ .zst, payload_layout });
@@ -17962,6 +18177,7 @@ test "RC descriptor-bearing tag aliases and aggregates follow their committed la
 
 test "RC does not treat a descriptor-bearing scalar dictionary result as refcounted" {
     var f = try ArcTest.init(testing.allocator);
+    f.store.runtime_contract = .boxy;
     defer f.deinit();
 
     const desc = LIR.BoxyDescRef{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) };
@@ -18168,4 +18384,29 @@ test "ARC ownership iteration skips absent resources and preserves release order
     var empty = filtered.iterator(.{});
     try testing.expectEqual(null, empty.next());
     for (keys) |key| try testing.expect(owned.contains(locals[key]));
+}
+
+test "ARC outcome capability excludes conventions that return no ownership units" {
+    for ([_]bool{ false, true }) |stable| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+        const outcome_layout = try f.layouts.putTagUnion(&.{ f.list_i64, f.list_i64 });
+        const param = try f.local(f.list_i64);
+        const choose = try f.local(.i64);
+        const result = try f.local(outcome_layout);
+        const ret = try f.ret(result);
+        const left = try f.assignTag(result, 0, param, ret);
+        const right = try f.assignTag(result, 1, param, ret);
+        const body = try f.switchStmt(choose, left, right, null);
+        const proc = try f.addProc(&.{ param, choose }, body, outcome_layout);
+        f.store.getProcSpecPtr(proc).stable_signature = stable;
+        const rc = [_]bool{ true, false, true };
+        {
+            var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
+            defer solution.deinit();
+            try testing.expect(solution.availableOutcomeSpanOf(proc).isEmpty());
+        }
+        try insert(&f.store, &f.layouts, .{ .specialize = false });
+        try testing.expect(!f.store.getProcSpec(proc).rc_variant_demandable);
+    }
 }

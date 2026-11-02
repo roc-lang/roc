@@ -226,10 +226,73 @@ pub fn acos(value: f64) f64 {
     return std.math.acos(value);
 }
 
-/// Returns the arctangent of `value` using Zig's explicit binary64 algorithm.
+/// Returns the arctangent of `value`, computed entirely with binary64
+/// operations. This is fdlibm's `s_atan.c`, as Zig's `std.math.atan` ports
+/// it, except that a subnormal `value` returns without raising the underflow
+/// exception, which Roc never observes. Raising it takes an inline `asm`
+/// operand that the wasm backend cannot place in position-independent code.
 pub fn atan(value: f64) f64 {
     @setFloatMode(.strict);
-    return std.math.atan(value);
+    const high = [_]f64{ 4.63647609000806093515e-01, 7.85398163397448278999e-01, 9.82793723247329054082e-01, 1.57079632679489655800e+00 };
+    const low = [_]f64{ 2.26987774529616870924e-17, 3.06161699786838301793e-17, 1.39033110312309984516e-17, 6.12323399573676603587e-17 };
+    const coefficients = [_]f64{
+        3.33333333333329318027e-01,  -1.99999999998764832476e-01, 1.42857142725034663711e-01,
+        -1.11111104054623557880e-01, 9.09088713343650656196e-02,  -7.69187620504482999495e-02,
+        6.66107313738753120669e-02,  -5.83357013379057348645e-02, 4.97687799461593236017e-02,
+        -3.65315727442169155270e-02, 1.62858201153657823623e-02,
+    };
+
+    const bits: u64 = @bitCast(value);
+    const high_word: u32 = @truncate((bits >> 32) & 0x7fff_ffff);
+    const negative = bits >> 63 != 0;
+    if (high_word >= 0x4410_0000) {
+        if (value != value) return value;
+        const result = high[3] + 0x1p-120;
+        return if (negative) -result else result;
+    }
+
+    var reduced: f64 = undefined;
+    var identity: ?u2 = null;
+    if (high_word < 0x3fdc_0000) {
+        if (high_word < 0x3e40_0000) return value;
+        reduced = value;
+    } else {
+        const magnitude = @abs(value);
+        if (high_word < 0x3ff3_0000) {
+            if (high_word < 0x3fe6_0000) {
+                reduced = (2.0 * magnitude - 1.0) / (2.0 + magnitude);
+                identity = 0;
+            } else {
+                reduced = (magnitude - 1.0) / (magnitude + 1.0);
+                identity = 1;
+            }
+        } else if (high_word < 0x4003_8000) {
+            reduced = (magnitude - 1.5) / (1.0 + 1.5 * magnitude);
+            identity = 2;
+        } else {
+            reduced = -1.0 / magnitude;
+            identity = 3;
+        }
+    }
+
+    const z = reduced * reduced;
+    const w = z * z;
+    const odd = z * (coefficients[0] + w * (coefficients[2] + w * (coefficients[4] + w * (coefficients[6] + w * (coefficients[8] + w * coefficients[10])))));
+    const even = w * (coefficients[1] + w * (coefficients[3] + w * (coefficients[5] + w * (coefficients[7] + w * coefficients[9]))));
+    if (identity) |id| {
+        const index: usize = id;
+        const result = high[index] - (reduced * (odd + even) - low[index] - reduced);
+        return if (negative) -result else result;
+    }
+    return reduced - reduced * (odd + even);
+}
+
+test "F64 atan matches Zig's binary64 algorithm bit for bit" {
+    const values = [_]f64{ 0.0, -0.0, 1e-320, -1e-320, 1e-10, 0.3, -0.43, 0.5, 0.7, -1.0, 1.1, 1.3, 2.0, -2.5, 10.0, 1e20, -1e300, ieee.positiveInfinity(f64), -ieee.positiveInfinity(f64) };
+    for (values) |value| {
+        try std.testing.expectEqual(@as(u64, @bitCast(std.math.atan(value))), @as(u64, @bitCast(atan(value))));
+    }
+    try std.testing.expect(std.math.isNan(atan(canonical_nan)));
 }
 
 test "F64 power special cases" {

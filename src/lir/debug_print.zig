@@ -928,6 +928,7 @@ test "debug print includes boxy RC helper descriptor references" {
     const allocator = std.testing.allocator;
 
     var store = LirStore.init(allocator);
+    store.runtime_contract = .boxy;
     defer store.deinit();
 
     var layouts = try layout_mod.Store.init(allocator, .u64);
@@ -959,6 +960,7 @@ test "debug print includes boxy statement surface" {
     const allocator = std.testing.allocator;
 
     var store = LirStore.init(allocator);
+    store.runtime_contract = .boxy;
     defer store.deinit();
 
     var layouts = try layout_mod.Store.init(allocator, .u64);

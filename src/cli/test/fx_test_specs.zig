@@ -779,6 +779,21 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test for #12438: a list passed through cursor records into helper calls is not decremented more often than it is owned",
     },
     .{
+        .roc_file = "test/fx/issue_12692_handle_shape.roc",
+        .io_spec = "1>method call: closed|1>qualified call: closed|1>recursive helper: closed|1>wrapper call: closed",
+        .description = "Regression test for #12692: a record argument returned to its caller on a switched result outcome keeps the field its callee passed to a hosted call",
+    },
+    .{
+        .roc_file = "test/fx/issue_12706_shared_case_arm.roc",
+        .io_spec = "1>small 2001|1>small 1001|1>small 2008|1>big 1060|1>small 2099|1>small missing101",
+        .description = "Regression test for #12706: a case-of-case arm shared through a join keeps the arms of the code after a match whose result reaches that code along several paths",
+    },
+    .{
+        .roc_file = "test/fx/issue_12707_try_split_first_map_err_not_found.roc",
+        .io_spec = "1>Ok(\"0\")",
+        .description = "Regression test for #12707: an unannotated function whose `?` on Str.split_first and whose map_err both produce NotFound builds and runs",
+    },
+    .{
         .roc_file = "test/fx/tailcc_stack_args.roc",
         .io_spec = "0<x x default 41|1>PASS",
         .description = "Regression test for #12191: an AArch64 spill reload right after a call that passes arguments on the stack reads the right slot",

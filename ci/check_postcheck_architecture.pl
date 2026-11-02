@@ -319,7 +319,7 @@ sub check_body_context_output_access {
     # Method lookup lives on `Builder` and resolves an owner in the name store
     # it is given; a body passes its graph's.
     my $method_lookup = qr/self\.builder\.(?:lookupMethodTarget|lookupMethodTargetByName|lookupInspectOverride)\(/;
-    my $graph_method_lookup = qr/self\.builder\.(?:lookupMethodTarget|lookupMethodTargetByName|lookupInspectOverride)\(self\.method_scope, self\.nameStore\(\),/;
+    my $graph_method_lookup = qr/self\.builder\.(?:lookupMethodTarget|lookupMethodTargetByName|lookupInspectOverride)\(self\.nameStore\(\),/;
     my $graph_type_egress = qr/self\.commitGraphType\b/;
     my $coordinator_static_data = qr/self\.builder\.commitStaticDataValue\b/;
 

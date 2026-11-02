@@ -18,6 +18,11 @@ const hosted = @import("hosted.zig");
 const StringLiteral = base.StringLiteral;
 const names = check.CheckedNames;
 
+/// Capability established by lowering, preserved by artifacts, and consumed
+/// mechanically by execution backends. Only explicit Boxy lowering enables
+/// descriptor operations; specialized indirect calls have an exact native ABI.
+pub const RuntimeContract = enum(u8) { specialized, boxy };
+
 /// Global identifier (opaque 64-bit id).
 pub const Symbol = packed struct(u64) {
     id: u64,
@@ -1408,8 +1413,8 @@ pub const BoxyDynamicFracLiteral = struct {
 pub const ErasedCallData = struct {
     closure: LocalId,
     args: LocalSpan,
-    /// Ordered runtime layouts of the explicit arguments packed into the
-    /// erased-call argument buffer.
+    /// Boxy-only layouts for runtime argument adaptation. Specialized calls
+    /// use their locals and `arg_plan` and leave this span empty.
     arg_layouts: BoxySpan = BoxySpan.empty(),
     /// Exact descriptors for descriptor-bearing explicit arguments, in
     /// the callee function representation's traversal order.
@@ -2044,8 +2049,8 @@ pub const LirProcSpec = struct {
     /// Keyed byte offsets of hidden descriptor fields in this erased worker's
     /// capture value, in increasing (argument, descriptor) key order.
     erased_arg_desc_offsets: BoxySpan = .{},
-    /// Ordered runtime layouts expected in this erased worker's explicit
-    /// argument buffer.
+    /// Boxy-only layouts for runtime argument adaptation. Specialized workers
+    /// carry their exact ABI in argument locals and `erased_call_args`.
     erased_arg_layouts: BoxySpan = .{},
     /// Hidden descriptor parameters supplied for this erased invocation, in
     /// increasing (argument, descriptor) key order.
@@ -2081,16 +2086,25 @@ pub const LirProcSpec = struct {
     /// content (`Mono.FnTemplate.site_identity`): its identity together with
     /// its module's content key, which names its code. Cached code of the
     /// procedure is taken and placed only under an equal code key; a null key
-    /// means the identity names the code. Code compiled against an earlier
-    /// body of the procedure calls it by identity, so ARC pins its signature
-    /// to the one its types determine. Set only in a program using the
-    /// object cache.
+    /// means the identity names the code. Set in every program whose code a
+    /// pack can hold (`CheckedPipeline.TargetConfig.site_code_keys`), whether
+    /// or not it uses the object cache.
     code_key: ?[32]u8 = null,
+    /// A procedure with a code key that code without one can call: a member
+    /// of a lambda set in such a procedure's signature, or an app function
+    /// such a procedure's code reaches. That code keeps its identity across
+    /// an edit of this procedure's body, so cached copies of it call this
+    /// procedure's current body; ARC pins its base signature to the one its
+    /// types determine (`Lowerer.markStableSignatures`).
+    stable_signature: bool = false,
     /// The Monotype function this procedure lowers, which keys the producer's
     /// summary of the compile-time roots its code reads
     /// (`SpecComptimeReads.fnReads`); null for a procedure no Monotype
     /// function names.
     source_monotype_fn: ?u32 = null,
+    /// Checked defining module for an app-independent direct template offer.
+    /// Null keeps generated, nested, and app-dependent code program-scoped.
+    cache_provider_module: ?[32]u8 = null,
     /// Set on an `external` proc whose cache entry is a linked object rather
     /// than spliced code: callers reach it through its C-ABI entry
     /// (`ProcIdentity.writeCAbiEntryName`), classified from its argument and
@@ -2102,6 +2116,9 @@ pub const LirProcSpec = struct {
     /// `unless_caller_drives` statement: its entry records whether the
     /// erased-call runtime made the call.
     reads_caller_drives: bool = false,
+    /// Producer-owned tail-drive summary. Cached bodies retain this fact so
+    /// callers make a pending erased call before reading its result.
+    may_leave_pending: bool = false,
     /// Tail-recursion rewrite applied by the TRMC pass, if any.
     tail_transform: TailTransform = .none,
     /// Set by ARC on every procedure that makes or receives a same-SCC tail

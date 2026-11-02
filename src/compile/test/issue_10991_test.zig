@@ -3,8 +3,9 @@
 //! Dev builds run post-check inlining and SpecConstr with its value-aware
 //! clones scoped to iterator fusion. That scope must still collapse a
 //! `List.fold` into a direct index loop: the procedure that reads elements
-//! with `list_get_unsafe` may not call any procedure, because a per-element
-//! out-of-line call is exactly the overhead the collapse exists to remove.
+//! with `list_get_unsafe` may call nothing but the app's list builders and
+//! printer, because a per-element out-of-line call is exactly the overhead
+//! the collapse exists to remove.
 
 const std = @import("std");
 const collections = @import("collections");
@@ -14,9 +15,13 @@ const harness = @import("lower_to_lir_harness.zig");
 
 const GuardedList = collections.GuardedList;
 
+/// Procedures the app calls outside any fold: building its lists and
+/// printing the sum.
+const non_folding_procs = [_][]const u8{ "Builtin.List.repeat", "Echo.line!" };
+
 /// Walk one procedure's own control-flow statements (never following calls
 /// into other procedures) and report whether it reads list elements directly
-/// and how many procedure calls it makes.
+/// and how many calls it makes to anything but `non_folding_procs`.
 const ProcScan = struct {
     reads_list_elements: bool = false,
     call_count: usize = 0,
@@ -43,7 +48,7 @@ const ProcScan = struct {
                     try stack.append(allocator, assign.next);
                 },
                 .assign_call => |assign| {
-                    result.call_count += 1;
+                    if (!isNonFolding(store, assign.proc)) result.call_count += 1;
                     try stack.append(allocator, assign.next);
                 },
                 .assign_call_erased => |assign| {
@@ -126,6 +131,14 @@ const ProcScan = struct {
         }
         return result;
     }
+
+    fn isNonFolding(store: *const lir.LirStore, proc_id: lir.LIR.LirProcSpecId) bool {
+        const name = store.procDebugName(proc_id) orelse return false;
+        for (non_folding_procs) |non_folding| {
+            if (std.mem.eql(u8, name, non_folding)) return true;
+        }
+        return false;
+    }
 };
 
 fn expectFoldCollapsedToCallFreeIndexLoop(
@@ -138,15 +151,13 @@ fn expectFoldCollapsedToCallFreeIndexLoop(
     @memset(seen_stmts, false);
 
     // The collapsed loop's home depends on the clone scope: `.all_calls`
-    // chases the known `List.fold` callee into `sum_list`, while
-    // `.iterator_fusion` collapses `List.fold`'s own specialization in place
-    // and leaves `sum_list` as a wrapper the inline plan then dissolves.
+    // inlines the wrapper `sum_list` and the `List.fold` its known step
+    // reaches into `main`, while `.iterator_fusion` collapses `List.fold`'s
+    // own specialization in place and leaves `sum_list` as a wrapper the
+    // inline plan then dissolves. Any procedure may hold it.
     var collapsed_fold_procs: usize = 0;
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        const name = store.procDebugName(proc_id) orelse continue;
-        if (!std.mem.eql(u8, name, "sum_list") and
-            !std.mem.eql(u8, name, "Builtin.List.fold")) continue;
         const scan = try ProcScan.scan(store, proc_id, seen_stmts);
         // Without the collapse, folding never reads an element by index: it
         // pulls elements through the step-closure protocol instead.

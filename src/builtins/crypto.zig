@@ -5,10 +5,17 @@ const builtin = @import("builtin");
 const list = @import("list.zig");
 const utils = @import("utils.zig");
 const sha256 = @import("sha256.zig");
+const stack_guard = @import("stack_guard.zig");
+const blake3_iterative = @import("blake3_iterative.zig");
 
 const RocList = list.RocList;
 const RocOps = utils.RocOps;
 const Blake3 = std.crypto.hash.Blake3;
+
+/// std's BLAKE3 update hashes whole subtrees recursively, so the builtins of
+/// a stack-checked wasm object, which must not recurse, use an equivalent
+/// that hashes one chunk at a time.
+const blake3Update = if (stack_guard.enabled) blake3_iterative.update else Blake3.update;
 
 const digest_len = 32;
 
@@ -84,7 +91,9 @@ pub fn sha256HashBytes(input_bytes: ?[*]const u8, input_len: usize, roc_ops: *Ro
 pub fn blake3HashBytes(input_bytes: ?[*]const u8, input_len: usize, roc_ops: *RocOps) RocList {
     const input = readInput(input_bytes, input_len, roc_ops);
     var digest: [digest_len]u8 = undefined;
-    Blake3.hash(input, &digest, .{});
+    var hasher = Blake3.init(.{});
+    blake3Update(&hasher, input);
+    hasher.final(&digest);
     return listFromBytes(&digest, roc_ops);
 }
 
@@ -267,7 +276,7 @@ pub fn blake3HasherWrite(state_bytes: ?[*]const u8, state_len: usize, input_byte
     const state = readInput(state_bytes, state_len, roc_ops);
     const input = readInput(input_bytes, input_len, roc_ops);
     var hasher = deserializeBlake3(state, roc_ops);
-    hasher.update(input);
+    blake3Update(&hasher, input);
     return serializeBlake3(&hasher, roc_ops);
 }
 
