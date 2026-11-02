@@ -177,7 +177,6 @@ pub const Operands = struct {
             .tag_payload_addr => |payload| {
                 result.single(payload.base);
                 result.single(payload.desc);
-                result.single(payload.name);
             },
             .record => |record| {
                 result.single(record.desc);
@@ -373,7 +372,6 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
         .tag_payload_addr => |payload| .{ .tag_payload_addr = .{
             .base = try Remap.one(context, payload.base),
             .desc = try Remap.one(context, payload.desc),
-            .name = try Remap.one(context, payload.name),
             .payload_index = payload.payload_index,
         } },
         .record => |record| .{ .record = .{ .desc = try Remap.one(context, record.desc), .fields = try Remap.span(store, context, record.fields) } },

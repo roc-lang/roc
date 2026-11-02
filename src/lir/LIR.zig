@@ -1419,9 +1419,10 @@ pub const DynOp = union(enum) {
     tag_discriminant: struct { base: LocalId, desc: LocalId },
     /// The discriminant (target: `u32`) tag `name` has under `desc`.
     tag_discriminant_of: struct { desc: LocalId, name: LocalId },
-    /// Payload `payload_index` of tag `name` in the tag union `base`, which
-    /// holds that tag.
-    tag_payload_addr: struct { base: LocalId, desc: LocalId, name: LocalId, payload_index: u32 },
+    /// Payload `payload_index` of the active tag in `base`, selected by its
+    /// stored discriminant. The producer has established that this tag holds
+    /// the target's payload type (a matched arm or a known constructor).
+    tag_payload_addr: struct { base: LocalId, desc: LocalId, payload_index: u32 },
     /// Build the record or tuple `desc` describes from `fields`, given in
     /// semantic index order.
     record: struct { desc: LocalId, fields: LocalSpan },

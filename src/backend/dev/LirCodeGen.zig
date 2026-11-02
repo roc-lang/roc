@@ -17473,7 +17473,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .tag_payload_addr => |t| {
                     try self.addWordArg(&builder, t.desc);
                     try self.addBytesArg(&builder, t.base);
-                    try self.addWordArg(&builder, t.name);
                     try builder.addImmArg(t.payload_index);
                     try self.callBoxyRuntime(&builder, "roc_desc_tag_payload_addr");
                     try self.bindComponentAddress(dst_local);
