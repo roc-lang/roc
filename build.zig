@@ -1859,7 +1859,7 @@ pub fn build(b: *std.Build) void {
     const build_glue_release_step = b.step("build-glue-release", "Build release-ready glue specs");
 
     const build_test_hosts_step = b.step("build-test-hosts", "Build test platform host libraries");
-    const build_release_step = b.step("build-release", "Build optimized release binary for distribution");
+    const build_release_step = b.step("build-release", "Build optimized release binary for distribution (ReleaseFast unless -Doptimize is given)");
 
     // general configuration
     const optimize = b.standardOptimizeOption(.{});
@@ -2782,16 +2782,20 @@ pub fn build(b: *std.Build) void {
     // Release build with platform-optimal settings
     {
         const release_target = b.resolveTargetQuery(getReleaseTargetQuery(b, target));
+        // ReleaseFast unless `-Doptimize` is given explicitly, e.g. ReleaseSafe
+        // for the memory-safe nightlies. An omitted `-Doptimize` resolves to
+        // `.debug` too, so only `user_input_options` tells the two apart.
+        const release_optimize: OptimizeMode = if (b.user_input_options.contains("optimize")) optimize else .fast;
         // Create a release-specific zstd dependency with release settings
         const release_zstd = b.dependency("zstd", .{
             .target = release_target,
-            .optimize = .fast,
+            .optimize = release_optimize,
         });
         const release_exe_result = addMainExe(
             b,
             roc_modules,
             release_target,
-            .fast, // Always ReleaseFast for release
+            release_optimize,
             true, // Always strip for release
             null, // Default frame pointer handling
             dependency_source,
