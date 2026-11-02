@@ -15618,6 +15618,85 @@ Compile-time evaluation results, checked modules, and the canonicalized cache
 keep their existing keys and behavior. Specialized builds are unaffected:
 their specializations are inherently cross-module and keep their own caches.
 
+#### Unit Pieces And Whole-Program Dead Code
+
+A `--specialize=no` dev build links one object per module, and nothing in it
+is ever removed: a library unit keeps every export, since any importer may
+call it, and the final link cannot prune inside a unit's object because the
+dev backend writes one code section per object and resolves calls within a
+unit to direct branches that leave no relocation behind. The linker is handed
+`-dead_strip` or `--gc-sections` and can act only on whole sections, every
+one of which something references. The program's executable therefore holds
+every procedure of every module, and the link's cost, which scales with the
+code it lays out, pays for all of it.
+
+Dead code is removed by the compiler's own composition step instead, from
+data the compiler produced, so that it is exact and holds at every
+optimization level. This is the native half of the Roc-only composition
+phase the Sealed Roc Object Boundary requires (compiler-owned code "merged,
+resolved, dead-stripped from the `provides` roots, and localized").
+
+- A UNIT'S CACHE ENTRY holds its code in PIECES, one per function, never a
+  finished object. A piece is one procedure's, refcount helper's, entry
+  wrapper's or static-data initializer's machine code with its frame and
+  unwind data, its source lines and failure sites, and its outgoing
+  references: to other pieces by stable identity (a procedure by its
+  `ProcIdentity`, a helper by its name), to constants by content name, and to
+  host, hosted, builtin and runtime functions by symbol. Constants are stored
+  once per unit by content name with their own relocations. Nothing in a
+  piece names a position in the unit: no offset, no section, no index into
+  another piece, so a piece is the same bytes wherever it lands, and the cache
+  keeps every piece of every module. The entry format is its own
+  (`compile.boxy_object_cache`), not the specialized object cache's pack,
+  and its file is byte-identical for its key as before.
+- REACHABILITY is computed from the checked program, not from machine code.
+  Once checking has resolved every call's dispatch target, the set of
+  procedures the program can reach is a function of the checked modules
+  alone: the walk starts at the app's entrypoints, the `provides` exports and
+  the host-visible constants, and follows each body's references and resolved
+  dispatch targets across modules (the walk Boxy lowering already does to
+  discover a unit's workers, over the whole program). It runs on a post-check
+  worker as soon as the last module is checked, while units are still
+  compiling, so it is finished before any code is copied. Code the backend
+  emits below that level (refcount helpers, structural equality and hashing,
+  codecs, entry wrappers, static-data initializers) is reached from the kept
+  procedures: each piece records what it needs, so the copy step takes, for
+  every kept procedure, the pieces its references name, transitively. Both
+  halves are compiler-produced data; neither is a guess.
+- THE LINK takes ONE OBJECT: as units are restored or built, their pieces
+  join one program-wide set, and when the walk and the units are done the
+  reachable pieces, and the constants they name, are placed into one image
+  in a fixed order (procedures by identity, helpers by name, constants by
+  content name, as Deterministic Dev Images orders them) and encoded as a
+  single relocatable object, which goes to the platform link with the host
+  inputs. The compiler-owned runtime objects (the Zig-compiled builtins, the
+  Boxy runtime, the compiler-rt carrier) are built with one section per
+  function, so the platform link prunes them to what that object references;
+  a link the compiler performs itself walks their symbol and relocation
+  tables with the same relocatable-object reader the evaluator uses and
+  copies only the reached functions.
+- COMPILE-TIME EVALUATION keeps whole units: a module's roots may call any
+  export of any import, so the evaluator's in-process image of a unit is
+  built from all of the unit's pieces, which is what loading the unit's
+  object did. Nothing is dropped before the final link.
+- AT `--opt=speed` AND `--opt=size` under `--specialize=no` the program is
+  one unit whose lowering walks from the program's roots, so it never emits
+  an unreached procedure, and the LLVM backend gives every procedure but the
+  `provides` exports internal linkage, so its own global dead-code pass
+  removes what nothing reaches. The runtime objects are pruned as above.
+  Every optimization level therefore links only the code the program can
+  reach, and the same walk decides it.
+- `wasm32` objects already carry one symbol and relocation group per
+  function, and `wasm-ld` is given `--gc-sections` with only the platform's
+  `--export` names as roots, so its final module holds only reached code
+  today; the composition above does not change what it links.
+
+A unit stops at its pieces: extraction lifts each function's bytes and
+references out of the unit's code generator, and the arrangement, symbol
+table and object encoding that each unit paid for happen once, for the
+program, over the reachable set. `ROC_VERIFY_BOXY_OBJECT_REUSE` compares a
+restored unit's pieces with a rebuilt unit's exactly as it compared objects.
+
 ### Compile-Time Evaluation Strategy
 
 `--specialize` selects the compile-time evaluator as well as the runtime
