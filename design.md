@@ -11362,18 +11362,34 @@ value's own row (Value Rows: Uses Share One Row) the relation only ties the
 read to the root's slot.
 
 A join follows a value, so Lambda Solved must hold one node per OCCURRENCE of
-a row-bearing type, not one per type. Its lazy Monotype leaves share clones
-to save work: a callable-free type used to be one node wherever it occurred,
-and within one expanded type every occurrence of one sub-type was one node.
-Both ties are kept only for types that cannot change under unification
-(`Solver.isCloneInvariant`: no callable slot, no tag row) and, within a
-clone context, for rows that lie on a cycle, whose back-references the tie
-exists for. A callable-free type holding a tag row and reaching no cycle is
-POSITIONAL (`Solver.LeafSharing`): each occurrence is its own leaf, in no
-context. Otherwise two unrelated unions that both receive a value of one
-narrower type would be joined through it by type identity rather than by
-flow, and one tag label standing in both with two payload types would then
-be unified.
+a row-bearing type that a join can change, not one per type. Its lazy
+Monotype leaves share clones to save work: within one expanded type every
+occurrence of one sub-type is one node, and a callable-free type that no join
+can change is one node wherever it occurs. Both ties are kept only for types
+that cannot change under unification (`Solver.isCloneInvariant`: no callable
+slot, and no tag row a join can change) and, within a clone context, for rows
+that lie on a cycle, whose back-references the tie exists for. A callable-free
+type holding a row a join can change and reaching no cycle is POSITIONAL
+(`Solver.LeafSharing`): each occurrence is its own leaf, in no context.
+Otherwise two unrelated unions that both receive a value of one narrower type
+would be joined through it by type identity rather than by flow, and one tag
+label standing in both with two payload types would then be unified.
+
+Which rows a join can change is found before solving
+(`findRowJoinedTypes`). A row changes only where unification relates two
+types instantiated from DIFFERENT Monotypes; relating two instances of one
+Monotype unites rows that are already equal. An analysis solve relates every
+body exactly as the real solve does, but with one clone per callable-free
+Monotype, and records both Monotypes of every such pair. Sharing a clone only
+adds relations, so the analysis relates every pair the real solve does. The
+recorded row-bearing Monotypes, every Monotype structurally equal to one
+(equal equality digests), and every Monotype containing one are row-joined;
+the analysis's solution is then discarded and the real solve shares every
+other callable-free Monotype. A declared nominal row that no value is ever
+joined into, such as a large parse tree's, is thus one node for the whole
+program instead of a copy of its whole row per occurrence. Debug builds
+assert that a shared row-bearing clone never meets a different Monotype in
+unification.
 
 A fresh callable-free cyclic leaf may join an existing instance without
 expansion only after an exact clone proof. That proof reads the immutable
