@@ -487,27 +487,26 @@ pub const cases = [_]Case{
         ,
         .inspects = &.{ .nominal, .tag_union, .tuple },
     },
-    // A use of a top-level alias instantiates the alias's scheme, so each
+    // A use of a procedure alias instantiates the alias's scheme, so each
     // reaches its target through the alias's own scope: annotated, chained,
     // at different types, called and as a value.
     .{
         .name = "procedure aliases: annotated, chained, and generic aliases reach their targets' requirements",
-        .source_kind = .module,
         .source =
-        \\via = |value| value.to_str()
-        \\stored : U64 -> Str
-        \\stored = via
-        \\again = via
-        \\once_more = again
-        \\at_u8 : U8 -> Str
-        \\at_u8 = once_more
-        \\bump = |x| x + 1
-        \\gen = bump
-        \\at_i16 : I16 -> I16
-        \\at_i16 = gen
-        \\apply = |f, x| f(x)
-        \\wrap = |x| once_more(x)
-        \\main = {
+        \\{
+        \\    via = |value| value.to_str()
+        \\    stored : U64 -> Str
+        \\    stored = via
+        \\    again = via
+        \\    once_more = again
+        \\    at_u8 : U8 -> Str
+        \\    at_u8 = once_more
+        \\    bump = |x| x + 1
+        \\    gen = bump
+        \\    at_i16 : I16 -> I16
+        \\    at_i16 = gen
+        \\    apply = |f, x| f(x)
+        \\    wrap = |x| once_more(x)
         \\    k = {
         \\        dbg 1.U64
         \\        1.U64
