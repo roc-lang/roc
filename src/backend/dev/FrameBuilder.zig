@@ -55,20 +55,17 @@ pub const FramePointerPolicy = enum {
 /// Callers: compileProcSpec, x86_64/CodeGen, aarch64/CodeGen
 pub fn DeferredFrameBuilder(comptime EmitType: type) type {
     const roc_target = EmitType.roc_target;
-    const is_x86_64 = roc_target.toCpuArch() == .x86_64;
-    const is_aarch64 = roc_target.toCpuArch() == .aarch64 or roc_target.toCpuArch() == .aarch64_be;
+    const isa = isaOf(roc_target);
     const is_windows = roc_target.isWindows();
 
     const GeneralReg = EmitType.GeneralReg;
     const CC = EmitType.CC;
 
     // Architecture-specific callee-saved register definitions
-    const CalleeSavedInfo = if (is_x86_64)
-        X86_64CalleeSavedInfo(is_windows, GeneralReg)
-    else if (is_aarch64)
-        Aarch64CalleeSavedInfo(GeneralReg)
-    else
-        @compileError("Unsupported architecture for DeferredFrameBuilder");
+    const CalleeSavedInfo = switch (isa) {
+        .x86_64 => X86_64CalleeSavedInfo(is_windows, GeneralReg),
+        .aarch64 => Aarch64CalleeSavedInfo(GeneralReg),
+    };
 
     return struct {
         const Self = @This();
@@ -132,8 +129,11 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         /// marking that register as used so the normal callee-saved save/restore
         /// path preserves the incoming value before this prologue overwrites it.
         pub fn setCallerStackArgBaseReg(self: *Self, reg: GeneralReg) void {
-            if (!is_aarch64) {
-                invariant("{s}", .{"caller stack-argument base register is only meaningful on aarch64"});
+            switch (isa) {
+                .x86_64 => {
+                    invariant("{s}", .{"caller stack-argument base register is only meaningful on aarch64"});
+                },
+                .aarch64 => {},
             }
             self.caller_stack_arg_base_reg = reg;
         }
@@ -160,12 +160,13 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
                 return 0;
             }
 
-            if (is_x86_64) {
-                return self.emitPrologueX86_64(emit);
-            } else if (is_aarch64) {
-                return self.emitPrologueAarch64(emit);
-            } else {
-                unreachable; // CalleeSavedInfo is a compile error for every architecture other than x86_64 and aarch64
+            switch (isa) {
+                .x86_64 => {
+                    return self.emitPrologueX86_64(emit);
+                },
+                .aarch64 => {
+                    return self.emitPrologueAarch64(emit);
+                },
             }
         }
 
@@ -176,36 +177,38 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
                 return;
             }
 
-            if (is_x86_64) {
-                return self.emitEpilogueX86_64(emit);
-            } else if (is_aarch64) {
-                return self.emitEpilogueAarch64(emit);
-            } else {
-                unreachable; // CalleeSavedInfo is a compile error for every architecture other than x86_64 and aarch64
+            switch (isa) {
+                .x86_64 => {
+                    return self.emitEpilogueX86_64(emit);
+                },
+                .aarch64 => {
+                    return self.emitEpilogueAarch64(emit);
+                },
             }
         }
 
         /// Return to the caller, removing this function's argument block.
         fn emitReturn(self: *const Self, emit: *EmitType) Allocator.Error!void {
             if (self.callee_pop == 0) return emit.ret();
-            if (is_x86_64) {
-                if (self.callee_pop <= std.math.maxInt(u16)) {
-                    try emit.retImm16(@intCast(self.callee_pop));
-                } else {
-                    try emit.pop(.R11);
-                    try emit.addRegImm32(.w64, .RSP, @intCast(self.callee_pop));
-                    try emit.jmpReg(.R11);
-                }
-            } else if (is_aarch64) {
-                if (self.callee_pop <= 4095) {
-                    try emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(self.callee_pop));
-                } else {
-                    try emit.movRegImm64(.IP0, self.callee_pop);
-                    try emit.addRegRegReg(.w64, .ZRSP, .ZRSP, .IP0);
-                }
-                try emit.ret();
-            } else {
-                unreachable; // CalleeSavedInfo is a compile error for every architecture other than x86_64 and aarch64
+            switch (isa) {
+                .x86_64 => {
+                    if (self.callee_pop <= std.math.maxInt(u16)) {
+                        try emit.retImm16(@intCast(self.callee_pop));
+                    } else {
+                        try emit.pop(.R11);
+                        try emit.addRegImm32(.w64, .RSP, @intCast(self.callee_pop));
+                        try emit.jmpReg(.R11);
+                    }
+                },
+                .aarch64 => {
+                    if (self.callee_pop <= 4095) {
+                        try emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(self.callee_pop));
+                    } else {
+                        try emit.movRegImm64(.IP0, self.callee_pop);
+                        try emit.addRegRegReg(.w64, .ZRSP, .ZRSP, .IP0);
+                    }
+                    try emit.ret();
+                },
             }
         }
 
@@ -218,17 +221,21 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         /// Emit only the callee-saved register restores, for the shared exit
         /// that frame-replacing calls reach before the body's own epilogue.
         pub fn emitRestoreCalleeSaved(self: *const Self, emit: *EmitType) Allocator.Error!void {
-            if (is_x86_64) {
-                return self.emitRestoreCalleeSavedX86_64(emit);
-            } else if (is_aarch64) {
-                return self.emitRestoreCalleeSavedAarch64(emit);
-            } else {
-                unreachable; // CalleeSavedInfo is a compile error for every architecture other than x86_64 and aarch64
+            switch (isa) {
+                .x86_64 => {
+                    return self.emitRestoreCalleeSavedX86_64(emit);
+                },
+                .aarch64 => {
+                    return self.emitRestoreCalleeSavedAarch64(emit);
+                },
             }
         }
 
         pub fn emitTailCallExitAarch64(self: *Self, emit: *EmitType, delta_reg: GeneralReg, target_reg: GeneralReg) Allocator.Error!void {
-            if (!is_aarch64) @compileError("emitTailCallExitAarch64 is only meaningful on aarch64");
+            switch (isa) {
+                .x86_64 => @compileError("emitTailCallExitAarch64 is only meaningful on aarch64"),
+                .aarch64 => {},
+            }
             if (self.actual_stack_alloc == 0) {
                 const callee_saved_space: u32 = @intCast(CalleeSavedInfo.AREA_SIZE);
                 const total_frame: u32 = 16 + callee_saved_space + self.stack_size;
@@ -519,10 +526,16 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         }
 
         /// Callee-saved register slots (for direct access if needed)
-        pub const CALLEE_SAVED_SLOTS = if (is_x86_64) CalleeSavedInfo.SLOTS else @compileError("CALLEE_SAVED_SLOTS only available on x86_64");
+        pub const CALLEE_SAVED_SLOTS = switch (isa) {
+            .x86_64 => CalleeSavedInfo.SLOTS,
+            .aarch64 => @compileError("CALLEE_SAVED_SLOTS only available on x86_64"),
+        };
 
         /// Callee-saved register pairs (for direct access if needed)
-        pub const CALLEE_SAVED_PAIRS = if (is_aarch64) CalleeSavedInfo.PAIRS else @compileError("CALLEE_SAVED_PAIRS only available on aarch64");
+        pub const CALLEE_SAVED_PAIRS = switch (isa) {
+            .aarch64 => CalleeSavedInfo.PAIRS,
+            .x86_64 => @compileError("CALLEE_SAVED_PAIRS only available on aarch64"),
+        };
 
         /// Size of the callee-saved area when all registers are saved
         pub const CALLEE_SAVED_AREA_SIZE: i32 = CalleeSavedInfo.AREA_SIZE;
@@ -576,6 +589,7 @@ fn Aarch64CalleeSavedInfo(comptime GeneralReg: type) type {
 
 const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
+const isaOf = @import("isa.zig").isaOf;
 
 // DeferredFrameBuilder tests (mask-based pattern)
 

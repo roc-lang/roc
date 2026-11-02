@@ -605,6 +605,7 @@ const CustomCase = enum {
     issue_12701_shared_package_codec_cache,
     issue_12747_check_then_build,
     issue_12747_shared_package,
+    issue_12728_boxy_built_codecs,
     issue_11826_cache_ownership_variants,
     issue_12241_cached_constant_insert,
     issue_12294_cached_capturing_closures,
@@ -2539,6 +2540,10 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12556: remainder in a map closure does not prove its divisor nonzero after the map (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/RemainderDivisorFactScope.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12556: remainder in a map closure does not prove its divisor nonzero after the map (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "test", "--opt=size", "--no-cache" }, .roc_file = "test/cli/RemainderDivisorFactScope.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12556: remainder in a map closure does not prove its divisor nonzero after the map (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/RemainderDivisorFactScope.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12775: List.sort_with on records with a refcounted field (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/SortWithRefcountedRecords.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12775: List.sort_with on records with a refcounted field (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/SortWithRefcountedRecords.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12775: List.sort_with on records with a refcounted field (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "test", "--opt=size", "--no-cache" }, .roc_file = "test/cli/SortWithRefcountedRecords.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12775: List.sort_with on records with a refcounted field (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/SortWithRefcountedRecords.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12029: tail calls between functions run in constant stack (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/MutualTailCalls.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (9) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "overflowed its stack" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12029: tail calls between functions run in constant stack (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/MutualTailCalls.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (9) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "overflowed its stack" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12029: tail calls between functions run in constant stack (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "test", "--opt=size", "--no-cache" }, .roc_file = "test/cli/MutualTailCalls.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (9) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "overflowed its stack" }} } } },
@@ -3500,6 +3505,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12747: a dev build erasing a boxed function succeeds against the cache a roc check wrote without erasing it", .timeout_ms = 600_000, .body = .{ .custom = .issue_12747_check_then_build } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12747: an app boxing a function shares a package function with an app that boxes none", .timeout_ms = 600_000, .body = .{ .custom = .issue_12747_shared_package } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12701: a package parser cached by one app's check builds in an app that omits the module sharing its codec", .timeout_ms = 600_000, .body = .{ .custom = .issue_12701_shared_package_codec_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12728: a boxy dev executable runs derived codecs at runtime", .timeout_ms = 600_000, .body = .{ .custom = .issue_12728_boxy_built_codecs } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12701: a package parser stored from another module's generic plans its codec dictionary (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=interpreter", "--specialize=no" }, .roc_file = "test/cli/issue_12701_shared_package_codec_cache/Repro.roc", .exit = .success, .stdout_exact = "Err(InvalidJson(\"Invalid JSON\"))\n", .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: every program compiles an offered procedure to the same LIR", .timeout_ms = 600_000, .body = .{ .custom = .cache_fingerprints_agree } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12576: compatible native procedure providers elide shared bodies across libc targets", .timeout_ms = 600_000, .body = .{ .custom = .compatible_native_procedure_cache } },
@@ -5852,6 +5858,7 @@ fn runCustomCase(
         .issue_12701_shared_package_codec_cache => customIssue12701SharedPackageCodecCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12747_check_then_build => customIssue12747CheckThenBuild(io, allocator, &env, &timer, timeout_ms),
         .issue_12747_shared_package => customIssue12747SharedPackage(io, allocator, &env, &timer, timeout_ms),
+        .issue_12728_boxy_built_codecs => customIssue12728BoxyBuiltCodecs(io, allocator, &env, &timer, timeout_ms),
         .issue_11826_cache_ownership_variants => customIssue11826CacheOwnershipVariants(io, allocator, &env, &timer, timeout_ms),
         .issue_12241_cached_constant_insert => customIssue12241CachedConstantInsert(io, allocator, &env, &timer, timeout_ms),
         .issue_12294_cached_capturing_closures => customIssue12294CachedCapturingClosures(io, allocator, &env, &timer, timeout_ms),
@@ -10957,7 +10964,19 @@ fn customNativeBuildExcerptRoundTrip(
             .not_contains = &.{ .{ .stream = .stderr, .text = "round trip failed" }, .{ .stream = .stderr, .text = "panic" } },
         })) |failure| return failure;
     }
-    return null;
+
+    // Boxy code loads runtime table numbers, which excerpts keep apart from
+    // their linked relocations.
+    const boxy_output_path = std.fmt.allocPrint(allocator, "{s}/excerpt_round_trip_boxy", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const boxy_out_arg = outputArg(allocator, boxy_output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+    return runRocAndCheck(io, allocator, &round_trip_env, timer, timeout_ms, .{
+        .args = &.{ "build", "--no-cache", "--opt=dev", "--specialize=no", boxy_out_arg },
+        .roc_file = "test/cli/issue_12728_boxy_built_codecs/App.roc",
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        .not_contains = &.{ .{ .stream = .stderr, .text = "round trip failed" }, .{ .stream = .stderr, .text = "panic" } },
+    });
 }
 
 /// `ROC_DEV_PACK_OBJECTS` makes a native dev build also lower every visible
@@ -12894,6 +12913,58 @@ fn customIssue12747SharedPackage(
         .args = &.{},
         .stdout_exact = "0 2\n",
         .not_contains = &.{.{ .stream = .stderr, .text = "Memory leak detected" }},
+    });
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/12728: an object file's
+// image renumbers the layouts its code passes the Boxy runtime, including the
+// worker return layouts its entry wrapper registers. A dictionary call that
+// compares a worker's registered layout with its own must see one numbering,
+// so the executable must run its derived codecs and print their results.
+// Running the file directly never builds that image, so this case builds it.
+fn customIssue12728BoxyBuiltCodecs(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const exe = std.fmt.allocPrint(allocator, "{s}/issue_12728_app", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const out_arg = outputArg(allocator, exe) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+    const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+    const built = runRocInEnv(io, allocator, env, &.{ "build", "--opt=dev", "--specialize=no", out_arg }, "test/cli/issue_12728_boxy_built_codecs/App.roc", .relative, &.{}, null, build_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+    if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
+        return failureFromRun(allocator, timer, built, "boxy dev build did not succeed");
+    }
+    return runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
+        .args = &.{},
+        .stdout_exact =
+        \\Ok(1)
+        \\Ok("1")
+        \\Err(InvalidJson("Invalid JSON"))
+        \\Ok("1")
+        \\Ok(1)
+        \\Err(InvalidJson("Invalid JSON"))
+        \\Ok(["1"])
+        \\"1"
+        \\{"a":"1"}
+        \\[1]
+        \\[["1"]]
+        \\["1"]
+        \\Ok("items=2:7;1;")
+        \\Ok("nested=2:2:7;1;;0:;")
+        \\Ok("tagged=<7|1|>")
+        \\prefixed=#5#1
+        \\Ok("ints=5;1;")
+        \\Ok("alias=5;1;")
+        \\Ok("held=5;1;")
+        \\Ok("records=a=5 b=1 ;")
+        \\
+        ,
     });
 }
 

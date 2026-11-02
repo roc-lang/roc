@@ -159,17 +159,17 @@ LSP method, like `textDocument/completion` for example, the handler should be ad
 directory and its call should be added either in `request` (if it expects a response) or `notification`
 (if it doesn't expect a response). `textDocument/completion` for example would go here :
 ```zig
-const request_handlers = std.StaticStringMap(HandlerPtr).initComptime(.{
-    .{ "initialize", &InitializeHandler.call },
-    .{ "shutdown", &ShutdownHandler.call },
-    .{ "textDocument/completion", &CompletionHandler.call },
+const request_handlers = std.StaticStringMap(HandlerRegistration).initComptime(.{
+    .{ "initialize", HandlerRegistration{ .call = &InitializeHandler.call, .requires_check = false } },
+    .{ "shutdown", HandlerRegistration{ .call = &ShutdownHandler.call, .requires_check = false } },
+    .{ "textDocument/completion", HandlerRegistration{ .call = &CompletionHandler.call, .requires_check = true } },
 });
 ```
 When adding a new capability, if the server is ready to support it, you need to add the capabilities to
 the `capabilities.zig` file for the `initialize` response to tell the client the capabilities is available :
 ```zig
-pub fn buildCapabilities(trusted_workspace: bool) ServerCapabilities {
-    const parse_only: ServerCapabilities = .{
+pub fn buildCapabilities() ServerCapabilities {
+    return .{
         .textDocumentSync = .{
             .openClose = true,
             .change = @backingInt(ServerCapabilities.TextDocumentSyncKind.incremental),
@@ -179,8 +179,8 @@ pub fn buildCapabilities(trusted_workspace: bool) ServerCapabilities {
 }
 ```
 Here we tell the client that `textDocumentSync` is available in accordance to the LSP specifications data
-structure. Capabilities that need a full build belong in the trusted branch only, matching
-`requires_trust` on their handler.
+structure. Handlers that need a full build declare `requires_check = true` so any
+scheduled check of their document runs before the request.
 
 The `Server` struct holds the state, meaning in has the knowledge of the project files, the
 documentation, the type inference, the syntax, etc. Every handler has access to it. These points of knowledge
@@ -221,25 +221,6 @@ which log build environment activity, syntax/type checking, and server lifecycle
 to the same session log file. Logs are created exclusively with owner-only permissions
 on Unix; existing files and symlinks are never reopened. Transport logs contain
 full document contents.
-
-## Workspace trust
-
-By default, opening or changing a document does not compile it. Formatting,
-folding ranges, and selection ranges remain available; diagnostics and semantic
-features require the client to send this in its `initialize` params:
-
-```json
-"initializationOptions": { "trustedWorkspace": true }
-```
-
-Enable this only after the user trusts the workspace: checking can download URL
-packages and execute compile-time Roc code inside the server. Clients must derive
-trust from their own user-controlled trust mechanism, never repository settings.
-Restart the server when trust changes. Trust applies to the entire server session,
-including every opened document and transitive dependency; use separate sessions
-for untrusted folders. Clients without a trust integration remain in syntax-only
-mode. In that mode the `initialize` response only advertises formatting, folding
-ranges, and selection ranges, and other requests return a trust-required error.
 
 ## Editor examples
 

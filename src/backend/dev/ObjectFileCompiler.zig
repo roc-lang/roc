@@ -15,6 +15,7 @@ const std = @import("std");
 const invariant = @import("base").invariant;
 const dev_diagnostics = @import("base").dev_diagnostics;
 const builtin = @import("builtin");
+const isaOfOrNull = @import("isa.zig").isaOfOrNull;
 const Allocator = std.mem.Allocator;
 
 const layout = @import("layout");
@@ -233,8 +234,7 @@ pub const ObjectFileCompiler = struct {
             const comptime_target: RocTarget = @fromBackingInt(@intCast(field_value));
             if (comptime comptime_target.defaultCpuTarget() != comptime_target) continue;
             if (default_target == comptime_target) {
-                const arch = comptime comptime_target.toCpuArch();
-                if (comptime (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be)) {
+                if (comptime isaOfOrNull(comptime_target) != null) {
                     return compilePiecesWithCodeGen(
                         LirCodeGenMod.LirCodeGen(comptime_target),
                         self.allocator,
@@ -272,8 +272,7 @@ pub const ObjectFileCompiler = struct {
             const comptime_target: RocTarget = @fromBackingInt(@intCast(field_value));
             if (comptime comptime_target.defaultCpuTarget() != comptime_target) continue;
             if (default_target == comptime_target) {
-                const arch = comptime comptime_target.toCpuArch();
-                if (comptime (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be)) {
+                if (comptime isaOfOrNull(comptime_target) != null) {
                     return composeWithCodeGen(LirCodeGenMod.LirCodeGen(comptime_target), self.allocator, inputs, target, options, self.timing);
                 } else {
                     return CompilationError.UnsupportedTarget;
@@ -1651,8 +1650,7 @@ fn crossCompileDispatch(
         const comptime_target: RocTarget = @fromBackingInt(@intCast(field_value));
         if (comptime comptime_target.defaultCpuTarget() != comptime_target) continue;
         if (default_target == comptime_target) {
-            const arch = comptime comptime_target.toCpuArch();
-            if (comptime (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be)) {
+            if (comptime isaOfOrNull(comptime_target) != null) {
                 return compileWithCodeGen(
                     LirCodeGenMod.LirCodeGen(comptime_target),
                     allocator,

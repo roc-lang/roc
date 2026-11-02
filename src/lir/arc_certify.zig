@@ -43,18 +43,30 @@
 //! (`JoinGroup`, `absorbJoinSummary`):
 //!
 //! - Summaries agreeing on every name's mode (same class, same presence
-//!   condition, same borrow anchor) share one group. The group's partition
-//!   is the meet (common refinement) of the members' partitions, and each
-//!   fine class's balance is attributed from the members' class balances by
-//!   constraint propagation (`meetGroupSummary`).
+//!   condition, same holder and payload proof) share one group. The group's
+//!   partition is the meet (common refinement) of the members' partitions,
+//!   and each fine class's balance is attributed from the members' class
+//!   balances by constraint propagation (`meetGroupSummary`). A name's
+//!   lender conjunction in the group is the union of the members'.
 //! - Summaries whose modes disagree go to separate groups. This is the
 //!   refinement rule: the abstraction splits exactly on entry-state modes
 //!   real in-edges disagree about, so every group is witnessed by at least one real jump
 //!   and a group-walk finding always corresponds to a real entry state. In
 //!   the worst case this degenerates to one group per distinct summary—
-//!   the pre-fixpoint exact behavior. Different lifetime proofs remain
-//!   separate regardless of the number of groups: discarding a borrowed
-//!   value's lender would manufacture an invalid state no edge supplied.
+//!   the pre-fixpoint exact behavior. No join discards a lender: discarding
+//!   a borrowed value's lender would manufacture an invalid state no edge
+//!   supplied. A proof with lenders stays separate from one without them, as
+//!   do proofs with different holders or payload sources, regardless of the
+//!   number of groups.
+//!
+//! A name with a lender union is live only while it is live under every
+//! member. That is the shape of a selection between borrowed elements: the
+//! selection stays valid while both sources live, and one group per arm would
+//! multiply across consecutive selections. A union is taken only when it is
+//! exact (`lenderUnionsAreExact`): the members share a partition and balances,
+//! and every lender of a disagreeing name has one proof in both, so a dead
+//! lender in the union is a dead lender in the member that named it. Any other
+//! disagreement starts its own group.
 //!
 //! Why one walk under the group's meet partition covers every member
 //! (soundness of the join): a member's entry state is the group state with
@@ -72,11 +84,13 @@
 //! only moves down the refinement order as members arrive.
 //!
 //! Termination and re-walk bound: a group's partition strictly refines at
-//! most (relevant locals - 1) times, and each conditional cell's
-//! may-already-released fact changes from false to true at most once. A group
-//! is re-walked only for one of those strict changes, so each group walks at
-//! most 2n times—the lattice height replaces summary enumeration. Group
-//! *creation* is bounded by
+//! most (relevant locals - 1) times, each conditional cell's
+//! may-already-released fact changes from false to true at most once, each
+//! name's known variant is dropped at most once, and each name's lender
+//! conjunction grows at most (relevant locals - 1) times. A group is re-walked
+//! only for one of those strict changes, so each group walks at most n²+2n
+//! times—the lattice height replaces summary enumeration. Group *creation* is
+//! bounded by
 //! Dickson's lemma: mode vectors and partitions are finite, and among
 //! groups sharing both, balance vectors that keep growing pointwise are
 //! reported as a per-iteration accumulation finding after
@@ -1374,6 +1388,20 @@ fn summaryProvenanceEql(a: ?*const SummaryProvenance, b: ?*const SummaryProvenan
     if (a == b) return true;
     if (a == null or b == null) return a == b;
     return std.mem.eql(u32, a.?.lender_reprs, b.?.lender_reprs) and
+        std.mem.eql(u32, a.?.holder_reprs, b.?.holder_reprs) and
+        a.?.payload_source == b.?.payload_source and
+        a.?.payload_projection.eql(b.?.payload_projection) and
+        a.?.payload_taken == b.?.payload_taken;
+}
+
+/// Whether two proofs can join to one: they are the same proof, or they differ
+/// only in their nonempty lender conjunctions. A proof with no lenders stays
+/// apart from one with lenders, because a union with it would state a lender
+/// the other edge never had.
+fn summaryProofsJoinable(a: ?*const SummaryProvenance, b: ?*const SummaryProvenance) bool {
+    if (a == b) return true;
+    if (a == null or b == null) return false;
+    return a.?.lender_reprs.len != 0 and b.?.lender_reprs.len != 0 and
         std.mem.eql(u32, a.?.holder_reprs, b.?.holder_reprs) and
         a.?.payload_source == b.?.payload_source and
         a.?.payload_projection.eql(b.?.payload_projection) and
@@ -3259,7 +3287,7 @@ const Certifier = struct {
 
         std.mem.sort(u32, self.provenance_lender_scratch.items, {}, comptime std.sort.asc(u32));
         std.mem.sort(u32, self.provenance_holder_scratch.items, {}, comptime std.sort.asc(u32));
-        const candidate = SummaryProvenance{
+        const provenance = try self.internProvenance(.{
             .lender_reprs = self.provenance_lender_scratch.items,
             .holder_reprs = self.provenance_holder_scratch.items,
             .payload_source = payload_source,
@@ -3268,35 +3296,39 @@ const Certifier = struct {
             else
                 info.payload_projection,
             .payload_taken = payload_source != no_dense and info.payload_taken,
-        };
+        });
+        return .{ .provenance = provenance, .uncarried_live_lender = uncarried_live_lender };
+    }
+
+    /// The canonical provenance equal to `candidate`, whose slices may be
+    /// scratch storage.
+    fn internProvenance(self: *Certifier, candidate: SummaryProvenance) Allocator.Error!*const SummaryProvenance {
         const interned = try self.provenance_interner.getOrPutContext(
             self.allocator,
             candidate,
             .{},
         );
-        if (interned.found_existing) {
-            return .{ .provenance = interned.value_ptr.*, .uncarried_live_lender = uncarried_live_lender };
-        }
+        if (interned.found_existing) return interned.value_ptr.*;
         errdefer _ = self.provenance_interner.removeContext(candidate, .{});
 
         const arena = self.lender_arena.allocator();
         const provenance = try arena.create(SummaryProvenance);
         provenance.* = .{
-            .lender_reprs = if (self.provenance_lender_scratch.items.len == 0)
+            .lender_reprs = if (candidate.lender_reprs.len == 0)
                 &.{}
             else
-                try arena.dupe(u32, self.provenance_lender_scratch.items),
-            .holder_reprs = if (self.provenance_holder_scratch.items.len == 0)
+                try arena.dupe(u32, candidate.lender_reprs),
+            .holder_reprs = if (candidate.holder_reprs.len == 0)
                 &.{}
             else
-                try arena.dupe(u32, self.provenance_holder_scratch.items),
+                try arena.dupe(u32, candidate.holder_reprs),
             .payload_source = candidate.payload_source,
             .payload_projection = candidate.payload_projection,
             .payload_taken = candidate.payload_taken,
         };
         interned.key_ptr.* = provenance.*;
         interned.value_ptr.* = provenance;
-        return .{ .provenance = provenance, .uncarried_live_lender = uncarried_live_lender };
+        return provenance;
     }
 
     fn summaryDigest(cursor: LIR.CFStmtId, summary: []const LocalSummary) u64 {
@@ -3511,8 +3543,8 @@ const Certifier = struct {
 
     /// True when the two summaries assign every name the same ownership
     /// mode: same class, same presence condition for conditional ownership,
-    /// and the same sparse provenance. Partition (`repr`) and balances are the
-    /// joinable components and are deliberately not compared here.
+    /// and joinable sparse provenance. Partition (`repr`), balances, and lender
+    /// sets are the joinable components and are deliberately not compared here.
     fn modesCompatible(a: []const LocalSummary, b: []const LocalSummary) bool {
         var pairs = SummaryPairs{ .a = a, .b = b };
         while (pairs.next()) |pair| {
@@ -3526,13 +3558,67 @@ const Certifier = struct {
                 // Claims are per-field spend records, not attributable
                 // balances; states disagreeing on them walk separately.
                 .owned => if (!ga.claims.eql(sb.claims) or
-                    !summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
+                    !summaryProofsJoinable(ga.provenance, sb.provenance)) return false,
                 .conditional_owned => if (ga.condition != sb.condition or
                     ga.condition_mask != sb.condition_mask or
                     !summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
-                .borrowed => if (!summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
+                .borrowed => if (!summaryProofsJoinable(ga.provenance, sb.provenance)) return false,
             }
         }
+        return true;
+    }
+
+    /// Whether an aligned pair of entries holds different lender conjunctions.
+    /// `modesCompatible` has already proved every other component of the two
+    /// proofs equal, and a `.representation` entry's proof is not compared.
+    fn lendersDisagree(a: LocalSummary, b: LocalSummary) bool {
+        return switch (a.class) {
+            .unbound, .representation, .conditional_owned => false,
+            .owned, .borrowed => !summaryProvenanceEql(a.provenance, b.provenance),
+        };
+    }
+
+    /// Whether every lender disagreement between two summaries of one
+    /// partition joins without changing what either summary proves: each
+    /// lender of a disagreeing name must have the same proof in both, so a
+    /// failed liveness check of that name under the union is a failed check
+    /// under the summary that named the dead lender.
+    ///
+    /// Lender graphs stay acyclic under this rule. A union can only close a
+    /// cycle by combining an edge only the group has with an edge only the
+    /// summary has, each leaving a disagreeing name, and a disagreeing name
+    /// lends only from names that agree, whose edges both sides share.
+    fn lenderUnionsAreExact(group: []const LocalSummary, incoming: []const LocalSummary) bool {
+        for (group, incoming) |a, b| {
+            if (!lendersDisagree(a, b)) continue;
+            for ([_]*const SummaryProvenance{ a.provenance.?, b.provenance.? }) |proof| {
+                for (proof.lender_reprs) |lender| {
+                    const position = std.sort.binarySearch(LocalSummary, group, lender, compareSummaryDense).?;
+                    if (lendersDisagree(group[position], incoming[position])) return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    fn compareSummaryDense(dense: u32, entry: LocalSummary) std.math.Order {
+        return std.math.order(dense, entry.dense);
+    }
+
+    /// The group entry's lender conjunction extended by the arriving entry's.
+    /// Reports whether it grew.
+    fn joinLenders(self: *Certifier, entry: *LocalSummary, arriving: LocalSummary) Allocator.Error!bool {
+        const proof = entry.provenance.?;
+        self.provenance_lender_scratch.clearRetainingCapacity();
+        try self.provenance_lender_scratch.appendSlice(self.allocator, proof.lender_reprs);
+        for (arriving.provenance.?.lender_reprs) |lender| {
+            try appendUniqueU32(&self.provenance_lender_scratch, self.allocator, lender);
+        }
+        if (self.provenance_lender_scratch.items.len == proof.lender_reprs.len) return false;
+        std.mem.sort(u32, self.provenance_lender_scratch.items, {}, comptime std.sort.asc(u32));
+        var joined = proof.*;
+        joined.lender_reprs = self.provenance_lender_scratch.items;
+        entry.provenance = try self.internProvenance(joined);
         return true;
     }
 
@@ -3555,15 +3641,16 @@ const Certifier = struct {
     const MeetOutcome = enum {
         /// The summary is subsumed: same partition, same balances.
         unchanged,
-        /// The group's partition was refined (and balances re-attributed), or
-        /// a conditional cell gained a may-already-released fact. The body
-        /// must be re-walked under the stricter state. Partition refinement
-        /// and released-bit union each happen at most once per name.
+        /// The group's partition was refined (and balances re-attributed), a
+        /// conditional cell gained a may-already-released fact, a known
+        /// variant was dropped, or a lender conjunction grew. The body must be
+        /// re-walked under the stricter state. Each of these moves one name
+        /// strictly down a finite chain.
         refined,
         /// Balance attribution failed: the summary's units cannot be
         /// reconciled with the group's (divergent entry balances, or an
-        /// attribution the constraints leave ambiguous). The summary starts
-        /// its own group.
+        /// attribution the constraints leave ambiguous), or a lender
+        /// disagreement has no exact union. The summary starts its own group.
         conflict,
     };
 
@@ -3576,6 +3663,11 @@ const Certifier = struct {
     /// balance; propagation solves constraints with a single unknown until
     /// nothing changes. A full, consistent solution updates the group in
     /// place; anything else is a conflict.
+    ///
+    /// Lender conjunctions join by union only between summaries of one
+    /// partition (`lenderUnionsAreExact`). Across a refinement, a name the
+    /// summary aliased with its lender becomes a separate class, and a union
+    /// there could reject a read that summary proves.
     fn meetGroupSummary(self: *Certifier, group: *JoinGroup, summary: []const LocalSummary) CertifyError!MeetOutcome {
         // Align both summaries over the union of their positions.
         self.align_left_scratch.clearRetainingCapacity();
@@ -3602,17 +3694,28 @@ const Certifier = struct {
             if ((a.class == .owned or a.class == .conditional_owned) and a.balance != b.balance) same_balances = false;
         }
         if (same_partition) {
-            if (!same_balances) return .conflict;
+            if (!same_balances or !lenderUnionsAreExact(g, incoming)) return .conflict;
             var changed = false;
             for (g, incoming) |*entry, arriving| {
                 if (!entry.maybe_uninitialized_released and arriving.maybe_uninitialized_released) {
                     entry.maybe_uninitialized_released = true;
                     changed = true;
                 }
+                if (entry.known_variant != no_variant and entry.known_variant != arriving.known_variant) {
+                    entry.known_variant = no_variant;
+                    changed = true;
+                }
+                if (lendersDisagree(entry.*, arriving) and try self.joinLenders(entry, arriving)) {
+                    changed = true;
+                }
             }
             if (!changed) return .unchanged;
             try self.commitGroupSummary(group, g);
             return .refined;
+        }
+
+        for (g, incoming) |a, b| {
+            if (lendersDisagree(a, b)) return .conflict;
         }
 
         // The solver indexes classes by position, so representatives are
@@ -4262,16 +4365,18 @@ const Certifier = struct {
     /// Adds every local carrier needed to restore one dependency to the
     /// summary domain. The direct value is preferred because its own sparse
     /// provenance preserves the exact liveness alternatives; unnamed
-    /// intermediates are reduced to the live anchors that can actually cross
-    /// the join.
+    /// intermediates and transparent borrows are reduced to the live anchors
+    /// that can actually cross the join.
     fn markSummaryDependencyRelevant(
         self: *Certifier,
         state: *const State,
         dependency: ValueId,
     ) Allocator.Error!void {
-        if (self.repr_scratch.get(dependency)) |carrier| {
-            try self.addSummaryDomain(state, carrier);
-            return;
+        if (!self.isTransparentBorrow(state, dependency)) {
+            if (self.repr_scratch.get(dependency)) |carrier| {
+                try self.addSummaryDomain(state, carrier);
+                return;
+            }
         }
 
         if (!try self.collectBorrowSummaryAnchorValues(state, dependency, &self.provenance_value_scratch)) return;
@@ -4279,6 +4384,37 @@ const Certifier = struct {
             const carrier = self.repr_scratch.get(anchor) orelse continue;
             try self.addSummaryDomain(state, carrier);
         }
+    }
+
+    /// A borrow the join's body never reads, with no ownership of its own and
+    /// no container above it. Its liveness is exactly its lenders' liveness and
+    /// nothing can be claimed through it, so a summary loses nothing by naming
+    /// its anchors in place of it.
+    fn isTransparentBorrow(self: *Certifier, state: *const State, value: ValueId) bool {
+        if (self.carrier_scratch.contains(value)) return false;
+        const info = self.values.items[value];
+        return info.lenders.len != 0 and
+            !info.always_live and
+            info.payload_source == no_value and
+            self.holdsNoOwnership(state, value);
+    }
+
+    /// Whether `value` holds no unit, claim, presence condition, or holder.
+    fn holdsNoOwnership(_: *const Certifier, state: *const State, value: ValueId) bool {
+        return state.balanceOf(value) == 0 and
+            state.claimsOf(value).isEmpty() and
+            state.conditionalConditionOf(value) == null and
+            state.holderOf(value) == no_value;
+    }
+
+    /// Whether a link of `value`'s payload chain stores anything a local must
+    /// name across a join.
+    fn payloadChainStoresOwnership(self: *const Certifier, state: *const State, value: ValueId) bool {
+        var link = self.values.items[value].payload_source;
+        while (link != no_value) : (link = self.values.items[link].payload_source) {
+            if (!self.holdsNoOwnership(state, link)) return true;
+        }
+        return false;
     }
 
     fn addSummaryDomain(self: *Certifier, state: *const State, dense: u32) Allocator.Error!void {
@@ -4595,11 +4731,12 @@ const Certifier = struct {
     /// that reaches no carried container gains no carriers when the selection
     /// holds no unit of its own: it claims the stored unit before quotienting
     /// instead. A selection that holds its own unit (retained after a take)
-    /// cannot absorb the stored unit, so every carrier on its chain joins the
-    /// relevant bound positions too; otherwise the stored unit would cross
-    /// the join with no local naming it. At an entry jump such a carrier
-    /// lands in the frame or the summary domain by the same region rule as
-    /// every other relevant position.
+    /// cannot absorb a stored unit, so when its chain stores one every carrier
+    /// on the chain joins the relevant bound positions too; otherwise the
+    /// stored unit would cross the join with no local naming it. A chain of
+    /// plain borrows stores nothing and gains no carriers. At an entry jump
+    /// such a carrier lands in the frame or the summary domain by the same
+    /// region rule as every other relevant position.
     fn addProvenanceCarriers(self: *Certifier, state: *const State) Allocator.Error!void {
         self.provenance_carrier_scratch.clearRetainingCapacity();
         self.repr_scratch.clearRetainingCapacity();
@@ -4620,7 +4757,7 @@ const Certifier = struct {
                 break :reach false;
             };
             const holds_unit = state.balanceOf(value) != 0 and !try self.claimsSpendUnit(state, value);
-            if (!reaches_carried and !holds_unit) continue;
+            if (!reaches_carried and !(holds_unit and self.payloadChainStoresOwnership(state, value))) continue;
             var link = self.values.items[value].payload_source;
             while (link != no_value and !self.carrier_scratch.contains(link)) : (link = self.values.items[link].payload_source) {
                 const carrier = self.repr_scratch.get(link) orelse continue;
@@ -4934,21 +5071,7 @@ const Certifier = struct {
         }
 
         try work.append(self.allocator, .{ .segment = .{ .cursor = body, .state = state } });
-        // Companion to the bound inside `runSegment`: that one catches a single
-        // walk that never ends, this one catches a worklist that keeps growing.
-        // The busiest procedure in a 117k-statement module queues 1572 segments
-        // against a limit of 29k, so a procedure that passes this is not
-        // converging.
-        const item_limit = @max(@as(usize, 1) << 16, self.store.cfStmtCount());
-        var items: usize = 0;
         while (work.pop()) |item| {
-            items += 1;
-            if (items > item_limit) {
-                return self.fail(
-                    "certifying this procedure queued more than {d} segments without settling",
-                    .{item_limit},
-                );
-            }
             if (self.work_stats) |stats| stats.work_items += 1;
             switch (item) {
                 .segment => |segment| try self.runSegment(&work, segment),
@@ -5268,24 +5391,7 @@ const Certifier = struct {
         defer state.deinit();
         var cursor = segment.cursor;
         self.current_origin_join = segment.origin_join;
-        // A segment walk ends by reaching a terminator or by meeting a state it
-        // has already memoized. Nothing else bounds it, so a walk whose state
-        // never repeats runs forever, and the only symptom is a build that
-        // never finishes. Bound it instead: the limit is far above any real
-        // walk (the largest segment in a 117k-statement module takes 154
-        // steps), so crossing it means the memo is not converging, and saying
-        // so with the proc and statement is worth more than hanging.
-        const step_limit = @max(@as(usize, 1) << 16, self.store.cfStmtCount() * 2);
-        var walk_steps: usize = 0;
-
         while (true) {
-            walk_steps += 1;
-            if (walk_steps > step_limit) {
-                return self.fail(
-                    "segment walk passed {d} statements without reaching a terminator or a repeated state",
-                    .{step_limit},
-                );
-            }
             self.current_stmt = cursor;
 
             if (self.memo_points.contains(cursor)) {
@@ -10266,4 +10372,244 @@ test "issue 12505 a record taken from its parent cannot be dismantled twice from
     defer f.deinit();
     try buildRetainedRecordDismantledFromParentTwice(&f, false);
     try testing.expectError(error.Certification, f.certify());
+}
+
+/// Two lists of records and the control flow that selects a string out of
+/// either one, the shape a sort's pivot selection takes once it is inlined.
+const SelectionFixture = struct {
+    list_a: LIR.LocalId,
+    list_b: LIR.LocalId,
+    list_layout: layout_mod.Idx,
+    index: LIR.LocalId,
+
+    fn init(f: *CertifyTest) Allocator.Error!SelectionFixture {
+        const list_layout = try f.layouts.insertList(f.pair_str);
+        return .{
+            .list_a = try f.local(list_layout),
+            .list_b = try f.local(list_layout),
+            .list_layout = list_layout,
+            .index = try f.local(.u64),
+        };
+    }
+
+    fn arm(
+        self: SelectionFixture,
+        f: *CertifyTest,
+        list: LIR.LocalId,
+        param: LIR.LocalId,
+        join_id: LIR.JoinPointId,
+        ownership: SelectionOwnership,
+    ) Allocator.Error!LIR.CFStmtId {
+        const element = try f.local(f.pair_str);
+        const field = try f.local(.str);
+        const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+        const set = try f.store.addCFStmt(.{ .set_local = .{
+            .target = param,
+            .value = field,
+            .next = jump,
+            .mode = .initialize_join_param,
+        } }, .test_fixture);
+        const retain = switch (ownership) {
+            .retained => try f.increfStmt(field, .str, set),
+            .borrowed => set,
+        };
+        const read = try f.store.addCFStmt(.{ .assign_ref = .{
+            .target = field,
+            .op = .field(element, 0),
+            .next = retain,
+        } }, .test_fixture);
+        return f.store.addCFStmt(.{ .assign_low_level = .{
+            .target = element,
+            .op = .list_get_unsafe,
+            .rc_effect = try f.store.addRcEffect(LIR.LowLevel.list_get_unsafe.rcEffect()),
+            .args = try f.store.addLocalSpan(&.{ list, self.index }),
+            .next = read,
+        } }, .test_fixture);
+    }
+
+    fn select(
+        self: SelectionFixture,
+        f: *CertifyTest,
+        param: LIR.LocalId,
+        ownership: SelectionOwnership,
+        body: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const join_id = f.freshJoinPointId();
+        const from_a = try self.arm(f, self.list_a, param, join_id, ownership);
+        const from_b = try self.arm(f, self.list_b, param, join_id, ownership);
+        const choose = try f.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = self.index,
+            .branches = try f.store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{.{ .value = 1, .body = from_a }}),
+            .default_branch = from_b,
+        } }, .test_fixture);
+        return f.store.addCFStmt(.{ .join = .{
+            .id = join_id,
+            .params = try f.store.addLocalSpan(&.{param}),
+            .body = body,
+            .remainder = choose,
+        } }, .test_fixture);
+    }
+};
+
+const SelectionOwnership = enum { retained, borrowed };
+
+/// Selects a string from either list, releases `released_first` if any, and
+/// then reads the selection.
+fn certifySelectionRead(ownership: SelectionOwnership, released_first: enum { neither, a, b }) CertifyError!void {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const s = try SelectionFixture.init(&f);
+    const selected = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const assign = try f.assignI64(result, ret);
+    const tail = switch (released_first) {
+        .neither => try f.decrefStmt(s.list_b, s.list_layout, try f.decrefStmt(s.list_a, s.list_layout, assign)),
+        .a => try f.decrefStmt(s.list_b, s.list_layout, assign),
+        .b => try f.decrefStmt(s.list_a, s.list_layout, assign),
+    };
+    const read = try f.store.addCFStmt(.{ .expect = .{ .condition = selected, .next = tail } }, .test_fixture);
+    const release = switch (released_first) {
+        .neither => read,
+        .a => try f.decrefStmt(s.list_a, s.list_layout, read),
+        .b => try f.decrefStmt(s.list_b, s.list_layout, read),
+    };
+    const body = switch (ownership) {
+        .retained => try f.decrefStmt(selected, .str, release),
+        .borrowed => release,
+    };
+    const flow = try s.select(&f, selected, ownership, body);
+    _ = try f.addProc(&.{ s.list_a, s.list_b, s.index }, flow, .i64);
+    try f.certify();
+}
+
+test "certify accepts reading a selection while every possible lender lives" {
+    try certifySelectionRead(.retained, .neither);
+    try certifySelectionRead(.borrowed, .neither);
+}
+
+test "certify rejects reading a selection after either possible lender dies" {
+    try testing.expectError(error.Certification, certifySelectionRead(.retained, .a));
+    try testing.expectError(error.Certification, certifySelectionRead(.retained, .b));
+    try testing.expectError(error.Certification, certifySelectionRead(.borrowed, .a));
+    try testing.expectError(error.Certification, certifySelectionRead(.borrowed, .b));
+}
+
+fn selectionChainWork(count: usize) CertifyError!CertifierWorkStats {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const s = try SelectionFixture.init(&f);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    var flow = try f.assignI64(result, ret);
+    flow = try f.decrefStmt(s.list_b, s.list_layout, try f.decrefStmt(s.list_a, s.list_layout, flow));
+    var params = std.ArrayList(LIR.LocalId).empty;
+    defer params.deinit(testing.allocator);
+    for (0..count) |_| {
+        const param = try f.local(.str);
+        try params.append(testing.allocator, param);
+        flow = try f.decrefStmt(param, .str, flow);
+    }
+    for (params.items) |param| flow = try s.select(&f, param, .retained, flow);
+    _ = try f.addProc(&.{ s.list_a, s.list_b, s.index }, flow, .i64);
+    return f.certifyAndMeasureWork();
+}
+
+test "certifier keeps consecutive selection work linear" {
+    const narrow = try selectionChainWork(4);
+    const wide = try selectionChainWork(8);
+
+    // Each selection has two arms, so one group per combination of arms
+    // multiplies the work by 16 here. A 3x bound leaves ample headroom for
+    // the structural doubling.
+    try testing.expect(wide.work_items <= narrow.work_items * 3);
+}
+
+test "lender unions are exact only over lenders with one proof" {
+    const lender_a = SummaryProvenance{ .lender_reprs = &.{0} };
+    const lender_b = SummaryProvenance{ .lender_reprs = &.{1} };
+    const entry = struct {
+        fn at(dense: u32, provenance: ?*const SummaryProvenance) LocalSummary {
+            return .{ .dense = dense, .class = .borrowed, .repr = dense, .balance = 0, .condition = no_dense, .condition_mask = 0, .provenance = provenance };
+        }
+    }.at;
+
+    // A selection between two lenders that agree on their own proofs.
+    const group = [_]LocalSummary{ entry(0, null), entry(1, null), entry(2, &lender_a) };
+    const arriving = [_]LocalSummary{ entry(0, null), entry(1, null), entry(2, &lender_b) };
+    try testing.expect(Certifier.lenderUnionsAreExact(&group, &arriving));
+
+    // A lender that itself disagrees could die in the union while the member
+    // that names it still lives.
+    const chained_group = [_]LocalSummary{ entry(0, &lender_b), entry(1, null), entry(2, &lender_a) };
+    const chained_arriving = [_]LocalSummary{ entry(0, &lender_a), entry(1, null), entry(2, &lender_b) };
+    try testing.expect(!Certifier.lenderUnionsAreExact(&chained_group, &chained_arriving));
+
+    // Each side lending the other name would close a cycle in the union.
+    const cycle_group = [_]LocalSummary{ entry(0, &lender_b), entry(1, &lender_b) };
+    const cycle_arriving = [_]LocalSummary{ entry(0, &lender_a), entry(1, &lender_a) };
+    try testing.expect(!Certifier.lenderUnionsAreExact(&cycle_group, &cycle_arriving));
+}
+
+/// A join whose body switches on `tag`, entered from one jump per variant in
+/// `entry_variants`. Variant 0's arm leaks `tag`, so the procedure is invalid
+/// exactly when the body can be entered under variant 0 or an unknown variant.
+fn certifyKnownVariantJoin(entry_variants: []const u32) CertifyError!void {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const tag_pair = try f.layouts.putTagUnion(&[_]layout_mod.Idx{ f.pair_str, f.pair_str, f.pair_str });
+    const tag = try f.local(tag_pair);
+    const entry_discriminant = try f.local(.u8);
+    const body_discriminant = try f.local(.u8);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    const invalid_arm = try f.assignI64(result, try f.ret(result));
+    const valid_arm = try f.decrefStmt(tag, tag_pair, try f.assignI64(result, try f.ret(result)));
+    const body_switch = try f.store.addCFStmt(.{ .switch_stmt = .{
+        .cond = body_discriminant,
+        .branches = try f.store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{.{ .value = 0, .body = invalid_arm }}),
+        .default_branch = valid_arm,
+    } }, .test_fixture);
+    const body = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = body_discriminant,
+        .op = .discriminant(tag),
+        .next = body_switch,
+    } }, .test_fixture);
+
+    var branches = std.ArrayList(LIR.CFSwitchBranch).empty;
+    defer branches.deinit(testing.allocator);
+    for (entry_variants) |variant| {
+        try branches.append(testing.allocator, .{
+            .value = variant,
+            .body = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture),
+        });
+    }
+    const entry_switch = try f.store.addCFStmt(.{ .switch_stmt = .{
+        .cond = entry_discriminant,
+        .branches = try f.store.addCFSwitchBranches(branches.items),
+        .default_branch = try f.decrefStmt(tag, tag_pair, try f.assignI64(result, try f.ret(result))),
+    } }, .test_fixture);
+    const entry_read = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = entry_discriminant,
+        .op = .discriminant(tag),
+        .next = entry_switch,
+    } }, .test_fixture);
+    const join_stmt = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.store.addLocalSpan(&.{}),
+        .body = body,
+        .remainder = entry_read,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{tag}, join_stmt, .i64);
+    try f.certify();
+}
+
+test "certify known variant prunes a join body's infeasible arm" {
+    try certifyKnownVariantJoin(&.{1});
+}
+
+test "certify known variant does not prune an arm a later jump reaches" {
+    // Branches arrive last-listed first, so variant 1 reaches the join first.
+    try testing.expectError(error.Certification, certifyKnownVariantJoin(&.{ 0, 1 }));
 }

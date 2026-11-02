@@ -9,6 +9,7 @@ const base = @import("base");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const coff = @import("object/coff.zig");
+const host_isa = @import("isa.zig").host;
 
 // std.os.windows.VirtualAlloc / VirtualFree / VirtualProtect were removed in Zig 0.16.
 // Declare the thin extern bindings we need locally; only referenced on Windows.
@@ -24,19 +25,17 @@ const win32 = struct {
     const PAGE_READWRITE: DWORD = 0x04;
     const PAGE_EXECUTE_READ: DWORD = 0x20;
 
-    const RuntimeFunction = if (builtin.cpu.arch == .x86_64)
-        extern struct {
+    const RuntimeFunction = if (host_isa) |isa| switch (isa) {
+        .x86_64 => extern struct {
             BeginAddress: DWORD,
             EndAddress: DWORD,
             UnwindData: DWORD,
-        }
-    else if (builtin.cpu.arch == .aarch64)
-        extern struct {
+        },
+        .aarch64 => extern struct {
             BeginAddress: DWORD,
             UnwindData: DWORD,
-        }
-    else
-        void;
+        },
+    } else void;
 
     extern "kernel32" fn VirtualAlloc(
         lpAddress: LPVOID,
@@ -72,9 +71,10 @@ const WindowsUnwindState = if (builtin.os.tag == .windows) struct {
     const allocator = std.heap.smp_allocator;
 
     fn coffArch() error{UnsupportedPlatform}!coff.Architecture {
-        if (builtin.cpu.arch == .x86_64) return .x86_64;
-        if (builtin.cpu.arch == .aarch64) return .aarch64;
-        return error.UnsupportedPlatform;
+        return switch (host_isa orelse return error.UnsupportedPlatform) {
+            .x86_64 => .x86_64,
+            .aarch64 => .aarch64,
+        };
     }
 
     fn xdataSize(functions: []const coff.FunctionInfo) (Allocator.Error || error{UnsupportedPlatform})!usize {
@@ -128,19 +128,17 @@ const WindowsUnwindState = if (builtin.os.tag == .windows) struct {
 
         for (sorted_functions, xdata_offsets, 0..) |function, xdata_function_offset, i| {
             const xdata_rva: u32 = @intCast(xdata_offset + xdata_function_offset);
-            entries[i] = if (builtin.cpu.arch == .x86_64)
-                .{
+            entries[i] = if (host_isa) |isa| switch (isa) {
+                .x86_64 => .{
                     .BeginAddress = function.start_offset,
                     .EndAddress = function.end_offset,
                     .UnwindData = xdata_rva,
-                }
-            else if (builtin.cpu.arch == .aarch64)
-                .{
+                },
+                .aarch64 => .{
                     .BeginAddress = function.start_offset,
                     .UnwindData = xdata_rva,
-                }
-            else
-                unreachable; // coffArch above returned UnsupportedPlatform for every other architecture
+                },
+            } else unreachable; // coffArch above returned UnsupportedPlatform for every other architecture
         }
 
         if (win32.RtlAddFunctionTable(entries.ptr, @intCast(entries.len), @intFromPtr(memory.ptr)) == .FALSE) {
@@ -436,7 +434,10 @@ fn freeMemory(memory: []align(std.heap.page_size_min) u8) void {
 // Tests
 
 test "execute simple x86_64 code" {
-    if (builtin.cpu.arch != .x86_64) return error.SkipZigTest;
+    switch (host_isa orelse return error.SkipZigTest) {
+        .x86_64 => {},
+        .aarch64 => return error.SkipZigTest,
+    }
 
     // mov eax, 42; ret
     const code = [_]u8{ 0xB8, 0x2A, 0x00, 0x00, 0x00, 0xC3 };
@@ -449,7 +450,10 @@ test "execute simple x86_64 code" {
 }
 
 test "execute x86_64 return 64-bit value" {
-    if (builtin.cpu.arch != .x86_64) return error.SkipZigTest;
+    switch (host_isa orelse return error.SkipZigTest) {
+        .x86_64 => {},
+        .aarch64 => return error.SkipZigTest,
+    }
 
     // movabs rax, 0x123456789ABCDEF0; ret
     const code = [_]u8{ 0x48, 0xB8, 0xF0, 0xDE, 0xBC, 0x9A, 0x78, 0x56, 0x34, 0x12, 0xC3 };
@@ -462,7 +466,10 @@ test "execute x86_64 return 64-bit value" {
 }
 
 test "execute aarch64 code" {
-    if (builtin.cpu.arch != .aarch64) return error.SkipZigTest;
+    switch (host_isa orelse return error.SkipZigTest) {
+        .x86_64 => return error.SkipZigTest,
+        .aarch64 => {},
+    }
 
     // mov w0, #42; ret
     const code = [_]u8{ 0x40, 0x05, 0x80, 0x52, 0xC0, 0x03, 0x5F, 0xD6 };
@@ -475,7 +482,10 @@ test "execute aarch64 code" {
 }
 
 test "execute x86_64 with result ptr" {
-    if (builtin.cpu.arch != .x86_64) return error.SkipZigTest;
+    switch (host_isa orelse return error.SkipZigTest) {
+        .x86_64 => {},
+        .aarch64 => return error.SkipZigTest,
+    }
 
     // Entry convention: fn(result_ptr, args_ptr)
     // Windows x64: RCX = result_ptr
@@ -497,7 +507,10 @@ test "execute x86_64 with result ptr" {
 }
 
 test "execute x86_64 with full prologue/epilogue" {
-    if (builtin.cpu.arch != .x86_64) return error.SkipZigTest;
+    switch (host_isa orelse return error.SkipZigTest) {
+        .x86_64 => {},
+        .aarch64 => return error.SkipZigTest,
+    }
 
     // This mimics the generated code structure:
     // - Prologue: push rbp; mov rbp,rsp; push rbx; push r12; sub rsp,1024
