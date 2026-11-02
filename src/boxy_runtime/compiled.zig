@@ -133,10 +133,13 @@ pub fn tagDiscriminantOf(desc: *const TypeDesc, name: *const Name, ops: *RocOps)
     return variantNamed(desc, name, ops).variant.discriminant;
 }
 
-/// The address of payload `payload_index` of the variant named `name` of
-/// the tag union value at `base`.
-pub fn tagPayloadAddr(desc: *const TypeDesc, base: [*]u8, name: *const Name, payload_index: u32, ops: *RocOps) [*]u8 {
-    const variant = variantNamed(desc, name, ops).variant;
+/// The address of payload `payload_index` of the value's active variant.
+/// Lowering establishes the variant before projecting its typed payload;
+/// the stored discriminant indexes the same finalized table as name lookup.
+pub fn tagPayloadAddr(desc: *const TypeDesc, base: [*]u8, payload_index: u32, ops: *RocOps) [*]u8 {
+    const union_desc = backing(desc);
+    if (union_desc.kind != .tag_union) invariant(ops, "a payload of a descriptor that is not a tag union");
+    const variant = &union_desc.variants()[union_desc.readDiscriminant(base)];
     if (payload_index >= variant.payload_count) invariant(ops, "a tag argument index past its tag's arguments");
     return componentAddr(payloadDesc(variant, payload_index), base + payloadOffset(variant, payload_index));
 }

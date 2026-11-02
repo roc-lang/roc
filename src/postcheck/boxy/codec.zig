@@ -1150,8 +1150,10 @@ const Gen = struct {
 
     /// The failure path of an `Err` value of `try_ty`.
     fn fail(self: *Gen, value: LocalId, try_ty: TypeId, err_ty: TypeId, on_err: OnErr) Allocator.Error!void {
-        if ((try self.structuralTags(err_ty)).len == 0) {
-            // A method whose error row is empty never returns `Err`.
+        if (isEmptyUnion(self.program(), try self.b.structuralType(err_ty))) {
+            // A method whose error type is the closed empty row never returns
+            // `Err`. Any other error type is a format's own, or a variable of
+            // the family that each use binds, so its `Err` propagates.
             try self.b.emitTerminal(.runtime_error);
             return;
         }
@@ -1400,12 +1402,12 @@ const Gen = struct {
         }
         b.var_descs = try b.program.arena.allocator().dupe(LocalId, start.captures[worker.capture_types.len..]);
         var record: ?LocalId = null;
-        if (worker.params.len != 0) record = try b.argsRecordLocal(worker.params, .param);
+        if (worker.params.len != 0) record = try b.erasedParamLocal(worker.params);
         const ret_layout = try self.resultLayout(worker.ret);
         const body_start = try b.newHole();
         b.hole = body_start;
         const args = try b.allocator.alloc(LocalId, worker.params.len);
-        for (args, worker.params, 0..) |*arg, ty, index| arg.* = try b.argsRecordField(record.?, @intCast(index), ty);
+        for (args, 0..) |*arg, index| arg.* = try b.erasedParamValue(record.?, worker.params, @intCast(index));
         return .{ .start = start, .record = record, .ret_layout = ret_layout, .body_start = body_start, .args = args, .captures = start.captures[0..worker.capture_types.len] };
     }
 
@@ -2734,13 +2736,18 @@ fn unionTags(program: *Program, ty: TypeId) []const types.Tag {
     };
 }
 
+/// Whether `ty` is the closed empty tag union, which no value inhabits.
+fn isEmptyUnion(program: *Program, ty: TypeId) bool {
+    return switch (program.store.get(ty)) {
+        .tag_union => |tag_union| tag_union.ext == null and tag_union.tags.len == 0,
+        .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => false,
+    };
+}
+
 /// Whether a tag has a payload no value inhabits: the empty tag union.
 fn tagUninhabited(program: *Program, tag_info: types.Tag) Allocator.Error!bool {
     for (program.store.span(tag_info.payloads)) |payload_ty| {
-        switch (program.store.get(payload_ty)) {
-            .tag_union => |tag_union| if (tag_union.ext == null and tag_union.tags.len == 0) return true,
-            .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => {},
-        }
+        if (isEmptyUnion(program, payload_ty)) return true;
     }
     return false;
 }

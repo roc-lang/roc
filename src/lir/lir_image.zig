@@ -60,7 +60,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v57: images carry only specialized LIR tables.
 /// v58: procedure specs carry their link binding (`linked`, `exported`).
 /// v59: composition statements name mutable static cache slots.
-pub const FORMAT_VERSION: u32 = 59;
+/// v60: active-tag payload addresses no longer carry a tag-name operand.
+pub const FORMAT_VERSION: u32 = 60;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.

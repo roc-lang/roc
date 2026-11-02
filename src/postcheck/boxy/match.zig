@@ -548,8 +548,7 @@ pub const Ctx = struct {
                 try self.b.readTagPayloadInto(dest, source, union_ty, variant, payloads, index);
             }
         } else {
-            const name = (try self.unionTags(union_ty))[variant].name;
-            try self.b.emitDyn(dest, .{ .tag_payload_addr = .{ .base = source, .desc = try self.b.descOf(union_ty), .name = try self.b.nameDesc(name), .payload_index = index } });
+            try self.b.emitDyn(dest, .{ .tag_payload_addr = .{ .base = source, .desc = try self.b.descOf(union_ty), .payload_index = index } });
         }
         return try self.b.endBackward(start, next);
     }

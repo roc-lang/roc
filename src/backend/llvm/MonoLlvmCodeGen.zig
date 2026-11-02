@@ -11951,10 +11951,9 @@ pub const MonoLlvmCodeGen = struct {
                 try self.prepareLocalWrite(target);
                 try self.storeLocalInt(target, discriminant, self.localLayout(target));
             },
-            .tag_payload_addr => |t| try self.bindComponentAddress(target, try self.callBoxyRuntime("roc_desc_tag_payload_addr", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, .i32 }, &.{
+            .tag_payload_addr => |t| try self.bindComponentAddress(target, try self.callBoxyRuntime("roc_desc_tag_payload_addr", ptr_ty, &.{ ptr_ty, ptr_ty, .i32 }, &.{
                 try self.wordValue(t.desc),
                 try self.bytesAddress(t.base),
-                try self.wordValue(t.name),
                 try self.intValue(.i32, t.payload_index),
             })),
             .record => |r| {
