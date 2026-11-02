@@ -1,6 +1,7 @@
 import A
 import Point
 import Adder
+import Spaced
 
 B := {}.{
     run : Str -> Str
@@ -20,6 +21,12 @@ B := {}.{
 
     held : U64 -> U64
     held = |n| (Adder.table.f)(n)
+
+    spaced : U64 -> U64
+    spaced = |n| {
+        s = Spaced.new(n)
+        s.a * 10 + s.z
+    }
 
     point : U64 -> U64
     point = |n| {
