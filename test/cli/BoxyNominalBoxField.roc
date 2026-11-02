@@ -4,22 +4,22 @@
 ## generic body releases exactly the allocation the box made.
 BoxyNominalBoxField := [].{}
 
-Range :: { length : U64, start : U64 }.{
-	make : U64, U64 -> Range
-	make = |start, length| Range.{ start, length }
+Span :: { length : U64, start : U64 }.{
+	make : U64, U64 -> Span
+	make = |start, length| Span.{ start, length }
 
-	start : Range -> U64
+	start : Span -> U64
 	start = |r| r.start
 
-	length : Range -> U64
+	length : Span -> U64
 	length = |r| r.length
 }
 
-Boxed :: Box({ prop : U64, bytes : Range }).{
-	make : U64, Range -> Boxed
+Boxed :: Box({ prop : U64, bytes : Span }).{
+	make : U64, Span -> Boxed
 	make = |prop, bytes| Boxed.(Box.box({ prop, bytes }))
 
-	value : Boxed -> { prop : U64, bytes : Range }
+	value : Boxed -> { prop : U64, bytes : Span }
 	value = |Boxed.(boxed)| Box.unbox(boxed)
 }
 
@@ -48,7 +48,7 @@ upd : List(Run) -> List(Run)
 upd = |runs| {
 	var $out = List.with_capacity(runs.len())
 	for run in runs {
-		$out = $out.append({ ..run, actual: Sliced(Boxed.make(1, Range.make(0, 1))) })
+		$out = $out.append({ ..run, actual: Sliced(Boxed.make(1, Span.make(0, 1))) })
 	}
 	$out
 }
@@ -90,6 +90,6 @@ expect {
 }
 
 expect {
-	pair = (Named.make("kept in a tuple"), [Boxed.make(7, Range.make(1, 2))])
+	pair = (Named.make("kept in a tuple"), [Boxed.make(7, Span.make(1, 2))])
 	Named.text(pair.0) == "kept in a tuple" and pair.1.map(|b| Boxed.value(b).prop) == [7]
 }
