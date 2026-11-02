@@ -3480,7 +3480,7 @@ pub const Builder = struct {
 
     /// A word holding null.
     fn nullWord(self: *Builder) Allocator.Error!LocalId {
-        const local = try self.closedLocal(try self.erasedLayout());
+        const local = try self.closedLocal(.opaque_ptr);
         try self.emitEntry(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = try self.program.static_descs.nullWordSlot() } }, .next = undefined } });
         return local;
     }

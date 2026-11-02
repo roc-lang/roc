@@ -123,7 +123,7 @@ pub const ReadCache = struct {
         @memset(&self.ids, 0);
     }
     fn invalidate(self: *ReadCache, id: RecordId) void {
-        const slot = id % self.ids.len;
+        const slot: usize = @intCast(id % self.ids.len);
         if (self.ids[slot] == id) self.ids[slot] = 0;
     }
 };
@@ -229,7 +229,7 @@ pub const Index = struct {
     fn nodeRef(self: *Index, id: RecordId, storage: *Node) Error!*const Node {
         if (id == 0 or id >= self.header.next) return error.CorruptCatalog;
         if (self.read_cache) |cache| {
-            const slot = id % cache.ids.len;
+            const slot: usize = @intCast(id % cache.ids.len);
             if (cache.ids[slot] != id) {
                 var bytes: Record = undefined;
                 cache.nodes[slot] = try Node.decode(try self.readRecordRef(id, &bytes), self.header.next);
@@ -303,7 +303,7 @@ pub const Transaction = struct {
     fn nodeRef(self: *Transaction, id: RecordId) Error!*const Node {
         if (id == 0 or id >= self.header.next) return error.CorruptCatalog;
         for (self.changes[0..self.count]) |*change| if (change.id == id) return &change.node;
-        const slot = id % self.read_ids.len;
+        const slot: usize = @intCast(id % self.read_ids.len);
         if (self.index.read_cache != null) return self.index.nodeRef(id, &self.read_nodes[slot]);
         if (self.read_ids[slot] != id) {
             _ = try self.index.nodeRef(id, &self.read_nodes[slot]);

@@ -881,7 +881,9 @@ fn recursiveMemberOf(composed: *const TypeDesc, ops: *RocOps) ?*const TypeDesc {
     return null;
 }
 
-/// Whether `member` is `composed` with some slots behind recursion boxes.
+/// Whether `member` is `composed` with some slots behind recursion boxes. A
+/// tag without a payload has nothing to compare: which zero-sized descriptor
+/// fills its slot depends only on who built the descriptor.
 fn foldsTo(member: *const TypeDesc, composed: *const TypeDesc, ops: *RocOps) bool {
     if (member.count != composed.count) return false;
     var assumed: DescWalk(DescPair) = .{};
@@ -890,6 +892,7 @@ fn foldsTo(member: *const TypeDesc, composed: *const TypeDesc, ops: *RocOps) boo
     switch (member.kind) {
         .tag_union => for (member.variants(), composed.variants()) |a, b| {
             if (!a.name.eql(b.name) or a.payload_count != b.payload_count) return false;
+            if (a.payload_count == 0) continue;
             if (!slotMatches(a.payload, b.payload, &boxed, &assumed, ops)) return false;
         },
         .record, .tuple => for (0..member.count) |index| {
@@ -938,6 +941,7 @@ fn sameDesc(a: *const TypeDesc, b: *const TypeDesc, assumed: *DescWalk(DescPair)
         },
         .tag_union => for (a.variants(), b.variants()) |x, y| {
             if (!x.name.eql(y.name) or x.payload_count != y.payload_count) return false;
+            if (x.payload_count == 0) continue;
             if (!sameDesc(x.payload, y.payload, assumed, ops)) return false;
         },
         .scalar, .bool, .str, .erased_callable, .zst => {},
