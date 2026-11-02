@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Focused individual-outcome and reporting-relocation checks (#12593/#12615)."""
+"""Focused test-outcome, completed-command and reporting-relocation checks under both strategies."""
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
+import time
+
+
+COMMAND_MAGIC = b'ROC_COMPLETED_DEV_TEST_V4'
 
 
 def is_outcome(path):
@@ -23,28 +28,35 @@ def transcript(data):
 
 
 class Fixture:
-    def __init__(self, root, roc):
+    def __init__(self, root, roc, specialize):
         self.root = root
         self.roc = roc
+        self.specialize = specialize
         self.cache = root / "cache"
-        self.env = dict(os.environ, ROC_CACHE_DIR=str(self.cache), ROC_TRACE_BOXY_WORK="1")
+        self.env = dict(os.environ, ROC_CACHE_DIR=str(self.cache))
+        if specialize == "yes":
+            self.env["ROC_TRACE_BOXY_WORK"] = "1"
         self.path = root / "Main.roc"
+        self.cwd = None
 
     def write(self, text, name="Main.roc"):
         (self.root / name).write_text(text)
 
     def run(self, *, cache=True, timings=False, mode="dev", work=False):
         args = [str(self.roc), "test", str(self.path), f"--opt={mode}",
-                "--specialize=yes", "--no-color", "--verbose"]
+                f"--specialize={self.specialize}", "--no-color", "--verbose"]
         if not cache:
             args.append("--no-cache")
         if timings:
             args.append("--timings")
         env = dict(self.env, ROC_TEST_COMMAND_WORK="1") if work else self.env
-        result = subprocess.run(args, env=env, capture_output=True, timeout=120)
+        result = subprocess.run(args, env=env, capture_output=True, timeout=120, cwd=self.cwd)
         assert result.returncode in (0, 1, 2), result.stderr.decode(errors="replace")
         assert b"panic" not in result.stderr, result.stderr.decode(errors="replace")
-        assert b"boxy-work:" not in result.stderr, result.stderr.decode(errors="replace")
+        if self.specialize == "yes":
+            assert b"boxy-work:" not in result.stderr, result.stderr.decode(errors="replace")
+        # Checking traces its literal arguments only when it checks afresh.
+        result.stderr = re.sub(rb"(?m)^literal-args: .*\n", b"", result.stderr)
         return result
 
     def check(self, hits=None, *, mode="dev"):
@@ -325,16 +337,375 @@ expect {
         assert transcript(result.stderr) == transcript(runs[0].stderr)
     f.check(3)
 
+WORK_COUNTERS = ('specialization', 'ctfe_execution', 'second_specialization', 'runtime_lir',
+                 'arc', 'static_data', 'native_test_procedures', 'test_root_execution')
+
+
+def counter(run, name):
+    match = re.search(rb'(?m)^test-work ' + name.encode() + rb'=(\d+)$', run.stderr)
+    assert match, run.stderr.decode(errors='replace')
+    return int(match[1])
+
+
+def complete_hit(f, **kwargs):
+    """The record replays with every post-check counter at zero."""
+    run = f.run(timings=True, work=True, **kwargs)
+    text = re.sub(r'\s+', ' ', run.stderr.decode(errors='replace'))
+    assert re.search(r'Completed test command.*?Hits\s+1\b', text), text
+    for name in WORK_COUNTERS:
+        assert counter(run, name) == 0, (name, text)
+    return run
+
+
+def is_command_record(path):
+    if not path.is_file():
+        return False
+    with path.open('rb') as source:
+        return source.read(len(COMMAND_MAGIC)) == COMMAND_MAGIC
+
+
+def same_report(a, b):
+    assert a.returncode == b.returncode, (a.stderr, b.stderr)
+    assert transcript(a.stdout) == transcript(b.stdout), (a.stdout, b.stdout)
+    assert transcript(a.stderr) == transcript(b.stderr), (a.stderr, b.stderr)
+
+
+# Each case is (name, files, [(file, old, new)]): an edit outside the test body
+# that changes what the test observes. A cached outcome that survived the edit
+# would disagree with a fresh run, and a fresh run proves the edit is observable.
+TH = 'module [T, make]\nT := [A].{\n  render = |_| "one"\n}\nmake = || T.A\n'
+EQ = 'module [T, make]\nT := [A, B].{\n  is_eq = |_, _| True\n}\nmake = |x| if x T.A else T.B\n'
+NUM = ('module [N, make]\nN := { v: I64 }.{\n'
+       '  from_numeral : Numeral -> Try(N, [InvalidNumeral(Str)])\n'
+       '  from_numeral = |_| Ok({ v: 1 })\n  is_eq = |a, b| a.v == b.v\n  get = |a| a.v\n}\n'
+       'make = |v| N.{ v }\n')
+QUOTE = ('module [Q, get]\nQ := { v: I64 }.{\n'
+         '  from_quote : Str -> Try(Q, [BadQuotedBytes(Str)])\n'
+         '  from_quote = |_| Ok({ v: 1 })\n  get = |a| a.v\n}\nget = |q| q.get()\n')
+IDENTITY_CASES = [
+    ('test body', {'Main.roc': 'expect 1 == 1\n'}, [('Main.roc', '1 == 1', '1 == 2')]),
+    ('imported function', {'Lib.roc': 'module [f]\nf = |x| x + 1\n', 'Main.roc': 'import Lib\nexpect Lib.f(1) == 2\n'},
+     [('Lib.roc', 'x + 1', 'x + 2')]),
+    ('transitive function', {'Leaf.roc': 'module [f]\nf = |x| x + 1\n',
+                             'Lib.roc': 'module [g]\nimport Leaf\ng = |x| Leaf.f(x)\n',
+                             'Main.roc': 'import Lib\nexpect Lib.g(1) == 2\n'},
+     [('Leaf.roc', 'x + 1', 'x + 2')]),
+    ('generic import dispatches a third module',
+     {'Gen.roc': 'module [show]\nshow = |v| v.render()\n', 'Th.roc': TH,
+      'Main.roc': 'import Gen\nimport Th\nexpect Gen.show(Th.make()) == "one"\n'}, [('Th.roc', '"one"', '"two"')]),
+    ('local generic dispatches an import',
+     {'Th.roc': TH, 'Main.roc': 'import Th\nh = |v| v.render()\nexpect h(Th.make()) == "one"\n'}, [('Th.roc', '"one"', '"two"')]),
+    ('where clause target',
+     {'Lib.roc': 'module [f]\nf : a -> Str where [a.name : a -> Str]\nf = |x| x.name()\n',
+      'Main.roc': 'import Lib\nT := [A].{\n  name = |_| h()\n}\nh = || "one"\nexpect Lib.f(T.A) == "one"\n'},
+     [('Main.roc', '|| "one"', '|| "two"')]),
+    ('structural equality override', {'Th.roc': EQ, 'Main.roc': 'import Th\nexpect { a: Th.make(True) } == { a: Th.make(False) }\n'},
+     [('Th.roc', 'is_eq = |_, _| True', 'is_eq = |_, _| False')]),
+    ('override behind an import',
+     {'Th.roc': EQ, 'Mid.roc': 'module [mk]\nimport Th\nmk = |x| { a: Th.make(x) }\n',
+      'Main.roc': 'import Mid\nexpect Mid.mk(True) == Mid.mk(False)\n'}, [('Th.roc', 'is_eq = |_, _| True', 'is_eq = |_, _| False')]),
+    ('inspection override',
+     {'Th.roc': 'module [T, make]\nT := [A].{\n  to_inspect = |_| "one"\n}\nmake = || T.A\n',
+      'Mid.roc': 'module [mk]\nimport Th\nmk = || [Th.make()]\n',
+      'Main.roc': 'import Mid\nexpect {\n  dbg Mid.mk()\n  True\n}\n'}, [('Th.roc', '"one"', '"two"')]),
+    ('numeral conversion in a pattern',
+     {'Nm.roc': NUM, 'Main.roc': 'import Nm\nf = |x| match x {\n  5 => "five"\n  _ => "other"\n}\nexpect f(Nm.make(1)) == "five"\n'},
+     [('Nm.roc', 'Ok({ v: 1 })', 'Ok({ v: 2 })')]),
+    ('numeral conversion through a generic literal',
+     {'Nm.roc': NUM, 'G.roc': 'module [one]\none = || 5\n',
+      'Main.roc': 'import Nm\nimport G\nexpect {\n  x : Nm.N\n  x = G.one()\n  x.get() == 1\n}\n'},
+     [('Nm.roc', 'Ok({ v: 1 })', 'Ok({ v: 2 })')]),
+    ('quote conversion',
+     {'Q.roc': QUOTE, 'Main.roc': 'import Q\nexpect {\n  x : Q.Q\n  x = "hi"\n  Q.get(x) == 1\n}\n'},
+     [('Q.roc', 'Ok({ v: 1 })', 'Ok({ v: 2 })')]),
+    ('compile-time constant', {'Lib.roc': 'module [f]\nf = |x| x + 1\n', 'Main.roc': 'import Lib\nk = Lib.f(1)\nexpect k == 2\n'},
+     [('Lib.roc', 'x + 1', 'x + 2')]),
+    ('imported constant', {'Lib.roc': 'module [k]\nk = List.len([1, 2])\n', 'Main.roc': 'import Lib\nexpect Lib.k == 2\n'},
+     [('Lib.roc', '[1, 2]', '[1, 2, 3]')]),
+    ('stored closure', {'Lib.roc': 'module [g]\nmk = |x| |y| x + y\ng = mk(1)\n', 'Main.roc': 'import Lib\nexpect Lib.g(1) == 2\n'},
+     [('Lib.roc', 'mk(1)', 'mk(2)')]),
+    ('type a use elsewhere pinned', {'Main.roc': 'v = 300\nw : U64\nw = v\nexpect v.to_str() == "300"\n'},
+     [('Main.roc', 'w : U64', 'w : Dec')]),
+    ('alias', {'Lib.roc': 'module [T, f]\nT : U8\nf : U64 -> T\nf = |x| x.to_u8_wrap()\n', 'Main.roc': 'import Lib\nexpect Lib.f(300) == 44\n'},
+     [('Lib.roc', 'T : U8', 'T : U16')]),
+    ('field default', {'Lib.roc': 'Lib := { v : U64 ?? h() }.{}\nh = || 1\n', 'Main.roc': 'import Lib\nexpect Lib.{}.v == 1\n'},
+     [('Lib.roc', '|| 1', '|| 2')]),
+    ('associated item', {'Ty.roc': 'Ty := [X].{\n  k = 1\n  f = |x| x + k\n}\n', 'Main.roc': 'import Ty\nexpect Ty.f(1) == 2\n'},
+     [('Ty.roc', 'k = 1', 'k = 2')]),
+    ('imported file', {'a.txt': 'one', 'Lib.roc': 'module [k]\nimport "a.txt" as d : Str\nk = d\n', 'Main.roc': 'import Lib\nexpect Lib.k == "one"\n'},
+     [('a.txt', 'one', 'two')]),
+    ('inline expect in a helper', {'Lib.roc': 'module [f]\nf = |x| { expect x > 0\n x }\n', 'Main.roc': 'import Lib\nexpect Lib.f(1) == 1\n'},
+     [('Lib.roc', 'x > 0', 'x > 5')]),
+    ('local package', {'pkg/main.roc': 'package [Value] {}\n', 'pkg/Value.roc': 'Value := {}.{ value = 1 }\n',
+                       'Main.roc': 'app [main!] { dep: "./pkg/main.roc" }\nimport dep.Value\nexpect Value.value == 1\nmain! = |_| Ok({})\n'},
+     [('pkg/Value.roc', 'value = 1', 'value = 2')]),
+]
+
+
+def identity_checks(f):
+    for index, (name, files, edits) in enumerate(IDENTITY_CASES):
+        case = Fixture(f.root / f'identity-{index}', f.roc, f.specialize)
+        case.cache, case.env = f.cache, f.env
+        for file, source in files.items():
+            (case.root / file).parent.mkdir(parents=True, exist_ok=True)
+            case.write(source, file)
+        case.check()
+        complete_hit(case)
+        before = case.run(cache=False)
+        for file, old, new in edits:
+            source = (case.root / file).read_text()
+            assert old in source, name
+            case.write(source.replace(old, new), file)
+            fresh = case.run(cache=False)
+            assert (transcript(before.stdout), transcript(before.stderr)) != (transcript(fresh.stdout), transcript(fresh.stderr)), name
+            cached = case.run(timings=True, work=True)
+            assert counter(cached, 'test_root_execution') >= 1, name
+            cached = case.run()
+            same_report(cached, fresh)
+            case.write(source, file)
+        # The earlier outcome is reusable as soon as its inputs return.
+        complete_hit(case)
+
+
+def command_checks(f):
+    other = 'yes' if f.specialize == 'no' else 'no'
+    passing = 'helper = |x| x + 1\nexpect helper(1) == 2\nexpect { dbg "kept"\n    True }\n'
+    f.write(passing)
+    f.check(2)
+    complete_hit(f)
+    same_report(f.run(), f.run(cache=False))
+
+    # A complete hit replays diagnostics, failure values and the exit status.
+    failing = ('import "input.txt" as data : Str\n'
+               'unused_constant = { dbg "compile-time"\n    1 }\n'
+               'expect { dbg "first"\n    data == "bytes" }\n'
+               'expect { value = 2\n    dbg "second"\n    value == 3 }\n'
+               'expect { crash "boom" }\n'
+               'expect { bad : Try(U64, [Oops])\n    bad = Err(Oops)\n    bad? == 1 }\n')
+    f.write('other', 'input.txt')
+    f.write(failing)
+    f.check(4)
+    assert complete_hit(f).returncode == 1
+    same_report(f.run(), f.run(cache=False))
+
+    # Failure to success to failure: every state is its own durable command.
+    fixed = failing.replace('data == "bytes"', 'data == "other"').replace('value == 3', 'value == 2')
+    f.write(fixed)
+    f.check(4)
+    f.write(failing)
+    complete_hit(f)
+    same_report(f.run(), f.run(cache=False))
+    f.write('bytes', 'input.txt')
+    f.check(4)
+    f.write('other', 'input.txt')
+    complete_hit(f)
+
+    # --no-cache neither reads nor publishes.
+    bypass = f.run(cache=False, timings=True, work=True)
+    assert counter(bypass, 'test_root_execution') == 4
+    f.write('expect 11 == 11\n')
+    fresh = f.run(cache=False, timings=True, work=True)
+    assert counter(fresh, 'test_root_execution') == 1
+    assert counter(f.run(cache=False, work=True), 'test_root_execution') == 1
+    assert counter(f.run(timings=True, work=True), 'test_root_execution') == 1, 'a --no-cache run published'
+
+    # Strategy and execution mode each own their outcomes and commands.
+    f.write(passing)
+    complete_hit(f)
+    swapped = Fixture(f.root, f.roc, other)
+    swapped.cache, swapped.env = f.cache, dict(f.env)
+    swapped.env.pop('ROC_TRACE_BOXY_WORK', None)
+    swapped.specialize = other
+    assert counter(swapped.run(work=True), 'test_root_execution') == 2
+    for mode in ('interpreter', 'size', 'speed'):
+        run = f.run(timings=True, mode=mode)
+        f.hits(run, 0)
+        f.check(2, mode=mode)
+    complete_hit(f)
+
+    # Reported positions follow the current source with the outcome unchanged.
+    moved = '# a comment moves everything\n\n' + failing
+    f.write(failing)
+    complete_hit(f)
+    f.write(moved)
+    run = f.run(timings=True, work=True)
+    assert counter(run, 'test_root_execution') == 0
+    f.check(4)
+
+    # Identical bodies stay separate reports, each at its own source position.
+    twice = 'expect { dbg "same"\n    1 == 2 }\n'
+    f.write(twice + '\n' + twice)
+    f.check(2)
+    report = complete_hit(f).stderr
+    assert report.count(b'Main.roc:1:1') == 1 and report.count(b'Main.roc:4:1') == 1, report
+
+    # A selection is a root with its own command record and report; neither
+    # selection replays the other's.
+    lib = 'module [f]\nf = |x| x + 1\nexpect f(1) == 2\n'
+    f.write(lib, 'Lib.roc')
+    f.write('import Lib\nexpect Lib.f(2) == 3\n')
+    f.check(2)
+    alone = Fixture(f.root, f.roc, f.specialize)
+    alone.cache, alone.env, alone.path = f.cache, f.env, f.root / 'Lib.roc'
+    same_report(alone.run(), alone.run(cache=False))
+    assert alone.run(cache=False).stdout.count(b'PASS') == 1
+    complete_hit(alone)
+    complete_hit(f)
+
+
+def resource_checks(f):
+    # Running out of stack depends on the executing thread, which no identity
+    # records, so that root always runs again; its neighbour's result is kept.
+    f.write('deep : U64 -> U64\ndeep = |n| 1 + deep(n + 1)\nexpect deep(0) == 0\nexpect 1 == 1\n')
+    for mode in ('dev', 'interpreter'):
+        first = f.run(timings=True, mode=mode)
+        assert first.returncode == 1 and b'overflowed its stack' in first.stderr, first.stderr
+        again = f.run(timings=True, mode=mode)
+        f.hits(again, 1)
+        assert not re.search(rb'Completed test command\s+Hits', again.stderr), again.stderr
+    assert counter(f.run(work=True), 'test_root_execution') == 1
+
+    # A compile error is never an outcome, and fixing it runs every root.
+    f.write('expect 1 == 1\nexpect missing == 1\n')
+    for _ in range(2):
+        assert f.run().returncode == 1
+    f.write('missing = 1\nexpect 1 == 1\nexpect missing == 1\n')
+    f.check(2)
+
+    # An interrupted invocation publishes nothing for the root it was running.
+    f.write('spin : U64 -> U64\nspin = |n| if n == 0 { 0 } else { spin(n) }\nexpect spin(1) == 0\n')
+    args = [str(f.roc), 'test', str(f.path), f'--specialize={f.specialize}', '--opt=dev', '--no-color', '--jobs=1']
+    process = subprocess.Popen(args, env=f.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(3)
+    process.kill()
+    process.wait()
+    f.write('spin : U64 -> U64\nspin = |n| if n == 0 { 0 } else { spin(n - 1) }\nexpect spin(1) == 0\n')
+    f.check(1)
+
+
+def damage_checks(f):
+    source = 'expect 21 == 21\nexpect { dbg "kept"\n    22 == 23 }\n'
+    f.write(source)
+    f.check(2)
+    complete_hit(f)
+    baseline = f.run(cache=False)
+    records = [p for p in f.cache.rglob('*') if is_command_record(p)]
+    assert len(records) >= 2, 'no completed command records published'
+
+    def repaired():
+        same_report(f.run(), baseline)
+        complete_hit(f)
+
+    originals = {path: path.read_bytes() for path in records}
+    for damage in (lambda d: d[:len(d) // 2], lambda d: d[:len(COMMAND_MAGIC)], lambda d: b'',
+                   lambda d: d[:-1] + bytes([d[-1] ^ 1]), lambda d: d + b'x'):
+        for path, data in originals.items():
+            path.write_bytes(damage(data))
+            repaired()
+            # Publication replaces the damaged entry at its own path.
+            path.write_bytes(data)
+    outcomes = {path: path.read_bytes() for path in f.cache.rglob('*') if is_outcome(path)}
+    assert outcomes, 'no outcomes published'
+    for damage in (lambda d: d[:len(d) // 2], lambda d: b'', lambda d: d[:40] + bytes([d[40] ^ 1]) + d[41:]):
+        for path, data in outcomes.items():
+            path.write_bytes(damage(data))
+        repaired()
+        for path, data in outcomes.items():
+            path.write_bytes(data)
+    # An evicted outcome invalidates every command that refers to it.
+    for path in outcomes:
+        path.unlink()
+    repaired()
+
+
+def concurrency_checks(f):
+    """Racing invocations in one tree and in separate trees over one cache."""
+    copies = [f.root / f'concurrent-{index}' for index in range(4)]
+    sources = ['expect 31 == 31\nexpect { dbg "race"\n    32 == 33 }\n',
+               'expect 31 == 31\nexpect { dbg "race"\n    32 == 32 }\n']
+    for path, source in zip(copies, sources * 2):
+        path.mkdir()
+        (path / 'Main.roc').write_text(source)
+    fixtures = []
+    for path in copies:
+        fixture = Fixture(path, f.roc, f.specialize)
+        fixture.cache, fixture.env = f.cache, f.env
+        fixtures.append(fixture)
+    expected = [fixture.run(cache=False) for fixture in fixtures]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for _ in range(3):
+            work = [pool.submit(fixture.run) for fixture in fixtures * 2]
+            results = [future.result() for future in work]
+            for result, fresh in zip(results, expected * 2):
+                same_report(result, fresh)
+    for fixture, fresh in zip(fixtures, expected):
+        complete_hit(fixture)
+        same_report(fixture.run(), fresh)
+
+
+def checkout_checks(f):
+    """Checkouts, working directories and fetched roots are not identities."""
+    first = f.root / 'checkout' / 'one'
+    second = f.root / 'elsewhere' / 'much' / 'deeper' / 'two'
+    (first / 'pkg').mkdir(parents=True)
+    (first / 'Lib.roc').write_text('module [f]\nf = |x| { dbg "lib"\n    x + 1 }\n')
+    (first / 'pkg' / 'main.roc').write_text('package [Value] {}\n')
+    (first / 'pkg' / 'Value.roc').write_text('Value := {}.{ value = 1 }\n')
+    (first / 'input.txt').write_text('bytes')
+    (first / 'Main.roc').write_text('app [main!] { dep: "./pkg/main.roc" }\nimport dep.Value\nimport Lib\n'
+                                    'import "input.txt" as data : Str\n'
+                                    'expect Lib.f(Value.value) == 2\nexpect data == "other"\nmain! = |_| Ok({})\n')
+    one = Fixture(first, f.roc, f.specialize)
+    one.cache, one.env, one.cwd = f.cache, f.env, first
+    assert one.run().returncode == 1
+    complete_hit(one)
+    second.parent.mkdir(parents=True)
+    shutil.copytree(first, second)
+    two = Fixture(second, f.roc, f.specialize)
+    two.cache, two.env, two.cwd = f.cache, f.env, second
+    complete_hit(two)
+    # The record does not depend on where the command runs from, either.
+    two.cwd = f.root
+    complete_hit(two)
+    two.cwd = second
+    moved = two.run()
+    assert str(first).encode() not in moved.stderr + moved.stdout, moved.stderr
+    same_report(moved, two.run(cache=False))
+    (first / 'Lib.roc').write_text('module [f]\nf = |x| { dbg "lib"\n    x + 2 }\n')
+    run = one.run(timings=True, work=True)
+    assert counter(run, 'test_root_execution') == 1
+    complete_hit(two)
+
+
+def lowering_policy_checks(f):
+    # A Boxy test reuses outcomes without entering the native test artifact
+    # cache, whichever of its runs populated the outcome.
+    f.write('expect 41 == 41\n')
+    f.check(1)
+    f.write('expect 41 == 42\n')
+    run = f.run(timings=True)
+    assert b'Native test artifact cache' not in run.stderr, run.stderr
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--roc', type=Path, required=True)
     args = parser.parse_args()
-    with tempfile.TemporaryDirectory(prefix='roc-test-outcomes-') as temp:
-        fixture = Fixture(Path(temp), args.roc.resolve())
-        exercise(fixture)
-        relocation_checks(fixture)
-    print('issues 12593/12615: focused test-outcome cache checks passed')
+    for specialize in ('yes', 'no'):
+        with tempfile.TemporaryDirectory(prefix='roc-test-outcomes-') as temp:
+            fixture = Fixture(Path(temp), args.roc.resolve(), specialize)
+            exercise(fixture)
+            relocation_checks(fixture)
+            command_checks(fixture)
+            resource_checks(fixture)
+            checkout_checks(fixture)
+            # Both strategies share these paths; the identity is checked data.
+            if specialize == 'no':
+                identity_checks(fixture)
+                damage_checks(fixture)
+                concurrency_checks(fixture)
+                lowering_policy_checks(fixture)
+    print('focused test-outcome cache checks passed under both strategies')
 
 
 if __name__ == '__main__':

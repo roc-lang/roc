@@ -12329,11 +12329,20 @@ fn customBoxyCachesNothingAfterChecking(
         if (command.env_index != 1) continue;
         const inventory = cacheInventory(io, allocator, cache_roots[1]) catch |err|
             return customInfraFailure(allocator, timer, "failed to read the cache: {}", .{err});
+        // Each execution mode owns its test outcomes; everything else a run
+        // leaves is what `roc check` leaves.
+        var outcomes: usize = 0;
+        var lowered = std.ArrayList(CacheEntryName).empty;
+        for (inventory) |entry| {
+            if (entry.family == .test_result) outcomes += 1 else lowered.append(allocator, entry) catch |err|
+                return customInfraFailure(allocator, timer, "failed to filter the cache: {}", .{err});
+        }
+        if (outcomes == 0) return customFailure(allocator, timer, "`roc test {s}` recorded no test outcome", .{command.args[2]});
         if (test_inventory) |previous| {
-            if (firstInventoryDifference(previous, inventory)) |entry| {
+            if (firstInventoryDifference(previous, lowered.items)) |entry| {
                 return customFailure(allocator, timer, "running the tests again with {s} changed the cache: {s} {x}", .{ command.args[2], @tagName(entry.family), &entry.key });
             }
-        } else test_inventory = inventory;
+        } else test_inventory = lowered.items;
     }
 
     const check_inventory = cacheInventory(io, allocator, cache_roots[0]) catch |err|
@@ -17670,7 +17679,7 @@ fn damageCompletedTestCache(io: std.Io, allocator: Allocator, cache_path: []cons
     defer store.deinit();
     const entries = try indexedCacheEntries(io, allocator, cache_path);
     defer allocator.free(entries);
-    const magic = if (remove_payload) "ROC_TEST_OUTCOMES_V3" else "ROC_COMPLETED_DEV_TEST_V3";
+    const magic = if (remove_payload) "ROC_TEST_OUTCOMES_V3" else "ROC_COMPLETED_DEV_TEST_V4";
     var damaged = false;
     for (entries) |entry| {
         if (entry.state != .published or entry.family != .test_result) continue;

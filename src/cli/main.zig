@@ -13519,7 +13519,9 @@ const CliTestResultItem = struct {
     failure_detail: ?[]const u8,
     failure_detail_visibility: CliTestFailureDetailVisibility = .always,
     /// Whether execution completed with a source-language outcome. Backend
-    /// failures and incomplete execution are not reusable test outcomes.
+    /// failures, incomplete execution and running out of stack, which depends
+    /// on the executing thread rather than the checked program, are not
+    /// reusable test outcomes.
     cacheable: bool = true,
 };
 
@@ -13809,11 +13811,32 @@ const CliTestDebugCapture = struct {
     }
 };
 
+/// The packages this invocation's records name by package: fetched packages,
+/// whose root is in the package cache, and compiler-owned or synthesized ones,
+/// whose root is a staging directory. A local package's identity is its
+/// canonical path, so it stays relative to the file under test instead.
+fn cliCompletedTestPaths(allocator: Allocator, build: *BuildEnv, root_path: []const u8) Allocator.Error!completed_test.Paths {
+    var placed = std.ArrayList(completed_test.Paths.Placed).empty;
+    var packages = build.packages.valueIterator();
+    while (packages.next()) |pkg| {
+        if (pkg.url != null or build.isCompilerPlacedPackage(pkg.name)) try placed.append(allocator, .{ .name = pkg.name, .root_dir = pkg.root_dir });
+    }
+    const root_abs = try std.fs.path.resolve(allocator, &.{ build.cwd, root_path });
+    return .{ .cwd = build.cwd, .base = std.fs.path.dirname(root_abs) orelse root_abs, .placed = placed.items };
+}
+
 /// Resolution still runs on a complete hit. Hash the resolver's explicit
 /// graph, rather than discovering a closure from cached checked artifacts.
-fn cliCompletedTestSeed(allocator: Allocator, build: *BuildEnv, args: cli_args.TestArgs) Allocator.Error![32]u8 {
+/// Every path is portable, so a moved checkout keeps its identity.
+fn cliCompletedTestSeed(allocator: Allocator, build: *BuildEnv, paths: completed_test.Paths, args: cli_args.TestArgs) Allocator.Error![32]u8 {
     const Edge = struct { alias: []const u8, target: []const u8 };
     const Package = struct { name: []const u8, kind: []const u8, root: []const u8, state: ?compile.watch_inputs.State, edges: []Edge };
+    const portableName = struct {
+        fn of(gpa: Allocator, names: completed_test.Paths, name: []const u8) Allocator.Error![]const u8 {
+            for (names.placed) |package| if (std.mem.eql(u8, package.name, name)) return name;
+            return names.portable(gpa, name);
+        }
+    }.of;
     var packages = try allocator.alloc(Package, build.packages.count());
     var it = build.packages.valueIterator();
     var index: usize = 0;
@@ -13821,13 +13844,13 @@ fn cliCompletedTestSeed(allocator: Allocator, build: *BuildEnv, args: cli_args.T
         const edges = try allocator.alloc(Edge, pkg.shorthands.count());
         var aliases = pkg.shorthands.iterator();
         var edge_index: usize = 0;
-        while (aliases.next()) |alias| : (edge_index += 1) edges[edge_index] = .{ .alias = alias.key_ptr.*, .target = alias.value_ptr.name };
+        while (aliases.next()) |alias| : (edge_index += 1) edges[edge_index] = .{ .alias = alias.key_ptr.*, .target = try portableName(allocator, paths, alias.value_ptr.name) };
         std.mem.sort(Edge, edges, {}, struct {
             fn less(_: void, a: Edge, b: Edge) bool {
                 return std.mem.lessThan(u8, a.alias, b.alias);
             }
         }.less);
-        packages[index] = .{ .name = pkg.name, .kind = @tagName(pkg.kind), .root = pkg.root_file, .state = pkg.root_file_state, .edges = edges };
+        packages[index] = .{ .name = try portableName(allocator, paths, pkg.name), .kind = @tagName(pkg.kind), .root = try paths.portable(allocator, pkg.root_file), .state = pkg.root_file_state, .edges = edges };
     }
     std.mem.sort(Package, packages, {}, struct {
         fn less(_: void, a: Package, b: Package) bool {
@@ -13840,9 +13863,8 @@ fn cliCompletedTestSeed(allocator: Allocator, build: *BuildEnv, args: cli_args.T
         .strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy),
         .opt = args.opt,
         .target = RocTarget.detectNative(),
-        .cwd = build.cwd,
-        .root = build.discovered_root_abs,
-        .entry = build.entry_module_abs,
+        .root = if (build.discovered_root_abs) |path| try paths.portable(allocator, path) else null,
+        .entry = if (build.entry_module_abs) |path| try paths.portable(allocator, path) else null,
         .root_url = args.root_source_url,
         .main_url = args.main_source_url,
         .packages = packages,
@@ -13868,11 +13890,12 @@ fn cliCompletedTestKey(allocator: Allocator, seed: [32]u8, plan: completed_test.
 fn refreshCliCompletedTestInputs(
     allocator: Allocator,
     build: *BuildEnv,
+    paths: completed_test.Paths,
     plan: completed_test.Plan,
     sources: *std.StringHashMapUnmanaged([]const u8),
 ) Allocator.Error!bool {
     for (plan.inputs) |*input| {
-        const path = try std.fs.path.resolve(allocator, &.{ build.cwd, input.path });
+        const path = (try paths.bind(allocator, input.path)) orelse return false;
         const bytes = build.filesystem.readFile(path, allocator) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.FileNotFound => {
@@ -13885,12 +13908,12 @@ fn refreshCliCompletedTestInputs(
         try sources.put(allocator, input.path, bytes);
     }
     for (plan.resolutions) |*resolution| {
-        const path = try std.fs.path.resolve(allocator, &.{ build.cwd, resolution.path });
+        const path = (try paths.bind(allocator, resolution.path)) orelse return false;
         const target = build.filesystem.canonicalize(path, allocator) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.FileNotFound, error.AccessDenied, error.IoError => return false,
         };
-        resolution.target = try std.fs.path.relative(allocator, build.cwd, null, build.cwd, target);
+        resolution.target = try paths.portable(allocator, target);
     }
     return true;
 }
@@ -13908,14 +13931,14 @@ const CliCompletedTest = struct {
     }
 };
 
-fn loadCliCompletedTest(ctx: *CliCtx, arena: Allocator, build: *BuildEnv, seed: [32]u8) CliCompletedTestError!?CliCompletedTest {
+fn loadCliCompletedTest(ctx: *CliCtx, arena: Allocator, build: *BuildEnv, paths: completed_test.Paths, seed: [32]u8) CliCompletedTestError!?CliCompletedTest {
     const manager = build.cache_manager orelse return null;
     const directory = try cliCompletedTestDir(arena, manager);
     const plan_bytes = manager.loadFamilyBytes(.test_result, seed, directory) orelse return null;
     defer ctx.gpa.free(plan_bytes);
     const plan = (try completed_test.decode(arena, completed_test.Plan, plan_bytes)) orelse return null;
     var sources = std.StringHashMapUnmanaged([]const u8){};
-    if (!try refreshCliCompletedTestInputs(arena, build, plan, &sources)) return null;
+    if (!try refreshCliCompletedTestInputs(arena, build, paths, plan, &sources)) return null;
     const key = try cliCompletedTestKey(arena, seed, plan);
     const record_bytes = manager.loadFamilyBytes(.test_result, key, directory) orelse return null;
     defer ctx.gpa.free(record_bytes);
@@ -13930,7 +13953,7 @@ fn loadCliCompletedTest(ctx: *CliCtx, arena: Allocator, build: *BuildEnv, seed: 
         const common = try arena.create(base.CommonEnv);
         common.* = try base.CommonEnv.init(arena, normalized);
         try common.calcLineStarts(arena);
-        bound.* = .{ .env = null, .common = common, .path = try std.fs.path.resolve(arena, &.{ build.cwd, source.path }), .name = source.qualified_name, .reports = (try CliTestReportMap.init(arena, source.sites, normalized.len)) orelse return null };
+        bound.* = .{ .env = null, .common = common, .path = (try paths.bind(arena, source.path)) orelse return null, .name = source.qualified_name, .reports = (try CliTestReportMap.init(arena, source.sites, normalized.len)) orelse return null };
         const entry = try source_modules.getOrPut(arena, source.name);
         if (entry.found_existing) return null;
         entry.value_ptr.* = bound.*;
@@ -13981,7 +14004,7 @@ fn loadCliCompletedTest(ctx: *CliCtx, arena: Allocator, build: *BuildEnv, seed: 
     try coalesceInlineExpectResults(ctx.gpa, results.items, &total);
     for (record.diagnostics) |*diagnostic| {
         if (diagnostic.severity.isError()) return null;
-        try completed_test.mapDiagnosticPaths(arena, diagnostic, build.cwd, true);
+        if (!try completed_test.mapDiagnosticPaths(arena, diagnostic, paths, true)) return null;
     }
     accepted = true;
     return .{ .record = record, .inputs = plan.inputs, .module_results = results.items, .total = total };
@@ -13991,6 +14014,7 @@ fn storeCliCompletedTest(
     ctx: *CliCtx,
     arena: Allocator,
     build: *BuildEnv,
+    paths: completed_test.Paths,
     seed: [32]u8,
     args: cli_args.TestArgs,
     modules: []const BuildEnv.CompiledModuleInfo,
@@ -14007,7 +14031,7 @@ fn storeCliCompletedTest(
     const inputs = try arena.alloc(completed_test.Input, consumed.len);
     for (inputs, consumed) |*input, source| {
         if (source.state == .unreadable) return;
-        input.* = .{ .path = try std.fs.path.relative(arena, build.cwd, null, build.cwd, source.path), .state = source.state };
+        input.* = .{ .path = try paths.portable(arena, source.path), .state = source.state };
     }
     std.mem.sort(completed_test.Input, inputs, {}, struct {
         fn less(_: void, a: completed_test.Input, b: completed_test.Input) bool {
@@ -14019,13 +14043,13 @@ fn storeCliCompletedTest(
     // not a fresh reconstruction of what checking might have resolved.
     var packages = build.coordinator.?.packages.valueIterator();
     while (packages.next()) |pkg| {
-        var paths = pkg.*.physical_module_paths.iterator();
-        while (paths.next()) |path| {
+        var import_paths = pkg.*.physical_module_paths.iterator();
+        while (import_paths.next()) |path| {
             for (pkg.*.modules.items) |module| {
                 if (!std.mem.eql(u8, module.name, path.value_ptr.*)) continue;
                 try resolutions.append(arena, .{
-                    .path = try std.fs.path.relative(arena, build.cwd, null, build.cwd, module.path),
-                    .target = try std.fs.path.relative(arena, build.cwd, null, build.cwd, path.key_ptr.*),
+                    .path = try paths.portable(arena, module.path),
+                    .target = try paths.portable(arena, path.key_ptr.*),
                 });
                 break;
             }
@@ -14040,7 +14064,7 @@ fn storeCliCompletedTest(
     const key = try cliCompletedTestKey(arena, seed, plan);
     const plan_bytes = try completed_test.encode(arena, plan);
     var current_sources = std.StringHashMapUnmanaged([]const u8){};
-    if (!try refreshCliCompletedTestInputs(arena, build, plan, &current_sources)) return;
+    if (!try refreshCliCompletedTestInputs(arena, build, paths, plan, &current_sources)) return;
     if (!std.mem.eql(u8, &key, &try cliCompletedTestKey(arena, seed, plan))) return;
 
     const sources = try arena.alloc(completed_test.Source, modules.len);
@@ -14048,7 +14072,7 @@ fn storeCliCompletedTest(
         .name = completed_test.hash(module.semantic.env.qualifiedModuleName()),
         .qualified_name = module.semantic.env.qualifiedModuleName(),
         .sites = if (module.semantic.checked_artifact) |artifact| artifact.compile_time_root_identities.test_report_sites else &.{},
-        .path = try std.fs.path.relative(arena, build.cwd, null, build.cwd, module.path),
+        .path = try paths.portable(arena, module.path),
     };
     const result_modules = try arena.alloc(completed_test.Module, test_plan.modules.len);
     const test_dir = try manager.config.getTestCacheDir(arena);
@@ -14074,7 +14098,7 @@ fn storeCliCompletedTest(
     // Clone the structured documents into record storage before rebasing paths.
     const report_bytes = try completed_test.encode(arena, reports.items);
     const portable_reports = (try completed_test.decode(arena, []completed_test.Diagnostic, report_bytes)).?;
-    for (portable_reports) |*report| try completed_test.mapDiagnosticPaths(arena, report, build.cwd, false);
+    for (portable_reports) |*report| _ = try completed_test.mapDiagnosticPaths(arena, report, paths, false);
     const record = completed_test.Record{
         .input_key = key,
         .sources = sources,
@@ -14132,42 +14156,59 @@ fn cliTestTranscriptEventPayload(event: CliTestTranscriptEvent) []const u8 {
     return event.payload;
 }
 
-fn cliTestCacheKey(
-    artifact_key: check.CheckedArtifact.CheckedModuleArtifactKey,
-    specialization_strategy: base.SpecializationStrategy,
+/// Everything that decides a checked root's outcome: its checked dependency
+/// identity, the platform/app binding it ran under, the compiler, the native
+/// target it ran on, and how it was lowered and executed. Paths, rendering
+/// settings and worker counts are not inputs.
+const CliTestOutcomeInputs = struct {
+    identity: [32]u8,
+    relation: ?[32]u8,
+    compiler: []const u8,
+    target: RocTarget,
+    strategy: base.SpecializationStrategy,
     opt: cli_args.OptLevel,
-) [32]u8 {
-    var hasher = base.Sha256.init(.{});
-    hasher.update(cli_test_cache_magic);
-    hasher.update(build_options.compiler_compatibility_id);
-    hasher.update(@tagName(specialization_strategy));
-    // A result records what one execution mode did with the tests, including
-    // how long they ran and whether they exhausted its resources.
-    hasher.update(@tagName(opt));
-    hasher.update(&artifact_key.bytes);
-    var out: [32]u8 = undefined;
-    hasher.final(&out);
-    return out;
-}
 
-test "CLI test cache key includes specialization strategy" {
-    const artifact_key: check.CheckedArtifact.CheckedModuleArtifactKey = .{
-        .bytes = @as([32]u8, @splat(0x5a)),
-    };
-    const lss_key = cliTestCacheKey(artifact_key, .lss, .dev);
-    const boxy_key = cliTestCacheKey(artifact_key, .boxy, .dev);
-    try std.testing.expect(!std.mem.eql(u8, &lss_key, &boxy_key));
-}
-
-test "CLI test cache key includes execution mode" {
-    const artifact_key: check.CheckedArtifact.CheckedModuleArtifactKey = .{
-        .bytes = @as([32]u8, @splat(0x5a)),
-    };
-    const dev_key = cliTestCacheKey(artifact_key, .lss, .dev);
-    inline for (.{ cli_args.OptLevel.interpreter, cli_args.OptLevel.size, cli_args.OptLevel.speed }) |opt| {
-        const other_key = cliTestCacheKey(artifact_key, .lss, opt);
-        try std.testing.expect(!std.mem.eql(u8, &dev_key, &other_key));
+    fn key(self: CliTestOutcomeInputs) [32]u8 {
+        var hasher = base.Sha256.init(.{});
+        hasher.update(cli_test_cache_magic);
+        hasher.update(self.compiler);
+        hasher.update(&[_]u8{0});
+        hasher.update(@tagName(self.target));
+        hasher.update(&[_]u8{0});
+        hasher.update(@tagName(self.strategy));
+        hasher.update(&[_]u8{0});
+        // A result records what one execution mode did with the tests, including
+        // how long they ran and whether they exhausted its resources.
+        hasher.update(@tagName(self.opt));
+        hasher.update(&[_]u8{0});
+        hasher.update(&self.identity);
+        if (self.relation) |relation| hasher.update(&relation);
+        return hasher.finalResult();
     }
+};
+
+test "CLI test outcome key names every input that decides an outcome" {
+    const inputs = CliTestOutcomeInputs{
+        .identity = @splat(0x5a),
+        .relation = null,
+        .compiler = "compiler-a",
+        .target = .x64glibc,
+        .strategy = .lss,
+        .opt = .dev,
+    };
+    var changed: [7]CliTestOutcomeInputs = @splat(inputs);
+    changed[0].identity = @splat(0x5b);
+    changed[1].relation = @as([32]u8, @splat(0x01));
+    changed[2].compiler = "compiler-b";
+    changed[3].target = .arm64glibc;
+    changed[4].strategy = .boxy;
+    changed[5].opt = .interpreter;
+    changed[6].opt = .speed;
+    for (changed) |other| try std.testing.expect(!std.mem.eql(u8, &inputs.key(), &other.key()));
+    var relation = inputs;
+    relation.relation = @as([32]u8, @splat(0x02));
+    try std.testing.expect(!std.mem.eql(u8, &changed[1].key(), &relation.key()));
+    try std.testing.expectEqualSlices(u8, &inputs.key(), &inputs.key());
 }
 
 fn summarizeTestResults(results: []const CliTestResultItem) CliTestRunSummary {
@@ -14185,12 +14226,15 @@ fn summarizeTestResults(results: []const CliTestResultItem) CliTestRunSummary {
 
 fn cliTestOutcomeKey(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, root: check.CheckedArtifact.RootRequest, strategy: base.SpecializationStrategy, opt: cli_args.OptLevel) [32]u8 {
     const id = root.compile_time_root orelse base.invariant("test request has no checked root identity", .{});
-    const identity = artifact.compile_time_root_identities.test_rows[@backingInt(id)];
-    var hasher = base.Sha256.init(.{});
-    hasher.update(&identity.value);
-    if (artifact.checking_context_identity.platform_app_relation) |relation| hasher.update(&relation.bytes);
-    hasher.update(@tagName(RocTarget.detectNative()));
-    return cliTestCacheKey(.{ .bytes = hasher.finalResult() }, strategy, opt);
+    const inputs = CliTestOutcomeInputs{
+        .identity = artifact.compile_time_root_identities.test_rows[@backingInt(id)].value,
+        .relation = if (artifact.checking_context_identity.platform_app_relation) |relation| relation.bytes else null,
+        .compiler = build_options.compiler_compatibility_id,
+        .target = RocTarget.detectNative(),
+        .strategy = strategy,
+        .opt = opt,
+    };
+    return inputs.key();
 }
 
 /// The current checked pass owns both directions. Duplicate identities at
@@ -14987,11 +15031,6 @@ fn currentRuntimeSpecializationStrategy(
     return explicit orelse .lss;
 }
 
-/// Whether a command under `strategy` reads and writes the caches of work
-/// done after checking: lowered output, dev and object packs, linked
-/// executables and shim libraries, recorded program outputs, and test
-/// results. Under `.boxy` a command leaves the cache exactly as `roc check`
-/// leaves it (design.md "Caching Under `.boxy`").
 /// The publisher of a command's compile-time packs. A command whose
 /// post-check work writes no cache writes the compile-time packs `roc check`
 /// writes (design.md "Caching Under `.boxy`").
@@ -15002,6 +15041,11 @@ fn compileTimePackPublisher(command: @FieldType(pack_store.CompileTimePublisher,
 
 const check_compile_time_pack_publisher: pack_store.CompileTimePublisher = .{ .command = .check, .opt = @tagName(cli_args.OptLevel.dev) };
 
+/// Whether a command under `strategy` reads and writes the caches of lowered
+/// work done after checking: lowered output, dev and object packs, linked
+/// executables and shim libraries, and recorded program outputs. Test outcomes
+/// and completed test commands are not part of this policy (design.md "Caching
+/// Under `.boxy`").
 fn cachesPostCheckWork(strategy: base.SpecializationStrategy) bool {
     return switch (strategy) {
         .lss => true,
@@ -15795,6 +15839,7 @@ fn runInterpreterTestRoots(
                     .transcript = transcript,
                     .failure_detail = failure_detail,
                     .failure_detail_visibility = .always,
+                    .cacheable = !interpreter.stackOverflowed(),
                 });
                 break :root_eval;
             };
@@ -15971,6 +16016,7 @@ fn cliTestResultItemFromEval(
                 .transcript = crash_transcript,
                 .failure_detail = null,
                 .failure_detail_visibility = .always,
+                .cacheable = !eval_result.stack_overflowed,
             };
         },
         .expect_err => |failure| {
@@ -17672,9 +17718,9 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     var command_arena = std.heap.ArenaAllocator.init(ctx.gpa);
     defer command_arena.deinit();
     const command_allocator = command_arena.allocator();
-    // A completed test run is post-check work, so it is reused and recorded
-    // only under a strategy that caches it.
-    const complete_cache_enabled = !args.no_cache and args.opt == .dev and cachesPostCheckWork(currentRuntimeSpecializationStrategy(args.specialization_strategy));
+    // A completed test command is an orchestration result, independent of
+    // the strategy's policy for lowered output; its key names the strategy.
+    const complete_cache_enabled = !args.no_cache and args.opt == .dev;
     var debug_capture = CliTestDebugCapture{ .allocator = command_allocator };
 
     // --- Normal compilation path ---
@@ -17723,9 +17769,10 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     };
     reporter.end();
 
-    const complete_seed = if (complete_cache_enabled) try cliCompletedTestSeed(command_allocator, &build_env, args) else null;
+    const complete_paths = if (complete_cache_enabled) try cliCompletedTestPaths(command_allocator, &build_env, args.path) else null;
+    const complete_seed = if (complete_paths) |paths| try cliCompletedTestSeed(command_allocator, &build_env, paths, args) else null;
     if (complete_seed) |seed| {
-        if (try loadCliCompletedTest(ctx, command_allocator, &build_env, seed)) |loaded| {
+        if (try loadCliCompletedTest(ctx, command_allocator, &build_env, complete_paths.?, seed)) |loaded| {
             var completed = loaded;
             defer completed.deinit(ctx.gpa);
             reporter.recordCounters("Completed test command", &.{.{ .name = "Hits", .count = 1 }});
@@ -17749,7 +17796,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             if (args.watch_inputs_file) |path| {
                 const compiler_inputs = try command_allocator.alloc(compile.watch_inputs.Input, completed.inputs.len);
                 for (compiler_inputs, completed.inputs) |*input, stored| input.* = .{
-                    .path = try std.fs.path.resolve(command_allocator, &.{ build_env.cwd, stored.path }),
+                    .path = (try complete_paths.?.bind(command_allocator, stored.path)).?,
                     .state = stored.state,
                 };
                 var input_set = try collectWatchInputSetFromCompilerInputs(ctx, compiler_inputs, extra_paths);
@@ -17812,9 +17859,9 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     defer test_plan.deinit(ctx.gpa);
 
     const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
-    // Test results are post-check work, so they are read from and recorded
-    // in the cache only under a strategy that caches it.
-    const test_result_cache: ?*CacheManager = if (cachesPostCheckWork(specialization_strategy)) build_env.cache_manager else null;
+    // Test outcomes are observations of checked programs, not lowered output,
+    // so they are cached under every strategy; their keys name the strategy.
+    const test_result_cache: ?*CacheManager = build_env.cache_manager;
     reporter.begin("Test Planning");
     for (test_plan.modules) |*planned| {
         for (planned.test_roots, 0..) |_, root_index| {
@@ -18082,7 +18129,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         }
     }
     if (complete_seed) |seed| if (diag.errors == 0) {
-        try storeCliCompletedTest(ctx, command_allocator, &build_env, seed, args, modules, &test_plan, module_results.items, debug_capture.messages.items, command_diagnostics);
+        try storeCliCompletedTest(ctx, command_allocator, &build_env, complete_paths.?, seed, args, modules, &test_plan, module_results.items, debug_capture.messages.items, command_diagnostics);
     };
     try coalesceInlineExpectResults(ctx.gpa, module_results.items, &total);
     total.modules_with_tests = test_plan.modules_with_tests;
