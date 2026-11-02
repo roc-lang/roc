@@ -17340,6 +17340,38 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     try self.bindReturnedScalar(dst_local, 8);
                 },
+                .desc_declared_record => |d| {
+                    const names = self.store.getLocalSpan(d.names);
+                    const descs = self.store.getLocalSpan(d.descs);
+                    const padding = self.store.getU32Span(d.padding);
+                    if (names.len + padding.len != descs.len) base.invariant("LIR/codegen invariant violated: desc_declared_record has {d} names and {d} padding fields for {d} descriptors", .{ names.len, padding.len, descs.len });
+                    const entry_size: i32 = @sizeOf(boxy_runtime.compose.DeclaredFieldInput);
+                    const fields = self.codegen.allocStackSlot(@intCast(@max(descs.len, 1) * entry_size));
+                    const reg = try self.allocTempGeneral();
+                    var next_name: usize = 0;
+                    var next_padding: usize = 0;
+                    for (0..descs.len) |i| {
+                        const entry = fields + @as(i32, @intCast(i)) * entry_size;
+                        const is_padding = next_padding < padding.len and GuardedList.at(padding, next_padding) == i;
+                        if (is_padding) {
+                            next_padding += 1;
+                            try self.codegen.emit.movRegImm64(reg, 0);
+                        } else {
+                            try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(GuardedList.at(names, next_name)));
+                            next_name += 1;
+                        }
+                        try self.emitStore(.w64, frame_ptr, entry + @offsetOf(boxy_runtime.compose.DeclaredFieldInput, "name"), reg);
+                        try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(GuardedList.at(descs, i)));
+                        try self.emitStore(.w64, frame_ptr, entry + @offsetOf(boxy_runtime.compose.DeclaredFieldInput, "desc"), reg);
+                        try self.codegen.emit.movRegImm64(reg, @intFromBool(is_padding));
+                        try self.emitStore(.w32, frame_ptr, entry + @offsetOf(boxy_runtime.compose.DeclaredFieldInput, "is_padding"), reg);
+                    }
+                    self.codegen.freeGeneral(reg);
+                    try builder.addImmArg(@intCast(descs.len));
+                    try builder.addLeaArg(frame_ptr, fields);
+                    try self.callBoxyRuntime(&builder, "roc_desc_declared_record");
+                    try self.bindReturnedScalar(dst_local, 8);
+                },
                 .desc_tuple => |d| {
                     const elems = try self.emitLocalArray(d.elems, .words);
                     try builder.addImmArg(@intCast(self.store.getLocalSpan(d.elems).len));

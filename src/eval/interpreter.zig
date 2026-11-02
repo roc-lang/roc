@@ -8664,6 +8664,28 @@ pub const Interpreter = struct {
                     boxy.compose.record(immortals.composeCache(), &immortals.ops, fields);
                 try self.setWordTarget(frame, stmt_id, target, @intFromPtr(composed));
             },
+            .desc_declared_record => |d| {
+                const names = self.store.getLocalSpan(d.names);
+                const descs = self.store.getLocalSpan(d.descs);
+                const padding = self.store.getU32Span(d.padding);
+                if (names.len + padding.len != descs.len) {
+                    return self.invariantFailedError("LIR/interpreter invariant violated: desc_declared_record has {d} names and {d} padding fields for {d} descriptors", .{ names.len, padding.len, descs.len });
+                }
+                const fields = try self.evalAllocator().alloc(boxy.compose.DeclaredFieldInput, descs.len);
+                var next_name: usize = 0;
+                var next_padding: usize = 0;
+                for (fields, 0..) |*field, i| {
+                    const is_padding = next_padding < padding.len and GuardedList.at(padding, next_padding) == i;
+                    field.* = .{
+                        .name = if (is_padding) null else try self.nameAt(frame, GuardedList.at(names, next_name)),
+                        .desc = try self.descAt(frame, GuardedList.at(descs, i)),
+                        .is_padding = @intFromBool(is_padding),
+                    };
+                    if (is_padding) next_padding += 1 else next_name += 1;
+                }
+                const immortals = try self.boxyImmortals();
+                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(boxy.compose.declaredRecord(immortals.composeCache(), &immortals.ops, fields)));
+            },
             .desc_tuple => |d| {
                 const elems = try self.descsAt(frame, d.elems);
                 const immortals = try self.boxyImmortals();

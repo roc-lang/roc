@@ -14,7 +14,7 @@ const DynOp = LIR.DynOp;
 /// the site cache key; all other inputs are fixed by the statement itself.
 pub fn isComposition(op: DynOp) bool {
     return switch (op) {
-        .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_compose, .dict_patch, .dict_record => true,
+        .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_compose, .dict_patch, .dict_record => true,
         .frame_alloc, .desc_note, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => false,
     };
 }
@@ -47,6 +47,7 @@ pub fn ownership(op: DynOp) Ownership {
         .desc_list,
         .desc_box,
         .desc_record,
+        .desc_declared_record,
         .desc_tuple,
         .desc_presence_slot,
         .desc_tag_union,
@@ -108,6 +109,10 @@ pub const Operands = struct {
             .desc_box => |desc| result.single(desc.payload),
             .desc_record => |desc| {
                 if (desc.ext) |ext| result.single(ext);
+                result.span(desc.names);
+                result.span(desc.descs);
+            },
+            .desc_declared_record => |desc| {
                 result.span(desc.names);
                 result.span(desc.descs);
             },
@@ -277,7 +282,7 @@ pub fn constructedValues(store: *const LirStore, allocator: std.mem.Allocator, o
         .slot_store => |slot| try out.appendSlice(allocator, &.{ slot.slot, slot.value }),
         .dict_compose => |dict| try appendSpan(store, allocator, dict.captures, out),
         .closure => |closure| try out.append(allocator, closure.capture),
-        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .eq, .hash, .inspect, .call_erased, .view, .adapt => unreachable, // only construct operations consume value operands
+        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .eq, .hash, .inspect, .call_erased, .view, .adapt => unreachable, // only construct operations consume value operands
     }
 }
 
@@ -291,7 +296,7 @@ pub fn borrowedValues(store: *const LirStore, allocator: std.mem.Allocator, op: 
         .adapt => |adapt| try out.append(allocator, adapt.src),
         .dict_record => |dict| try appendSpan(store, allocator, dict.methods, out),
         .dict_patch => |patch| try out.appendSlice(allocator, &.{ patch.dict, patch.value }),
-        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_compose, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .call_erased, .closure, .view => unreachable, // only borrow_operands operations borrow value operands
+        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_compose, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .call_erased, .closure, .view => unreachable, // only borrow_operands operations borrow value operands
     }
 }
 
@@ -337,6 +342,11 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
             .names = try Remap.span(store, context, desc.names),
             .descs = try Remap.span(store, context, desc.descs),
             .ext = try Remap.opt(context, desc.ext),
+        } },
+        .desc_declared_record => |desc| .{ .desc_declared_record = .{
+            .names = try Remap.span(store, context, desc.names),
+            .descs = try Remap.span(store, context, desc.descs),
+            .padding = desc.padding,
         } },
         .desc_tuple => |desc| .{ .desc_tuple = .{ .elems = try Remap.span(store, context, desc.elems) } },
         .desc_presence_slot => |desc| .{ .desc_presence_slot = .{

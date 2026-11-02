@@ -84,9 +84,9 @@ pub const Layouts = struct {
             .list => |elem| try out.append(self.allocator, .{ .child = elem, .slot = .list_elem }),
             .box => |payload| try out.append(self.allocator, .{ .child = payload, .slot = .box_payload }),
             .record => |record| {
-                const fields = try self.allocator.dupe(types.Field, self.store.fieldSpan(record.fields));
-                defer self.allocator.free(fields);
-                for (fields) |field| try out.append(self.allocator, .{ .child = try self.fieldStorage(field), .slot = .field });
+                const storage = try self.recordStorage(record);
+                defer self.allocator.free(storage);
+                for (storage) |child| try out.append(self.allocator, .{ .child = child, .slot = .field });
             },
             .tuple => |items_span| {
                 const items = try self.allocator.dupe(TypeId, self.store.span(items_span));
@@ -330,6 +330,7 @@ pub const Layouts = struct {
                     const fields = try self.allocator.dupe(types.Field, self.store.fieldSpan(record.fields));
                     defer self.allocator.free(fields);
                     for (fields) |field| try pending.append(self.allocator, try self.fieldStorage(field));
+                    try pending.appendSlice(self.allocator, self.store.paddingTypes(record));
                 },
                 .tag_union => |tag_union| {
                     if (tag_union.ext) |ext| try pending.append(self.allocator, ext);
@@ -378,6 +379,18 @@ pub const Layouts = struct {
             .presence_slot => try self.presenceSlot(field.ty),
             .variable_slot => try self.store.variable(field.slot_variable),
         };
+    }
+
+    /// The stored types of `record`'s slots, by semantic index: its fields,
+    /// then its unnamed fields. Caller frees.
+    pub fn recordStorage(self: *Layouts, record: types.Record) Allocator.Error![]TypeId {
+        const fields = self.store.fieldSpan(record.fields);
+        const padding = self.store.paddingTypes(record);
+        const storage = try self.allocator.alloc(TypeId, fields.len + padding.len);
+        errdefer self.allocator.free(storage);
+        for (fields, storage[0..fields.len]) |field, *slot| slot.* = try self.fieldStorage(field);
+        @memcpy(storage[fields.len..], padding);
+        return storage;
     }
 
     /// The payload type a tag variant stores: nothing, its one argument, or a
@@ -477,13 +490,18 @@ pub const Layouts = struct {
             },
             .record => |record| {
                 if (record.ext != null) types.invariant("an open record reached committed layout selection");
-                const record_fields = try self.allocator.dupe(types.Field, self.store.fieldSpan(record.fields));
-                defer self.allocator.free(record_fields);
-                const fields = try self.allocator.alloc(layout.GraphField, record_fields.len);
+                const storage = try self.recordStorage(record);
+                defer self.allocator.free(storage);
+                const fields = try self.allocator.alloc(layout.GraphField, storage.len);
                 defer self.allocator.free(fields);
-                for (record_fields, fields, 0..) |record_field, *field, index| {
-                    const storage = try self.fieldStorage(record_field);
-                    field.* = .{ .index = @intCast(index), .child = try self.input(graph, nodes, order, storage) };
+                if (record.declared) |declared| {
+                    for (self.store.declaredSlots(declared), fields) |slot, *field| {
+                        field.* = .{ .index = slot, .child = try self.input(graph, nodes, order, storage[slot]), .is_padding = slot >= record.fields.len };
+                    }
+                    return .{ .struct_ = graph.declaredOrder(try graph.appendFields(self.allocator, fields)) };
+                }
+                for (storage, fields, 0..) |slot_ty, *field, index| {
+                    field.* = .{ .index = @intCast(index), .child = try self.input(graph, nodes, order, slot_ty) };
                 }
                 return .{ .struct_ = try graph.appendFields(self.allocator, fields) };
             },

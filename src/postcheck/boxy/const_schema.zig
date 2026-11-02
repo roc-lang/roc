@@ -202,7 +202,9 @@ pub fn constTypeOf(program: *Program, ty: TypeId) Allocator.Error!const_store.Co
             const ids = try allocator.alloc(const_store.ConstTypeId, formal_count);
             defer allocator.free(ids);
             for (all_args[0..formal_count], ids) |arg, *slot| slot.* = try constTypeOf(program, arg);
-            const backing = try constTypeOf(program, try program.layouts.converter.backing(ty));
+            const backing_ty = try program.layouts.converter.backing(ty);
+            const backing = try constTypeOf(program, backing_ty);
+            const declared_order = try declaredOrderOf(program, backing_ty);
             // An opaque declaration's backing is a layout later stages never
             // look into, as Monotype types it.
             break :blk .{ .named = .{
@@ -216,6 +218,7 @@ pub fn constTypeOf(program: *Program, ty: TypeId) Allocator.Error!const_store.Co
                 .builtin_owner = builtinOwner(nominal.builtin),
                 .args = try const_types.appendTypeSpan(ids),
                 .backing = .{ .ty = backing, .use = if (nominal.is_opaque) .runtime_layout_only else .inspectable, .authority = .checked_public },
+                .declared_order = declared_order,
             } };
         },
         .function => |function| blk: {
@@ -230,6 +233,28 @@ pub fn constTypeOf(program: *Program, ty: TypeId) Allocator.Error!const_store.Co
     };
     try const_types.fill(id, stored);
     return id;
+}
+
+/// The declared order stored with a nominal of backing `backing_ty`: the
+/// record's slots in memory order, named fields by label.
+fn declaredOrderOf(program: *Program, backing_ty: TypeId) Allocator.Error!const_store.ConstRange {
+    const store = &program.store;
+    const const_types = &program.result.const_types;
+    const record = switch (store.get(backing_ty)) {
+        .record => |record| record,
+        .primitive, .empty_record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => return .{},
+    };
+    const declared = record.declared orelse return .{};
+    const fields = store.fieldSpan(record.fields);
+    const padding = store.span(declared.padding);
+    const slots = store.declaredSlots(declared);
+    const out = try program.allocator.alloc(const_store.TypeDeclaredField, slots.len);
+    defer program.allocator.free(out);
+    for (slots, out) |slot, *entry| entry.* = if (slot < fields.len)
+        .{ .named = try program.result.const_type_names.internRecordFieldLabel(store.nameText(fields[slot].name)) }
+    else
+        .{ .padding = try constTypeOf(program, padding[slot - fields.len]) };
+    return try const_types.appendDeclaredFieldSpan(out);
 }
 
 /// The named type a stored nominal value names: its declaration's root in
@@ -308,6 +333,7 @@ pub fn holdsFunction(program: *Program, ty: TypeId) Allocator.Error!bool {
                 defer allocator.free(fields);
                 for (fields) |field| try pending.append(allocator, field.ty);
                 if (record.ext) |ext| try pending.append(allocator, ext);
+                try pending.appendSlice(allocator, store.paddingTypes(record));
             },
             .tag_union => |tag_union| {
                 const tags = try allocator.dupe(types.Tag, store.tagSpan(tag_union.tags));

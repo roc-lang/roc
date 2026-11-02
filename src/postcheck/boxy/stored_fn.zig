@@ -373,6 +373,7 @@ const Encoder = struct {
                 .record => |record| {
                     for (store.fieldSpan(record.fields)) |field| try stack.append(self.allocator, .{ .ty = field.ty, .expanded = false });
                     if (record.ext) |ext| try stack.append(self.allocator, .{ .ty = ext, .expanded = false });
+                    for (store.paddingTypes(record)) |padding| try stack.append(self.allocator, .{ .ty = padding, .expanded = false });
                 },
                 .tuple => |items| for (store.span(items)) |item| try stack.append(self.allocator, .{ .ty = item, .expanded = false }),
                 .tag_union => |tag_union| {
@@ -409,6 +410,13 @@ const Encoder = struct {
                     try self.tableWord(field.slot_variable);
                 }
                 try self.tableExt(record.ext);
+                try self.table.append(self.allocator, @intFromBool(record.declared != null));
+                if (record.declared) |declared| {
+                    try self.tableTypes(store.span(declared.padding));
+                    const slots = store.declaredSlots(declared);
+                    try self.tableWord(@intCast(slots.len));
+                    for (slots) |slot| try self.tableWord(slot);
+                }
             },
             .tuple => |items| try self.tableTypes(store.span(items)),
             .tag_union => |tag_union| {
@@ -621,7 +629,15 @@ const Decoder = struct {
                     const kind: types.FieldKind = @fromBackingInt(@intCast(self.byte()));
                     field.* = .{ .name = field_name, .ty = ty, .kind = kind, .slot_variable = self.word() };
                 }
-                break :blk try store.intern(.{ .record = .{ .fields = fields, .ext = self.ext() } });
+                const remainder = self.ext();
+                var declared: ?types.DeclaredOrderInput = null;
+                if (self.byte() != 0) {
+                    const padding = try self.typeSpan();
+                    const slots = try program.arena.allocator().alloc(u32, self.word());
+                    for (slots) |*slot| slot.* = self.word();
+                    declared = .{ .padding = padding, .slots = slots };
+                }
+                break :blk try store.intern(.{ .record = .{ .fields = fields, .ext = remainder, .declared = declared } });
             },
             .tuple => blk: {
                 const items = try self.typeSpan();
