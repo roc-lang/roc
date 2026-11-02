@@ -2355,6 +2355,19 @@ fn sourceTypeIsFunction(module: TypedCIR.Module, var_: Var) bool {
     return module.typeStoreConst().varResolvesToFunction(var_);
 }
 
+/// Whether `pattern = expr` binds an exact procedure alias, local or top
+/// level (design.md "Procedure Aliases"). Generalization is checker-owned
+/// binding metadata; the right-hand lookup supplies the forward, and calls
+/// and other computations keep their ordinary evaluation site.
+fn bindsProcedureAlias(module: TypedCIR.Module, pattern: CIR.Pattern.Idx, expr: CIR.Expr.Idx) bool {
+    const rhs = module.expr(expr).data;
+    const is_lookup = rhs == .e_lookup_local or rhs == .e_lookup_external or
+        rhs == .e_lookup_required or rhs == .e_lookup_associated_resolved;
+    return is_lookup and module.pattern(pattern).data == .assign and
+        module.moduleEnvConst().nodeIsBindingScheme(ModuleEnv.nodeIdxFrom(pattern)) and
+        sourceTypeIsFunction(module, module.patternType(pattern));
+}
+
 fn isHostedProcedureExpr(expr: CIR.Expr) bool {
     return expr == .e_hosted_lambda;
 }
@@ -15783,16 +15796,7 @@ const CheckedBodyPayloadCopier = struct {
                 if (self.promoted_patterns.contains(decl.pattern)) {
                     break :blk .{ .promoted_proc = .{ .pattern = self.checkedPattern(decl.pattern), .expr = self.checkedExpr(decl.expr) } };
                 }
-                // Generalization is checker-owned binding metadata. The RHS
-                // lookup supplies the explicit forwarding edge; calls and
-                // other computations retain their ordinary evaluation site.
-                const rhs = self.module.expr(decl.expr).data;
-                const is_lookup = rhs == .e_lookup_local or rhs == .e_lookup_external or
-                    rhs == .e_lookup_required or rhs == .e_lookup_associated_resolved;
-                if (is_lookup and self.module.pattern(decl.pattern).data == .assign and
-                    self.module.moduleEnvConst().nodeIsBindingScheme(ModuleEnv.nodeIdxFrom(decl.pattern)) and
-                    sourceTypeIsFunction(self.module, self.module.patternType(decl.pattern)))
-                {
+                if (bindsProcedureAlias(self.module, decl.pattern, decl.expr)) {
                     const binder = try self.patternBinder(decl.pattern);
                     self.pattern_binders.items[@backingInt(binder)].is_scheme_alias = true;
                 }
@@ -20211,11 +20215,10 @@ const EvidencePass = struct {
     ) Allocator.Error!void {
         const expr_data = self.module.expr(expr).data;
         if (expr_data == .e_lambda or expr_data == .e_closure) return;
-        if (self.checked_bodies.patternBinderForSource(pattern)) |binder| {
-            // Callable aliases now own exact evidence scopes. Their RHS
-            // requirements belong to that scope, not to a representative use.
-            if (self.checked_bodies.patternBinder(binder).is_scheme_alias) return;
-        }
+        // A procedure alias owns an exact evidence scope. Its right-hand
+        // side's requirements belong to that scope, not to a representative
+        // use.
+        if (bindsProcedureAlias(self.module, pattern, expr)) return;
         // Resolution reaches a pattern only through one of its value-use
         // records. A decl nobody instantiated (for example a local inside a
         // generalized definition, whose variables are generalized only as
@@ -26671,12 +26674,17 @@ fn publishLiteralArgumentRoots(
         }
 
         /// The template a procedure value reference instantiates.
+        /// The template whose scheme a value reference instantiates: the
+        /// procedure's, or an exact procedure alias's entry wrapper, whose
+        /// scheme is the alias's. A use of a computed callable instantiates
+        /// nothing.
         fn templateOfValueRef(self: *@This(), ref: ResolvedValueRef) ?canonical.ProcedureTemplateRef {
             const use: ProcedureUseTemplate = switch (ref) {
                 .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| use,
                 .platform_required_proc => |required| required.procedure,
                 .hosted_proc, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_const, .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .platform_required_declaration, .platform_required_checked_error => return null,
             };
+            var alias_view: ?ImportedModuleView = null;
             const body: ProcedureBindingBody = switch (use.binding) {
                 .top_level => |top_level| blk: {
                     if (!top_level.artifact.eql(self.owner)) return null;
@@ -26684,6 +26692,7 @@ fn publishLiteralArgumentRoots(
                 },
                 .imported => |imported| blk: {
                     const view = self.import_views.viewForKey(imported.artifact) orelse return null;
+                    alias_view = view;
                     const binding = importedProcedureBindingForDef(view, imported.def) orelse return null;
                     break :blk binding.body;
                 },
@@ -26694,7 +26703,16 @@ fn publishLiteralArgumentRoots(
                     .checked => |template| template,
                     .lifted, .synthetic => null,
                 },
-                .callable_eval_template, .checked_error => null,
+                .callable_eval_template => |template_id| blk: {
+                    const eval_templates: CallableEvalTemplateTableView = if (alias_view) |view| view.callable_eval_templates else self.callable_eval_templates.view();
+                    const template = eval_templates.templates[@backingInt(template_id)];
+                    if (template.forwarded_lookup == null) break :blk null;
+                    const wrapper_table: *const EntryWrapperTable = if (alias_view) |view| view.entry_wrappers else self.entry_wrappers;
+                    const wrapper = wrapper_table.lookupByRoot(template.root) orelse
+                        checkedArtifactInvariant("a callable-eval template's root has no entry wrapper", .{});
+                    break :blk wrapper.template;
+                },
+                .checked_error => null,
             };
         }
 
