@@ -487,6 +487,37 @@ pub const cases = [_]Case{
         ,
         .inspects = &.{ .nominal, .tag_union, .tuple },
     },
+    // A use of a top-level alias instantiates the alias's scheme, so each
+    // reaches its target through the alias's own scope: annotated, chained,
+    // at different types, called and as a value.
+    .{
+        .name = "procedure aliases: annotated, chained, and generic aliases reach their targets' requirements",
+        .source_kind = .module,
+        .source =
+        \\via = |value| value.to_str()
+        \\stored : U64 -> Str
+        \\stored = via
+        \\again = via
+        \\once_more = again
+        \\at_u8 : U8 -> Str
+        \\at_u8 = once_more
+        \\bump = |x| x + 1
+        \\gen = bump
+        \\at_i16 : I16 -> I16
+        \\at_i16 = gen
+        \\apply = |f, x| f(x)
+        \\wrap = |x| once_more(x)
+        \\main = {
+        \\    k = {
+        \\        dbg 1.U64
+        \\        1.U64
+        \\    }
+        \\    small = 7.U8
+        \\    (stored(k), apply(stored, k), once_more(k), once_more(small), at_u8(small), apply(at_u8, small), wrap(k), wrap(small), gen(k), gen(small), at_i16(2), apply(gen, k))
+        \\}
+        ,
+        .inspects = &.{ .primitive, .tuple },
+    },
 };
 
 fn covered(comptime kind: ShapeKind, comptime field: []const u8) bool {

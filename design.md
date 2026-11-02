@@ -15378,6 +15378,12 @@ strategy).
   arguments (`.forwarded`). A template's `literal_argument_demand` lists the
   roots its edges read, so compile-time evaluation orders them before any
   evaluation of the template.
+- A use of an exact procedure alias is an edge to the alias's entry wrapper,
+  whose literal requirements are those its forwarded lookup, itself an edge,
+  gives it. Boxy passes each alias's arguments down the chain as it does
+  dictionaries, reading each lookup's edge in that alias's scope. A dispatch
+  edge bound to an alias holds the target's arguments composed through the
+  chain (`aliasChainSubstitution`), resolved in the scope holding the edge.
 - The root's value type is the conversion's `Ok` payload type at the closed
   type: the literal's type for a numeral or a quote, the assembler's function
   type for an interpolation. A root whose value holds a function
@@ -18228,9 +18234,22 @@ the lookup's own callee there, so the call reaches the aliased procedure's speci
 the evidence the alias's scope composes and keeps that procedure's
 representation; no alias function exists at runtime. The callee's compiler-owned
 roles (call-site intrinsics, iterator procedures, `Str.inspect`, hosted `Try`
-adapters) follow the forward to the final procedure. Boxy follows the forward
-too, composing the final procedure's hidden arguments through the alias's
-evidence (`through_alias`).
+adapters) follow the forward to the final procedure.
+
+A use of an alias instantiates the alias's scheme, never the procedure's: the
+alias can fix some of the procedure's variables (`stored : U64 -> Str` of a
+generic `via`), so the use can record no evidence at all while the procedure
+requires a dictionary. The forwarded lookup is the only record of the
+procedure's instantiation. Its evidence is resolved against the alias's scope,
+whatever types the alias is used at, and a requirement the alias's scheme keeps
+is a `constraint` on that scope; no representative use stands in for it. A
+value use follows the same forward as a call, and Boxy composes the final
+procedure's hidden arguments alias by alias for every use: a call, a value, a
+literal chain's edge, a platform requirement the app binds to an alias, and a
+root (`Body.aliasChainInstance`; a dispatch edge's scope comes from
+`through_alias`). A platform requirement and a root record no instantiation, so
+the use's function type relates the alias's variables and the requirement's or
+root's evidence fills its scope.
 
 A method bound to an exact alias dispatches to the procedure the alias chain
 reaches, and the method target records the alias binding it was reached

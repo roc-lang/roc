@@ -8601,7 +8601,7 @@ const Builder = struct {
                 .data = .{ .checked_error = try self.program.addStringLiteral("runtime error") },
             }),
             .callable_eval_template => blk: {
-                const callee = try self.lowerProcedureBindingValue(view, binding, fn_ty);
+                const callee = try self.lowerProcedureBindingValue(view, binding, fn_ty, request.root_evidence);
                 break :blk try self.program.addExpr(.{
                     .ty = fn_data.ret,
                     .data = .{ .call_value = .{
@@ -8668,6 +8668,7 @@ const Builder = struct {
         view: ModuleView,
         binding: checked.TopLevelProcedureBinding,
         mono_fn_ty: Type.TypeId,
+        root_evidence: ?checked.CheckedEvidenceSpan,
     ) Allocator.Error!Ast.ExprId {
         return switch (binding.body) {
             .direct_template => blk: {
@@ -8686,7 +8687,7 @@ const Builder = struct {
                 });
             },
             .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
-            .callable_eval_template => |template_id| try self.lowerCallableEvalBindingValue(view, template_id, mono_fn_ty),
+            .callable_eval_template => |template_id| try self.lowerCallableEvalBindingValue(view, template_id, mono_fn_ty, root_evidence),
         };
     }
 
@@ -8695,6 +8696,7 @@ const Builder = struct {
         view: ModuleView,
         template_id: checked.CallableEvalTemplateId,
         mono_fn_ty: Type.TypeId,
+        root_evidence: ?checked.CheckedEvidenceSpan,
     ) Allocator.Error!Ast.ExprId {
         const raw = @backingInt(template_id);
         if (raw >= view.callable_eval_templates.templates.len) {
@@ -8707,7 +8709,7 @@ const Builder = struct {
             .const_node => |node| try runConstRestore(self, view, view, node, mono_fn_ty, null),
             // A program that does not evaluate a root no compilation
             // evaluated yet computes the callable in place.
-            .pending, .unevaluated => return try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
+            .pending, .unevaluated => return try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty, root_evidence),
             .discarded, .expect, .runtime => Common.invariant("callable eval binding root output a non-callable payload"),
         };
         try self.recordRestoredRootRead(restored, view.key, template.root);
@@ -8778,9 +8780,14 @@ const Builder = struct {
         template: checked.CallableEvalTemplate,
         root: checked.CompileTimeRoot,
         mono_fn_ty: Type.TypeId,
+        root_evidence: ?checked.CheckedEvidenceSpan,
     ) Allocator.Error!Ast.ExprId {
         const wrapper = view.entry_wrappers.lookupByRoot(template.root) orelse
             Common.invariant("callable eval template root had no checked entry wrapper");
+        const evidence: []const SpecEvidence = if (root_evidence) |span|
+            (try self.materializeCheckedProcedureEvidence(wrapper.template, span)).vector
+        else
+            &.{};
 
         var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
         defer graph_setup_timing_scope.end();
@@ -8796,6 +8803,7 @@ const Builder = struct {
         defer body_draft.deinit();
         var body_ctx = try BodyContext.init(self.allocator, self, view, wrapper.template, graph, &body_draft);
         defer body_ctx.deinit();
+        body_ctx.restore_evidence = rootEvidence(wrapper.template, evidence);
         graph_setup_timing_scope.end();
 
         const draft = FinalBodyOutputGuard.begin(self);
