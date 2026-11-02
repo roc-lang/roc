@@ -60,6 +60,7 @@ pub const spliceExternalProcs = if (builtin.os.tag == .freestanding) void else @
 pub const HostSplice = if (builtin.os.tag == .freestanding) void else @import("HostSplice.zig").HostSplice;
 /// On-disk form of one module's pack of excerpts.
 pub const PackFile = @import("PackFile.zig");
+pub const UnitPieces = @import("UnitPieces.zig");
 pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").Entrypoint;
 pub const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
 pub const StaticDataRelocation = @import("StaticDataExport.zig").StaticDataRelocation;

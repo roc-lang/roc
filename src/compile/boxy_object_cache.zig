@@ -4,20 +4,20 @@
 //! (`boxy_interface.Digests.objectInput`) extended with the target, the
 //! optimization level, whether expects are compiled in, and the compiler's
 //! compatibility identity. An entry holds
-//! everything a build needs of the module's object: the export interface
+//! everything a build needs of the module's code: the export interface
 //! each importing module compiles its calls against, the hosted symbols the
-//! object references, the object code itself, and where that code came from.
-//! Nothing in it refers to another cache.
+//! code references, and the code itself in pieces (`backend.dev.UnitPieces`,
+//! design.md "Unit Pieces And Whole-Program Dead Code"). Nothing in it refers
+//! to another cache.
 
 const std = @import("std");
 const base = @import("base");
 const build_options = @import("build_options");
-const CodeLocations = @import("backend").dev.CodeLocations;
 
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 3;
+pub const format_version: u32 = 4;
 
 const magic = "RBXO";
 
@@ -113,10 +113,8 @@ pub const Entry = struct {
     /// keeps, and the symbols a shared library exports.
     link_root_symbols: []const []const u8 = &.{},
     app_export_symbols: []const []const u8 = &.{},
-    /// Where the object's code came from (`CodeLocations`): what a
-    /// compile-time program running the object reports its failures from.
-    code_locations: []const u8 = &.{},
-    object: []const u8,
+    /// The module's code in pieces, encoded (`UnitPieces.encode`).
+    pieces: []const u8,
 };
 
 /// Encode `entry` as the bytes filed in the cache. The caller owns the result.
@@ -145,10 +143,8 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
             try bytes.appendSlice(allocator, symbol);
         }
     }
-    try appendU64(&bytes, allocator, entry.code_locations.len);
-    try bytes.appendSlice(allocator, entry.code_locations);
-    try appendU64(&bytes, allocator, entry.object.len);
-    try bytes.appendSlice(allocator, entry.object);
+    try appendU64(&bytes, allocator, entry.pieces.len);
+    try bytes.appendSlice(allocator, entry.pieces);
     return try bytes.toOwnedSlice(allocator);
 }
 
@@ -201,24 +197,17 @@ pub fn decode(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     errdefer freeSymbols(allocator, link_root_symbols);
     const app_export_symbols = try decodeSymbols(allocator, &reader);
     errdefer freeSymbols(allocator, app_export_symbols);
-    const locations_len = try reader.word64();
-    if (locations_len > std.math.maxInt(usize)) return error.InvalidEntry;
-    const encoded_locations = try reader.take(@intCast(locations_len));
-    if (encoded_locations.len != 0 and !CodeLocations.validate(encoded_locations)) return error.InvalidEntry;
-    const code_locations = try allocator.dupe(u8, encoded_locations);
-    errdefer allocator.free(code_locations);
-    const object_len = try reader.word64();
-    if (object_len > std.math.maxInt(usize)) return error.InvalidEntry;
-    const object = try allocator.dupe(u8, try reader.take(@intCast(object_len)));
-    errdefer allocator.free(object);
+    const pieces_len = try reader.word64();
+    if (pieces_len > std.math.maxInt(usize)) return error.InvalidEntry;
+    const pieces = try allocator.dupe(u8, try reader.take(@intCast(pieces_len)));
+    errdefer allocator.free(pieces);
     if (reader.at != bytes.len) return error.InvalidEntry;
     return .{
         .exports = exports,
         .hosted_symbols = hosted_symbols,
         .link_root_symbols = link_root_symbols,
         .app_export_symbols = app_export_symbols,
-        .code_locations = code_locations,
-        .object = object,
+        .pieces = pieces,
     };
 }
 
@@ -248,9 +237,8 @@ pub fn deinitEntry(allocator: Allocator, entry: Entry) void {
     allocator.free(entry.exports);
     freeSymbols(allocator, entry.hosted_symbols);
     freeSymbols(allocator, entry.link_root_symbols);
-    allocator.free(entry.code_locations);
     freeSymbols(allocator, entry.app_export_symbols);
-    allocator.free(entry.object);
+    allocator.free(entry.pieces);
 }
 
 const Reader = struct {
@@ -357,7 +345,7 @@ test "a Boxy object entry round-trips through its bytes" {
         .hosted_symbols = &.{ "roc_fx_stdout_line", "roc_fx_stdin_line" },
         .link_root_symbols = &.{"roc__d3"},
         .app_export_symbols = &.{ "roc__main_for_host", "roc__d3" },
-        .object = "not really an object",
+        .pieces = "not really pieces",
     };
     const bytes = try encode(allocator, entry);
     defer allocator.free(bytes);
@@ -367,7 +355,7 @@ test "a Boxy object entry round-trips through its bytes" {
     try std.testing.expectEqualDeep(entry.hosted_symbols, decoded.hosted_symbols);
     try std.testing.expectEqualDeep(entry.link_root_symbols, decoded.link_root_symbols);
     try std.testing.expectEqualDeep(entry.app_export_symbols, decoded.app_export_symbols);
-    try std.testing.expectEqualStrings(entry.object, decoded.object);
+    try std.testing.expectEqualStrings(entry.pieces, decoded.pieces);
 
     // A truncated or altered file is no entry.
     try std.testing.expectError(error.InvalidEntry, decode(allocator, bytes[0 .. bytes.len - 1]));
@@ -395,7 +383,7 @@ test "a hosted bindings digest is a function of the bindings in order" {
 
 test "a count larger than the bytes behind it is a miss, not an allocation" {
     const gpa = std.testing.allocator;
-    const encoded = try encode(gpa, .{ .exports = &.{}, .hosted_symbols = &.{}, .object = "object" });
+    const encoded = try encode(gpa, .{ .exports = &.{}, .hosted_symbols = &.{}, .pieces = "pieces" });
     defer gpa.free(encoded);
     const count_offset = magic.len + @sizeOf(u32);
     for ([_]usize{ count_offset, count_offset + @sizeOf(u32) }) |offset| {

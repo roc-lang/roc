@@ -113,7 +113,8 @@ pub const Kind = union(enum) {
     proc: lir.ProcIdentity,
     /// Symbol name of the helper (`roc__rc_*`).
     rc_helper: []const u8,
-    entrypoint,
+    /// A platform entrypoint wrapper, by the symbol it is exported under.
+    entrypoint: []const u8,
     message_pool_run,
     /// Never lifted as a standalone excerpt: islands belong to placement.
     /// Reserved in-body island bytes travel with their owning procedure and
@@ -464,6 +465,16 @@ pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!S
 /// dropped, and references to it resolve to the first copy. The sets share
 /// one source-file table, as programs of one Solved program do.
 pub fn combineDistinct(allocator: Allocator, sets: []const *const Set) Allocator.Error!Set {
+    return combineDistinctNamed(allocator, sets, true);
+}
+
+/// `combineDistinct` for sets whose constants are already named by content:
+/// one definition per procedure and helper, with no renaming.
+pub fn distinct(allocator: Allocator, set: *const Set) Allocator.Error!Set {
+    return combineDistinctNamed(allocator, &.{set}, false);
+}
+
+fn combineDistinctNamed(allocator: Allocator, sets: []const *const Set, rename: bool) Allocator.Error!Set {
     const source_files: []const [32]u8 = if (sets.len == 0) &.{} else sets[0].source_files;
     if (@import("builtin").mode == .debug) for (sets) |set| {
         if (set.source_files.len != source_files.len) base.invariant("{s}", .{"combined excerpt sets index different source-file tables"});
@@ -552,7 +563,7 @@ pub fn combineDistinct(allocator: Allocator, sets: []const *const Set) Allocator
         // before the sets meet.
         var names = try ContentNames.init(allocator, set);
         defer names.deinit();
-        const shared = for (set.excerpts) |excerpt| {
+        const shared = rename and for (set.excerpts) |excerpt| {
             if (excerpt.data_graph != null) break true;
         } else false;
         const renamed_graph: ?*const PreparedData = if (shared) graph: {
@@ -572,7 +583,7 @@ pub fn combineDistinct(allocator: Allocator, sets: []const *const Set) Allocator
             for (@constCast(excerpts.items[first].symbolic_refs), source.symbolic_refs) |*ref, original| if (original.binding == .local) {
                 ref.binding = .{ .local = map[original.binding.local] };
             };
-            try nameDataByContent(a, &excerpts.items[first], &names, renamed_graph);
+            if (rename) try nameDataByContent(a, &excerpts.items[first], &names, renamed_graph);
         }
     }
     // Both slices come from the arena before it is copied into the set.
@@ -629,7 +640,8 @@ fn copyExcerpts(a: Allocator, excerpts: *std.ArrayList(Excerpt), set: *const Set
         var excerpt = source;
         excerpt.kind = switch (source.kind) {
             .rc_helper => |name| .{ .rc_helper = try a.dupe(u8, name) },
-            .proc, .entrypoint, .message_pool_run, .branch_island => source.kind,
+            .entrypoint => |name| .{ .entrypoint = try a.dupe(u8, name) },
+            .proc, .message_pool_run, .branch_island => source.kind,
         };
         excerpt.code = try a.dupe(u8, source.code);
         const refs = try a.dupe(Reference, source.refs);
@@ -1270,7 +1282,7 @@ pub fn extractPrepared(
         const kind: Kind = switch (region.kind) {
             .proc => |proc_id| .{ .proc = proc_specs[@backingInt(proc_id)].identity },
             .rc_helper => |key| .{ .rc_helper = try LirCodeGenMod.compiledRcHelperSymbolName(arena_allocator, layout_store, key) },
-            .entrypoint => .entrypoint,
+            .entrypoint => |name| .{ .entrypoint = try arena_allocator.dupe(u8, name) },
             .message_pool_run => .message_pool_run,
             .branch_island, .hosted_stub => unreachable, // regionHasExcerpt is false for these, so excerpt_of_region skipped them above
             .spliced_proc => |identity| .{ .proc = identity },
@@ -1679,6 +1691,8 @@ fn regionContaining(comptime CG: type, regions: []const CG.CodeRegion, offset: u
 pub const ImageRoots = struct {
     procs: []const lir.ProcIdentity,
     data: []const []const u8,
+    /// Keep every entrypoint wrapper of the set: a whole program's roots.
+    entrypoints: bool = false,
     /// Further names code and constants relocate to that name a helper
     /// excerpt, by the helper's excerpt name.
     helper_aliases: *const std.StringHashMap([]const u8),
@@ -1723,6 +1737,9 @@ pub fn retainReachable(allocator: Allocator, set: *const Set, catalog: *const Pr
     defer data_seen.deinit();
 
     for (roots.procs) |identity| if (by_proc.get(identity)) |index| try excerpt_work.append(allocator, index);
+    if (roots.entrypoints) for (set.excerpts, 0..) |excerpt, index| {
+        if (excerpt.kind == .entrypoint) try excerpt_work.append(allocator, @intCast(index));
+    };
     for (roots.data) |name| try data_work.append(allocator, name);
     while (excerpt_work.items.len != 0 or data_work.items.len != 0) {
         while (excerpt_work.pop()) |index| {
@@ -1773,7 +1790,8 @@ pub fn retainReachable(allocator: Allocator, set: *const Set, catalog: *const Pr
         var excerpt = source;
         excerpt.kind = switch (source.kind) {
             .rc_helper => |name| .{ .rc_helper = try a.dupe(u8, name) },
-            .proc, .entrypoint, .message_pool_run, .branch_island => source.kind,
+            .entrypoint => |name| .{ .entrypoint = try a.dupe(u8, name) },
+            .proc, .message_pool_run, .branch_island => source.kind,
         };
         excerpt.code = try a.dupe(u8, source.code);
         const refs = try a.dupe(Reference, source.refs);
@@ -1935,7 +1953,8 @@ pub fn arrange(allocator: Allocator, set: *const Set, host_visible: []const Data
         out.* = source;
         out.kind = switch (source.kind) {
             .rc_helper => |name| .{ .rc_helper = try a.dupe(u8, name) },
-            .proc, .entrypoint, .message_pool_run, .branch_island => source.kind,
+            .entrypoint => |name| .{ .entrypoint = try a.dupe(u8, name) },
+            .proc, .message_pool_run, .branch_island => source.kind,
         };
         out.code = try a.dupe(u8, source.code);
         const refs = try a.dupe(Reference, source.refs);
@@ -2026,7 +2045,8 @@ fn canonicalBefore(set: *const Set, a: u32, b: u32) bool {
         .rc_helper => |name| std.mem.lessThan(u8, name, rhs.rc_helper),
         // Only one placement's own code has these kinds, which name nothing;
         // the code bytes order them.
-        .entrypoint, .branch_island, .message_pool_run => std.mem.lessThan(u8, set.excerpts[a].code, set.excerpts[b].code),
+        .entrypoint => |name| std.mem.lessThan(u8, name, rhs.entrypoint),
+        .branch_island, .message_pool_run => std.mem.lessThan(u8, set.excerpts[a].code, set.excerpts[b].code),
     };
 }
 
@@ -2059,7 +2079,7 @@ pub fn assembleArranged(
         const kind: CG.CodeRegionKind = switch (excerpt.kind) {
             .proc => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .proc = proc_id } else .{ .spliced_proc = identity },
             .rc_helper => |name| if (helper_keys.get(name)) |key| .{ .rc_helper = key } else .spliced_helper,
-            .entrypoint => .entrypoint,
+            .entrypoint => |name| .{ .entrypoint = name },
             .message_pool_run => .{ .message_pool_run = 0 },
             .branch_island => .branch_island,
         };
@@ -2162,7 +2182,7 @@ pub fn appendPrepared(
         const kind: CG.CodeRegionKind = switch (excerpt.kind) {
             .proc => |identity| .{ .proc = procs_by_identity.get(identity) orelse return error.UnknownProcIdentity },
             .rc_helper => |name| .{ .rc_helper = helper_keys.get(name) orelse return error.UnknownRcHelper },
-            .entrypoint => .entrypoint,
+            .entrypoint => |name| .{ .entrypoint = name },
             .message_pool_run => .{ .message_pool_run = 0 },
             .branch_island => .branch_island,
         };
@@ -2603,7 +2623,7 @@ pub fn splice(
         const kind: CG.CodeRegionKind = switch (excerpt.kind) {
             .proc => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .proc = proc_id } else .{ .spliced_proc = identity },
             .rc_helper => .spliced_helper,
-            .entrypoint => .entrypoint,
+            .entrypoint => |name| .{ .entrypoint = name },
             .message_pool_run => .{ .message_pool_run = 0 },
             .branch_island => .branch_island,
         };
@@ -2710,7 +2730,7 @@ test "excerpt local calls reserve veneers before later regions exceed reach" {
         .arena = collections.SingleThreadArena.init(allocator),
         .excerpts = &.{
             .{
-                .kind = .entrypoint,
+                .kind = .{ .entrypoint = "" },
                 .code = "\x00\x00\x00\x94",
                 .entry = 0,
                 .frame = null,
@@ -2718,8 +2738,8 @@ test "excerpt local calls reserve veneers before later regions exceed reach" {
                 .relocations = &.{},
                 .data = &.{},
             },
-            .{ .kind = .entrypoint, .code = &gap, .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} },
-            .{ .kind = .entrypoint, .code = "\xc0\x03\x5f\xd6", .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} },
+            .{ .kind = .{ .entrypoint = "" }, .code = &gap, .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} },
+            .{ .kind = .{ .entrypoint = "" }, .code = "\xc0\x03\x5f\xd6", .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} },
         },
     };
     defer set.deinit();
@@ -2764,7 +2784,7 @@ fn testPreparedData(allocator: Allocator) (ExtractError || error{ TestExpectedEq
     };
     const items = try captureData(allocator, a, &refs, &prepared);
     const owners = try Set.retainOwners(a, &.{.{
-        .kind = .entrypoint,
+        .kind = .{ .entrypoint = "" },
         .code = &.{},
         .entry = 0,
         .frame = null,
@@ -2918,7 +2938,7 @@ fn testReloc(offset: u32, name: []const u8, addend: i64) DataRelocation {
 
 /// A set whose one excerpt carries `data`; the set owns nothing.
 fn testDataSet(storage: *[1]Excerpt, data: []const DataItem) Set {
-    storage[0] = .{ .kind = .entrypoint, .code = &.{}, .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = data };
+    storage[0] = .{ .kind = .{ .entrypoint = "" }, .code = &.{}, .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = data };
     return .{ .arena = collections.SingleThreadArena.init(std.testing.allocator), .excerpts = storage };
 }
 

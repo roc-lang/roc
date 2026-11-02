@@ -36,6 +36,8 @@ const collections = @import("collections");
 const SymbolTable = @import("SymbolTable.zig");
 const IndexedRelocation = @import("Relocation.zig").IndexedRelocation;
 const StaticStringData = @import("StaticStringData.zig");
+const UnitPieces = @import("UnitPieces.zig");
+const TargetUsize = @import("base").target.TargetUsize;
 
 /// Information about an entrypoint to compile
 pub const Entrypoint = struct {
@@ -69,6 +71,18 @@ pub const CompilationResult = struct {
         self.allocator.free(self.code_locations);
         if (self.excerpts) |*set| set.deinit();
     }
+};
+
+/// What a composition keeps and how it names what it keeps.
+pub const ComposeOptions = struct {
+    enable_default_platform_runtime: bool = false,
+    /// The procedures the composition starts its walk from, beside every
+    /// entrypoint wrapper and host-visible constant. Null keeps every piece.
+    roots: ?[]const lir.ProcIdentity = null,
+    /// Give every procedure a global symbol, as an image the compiler loads
+    /// into its own process looks procedures up by name.
+    global_procs: bool = false,
+    capture_code_locations: bool = false,
 };
 
 /// Errors that can occur during compilation
@@ -200,6 +214,75 @@ pub const ObjectFileCompiler = struct {
     }
 
     /// Compile to an object file and write it to a path.
+    /// Compile `proc_specs` to a unit's pieces (design.md "Unit Pieces And
+    /// Whole-Program Dead Code"): every procedure, helper and entrypoint
+    /// wrapper lifted out of the unit's code as its own excerpt, with the
+    /// constants it names under their content names. No object is encoded.
+    pub fn compileToPieces(
+        self: *ObjectFileCompiler,
+        lir_store: *const LirStore,
+        layout_store: *const layout.Store,
+        entrypoints: []const Entrypoint,
+        static_data_exports: []const StaticDataExport,
+        proc_specs: []const LirProcSpec,
+        target: RocTarget,
+    ) CompilationError!UnitPieces.Pieces {
+        const enum_info = @typeInfo(RocTarget).@"enum";
+        const default_target = target.defaultCpuTarget();
+        inline for (enum_info.field_values) |field_value| {
+            const comptime_target: RocTarget = @fromBackingInt(@intCast(field_value));
+            if (comptime comptime_target.defaultCpuTarget() != comptime_target) continue;
+            if (default_target == comptime_target) {
+                const arch = comptime comptime_target.toCpuArch();
+                if (comptime (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be)) {
+                    return compilePiecesWithCodeGen(
+                        LirCodeGenMod.LirCodeGen(comptime_target),
+                        self.allocator,
+                        lir_store,
+                        layout_store,
+                        entrypoints,
+                        static_data_exports,
+                        proc_specs,
+                        target,
+                        self.enable_default_platform_runtime,
+                        self.erased_capture_prefix,
+                        self.timing,
+                        self.post_check_executor,
+                    );
+                } else {
+                    return CompilationError.UnsupportedTarget;
+                }
+            }
+        }
+        return CompilationError.UnsupportedTarget;
+    }
+
+    /// Compose the pieces of a program's units into one relocatable object
+    /// holding only what `options.roots` reach (design.md "Unit Pieces And
+    /// Whole-Program Dead Code").
+    pub fn composeObject(
+        self: *ObjectFileCompiler,
+        inputs: []const *const UnitPieces.Pieces,
+        target: RocTarget,
+        options: ComposeOptions,
+    ) CompilationError!CompilationResult {
+        const enum_info = @typeInfo(RocTarget).@"enum";
+        const default_target = target.defaultCpuTarget();
+        inline for (enum_info.field_values) |field_value| {
+            const comptime_target: RocTarget = @fromBackingInt(@intCast(field_value));
+            if (comptime comptime_target.defaultCpuTarget() != comptime_target) continue;
+            if (default_target == comptime_target) {
+                const arch = comptime comptime_target.toCpuArch();
+                if (comptime (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be)) {
+                    return composeWithCodeGen(LirCodeGenMod.LirCodeGen(comptime_target), self.allocator, inputs, target, options, self.timing);
+                } else {
+                    return CompilationError.UnsupportedTarget;
+                }
+            }
+        }
+        return CompilationError.UnsupportedTarget;
+    }
+
     pub fn compileToObjectFileAndWrite(
         self: *ObjectFileCompiler,
         lir_store: *const LirStore,
@@ -1144,6 +1227,415 @@ fn compileStaticDataObjectBytes(
 /// its default twin's instantiation and carries its CPU level as a runtime
 /// field, so the baseline targets cost no extra monomorphizations: they select
 /// different instruction sequences, not a different code generator.
+fn compilePiecesWithCodeGen(
+    comptime CodeGen: type,
+    allocator: Allocator,
+    lir_store: *const LirStore,
+    layout_store: *const layout.Store,
+    entrypoints: []const Entrypoint,
+    static_data_exports: []const StaticDataExport,
+    proc_specs: []const LirProcSpec,
+    target: RocTarget,
+    enable_default_platform_runtime: bool,
+    erased_capture_prefix: u32,
+    timing: ?*ObjectFileCompiler.Timing,
+    executor: ?Executor,
+) CompilationError!UnitPieces.Pieces {
+    const backend_setup_started_ns = if (timing) |timings| timings.start() else 0;
+    var static_strings = StaticStringData.build(allocator, lir_store, target) catch return CompilationError.OutOfMemory;
+    defer static_strings.deinit();
+    var codegen = CodeGen.initWithCapturePrefix(
+        allocator,
+        lir_store,
+        layout_store,
+        static_strings.view(),
+        erased_capture_prefix,
+        target.cpuLevel(),
+    ) catch return CompilationError.OutOfMemory;
+    defer codegen.deinit();
+    codegen.generation_mode = .object_file;
+    codegen.setStaticDataSymbols(static_data_exports) catch return CompilationError.OutOfMemory;
+    codegen.enable_default_platform_runtime = enable_default_platform_runtime;
+    const static_rc_helpers = static_data_export.collectRequiredRcHelpers(allocator, static_data_exports) catch return CompilationError.OutOfMemory;
+    defer allocator.free(static_rc_helpers);
+    if (timing) |timings| timings.finish(backend_setup_started_ns, .backend_setup);
+    const procedure_instructions_started_ns = if (timing) |timings| timings.start() else 0;
+    var demand = std.ArrayList(lir.LIR.LirProcSpecId).empty;
+    defer demand.deinit(allocator);
+    for (proc_specs, 0..) |proc, index| {
+        if (proc.is_static_initializer or proc.linked or (proc.external and !proc.c_abi_entry)) continue;
+        demand.append(allocator, @fromBackingInt(@intCast(index))) catch return CompilationError.OutOfMemory;
+    }
+    var native_metrics: NativeProcCompiler.Metrics = .{};
+    var retained = NativeProcCompiler.run(CodeGen, allocator, &codegen, demand.items, .{
+        .target = target,
+        .executor = executor,
+        .metrics_out = &native_metrics,
+        .static_helpers = static_rc_helpers,
+        .constant_exports = static_data_exports,
+    }) catch return CompilationError.OutOfMemory;
+    defer retained.deinit();
+    if (timing) |timings| timings.snapshot_value.native_emission.add(native_metrics);
+    if (timing) |timings| timings.finish(procedure_instructions_started_ns, .procedure_instructions);
+    // Entrypoint wrappers join the unit's image here, so they are lifted
+    // out as pieces named by their symbols.
+    const entrypoint_instructions_started_ns = if (timing) |timings| timings.start() else 0;
+    for (entrypoints) |entrypoint| {
+        _ = codegen.generateEntrypointWrapper(entrypoint.symbol_name, entrypoint.proc, entrypoint.arg_layouts, entrypoint.ret_layout) catch return CompilationError.OutOfMemory;
+    }
+    if (timing) |timings| timings.finish(entrypoint_instructions_started_ns, .entrypoint_instructions);
+    const extraction_started_ns = if (timing) |timings| timings.start() else 0;
+    codegen.finishImage() catch return CompilationError.OutOfMemory;
+    var catalog = CodeExcerpt.PreparedData.init(allocator, static_strings.exports, static_data_exports, &.{}) catch return CompilationError.OutOfMemory;
+    defer catalog.deinit();
+    var staged = CodeExcerpt.extractCataloged(CodeGen, allocator, &codegen, proc_specs, layout_store, &catalog) catch |err| switch (err) {
+        error.OutOfMemory => return CompilationError.OutOfMemory,
+        error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => invariant("unit piece extraction failed: {s}", .{@errorName(err)}),
+    };
+    defer staged.deinit();
+    // The unit's constants under their content names, so pieces of
+    // different units can meet in one program.
+    var named = CodeExcerpt.combineDistinct(allocator, &.{&staged}) catch return CompilationError.OutOfMemory;
+    errdefer named.deinit();
+    var arena = collections.SingleThreadArena.init(allocator);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+    var host_visible = std.ArrayList(CodeExcerpt.DataItem).empty;
+    defer host_visible.deinit(allocator);
+    {
+        var roots = std.ArrayList([]const u8).empty;
+        defer roots.deinit(allocator);
+        for (static_data_exports) |data_export| {
+            if (data_export.is_exported) roots.append(allocator, data_export.symbol_name) catch return CompilationError.OutOfMemory;
+        }
+        CodeExcerpt.dataClosure(allocator, &catalog, roots.items, &host_visible) catch |err| switch (err) {
+            error.OutOfMemory => return CompilationError.OutOfMemory,
+            error.DanglingReference => invariant("a host-visible constant names a constant the program does not define", .{}),
+        };
+    }
+    const exported_data = a.alloc(CodeExcerpt.DataItem, host_visible.items.len) catch return CompilationError.OutOfMemory;
+    for (host_visible.items, exported_data) |item, *owned| owned.* = ownDataItem(a, item) catch return CompilationError.OutOfMemory;
+    const helper_aliases = a.alloc(UnitPieces.HelperAlias, static_rc_helpers.len) catch return CompilationError.OutOfMemory;
+    for (static_rc_helpers, helper_aliases) |helper_key, *alias| {
+        alias.* = .{
+            .helper = LirCodeGenMod.compiledRcHelperSymbolName(a, layout_store, LirCodeGenMod.staticDataRcHelperKey(helper_key)) catch return CompilationError.OutOfMemory,
+            .alias = static_data_export.atomicRcHelperSymbolName(a, layout_store, helper_key) catch return CompilationError.OutOfMemory,
+        };
+    }
+    const source_files = a.alloc(UnitPieces.SourceFile, named.source_files.len) catch return CompilationError.OutOfMemory;
+    for (named.source_files, source_files, 0..) |identity, *file, index| {
+        std.debug.assert(std.mem.eql(u8, &identity, &lir_store.sourceFileModuleIdentity(@intCast(index))));
+        file.* = .{
+            .name = a.dupe(u8, lir_store.sourceFileName(@intCast(index))) catch return CompilationError.OutOfMemory,
+            .qualified_name = a.dupe(u8, lir_store.sourceFileQualifiedName(@intCast(index))) catch return CompilationError.OutOfMemory,
+            .identity = identity,
+        };
+    }
+    if (timing) |timings| timings.finish(extraction_started_ns, .symbol_relocations);
+    return .{
+        .arena = arena,
+        .set = named,
+        .erased_capture_prefix = erased_capture_prefix,
+        .source_files = source_files,
+        .exported_data = exported_data,
+        .helper_aliases = helper_aliases,
+    };
+}
+
+/// A copy of `item` and its relocations, owned by `a`.
+fn ownDataItem(a: Allocator, item: CodeExcerpt.DataItem) Allocator.Error!CodeExcerpt.DataItem {
+    const relocations = try a.alloc(CodeExcerpt.DataRelocation, item.relocations.len);
+    for (item.relocations, relocations) |relocation, *out| {
+        out.* = relocation;
+        out.name = try a.dupe(u8, relocation.name);
+    }
+    return .{
+        .name = try a.dupe(u8, item.name),
+        .bytes = try a.dupe(u8, item.bytes),
+        .alignment = item.alignment,
+        .symbol_offset = item.symbol_offset,
+        .relocations = relocations,
+        .program_local_name = item.program_local_name,
+        .is_mutable = item.is_mutable,
+    };
+}
+
+fn composeWithCodeGen(
+    comptime CodeGen: type,
+    allocator: Allocator,
+    inputs: []const *const UnitPieces.Pieces,
+    target: RocTarget,
+    options: ComposeOptions,
+    timing: ?*ObjectFileCompiler.Timing,
+) CompilationError!CompilationResult {
+    const symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;
+    // The object is a function of the units, not of the order they arrive
+    // in: the units are taken in the order of their source-file tables, and
+    // the host-visible constants in name order.
+    const ordered = allocator.alloc(*const UnitPieces.Pieces, inputs.len) catch return CompilationError.OutOfMemory;
+    defer allocator.free(ordered);
+    @memcpy(ordered, inputs);
+    std.mem.sort(*const UnitPieces.Pieces, ordered, {}, struct {
+        fn lessThan(_: void, a: *const UnitPieces.Pieces, b: *const UnitPieces.Pieces) bool {
+            const common = @min(a.set.source_files.len, b.set.source_files.len);
+            for (a.set.source_files[0..common], b.set.source_files[0..common]) |left, right| {
+                switch (std.mem.order(u8, &left, &right)) {
+                    .lt => return true,
+                    .gt => return false,
+                    .eq => {},
+                }
+            }
+            return a.set.source_files.len < b.set.source_files.len;
+        }
+    }.lessThan);
+    const sets = allocator.alloc(*const CodeExcerpt.Set, ordered.len) catch return CompilationError.OutOfMemory;
+    defer allocator.free(sets);
+    for (ordered, sets) |pieces, *set| set.* = &pieces.set;
+    const erased_capture_prefix: u32 = if (inputs.len == 0) 0 else inputs[0].erased_capture_prefix;
+    for (inputs) |pieces| {
+        if (pieces.erased_capture_prefix != erased_capture_prefix) invariant("composed units were generated for different capture prefixes", .{});
+    }
+    var merged = CodeExcerpt.combine(allocator, sets) catch return CompilationError.OutOfMemory;
+    defer merged.deinit();
+    var unique = CodeExcerpt.distinct(allocator, &merged) catch return CompilationError.OutOfMemory;
+    defer unique.deinit();
+    // The merged source-file table, named from the units that index it.
+    const files = allocator.alloc(@import("base").SourceFileEntry, merged.source_files.len) catch return CompilationError.OutOfMemory;
+    defer allocator.free(files);
+    for (merged.source_files, files) |identity, *file| {
+        file.* = named: {
+            for (inputs) |pieces| for (pieces.source_files) |source| {
+                if (std.mem.eql(u8, &source.identity, &identity)) break :named .{ .name = source.name, .qualified_name = source.qualified_name, .module_identity = identity };
+            };
+            invariant("a composed source file belongs to no unit", .{});
+        };
+    }
+    var host_visible = std.ArrayList(CodeExcerpt.DataItem).empty;
+    defer host_visible.deinit(allocator);
+    var exported_roots = std.StringHashMap(void).init(allocator);
+    defer exported_roots.deinit();
+    {
+        var seen = std.StringHashMap(void).init(allocator);
+        defer seen.deinit();
+        for (ordered) |pieces| for (pieces.exported_data) |item| {
+            if ((seen.getOrPut(item.name) catch return CompilationError.OutOfMemory).found_existing) continue;
+            host_visible.append(allocator, item) catch return CompilationError.OutOfMemory;
+            if (!item.program_local_name) exported_roots.put(item.name, {}) catch return CompilationError.OutOfMemory;
+        };
+        std.mem.sort(CodeExcerpt.DataItem, host_visible.items, {}, struct {
+            fn lessThan(_: void, a: CodeExcerpt.DataItem, b: CodeExcerpt.DataItem) bool {
+                return std.mem.lessThan(u8, a.name, b.name);
+            }
+        }.lessThan);
+    }
+    // The walk follows constants into the code they name, so the catalog
+    // holds every constant a piece carries beside the host-visible ones.
+    var carried = CodeExcerpt.DataCollector{ .allocator = allocator };
+    defer carried.deinit();
+    for (host_visible.items) |item| carried.items.append(allocator, item) catch return CompilationError.OutOfMemory;
+    for (unique.excerpts) |excerpt| carried.add(excerpt) catch return CompilationError.OutOfMemory;
+    var catalog = CodeExcerpt.PreparedData.init(allocator, &.{}, &.{}, carried.items.items) catch return CompilationError.OutOfMemory;
+    defer catalog.deinit();
+    // Static data reaches refcount helpers under their atomic aliases.
+    var helper_aliases = std.StringHashMap([]const u8).init(allocator);
+    defer helper_aliases.deinit();
+    var alias_of_helper = std.StringHashMap([]const u8).init(allocator);
+    defer alias_of_helper.deinit();
+    for (inputs) |pieces| for (pieces.helper_aliases) |alias| {
+        helper_aliases.put(alias.alias, alias.helper) catch return CompilationError.OutOfMemory;
+        alias_of_helper.put(alias.helper, alias.alias) catch return CompilationError.OutOfMemory;
+    };
+    var root_procs = std.ArrayList(lir.ProcIdentity).empty;
+    defer root_procs.deinit(allocator);
+    if (options.roots) |roots| {
+        root_procs.appendSlice(allocator, roots) catch return CompilationError.OutOfMemory;
+    } else for (unique.excerpts) |excerpt| switch (excerpt.kind) {
+        .proc => |identity| root_procs.append(allocator, identity) catch return CompilationError.OutOfMemory,
+        .rc_helper, .entrypoint, .message_pool_run, .branch_island => {},
+    };
+    var root_data = std.ArrayList([]const u8).empty;
+    defer root_data.deinit(allocator);
+    for (host_visible.items) |item| root_data.append(allocator, item.name) catch return CompilationError.OutOfMemory;
+    var reachable = CodeExcerpt.retainReachable(allocator, &unique, &catalog, .{
+        .procs = root_procs.items,
+        .data = root_data.items,
+        .helper_aliases = &helper_aliases,
+        .entrypoints = true,
+    }) catch return CompilationError.OutOfMemory;
+    defer reachable.deinit();
+    var canonical = CodeExcerpt.arrange(allocator, &reachable, host_visible.items) catch return CompilationError.OutOfMemory;
+    defer canonical.deinit();
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    store.setSourceFiles(files) catch return CompilationError.OutOfMemory;
+    var layouts = layout.Store.init(allocator, TargetUsize.fromPtrBitWidth(target.ptrBitWidth())) catch return CompilationError.OutOfMemory;
+    defer layouts.deinit();
+    var static_strings = StaticStringData.build(allocator, &store, target) catch return CompilationError.OutOfMemory;
+    defer static_strings.deinit();
+    var final = CodeGen.initWithCapturePrefix(
+        allocator,
+        &store,
+        &layouts,
+        static_strings.view(),
+        erased_capture_prefix,
+        target.cpuLevel(),
+    ) catch return CompilationError.OutOfMemory;
+    defer final.deinit();
+    final.generation_mode = .object_file;
+    final.enable_default_platform_runtime = options.enable_default_platform_runtime;
+    var procs_by_identity = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(allocator);
+    defer procs_by_identity.deinit();
+    var helper_keys = CodeExcerpt.HelperKeys.init(allocator);
+    defer helper_keys.deinit();
+    const starts = CodeExcerpt.assembleArranged(CodeGen, allocator, &final, &canonical.set, &procs_by_identity, &helper_keys) catch return CompilationError.OutOfMemory;
+    defer allocator.free(starts);
+    var symbols = std.ArrayList(SymbolDefinition).empty;
+    defer symbols.deinit(allocator);
+    var rodata = std.ArrayList(u8).empty;
+    defer rodata.deinit(allocator);
+    var rodata_relocations = std.ArrayList(ObjectWriter.IndexedDataRelocation).empty;
+    defer rodata_relocations.deinit(allocator);
+    var zero_fill_size: u64 = 0;
+    var owned_symbol_names = std.ArrayList([]u8).empty;
+    defer {
+        for (owned_symbol_names.items) |name| allocator.free(name);
+        owned_symbol_names.deinit(allocator);
+    }
+    var dwarf_procs = std.ArrayList(Dwarf.ProcEntry).empty;
+    defer dwarf_procs.deinit(allocator);
+    {
+        const data_exports = allocator.alloc(static_data_export.StaticDataExport, canonical.data.len) catch return CompilationError.OutOfMemory;
+        defer allocator.free(data_exports);
+        var data_relocations = std.ArrayList([]static_data_export.StaticDataRelocation).empty;
+        defer {
+            for (data_relocations.items) |relocations| allocator.free(relocations);
+            data_relocations.deinit(allocator);
+        }
+        for (canonical.data, data_exports) |datum, *out| {
+            const item = datum.item;
+            const relocations = allocator.alloc(static_data_export.StaticDataRelocation, item.relocations.len) catch return CompilationError.OutOfMemory;
+            data_relocations.append(allocator, relocations) catch {
+                allocator.free(relocations);
+                return CompilationError.OutOfMemory;
+            };
+            for (item.relocations, relocations) |relocation, *relocation_out| relocation_out.* = .{
+                .offset = relocation.offset,
+                .target_symbol_name = relocation.name,
+                .target = .named,
+                .addend = relocation.addend,
+                .kind = if (relocation.function) .function_pointer else .address,
+            };
+            const exported = datum.host_visible and exported_roots.contains(item.name);
+            out.* = .{
+                .symbol_name = item.name,
+                .bytes = item.bytes,
+                .symbol_offset = item.symbol_offset,
+                .alignment = item.alignment,
+                .is_global = exported,
+                .is_exported = exported,
+                .is_mutable = datum.item.is_mutable,
+                .relocations = relocations,
+            };
+        }
+        try appendStaticDataExports(allocator, &final.codegen.symbols, data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
+    }
+    for (canonical.set.excerpts, starts) |excerpt, start| switch (excerpt.kind) {
+        .proc => |identity| {
+            const frame = excerpt.frame orelse invariant("a procedure excerpt had no frame", .{});
+            const symbol_name = static_data_export.procSymbolName(allocator, identity) catch return CompilationError.OutOfMemory;
+            owned_symbol_names.append(allocator, symbol_name) catch {
+                allocator.free(symbol_name);
+                return CompilationError.OutOfMemory;
+            };
+            appendDefinition(allocator, &final.codegen.symbols, &symbols, .{
+                .name = symbol_name,
+                .offset = start,
+                .size = excerpt.code.len,
+                .is_global = options.global_procs,
+                .is_function = true,
+                .is_external = false,
+                .section = .text,
+                .prologue_size = frame.prologue_size,
+                .stack_alloc = frame.stack_alloc,
+                .frame_size = frame.frame_size,
+                .callee_saved_mask = frame.callee_saved_mask,
+                .epilogue_offset = frame.epilogue_offset,
+                .uses_frame_pointer = frame.uses_frame_pointer,
+            }) catch return CompilationError.OutOfMemory;
+            dwarf_procs.append(allocator, .{
+                .name = symbol_name,
+                .code_start = start,
+                .code_size = excerpt.code.len,
+                .loc = excerpt.loc,
+            }) catch return CompilationError.OutOfMemory;
+        },
+        .rc_helper => |name| {
+            const frame = excerpt.frame orelse continue;
+            const alias = alias_of_helper.get(name);
+            const symbol_name = allocator.dupe(u8, alias orelse name) catch return CompilationError.OutOfMemory;
+            owned_symbol_names.append(allocator, symbol_name) catch {
+                allocator.free(symbol_name);
+                return CompilationError.OutOfMemory;
+            };
+            appendDefinition(allocator, &final.codegen.symbols, &symbols, .{
+                .name = symbol_name,
+                .offset = start + excerpt.entry,
+                .size = excerpt.code.len - excerpt.entry,
+                .is_global = alias != null,
+                .is_function = true,
+                .is_external = false,
+                .is_hidden = alias != null,
+                .section = .text,
+                .prologue_size = frame.prologue_size,
+                .stack_alloc = frame.stack_alloc,
+                .frame_size = frame.frame_size,
+                .callee_saved_mask = frame.callee_saved_mask,
+                .epilogue_offset = frame.epilogue_offset,
+                .uses_frame_pointer = frame.uses_frame_pointer,
+            }) catch return CompilationError.OutOfMemory;
+            if (alias == null) dwarf_procs.append(allocator, .{
+                .name = symbol_name,
+                .code_start = start + excerpt.entry,
+                .code_size = excerpt.code.len - excerpt.entry,
+                .loc = .none,
+            }) catch return CompilationError.OutOfMemory;
+        },
+        .entrypoint => |name| {
+            const frame = excerpt.frame orelse invariant("an entrypoint excerpt had no frame", .{});
+            appendDefinition(allocator, &final.codegen.symbols, &symbols, .{
+                .name = name,
+                .offset = start,
+                .size = excerpt.code.len,
+                .is_global = true,
+                .is_function = true,
+                .is_external = false,
+                .section = .text,
+                .prologue_size = frame.prologue_size,
+                .stack_alloc = frame.stack_alloc,
+                .frame_size = frame.frame_size,
+                .callee_saved_mask = frame.callee_saved_mask,
+                .epilogue_offset = frame.epilogue_offset,
+                .uses_frame_pointer = frame.uses_frame_pointer,
+            }) catch return CompilationError.OutOfMemory;
+            dwarf_procs.append(allocator, .{ .name = name, .code_start = start, .code_size = excerpt.code.len, .loc = .none }) catch return CompilationError.OutOfMemory;
+        },
+        .message_pool_run, .branch_island => {},
+    };
+    final.finishImage() catch return CompilationError.OutOfMemory;
+    const code = final.getGeneratedCode();
+    const relocations = final.getRelocations();
+    var resolved = try resolveObjectSymbols(allocator, &final.codegen.symbols, symbols.items, relocations);
+    defer resolved.deinit(allocator);
+    if (timing) |timings| timings.finish(symbol_relocations_started_ns, .symbol_relocations);
+    const object_bytes = try encodeObject(allocator, &store, target, &final, code, rodata.items, zero_fill_size, resolved.symbols, relocations, rodata_relocations.items, dwarf_procs.items, timing);
+    errdefer allocator.free(object_bytes);
+    return CompilationResult{
+        .object_bytes = object_bytes,
+        .allocator = allocator,
+        .code_locations = if (options.capture_code_locations) try encodeCodeLocations(allocator, &store, &final) else &.{},
+    };
+}
+
 fn crossCompileDispatch(
     allocator: Allocator,
     lir_store: *const LirStore,
