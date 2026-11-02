@@ -15007,7 +15007,9 @@ the checker's rule. The reach never recurses (nominal rows are declared and
 aliases cannot be recursive), so every conversion worker is finite. A
 conversion whose destination row a type variable of the body opens is the
 descriptor-driven `adapt` (Dynamic Values In LIR), which re-tags by name
-under the destination's descriptor. Either conversion is elided when the two
+under the destination's descriptor, and `Bool`, the union `[False, True]`
+whose descriptor holds no variant table, takes part by the same names. Either
+conversion is elided when the two
 types are one or commit one layout, since a reached row's source tags are a
 subset of its destination's and equal variant counts mean equal tag sets.
 
@@ -15177,7 +15179,10 @@ Composing a record, tuple, or tag union therefore searches its components along
 size edges for a member with its structure behind recursion boxes, and yields
 that member, so a closed type has one layout however it was composed. Component addressing and construction see through recursion boxes: a
 field or payload address is the boxed value's, and building a value boxes
-the components its descriptor's slots box.
+the components its descriptor's slots box. A `Box` a type states itself,
+including through nominal wrappers, is the component's own representation and
+never a recursion box; value slots and static descriptors read this one rule
+(`Layouts.isRecursionBox`).
 
 Every descriptor a body needs depends only on its hidden parameters, so the
 lowerer hoists all composition statements to the worker's entry block. A body

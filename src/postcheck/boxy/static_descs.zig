@@ -412,8 +412,7 @@ pub const StaticDescs = struct {
     /// component type's own descriptor, or the recursion box around it when
     /// the committed layout boxed a component the type does not box.
     fn componentNode(self: *StaticDescs, ty: TypeId, committed: layout.Idx) Allocator.Error!ExportIndex {
-        const boxed_by_layout = self.layouts.layouts.getLayout(committed).tag == .box and self.store.get(ty) != .box;
-        return (try self.reserveDescriptor(.{ .ty = ty, .recursive_box = boxed_by_layout })).node;
+        return (try self.reserveDescriptor(.{ .ty = ty, .recursive_box = try self.layouts.isRecursionBox(committed, ty) })).node;
     }
 
     fn fill(self: *StaticDescs, item: Pending) Allocator.Error!void {
