@@ -187,7 +187,7 @@ pub fn checkedTypePayloadIdentityVariableChildren(
             .forbid => true,
             .tolerate => context.pendingContainsIdentityVariables(root),
         },
-        .err => return false,
+        .field_kind, .err => return false,
         .flex,
         .rigid,
         => return true,

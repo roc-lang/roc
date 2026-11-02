@@ -13378,10 +13378,29 @@ complete):
   explicitly reads, constructs, or tests record storage.
 - Boxy lowering consumes the checked row's explicit field kind directly.
   Required and defaulted children use their inline layout; optional children
-  use the `[#Missing, #Present(payload)]` presence-slot layout. A still-undetermined scheme-interior kind
-  preserves its checked kind-variable identity and uses that same checker-defined
-  presence-slot representation: one non-specialized worker can therefore
-  serve both required and optional instantiations without cloning its body.
+  use the `[#Missing, #Present(payload)]` presence-slot layout. A still-undetermined
+  scheme-interior kind is a quantified variable of its scheme like any other:
+  its checked kind-variable identity is one of the scheme's `scheme_vars`, the
+  worker takes one hidden descriptor for it, and the field's storage is that
+  variable. The descriptor describes the field's slot at the instantiation:
+  the value's descriptor for a required or defaulted kind, the presence slot
+  over it for an optional one. So one worker serves both instantiations
+  without cloning its body, and a record has one representation on both sides
+  of a call, wherever it sits: inside a list, a box, a tag, a nominal, or the
+  signature of a function value stored in data. No value is converted at a
+  call for its field kinds.
+  An instantiation names the kind explicitly: a checked site substitution's
+  entry for a kind variable is the `field_kind` payload the kind committed to,
+  the using scheme's own kind variable, or, for a kind no use pinned, a flex no
+  scope binds, which commits to `required` as it does for every strategy. The
+  entry alone is not a descriptor: `SchemeKinds` records the value type of each
+  kind variable's field, and `Program.resolveKindSlots` builds the slot from
+  the two. Nothing reads a kind by matching types at the call. A scope that
+  lowers a body at an instantiation binds the kind variable to the committed
+  kind directly, and that body stores the field inline or in a presence slot.
+  A `field_kind` entry is a substitution entry, never part of a type; Monotype
+  skips it as it skips an erroneous entry, since it solves kinds from
+  its instantiation graph.
   Nominal declared-field tables use that same complete slot representation as
   the backing row. Their source type still identifies the payload, but their
   representation includes presence storage; descriptor construction must never
@@ -13391,30 +13410,20 @@ complete):
   checked payload type. The planned slot variants and explicit Present
   discriminant select that restoration; the payload's type cannot describe the
   enclosing presence tag.
-  The slot descriptor records the `#Present` discriminant explicitly. Worker
-  boundaries use that metadata to wrap an inline required value in `#Present`
-  or unwrap a `#Present` slot for an inline required result; optional callers
-  pass the slot through unchanged. When the call boundary completes the
-  worker's result descriptor from the caller's, an inline caller value only
-  completes the erased children of the worker's `#Present` payload: the payload
-  keeps the worker's storage, which is what the returned bytes use. Borrowed
-  materialization retains the Present payload that the adaptation copied.
-  (`test/cli/ParserCustomNominalField.roc` under `--specialize=no`.) Thus required instantiations pay only the
-  explicit boundary conversion needed by a shared representation, while
-  specialized lowering remains free to use its resolved zero-cost inline
-  representation. Boxy record construction uses the same child kind to wrap
-  supplied optional or still-undetermined fields, emit missing optional slots,
-  restore omitted defaults, and copy unmentioned update slots. Its `.?`
-  lowering consumes the checked access segment modes and constructs the
-  promised flat `Try` result. It does not infer field kinds from layouts,
-  variant shapes, or reserved labels. At a named record call boundary, a target
-  field absent from the worker source is legal only when the target child's
-  checked kind is explicitly `optional` or `undetermined`; descriptor lowering
-  preserves that target slot descriptor unchanged. Runtime materialization
-  validates its explicit presence-slot marker and writes the descriptor's
-  non-Present discriminant, while borrowed-result retention validates that the
-  already-materialized slot is Missing and performs no payload retain. A
-  missing required, defaulted, or unmarked field is an invariant violation.
+  The slot descriptor records the `#Present` discriminant explicitly.
+  Thus a required instantiation stores its field inline in the generic worker
+  too, while a worker with an undetermined kind reads its record through
+  descriptors, as it reads any record of variable type. Specialized lowering
+  uses its resolved representation directly. Boxy record construction consumes
+  the same child kind: it wraps a supplied optional field, writes a supplied
+  field of undetermined kind through `adapt` to the variable's descriptor, which
+  wraps it exactly when that descriptor is a presence slot, emits missing
+  optional slots, restores omitted defaults, and copies unmentioned update
+  slots. Its `.?` lowering consumes the checked access segment modes and
+  constructs the promised flat `Try` result. It does not infer field kinds from
+  layouts or variant shapes. A presence slot's type is recognized by its
+  reserved labels when it is interned, however it came to be interned, including
+  by decoding a stored closure's types.
 - Construction (`lowerRecordExpr`): graph-owned construction consumes the
   resolved field-kind cell. Construction from an already-sealed Monotype
   consumes the target `Type.Field`'s explicit resolved metadata
@@ -13520,9 +13529,9 @@ boundaries' still-flex arms (TypeWriter rendering, `copyCheckedRecordFields`
 CheckedModule output, the `writeFieldPresenceForKey` type-digest writer) now cover scheme
 interiors. Source-facing readers render and digest that state as
 required-equivalent, while representation strategies must either resolve it
-per instantiation or preserve it explicitly: Boxy uses the checker-defined
-presence-slot representation described above. Monomorphic literal-minted kinds
-reach these readers already committed.
+per instantiation or preserve it explicitly: Boxy passes each kind variable a
+hidden descriptor of the field's slot, as described above. Monomorphic
+literal-minted kinds reach these readers already committed.
 
 Deferred (explicitly not yet implemented):
 
@@ -14801,7 +14810,8 @@ A worker's signature is its explicit checked parameters followed by its hidden
 parameters:
 
 - one descriptor parameter per quantified variable of its scheme, in the
-  scheme's checked `scheme_vars` order;
+  scheme's checked `scheme_vars` order (a field kind variable's describes the
+  field's slot, Field Kinds);
 - one dictionary parameter per evidence parameter of its scheme, in the
   checked `evidence_params` order the checker records;
 - one literal argument per literal requirement of its scheme, in the checked
@@ -14882,8 +14892,7 @@ callers, so widening becomes a CONVERSION at the instantiation that widens:
 - A function value used at a type wider than its own sealed result, and a
   `where` implementation whose result row its dictionary's consumer widens,
   are wrapped in an adapter (`WorkerKey.adapter`) that calls the value and
-  converts its result, the same adapter that reconciles record-field storage
-  (Field Kinds).
+  converts its result.
 
 A conversion between two CLOSED types is a static row conversion: a worker
 of the converting module (`WorkerKey.convert`, keyed by the source and
@@ -15543,7 +15552,7 @@ composition, while polymorphic sites use the ordinary interner on a mismatch.
 - The lowerer emits no conversions between representations of one type, no
   thunks, and no statement whose meaning depends on a path through a type.
   The only conversions are the row conversions and adapters of Sealed Result
-  Rows and Field Kinds, each between two types the checker relates.
+  Rows, each between two types the checker relates.
 - `--timings` reports the strategy's post-check work as `Boxy Lowering`
   followed by the shared `LIR Passes` and `ARC` entries. Progress text reports
   the pipeline position as `Lowering`.

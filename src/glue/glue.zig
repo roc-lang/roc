@@ -1814,7 +1814,7 @@ const TypeTable = struct {
                 return try self.collectRecordFieldsForRootBound(src.artifact, record.ext, fields);
             },
             .empty_record => return true,
-            .pending, .err, .flex, .rigid, .tuple, .function, .tag_union, .empty_tag_union => return false,
+            .pending, .field_kind, .err, .flex, .rigid, .tuple, .function, .tag_union, .empty_tag_union => return false,
         }
     }
 
@@ -1849,7 +1849,7 @@ const TypeTable = struct {
 
         switch (checkedTypePayload(src.artifact, src.checked_type)) {
             .pending => glueInvariant("pending checked type reached glue bound type string", .{}),
-            .err => glueInvariant("erroneous checked type reached glue bound type string", .{}),
+            .field_kind, .err => glueInvariant("erroneous checked type reached glue bound type string", .{}),
             .flex => try buf.appendSlice(self.gpa, "flex"),
             .rigid => try buf.appendSlice(self.gpa, "rigid"),
             .alias => |alias| try self.writeTypeStringBound(src.artifact, alias.backing, buf, active),
@@ -2190,7 +2190,7 @@ const TypeTable = struct {
         if (visited.contains(key)) return false;
         try visited.put(key, {});
         switch (checkedTypePayload(artifact, checked_type)) {
-            .pending, .err, .empty_record, .empty_tag_union => return false,
+            .pending, .field_kind, .err, .empty_record, .empty_tag_union => return false,
             .flex, .rigid => return self.template_bindings.contains(key),
             .alias => |alias| return self.mentionsBoundFormalInner(artifact, alias.backing, visited),
             .record => |record| {
@@ -2407,7 +2407,7 @@ const TypeTable = struct {
             switch (checkedTypePayload(artifact, current)) {
                 .alias => |alias| current = alias.backing,
                 .flex, .rigid => |variable| return defaultedVariableRepr(variable) == null,
-                .pending, .err, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return false,
+                .pending, .field_kind, .err, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return false,
             }
         }
     }
@@ -3096,7 +3096,7 @@ const TypeTable = struct {
         const payload = checkedTypePayload(artifact, checked_type);
         return switch (payload) {
             .pending => glueInvariant("pending checked type reached glue type table", .{}),
-            .err => glueInvariant("erroneous checked type reached glue type table", .{}),
+            .field_kind, .err => glueInvariant("erroneous checked type reached glue type table", .{}),
             .flex => |variable| try self.convertTypeVariable(variable, position, "flex"),
             .rigid => |variable| try self.convertTypeVariable(variable, position, "rigid"),
             .alias => |alias| try self.convertCheckedType(artifact, alias.backing, position),
@@ -4318,7 +4318,7 @@ fn appendRecordRowFields(
                 try fields.appendSlice(gpa, record.fields);
                 current = record.ext;
             },
-            .pending, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union => glueInvariant("non-record checked row reached glue record conversion", .{}),
+            .pending, .field_kind, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union => glueInvariant("non-record checked row reached glue record conversion", .{}),
         }
     }
 }
@@ -4366,7 +4366,7 @@ fn appendTagRowTags(
                 try tags.appendSlice(gpa, tag_union.tags);
                 current = tag_union.ext;
             },
-            .pending, .err, .record, .tuple, .nominal, .function, .empty_record => glueInvariant("non-tag checked row reached glue tag-union conversion", .{}),
+            .pending, .field_kind, .err, .record, .tuple, .nominal, .function, .empty_record => glueInvariant("non-tag checked row reached glue tag-union conversion", .{}),
         }
     }
 }
@@ -4400,7 +4400,7 @@ fn writeTypeString(
 
     switch (checkedTypePayload(artifact, checked_type)) {
         .pending => glueInvariant("pending checked type reached glue type string", .{}),
-        .err => glueInvariant("erroneous checked type reached glue type string", .{}),
+        .field_kind, .err => glueInvariant("erroneous checked type reached glue type string", .{}),
         .flex => try buf.appendSlice(gpa, "flex"),
         .rigid => try buf.appendSlice(gpa, "rigid"),
         .alias => |alias| try writeTypeString(gpa, artifact, alias.backing, buf, active),

@@ -95,6 +95,7 @@ pub fn checkedTypeIsClosed(
             try stack.append(allocator, .{ .ty = func.ret, .boxed = false });
         },
         .pending,
+        .field_kind,
         .err,
         .empty_record,
         .empty_tag_union,
@@ -113,7 +114,7 @@ pub fn checkedTypeIsClosed(
         const gop = try (if (boxed) &visited_boxed else &visited).getOrPut(ty);
         if (gop.found_existing) continue;
         switch (types.payload(ty)) {
-            .pending, .err, .empty_record, .empty_tag_union => {},
+            .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
             .flex => return false,
             .function => |func| {
                 if (!boxed) return false;

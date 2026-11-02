@@ -337,6 +337,7 @@ const Extractor = struct {
                     return nominal;
                 },
                 .pending,
+                .field_kind,
                 .err,
                 .flex,
                 .rigid,
@@ -511,7 +512,7 @@ const Extractor = struct {
 
         switch (view.payload(id)) {
             .pending => return self.fail(.unpublished_public_type, "public type contains an unresolved (pending) checked type"),
-            .err => return self.fail(.unpublished_public_type, "public type contains an erroneous checked type"),
+            .field_kind, .err => return self.fail(.unpublished_public_type, "public type contains an erroneous checked type"),
             .flex, .rigid => |variable| {
                 // Insert the memo entry before converting constraints so a
                 // constraint signature that mentions its own variable
