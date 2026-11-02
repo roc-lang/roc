@@ -6600,6 +6600,11 @@ is a fresh instance such as an imported or viewed variable brought into
 this store—and `identityOrigin` refuses one that declares none, so a
 forgotten origin fails loudly instead of reading as an unquantified tail.
 Serialized stores carry no origins: no post-check consumer asks the question.
+A post-check consumer that reads a direct dispatch's function type in its
+enclosing scope reads the edge's callable relation
+(`EvidenceTargetInstantiation`), a root the scope's own scheme variables
+appear in, never the specialized plan callable, whose variables no scope
+binds.
 
 Type substitution preserves this graph discipline. A substitution of a closed
 root is the original root, because no formal can occur in it. A real
@@ -14916,7 +14921,9 @@ A direct call to a known template reads the checked site evidence of the use
   from the enclosing worker's hidden descriptor parameters. A sealed variable
   of the target scheme (Sealed Result Rows) takes no descriptor; where the
   edge copied it to a wider row, the call's result is converted from the
-  callee's result at the sealed row to the call's own type.
+  callee's result at the sealed row to the call's own type. The call's
+  function type is the edge's callable relation, whose variables are this
+  body's scheme variables (`Builder.dispatchCallable`).
 - the node's nested evidence names, for each evidence parameter of the target
   scheme in checked order, how the requirement was discharged. The lowerer
   passes the dictionary that discharge denotes (see Dictionaries).
