@@ -8814,9 +8814,8 @@ pub const Interpreter = struct {
                 try self.setScalarTarget(frame, stmt_id, target, u32, found.variant.discriminant);
             },
             .tag_payload_addr => |t| {
-                const found = try self.variantNamed(try self.descAt(frame, t.desc), try self.nameAt(frame, t.name));
-                const offset = try self.variantPayloadOffset(found.variant, t.payload_index);
-                try self.setComponentTarget(frame, stmt_id, target, boxy.compiled.componentAddr(variantPayloadDesc(found.variant, t.payload_index), (try self.localBytes(frame, t.base)) + offset));
+                const address = boxy.compiled.tagPayloadAddr(try self.descAt(frame, t.desc), try self.localBytes(frame, t.base), t.payload_index, &self.roc_ops);
+                try self.setComponentTarget(frame, stmt_id, target, address);
             },
             .record => |r| {
                 const record = try self.recordFields(try self.descAt(frame, r.desc));

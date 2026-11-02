@@ -90,6 +90,7 @@ fn compileReleasingSolverTypes(
         .enabled = cache_dir != null,
         .cache_dir = cache_dir orelse "",
     }, roc_ctx);
+    defer cache_manager.deinit();
 
     var builtin_modules = try eval.BuiltinModules.init(gpa);
     defer builtin_modules.deinit();

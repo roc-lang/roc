@@ -72,6 +72,7 @@ test "storeRawBytes and loadRawBytes round-trip" {
     const config = CacheConfig{ .cache_dir = tmp_path, .roc_ctx = filesystem };
 
     var manager = CacheManager.init(allocator, config, filesystem);
+    defer manager.deinit();
 
     const test_data = "Hello, test cache!";
     const cache_key = @as([32]u8, @splat(0x42));
@@ -99,7 +100,9 @@ test "concurrent cache stores of one key use separate staging files" {
     // Verbose output names the failing step and error if a store fails.
     const config = CacheConfig{ .cache_dir = tmp_path, .roc_ctx = filesystem, .verbose = true };
     var first = CacheManager.init(std.heap.page_allocator, config, filesystem);
+    defer first.deinit();
     var second = CacheManager.init(std.heap.page_allocator, config, filesystem);
+    defer second.deinit();
 
     const key = @as([32]u8, @splat(0x51));
     const data = "same checked artifact";
@@ -132,6 +135,7 @@ test "loadRawBytes returns null on miss" {
     const config = CacheConfig{ .cache_dir = tmp_path, .roc_ctx = filesystem };
 
     var manager = CacheManager.init(allocator, config, filesystem);
+    defer manager.deinit();
 
     const cache_key = @as([32]u8, @splat(0x24));
     const loaded = manager.loadRawBytes(cache_key, tmp_path);
@@ -154,6 +158,7 @@ test "recordStoreFailure prints non-verbose warning once" {
     filesystem.vtable.writeStderr = &captureStderr;
 
     var manager = CacheManager.init(allocator, .{ .roc_ctx = filesystem }, filesystem);
+    defer manager.deinit();
     manager.recordStoreFailure();
     manager.recordStoreFailure();
 
@@ -186,6 +191,7 @@ test "issue 11961: streamed cache publication preserves the old entry on write f
     filesystem.ctx = &capture;
     filesystem.vtable.writeStderr = captureStderr;
     var manager = CacheManager.init(gpa, .{ .cache_dir = path, .roc_ctx = filesystem }, filesystem);
+    defer manager.deinit();
     const key = @as([32]u8, @splat(0x42));
     manager.storeRawBytes(key, "old entry", path, "Test");
     const bad = Stream{ .fail = true };
@@ -242,6 +248,7 @@ test "cache write failures report every operation only in verbose mode" {
             filesystem.vtable.writeFile = &FailingCacheFilesystem.writeFile;
             filesystem.vtable.writeStderr = &FailingCacheFilesystem.writeStderr;
             var manager = CacheManager.init(allocator, .{ .cache_dir = root, .verbose = verbose }, filesystem);
+            defer manager.deinit();
             for ([_]CacheManager.Kind{ .checked, .canonicalized }) |kind| manager.storeRawBytesIn(allocator, kind, key, "cache data", "scope", "package.Module");
             const output = capture.capture.stderr.items;
             try testing.expectEqual(@as(u64, 1), manager.stats.store_failures);

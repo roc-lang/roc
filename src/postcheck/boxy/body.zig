@@ -299,6 +299,17 @@ const AliasStep = struct {
     params: []const static_dispatch.EvidenceParamRecord,
 };
 
+const ArgsDescKey = struct { descs: []const LocalId };
+
+const ArgsDescContext = struct {
+    pub fn hash(_: @This(), key: ArgsDescKey) u64 {
+        return std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(key.descs));
+    }
+    pub fn eql(_: @This(), a: ArgsDescKey, b: ArgsDescKey) bool {
+        return std.mem.eql(LocalId, a.descs, b.descs);
+    }
+};
+
 /// Lowers one worker's checked body to LIR.
 pub const Builder = struct {
     composition_site_count: u32 = 0,
@@ -346,6 +357,10 @@ pub const Builder = struct {
     /// start in `alias_scopes`. Its lookup reaches no scope outside them.
     foreign_scopes: ?usize = null,
     type_descs: collections.DenseMapUnmanaged(TypeId, LocalId) = .empty,
+    /// Complete argument layouts already emitted in this entry chain. Keys
+    /// name the exact ordered descriptor locals, not an approximation of types.
+    args_descs: std.HashMapUnmanaged(ArgsDescKey, LocalId, ArgsDescContext, std.hash_map.default_max_load_percentage) = .empty,
+
     /// Each type's descriptor once noted (`Input.stored_functions`).
     noted_descs: collections.DenseMapUnmanaged(TypeId, LocalId) = .empty,
     /// The locals the entry chain defines, which every statement of the
@@ -421,6 +436,9 @@ pub const Builder = struct {
         self.declared_captures.deinit(self.allocator);
         self.root_thunks.deinit(self.allocator);
         self.type_descs.deinit(self.allocator);
+        var args_keys = self.args_descs.keyIterator();
+        while (args_keys.next()) |key| self.allocator.free(key.descs);
+        self.args_descs.deinit(self.allocator);
         self.noted_descs.deinit(self.allocator);
         self.entry_locals.deinit(self.allocator);
         self.opened_components.deinit(self.allocator);
@@ -1589,7 +1607,7 @@ pub const Builder = struct {
             record_param = try self.ownScopeArgs(worker, outer_descs);
             try args.append(self.allocator, record_param.?);
         } else if (worker.params.len != 0) {
-            record_param = try self.argsRecordLocal(worker.params, .param);
+            record_param = try self.erasedParamLocal(worker.params);
             try args.append(self.allocator, record_param.?);
         }
         var ret_layout: layout.Idx = undefined;
@@ -1608,7 +1626,7 @@ pub const Builder = struct {
                 const local = try self.localOf(param_ty, .view);
                 try self.emitDyn(local, .{ .field_addr = .{ .base = record_param.?, .desc = self.store.localDyn(record_param.?).?.desc, .field_index = @intCast(own_words + index) } });
                 break :blk local;
-            } else try self.argsRecordField(record_param.?, @intCast(index), param_ty);
+            } else try self.erasedParamValue(record_param.?, worker.params, @intCast(index));
             try self.bindIrrefutable(pattern, value, param_ty);
         }
         try self.tasks.append(self.allocator, .ret);
@@ -1650,7 +1668,7 @@ pub const Builder = struct {
         }
         var args: std.ArrayList(LocalId) = .empty;
         defer args.deinit(self.allocator);
-        const record_param: ?LocalId = if (worker.params.len != 0) try self.argsRecordLocal(worker.params, .param) else null;
+        const record_param: ?LocalId = if (worker.params.len != 0) try self.erasedParamLocal(worker.params) else null;
         if (record_param) |param| try args.append(self.allocator, param);
         var ret_layout: layout.Idx = undefined;
         if (try self.closed(worker.ret)) {
@@ -1670,7 +1688,7 @@ pub const Builder = struct {
         const adapted = try self.allocator.alloc(LocalId, worker.params.len);
         defer self.allocator.free(adapted);
         for (worker.params, from_params, adapted, 0..) |param_ty, from_ty, *value, index| {
-            const arg = try self.argsRecordField(record_param.?, @intCast(index), param_ty);
+            const arg = try self.erasedParamValue(record_param.?, worker.params, @intCast(index));
             value.* = try self.adaptValue(arg, param_ty, from_ty);
         }
         const result = try self.emitErasedCall(inner, from, adapted, signature.ret);
@@ -1994,8 +2012,7 @@ pub const Builder = struct {
         const words = try self.allocator.alloc(LocalId, own_words);
         defer self.allocator.free(words);
         @memset(words, word);
-        const prefix_desc = try self.closedLocal(.opaque_ptr);
-        try self.emitEntry(.{ .dyn = .{ .target = prefix_desc, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_args = .{ .elems = try self.store.addLocalSpan(words) } }), .next = undefined } });
+        const prefix_desc = try self.composedArgsDesc(words);
         for (0..own_words) |index| {
             const local = try self.closedLocal(if (index < worker.own_descs) .opaque_ptr else try self.erasedLayout());
             try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = prefix_desc, .field_index = @intCast(index) } }), .next = undefined } });
@@ -2298,7 +2315,7 @@ pub const Builder = struct {
         for (payloads, 0..) |*payload, index| {
             const payload_ty = try store.variable(@intCast(2 + index));
             const view = try self.localOf(payload_ty, .view);
-            try self.emitDyn(view, .{ .tag_payload_addr = .{ .base = input, .desc = input_desc, .name = name, .payload_index = @intCast(index) } });
+            try self.emitDyn(view, .{ .tag_payload_addr = .{ .base = input, .desc = input_desc, .payload_index = @intCast(index) } });
             const copy = try self.localOf(payload_ty, .frame);
             try self.emitDyn(copy, .{ .copy = .{ .src = view, .desc = self.var_descs[2 + index] } });
             payload.* = copy;
@@ -2364,7 +2381,7 @@ pub const Builder = struct {
         defer args.deinit(self.allocator);
         var record: ?LocalId = null;
         if (params.len != 0) {
-            record = try self.argsRecordLocal(params, .param);
+            record = try self.erasedParamLocal(params);
             try args.append(self.allocator, record.?);
         }
         var ret_layout: layout.Idx = undefined;
@@ -2378,7 +2395,7 @@ pub const Builder = struct {
         self.hole = body_start;
         const values = try self.allocator.alloc(LocalId, params.len);
         defer self.allocator.free(values);
-        for (values, params, 0..) |*value, param_ty, index| value.* = try self.argsRecordField(record.?, @intCast(index), param_ty);
+        for (values, 0..) |*value, index| value.* = try self.erasedParamValue(record.?, params, @intCast(index));
         const result: ?LocalId = switch (body) {
             .call => |call| blk: {
                 const all = try std.mem.concat(self.allocator, LocalId, &.{ values, call.hidden });
@@ -2432,6 +2449,21 @@ pub const Builder = struct {
         return try self.program.result.layouts.putStructFields(fields);
     }
 
+    /// An erased entry owns one complete argument block. A sole argument
+    /// is already that block: use its own descriptor and ownership unit.
+    pub fn erasedParamLocal(self: *Builder, params: []const TypeId) Allocator.Error!LocalId {
+        std.debug.assert(params.len != 0);
+        if (params.len == 1) return self.localOf(params[0], .param);
+        return self.argsRecordLocal(params, .param);
+    }
+
+    /// Bind the source parameter directly when it is the entire block.
+    pub fn erasedParamValue(self: *Builder, block: LocalId, params: []const TypeId, index: u32) Allocator.Error!LocalId {
+        std.debug.assert(index < params.len);
+        if (params.len == 1) return block;
+        return self.argsRecordField(block, index, params[index]);
+    }
+
     /// The packed erased-call argument record of `params`: a declared-order
     /// struct when every parameter type is closed, a dynamic record composed
     /// with `desc_args` otherwise.
@@ -2459,8 +2491,23 @@ pub const Builder = struct {
         const descs = try self.allocator.alloc(LocalId, params.len);
         defer self.allocator.free(descs);
         for (descs, params) |*desc, param| desc.* = try self.descOf(param);
+        return self.composedArgsDesc(descs);
+    }
+
+    /// Reuse an exact argument-layout computation in this worker's entry.
+    fn composedArgsDesc(self: *Builder, descs: []const LocalId) Allocator.Error!LocalId {
+        // Only completed descriptor graphs are immutable. A composition
+        // emitted while a recursive member is open is not shared across its
+        // close, which can change the layout it describes.
+        const finalized = self.open_members.count() == 0;
+        if (finalized) if (self.args_descs.get(.{ .descs = descs })) |existing| return existing;
         const local = try self.closedLocal(.opaque_ptr);
         try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_args = .{ .elems = try self.store.addLocalSpan(descs) } }), .next = undefined } });
+        if (finalized) {
+            const key = try self.allocator.dupe(LocalId, descs);
+            errdefer self.allocator.free(key);
+            try self.args_descs.put(self.allocator, .{ .descs = key }, local);
+        }
         return local;
     }
 
@@ -4543,8 +4590,7 @@ pub const Builder = struct {
         defer self.allocator.free(elems);
         @memset(elems[0..words.len], word);
         for (elems[words.len..], params) |*elem, param_ty| elem.* = try self.descOf(param_ty);
-        const desc = try self.closedLocal(.opaque_ptr);
-        try self.emitEntry(.{ .dyn = .{ .target = desc, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_args = .{ .elems = try self.store.addLocalSpan(elems) } }), .next = undefined } });
+        const desc = try self.composedArgsDesc(elems);
         const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = .frame } });
         const fields = try std.mem.concat(self.allocator, LocalId, &.{ words, args });
         defer self.allocator.free(fields);
@@ -7038,9 +7084,7 @@ pub const Builder = struct {
         defer self.allocator.free(descs);
         @memset(descs[0 .. 1 + word_count], word);
         for (descs[1 + word_count ..], capture_types) |*desc, ty| desc.* = try self.descOf(ty);
-        const local = try self.closedLocal(.opaque_ptr);
-        try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_args = .{ .elems = try self.store.addLocalSpan(descs) } }), .next = undefined } });
-        return local;
+        return self.composedArgsDesc(descs);
     }
 
     pub fn opaqueWordDesc(self: *Builder) Allocator.Error!LocalId {
@@ -8103,7 +8147,7 @@ pub const Builder = struct {
         } else invariant("a tag pattern's tag is absent from its type");
         for (args, payload_types, 0..) |arg, payload_ty, index| {
             const local = try self.localOf(payload_ty, .view);
-            try self.emitDyn(local, .{ .tag_payload_addr = .{ .base = value, .desc = desc, .name = name_local, .payload_index = @intCast(index) } });
+            try self.emitDyn(local, .{ .tag_payload_addr = .{ .base = value, .desc = desc, .payload_index = @intCast(index) } });
             try pending.append(self.allocator, .{ .pattern = arg, .value = local, .ty = payload_ty });
         }
     }
@@ -8406,7 +8450,7 @@ pub const Builder = struct {
                 if (tag.name == name) break self.program.store.span(tag.payloads)[index];
             } else invariant("a tag payload's tag is absent from its type");
             const local = try self.localOf(payload_ty, .view);
-            try self.emitDyn(local, .{ .tag_payload_addr = .{ .base = value, .desc = try self.descOf(ty), .name = try self.nameDesc(name), .payload_index = index } });
+            try self.emitDyn(local, .{ .tag_payload_addr = .{ .base = value, .desc = try self.descOf(ty), .payload_index = index } });
             return .{ .value = local, .ty = payload_ty };
         }
         const variant = try self.closedVariant(ty, name);
