@@ -988,7 +988,9 @@ pub const RootRequestTable = struct {
         }
         for (requests.items) |*request| {
             if (request.root_evidence != null) continue;
-            const template_ref = request.procedure_template orelse continue;
+            const template_ref = request.procedure_template orelse
+                aliasRootWrapperTemplate(request.*, top_level_procedure_bindings, callable_eval_templates, entry_wrappers) orelse
+                continue;
             if (!template_ref.artifact.eql(artifact_key.digest())) {
                 checkedArtifactInvariant("root procedure template belonged to a different checked artifact", .{});
             }
@@ -2210,6 +2212,26 @@ fn procedureTemplateForTopLevelBinding(
     };
 }
 
+/// The entry wrapper template of a root bound to an exact procedure alias. The
+/// root enters the alias's scope, which is that wrapper's, so the wrapper's
+/// template root evidence is the root's.
+fn aliasRootWrapperTemplate(
+    request: RootRequest,
+    top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
+    callable_eval_templates: *const CallableEvalTemplateTable,
+    entry_wrappers: *const EntryWrapperTable,
+) ?canonical.ProcedureTemplateRef {
+    const binding_ref = request.procedure_binding orelse return null;
+    return switch (top_level_procedure_bindings.get(binding_ref).body) {
+        .callable_eval_template => |template_id| blk: {
+            const template = callable_eval_templates.templates.items[@backingInt(template_id)];
+            if (template.forwarded_lookup == null) break :blk null;
+            break :blk templateForEntryWrapperRoot(entry_wrappers, template.root);
+        },
+        .direct_template, .checked_error => null,
+    };
+}
+
 const RootBackingProcedure = struct {
     checked_type: CheckedTypeId,
     template: canonical.ProcedureTemplateRef,
@@ -2353,6 +2375,19 @@ fn topLevelExprIsAlreadyProcedure(module: TypedCIR.Module, def_idx: CIR.Def.Idx,
 
 fn sourceTypeIsFunction(module: TypedCIR.Module, var_: Var) bool {
     return module.typeStoreConst().varResolvesToFunction(var_);
+}
+
+/// Whether `pattern = expr` binds an exact procedure alias, local or top
+/// level (design.md "Procedure Aliases"). Generalization is checker-owned
+/// binding metadata; the right-hand lookup supplies the forward, and calls
+/// and other computations keep their ordinary evaluation site.
+fn bindsProcedureAlias(module: TypedCIR.Module, pattern: CIR.Pattern.Idx, expr: CIR.Expr.Idx) bool {
+    const rhs = module.expr(expr).data;
+    const is_lookup = rhs == .e_lookup_local or rhs == .e_lookup_external or
+        rhs == .e_lookup_required or rhs == .e_lookup_associated_resolved;
+    return is_lookup and module.pattern(pattern).data == .assign and
+        module.moduleEnvConst().nodeIsBindingScheme(ModuleEnv.nodeIdxFrom(pattern)) and
+        sourceTypeIsFunction(module, module.patternType(pattern));
 }
 
 fn isHostedProcedureExpr(expr: CIR.Expr) bool {
@@ -15783,16 +15818,7 @@ const CheckedBodyPayloadCopier = struct {
                 if (self.promoted_patterns.contains(decl.pattern)) {
                     break :blk .{ .promoted_proc = .{ .pattern = self.checkedPattern(decl.pattern), .expr = self.checkedExpr(decl.expr) } };
                 }
-                // Generalization is checker-owned binding metadata. The RHS
-                // lookup supplies the explicit forwarding edge; calls and
-                // other computations retain their ordinary evaluation site.
-                const rhs = self.module.expr(decl.expr).data;
-                const is_lookup = rhs == .e_lookup_local or rhs == .e_lookup_external or
-                    rhs == .e_lookup_required or rhs == .e_lookup_associated_resolved;
-                if (is_lookup and self.module.pattern(decl.pattern).data == .assign and
-                    self.module.moduleEnvConst().nodeIsBindingScheme(ModuleEnv.nodeIdxFrom(decl.pattern)) and
-                    sourceTypeIsFunction(self.module, self.module.patternType(decl.pattern)))
-                {
+                if (bindsProcedureAlias(self.module, decl.pattern, decl.expr)) {
                     const binder = try self.patternBinder(decl.pattern);
                     self.pattern_binders.items[@backingInt(binder)].is_scheme_alias = true;
                 }
@@ -18856,6 +18882,10 @@ const EvidencePass = struct {
     local_value_scheme_by_var: collections.DenseMap(u32, u32),
     /// First value_use record per looked-up pattern.
     value_use_record_by_pattern: collections.DenseMap(u32, u32),
+    /// A scheme relation's callable root -> the callable of the private
+    /// instance whose derivation answers for it. Evidence states the instance,
+    /// whose types are the ones that derivation was built at.
+    codec_instance_by_template: collections.DenseMap(Var, Var),
     /// Each scheme-use record's substitution, indexed by the resolved root of
     /// each pair's scheme-side var; the first pair recorded for a root wins.
     /// The store is read-only during this pass, so resolved roots are fixed.
@@ -18984,6 +19014,7 @@ const EvidencePass = struct {
             .source_by_checked_expr = collections.DenseMap(u32, u32).init(allocator),
             .local_value_scheme_by_var = collections.DenseMap(u32, u32).init(allocator),
             .value_use_record_by_pattern = collections.DenseMap(u32, u32).init(allocator),
+            .codec_instance_by_template = collections.DenseMap(Var, Var).init(allocator),
             .node_by_record = collections.DenseMap(u32, static_dispatch.EvidenceNodeId).init(allocator),
             .evidence_node_buckets = std.AutoHashMap(u64, static_dispatch.EvidenceNodeId).init(allocator),
             .evidence_node_next = .empty,
@@ -19022,6 +19053,7 @@ const EvidencePass = struct {
         self.source_by_checked_expr.deinit();
         self.local_value_scheme_by_var.deinit();
         self.value_use_record_by_pattern.deinit();
+        self.codec_instance_by_template.deinit();
         self.fresh_by_pair_root.deinit(self.allocator);
         self.node_by_record.deinit();
         self.evidence_node_buckets.deinit();
@@ -19622,6 +19654,10 @@ const EvidencePass = struct {
                 checkedArtifactInvariant("duplicate generated codec source constraint identity", .{});
             }
             slot.* = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+            if (derivation.template_constraint_fn_var != derivation.source_constraint_fn_var) {
+                const template: Var = @fromBackingInt(@intCast(derivation.template_constraint_fn_var));
+                try self.codec_instance_by_template.put(self.types.resolveVar(template).var_, source);
+            }
         }
         // Records replayed from one source name the same substitution range,
         // whose pairs are indexed once.
@@ -20211,11 +20247,10 @@ const EvidencePass = struct {
     ) Allocator.Error!void {
         const expr_data = self.module.expr(expr).data;
         if (expr_data == .e_lambda or expr_data == .e_closure) return;
-        if (self.checked_bodies.patternBinderForSource(pattern)) |binder| {
-            // Callable aliases now own exact evidence scopes. Their RHS
-            // requirements belong to that scope, not to a representative use.
-            if (self.checked_bodies.patternBinder(binder).is_scheme_alias) return;
-        }
+        // A procedure alias owns an exact evidence scope. Its right-hand
+        // side's requirements belong to that scope, not to a representative
+        // use.
+        if (bindsProcedureAlias(self.module, pattern, expr)) return;
         // Resolution reaches a pattern only through one of its value-use
         // records. A decl nobody instantiated (for example a local inside a
         // generalized definition, whose variables are generalized only as
@@ -20615,12 +20650,17 @@ const EvidencePass = struct {
         }
     }
 
+    /// The callable a generated codec relation's derivation was validated at.
+    fn codecRelationCallable(self: *EvidencePass, constraint_fn_var: Var) Var {
+        return self.codec_instance_by_template.get(self.types.resolveVar(constraint_fn_var).var_) orelse constraint_fn_var;
+    }
+
     fn generatedCodecDerivationForSourceConstraint(
         self: *EvidencePass,
         constraint_fn_var: Var,
         expected_kind: static_dispatch.GeneratedCodecDerivationKind,
     ) ?static_dispatch.GeneratedCodecDerivationId {
-        const by_kind = self.generated_codec_by_source.getPtrConst(constraint_fn_var) orelse return null;
+        const by_kind = self.generated_codec_by_source.getPtrConst(self.codecRelationCallable(constraint_fn_var)) orelse return null;
         return by_kind.get(expected_kind);
     }
 
@@ -21557,7 +21597,7 @@ const EvidencePass = struct {
                     .callable_contract = dependent.callable_contract,
                 } },
                 .structural => |kind| blk: {
-                    const callable_var = fresh_fn_var orelse param.constraint.fn_var;
+                    const callable_var = self.codecRelationCallable(fresh_fn_var orelse param.constraint.fn_var);
                     const callable_ty = self.checked_types.rootForSourceVar(self.module, callable_var) orelse
                         checkedArtifactInvariant("checked structural evidence callable type was not published", .{});
                     break :blk .{ .structural = .{
@@ -26671,12 +26711,17 @@ fn publishLiteralArgumentRoots(
         }
 
         /// The template a procedure value reference instantiates.
+        /// The template whose scheme a value reference instantiates: the
+        /// procedure's, or an exact procedure alias's entry wrapper, whose
+        /// scheme is the alias's. A use of a computed callable instantiates
+        /// nothing.
         fn templateOfValueRef(self: *@This(), ref: ResolvedValueRef) ?canonical.ProcedureTemplateRef {
             const use: ProcedureUseTemplate = switch (ref) {
                 .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| use,
                 .platform_required_proc => |required| required.procedure,
                 .hosted_proc, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_const, .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .platform_required_declaration, .platform_required_checked_error => return null,
             };
+            var alias_view: ?ImportedModuleView = null;
             const body: ProcedureBindingBody = switch (use.binding) {
                 .top_level => |top_level| blk: {
                     if (!top_level.artifact.eql(self.owner)) return null;
@@ -26684,6 +26729,7 @@ fn publishLiteralArgumentRoots(
                 },
                 .imported => |imported| blk: {
                     const view = self.import_views.viewForKey(imported.artifact) orelse return null;
+                    alias_view = view;
                     const binding = importedProcedureBindingForDef(view, imported.def) orelse return null;
                     break :blk binding.body;
                 },
@@ -26694,7 +26740,16 @@ fn publishLiteralArgumentRoots(
                     .checked => |template| template,
                     .lifted, .synthetic => null,
                 },
-                .callable_eval_template, .checked_error => null,
+                .callable_eval_template => |template_id| blk: {
+                    const eval_templates: CallableEvalTemplateTableView = if (alias_view) |view| view.callable_eval_templates else self.callable_eval_templates.view();
+                    const template = eval_templates.templates[@backingInt(template_id)];
+                    if (template.forwarded_lookup == null) break :blk null;
+                    const wrapper_table: *const EntryWrapperTable = if (alias_view) |view| view.entry_wrappers else self.entry_wrappers;
+                    const wrapper = wrapper_table.lookupByRoot(template.root) orelse
+                        checkedArtifactInvariant("a callable-eval template's root has no entry wrapper", .{});
+                    break :blk wrapper.template;
+                },
+                .checked_error => null,
             };
         }
 

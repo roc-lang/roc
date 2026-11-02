@@ -162,6 +162,9 @@ jobs:
       - name: Run CLI tests (LLVM size/speed backends)
         run: zig build run-test-cli -- --llvm-only
 
+      - name: Run CLI platform tests under --specialize=no (LLVM size/speed backends)
+        run: zig build run-test-cli -- --suite platforms --llvm-only --specialize=no
+
       - name: Run focused test outcome cache regressions
         run: zig build run-test-outcome-cache -j2
 

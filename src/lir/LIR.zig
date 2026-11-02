@@ -1351,6 +1351,11 @@ pub const DynOp = union(enum) {
     /// open row, is the descriptor of the row's remainder, whose fields
     /// join the named ones.
     desc_record: struct { names: LocalSpan, descs: LocalSpan, ext: ?LocalId = null },
+    /// A padded nominal's backing record, laid out in declared order. `descs`
+    /// has every field in that order, `padding` the positions in it of the
+    /// unnamed fields, ascending, and `names` the labels of the others in
+    /// their order.
+    desc_declared_record: struct { names: LocalSpan, descs: LocalSpan, padding: U32Span },
     desc_tuple: struct { elems: LocalSpan },
     /// An optional record field's presence slot over `payload`: the tag
     /// union `[missing, present(payload)]`, marked as a presence slot.

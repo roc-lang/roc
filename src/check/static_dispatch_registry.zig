@@ -1570,7 +1570,8 @@ pub const CheckedEvidence = struct {
         /// evidence parameter projected from the concrete callable request.
         from_callable,
         /// The local declaration binds an abstract scheme requirement. A use
-        /// supplies its checked evidence; no codec is instantiated at declaration.
+        /// supplies its checked evidence; no codec is instantiated at declaration,
+        /// and a declaration nothing uses has no dispatch to reach.
         from_scheme,
         checked_error,
         /// The edge left this obligation's dispatcher unsolved: no value of that

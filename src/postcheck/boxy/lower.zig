@@ -1047,6 +1047,9 @@ pub const Program = struct {
                             try store.intern(.{ .record = .{ .fields = residual.items, .ext = other.record.ext } });
                         try pending.append(allocator, .{ ext, remainder });
                     }
+                    if (record.declared != null and other.record.declared != null) {
+                        for (store.paddingTypes(record), store.paddingTypes(other.record)) |a, b| try pending.append(allocator, .{ a, b });
+                    }
                 },
                 .tag_union => |tag_union| {
                     var residual: std.ArrayList(types.TagInput) = .empty;
@@ -1106,6 +1109,7 @@ pub const Program = struct {
                         try pending.append(self.allocator, field.ty);
                     }
                     if (record.ext) |ext| try pending.append(self.allocator, ext);
+                    try pending.appendSlice(self.allocator, self.store.paddingTypes(record));
                 },
                 .tuple => |items| try pending.appendSlice(self.allocator, self.store.span(items)),
                 .tag_union => |tag_union| {
@@ -1195,6 +1199,7 @@ pub const Program = struct {
                         try pending.append(allocator, field.ty);
                     }
                     if (record.ext) |ext| try pending.append(allocator, ext);
+                    try pending.appendSlice(allocator, self.store.paddingTypes(record));
                 },
                 .tuple => |items| try pending.appendSlice(allocator, self.store.span(items)),
                 .tag_union => |tag_union| {
@@ -1244,6 +1249,7 @@ pub const Program = struct {
                     .record => |record| {
                         for (self.store.fieldSpan(record.fields)) |field| try stack.append(allocator, .{ .ty = field.ty, .expanded = false });
                         if (record.ext) |ext| try stack.append(allocator, .{ .ty = ext, .expanded = false });
+                        for (self.store.paddingTypes(record)) |padding| try stack.append(allocator, .{ .ty = padding, .expanded = false });
                     },
                     .tuple => |items| for (self.store.span(items)) |item| try stack.append(allocator, .{ .ty = item, .expanded = false }),
                     .tag_union => |tag_union| {
@@ -1308,6 +1314,18 @@ pub const Program = struct {
                         .variable => {},
                         .primitive, .tuple, .tag_union, .list, .box, .nominal, .function => invariant("a record row's remainder substituted to a non-record type"),
                     };
+                    // A declared order's slots index its row, which no
+                    // substitution of its closed remainder extends.
+                    if (record.declared) |declared| {
+                        const padding = try allocator.alloc(TypeId, declared.padding.len);
+                        defer allocator.free(padding);
+                        for (self.store.span(declared.padding), padding) |ty, *slot| slot.* = done.get(ty).?;
+                        break :blk try self.store.intern(.{ .record = .{
+                            .fields = fields.items,
+                            .ext = ext,
+                            .declared = .{ .padding = padding, .slots = self.store.declaredSlots(declared) },
+                        } });
+                    }
                     if (fields.items.len == 0 and ext == null) break :blk try self.store.emptyRecord();
                     const store = &self.store;
                     std.mem.sort(types.Field, fields.items, store, struct {
@@ -1495,6 +1513,7 @@ pub const Program = struct {
                 .record => |record| {
                     for (store.fieldSpan(record.fields)) |field| try pending.append(self.allocator, field.ty);
                     if (record.ext) |ext| try pending.append(self.allocator, ext);
+                    try pending.appendSlice(self.allocator, store.paddingTypes(record));
                 },
                 .tuple => |items| try pending.appendSlice(self.allocator, store.span(items)),
                 .tag_union => |tag_union| {
@@ -1767,6 +1786,7 @@ pub const Program = struct {
                 .record => |record| {
                     for (self.store.fieldSpan(record.fields)) |field| try stack.append(self.allocator, field.ty);
                     if (record.ext) |ext| try stack.append(self.allocator, ext);
+                    try stack.appendSlice(self.allocator, self.store.paddingTypes(record));
                 },
                 .tuple => |items| try stack.appendSlice(self.allocator, self.store.span(items)),
                 .tag_union => |tag_union| {

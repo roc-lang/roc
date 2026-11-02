@@ -2720,7 +2720,9 @@ root ("Demand-Driven Compile-Time Evaluation"). Its Solved policy is that of the
 being built, so evaluation runs inside that program's one specialization;
 with no runtime program, as in `roc check`, it is a dev build's
 (`CheckedPipeline.dev_inline_mode`). Inlining and SpecConstr preserve meaning,
-so the policy changes how evaluation's code is built, never what it computes.
+and every function value keeps the captures the checked program gives it
+("Stored Function Capture Contract"), so the policy changes how evaluation's
+code is built, never what it computes or stores.
 Every LIR setting evaluation lowers under is a dev build's too: the rewrites
 that only speed up the produced program stay off, tag-case fusion (which
 bounds list copying) stays on, ARC may consume dead boxes, and `Dict`'s
@@ -8668,9 +8670,7 @@ names, for dictionaries and descriptors alike. A
 generated codec runtime body reads its edge in that body's module when that
 module holds an equal contract; otherwise, as for a custom format's contract
 reached through a Builtin method, it reads the edge the same way, from the storing
-module's import closure. A generated runtime whose encoding operand reads the frame
-that built it, rather than being a value any frame can rebuild, always captures
-the encoding, so a stored one has its value when that frame is gone. Completed-body records
+module's import closure. Completed-body records
 retain recorded edges and are rejected when their recording module is absent.
 
 The checker's derived-codec walk records each nominal application whose
@@ -9407,7 +9407,9 @@ value. The iterator-only pass used by `.none` and `.procedures` preserves
 this ownership boundary: the pipeline must not repeat capture analysis.
 SpecConstr can change free-variable use while cloning and rewriting function
 bodies, so SpecConstr owns one exact capture finalization before it returns its
-Monotype Lifted output. No later pipeline stage repeats that finalization.
+Monotype Lifted output. No later pipeline stage repeats that finalization. A
+program that evaluates compile-time roots keeps every declared capture through
+it ("Stored Function Capture Contract").
 
 SpecConstr also owns the exact procedure-use inventory for its final rewritten
 graph. Its last graph snapshot records each function's external direct-call
@@ -11750,7 +11752,11 @@ Equating the rows instead would write `Bad(a)` into the callback's row, so the
 inferred signature would be strictly less general than an annotation the
 checker accepts. Two tagless contributions share the one tail. A tag the
 source turns out to carry at a use merges with a same-named head whose
-payload agrees and is a mismatch otherwise (Row Union Normalization).
+payload agrees and is a mismatch otherwise (Row Union Normalization). An error
+that is not a row at all, such as a nominal tag union, is not a tagless
+contribution: it has no residual extension, so it is related to the whole
+result row as a contribution with tags is, and a bare tag returned beside
+`check(x)?` on a `Try(_, Error)` joins `Error`.
 
 Under an ANNOTATED result the residual tail is the annotation's—rigid, or
 bounded by it—so a tagless source there is a row still being resolved (a
@@ -12443,6 +12449,49 @@ omit it), test/cli/Issue11561ClosedRowPattern.roc (a use that names the tag
 does not excuse the annotation), and
 test/cli/ParserChildErrorOutsideAnnotation.roc (a nested custom parser's error
 tag outside the annotated row, including when a caller also widens the row).
+
+### Parked Codec Relations Validate A Private Instance
+
+A generalized scheme never changes after its boundary: every use copies it, so
+a later write would reach some uses and miss others. A generated-codec relation
+parked for finalization whose receiver is known but whose state or error row is
+still a variable the definition quantifies (`any_parser = |_|
+U64.parser_for(Format.Default)`, whose state nothing in the definition fixes)
+therefore belongs to its scheme as a template, exactly like a relation over an
+unresolved receiver. `Check.activateSchemeDeferredCodecConstraints` marks it
+scheme-only at the boundary. Each use copies it and validates the copy at that
+use's own state and error row, so two calls of one definition in one body may
+take two rows, and a call's `Parser Error Row Missing Tag` or state mismatch is
+that use's own relation. `.boxy` constructs a stored lambda with its own
+dictionaries, and a `from_scheme` entry there means no use instantiated it, so
+that dictionary is a crash nothing reads.
+
+A definition with no use still owes its relation a verdict, so finalization
+validates one private instance of it (`Check.finalCodecRelationInstance`)
+rather than the template. The instance copies the variables the scheme
+quantifies, keeps rigid variables rigid, so a body that cannot deliver its
+annotation is rejected, and shares monomorphic variables, so a relation that
+reaches a weak value still determines it. A relation no type satisfies, such as
+a format with no `parse_u64`, is reported at the expression that created it,
+and rejects the template. The instance's derivation answers for the template
+(`GeneratedCodecDerivation.template_constraint_fn_var`), and evidence through
+it states the instance's callable, whose types that derivation was built at. So
+a procedure that runs as a root, which has no caller, relates to the instance as
+it would to a use, and a generalized binding nothing uses (`_ = any_parser`)
+still has evidence at its construction.
+This validates in a private copy and rewrites no solved variable the program can
+reach, so it adds no Rewrite Inventory entry (Solver-Mutating Rewrites).
+
+A relation whose state is known at the boundary is unaffected: it is validated
+there, before generalization, so its constraints enter the definition's type
+before anything can copy it. Pinned by `src/check/test/codec_scheme_relation_test.zig` (accepted:
+quantified schemes for parsers, encoders and forwarding definitions, two rows
+in one body; rejected: a use's state or row, a relation no type satisfies with
+no use, and an annotation's rigid state or error row) and
+`test/cli/CodecSchemeRowsPerUse.roc`, which runs parsers and encoders at two
+rows in one body, through a forwarding definition and a local alias, in stored
+records, at two state types, through an import, and as bindings nothing uses, on
+every backend under both strategies.
 
 ### Derived Equality And Hashing Over Open Rows
 
@@ -15095,7 +15144,8 @@ Descriptors come from two sources and nowhere else:
   mentions one of its type variables, the lowerer emits a composition
   statement whose operands are static descriptors and hidden descriptor
   parameters: `desc_list(item)`, `desc_box(payload)`, `desc_record(fields)`,
-  `desc_tag_union(variants)`, `desc_nominal(declaration, args)`,
+  `desc_declared_record(fields)`, `desc_tag_union(variants)`,
+  `desc_nominal(declaration, args)`,
   `desc_erased_callable`. The runtime composes the layout with the shared
   layout code and interns the result in an immortal cache keyed by
   constructor and operand identities, so a composition executed again
@@ -15378,6 +15428,12 @@ strategy).
   arguments (`.forwarded`). A template's `literal_argument_demand` lists the
   roots its edges read, so compile-time evaluation orders them before any
   evaluation of the template.
+- A use of an exact procedure alias is an edge to the alias's entry wrapper,
+  whose literal requirements are those its forwarded lookup, itself an edge,
+  gives it. Boxy passes each alias's arguments down the chain as it does
+  dictionaries, reading each lookup's edge in that alias's scope. A dispatch
+  edge bound to an alias holds the target's arguments composed through the
+  chain (`aliasChainSubstitution`), resolved in the scope holding the edge.
 - The root's value type is the conversion's `Ok` payload type at the closed
   type: the literal's type for a numeral or a quote, the assembler's function
   type for an interpolation. A root whose value holds a function
@@ -17474,8 +17530,9 @@ the record-field label that matches the lexicographic backing row; a padding
 entry stores the ordinal of the corresponding checked padding type in
 `padding_field_types`. The padding type itself is not duplicated in the
 declared-order entry, so generic nominal instantiation substitutes padding types
-in exactly one place. Monotype preserves this field metadata because boxy
-descriptors also consume it. Layout selection is independent:
+in exactly one place. Monotype preserves this field metadata for `.lss` layout
+selection; `.boxy` does not go through Monotype and reads the same checked data
+directly (Nominal Record Field Order). Layout selection is independent:
 without padding, LSS and boxy reuse the structural
 backing; with padding, they propagate an explicit declared-order policy.
 
@@ -18228,9 +18285,22 @@ the lookup's own callee there, so the call reaches the aliased procedure's speci
 the evidence the alias's scope composes and keeps that procedure's
 representation; no alias function exists at runtime. The callee's compiler-owned
 roles (call-site intrinsics, iterator procedures, `Str.inspect`, hosted `Try`
-adapters) follow the forward to the final procedure. Boxy follows the forward
-too, composing the final procedure's hidden arguments through the alias's
-evidence (`through_alias`).
+adapters) follow the forward to the final procedure.
+
+A use of an alias instantiates the alias's scheme, never the procedure's: the
+alias can fix some of the procedure's variables (`stored : U64 -> Str` of a
+generic `via`), so the use can record no evidence at all while the procedure
+requires a dictionary. The forwarded lookup is the only record of the
+procedure's instantiation. Its evidence is resolved against the alias's scope,
+whatever types the alias is used at, and a requirement the alias's scheme keeps
+is a `constraint` on that scope; no representative use stands in for it. A
+value use follows the same forward as a call, and Boxy composes the final
+procedure's hidden arguments alias by alias for every use: a call, a value, a
+literal chain's edge, a platform requirement the app binds to an alias, and a
+root (`Body.aliasChainInstance`; a dispatch edge's scope comes from
+`through_alias`). A platform requirement and a root record no instantiation, so
+the use's function type relates the alias's variables and the requirement's or
+root's evidence fills its scope.
 
 A method bound to an exact alias dispatches to the procedure the alias chain
 reaches, and the method target records the alias binding it was reached
@@ -20147,14 +20217,47 @@ record itself. Canonicalization preserves it—a nominal declaration's record
 annotation keeps its fields in source order—and checking records it as
 explicit CheckedModule data distinct from the (lexicographic) backing row,
 so later stages never rescan declarations. Monotype lowering preserves this
-metadata for boxy descriptors. LSS and boxy use the presence of explicit
-checked padding types to select the
+metadata for `.lss`, and `.boxy` reads it from the checked declaration. LSS and
+boxy use the presence of explicit checked padding types to select the
 declared-order layout policy; otherwise their runtime layout path reuses the
 structural backing row. The layout graph records the selected policy on the
 struct span, and the store commits it without probing or reconstructing intent.
 Field-name resolution continues to use the lexicographic row order, independent
 of the layout offset map. The same policy is consumed by the interpreter's
 layout store, so all backends agree.
+
+Under `.boxy` the backing of a padded nominal is a record type of its own,
+distinct from the record of the same fields: `Converter.backing` reads the
+declaration's declared fields and padding types, at the nominal's arguments, and
+interns a record node that carries them. Its fields stay in lexicographic order,
+so a literal, a field read, a pattern, or a codec treats it as it treats any
+record. A padding type may mention the declaration's type variables, so it is a
+component of the node like a field: it counts toward the type's closedness and
+its variables are substituted with the rest. A closed type commits through
+`Graph.declaredOrder`. A generic body composes the descriptor with
+`desc_declared_record`, which calls the runtime's `roc_desc_declared_record`,
+so the shared layout code gives both the same offsets. An explicit constructor
+builds its operand at this type rather than at the operand's record row. A
+padded record of no named fields is still such a record: it has storage, where
+the empty record has none.
+
+A structural record can lift into a padded nominal, and a padded nominal can
+reach a parameter written as its record row, open or closed, because a generic
+function has one body, which reads the record by the structural rule. The two
+types are one value in two memory orders, so where a value crosses between them
+it is rebuilt by the descriptor-driven `adapt` (Dynamic Values In LIR), which
+matches fields by name at any depth: `StorageDifference.record_order` on a
+result or a read, and the check of each explicit argument at a direct call. A
+function value converts by an adapter around it, like one a row widening reaches.
+A specialized program has one type for both and needs no conversion.
+
+A function value stored inside data whose signature differs by a padded record's
+order is not converted: `adapt` copies an erased callable as it is, so
+`StorageDifference` holds this as its invariant for nested function signatures.
+
+The declared order and the padding types are part of the module's checking
+interface, so an edit to either rebuilds the importers that compiled offsets
+against it (Caching Under `.boxy`).
 
 ### Pattern Lowering
 
@@ -24867,6 +24970,39 @@ When a later compilation materializes a cached const, Monotype lowering turns
   materializes generated captures such as transformed field-name strings by their
   generated capture ids, and regenerates the runtime parser lambda directly
   around those materialized constants
+
+#### Stored Function Capture Contract
+
+A stored function holds every capture a restore of it reads, and that set is a
+function of the checked program alone, never of the Solved policy that evaluated
+it. A restore lowers the checked template, not the code that ran, so a capture
+an optimized body stopped reading is still one the restored body names. If the
+stored set followed the optimized body, a value stored by one `--opt` would be
+unreadable by another command sharing the checked module cache, and by the
+compilation that stored it.
+
+Two explicit rules establish the set:
+
+- Lifting decides the declared captures. A source lambda declares its free
+  locals. A generated codec's lambda also declares `LambdaExpr.stored_captures`,
+  its encoding and every renamed field name, because a restore reads those by
+  generated capture id whether or not the generated body read them (an empty
+  record's encoder reads neither). The operand that constructed the codec is
+  not consulted: it can read binders of the enclosing scope, which a restore
+  does not have. The stored encoding is that operand.
+- Capture finalization keeps what is declared in a program that evaluates
+  compile-time roots (`Program.retains_declared_captures`). `recomputeCaptures`
+  treats each function's declared captures as reads of its body, so the operands
+  that supply them stay at every reference, and a SpecConstr clone or worker,
+  which starts from its source's captures, keeps them too.
+
+Only such a program retains them. A runtime program stores nothing, so it
+finalizes each function's captures from its rewritten body and pays for nothing
+the body does not read. The two never meet: `finalizeProgram` specializes the
+runtime program again whenever the evaluation's program had a compile-time root,
+and a procedure's identity renders its capture slots and those of every
+lambda-set member its signature names, so a cached procedure is never spliced
+into the program kind it was not built for.
 
 Materialization records an active `(module, ConstNodeId, representation)` before
 descending into that node. The first exact graph back-edge reserves and uses a

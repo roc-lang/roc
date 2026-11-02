@@ -453,6 +453,20 @@ const Printer = struct {
     fn writeDynOp(self: *Printer, op: LIR.DynOp, writer: *std.Io.Writer) Error!void {
         try writer.print("dyn.{s}", .{@tagName(op)});
         switch (op) {
+            .desc_declared_record => |desc| {
+                try writer.writeAll(" names(");
+                try self.writeLocals(desc.names, writer);
+                try writer.writeAll(") descs(");
+                try self.writeLocals(desc.descs, writer);
+                try writer.writeAll(") padding(");
+                const padding = self.store.getU32Span(desc.padding);
+                for (0..padding.len) |i| {
+                    if (i > 0) try writer.writeAll(", ");
+                    try writer.print("{d}", .{GuardedList.at(padding, i)});
+                }
+                try writer.writeAll(")");
+                return;
+            },
             .desc_tag_union => |desc| {
                 try writer.writeAll(" names(");
                 try self.writeLocals(desc.names, writer);

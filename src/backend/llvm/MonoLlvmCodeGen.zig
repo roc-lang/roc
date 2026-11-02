@@ -4003,7 +4003,7 @@ pub const MonoLlvmCodeGen = struct {
                     // its composition takes.
                     .dyn => |dyn_stmt| switch (self.store.stmtRow(dyn_stmt.data)) {
                         .dict_compose => |compose| needs[@backingInt(compose.worker)] = true,
-                        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => {},
+                        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => {},
                     },
                     .init_uninitialized, .assign_ref, .assign_call_erased, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
                 }
@@ -11538,6 +11538,15 @@ pub const MonoLlvmCodeGen = struct {
         fn fieldInputDesc(self: BoxyAbi) u32 {
             return self.word;
         }
+        fn declaredFieldInputSize(self: BoxyAbi) u32 {
+            return std.mem.alignForward(u32, self.declaredFieldInputIsPadding() + 4, self.word);
+        }
+        fn declaredFieldInputDesc(self: BoxyAbi) u32 {
+            return self.word;
+        }
+        fn declaredFieldInputIsPadding(self: BoxyAbi) u32 {
+            return 2 * self.word;
+        }
         fn variantInputSize(self: BoxyAbi) u32 {
             return 3 * self.word;
         }
@@ -11565,9 +11574,12 @@ pub const MonoLlvmCodeGen = struct {
         comptime {
             const host: BoxyAbi = .{ .word = @sizeOf(usize) };
             const FieldInput = boxy_runtime.compose.FieldInput;
+            const DeclaredFieldInput = boxy_runtime.compose.DeclaredFieldInput;
             const VariantInput = boxy_runtime.compose.VariantInput;
             const Request = boxy_runtime.compiled.ListOpRequest;
             std.debug.assert(host.fieldInputSize() == @sizeOf(FieldInput) and @offsetOf(FieldInput, "name") == 0 and host.fieldInputDesc() == @offsetOf(FieldInput, "desc"));
+            std.debug.assert(host.declaredFieldInputSize() == @sizeOf(DeclaredFieldInput) and @offsetOf(DeclaredFieldInput, "name") == 0);
+            std.debug.assert(host.declaredFieldInputDesc() == @offsetOf(DeclaredFieldInput, "desc") and host.declaredFieldInputIsPadding() == @offsetOf(DeclaredFieldInput, "is_padding"));
             std.debug.assert(host.variantInputSize() == @sizeOf(VariantInput) and @offsetOf(VariantInput, "name") == 0);
             std.debug.assert(host.variantInputPayloadCount() == @offsetOf(VariantInput, "payload_count") and host.variantInputPayloads() == @offsetOf(VariantInput, "payloads"));
             std.debug.assert(@offsetOf(Request, "op") == 0 and @offsetOf(Request, "unique_args") == 4);
@@ -11861,6 +11873,31 @@ pub const MonoLlvmCodeGen = struct {
                 else
                     try self.callBoxyRuntime("roc_desc_record", ptr_ty, &.{ .i32, ptr_ty }, &.{ count, fields });
                 try self.bindWord(target, desc);
+            },
+            .desc_declared_record => |d| {
+                const names = self.store.getLocalSpan(d.names);
+                const descs = self.store.getLocalSpan(d.descs);
+                const padding = self.store.getU32Span(d.padding);
+                if (names.len + padding.len != descs.len) llvmInvariantFmt("desc_declared_record has {d} names and {d} padding fields for {d} descriptors", .{ names.len, padding.len, descs.len });
+                const abi = self.boxyAbi();
+                const fields = try self.dynInputArray(abi.declaredFieldInputSize(), descs.len);
+                var next_name: usize = 0;
+                var next_padding: usize = 0;
+                for (0..descs.len) |i| {
+                    const entry: u32 = @intCast(i * abi.declaredFieldInputSize());
+                    const is_padding = next_padding < padding.len and GuardedList.at(padding, next_padding) == i;
+                    if (is_padding) {
+                        next_padding += 1;
+                        const no_name = (self.builder orelse return error.CompilationFailed).nullConst(ptr_ty) catch return error.OutOfMemory;
+                        try self.storePointer(try self.offsetPtr(fields, entry), no_name.toValue());
+                    } else {
+                        try self.storePointer(try self.offsetPtr(fields, entry), try self.wordValue(GuardedList.at(names, next_name)));
+                        next_name += 1;
+                    }
+                    try self.storePointer(try self.offsetPtr(fields, entry + abi.declaredFieldInputDesc()), try self.wordValue(GuardedList.at(descs, i)));
+                    _ = wip.store(.normal, try self.intValue(.i32, @intFromBool(is_padding)), try self.offsetPtr(fields, entry + abi.declaredFieldInputIsPadding()), LlvmBuilder.Alignment.fromByteUnits(4)) catch return error.OutOfMemory;
+                }
+                try self.bindWord(target, try self.callBoxyRuntime("roc_desc_declared_record", ptr_ty, &.{ .i32, ptr_ty }, &.{ try self.intValue(.i32, descs.len), fields }));
             },
             .desc_tuple => |d| {
                 const elems = try self.dynLocalArray(d.elems, .words);

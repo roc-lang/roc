@@ -153,6 +153,7 @@ pub fn run(
         break :transfer output;
     };
     errdefer program.deinit();
+    program.retains_declared_captures = owned.retains_declared_captures;
 
     const source_view = movedMonoView(&owned, &program);
     var lifter = try Lifter.init(allocator, source_view, &program);
@@ -229,9 +230,10 @@ fn movedMonoView(source: *const Mono.Program, moved: *const Ast.Program) Mono.Pr
 /// operand span to the recomputed capture slot order. Transformations that
 /// clone or rewrite lifted bodies must call this after they finish mutating the
 /// program, because substitutions can change the capture shape of the rewritten
-/// functions. Replaced bodies remain in the append-only expression store but
-/// are not part of the executable program and therefore need no capture
-/// operands.
+/// functions. A program with `retains_declared_captures` keeps every capture a
+/// function already declares in addition to those its body reads. Replaced
+/// bodies remain in the append-only expression store but are not part of the
+/// executable program and therefore need no capture operands.
 pub fn recomputeCaptures(allocator: Allocator, program: *Ast.Program) Allocator.Error!void {
     var graph = try CaptureDependencyGraph.init(allocator, program, null);
     defer graph.deinit();
@@ -962,6 +964,10 @@ const Lifter = struct {
         defer bound.deinit();
         try bindTypedLocals(self.output, &bound, self.output.typedLocalSpan(lambda.args));
         try captures.collectExpr(lambda.body, &bound);
+        if (self.output.retains_declared_captures) {
+            const stored = self.output.typedLocalSpan(lambda.stored_captures);
+            for (0..stored.len) |index| try captures.addIfFree(GuardedList.at(stored, index).local, &bound);
+        }
         sortCaptureSlots(self.output, captures.items.items);
 
         const capture_exprs = try self.captureOperandSpanForSlots(captures.items.items, &.{}, expr_id);
@@ -2078,6 +2084,10 @@ const CaptureDependencyGraph = struct {
             try self.roots.append(self.allocator, root);
             builder.reset();
             try builder.bindTypedLocals(self.program.typedLocalSpan(fn_.args));
+            if (self.program.retains_declared_captures) {
+                const declared = self.program.typedLocalSpan(fn_.captures);
+                for (0..declared.len) |index| try builder.addDirect(root, GuardedList.at(declared, index).local);
+            }
             switch (fn_.body) {
                 .roc => |expr| try builder.collectExpr(expr, root),
                 .hosted => {},
@@ -2993,6 +3003,56 @@ test "capture graph does not activate an operand for a removed target slot" {
     if (finalized_data != .fn_ref) return error.TestUnexpectedResult;
     const finalized = finalized_data.fn_ref;
     try std.testing.expectEqual(@as(usize, 0), program.captureOperandSpan(finalized.captures).len);
+}
+
+test "a program retaining declared captures keeps a slot its body no longer reads, with its operand" {
+    const allocator = std.testing.allocator;
+    var program = initCaptureTestProgram(allocator);
+    defer program.deinit();
+    program.retains_declared_captures = true;
+
+    const ty = try program.types.add(.zst);
+    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(1));
+    const declared = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, binder);
+    const declared_slots = try program.addTypedLocalSpan(&.{.{ .local = declared, .ty = ty }});
+    const callee_body = try program.addExpr(.{ .ty = ty, .data = .unit });
+    const callee = try program.addFn(.{
+        .symbol = @fromBackingInt(@intCast(1)),
+        .args = .empty(),
+        .captures = declared_slots,
+        .body = .{ .roc = callee_body },
+        .ret = ty,
+    });
+
+    const supplied = try program.addLocal(@fromBackingInt(@intCast(2)), ty);
+    const caller_args = try program.addTypedLocalSpan(&.{.{ .local = supplied, .ty = ty }});
+    const supplied_value = try program.addExpr(.{ .ty = ty, .data = .{ .local = supplied } });
+    const supplied_span = try program.addCaptureOperandSpan(&.{.{
+        .id = checked.CaptureId.fromBinder(binder),
+        .value = supplied_value,
+    }});
+    const reference = try program.addExpr(.{ .ty = ty, .data = .{ .fn_ref = .{
+        .fn_id = callee,
+        .captures = supplied_span,
+    } } });
+    const caller = try program.addFn(.{
+        .symbol = @fromBackingInt(@intCast(3)),
+        .args = caller_args,
+        .captures = .empty(),
+        .body = .{ .roc = reference },
+        .ret = ty,
+    });
+
+    try recomputeCaptures(allocator, &program);
+
+    const slots = program.typedLocalSpan(program.getFn(callee).captures);
+    try std.testing.expectEqual(@as(usize, 1), slots.len);
+    try std.testing.expectEqual(declared, GuardedList.at(slots, 0).local);
+    try std.testing.expectEqual(@as(usize, 0), program.typedLocalSpan(program.getFn(caller).captures).len);
+    const finalized = program.getExpr(reference).data.fn_ref;
+    const operands = program.captureOperandSpan(finalized.captures);
+    try std.testing.expectEqual(@as(usize, 1), operands.len);
+    try std.testing.expectEqual(supplied_value, GuardedList.at(operands, 0).value);
 }
 
 test "capture recomputation excludes replaced bodies from the active invariant" {

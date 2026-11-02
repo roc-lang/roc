@@ -429,6 +429,12 @@ pub const Program = struct {
     /// A shard owns only its raw list suffixes. Source rows remain immutable
     /// until all workers have stopped reading; row commits use saved boundaries.
     body_prefix: ?BodyShard.Prefix = null,
+    /// Lifting declares each lambda's `stored_captures`, and capture
+    /// finalization keeps every capture a function declares whether or not
+    /// its rewritten body still reads it (design.md "Stored Function Capture
+    /// Contract"). Set on a program that evaluates compile-time roots, whose
+    /// function values enter a `ConstStore`.
+    retains_declared_captures: bool = false,
     allocator: std.mem.Allocator,
     names: names.NameStore,
     next_symbol: u32,

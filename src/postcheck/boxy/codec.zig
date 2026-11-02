@@ -333,8 +333,9 @@ fn methodName(program: *Program, text: []const u8) Allocator.Error!NameId {
 
 /// The selection-key form of a subject type: a format method's subject is
 /// structural, so nominal layers that the codec walks through (user
-/// nominals and `Try`) are peeled. A codec boundary method keeps its exact
-/// subject, whose nominal identity selects the codec.
+/// nominals and `Try`) are peeled, and a padded nominal's backing is its
+/// record row. A codec boundary method keeps its exact subject, whose nominal
+/// identity selects the codec.
 fn subjectKey(program: *Program, method: NameId, ty: TypeId) Allocator.Error!TypeId {
     const text = program.store.nameText(method);
     if (std.mem.eql(u8, text, "encoder_for") or std.mem.eql(u8, text, "parser_for")) return ty;
@@ -345,7 +346,7 @@ fn subjectKey(program: *Program, method: NameId, ty: TypeId) Allocator.Error!Typ
                 if (!peelable(nominal)) return current;
                 current = try program.converter().backing(current);
             },
-            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => return current,
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => return try program.store.recordRow(current),
         }
     }
 }
@@ -881,15 +882,8 @@ pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.Const
         const needle = check.CheckedIds.CaptureId.generatedCheck(@intCast(index));
         const node = for (stored.captures) |capture| {
             if (capture.id == needle) break capture.value;
-        } else null;
-        if (node) |stored_node| {
-            try b.push(.{ .restore = .{ .source = source, .node = stored_node, .ty = captures[index] } });
-        } else if (index == 0 and try program.layouts.layoutOf(captures[0]) == .zst) {
-            // Compile-time evaluation stores no zero-sized encoding.
-            try b.push(.{ .push_value = try b.unitValue() });
-        } else {
-            invariant("a stored generated codec runtime lacks one of its captures");
-        }
+        } else invariant("a stored generated codec runtime lacks one of its captures");
+        try b.push(.{ .restore = .{ .source = source, .node = node, .ty = captures[index] } });
     }
 }
 
