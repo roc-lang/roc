@@ -355,22 +355,6 @@ pub const CacheManager = struct {
         return bytes[placement_pointer_magic.len..][0..32].*;
     }
 
-    pub fn storeLiteralValues(self: *Self, placement: [32]u8, bytes: []const u8) void {
-        self.storeFamilyBytes(.literals, placement, bytes, "literals", "literals");
-    }
-
-    pub fn loadLiteralValues(self: *Self, placement: [32]u8) ?[]u8 {
-        return if (self.loadFamilyBytes(.literals, placement, "literals")) |bytes| @constCast(bytes) else null;
-    }
-
-    pub fn loadCheckedEntryUncounted(self: *Self, key: [32]u8) ?CacheModule.CacheData {
-        const directory = self.config.getCheckedArtifactCacheDir(self.allocator) catch return null;
-        defer self.allocator.free(directory);
-        // This is a real cache acquisition for retention, even though it is a
-        // reuse probe rather than the ordinary current-key lookup.
-        return self.loadMapped(self.allocator, .checked, .checked, key, directory, false);
-    }
-
     pub fn getStats(self: *const Self) CacheStats {
         return self.stats;
     }

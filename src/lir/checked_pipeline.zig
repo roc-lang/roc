@@ -181,9 +181,8 @@ pub const TargetConfig = struct {
     /// compile-time roots it demands (design.md "Demand-Driven Compile-Time
     /// Evaluation").
     demand_driven_comptime_roots: bool = false,
-    /// A test/check command still validates every initializer. A prior silent
-    /// successful validation permits deferring its value until a reader needs it.
-    validated_comptime_roots: ?*const std.AutoHashMapUnmanaged(ComptimeDemandRoot, void) = null,
+    /// Test/check commands validate all pending initializers, even without readers.
+    validate_all_comptime_roots: bool = false,
     /// This program's specializations may be written to the object cache, so
     /// Monotype records what each one reads of compile-time evaluation
     /// (`SpecComptimeReads`).
@@ -1593,7 +1592,7 @@ pub fn prepareCheckedModulesMonotype(
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
                 .demand_driven_comptime_roots = target.demand_driven_comptime_roots,
-                .validated_comptime_roots = target.validated_comptime_roots,
+                .validate_all_comptime_roots = target.validate_all_comptime_roots,
                 .comptime_demand_out = if (target.comptime_value_reads) &comptime_demand else null,
                 .spec_comptime_reads_out = if (target.spec_comptime_reads) &spec_comptime_reads else null,
                 .spec_key_aliases_out = &spec_key_aliases,
@@ -1626,10 +1625,9 @@ pub fn prepareCheckedModulesMonotype(
         const omitted: u32 = @intCast(roots.requests.len - root_count);
         for (test_plan_metadata) |*metadata| metadata.request_index -= omitted;
     }
-    // The validation set is borrowed only by Monotype production, never by
-    // its retained consumers after the coordinator's finalization returns.
+    // Initializer validation belongs to finalization, not the retained runtime consumer.
     var retained_target = target;
-    retained_target.validated_comptime_roots = null;
+    retained_target.validate_all_comptime_roots = false;
     return .{
         .allocator = allocator,
         .program = mono,

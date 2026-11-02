@@ -313,7 +313,7 @@ pub const Options = struct {
     /// the compile-time roots the program demands (design.md "Demand-Driven
     /// Compile-Time Evaluation").
     demand_driven_comptime_roots: bool = false,
-    validated_comptime_roots: ?*const std.AutoHashMapUnmanaged(EntryRoot, void) = null,
+    validate_all_comptime_roots: bool = false,
     /// With `comptime_value_reads`, receives the compile-time roots the
     /// program demands and the checked roots each of its compile-time roots
     /// reads.
@@ -5666,7 +5666,7 @@ const Builder = struct {
     declared_comptime_roots: DeclaredComptimeRoots,
     borrowed_comptime_roots: ?*const DeclaredComptimeRoots = null,
     demand_driven_comptime_roots: bool,
-    validated_comptime_roots: ?*const std.AutoHashMapUnmanaged(EntryRoot, void),
+    validate_all_comptime_roots: bool,
     comptime_demand_out: ?*ComptimeDemand,
     spec_comptime_reads_out: ?*SpecComptimeReads,
     spec_key_aliases_out: ?*SpecKeyAliases,
@@ -5979,7 +5979,7 @@ const Builder = struct {
             .replay_interface_summaries = options.replay_interface_summaries,
             .declared_comptime_roots = DeclaredComptimeRoots.init(allocator),
             .demand_driven_comptime_roots = options.demand_driven_comptime_roots,
-            .validated_comptime_roots = options.validated_comptime_roots,
+            .validate_all_comptime_roots = options.validate_all_comptime_roots,
             .comptime_demand_out = options.comptime_demand_out,
             .spec_comptime_reads_out = options.spec_comptime_reads_out,
             .spec_key_aliases_out = options.spec_key_aliases_out,
@@ -7751,10 +7751,7 @@ const Builder = struct {
                 try self.declared_roots.append(self.allocator, .{
                     .request = request,
                     .source_module = source_module,
-                    .validation = if (self.validated_comptime_roots) |validated|
-                        !validated.contains(key)
-                    else
-                        source_view.compile_time_roots.root(root_id).kind == .hoisted_validation,
+                    .validation = self.validate_all_comptime_roots or source_view.compile_time_roots.root(root_id).kind == .hoisted_validation,
                 });
                 if (!self.demand_driven_comptime_roots) _ = try self.prepareDeclaredRoot(ordinal, &fn_tys[i]);
             }
