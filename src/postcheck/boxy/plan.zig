@@ -13514,8 +13514,8 @@ const Builder = struct {
         };
     }
 
-    /// The scheme variables of the template enclosing a nested worker.
-    fn nestedWorkerTemplateSchemeVars(self: *Builder, source: WorkerSource) ?WorkerSchemeVars {
+    /// The template enclosing a nested worker.
+    fn nestedWorkerTemplate(self: *Builder, source: WorkerSource) ?checked_names.ProcedureTemplateRef {
         const expr = switch (source) {
             .nested_expr => |expr| expr,
             .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator, .derived_map => return null,
@@ -13526,7 +13526,7 @@ const Builder = struct {
             if (candidate.checked_expr == site_expr) break candidate;
         } else return null;
         return switch (site.owner) {
-            .template => |template| self.templateSchemeVars(template),
+            .template => |template| template,
             .default_root => null,
         };
     }
@@ -15794,7 +15794,9 @@ const Builder = struct {
         while (index < self.plan.static_fns.items.len) : (index += 1) {
             const static_fn = self.plan.static_fns.items[index];
             const worker = self.plan.workers.items[@backingInt(static_fn.worker)];
-            if (worker.hidden_dicts.len == 0 or static_fn.hidden_dict_args.len != 0) continue;
+            // Planned on every pass: a selected method's worker gains
+            // dictionary parameters as planning iterates.
+            if (worker.hidden_dicts.len == 0) continue;
             const outer_stored_fn = self.active_stored_fn;
             const outer_stored_worker = self.active_stored_worker;
             const outer_stored_substitution = self.active_stored_substitution;
@@ -17734,7 +17736,10 @@ const Builder = struct {
         defer scheme_reps.deinit(self.allocator);
         // A stored function's dictionaries are planned at its use, where no
         // frame of the template that built it binds that template's variables.
-        const enclosing = if (self.active_stored_worker == state.worker_id) self.nestedWorkerTemplateSchemeVars(worker.source) else null;
+        const enclosing: ?WorkerSchemeVars = if (self.active_stored_worker == state.worker_id)
+            if (self.nestedWorkerTemplate(worker.source)) |template| self.templateSchemeVars(template) else null
+        else
+            null;
         for ([_]?WorkerSchemeVars{ self.workerSchemeVars(worker.source), enclosing }) |maybe_scheme| {
             const scheme = maybe_scheme orelse continue;
             for (scheme.vars) |scheme_var| {
@@ -18451,7 +18456,9 @@ const Builder = struct {
                     .worker_id = worker,
                     .caller_id = state.call.caller_id,
                     .arg_types = self.plan.dictionaryMethodCallTypeSlice(instantiation.arg_types),
-                    .ret_type = instantiation.ret_type,
+                    // A call representation is the call's whole instantiation:
+                    // no checked type names a stored position.
+                    .ret_type = if (instantiation.rep == null) instantiation.ret_type else null,
                     .evidence_view = null,
                     .evidence = null,
                     .scheme_substitution = null,
@@ -20232,10 +20239,14 @@ const Builder = struct {
                 // representation, and a position the call binds is the
                 // call's. A stored representation's source type names its
                 // stored root, so the call is made at the representation.
+                const call_rep = if (try self.plan.namesTypeVariable(self.allocator, target_child_rep))
+                    self.requirementCallRep(call, child_rep)
+                else
+                    null;
                 const exact_rep = if (child_rep == dispatcher_rep)
                     source_rep_id
                 else
-                    type_rep;
+                    call_rep orelse type_rep;
                 if (exact_rep != type_rep) any_at_call = true;
                 try position_reps.append(self.allocator, exact_rep);
             }
@@ -20584,9 +20595,6 @@ const Builder = struct {
         const try_payloads = checkedTryPayloads(requirement_view, runtime.ret) orelse
             boxyPlanInvariant("generated codec dictionary runtime did not return Try");
         const shape_key = source_view.checked_types.rootKey(source_rep.source_type.ty);
-        const encoding_key = self.requirementPositionKey(call, requirement_view, constructor.args[0]);
-        const state_key = self.requirementPositionKey(call, requirement_view, state_type);
-        const error_key = self.requirementPositionKey(call, requirement_view, try_payloads.err);
         if (self.active_stored_fn) |stored| {
             // A stored function carries the evidence its value was produced
             // with. Its structural entry for this shape is the dictionary's
@@ -20597,8 +20605,8 @@ const Builder = struct {
                 const derivation_id = evidence.generated_codec_derivation orelse
                     boxyPlanInvariant("stored codec evidence resolved without a contract");
                 const derivation = evidence_view.static_dispatch_plans.generated_codec_derivations[@backingInt(derivation_id)];
-                if (!std.meta.eql(encoding_key, evidence_view.checked_types.rootKey(derivation.encoding_ty)) or
-                    !std.meta.eql(state_key, evidence_view.checked_types.rootKey(derivation.state_ty)))
+                if (!try self.requirementPositionIs(call, requirement_view, constructor.args[0], evidence_view, derivation.encoding_ty) or
+                    !try self.requirementPositionIs(call, requirement_view, state_type, evidence_view, derivation.state_ty))
                 {
                     boxyPlanInvariant("stored codec evidence named a contract for another format");
                 }
@@ -20626,9 +20634,9 @@ const Builder = struct {
         for (source_view.static_dispatch_plans.generated_codec_derivations, 0..) |derivation, index| {
             if (derivation.kind != expected_kind or
                 !std.meta.eql(shape_key, source_view.checked_types.rootKey(derivation.shape_ty)) or
-                !std.meta.eql(encoding_key, source_view.checked_types.rootKey(derivation.encoding_ty)) or
-                !std.meta.eql(state_key, source_view.checked_types.rootKey(derivation.state_ty)) or
-                !std.meta.eql(error_key, source_view.checked_types.rootKey(derivation.error_ty)))
+                !try self.requirementPositionIs(call, requirement_view, constructor.args[0], source_view, derivation.encoding_ty) or
+                !try self.requirementPositionIs(call, requirement_view, state_type, source_view, derivation.state_ty) or
+                !try self.requirementPositionIs(call, requirement_view, try_payloads.err, source_view, derivation.error_ty))
             {
                 continue;
             }
@@ -20663,27 +20671,33 @@ const Builder = struct {
         };
     }
 
-    /// The checked key of a requirement's position at this call. A requirement
-    /// a generic method forwards names the format in that method's variables,
-    /// which the call binds.
-    fn requirementPositionKey(
-        self: *const Builder,
+    /// Whether a requirement's position at this call is `other_ty`. A
+    /// requirement a generic method forwards names the format in that method's
+    /// variables, which the call binds, and a stored representation's source
+    /// type names its stored root rather than its position.
+    fn requirementPositionIs(
+        self: *Builder,
         call: *const DictionaryCallArgs,
         requirement_view: ModuleView,
         ty: checked.CheckedTypeId,
-    ) checked_names.CanonicalTypeKey {
+        other_view: ModuleView,
+        other_ty: checked.CheckedTypeId,
+    ) Allocator.Error!bool {
+        const other_key = other_view.checked_types.rootKey(other_ty);
         const rep = self.plan.repForSourceType(typeRef(requirement_view, ty)) orelse
             boxyPlanInvariant("generated codec requirement position was not analyzed");
-        const bound = self.requirementCallRep(call, rep) orelse return requirement_view.checked_types.rootKey(ty);
+        const bound = self.requirementCallRep(call, rep) orelse return std.meta.eql(requirement_view.checked_types.rootKey(ty), other_key);
+        if (self.stored_type_of_rep.get(bound)) |stored| {
+            return try self.storedTypeInstantiatesCheckedType(self.moduleForId(stored.module), stored.ty, other_view, other_ty);
+        }
         const source = self.plan.representations.items[@backingInt(bound)].source_type;
-        return self.moduleForId(source.module).checked_types.rootKey(source.ty);
+        return std.meta.eql(self.moduleForId(source.module).checked_types.rootKey(source.ty), other_key);
     }
 
     /// A stored function use's substitution: the relation of its worker to its
-    /// type, and the owner of the method its evidence selected for each
-    /// requirement of the scopes enclosing the worker. A dispatcher that
-    /// reaches neither the function's type nor its captures, such as the format
-    /// of an encoder a generic method returned, is known only by that evidence.
+    /// type, and of the template that built it to that template's specialization.
+    /// A variable of the template can reach neither the function's type nor its
+    /// captures, such as the format of an encoder a generic method returned.
     fn storedEvidenceSubstitution(
         self: *Builder,
         stored: StoredFnSource,
@@ -20703,74 +20717,27 @@ const Builder = struct {
         worker_id: WorkerPlanId,
         relation: Span,
     ) Allocator.Error!Span {
-        const expr = switch (self.plan.workers.items[@backingInt(worker_id)].source) {
-            .nested_expr => |expr| expr,
-            .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator, .derived_map => return relation,
-        };
-        const view = self.moduleForId(expr.module);
+        const template_ref = self.nestedWorkerTemplate(self.plan.workers.items[@backingInt(worker_id)].source) orelse return relation;
         const fn_value = (self.moduleForId(stored.module).const_store orelse boxyPlanInvariant("stored function had no ConstStore")).getFn(stored.fn_id);
-        var added = std.ArrayList(SchemeRepSubstitution).empty;
-        defer added.deinit(self.allocator);
-        var next_frame = fn_value.evidence_frame_head;
-        while (next_frame) |frame_index| {
-            const frame = fn_value.evidence_frames[frame_index];
-            next_frame = frame.parent;
-            const params = self.storedEvidenceFrameParams(view, expr.expr, frame.scope()) orelse continue;
-            if (frame.roots_len != params.len) boxyPlanInvariant("stored function evidence frame disagreed with its scope's scheme");
-            var cursor: usize = frame.roots_start;
-            params: for (params) |param| {
-                const entry = fn_value.evidence.nodes[cursor];
-                skipStoredEvidenceEntries(fn_value.evidence, &cursor, 1);
-                const target = switch (entry) {
-                    .target => |target_index| fn_value.evidence.target(target_index),
-                    .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => continue,
-                };
-                const scheme_rep = self.plan.repForSourceType(typeRef(view, param.dispatcher_ty)) orelse continue;
-                for (self.plan.schemeRepSubstitutionSlice(relation)) |pair| {
-                    if (pair.scheme_rep == scheme_rep) continue :params;
-                }
-                for (added.items) |pair| {
-                    if (pair.scheme_rep == scheme_rep) continue :params;
-                }
-                const target_view = self.moduleForKey(.{ .bytes = target.view.bytes });
-                const owner_type = methodTargetOwnerType(target_view, target.method) orelse continue;
-                try added.append(self.allocator, .{ .scheme_rep = scheme_rep, .site_rep = try self.analyzeType(target_view, owner_type) });
-            }
-        }
-        if (added.items.len == 0) return relation;
+        const owner_fn_ty = fn_value.owner_fn_ty orelse return relation;
+        const template_view = self.moduleForCheckedModuleId(template_ref.artifact);
+        const template = &template_view.checked_procedure_templates.templates.items[@backingInt(template_ref.template)];
+        const template_rep = try self.analyzeType(template_view, template.checked_fn_root);
+        const owner_rep = try self.analyzeStoredType(self.moduleForId(stored.module), owner_fn_ty, typeRef(template_view, template.checked_fn_root));
+        const owner_pairs = try self.storedUseSchemeRepSubstitutions(template_rep, owner_rep);
         const start: u32 = @intCast(self.plan.scheme_rep_substitutions.items.len);
-        try self.plan.scheme_rep_substitutions.ensureUnusedCapacity(self.allocator, relation.len + added.items.len);
+        try self.plan.scheme_rep_substitutions.ensureUnusedCapacity(self.allocator, relation.len + owner_pairs.len);
         for (0..relation.len) |index| {
             self.plan.scheme_rep_substitutions.appendAssumeCapacity(self.plan.scheme_rep_substitutions.items[relation.start + index]);
         }
-        self.plan.scheme_rep_substitutions.appendSliceAssumeCapacity(added.items);
-        return .{ .start = start, .len = relation.len + @as(u32, @intCast(added.items.len)) };
-    }
-
-    /// The scheme requirements a stored evidence frame of the nested site
-    /// `expr` holds roots for.
-    fn storedEvidenceFrameParams(
-        self: *Builder,
-        view: ModuleView,
-        expr: checked.CheckedExprId,
-        scope: check.ConstStore.ConstFnEvidenceScope,
-    ) ?[]const static_dispatch.EvidenceParamRecord {
-        switch (scope) {
-            .generalized => |scope_index| {
-                const span = view.checked_procedure_templates.dispatch_scopes[scope_index].evidence_params;
-                return view.checked_procedure_templates.evidence_params_pool[span.start..][0..span.len];
-            },
-            .root => {
-                const site_expr = nestedCallableSiteExprFor(view, expr) orelse expr;
-                const site = for (view.nested_proc_sites.sites) |candidate| {
-                    if (candidate.checked_expr == site_expr) break candidate;
-                } else return null;
-                return switch (site.owner) {
-                    .template => |template| self.templateEvidenceParams(template).params,
-                    .default_root => null,
-                };
-            },
+        owner: for (0..owner_pairs.len) |index| {
+            const pair = self.plan.scheme_rep_substitutions.items[owner_pairs.start + index];
+            for (self.plan.scheme_rep_substitutions.items[start..]) |bound| {
+                if (bound.scheme_rep == pair.scheme_rep) continue :owner;
+            }
+            self.plan.scheme_rep_substitutions.appendAssumeCapacity(pair);
         }
+        return .{ .start = start, .len = @as(u32, @intCast(self.plan.scheme_rep_substitutions.items.len)) - start };
     }
 
     /// The structural codec evidence a stored function retained for this
@@ -23887,27 +23854,6 @@ fn methodOwnerForModuleType(view: ModuleView, ty: checked.CheckedTypeId) ?static
         if (payload != .alias) return methodOwnerForCheckedPayload(payload);
         current = payload.alias.backing;
     }
-}
-
-/// The type of the owner the method registry files a target under in `view`,
-/// the module declaring the target: the owner's one type, or its declared form
-/// when its arguments are variables, which the target selected at no argument.
-fn methodTargetOwnerType(view: ModuleView, target: static_dispatch.MethodTarget) ?checked.CheckedTypeId {
-    const owner = for (view.method_registry.entries) |entry| {
-        const registered = entry.target orelse continue;
-        if (registered.module_idx == target.module_idx and registered.def_idx == target.def_idx) break entry.key.owner;
-    } else return null;
-    for (0..view.checked_types.payloadCount()) |index| {
-        const ty: checked.CheckedTypeId = @fromBackingInt(@intCast(index));
-        const payload = view.checked_types.payload(ty);
-        if (payload != .nominal or !std.meta.eql(methodOwnerForCheckedPayload(payload), owner)) continue;
-        const generic = for (payload.nominal.args) |arg| {
-            const arg_payload = view.checked_types.payload(arg);
-            if (arg_payload != .flex and arg_payload != .rigid) break false;
-        } else true;
-        if (generic) return ty;
-    }
-    return null;
 }
 
 /// The method owner a resolved (non-alias) checked type payload dispatches on.

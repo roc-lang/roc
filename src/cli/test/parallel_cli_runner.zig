@@ -11695,6 +11695,7 @@ fn customIssue12728BoxyBuiltCodecs(
         \\Ok("items=2:7;1;")
         \\Ok("nested=2:2:7;1;;0:;")
         \\Ok("tagged=<7|1|>")
+        \\prefixed=#5#1
         \\
         ,
     });

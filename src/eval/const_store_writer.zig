@@ -483,6 +483,7 @@ pub const Writer = struct {
                     .fn_def = template.fn_def,
                     .source_fn_ty = template.source_fn_ty,
                     .source_fn_key = template.source_fn_key,
+                    .owner_fn_ty = if (template.owner_fn_ty) |owner_fn_ty| try self.cloneCaptureType(owner_fn_ty) else null,
                     .captures = captures,
                     .evidence = template.evidence,
                     .evidence_frames = template.evidence_frames,

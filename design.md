@@ -8575,14 +8575,12 @@ need hold the contract. A generic method selected for that dictionary, such as
 `List.encoder_for`, names its item and its format only in the encoder it
 returns, so Boxy relates the method to the requirement's position at the call,
 and the method's own codec requirements are read at what that relation binds.
-The dispatcher of a requirement the stored function's enclosing scope declares
-can reach neither the function's type nor its captures, as the format of an
-encoder a generic method returned does not. Boxy reads it from the stored
-evidence: the method registry files the selected target under its owner, and the
-target selected at no argument of a generic owner. Relating the requirement to
-the selected method then binds the variables only that requirement names, for
-dictionaries and descriptors alike. A stored function does not retain a dispatcher's
-type arguments, so such a dispatcher must not hold a value of one. A
+A variable of the template that built a stored nested function can reach neither
+the function's type nor its captures, as the format of an encoder a generic method
+returned does not, so the function keeps its template specialization's concrete
+type (`ConstFn.owner_fn_ty`) and Boxy relates the template to it. Relating a
+requirement to its selected method then binds the variables only that requirement
+names, for dictionaries and descriptors alike. A
 generated codec runtime body reads its edge in that
 body's module, which must hold an equal contract. Completed-body records
 retain recorded edges and are rejected when their recording module is absent.
