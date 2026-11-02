@@ -166,11 +166,23 @@ pub fn boxPayloadAddr(desc: *const TypeDesc, box: *const usize) [*]u8 {
 pub fn buildRecord(desc: *const TypeDesc, dst: [*]u8, fields: []const [*]const u8, ops: *RocOps) void {
     const record = recordOf(desc, ops);
     if (fields.len > record.count) invariant(ops, "a record built from more fields than its descriptor has");
-    @memset(dst[0..record.size], 0);
+    var initialized_size: u32 = 0;
     for (fields, 0..) |src, index| {
         const field = record.fieldBySemanticIndex(@intCast(index));
         writeComponent(field.desc, dst + field.offset, src, ops);
+        initialized_size += field.desc.size;
     }
+    // Keep operand and recursive-box allocation order. Dense records are
+    // already complete; only layouts with unwritten bytes need a gap walk.
+    std.debug.assert(initialized_size <= record.size);
+    if (initialized_size == record.size) return;
+    var end: u32 = 0;
+    for (record.fields()) |field| {
+        if (field.field_index >= fields.len) continue;
+        if (end != field.offset) @memset(dst[end..field.offset], 0);
+        end = field.offset + field.desc.size;
+    }
+    if (end != record.size) @memset(dst[end..record.size], 0);
 }
 
 /// Build the record `desc` describes at `dst` from the record `base`
@@ -180,9 +192,11 @@ pub fn buildRecord(desc: *const TypeDesc, dst: [*]u8, fields: []const [*]const u
 pub fn updateRecord(base_desc: *const TypeDesc, base: [*]u8, desc: *const TypeDesc, dst: [*]u8, names: []const *const Name, values: []const [*]const u8, ops: *RocOps) void {
     const record = recordOf(desc, ops);
     const base_record = recordOf(base_desc, ops);
-    @memset(dst[0..record.size], 0);
+    var end: u32 = 0;
     for (record.fields()) |*field| {
         if (field.is_padding != 0) continue;
+        if (end != field.offset) @memset(dst[end..field.offset], 0);
+        end = field.offset + field.desc.size;
         const name = field.name orelse invariant(ops, "an updated record has an unnamed field");
         const updated = for (names, values) |candidate, value| {
             if (candidate.eql(name)) break value;
@@ -197,6 +211,7 @@ pub fn updateRecord(base_desc: *const TypeDesc, base: [*]u8, desc: *const TypeDe
         @memcpy(dst[field.offset..][0..field.desc.size], base[source.offset..][0..field.desc.size]);
         walk.incref(field.desc, dst + field.offset, 1, ops);
     }
+    if (end != record.size) @memset(dst[end..record.size], 0);
     walk.decref(base_desc, base, ops);
 }
 

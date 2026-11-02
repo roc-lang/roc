@@ -861,3 +861,93 @@ test "active tag payloads preserve physical ordering, zero size, and recursive b
     walk.decref(desc, value.ptr(), ops);
     try testing.expectEqual(baseline, env.allocations());
 }
+
+test "record construction initializes gaps and omitted fields without touching surrounding bytes" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    const byte = compose.scalarDesc(.u8);
+    const wide = compose.scalarDesc(.u64);
+    const zero = compose.zstDesc();
+    const declared = compose.declaredRecord(&env.cache, ops, &.{
+        .{ .name = null, .desc = byte, .is_padding = 1 },
+        .{ .name = &name_c, .desc = byte, .is_padding = 0 },
+        .{ .name = &name_b, .desc = wide, .is_padding = 0 },
+        .{ .name = null, .desc = byte, .is_padding = 1 },
+        .{ .name = &name_a, .desc = zero, .is_padding = 0 },
+        .{ .name = null, .desc = byte, .is_padding = 1 },
+    });
+    const descriptors = [_]*const TypeDesc{
+        compose.record(&env.cache, ops, &.{}),
+        compose.tuple(&env.cache, ops, &.{ zero, zero }),
+        compose.tuple(&env.cache, ops, &.{ wide, wide }),
+        compose.tuple(&env.cache, ops, &.{ byte, wide, byte }),
+        recordAB(&env, byte, wide),
+        declared,
+        compose.nominal(&env.cache, ops, declared, &name_point, null, false),
+    };
+    var sources = [_]Slot{
+        .{ .bytes = @splat(0x31) },
+        .{ .bytes = @splat(0x62) },
+        .{ .bytes = @splat(0x93) },
+    };
+    const values = [_][*]const u8{ sources[0].ptr(), sources[1].ptr(), sources[2].ptr() };
+    for (descriptors) |desc| {
+        const record = compiled.backing(desc);
+        var named_count: usize = 0;
+        for (record.fields()) |field| named_count += @intFromBool(field.is_padding == 0);
+        // The constructor also supports a prefix of semantic fields. All
+        // absent fields, including explicit padding, must remain zero.
+        for (0..named_count + 1) |count| {
+            var actual: Slot = .{ .bytes = @splat(0xa5) };
+            var expected: Slot = .{ .bytes = @splat(0xa5) };
+            @memset(expected.bytes[0..desc.size], 0);
+            for (values[0..count], 0..) |src, index| {
+                const field = record.fieldBySemanticIndex(@intCast(index));
+                @memcpy(expected.bytes[field.offset..][0..field.desc.size], src[0..field.desc.size]);
+            }
+            compiled.buildRecord(desc, actual.ptr(), values[0..count], ops);
+            try testing.expectEqualSlices(u8, &expected.bytes, &actual.bytes);
+        }
+    }
+}
+
+test "record construction and updates preserve boxed fields and initialize all padding" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    const byte = compose.scalarDesc(.u8);
+    const boxed = compose.recursiveBox(&env.cache, ops, compose.strDesc());
+    const record = compose.declaredRecord(&env.cache, ops, &.{
+        .{ .name = null, .desc = byte, .is_padding = 1 },
+        .{ .name = &name_b, .desc = boxed, .is_padding = 0 },
+        .{ .name = &name_a, .desc = byte, .is_padding = 0 },
+        .{ .name = null, .desc = byte, .is_padding = 1 },
+    });
+    const desc = compose.nominal(&env.cache, ops, record, &name_point, null, false);
+    const allocations = env.allocations();
+    const text = "a heap string moved into a recursive record field";
+    const source = bigStr(text, ops);
+    const initial: u8 = 42;
+    const changed: u8 = 91;
+    var base: Slot = .{ .bytes = @splat(0xa5) };
+    compiled.buildRecord(desc, base.ptr(), &.{ @ptrCast(&initial), @ptrCast(&source) }, ops);
+    var actual: Slot = .{ .bytes = @splat(0xb6) };
+    // Updating another field must share the existing box before releasing
+    // the old record; changing the boxed field must move the new string.
+    compiled.updateRecord(desc, base.ptr(), desc, actual.ptr(), &.{&name_a}, &.{@ptrCast(&changed)}, ops);
+    const replacement = bigStr("a replacement heap string in the recursive record field", ops);
+    var replaced: Slot = .{ .bytes = @splat(0xc7) };
+    compiled.updateRecord(desc, actual.ptr(), desc, replaced.ptr(), &.{&name_b}, &.{@ptrCast(&replacement)}, ops);
+    const field_a = record.fieldBySemanticIndex(0);
+    const field_b = record.fieldBySemanticIndex(1);
+    var expected: Slot = .{ .bytes = @splat(0xc7) };
+    @memset(expected.bytes[0..desc.size], 0);
+    expected.bytes[field_a.offset] = changed;
+    @memcpy(expected.bytes[field_b.offset..][0..boxed.size], replaced.bytes[field_b.offset..][0..boxed.size]);
+    try testing.expectEqualSlices(u8, &expected.bytes, &replaced.bytes);
+    const stored: *const RocStr = @ptrCast(@alignCast(compiled.componentAddr(boxed, replaced.ptr() + field_b.offset)));
+    try testing.expectEqualStrings(replacement.asSlice(), stored.asSlice());
+    walk.decref(desc, replaced.ptr(), ops);
+    try testing.expectEqual(allocations, env.allocations());
+}
