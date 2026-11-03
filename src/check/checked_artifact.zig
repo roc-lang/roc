@@ -839,7 +839,7 @@ pub const ProvidesEntry = struct {
 /// Public `RequiresEntry` declaration.
 pub const RequiresEntry = struct {
     platform_name: canonical.ExportNameId,
-    declared_source_ty: canonical.CanonicalTypeSchemeKey,
+    declared_source_ty: CheckedTypeSchemeId,
 };
 
 /// Public `ProvidesRequiresMetadata` declaration.
@@ -865,7 +865,7 @@ pub const ProvidedProcedureExport = struct {
     def: CIR.Def.Idx,
     pattern: CheckedPatternId,
     checked_type: CheckedTypeId,
-    source_scheme: canonical.CanonicalTypeSchemeKey,
+    source_scheme: CheckedTypeSchemeId,
     binding: TopLevelProcedureBindingRef,
 };
 
@@ -876,7 +876,7 @@ pub const ProvidedDataExport = struct {
     def: CIR.Def.Idx,
     pattern: CheckedPatternId,
     checked_type: CheckedTypeId,
-    source_scheme: canonical.CanonicalTypeSchemeKey,
+    source_scheme: CheckedTypeSchemeId,
     const_ref: ConstRef,
 };
 
@@ -2671,13 +2671,20 @@ pub const CheckedTypeRoot = struct {
 /// `(start, len)` range into one of `CheckedTypeStore`'s flat side pools.
 pub const CheckedTypeRange = extern struct { start: u32 = 0, len: u32 = 0 };
 
-/// Public `CheckedTypeScheme` declaration.
+/// The key namespace a scheme's canonical key is computed in: a source
+/// scheme quantifies a source definition's type, a synthetic scheme names a
+/// type checked publication made.
+pub const CheckedTypeSchemeDomain = enum(u8) { source, synthetic };
+
+/// Public `CheckedTypeScheme` declaration. A scheme is identified within its
+/// module by its id; its canonical key is computed only when a consumer needs
+/// one (`CheckedTypeStoreView.schemeKey`).
 ///
 /// `gv_start`/`gv_len` are a range into `CheckedTypeStore.type_id_pool` (POD).
 /// Use `generalizedVars` to obtain the backing slice.
 pub const CheckedTypeScheme = struct {
     id: CheckedTypeSchemeId,
-    key: canonical.CanonicalTypeSchemeKey,
+    domain: CheckedTypeSchemeDomain,
     root: CheckedTypeId,
     gv_start: u32 = 0,
     gv_len: u32 = 0,
@@ -3709,7 +3716,6 @@ pub const CheckedTypeStoreView = struct {
     root_index: collections.SafeList(u32) = .{},
     root_index_count: u32 = 0,
     schemes: []const CheckedTypeScheme = &.{},
-    scheme_index: collections.SafeList(u32) = .{},
     stored_payloads: []const StoredCheckedTypePayload = &.{},
     alias_row_pool: []const StoredAlias = &.{},
     nominal_row_pool: []const StoredNominal = &.{},
@@ -3835,16 +3841,30 @@ pub const CheckedTypeStoreView = struct {
         return std.mem.eql(u8, &left_info.key.bytes, &right_info.key.bytes);
     }
 
-    /// Looks up a published checked source scheme by canonical scheme key.
-    pub fn schemeForKey(self: CheckedTypeStoreView, key: canonical.CanonicalTypeSchemeKey) ?CheckedTypeScheme {
-        const index = CheckedSchemeIndex.fromCells(self.scheme_index, @intCast(self.schemes.len));
-        const id = index.lookup(self, &key.bytes) orelse return null;
-        return self.schemes[@backingInt(id)];
+    /// The checked type of the source variable `var_`, or null when
+    /// publication never reached it.
+    pub fn sourceTypeRoot(self: CheckedTypeStoreView, var_: Var) ?CheckedTypeId {
+        const sealed = self.sealed orelse return null;
+        if (!sealed.reaches(var_)) return null;
+        return type_ids.fromVar(sealed.representative(var_));
     }
 
-    /// Rows used by the shared byte-key index, in dense ID order.
-    pub fn schemeRows(self: CheckedTypeStoreView) []const CheckedTypeScheme {
-        return self.schemes;
+    /// The scheme `id` names.
+    pub fn scheme(self: CheckedTypeStoreView, id: CheckedTypeSchemeId) CheckedTypeScheme {
+        const raw = @backingInt(id);
+        if (raw >= self.schemes.len) checkedArtifactInvariant("checked type scheme id is out of range", .{});
+        return self.schemes[raw];
+    }
+
+    /// The canonical key of the scheme `id` names, computed from its root's
+    /// key.
+    pub fn schemeKey(self: CheckedTypeStoreView, id: CheckedTypeSchemeId) Allocator.Error!canonical.CanonicalTypeSchemeKey {
+        const row = self.scheme(id);
+        const root_key = try self.rootKey(row.root);
+        return switch (row.domain) {
+            .source => canonical_type_keys.schemeKeyForType(root_key),
+            .synthetic => syntheticSchemeKeyForType(root_key),
+        };
     }
 
     /// Returns the canonical key for a checked type root in this view.
@@ -4447,11 +4467,10 @@ const CheckedTypePublication = struct {
     /// publication. Specialized checked roots have independent scheme keys.
     source_schemes: collections.DenseMap(Var, CheckedTypeSchemeId),
 
-    pub fn schemeForSourceVar(self: *const CheckedTypePublication, module: TypedCIR.Module, var_: Var) canonical.CanonicalTypeSchemeKey {
+    pub fn schemeForSourceVar(self: *const CheckedTypePublication, module: TypedCIR.Module, var_: Var) CheckedTypeSchemeId {
         const resolved = module.typeStoreConst().resolveVar(var_).var_;
-        const id = self.source_schemes.get(resolved) orelse
+        return self.source_schemes.get(resolved) orelse
             checkedArtifactInvariant("source scheme was not published", .{});
-        return self.store.schemes.items[@backingInt(id)].key;
     }
 
     /// The checked type of the source variable `var_`, or null when
@@ -4528,44 +4547,6 @@ const CheckedRootIndexPolicy = struct {
     }
     pub fn appendEntry(owner: CheckedRootInsert, _: Allocator, _: []const u8) Allocator.Error!Id {
         return owner.root;
-    }
-};
-
-const CheckedSchemeIndex = base.InternedBytes.Index(CheckedSchemeIndexPolicy);
-
-const CheckedSchemeInsert = struct {
-    store: *CheckedTypeStore,
-    key: canonical.CanonicalTypeSchemeKey,
-    root: CheckedTypeId,
-
-    pub fn schemeRows(self: CheckedSchemeInsert) []const CheckedTypeScheme {
-        return self.store.schemes.items;
-    }
-};
-
-const CheckedSchemeIndexPolicy = struct {
-    pub const Id = CheckedTypeSchemeId;
-    pub const Cell = u32;
-    pub const empty_cell: Cell = 0;
-    pub const initial_index_capacity: usize = 16;
-    pub const hash = base.InternedBytes.hash;
-
-    pub fn cellForId(id: Id) Cell {
-        return @backingInt(id) + 1;
-    }
-
-    pub fn idFromCell(cell: Cell) Id {
-        return @fromBackingInt(@intCast(cell - 1));
-    }
-
-    pub fn textForId(owner: anytype, id: Id) []const u8 {
-        return &owner.schemeRows()[@backingInt(id)].key.bytes;
-    }
-
-    pub fn appendEntry(owner: CheckedSchemeInsert, allocator: Allocator, _: []const u8) Allocator.Error!Id {
-        const id: Id = @fromBackingInt(@intCast(owner.store.schemes.items.len));
-        try owner.store.schemes.append(allocator, .{ .id = id, .key = owner.key, .root = owner.root });
-        return id;
     }
 };
 
@@ -4657,10 +4638,9 @@ pub const CheckedTypeStore = struct {
     closed_type_keys: ?*CheckedTypeKeys = null,
     roots: std.ArrayList(CheckedTypeRoot) = .empty,
     schemes: std.ArrayList(CheckedTypeScheme) = .empty,
-    /// Serialized probing buckets contain scheme IDs, with zero denoting an
-    /// empty bucket. Keys remain in the scheme rows; frozen lookups need no
-    /// rebuilding, allocation, or scan over unrelated schemes.
-    scheme_index: collections.SafeList(u32) = .{},
+    /// Build-only scheme of each root and domain, so a root asked for its
+    /// scheme twice names one scheme.
+    scheme_by_root: std.AutoHashMapUnmanaged(SchemeRootKey, CheckedTypeSchemeId) = .empty,
     payloads: std.ArrayList(StoredCheckedTypePayload) = .empty,
     /// Out-of-line rows of `alias` and `nominal` payloads.
     alias_row_pool: std.ArrayList(StoredAlias) = .empty,
@@ -4705,13 +4685,14 @@ pub const CheckedTypeStore = struct {
     /// buffer-owned memory and must not be freed).
     serialized: bool = false,
 
+    const SchemeRootKey = struct { root: CheckedTypeId, domain: CheckedTypeSchemeDomain };
+
     const BorrowedColumn = enum {
         roots,
         payloads,
         alias_row_pool,
         nominal_row_pool,
         schemes,
-        scheme_index,
         root_index,
         nominal_declarations,
         type_id_pool,
@@ -4761,6 +4742,7 @@ pub const CheckedTypeStore = struct {
         "identity_origins",
         "synthetic_variable_roots",
         "closed_type_keys",
+        "scheme_by_root",
         "sealed_env",
         "sealed_keys",
     };
@@ -4970,8 +4952,7 @@ pub const CheckedTypeStore = struct {
     ) Allocator.Error!void {
         const resolved = module.typeStoreConst().resolveVar(source_var).var_;
         if (source_schemes.contains(resolved)) return;
-        const key = canonical_type_keys.schemeKeyForType(try self.rootKey(root));
-        const id = try self.internScheme(allocator, key, root);
+        const id = try self.internScheme(allocator, .source, root);
         try source_schemes.put(resolved, id);
     }
 
@@ -4981,7 +4962,6 @@ pub const CheckedTypeStore = struct {
             .root_index = self.root_index,
             .root_index_count = self.root_index_count,
             .schemes = self.schemes.items,
-            .scheme_index = self.scheme_index,
             .stored_payloads = self.payloads.items,
             .alias_row_pool = self.alias_row_pool.items,
             .nominal_row_pool = self.nominal_row_pool.items,
@@ -5276,27 +5256,27 @@ pub const CheckedTypeStore = struct {
         head.value_ptr.* = entry_index + 1;
     }
 
-    pub fn schemeForKey(self: *const CheckedTypeStore, key: canonical.CanonicalTypeSchemeKey) ?CheckedTypeScheme {
-        return self.view().schemeForKey(key);
+    pub fn scheme(self: *const CheckedTypeStore, id: CheckedTypeSchemeId) CheckedTypeScheme {
+        return self.view().scheme(id);
     }
 
-    /// Intern a source scheme without changing the first representative root.
-    /// Index growth and row allocation both preserve existing rows on failure.
+    /// The scheme of `domain` over `root`, added the first time it is asked
+    /// for. Row allocation preserves existing rows on failure.
     pub fn internScheme(
         self: *CheckedTypeStore,
         allocator: Allocator,
-        key: canonical.CanonicalTypeSchemeKey,
+        domain: CheckedTypeSchemeDomain,
         root: CheckedTypeId,
     ) Allocator.Error!CheckedTypeSchemeId {
         std.debug.assert(!self.serialized);
-        if (self.borrowed_columns.contains(.schemes)) {
-            if (self.schemeForKey(key)) |existing| return existing.id;
-            try self.ownColumn(allocator, .schemes);
-            try self.ownColumn(allocator, .scheme_index);
-        }
-        var index = CheckedSchemeIndex.fromCells(self.scheme_index, @intCast(self.schemes.items.len));
-        defer self.scheme_index = index.cells;
-        return index.insert(CheckedSchemeInsert{ .store = self, .key = key, .root = root }, allocator, &key.bytes);
+        const entry = try self.scheme_by_root.getOrPut(allocator, .{ .root = root, .domain = domain });
+        if (entry.found_existing) return entry.value_ptr.*;
+        errdefer _ = self.scheme_by_root.remove(.{ .root = root, .domain = domain });
+        try self.ownColumn(allocator, .schemes);
+        const id: CheckedTypeSchemeId = @fromBackingInt(@intCast(self.schemes.items.len));
+        try self.schemes.append(allocator, .{ .id = id, .domain = domain, .root = root });
+        entry.value_ptr.* = id;
+        return id;
     }
 
     pub fn appendSyntheticFunctionRoot(
@@ -5329,7 +5309,6 @@ pub const CheckedTypeStore = struct {
             // A synthesized function with the same content shares this root;
             // synthetic callers still name it through its synthetic scheme.
             if (self.synthesizedRootForKey(key)) |existing| {
-                try self.ensureSyntheticSchemeForRoot(allocator, existing, key);
                 return existing;
             }
         }
@@ -5359,8 +5338,6 @@ pub const CheckedTypeStore = struct {
         }
         try self.indexRoot(allocator, root);
         if (fingerprint) |value| try self.indexStructuralRoot(allocator, .synthetic_function, id, value);
-
-        try self.ensureSyntheticSchemeForRoot(allocator, id, key);
         return id;
     }
 
@@ -5418,8 +5395,6 @@ pub const CheckedTypeStore = struct {
         }
         try self.indexRoot(allocator, root);
         if (fingerprint) |value| try self.indexStructuralRoot(allocator, .checked_payload, id, value);
-
-        try self.ensureSyntheticSchemeForRoot(allocator, id, key_info.key);
         return id;
     }
 
@@ -5537,7 +5512,6 @@ pub const CheckedTypeStore = struct {
         build_owned = false;
         self.payloads.items[index] = stored;
         errdefer self.payloads.items[index] = .pending;
-        try self.ensureSyntheticSchemeForRoot(allocator, root, self.roots.items[index].key);
     }
 
     pub fn replaceTypeRootPayload(
@@ -5555,7 +5529,6 @@ pub const CheckedTypeStore = struct {
         payload_owned = false;
         try self.ownColumn(allocator, .payloads);
         self.payloads.items[index] = stored;
-        try self.ensureSyntheticSchemeForRoot(allocator, root, self.roots.items[index].key);
     }
 
     pub fn nominalDeclaration(
@@ -5691,25 +5664,13 @@ pub const CheckedTypeStore = struct {
         return out;
     }
 
+    /// The synthetic scheme naming `root`.
     pub fn ensureSchemeForRoot(
         self: *CheckedTypeStore,
         allocator: Allocator,
         root: CheckedTypeId,
-    ) Allocator.Error!canonical.CanonicalTypeSchemeKey {
-        const key = try self.rootKey(root);
-        const scheme_key = syntheticSchemeKeyForType(key);
-        try self.ensureSyntheticSchemeForRoot(allocator, root, key);
-        return scheme_key;
-    }
-
-    fn ensureSyntheticSchemeForRoot(
-        self: *CheckedTypeStore,
-        allocator: Allocator,
-        root: CheckedTypeId,
-        key: canonical.CanonicalTypeKey,
-    ) Allocator.Error!void {
-        const scheme_key = syntheticSchemeKeyForType(key);
-        _ = try self.internScheme(allocator, scheme_key, root);
+    ) Allocator.Error!CheckedTypeSchemeId {
+        return try self.internScheme(allocator, .synthetic, root);
     }
 
     pub fn deinit(self: *CheckedTypeStore, allocator: Allocator) void {
@@ -5718,6 +5679,7 @@ pub const CheckedTypeStore = struct {
 
         self.identity_origins.deinit(allocator);
         self.synthetic_variable_roots.deinit(allocator);
+        self.scheme_by_root.deinit(allocator);
         if (self.closed_type_keys) |keys| {
             keys.deinit();
             allocator.destroy(keys);
@@ -5738,7 +5700,6 @@ pub const CheckedTypeStore = struct {
         root_index: collections.SafeList(u32).Serialized = .{ .offset = 0, .len = 0, .capacity = 0 },
         root_index_count: artifact_serialize.SerializedScalar(u32, 0) = .{},
         schemes: SerializedSlice(CheckedTypeScheme) = .{},
-        scheme_index: collections.SafeList(u32).Serialized = .{ .offset = 0, .len = 0, .capacity = 0 },
         payloads: SerializedSlice(StoredCheckedTypePayload) = .{},
         alias_row_pool: SerializedSlice(StoredAlias) = .{},
         nominal_row_pool: SerializedSlice(StoredNominal) = .{},
@@ -5758,10 +5719,10 @@ pub const CheckedTypeStore = struct {
         sealed_capabilities: SerializedSlice(sealed_type_view.SealedCapabilityRow) = .{},
 
         comptime {
-            // 22 = 17 `SerializedSlice` fields + both indexes + 3 for `var_names`
+            // 21 = 17 `SerializedSlice` fields + the root index + 3 for `var_names`
             // (`SerialStringInterner.Serialized` = 3 `SafeList` base pointers). The
             // count is the true total fixups, independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 22);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 21);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(CheckedTypeStore, @This());
@@ -16403,7 +16364,7 @@ pub const ProcedureBindingBody = union(enum) {
 
 /// Public `TopLevelProcedureBinding` declaration.
 pub const TopLevelProcedureBinding = struct {
-    source_scheme: canonical.CanonicalTypeSchemeKey,
+    source_scheme: CheckedTypeSchemeId,
     body: ProcedureBindingBody,
 };
 
@@ -16425,7 +16386,7 @@ pub const TopLevelProcedureBindingTable = struct {
     pub fn appendDirect(
         self: *TopLevelProcedureBindingTable,
         allocator: Allocator,
-        source_scheme: canonical.CanonicalTypeSchemeKey,
+        source_scheme: CheckedTypeSchemeId,
         proc_value: canonical.ProcedureValueRef,
         template: canonical.ProcedureTemplateRef,
     ) Allocator.Error!TopLevelProcedureBindingRef {
@@ -16443,7 +16404,7 @@ pub const TopLevelProcedureBindingTable = struct {
     pub fn appendCheckedError(
         self: *TopLevelProcedureBindingTable,
         allocator: Allocator,
-        source_scheme: canonical.CanonicalTypeSchemeKey,
+        source_scheme: CheckedTypeSchemeId,
         expr: CheckedExprId,
     ) Allocator.Error!TopLevelProcedureBindingRef {
         const ref: TopLevelProcedureBindingRef = @fromBackingInt(@intCast(@as(u32, @intCast(self.bindings.items.len))));
@@ -16457,7 +16418,7 @@ pub const TopLevelProcedureBindingTable = struct {
     pub fn appendCallableEval(
         self: *TopLevelProcedureBindingTable,
         allocator: Allocator,
-        source_scheme: canonical.CanonicalTypeSchemeKey,
+        source_scheme: CheckedTypeSchemeId,
         template: CallableEvalTemplateId,
     ) Allocator.Error!TopLevelProcedureBindingRef {
         const ref: TopLevelProcedureBindingRef = @fromBackingInt(@intCast(@as(u32, @intCast(self.bindings.items.len))));
@@ -16481,7 +16442,7 @@ pub const CallableEvalTemplate = struct {
     module_idx: u32,
     pattern: CheckedPatternId,
     root: ComptimeRootId,
-    source_scheme: canonical.CanonicalTypeSchemeKey,
+    source_scheme: CheckedTypeSchemeId,
     checked_fn_root: CheckedTypeId,
     /// The binding's checked lookup of another procedure when the binding is
     /// an exact procedure alias (`f = g`). A call through the alias is a
@@ -16512,7 +16473,7 @@ pub const CallableEvalTemplateTable = struct {
         module_idx: u32,
         pattern: CheckedPatternId,
         root: ComptimeRootId,
-        source_scheme: canonical.CanonicalTypeSchemeKey,
+        source_scheme: CheckedTypeSchemeId,
         checked_fn_root: CheckedTypeId,
     ) Allocator.Error!CallableEvalTemplateId {
         const id: CallableEvalTemplateId = @fromBackingInt(@intCast(@as(u32, @intCast(self.templates.items.len))));
@@ -22668,7 +22629,7 @@ pub const CheckedProcedureTemplate = struct {
     proc_base: canonical.ProcBaseKeyRef,
     template_id: canonical.CheckedProcedureTemplateId,
     body: CheckedProcedureBody,
-    checked_fn_scheme: canonical.CanonicalTypeSchemeKey,
+    checked_fn_scheme: CheckedTypeSchemeId,
     checked_fn_root: CheckedTypeId,
     /// Build/publication traversal span containing every call plan in the
     /// template. Post-check consumers use the classified spans below.
@@ -23089,7 +23050,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 &.{},
                 root.checked_type,
             );
-            const checked_fn_scheme = syntheticSchemeKeyForType((try checked_types.rootKey(checked_fn_root)));
+            const checked_fn_scheme = try checked_types.ensureSchemeForRoot(allocator, checked_fn_root);
             const proc_base = try names.internProcBase(.{
                 .module_name = module_name,
                 .export_name = null,
@@ -23261,7 +23222,7 @@ test "issue 11128 procedure template extension stays amortized" {
             .proc_base = @fromBackingInt(@intCast(i)),
             .template_id = @fromBackingInt(@intCast(i)),
             .body = .{ .entry_wrapper = @fromBackingInt(@intCast(i)) },
-            .checked_fn_scheme = .{},
+            .checked_fn_scheme = @fromBackingInt(@intCast(i)),
             .checked_fn_root = @fromBackingInt(@intCast(i)),
             .static_dispatch_plans = .{},
             .direct_dispatch_plans = .{},
@@ -24633,8 +24594,7 @@ const PlatformRelationTypeSubstitutions = struct {
             const resolved = try self.specializeRootWithMemo(allocator, store, source, &substitution);
             try source_types.substituted.put(var_, resolved);
             if (publication.source_schemes.getPtr(var_)) |scheme| {
-                const key = syntheticSchemeKeyForType(try store.rootKey(resolved));
-                scheme.* = try store.internScheme(allocator, key, resolved);
+                scheme.* = try store.ensureSchemeForRoot(allocator, resolved);
             }
         }
     }
@@ -28152,7 +28112,7 @@ pub fn pairCheckedPlatform(
         const source_root = template.checked_fn_root;
         template.checked_fn_root = try substitutions.specializeRootWithMemo(session, &result.checked_types, source_root, &type_memo);
         if (template.checked_fn_root != source_root) {
-            template.checked_fn_scheme = syntheticSchemeKeyForType((try result.checked_types.rootKey(template.checked_fn_root)));
+            template.checked_fn_scheme = try result.checked_types.ensureSchemeForRoot(session, template.checked_fn_root);
             switch (template.body) {
                 .entry_wrapper => |id| {
                     if (!copied_entry_wrappers) {
@@ -28543,17 +28503,16 @@ fn publishRequiresMetadata(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
+    publication: *const CheckedTypePublication,
 ) Allocator.Error![]RequiresEntry {
     const source = module.requiresTypes();
     const requires = try allocator.alloc(RequiresEntry, source.len);
     errdefer allocator.free(requires);
-    var scheme_writer = canonical_type_keys.SchemeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst());
-    defer scheme_writer.deinit();
 
     for (source, 0..) |entry, i| {
         requires[i] = .{
             .platform_name = try names.internExportIdent(module.identStoreConst(), entry.ident),
-            .declared_source_ty = try scheme_writer.fromVar(ModuleEnv.varFrom(entry.type_anno)),
+            .declared_source_ty = publication.schemeForSourceVar(module, ModuleEnv.varFrom(entry.type_anno)),
         };
     }
 
@@ -31603,7 +31562,7 @@ pub const ConstRef = struct {
     artifact: CheckedModuleDigest,
     owner: ConstOwner,
     template: ConstTemplateId,
-    source_scheme: canonical.CanonicalTypeSchemeKey,
+    source_scheme: CheckedTypeSchemeId,
 };
 
 /// Public checked constant locator declaration.
@@ -31644,7 +31603,7 @@ pub const TopLevelValueEntry = struct {
     def: CIR.Def.Idx,
     pattern: CheckedPatternId,
     source_name: canonical.ExportNameId,
-    source_scheme: canonical.CanonicalTypeSchemeKey,
+    source_scheme: CheckedTypeSchemeId,
     value: TopLevelValueKind,
 };
 
@@ -31829,7 +31788,7 @@ pub const HoistedConstEntry = struct {
     expr: CheckedExprId,
     pattern: ?CheckedPatternId,
     checked_type: CheckedTypeId,
-    source_scheme: canonical.CanonicalTypeSchemeKey,
+    source_scheme: CheckedTypeSchemeId,
     const_ref: ConstRef,
 };
 
@@ -32335,7 +32294,7 @@ test "ExportedProcedureBindingTable: serialize/relocate preserves rows and closu
     var bindings = std.ArrayList(ImportedProcedureBindingView).empty;
     try bindings.append(gpa, .{
         .binding = .{ .artifact = key_a.digest(), .def = @fromBackingInt(@intCast(1)), .pattern = @fromBackingInt(@intCast(2)) },
-        .source_scheme = .{},
+        .source_scheme = @fromBackingInt(0),
         .body = .{ .callable_eval_template = @fromBackingInt(@intCast(3)) },
         .intrinsic = .str_inspect,
         .iterator_procedure = .map,
@@ -32377,7 +32336,7 @@ test "platform relation procedure use preserves exported runtime result provenan
             .def = @fromBackingInt(@intCast(1)),
             .pattern = app_pattern,
         },
-        .source_scheme = .{},
+        .source_scheme = @fromBackingInt(0),
         .body = .{ .callable_eval_template = @fromBackingInt(@intCast(4)) },
         .runtime_result_provenance = .list_element_read,
     };
@@ -32386,7 +32345,7 @@ test "platform relation procedure use preserves exported runtime result provenan
         .def = exported.binding.def,
         .pattern = app_pattern,
         .source_name = @fromBackingInt(@intCast(6)),
-        .source_scheme = .{},
+        .source_scheme = @fromBackingInt(0),
         .value = .{ .procedure_binding = procedure_binding },
     };
     const app_value_ref = TopLevelValueRef{
@@ -33515,7 +33474,7 @@ fn dependencyViewByKey(
 pub const ExportedProcedureTemplate = struct {
     export_name: ?canonical.ExportNameId,
     def: CIR.Def.Idx,
-    source_scheme: canonical.CanonicalTypeSchemeKey,
+    source_scheme: CheckedTypeSchemeId,
     template: canonical.ProcedureTemplateRef,
     template_data: CheckedProcedureTemplate,
     template_closure: StoredImportedTemplateClosure = .{},
@@ -33835,12 +33794,10 @@ const ImportedTemplateClosureBuilder = struct {
 
     fn appendCheckedTypeScheme(
         self: *ImportedTemplateClosureBuilder,
-        scheme_key: canonical.CanonicalTypeSchemeKey,
+        scheme: CheckedTypeSchemeId,
     ) Allocator.Error!void {
-        const scheme = self.context.checked_types.schemeForKey(scheme_key) orelse {
-            base.invariant("checked artifact invariant violated: exported template references missing checked type scheme", .{});
-        };
-        const ref = ArtifactCheckedTypeSchemeRef{ .artifact = self.context.artifact_key.digest(), .scheme = scheme.id };
+        std.debug.assert(@backingInt(scheme) < self.context.checked_types.schemes.items.len);
+        const ref = ArtifactCheckedTypeSchemeRef{ .artifact = self.context.artifact_key.digest(), .scheme = scheme };
         _ = try self.checked_type_schemes.append(self.context.allocator, ref);
     }
 
@@ -34047,9 +34004,7 @@ const ImportedTemplateClosureBuilder = struct {
 
         if (!std.meta.eql(const_ref.artifact.bytes, self.context.artifact_key.bytes)) return;
 
-        const scheme = self.context.checked_types.schemeForKey(const_ref.source_scheme) orelse {
-            base.invariant("checked artifact invariant violated: const template references missing checked type scheme", .{});
-        };
+        const scheme = self.context.checked_types.scheme(const_ref.source_scheme);
         try self.appendCheckedTypeRoot(scheme.root);
         try self.appendCheckedTypeScheme(const_ref.source_scheme);
 
@@ -34222,7 +34177,7 @@ pub fn deinitImportedTemplateClosure(
 /// Public `ImportedProcedureBindingView` declaration.
 pub const ImportedProcedureBindingView = struct {
     binding: ImportedProcedureBindingRef,
-    source_scheme: canonical.CanonicalTypeSchemeKey,
+    source_scheme: CheckedTypeSchemeId,
     body: ProcedureBindingBody,
     intrinsic: ?IntrinsicId = null,
     iterator_procedure: ?IteratorProcedureId = null,
@@ -34385,7 +34340,7 @@ fn buildProcedureBindingClosure(
 pub const ConstEvalTemplate = struct {
     body: CheckedConstBodyRef,
     entry_template: canonical.ProcedureTemplateRef,
-    source_scheme: canonical.CanonicalTypeSchemeKey,
+    source_scheme: CheckedTypeSchemeId,
     resolved_value_refs: ResolvedValueRefTableRef = .{},
     static_dispatch_plans: StaticDispatchPlanTableRef = .{},
     nested_proc_sites: NestedProcSiteTableRef = .{},
@@ -34417,7 +34372,7 @@ pub const ConstTemplateState = union(enum) {
 pub const ConstTemplate = struct {
     id: ConstTemplateId,
     owner: ConstOwner,
-    source_scheme: canonical.CanonicalTypeSchemeKey,
+    source_scheme: CheckedTypeSchemeId,
     state: ConstTemplateState,
 };
 
@@ -34438,7 +34393,7 @@ pub const ConstTemplateTable = struct {
         artifact_key: CheckedModuleArtifactKey,
         module_idx: u32,
         pattern: CheckedPatternId,
-        source_scheme: canonical.CanonicalTypeSchemeKey,
+        source_scheme: CheckedTypeSchemeId,
     ) Allocator.Error!ConstRef {
         return self.appendTopLevel(allocator, artifact_key, module_idx, pattern, source_scheme, .reserved);
     }
@@ -34450,7 +34405,7 @@ pub const ConstTemplateTable = struct {
         artifact_key: CheckedModuleArtifactKey,
         module_idx: u32,
         pattern: CheckedPatternId,
-        source_scheme: canonical.CanonicalTypeSchemeKey,
+        source_scheme: CheckedTypeSchemeId,
         declaration: UnimplementedDeclaration,
     ) Allocator.Error!ConstRef {
         return self.appendTopLevel(
@@ -34469,7 +34424,7 @@ pub const ConstTemplateTable = struct {
         artifact_key: CheckedModuleArtifactKey,
         module_idx: u32,
         pattern: CheckedPatternId,
-        source_scheme: canonical.CanonicalTypeSchemeKey,
+        source_scheme: CheckedTypeSchemeId,
         state: ConstTemplateState,
     ) Allocator.Error!ConstRef {
         const id: ConstTemplateId = @fromBackingInt(@intCast(@as(u32, @intCast(self.templates.items.len))));
@@ -34497,7 +34452,7 @@ pub const ConstTemplateTable = struct {
         artifact_key: CheckedModuleArtifactKey,
         module_idx: u32,
         expr: CheckedExprId,
-        source_scheme: canonical.CanonicalTypeSchemeKey,
+        source_scheme: CheckedTypeSchemeId,
     ) Allocator.Error!ConstRef {
         const id: ConstTemplateId = @fromBackingInt(@intCast(@as(u32, @intCast(self.templates.items.len))));
         const owner: ConstOwner = .{ .hoisted_expr = .{
@@ -34524,7 +34479,7 @@ pub const ConstTemplateTable = struct {
         template: ConstEvalTemplate,
     ) void {
         const record = self.recordForRef(ref);
-        if (!std.meta.eql(record.source_scheme.bytes, template.source_scheme.bytes)) {
+        if (!(record.source_scheme == template.source_scheme)) {
             checkedArtifactInvariant("constant eval template source scheme does not match reserved ConstRef", .{});
         }
         switch (record.state) {
@@ -34554,7 +34509,7 @@ pub const ConstTemplateTable = struct {
         }
         const template = self.templates.items[idx];
         if (!std.meta.eql(template.owner, ref.owner) or
-            !std.meta.eql(template.source_scheme.bytes, ref.source_scheme.bytes))
+            !(template.source_scheme == ref.source_scheme))
         {
             checkedArtifactInvariant("ConstRef does not match constant template row", .{});
         }
@@ -34585,7 +34540,7 @@ pub const ConstTemplateTable = struct {
         }
         const record = &self.templates.items[idx];
         if (!std.meta.eql(record.owner, ref.owner) or
-            !std.meta.eql(record.source_scheme.bytes, ref.source_scheme.bytes))
+            !(record.source_scheme == ref.source_scheme))
         {
             checkedArtifactInvariant("ConstRef does not match constant template row", .{});
         }
@@ -34601,7 +34556,7 @@ pub const ImportedConstTemplateView = struct {
     def: CIR.Def.Idx,
     pattern: CheckedPatternId,
     const_ref: ConstRef,
-    source_scheme: canonical.CanonicalTypeSchemeKey,
+    source_scheme: CheckedTypeSchemeId,
     template: ConstTemplate,
     template_closure: StoredImportedTemplateClosure = .{},
 };
@@ -34739,7 +34694,7 @@ fn constRefEql(a: ConstRef, b: ConstRef) bool {
     return a.artifact.eql(b.artifact) and
         std.meta.eql(a.owner, b.owner) and
         a.template == b.template and
-        std.meta.eql(a.source_scheme.bytes, b.source_scheme.bytes);
+        (a.source_scheme == b.source_scheme);
 }
 
 fn constRefTopLevelOwner(ref: ConstRef) ?ConstTopLevelOwner {
@@ -35277,7 +35232,7 @@ pub const CheckedModuleArtifact = struct {
             // two pools of their own. Template demand vectors add one.
             // Literal arguments add the literal requirement pool, the demand pool, and the root lookup table.
             // The sealed type columns of the checked type store add five.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 249);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 248);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -36787,9 +36742,7 @@ pub const CheckedModuleArtifact = struct {
         for (self.checked_procedure_templates.templates.items, 0..) |template, i| {
             std.debug.assert(@backingInt(template.template_id) == i);
             std.debug.assert(self.checked_types.view().containsId(template.checked_fn_root));
-            _ = self.checked_types.schemeForKey(template.checked_fn_scheme) orelse {
-                base.invariant("checked artifact invariant violated: checked procedure template references missing type scheme", .{});
-            };
+            _ = self.checked_types.scheme(template.checked_fn_scheme);
             switch (template.body) {
                 .checked_body => |body| {
                     const checked_body = self.checked_bodies.body(body);
@@ -37037,9 +36990,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(root.kind == .callable_binding);
             std.debug.assert(root.pattern != null and root.pattern.? == template.pattern);
             std.debug.assert(self.checked_types.view().containsId(template.checked_fn_root));
-            _ = self.checked_types.schemeForKey(template.source_scheme) orelse {
-                base.invariant("checked artifact invariant violated: callable eval template references missing type scheme", .{});
-            };
+            _ = self.checked_types.scheme(template.source_scheme);
         }
 
         for (self.top_level_values.entries) |entry| {
@@ -37052,7 +37003,7 @@ pub const CheckedModuleArtifact = struct {
                     };
                     std.debug.assert(owner.module_idx == self.module_identity.module_idx);
                     std.debug.assert(owner.pattern == entry.pattern);
-                    std.debug.assert(std.meta.eql(const_ref.source_scheme.bytes, entry.source_scheme.bytes));
+                    std.debug.assert((const_ref.source_scheme == entry.source_scheme));
                 },
                 .procedure_binding => |binding_ref| {
                     const binding = self.top_level_procedure_bindings.get(binding_ref);
@@ -37086,9 +37037,7 @@ pub const CheckedModuleArtifact = struct {
 
         for (self.provides_requires.requires) |entry| {
             _ = self.canonical_names.exportNameText(entry.platform_name);
-            _ = self.checked_types.schemeForKey(entry.declared_source_ty) orelse {
-                base.invariant("checked artifact invariant violated: require metadata source type was not published", .{});
-            };
+            _ = self.checked_types.scheme(entry.declared_source_ty);
         }
 
         if (self.provided_exports.exports.len != self.provides_requires.provides.len) {
@@ -37106,7 +37055,7 @@ pub const CheckedModuleArtifact = struct {
                     };
                     std.debug.assert(top_level.pattern == procedure.pattern);
                     std.debug.assert(top_level.source_name == procedure.source_name);
-                    std.debug.assert(std.meta.eql(top_level.source_scheme.bytes, procedure.source_scheme.bytes));
+                    std.debug.assert((top_level.source_scheme == procedure.source_scheme));
                     switch (top_level.value) {
                         .procedure_binding => |binding| std.debug.assert(binding == procedure.binding),
                         .const_ref => base.invariant("checked artifact invariant violated: provided procedure export references const top-level value", .{}),
@@ -37122,7 +37071,7 @@ pub const CheckedModuleArtifact = struct {
                     };
                     std.debug.assert(top_level.pattern == data.pattern);
                     std.debug.assert(top_level.source_name == data.source_name);
-                    std.debug.assert(std.meta.eql(top_level.source_scheme.bytes, data.source_scheme.bytes));
+                    std.debug.assert((top_level.source_scheme == data.source_scheme));
                     switch (top_level.value) {
                         .const_ref => |const_ref| std.debug.assert(constRefEql(const_ref, data.const_ref)),
                         .procedure_binding => base.invariant("checked artifact invariant violated: provided data export references procedure top-level value", .{}),
@@ -38608,9 +38557,6 @@ pub fn publishFromTypedModule(
     const provides = try publishProvidesMetadata(allocator, module, &canonical_names);
     errdefer allocator.free(provides);
 
-    const requires = try publishRequiresMetadata(allocator, module, &canonical_names);
-    errdefer allocator.free(requires);
-
     const owner_artifact = artifact_key.digest();
 
     var source_nodes = try CheckedSourceNodes.init(allocator, module);
@@ -38623,6 +38569,8 @@ pub fn publishFromTypedModule(
     defer checked_type_publication.deinitIndex(allocator);
     errdefer checked_type_publication.store.deinit(allocator);
     const checked_types = &checked_type_publication.store;
+    const requires = try publishRequiresMetadata(allocator, module, &canonical_names, &checked_type_publication);
+    errdefer allocator.free(requires);
     var platform_type_inputs = try PlatformTypeInputs.fromModule(allocator, module, &canonical_names, &checked_type_publication, &platform_required_declarations);
     errdefer platform_type_inputs.deinit(allocator);
 
@@ -40681,17 +40629,14 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
 
     // A scheme with generalized vars [a, b].
     const gv = try store.appendPool(gpa, CheckedTypeId, &.{ a, b });
-    const scheme_key = canonical.CanonicalTypeSchemeKey{ .bytes = @as([32]u8, @splat(3)) };
-    const scheme_id = try store.internScheme(gpa, scheme_key, a);
+    const scheme_id = try store.internScheme(gpa, .source, a);
     store.schemes.items[@backingInt(scheme_id)].gv_start = gv.start;
     store.schemes.items[@backingInt(scheme_id)].gv_len = gv.len;
-    // Exercise several index resizes before freezing it. Distinct scheme keys
-    // may deliberately share the same checked root.
-    for (0..256) |i| {
-        var key = canonical.CanonicalTypeSchemeKey{};
-        key.bytes[0] = @intCast(i);
-        _ = try store.internScheme(gpa, key, a);
-    }
+    // A synthetic scheme over the same root is a distinct scheme; asking
+    // again names the same one.
+    const synthetic_scheme = try store.internScheme(gpa, .synthetic, a);
+    try std.testing.expect(synthetic_scheme != scheme_id);
+    try std.testing.expectEqual(synthetic_scheme, try store.internScheme(gpa, .synthetic, a));
 
     // A nominal declaration with formal args [c], backing c, padding fields [a], and a
     // declared record sequence [{field}, {_ : a}].
@@ -40736,10 +40681,9 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     defer loaded.deinit(gpa);
 
     for (store.schemes.items) |scheme| {
-        try std.testing.expectEqualDeep(scheme, loaded.schemeForKey(scheme.key).?);
-        try std.testing.expectEqualDeep(scheme, loaded.view().schemeForKey(scheme.key).?);
+        try std.testing.expectEqualDeep(scheme, loaded.scheme(scheme.id));
+        try std.testing.expectEqualDeep(scheme, loaded.view().scheme(scheme.id));
     }
-    try std.testing.expect(loaded.schemeForKey(.{ .bytes = @as([32]u8, @splat(255)) }) == null);
 
     // Flex name + constraint survive.
     const flex = loaded.payload(a).flex;
@@ -41541,8 +41485,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x54, 0x45, 0xE9, 0x5D, 0x93, 0x75, 0x5E, 0x95, 0xEF, 0x6D, 0x0C, 0xE1, 0xCC, 0x84, 0x25, 0x4C,
-        0x2A, 0x6E, 0xCF, 0x45, 0xFB, 0x7F, 0xD0, 0x01, 0x40, 0x56, 0x66, 0xCB, 0x6B, 0x56, 0xC6, 0xB6,
+        0x7D, 0x35, 0xDA, 0xF1, 0xBF, 0x00, 0x75, 0x56, 0xF2, 0x34, 0x35, 0xDF, 0x7B, 0xF7, 0x67, 0x71,
+        0xA7, 0x99, 0x1E, 0xFE, 0xE5, 0x83, 0xC9, 0xDF, 0xDE, 0x5A, 0xE5, 0xE1, 0xEE, 0x58, 0x01, 0x52,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -41805,7 +41749,7 @@ test "publishing a module releases each resource exactly once under allocation f
     try std.testing.checkAllAllocationFailures(no_resize.allocator(), Attempt.run, .{ &modules, env.module_env, &imports, &available, finalizer });
 }
 
-test "issue 11128 source scheme publication keys each source root once" {
+test "issue 11128 source scheme publication names each source root once" {
     const TestEnv = @import("test/TestEnv.zig");
     const gpa = std.testing.allocator;
     var env = try TestEnv.init("Schemes",
@@ -41843,10 +41787,10 @@ test "issue 11128 source scheme publication keys each source root once" {
         const root = try appendCheckedTypeRoot(allocator, module, &publication.store, &active, module.defType(def));
         try publication.store.publishSourceScheme(allocator, module, &publication.source_schemes, module.defType(def), root);
         const expected = try canonical_type_keys.schemeFromVar(gpa, module.typeStoreConst(), module.moduleEnvConst(), module.defType(def));
-        try std.testing.expectEqualDeep(expected, publication.schemeForSourceVar(module, module.defType(def)));
+        try std.testing.expectEqualDeep(expected, try publication.store.view().schemeKey(publication.schemeForSourceVar(module, module.defType(def))));
     }
-    // Every key is computed once, through its slot: publishing the schemes
-    // again computes nothing and allocates nothing.
+    // Each source root names one scheme: publishing the schemes again adds
+    // nothing and allocates nothing.
     const allocations = counter.allocated_bytes;
     for (0..128) |_| {
         for (defs) |def| {

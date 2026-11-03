@@ -441,18 +441,12 @@ const Extractor = struct {
             const gop = try seen_paths.getOrPut(self.gpa, path);
             if (gop.found_existing) continue;
 
-            const scheme_key = try canonical_type_keys.schemeFromVar(
-                self.gpa,
-                &module_env.types,
-                module_env,
-                ModuleEnv.varFrom(def_idx),
-            );
-            const scheme = view.schemeForKey(scheme_key) orelse
-                return self.fail(.unpublished_public_type, "public value has no published checked type scheme");
+            const root = view.sourceTypeRoot(ModuleEnv.varFrom(def_idx)) orelse
+                return self.fail(.unpublished_public_type, "public value has no published checked type");
 
             var memo = ConvertMemo.empty;
             defer memo.deinit(self.gpa);
-            const ty = try self.convertType(view, names, scheme.root, &memo);
+            const ty = try self.convertType(view, names, root, &memo);
             try self.api.addItem(module_index, .{ .path = path, .kind = .{ .value = ty } });
         }
     }

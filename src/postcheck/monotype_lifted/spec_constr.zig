@@ -16968,7 +16968,7 @@ test "compile-time root reads remain opaque through specialization and cloning" 
             .artifact = .{},
             .owner = .{ .hoisted_expr = .{ .module_idx = 0, .expr = @fromBackingInt(@intCast(1)) } },
             .template = @fromBackingInt(@intCast(1)),
-            .source_scheme = .{},
+            .source_scheme = @fromBackingInt(0),
         },
     };
     const root_id = try program.addComptimeValueRoot(root);
@@ -17015,7 +17015,7 @@ test "a constant read counts as one expression in either form" {
             .artifact = .{},
             .owner = .{ .hoisted_expr = .{ .module_idx = 0, .expr = @fromBackingInt(@intCast(1)) } },
             .template = @fromBackingInt(@intCast(1)),
-            .source_scheme = .{},
+            .source_scheme = @fromBackingInt(0),
         },
     });
     const read = try program.addExpr(.{ .ty = list_ty, .data = .{ .comptime_value = .{

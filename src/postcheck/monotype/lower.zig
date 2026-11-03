@@ -7532,7 +7532,7 @@ const Builder = struct {
         const binding = view.top_level_procedure_bindings.get(binding_id);
         const body = switch (binding.body) {
             .direct_template => blk: {
-                const source_fn_ty = schemeRoot(view, binding.source_scheme, "procedure binding source scheme was not output");
+                const source_fn_ty = view.types.scheme(binding.source_scheme).root;
                 const fn_template = self.fnDefForProcedureBindingBody(
                     view,
                     binding.body,
@@ -7593,7 +7593,7 @@ const Builder = struct {
             },
         }
         hashU32(&hasher, @backingInt(request.const_locator.template));
-        hasher.update(&request.const_locator.source_scheme.bytes);
+        hashU32(&hasher, @backingInt(request.const_locator.source_scheme));
         if (request.node) |node| {
             hasher.update("node");
             hashU32(&hasher, @backingInt(node));
@@ -7625,7 +7625,7 @@ const Builder = struct {
     ) Allocator.Error!Ast.ExprId {
         return switch (binding.body) {
             .direct_template => blk: {
-                const source_fn_ty = schemeRoot(view, binding.source_scheme, "procedure binding source scheme was not output");
+                const source_fn_ty = view.types.scheme(binding.source_scheme).root;
                 const fn_template = self.fnDefForProcedureBindingBody(
                     view,
                     binding.body,
@@ -68709,11 +68709,6 @@ fn checkedPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) checked.C
     return view.types.payload(checked_ty);
 }
 
-fn schemeRoot(view: ModuleView, source_scheme: anytype, comptime missing_message: []const u8) checked.CheckedTypeId {
-    const scheme = view.types.schemeForKey(source_scheme) orelse Common.invariant(missing_message);
-    return scheme.root;
-}
-
 fn checkedLambdaExprIdForConstFn(view: ModuleView, fn_def: anytype) checked.CheckedExprId {
     return switch (fn_def) {
         .nested => |nested| blk: {
@@ -69202,7 +69197,7 @@ fn constUseEql(a: checked.ConstLocator, b: checked.ConstLocator) bool {
     return moduleBytesEqual(left_checked_module.bytes, right_checked_module.bytes) and
         constOwnerEql(a.owner, b.owner) and
         a.template == b.template and
-        std.mem.eql(u8, a.source_scheme.bytes[0..], b.source_scheme.bytes[0..]);
+        (a.source_scheme == b.source_scheme);
 }
 
 fn constOwnerEql(a: checked.ConstOwner, b: checked.ConstOwner) bool {
@@ -70634,7 +70629,7 @@ test "body draft comptime roots relocate independent shards and survive source d
                 .artifact = .{ .bytes = @splat(0x41) },
                 .owner = .{ .hoisted_expr = .{ .module_idx = 19, .expr = @fromBackingInt(@intCast(23)) } },
                 .template = @fromBackingInt(@intCast(29)),
-                .source_scheme = .{ .bytes = @splat(0x51) },
+                .source_scheme = @fromBackingInt(0x51),
             },
         },
         .{

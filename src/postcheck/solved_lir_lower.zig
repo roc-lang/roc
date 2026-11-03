@@ -16003,7 +16003,7 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
                 .artifact = .{ .bytes = @splat(1) },
                 .owner = .{ .hoisted_expr = .{ .module_idx = 7, .expr = @fromBackingInt(@intCast(31)) } },
                 .template = @fromBackingInt(@intCast(47)),
-                .source_scheme = .{ .bytes = @splat(3) },
+                .source_scheme = @fromBackingInt(3),
             },
         },
     };

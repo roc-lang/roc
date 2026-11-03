@@ -4177,10 +4177,9 @@ fn checkedTypePayload(
 
 fn checkedTypeRootForScheme(
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
-    scheme_key: check.CanonicalNames.CanonicalTypeSchemeKey,
+    scheme: CheckedArtifact.CheckedTypeSchemeId,
 ) CheckedArtifact.CheckedTypeId {
-    return (artifact.checked_types.schemeForKey(scheme_key) orelse
-        glueInvariant("checked type scheme missing from artifact", .{})).root;
+    return artifact.checked_types.scheme(scheme).root;
 }
 
 fn appendRecordRowFields(
