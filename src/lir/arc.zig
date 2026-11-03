@@ -5173,9 +5173,26 @@ const Inserter = struct {
             // after this statement; a group member appearing as another
             // operand of this same statement is still live at the op.
             if (self.groupSharesOtherOperand(locals, i, local)) continue;
+            if (self.valueHasAnotherOwnedUnit(local, owned)) continue;
             unique |= bit;
         }
         return unique;
+    }
+
+    /// True when another owned unit holds the same value as `local`. An owned
+    /// pure same-value alias whose binding retained, rather than moved, its
+    /// source's unit gives the value a second holder: both units stay owned
+    /// until one is released, so the count is above 1 even though the value
+    /// was born unique and the solver records the alias as the same value.
+    fn valueHasAnotherOwnedUnit(self: *const Inserter, local: LIR.LocalId, owned: *const OwnedSet) bool {
+        const root = self.solution.aliasRootOf(local);
+        var units = owned.iterator(.{});
+        while (units.next()) |bit_index| {
+            const other = owned.domain.resource_locals[bit_index];
+            if (other == local) continue;
+            if (self.solution.aliasRootOf(other) == root) return true;
+        }
+        return false;
     }
 
     /// True when the local's value is statically unique in the current

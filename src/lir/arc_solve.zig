@@ -423,6 +423,19 @@ pub const Solution = struct {
         return @fromBackingInt(@intCast(cursor));
     }
 
+    /// The first local of `local`'s chain of pure same-value aliases: the
+    /// binding every alias in the chain names the value of.
+    pub fn aliasRootOf(self: *const Solution, local: LIR.LocalId) LIR.LocalId {
+        var cursor = @backingInt(local);
+        var steps: usize = 0;
+        while (cursor < self.alias_source.len and self.alias_source[cursor] != no_local) {
+            cursor = self.alias_source[cursor];
+            steps += 1;
+            if (steps > self.alias_source.len) solveInvariant("ARC alias-source chain contained a cycle");
+        }
+        return @fromBackingInt(@intCast(cursor));
+    }
+
     /// The local a solved-borrowed local borrows its value through, or null
     /// for owned bindings and borrowed parameters.
     pub fn borrowSourceOf(self: *const Solution, local: LIR.LocalId) ?LIR.LocalId {
