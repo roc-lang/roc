@@ -38093,72 +38093,98 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
 /// and rejects the construct that owns the pattern through
 /// `rejectPatternFailureOwner`.
 fn judgeRecordDestructBinds(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    var retained: usize = 0;
-    var index: usize = 0;
-    while (index < self.pending_record_destructs.items.len) : (index += 1) {
-        const pending = self.pending_record_destructs.items[index];
-        const resolved = self.types.resolveVar(pending.presence_var);
-        const bound_var = switch (resolved.desc.content) {
-            .field_presence => |field_presence| switch (field_presence) {
-                .required, .defaulted => pending.payload_var,
-                .optional => blk: {
-                    const missing_err_var = try self.makeFieldMissingTag(env, pending.region);
-                    break :blk try self.freshFromContent(
-                        try self.mkTryContent(pending.payload_var, missing_err_var),
-                        env,
-                        pending.region,
-                    );
-                },
-            },
-            .flex => blk: {
-                // A still-flex kind commits to `required` only at a
-                // commitment point that OWNS the var: the boundary's
-                // generalize call is about to promote exactly the vars at
-                // (or above) the current rank. A lower-ranked presence var
-                // belongs to an enclosing scope still mid-inference—a
-                // nested boundary (an annotation predeclare or inner
-                // lambda fired while checking the destructure's own RHS)
-                // must not pin it before the destructure statement's own
-                // unification has run. The entry stays pending for the
-                // scope that owns it (finalize as the monomorphic
-                // backstop, where every remaining non-generalized var is
-                // at rank). Whichever binding the owner makes relates the
-                // binder's type to the field's value at the owner's rank,
-                // so everything that type holds stays at that rank and no
-                // boundary nested inside the owner quantifies it first.
-                if (@backingInt(resolved.desc.rank) < @backingInt(env.rank())) {
-                    try self.pinReachableVarsAtRank(pending.binder_var, resolved.desc.rank, env);
+    while (true) {
+        // Bind every destructure whose field kind is decided. A binding
+        // relates a nested record pattern to the field's value, which can
+        // decide the kinds of that pattern's own fields, so repeat until a
+        // pass binds nothing.
+        var bound_any = true;
+        while (bound_any) {
+            bound_any = false;
+            var retained: usize = 0;
+            var index: usize = 0;
+            while (index < self.pending_record_destructs.items.len) : (index += 1) {
+                const pending = self.pending_record_destructs.items[index];
+                if (self.types.resolveVar(pending.presence_var).desc.content == .flex) {
                     self.pending_record_destructs.items[retained] = pending;
                     retained += 1;
                     continue;
                 }
-                const required_var = try self.freshFromContent(
-                    .{ .field_presence = .required },
+                try self.bindRecordDestruct(pending, env);
+                bound_any = true;
+            }
+            self.pending_record_destructs.shrinkRetainingCapacity(retained);
+        }
+        // A still-flex kind commits to `required` only at a commitment point
+        // that OWNS the var: the boundary's generalize call is about to
+        // promote exactly the vars at (or above) the current rank. Commit one
+        // at a time, latest first: a record pattern's fields are queued after
+        // the patterns nested in them, so an enclosing field commits, and its
+        // binding can decide a nested pattern's kinds, before any nested
+        // field defaults to `required`.
+        const owned = owned: {
+            var index = self.pending_record_destructs.items.len;
+            while (index > 0) {
+                index -= 1;
+                const pending = self.pending_record_destructs.items[index];
+                if (@backingInt(self.types.resolveVar(pending.presence_var).desc.rank) >= @backingInt(env.rank())) break :owned pending;
+            }
+            break :owned null;
+        } orelse break;
+        const required_var = try self.freshFromContent(
+            .{ .field_presence = .required },
+            env,
+            owned.region,
+        );
+        _ = try self.unify(owned.presence_var, required_var, env);
+    }
+    // A lower-ranked presence var belongs to an enclosing scope still
+    // mid-inference—a nested boundary (an annotation predeclare or inner
+    // lambda fired while checking the destructure's own RHS) must not pin it
+    // before the destructure statement's own unification has run. The entry
+    // stays pending for the scope that owns it (finalize as the monomorphic
+    // backstop, where every remaining non-generalized var is at rank).
+    // Whichever binding the owner makes relates the binder's type to the
+    // field's value at the owner's rank, so everything that type holds stays
+    // at that rank and no boundary nested inside the owner quantifies it
+    // first.
+    for (self.pending_record_destructs.items) |pending| {
+        try self.pinReachableVarsAtRank(pending.binder_var, self.types.resolveVar(pending.presence_var).desc.rank, env);
+    }
+}
+
+/// Bind one destructure's binder by its decided field kind.
+fn bindRecordDestruct(self: *Self, pending: PendingRecordDestruct, env: *Env) std.mem.Allocator.Error!void {
+    const bound_var = switch (self.types.resolveVar(pending.presence_var).desc.content) {
+        .field_presence => |field_presence| switch (field_presence) {
+            .required, .defaulted => pending.payload_var,
+            .optional => blk: {
+                const missing_err_var = try self.makeFieldMissingTag(env, pending.region);
+                break :blk try self.freshFromContent(
+                    try self.mkTryContent(pending.payload_var, missing_err_var),
                     env,
                     pending.region,
                 );
-                _ = try self.unify(pending.presence_var, required_var, env);
-                break :blk pending.payload_var;
             },
-            // `.err` and other poisoned contents: the kind mismatch was
-            // already reported; the binder still describes the payload.
-            .rigid, .alias, .structure, .err => pending.payload_var,
-        };
-        // The binder relation belongs to the destructure pattern. The payload
-        // is the destructured record's own field type, and the binder's class
-        // is shared with every use of the name, so a rejection reports here,
-        // poisons neither operand, and rejects the construct that owns the
-        // pattern.
-        const result = try self.runUnify(pending.binder_var, bound_var, env, .{
-            .context = .record_destructure,
-            .on_mismatch = .write_no_report,
-        });
-        if (!result.isAccepted()) {
-            _ = try self.appendTypeMismatch(pending.binder_var, bound_var, self.mismatchContext(.record_destructure, bound_var));
-            try self.rejectPatternFailureOwner(pending.failure_owner);
-        }
+        },
+        .flex => unreachable, // judgeRecordDestructBinds binds only entries whose kind is decided
+        // `.err` and other poisoned contents: the kind mismatch was
+        // already reported; the binder still describes the payload.
+        .rigid, .alias, .structure, .err => pending.payload_var,
+    };
+    // The binder relation belongs to the destructure pattern. The payload
+    // is the destructured record's own field type, and the binder's class
+    // is shared with every use of the name, so a rejection reports here,
+    // poisons neither operand, and rejects the construct that owns the
+    // pattern.
+    const result = try self.runUnify(pending.binder_var, bound_var, env, .{
+        .context = .record_destructure,
+        .on_mismatch = .write_no_report,
+    });
+    if (!result.isAccepted()) {
+        _ = try self.appendTypeMismatch(pending.binder_var, bound_var, self.mismatchContext(.record_destructure, bound_var));
+        try self.rejectPatternFailureOwner(pending.failure_owner);
     }
-    self.pending_record_destructs.shrinkRetainingCapacity(retained);
 }
 
 /// Kind defaulting as a checker pass (design.md "Field Kinds"): commit every
