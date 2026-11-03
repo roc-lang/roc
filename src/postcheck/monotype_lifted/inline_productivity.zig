@@ -254,8 +254,8 @@ pub const Placement = struct { value: PathId, result: PathId };
 /// What the code around a value consumes of it.
 pub const DemandSet = struct {
     /// Each read path once, in first-read order, with its consumers at the
-    /// same position. A value's distinct read paths are few, so a scan finds
-    /// a path's position.
+    /// same position. A single read scans for its path; a merge of many reads
+    /// finds each one's position through `PathMarks`.
     read_paths: std.ArrayList(PathId) = .empty,
     read_consumers: std.ArrayList(Consumers) = .empty,
     placements: std.AutoArrayHashMapUnmanaged(Placement, void) = .empty,
@@ -282,10 +282,36 @@ pub const DemandSet = struct {
         return !gop.found_existing;
     }
 
-    fn addAll(self: *DemandSet, allocator: Allocator, other: Demand) Allocator.Error!bool {
+    /// Add every read and placement of `other`. `marks` gives each of
+    /// `other`'s paths its position in `other`, so one pass over this set
+    /// finds the paths the two share, and a merge costs the sizes of the two
+    /// sets added rather than multiplied.
+    fn addAll(self: *DemandSet, allocator: Allocator, marks: *PathMarks, other: Demand) Allocator.Error!bool {
         var changed = false;
-        for (other.read_paths, other.read_consumers) |path, consumers| {
-            if (try self.addRead(allocator, path, consumers)) changed = true;
+        if (other.read_paths.len != 0) {
+            marks.claim();
+            defer marks.release();
+            for (other.read_paths, 0..) |path, index| {
+                const slot = try marks.slot(path);
+                if (slot.* != 0) Common.invariant("a demand listed one read path twice");
+                slot.* = @intCast(index + 1);
+            }
+            for (self.read_paths.items, self.read_consumers.items) |path, *existing| {
+                const mark = marks.get(path);
+                if (mark == 0) continue;
+                marks.clear(path);
+                const consumers = other.read_consumers[mark - 1];
+                if (existing.supersetOf(consumers)) continue;
+                existing.setUnion(consumers);
+                changed = true;
+            }
+            for (other.read_paths, other.read_consumers) |path, consumers| {
+                if (marks.get(path) == 0) continue;
+                marks.clear(path);
+                try self.read_paths.append(allocator, path);
+                try self.read_consumers.append(allocator, consumers);
+                changed = true;
+            }
         }
         for (other.placements) |placement| {
             if (try self.addPlacement(allocator, placement)) changed = true;
@@ -302,7 +328,77 @@ pub const DemandSet = struct {
     }
 };
 
-/// An immutable view of a `DemandSet`.
+/// One slot per path, shared by every read set of an analysis. Every slot is
+/// zero except while one merge into a read set runs, which marks the paths it
+/// meets with one more than their positions and clears them before it ends.
+const PathMarks = struct {
+    gpa: Allocator,
+    slots: std.ArrayList(u32) = .empty,
+    busy: bool = false,
+
+    fn deinit(self: *PathMarks) void {
+        self.slots.deinit(self.gpa);
+    }
+
+    fn claim(self: *PathMarks) void {
+        if (self.busy) Common.invariant("two read-set merges shared the path marks");
+        self.busy = true;
+    }
+
+    fn release(self: *PathMarks) void {
+        self.busy = false;
+    }
+
+    /// The slot of `path`, grown to cover paths interned since the last merge.
+    fn slot(self: *PathMarks, path: PathId) Allocator.Error!*u32 {
+        const raw = @backingInt(path);
+        if (raw >= self.slots.items.len) try self.slots.appendNTimes(self.gpa, 0, raw + 1 - self.slots.items.len);
+        return &self.slots.items[raw];
+    }
+
+    fn get(self: *const PathMarks, path: PathId) u32 {
+        const raw = @backingInt(path);
+        return if (raw < self.slots.items.len) self.slots.items[raw] else 0;
+    }
+
+    /// Clear the slot of a path this merge marked.
+    fn clear(self: *PathMarks, path: PathId) void {
+        self.slots.items[@backingInt(path)] = 0;
+    }
+};
+
+/// Reads collected into a new read set, each merged with an earlier read of
+/// its path through `PathMarks`. `finish` returns the set and clears the
+/// marks.
+const NewReads = struct {
+    set: DemandSet = .{},
+    marks: *PathMarks,
+    allocator: Allocator,
+
+    fn init(marks: *PathMarks, allocator: Allocator) NewReads {
+        marks.claim();
+        return .{ .marks = marks, .allocator = allocator };
+    }
+
+    fn add(self: *NewReads, path: PathId, consumers: Consumers) Allocator.Error!void {
+        const slot = try self.marks.slot(path);
+        if (slot.* != 0) {
+            self.set.read_consumers.items[slot.* - 1].setUnion(consumers);
+            return;
+        }
+        try self.set.read_paths.append(self.allocator, path);
+        try self.set.read_consumers.append(self.allocator, consumers);
+        slot.* = @intCast(self.set.read_paths.items.len);
+    }
+
+    fn finish(self: *NewReads) DemandSet {
+        for (self.set.read_paths.items) |path| self.marks.clear(path);
+        self.marks.release();
+        return self.set;
+    }
+};
+
+/// An immutable view of a `DemandSet`. It lists each read path once.
 pub const Demand = struct {
     read_paths: []const PathId,
     read_consumers: []const Consumers,
@@ -492,6 +588,7 @@ pub fn analyze(gpa: Allocator, program: *const Ast.Program, bodies: []const ?Ast
         .analysis = &analysis,
         .scratch = collections.SingleThreadArena.init(gpa),
         .callers = try gpa.alloc(std.ArrayList(Ast.FnId), bodies.len),
+        .marks = .{ .gpa = gpa },
     };
     for (builder.callers) |*list| list.* = .empty;
     defer builder.deinit();
@@ -510,6 +607,7 @@ const Builder = struct {
     scratch: collections.SingleThreadArena,
     /// Callers of each function, recorded by the demand walk.
     callers: []std.ArrayList(Ast.FnId),
+    marks: PathMarks,
     fn_id: Ast.FnId = undefined,
     locals: collections.DenseMapUnmanaged(Ast.LocalId, DemandSet) = .empty,
     locals_changed: bool = false,
@@ -539,6 +637,7 @@ const Builder = struct {
     fn deinit(self: *Builder) void {
         for (self.callers) |*list| list.deinit(self.gpa);
         self.gpa.free(self.callers);
+        self.marks.deinit();
         self.scratch.deinit();
     }
 
@@ -779,11 +878,11 @@ const Builder = struct {
         var changed = false;
         const args = self.program().typedLocalSpan(fn_.args);
         for (0..args.len) |index| {
-            if (try fn_summary.params[index].addAll(self.persistent(), self.localDemand(GuardedList.at(args, index).local))) changed = true;
+            if (try fn_summary.params[index].addAll(self.persistent(), &self.marks, self.localDemand(GuardedList.at(args, index).local))) changed = true;
         }
         const captures = self.program().typedLocalSpan(fn_.captures);
         for (0..captures.len) |index| {
-            if (try fn_summary.captures[index].addAll(self.persistent(), self.localDemand(GuardedList.at(captures, index).local))) changed = true;
+            if (try fn_summary.captures[index].addAll(self.persistent(), &self.marks, self.localDemand(GuardedList.at(captures, index).local))) changed = true;
         }
         return changed;
     }
@@ -794,8 +893,9 @@ const Builder = struct {
     }
 
     fn demandOf(self: *Builder, reads: []const Read, placements: []const Placement) Allocator.Error!Demand {
-        var set: DemandSet = .{};
-        for (reads) |read| _ = try set.addRead(self.temp(), read.path, read.consumers);
+        var new_reads = NewReads.init(&self.marks, self.temp());
+        for (reads) |read| try new_reads.add(read.path, read.consumers);
+        var set = new_reads.finish();
         for (placements) |placement| _ = try set.addPlacement(self.temp(), placement);
         return set.view();
     }
@@ -824,13 +924,13 @@ const Builder = struct {
     /// Demand on the part at `step` of a value demanded by `demand`.
     fn project(self: *Builder, demand: Demand, step_: Step) Allocator.Error!Demand {
         const paths = &self.analysis.paths;
-        var set: DemandSet = .{};
+        var new_reads = NewReads.init(&self.marks, self.temp());
         for (demand.read_paths, demand.read_consumers) |path, consumers| {
             try paths.stepsOf(self.temp(), path, &self.steps);
             if (self.steps.items.len == 0 or !self.steps.items[0].sameLabel(step_)) continue;
-            const below = try paths.concat(self.persistent(), .root, self.steps.items[1..]);
-            _ = try set.addRead(self.temp(), below, consumers);
+            try new_reads.add(try paths.concat(self.persistent(), .root, self.steps.items[1..]), consumers);
         }
+        var set = new_reads.finish();
         for (demand.placements) |placement| {
             if (placement.value == .root) {
                 const result = try paths.child(self.persistent(), placement.result, step_);
@@ -849,10 +949,11 @@ const Builder = struct {
     fn underPrefix(self: *Builder, demand: Demand, prefix: []const Step) Allocator.Error!Demand {
         const paths = &self.analysis.paths;
         const base = try paths.concat(self.persistent(), .root, prefix);
-        var set: DemandSet = .{};
+        var new_reads = NewReads.init(&self.marks, self.temp());
         for (demand.read_paths, demand.read_consumers) |path, consumers| {
-            _ = try set.addRead(self.temp(), try paths.under(self.persistent(), base, path), consumers);
+            try new_reads.add(try paths.under(self.persistent(), base, path), consumers);
         }
+        var set = new_reads.finish();
         for (demand.placements) |placement| {
             _ = try set.addPlacement(self.temp(), .{ .value = try paths.under(self.persistent(), base, placement.value), .result = placement.result });
         }
@@ -862,22 +963,22 @@ const Builder = struct {
     /// Demand on the constructor operand at `step` of a value demanded by
     /// `demand`: what reads that part, and the placement itself.
     fn constructorOperand(self: *Builder, demand: Demand, step_: Step) Allocator.Error!Demand {
-        var set: DemandSet = .{};
-        _ = try set.addAll(self.temp(), try self.project(demand, step_));
-        return set.view();
+        return self.project(demand, step_);
     }
 
     /// Demand on a receiver read along `steps`, whose read part is demanded by
     /// `demand`: each record or tuple the read passes through is projected.
     fn projected(self: *Builder, demand: Demand, steps: []const Step) Allocator.Error!Demand {
         const under = try self.underPrefix(demand, steps);
-        var set: DemandSet = .{};
-        _ = try set.addAll(self.temp(), under);
+        var new_reads = NewReads.init(&self.marks, self.temp());
+        for (under.read_paths, under.read_consumers) |path, consumers| try new_reads.add(path, consumers);
         var path: PathId = .root;
         for (steps) |step_| {
-            _ = try set.addRead(self.temp(), path, Consumers.initOne(.project));
+            try new_reads.add(path, Consumers.initOne(.project));
             path = try self.analysis.paths.child(self.persistent(), path, step_);
         }
+        var set = new_reads.finish();
+        for (under.placements) |placement| _ = try set.addPlacement(self.temp(), placement);
         return set.view();
     }
 
@@ -885,15 +986,16 @@ const Builder = struct {
     /// call whose result is demanded by `call`.
     fn instantiate(self: *Builder, param: Demand, call: Demand) Allocator.Error!Demand {
         const paths = &self.analysis.paths;
-        var set: DemandSet = .{};
-        for (param.read_paths, param.read_consumers) |path, consumers| {
-            _ = try set.addRead(self.temp(), path, consumers);
-        }
+        var new_reads = NewReads.init(&self.marks, self.temp());
+        for (param.read_paths, param.read_consumers) |path, consumers| try new_reads.add(path, consumers);
         for (param.placements) |placement| {
             for (call.read_paths, call.read_consumers) |path, consumers| {
                 if (!try paths.stepsBelow(self.temp(), path, placement.result, &self.steps)) continue;
-                _ = try set.addRead(self.temp(), try paths.concat(self.persistent(), placement.value, self.steps.items), consumers);
+                try new_reads.add(try paths.concat(self.persistent(), placement.value, self.steps.items), consumers);
             }
+        }
+        var set = new_reads.finish();
+        for (param.placements) |placement| {
             for (call.placements) |outer| {
                 // The call result's part `outer.value` sits in the caller's
                 // result; the parameter's part sits in the call result.
@@ -917,13 +1019,13 @@ const Builder = struct {
         if (demand.read_paths.len == 0 and demand.placements.len == 0) return;
         const gop = try self.locals.getOrPut(self.temp(), local);
         if (!gop.found_existing) gop.value_ptr.* = .{};
-        if (try gop.value_ptr.addAll(self.temp(), demand)) self.locals_changed = true;
+        if (try gop.value_ptr.addAll(self.temp(), &self.marks, demand)) self.locals_changed = true;
     }
 
     fn recordCallDemand(self: *Builder, call: Ast.ExprId, demand: Demand) Allocator.Error!void {
         const gop = try self.analysis.call_demand.getOrPut(self.persistent(), call);
         if (!gop.found_existing) gop.value_ptr.* = .{};
-        _ = try gop.value_ptr.addAll(self.persistent(), demand);
+        _ = try gop.value_ptr.addAll(self.persistent(), &self.marks, demand);
     }
 
     /// Demand a pattern's uses place on the value it binds.
@@ -981,7 +1083,7 @@ const Builder = struct {
 
     fn addLocalUnder(self: *Builder, local: Ast.LocalId, prefix: []const Step, out: *DemandSet) Allocator.Error!void {
         const under = try self.underPrefix(self.localDemand(local), prefix);
-        _ = try out.addAll(self.temp(), under);
+        _ = try out.addAll(self.temp(), &self.marks, under);
     }
 
     fn step(self: *Builder, task: Task) Allocator.Error!void {
@@ -993,7 +1095,7 @@ const Builder = struct {
                 const local_demand = self.localDemand(into.local);
                 const demand = if (into.enters_loop) blk: {
                     var set: DemandSet = .{};
-                    _ = try set.addAll(self.temp(), local_demand);
+                    _ = try set.addAll(self.temp(), &self.marks, local_demand);
                     _ = try set.addRead(self.temp(), .root, Consumers.initOne(.loop));
                     break :blk set.view();
                 } else local_demand;
@@ -1004,7 +1106,7 @@ const Builder = struct {
                 _ = try set.addRead(self.temp(), .root, Consumers.initOne(.match));
                 const branches = self.program().branchSpan(match.branches);
                 for (0..branches.len) |index| {
-                    _ = try set.addAll(self.temp(), try self.patternDemand(GuardedList.at(branches, index).pat));
+                    _ = try set.addAll(self.temp(), &self.marks, try self.patternDemand(GuardedList.at(branches, index).pat));
                 }
                 try self.push(match.scrutinee, set.view());
             },
@@ -1051,7 +1153,7 @@ const Builder = struct {
             .record_update => |update| {
                 const fields = program_.fieldExprSpan(update.fields);
                 var base: DemandSet = .{};
-                _ = try base.addAll(self.temp(), demand);
+                _ = try base.addAll(self.temp(), &self.marks, demand);
                 for (0..fields.len) |index| {
                     const field = GuardedList.at(fields, index);
                     const field_step = Step.field(field.name, program_.getExpr(field.value).ty);
@@ -1312,8 +1414,9 @@ const Builder = struct {
 
     /// `parts` with the consumers of each path merged into one read.
     fn mergedParts(self: *Builder, parts: []const Read) Allocator.Error![]const Read {
-        var merged: DemandSet = .{};
-        for (parts) |part| _ = try merged.addRead(self.temp(), part.path, part.consumers);
+        var new_reads = NewReads.init(&self.marks, self.temp());
+        for (parts) |part| try new_reads.add(part.path, part.consumers);
+        const merged = new_reads.finish();
         const out = try self.temp().alloc(Read, merged.read_paths.items.len);
         for (out, merged.read_paths.items, merged.read_consumers.items) |*read, path, consumers| read.* = .{ .path = path, .consumers = consumers };
         return out;
@@ -1784,4 +1887,38 @@ test "joining a path under a base folds as appending its steps does" {
     try std.testing.expectEqual(joined, try table.under(allocator, base, path));
     try std.testing.expectEqual(base, try table.under(allocator, base, .root));
     try std.testing.expectEqual(path, try table.under(allocator, .root, path));
+}
+
+test "a read-set merge unions shared paths, appends new ones, and leaves the marks clear" {
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var marks: PathMarks = .{ .gpa = std.testing.allocator };
+    defer marks.deinit();
+
+    const a: PathId = @fromBackingInt(3);
+    const b: PathId = @fromBackingInt(70);
+    const c: PathId = @fromBackingInt(200);
+    const match = Consumers.initOne(.match);
+    const call = Consumers.initOne(.call);
+
+    var new_reads = NewReads.init(&marks, allocator);
+    try new_reads.add(a, match);
+    try new_reads.add(b, match);
+    try new_reads.add(a, call);
+    var set = new_reads.finish();
+    try std.testing.expectEqualSlices(PathId, &.{ a, b }, set.read_paths.items);
+    try std.testing.expect(set.read_consumers.items[0].eql(Consumers.initMany(&.{ .match, .call })));
+
+    var other: DemandSet = .{};
+    _ = try other.addRead(allocator, c, call);
+    _ = try other.addRead(allocator, b, call);
+    try std.testing.expect(try set.addAll(allocator, &marks, other.view()));
+    try std.testing.expectEqualSlices(PathId, &.{ a, b, c }, set.read_paths.items);
+    try std.testing.expect(set.read_consumers.items[1].eql(Consumers.initMany(&.{ .match, .call })));
+    try std.testing.expect(set.read_consumers.items[2].eql(call));
+    try std.testing.expect(!try set.addAll(allocator, &marks, other.view()));
+
+    for (marks.slots.items) |slot| try std.testing.expectEqual(@as(u32, 0), slot);
+    try std.testing.expect(!marks.busy);
 }
