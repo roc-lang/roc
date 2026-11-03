@@ -17694,7 +17694,7 @@ test "SpecConstr compares representations, not checked provenance" {
 
     const first_full = program.types.typeDigestCached(&program.names, first, null);
     const other_occurrence_full = program.types.typeDigestCached(&program.names, other_occurrence, null);
-    try std.testing.expect(!std.mem.eql(u8, &first_full.bytes, &other_occurrence_full.bytes));
+    try std.testing.expectEqualSlices(u8, &first_full.bytes, &other_occurrence_full.bytes);
     try std.testing.expect(sameType(&program, first, other_occurrence));
     try std.testing.expect(!sameType(&program, first, other_backing));
 }

@@ -824,7 +824,7 @@ test "monotype spec builder shares equal nominal requests while preserving check
     } });
     const first_stored = types.typeDigest(&name_store, first);
     const second_stored = types.typeDigest(&name_store, second);
-    try std.testing.expect(!digestEql(first_stored, second_stored));
+    try std.testing.expect(digestEql(first_stored, second_stored));
 
     var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
     defer records.deinit(std.testing.allocator);

@@ -13459,9 +13459,9 @@ test "generated iterator identity ignores checked provenance that type equality 
             defer finals.deinit();
             item_ty.* = try finals.sealNode(item);
         }
-        // The items differ only in provenance that equality ignores.
+        // The items differ only in provenance that equality and digests ignore.
         try std.testing.expect(try type_store.typeEql(&name_store, items[0], items[1]));
-        try std.testing.expect(!std.meta.eql(type_store.typeDigest(&name_store, items[0]), type_store.typeDigest(&name_store, items[1])));
+        try std.testing.expect(std.meta.eql(type_store.typeDigest(&name_store, items[0]), type_store.typeDigest(&name_store, items[1])));
         try std.testing.expectEqual(identities[0], identities[1]);
     }
 }

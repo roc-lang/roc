@@ -656,13 +656,15 @@ and source frames from it.
 
 ### Closed Named Occurrences
 
-A closed checked occurrence (a root without identity variables) has no
-instantiation identity, so lowering chooses one representative for each
-closed named type inside each lowering's occurrence scope
-(`Builder.canonicalNamedOccurrence`, "Occurrence scope"). The candidates come
-from an index of every module's closed named roots by canonical type key
-(`ClosedOccurrenceIndex`), each key's holders sorted by module key. The
-coordinator builds it once, before any body is lowered, and workers borrow it.
+A Monotype named type is identified by its declaration (the declaring
+module's content identity and declaration statement) and its argument types.
+The checked occurrence it was lowered from (`named_type.ty`, a type id of
+`named_type.ty_module`) is a locator for re-entering checked types, never part
+of its identity: every digest mode hashes the declaration and the arguments'
+digests, so one named type digests alike in every module and every lowering.
+Lowering a module's checked types names that module's own occurrence
+(`Builder.namedOccurrence`); nothing chooses a representative occurrence among
+modules, and there is no program-wide index of closed occurrences.
 
 ### Cache storage
 
@@ -2270,8 +2272,9 @@ comparison, and a locator for resolution: `named_type.ty`, a type id of
 `named_type.ty_module`, the module whose checked types the occurrence is in,
 which is explicit and need not be `named_type.module` ("Canonical Type
 Keys"). Static data planning resolves the locator, re-entering
-`ty_module`'s types at `ty`, and the occurrence takes part in a Monotype
-type's full and specialization digests. Monotype lowering names only
+`ty_module`'s types at `ty`. A Monotype type's digests cover a named type's
+declaration and arguments, not its occurrence ("Closed Named
+Occurrences"). Monotype lowering names only
 occurrences inside the storing module's import closure ("Occurrence scope"),
 so a module's cache entry names only modules its own key covers, the locator
 is valid for exactly as long as the entry, and a stored type is restored with
@@ -25546,16 +25549,11 @@ from M's types and the bodies M's closure reaches, so every occurrence it
 stores names a module M's checked key covers, and any program holding M holds
 that module too. The program-wide module set is never a scope: a lowering must
 not name a module merely because the current program happens to contain it,
-since another program that reuses the stored result need not. A closed checked
-occurrence has no instantiation identity, so a fresh lowering and an in-memory
-replay of one closed type are given the same current witness: the owner's own
-occurrence when the owner holds the closed root inside the scope's closure, so
-the witness does not move when another module's entry key changes with an
-edit; otherwise the closure's holder that imports no other holder in the
-closure, the lowest-keyed one when several qualify; and only when the closure
-holds no such root, the same choice among the modules the input types name.
-Representatives inside a closure are memoized per module for the immutable
-lowering input set.
+since another program that reuses the stored result need not. Lowering a
+module's checked types names that module's own occurrence. A fresh lowering
+and an in-memory replay of one named type agree whichever occurrences they
+carry, because a named type's identity is its declaration and arguments
+("Closed Named Occurrences").
 
 Each Monotype builder indexes its immutable input views by module content
 identity before lowering. The first view in root/import/relation order wins,

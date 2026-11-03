@@ -2500,10 +2500,9 @@ pub const Store = struct {
         return self.computeDigest(name_store, ty, .equality, stats) catch digestOutOfMemory();
     }
 
-    /// Digest of a type's stored content without its checked provenance
-    /// (`named_type.ty`, the checked-store re-entry reference of a named
-    /// type). Two ids with the same representation digest have the same
-    /// runtime representation, whichever checked occurrence produced them.
+    /// Digest of a type's stored content. Two ids with the same
+    /// representation digest have the same runtime representation, whichever
+    /// checked occurrence produced them.
     pub fn representationDigestCached(
         self: *Store,
         name_store: *const names.NameStore,
@@ -2525,9 +2524,8 @@ pub const Store = struct {
     /// label text and ordered children. Equal full digests imply equality
     /// here—the direction interning relies on. The converse can fail one way:
     /// aliases digest as opaque nodes (deliberately), and the digest observes
-    /// identity fields this comparison does not (`named_type.ty`,
-    /// `tag.checked_name`, `type_name` under a `source_decl`, checked-public
-    /// backing content). Equality digests omit those provenance distinctions.
+    /// identity fields this comparison does not (`tag.checked_name`,
+    /// `type_name` under a `source_decl`, checked-public backing content). Equality digests omit those provenance distinctions.
     /// This is the authoritative check before one specialization can
     /// reuse another.
     pub fn typeEql(
@@ -3068,13 +3066,16 @@ pub const Store = struct {
     /// `sink.child`.
     ///
     /// Aliases are opaque named nodes rather than digesting as their backing.
-    /// `def.type_name` text is always hashed (also when `source_decl` is
-    /// present), `named_type.ty` is hashed in full and interface modes because
-    /// it survives into `ConstStore`, and `tag.checked_name` is hashed in
-    /// addition to `tag.name`. The interface mode omits exactly declared field
-    /// order and checked-public backing details; backing children digest in
-    /// full mode because a backing is a stored type identity, not an
-    /// interface. Representation mode is full mode without `named_type.ty`.
+    /// A named type is identified by its declaration (the declaring module's
+    /// content identity and declaration statement) and its arguments, never by
+    /// the checked occurrence it was lowered from (`named_type.ty`), so every
+    /// mode digests one named type alike in every module. `def.type_name` text
+    /// is always hashed (also when `source_decl` is present), and
+    /// `tag.checked_name` is hashed in addition to `tag.name`. The interface
+    /// mode omits exactly declared field order and checked-public backing
+    /// details; backing children digest in full mode because a backing is a
+    /// stored type identity, not an interface. Representation mode is full
+    /// mode.
     fn encodeTypeNode(
         self: *const Store,
         name_store: *const names.NameStore,
@@ -3094,10 +3095,6 @@ pub const Store = struct {
                     try sink.writeBytes("site");
                 } else {
                     try sink.writeBytes(&named.named_type.module.bytes);
-                    if (mode == .full or mode == .identity_only) {
-                        try sink.writeU32(@backingInt(named.named_type.ty));
-                        try sink.writeBytes(&named.named_type.ty_module.bytes);
-                    }
                     try sink.writeBytes(name_store.moduleIdentityBytes(named.def.module));
                 }
                 try sinkOptionalU32(sink, named.def.source_decl);
@@ -6185,9 +6182,9 @@ test "monotype equality digest caches alias queries without rehashing their back
     try std.testing.expectEqual(@as(u64, 0), warm.cache_misses);
 }
 
-test "monotype digest separates named types by checked type id" {
-    // `named_type.ty` survives into `ConstStore` and is later used to
-    // re-enter the checked store, so it is part of the identity.
+test "monotype digest identifies named types by declaration, not checked occurrence" {
+    // `named_type.ty` locates a checked occurrence for re-entry; two
+    // occurrences of one declaration with equal arguments are one type.
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
@@ -6212,10 +6209,10 @@ test "monotype digest separates named types by checked type id" {
 
     const first_digest = store.typeDigest(&name_store, first);
     const second_digest = store.typeDigest(&name_store, second);
-    try std.testing.expect(!std.mem.eql(u8, first_digest.bytes[0..], second_digest.bytes[0..]));
+    try std.testing.expectEqualSlices(u8, first_digest.bytes[0..], second_digest.bytes[0..]);
     const first_spec = store.specializationDigest(&name_store, first);
     const second_spec = store.specializationDigest(&name_store, second);
-    try std.testing.expect(!std.mem.eql(u8, first_spec.bytes[0..], second_spec.bytes[0..]));
+    try std.testing.expectEqualSlices(u8, first_spec.bytes[0..], second_spec.bytes[0..]);
 }
 
 test "monotype full and interface digests use separate domains" {
@@ -6607,11 +6604,11 @@ test "monotype digest byte fixtures preserve scalar and recursive encodings" {
         .backing = .{ .ty = record, .use = .inspectable },
     } });
     const function = try store.add(.{ .func = .{ .args = try store.addSpan(&.{ tree, scalar, list }), .ret = record } });
-    // Digests of the current encoding, which names a named type's checked
-    // occurrence by its id and the module whose type store the id indexes.
+    // Digests of the current encoding, which identifies a named type by its
+    // declaration and arguments.
     const expected = [_][]const u8{
-        "51f21375a3e6bfea7625324f0b95e42a3b47bf54b331bb7da4e3e7a3619a3cfa",
-        "3aa55077e7dcae806b1a7a706f7cb039b6220adab61952fa683bd2c8d10768b1",
+        "b71f52fe9f8dea5bd4b214db57b50711232833642923afaf1929dfdb77c7fdf0",
+        "5edd90d8462c3aa931e3622219287bea53ea9dc0b897d7c10a475b47d33e2f9b",
         "25d4e8a313f03981552dd326d3df189e1608c38707294112b80ea02234781776",
     };
     for ([_]Store.NamedDigestMode{ .full, .identity_only, .equality }, expected) |mode, hex| {
