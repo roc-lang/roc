@@ -1,4 +1,4 @@
-//! Direct file storage for checked modules and Boxy objects.
+//! Direct file storage for checked modules, Boxy objects and Boxy test outcomes.
 //! Each identity names one file. Writers stage complete bytes beside it and
 //! atomically rename them into place; readers own an open file or mapping.
 
@@ -20,6 +20,8 @@ pub const Family = enum {
     pairing,
     local_discovery,
     boxy_object,
+    /// One module's `roc test` outcomes under `--specialize=no`.
+    test_outcomes,
 };
 
 /// Explicit producer identity for one file.

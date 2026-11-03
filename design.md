@@ -667,7 +667,8 @@ coordinator builds it once, before any body is lowered, and workers borrow it.
 ### Cache storage
 
 Checked modules, canonicalized modules, compile-time values and their checking
-metadata, and Boxy objects use direct content-addressed files. Each cache
+metadata, Boxy objects and Boxy test outcomes use direct content-addressed
+files. Each cache
 identity includes compiler compatibility, family, logical group and key.
 Writers stage complete files beside their destination and publish by atomic
 rename. Readers own an open file or mapping; no writer truncates a published
@@ -14478,12 +14479,8 @@ the same sources, and `roc build` adds exactly the module objects still
 missing (`compile.boxy_object_cache`, the `boxy_object` family).
 `roc test` checks its root for explicit test roots
 (`Validation.explicit_roots`), which is its own check under either strategy,
-and with `--specialize=no` it leaves exactly what that check leaves plus its
-test outcomes and completed-command records (Completed dev test commands).
-Those are not lowered output: they are the same `test_result` family under
-either strategy, and whether a command reads and writes them is separate from
-the policy above (`cachesPostCheckWork`), which stays the policy of lowered
-output, packs and program artifacts. `roc
+and with `--specialize=no` it leaves exactly what that check leaves plus one
+outcome file per module with test roots (Test outcome files). `roc
 check` accepts `--opt` and ignores it; it honors `--specialize`, because the
 strategy selects the compile-time evaluator that completes the module's
 roots. The checked module itself names no strategy: both evaluators store
@@ -23074,19 +23071,19 @@ tested root reaches into a dependency is compiled and linked the same way.
 
 ## Optimized Test Execution
 
-Result-cache admission precedes runtime root construction and checked-program
-finalization. The complete ordered reporting plan remains command-owned; its
-execution subset contains only roots of modules whose structured result bundle
-missed admission. Subset request positions are distinct from original result
-slots. Each request retains its checked module identity, original module index,
-source root index and order, and result slot through `RootTestPlanMetadata`.
+Outcome admission (Test outcome files) precedes runtime root construction and
+checked-program finalization. The complete ordered reporting plan remains
+command-owned; its execution subset contains only roots whose outcome was not
+reused. Subset request positions are distinct from original result slots. Each
+request retains its checked module identity, original module index, source
+root index and order, and result slot through `RootTestPlanMetadata`.
 Consumers select module roots by that explicit module index, never by ranges
 of result slots or generated symbol names.
 
 The explicit subset is also the runtime demand of compile-time finalization,
 including its normalization specialization from completed stored values. A
-validated cached result discharges that test's runtime observation requirement;
-it does not discharge non-test compile-time requirements. The finalizer still
+reused outcome discharges that test's runtime observation requirement; it does
+not discharge non-test compile-time requirements. The finalizer still
 evaluates pending compile-time roots and replays stored diagnostics and debug
 observations under the checking contract, even when the subset is empty. An
 explicit empty subset has no runtime consumer and performs no test runtime
@@ -23094,23 +23091,23 @@ preparation. It must not turn back into the program's default root set.
 A source file with no test plan keeps ordinary checking without installing a
 runtime configuration; a plain type module need not have a runnable owner.
 
-Cached test roots remain explicit compile-time discovery requirements, separate
+Reused test roots remain explicit compile-time discovery requirements, separate
 from execution demand. The established `LiteralDemand` analysis selects only
 those that can register specialization-dependent literal conversions. These
 follow runtime requests as discovery roots in the shared producer, with no
 test-plan execution metadata. Their literal conversions still report rejected
-literals and replay compile-time observations; the cached test entrypoints
+literals and replay compile-time observations; the reused test entrypoints
 never run. Both initial evaluation and normalization use this separation.
 Runtime continuation selects only execution-subset positions, so discovery
 bodies cannot enlarge its LIR or native image. Discovery analysis over checked
 metadata is reported separately from specialized bodies and emitted code.
 
 Only the subset's required closure reaches runtime LIR, ARC, frozen static
-data and native emission. All uncached modules borrow one program and image;
+data and native emission. All executing modules borrow one program and image;
 their expect-counter partitions retain the subset program's source-site table.
-Cached observations retain their original source identities and combine with
+Reused observations retain their original source identities and combine with
 fresh observations only during the existing deterministic reporting merge.
-Work counters distinguish the complete reporting plan and cache admission
+Work counters distinguish the complete reporting plan and outcome admission
 from the procedures and entrypoints actually emitted for execution.
 
 ### Command-level execution
@@ -23119,8 +23116,8 @@ from the procedures and entrypoints actually emitted for execution.
 plan for all discovered test roots in the app and its imports. The plan is
 explicit compiler data. It owns the stable source-order display order, the
 checked module owner for each root, the source region used for reporting, the
-checked cache id for the root's result, the generated test symbol for uncached
-roots, the cached or uncached execution decision, and the result slot. Later
+generated test symbol for each root that runs, the decision whether a root runs
+or reuses its outcome, and the result slot. Later
 stages consume this plan directly; they never reconstruct test identity from
 source paths, symbol names, module traversal order, filesystem order, package
 cache paths, or backend output.
@@ -23136,9 +23133,9 @@ Optimized test execution performs at most one LLVM shared-library link for the
 whole command for the selected optimization mode and native target. It must not
 link one shared library per checked module. The per-module checked cache
 boundary remains intact, but cache boundaries are not native link/load
-boundaries for optimized tests. Cached test results are merged into the command
-result stream before reporting; uncached test roots are compiled into the single
-test library and committed as individual outcome records after execution.
+boundaries for optimized tests. Reused test outcomes are merged into the command
+result stream before reporting; the other test roots are compiled into the single
+test library, and their outcomes join the module's outcome file after execution.
 
 The command-level plan is built after checking has produced all checked modules
 and before any optimized test backend code is generated:
@@ -23146,15 +23143,15 @@ and before any optimized test backend code is generated:
 ```text
 checked modules
   -> command-level test plan
-  -> cached-result admission for plan entries
-  -> one command-level lowering batch containing every uncached test root
+  -> outcome admission for plan entries
+  -> one command-level lowering batch containing every test root that runs
   -> ARC insertion for each checked-module lowering result
   -> per-module LLVM bitcode with exported test entrypoints
   -> one merged LLVM module/object
   -> one native shared library
   -> parallel test-root calls
   -> deterministic transcript and result merge by test-plan order
-  -> per-root outcome writes for fresh test roots
+  -> outcome file publication for modules whose outcomes changed
   -> final timing summary
 ```
 
@@ -23173,11 +23170,9 @@ bug, not a cache-key distinction. Changing color mode, verbosity, terminal
 width, or another renderer setting may change only the rendering chosen from
 the same structured transcript data. Determinism tests compare each stream's
 transcript bytes directly; they do not normalize source snippets, whitespace,
-ANSI escapes, or cache labels inside the transcript. The final aggregate
-summary is a run epilogue and is outside the byte-for-byte transcript
-guarantee; it may include elapsed time and cache/timing annotations for this
-invocation. Cache-hit labels such as `(cached)` belong only in that epilogue,
-never in the per-test transcript.
+ANSI escapes inside the transcript. The final aggregate summary is a run
+epilogue and is outside the byte-for-byte transcript guarantee; it may include
+elapsed time and timing annotations for this invocation.
 
 The command-level lowering batch may name roots from multiple checked modules.
 Each per-module lowering request is built with explicit imported checked-module
@@ -23218,8 +23213,8 @@ another top-level expect remains inline; collecting it as a second entrypoint
 would execute and count the same source statement twice.
 When roots from separate checked modules reach the same source site, the
 command combines their counts by qualified declaring module and exact region
-after execution. Per-root outcome records retain the uncombined counts so any
-mix of cached and freshly executed roots produces the same command result.
+after execution. Outcome entries retain each root's uncombined counts so any
+mix of reused and freshly executed roots produces the same command result.
 
 After the single library is loaded, test roots run on a worker pool. Each root
 call owns its `RuntimeHostEnv`, `RocOps`, allocation tracker, crash boundary,
@@ -23265,27 +23260,46 @@ not write transcript spill files into user source directories.
 
 Worker completion order is never user-visible. Results are merged by the
 command-level test-plan order: checked module source order first, then checked
-test root source order within each module. Cached results and freshly-run
-results use the same ordering path. Diagnostics, `dbg`, `expect` failures,
-`expect_err` regions, crashes, and backend compiler errors stay attached to
-their test-plan entries until rendering and cache writes replay the plan order.
+test root source order within each module. Reused and freshly-run results use
+the same ordering path. Diagnostics, `dbg`, `expect` failures, `expect_err`
+regions, crashes, and backend compiler errors stay attached to their test-plan
+entries until rendering and outcome files replay the plan order.
 
-Checked test outcomes are separate per-root records. Their checked identity
-is produced during checked commit, independently of the root's current
-reporting slot. It includes the checked root type, body and name-reference
-closure, including both sides of conditionals, captures and constants.
-Definition summaries are Merkle identities of strongly connected components;
-recursive helpers therefore have stable identities without traversing a fresh
-transitive graph for every test. The checked type/method context covers literal
-conversions, generated dispatch and inspection, including failure observations.
-Imported implementation summaries, rather than runtime specialization or the
-last execution's read set, supply imported dependencies. Checked commit
-stores these in `CompileTimeRootIdentityTable.test_rows`, `test_context`, and
+### Test outcome files
+
+Under `--specialize=no`, `roc test` caches each test root's outcome; under
+`--specialize=yes` it caches none, because specialized compilation persists
+nothing after checking (Cache storage). `--no-cache` reads and writes no
+outcome file.
+
+Each module with test roots has one outcome file in the direct file store
+(`compile.artifact_store`, the `test_outcomes` family; `cli/test_outcome_file.zig`).
+Like every direct file it is named by content, never by a path. Its identity
+covers what all of the module's outcomes share: the module's own source inputs
+(`CheckedModuleArtifact.source_hash`), its qualified name, the platform/app
+relation it was checked under, compiler compatibility, the native target, the
+specialization strategy and the execution mode. It deliberately excludes the
+module's imports: each test's own identity covers what that test reads from
+them. Editing a module's own source therefore names a new file and reruns that
+module's tests, while editing another module keeps the file and reruns only the
+tests whose identities changed.
+
+Inside the file, each entry is keyed by one test root's checked outcome
+identity. Checked commit produces that identity independently of the root's
+current reporting slot. It includes the checked root type, body and
+name-reference closure, including both sides of conditionals, captures and
+constants. Definition summaries are Merkle identities of strongly connected
+components; recursive helpers therefore have stable identities without
+traversing a fresh transitive graph for every test. The checked type/method
+context covers literal conversions, generated dispatch and inspection,
+including failure observations. Imported implementation summaries, rather than
+runtime specialization or the last execution's read set, supply imported
+dependencies. Checked commit stores these in
+`CompileTimeRootIdentityTable.test_rows`, `test_context`, and
 `test_definitions`. Import contexts cover the type and method environment;
 explicit external and associated references select implementation summaries.
-Imported test-only edits do not change those summaries. Platform/app relation
-identity remains an explicit binding input. This is independent of compile-time
-value reuse's existing identity and portability contract.
+Imported test-only edits do not change those summaries. This is independent of
+compile-time value reuse's identity and portability contract.
 
 Nominal and alias types in test dependency summaries use producer-authored
 `test_declarations` provenance instead of an imported entry key and an
@@ -23303,85 +23317,83 @@ defaults: foreign construction materializes them without a local value-reference
 edge. Default-expression observations have their declaring type as an explicit
 reporting owner.
 
-The execution strategy, execution mode, compiler compatibility and payload
-version partition outcome admission. Rendering settings, elapsed time, root
-order and the whole enclosing module are not checked identity. Each current
-plan entry independently loads its outcome, so identical roots retain their
-output multiplicity. Missing, corrupt or incompatible records are misses;
-atomic cache commit prevents incomplete records from becoming hits. Each
-record also contains its expected key and a checksum. Atomic replacement under
-one key can refresh reporting provenance for the same checked outcome; reads
-still validate that provenance against the current sources.
+The file starts with a format tag and its own identity, so a file read under
+another identity has no entries. Each entry carries its test identity, its
+length and a digest over both and its body, and validates on its own. Reading
+stops at the first entry that does not validate, so a truncated or damaged file
+keeps only its intact prefix; everything else is an ordinary miss. The format
+is bespoke binary data.
 
-Source provenance is validated separately from meaning. Outcome format V2
-contains no absolute root offsets in its key or payload. A root's checked body
-and checked dependency identity, compiler compatibility, native target,
-specialization strategy and execution policy decide its outcome. Current root
-order, source owner and region form an occurrence, supplied by the current test
-plan. Identical roots may share an outcome, but each occurrence independently
-instantiates that outcome and contributes its observations.
+A command reads each planned module's file before submitting runtime roots.
+Each current test root whose identity has an entry reuses it, provided the
+entry decodes against the current sources; every other root runs. After the
+roots run, the command builds the module's file anew from exactly the current
+roots' outcomes, the reused entries and every reusable fresh outcome, each
+identity once, and publishes it by staging and atomic rename unless the file
+already holds exactly those entries. Removed tests therefore leave the file,
+and a module whose tests all hit writes nothing. Concurrent writers of one file
+are last-writer-wins; every entry a writer publishes is complete and
+self-validating. Identical roots share one entry, and each occurrence
+instantiates it independently and contributes its own observations, so
+identical roots retain their output multiplicity.
 
-A report inside the unchanged root carries a root-relative span. Other reports
-carry a qualified source owner and a checked producer-authored site identity.
-Checked commit emits `test_report_sites`: each site names its enclosing
-checked declaration's name and body bytes plus its relative span, and carries
-the current absolute region separately. Declaration bodies are hashed once per
-owner. The command builds both directions of this mapping once per source;
-replay never rescans or hashes source prefixes. Multiple current regions for
-one site identity are ambiguous and make that optional outcome unusable.
-Root-relative binding explicitly selects the current occurrence, so duplicate
-root bodies never require matching by old list position or proximity.
+Source provenance is validated separately from meaning. An entry contains no
+absolute offsets. Current root order, source owner and region form an
+occurrence, supplied by the current test plan. A report inside the root
+carries a root-relative span. Other reports carry a qualified source owner and
+a checked producer-authored site identity. Checked commit emits
+`test_report_sites`: each site names its enclosing checked declaration's name
+and body bytes plus its relative span, and carries the current absolute region
+separately. Declaration bodies are hashed once per owner. The command builds
+both directions of this mapping once per source; replay never rescans or hashes
+source prefixes. Multiple current regions for one site identity are ambiguous
+and make that entry unusable. Root-relative binding explicitly selects the
+current occurrence, so duplicate root bodies never require matching by old list
+position or proximity, and a report in an edited imported module renders at
+that site's current position.
 
-The decoder validates every reference, span, counter, event and checksum before
+The decoder validates every reference, span, counter and event before
 returning an outcome for merging or rendering. Missing, corrupt, incompatible
-or ambiguous reporting data rejects the entire outcome without emitting a
-partial transcript. Source maps borrow the command's checked sources, or the
-complete-command arena's validated source snapshots, through final rendering.
-Raw `dbg` and crash payload bytes remain checked output and are never rewritten.
-Failure excerpts of mentioned bindings are covered by checked definition
-identity; primary source excerpts and line numbers render from current sources.
-Passes and failures are equally admissible; compiler errors and incomplete
-execution are not durable outcomes. Neither is a root that ran out of stack:
-how deep it got depended on the executing thread's stack and on the compiler
-frames beneath it, which no identity records, so the host reports the overflow
-explicitly (`BoolRootEvalResult.stack_overflowed`) and the root runs again on
-every command. Allocation failure ends the process and publishes nothing.
+or ambiguous reporting data rejects the entire entry without emitting a
+partial transcript. Raw `dbg` and crash payload bytes remain checked output and
+are never rewritten. Failure excerpts of mentioned bindings are covered by
+checked definition identity; primary source excerpts and line numbers render
+from current sources.
+
+Passes, failed expects and Roc crashes are equally admissible; compiler errors,
+backend failures and incomplete execution are not durable outcomes. Neither is
+a root that ran out of stack: how deep it got depended on the executing
+thread's stack and on the compiler frames beneath it, which no identity
+records, so the host reports the overflow explicitly
+(`BoolRootEvalResult.stack_overflowed`) and the root runs again on every
+command. Neither is an interpreter root that failed to allocate. A command that
+crashes or is interrupted publishes nothing, because files are written only
+after the roots finish.
 
 Nothing else a root observes lies outside its identity. Roc has no ambient
 input a pure `expect` can read, and an `expect` body cannot be effectful, so no
 root calls a hosted function: the host's code and environment are not inputs.
 
-Completed-command format V2 references durable individual outcomes and retains
-producer-authored report maps and each occurrence's current region, order and
-key under its exact validated input manifest. Both replay paths call the same
-outcome decoder. After an edit the command manifest misses, and current checking
-supplies fresh maps for individual reuse; a complete hit needs no checked graph.
+Only roots without a reused outcome enter specialization, LIR, code generation
+and execution. Each executing root owns its inline-expect counts as well as its
+transcript and result. Worker-local counters are harvested and cleared at root
+completion, retaining sparse nonzero observations with that root. Reused and
+fresh root observations are merged before command-level coalescing. Files are
+built before coalescing, preserving every root's uncombined contribution.
+Shared code and static data remain command-owned.
 
-Admission precedes submission of runtime roots. Only misses enter specialization,
-LIR, code generation and execution. Each executing root owns its inline-expect
-counts as well as its transcript and result. Worker-local counters are harvested
-and cleared at root completion, retaining sparse nonzero observations with that
-root. Cached and fresh root observations are merged before command-level
-coalescing. Commit happens before coalescing, preserving every root's
-uncombined contribution. Shared code and static data remain command-owned.
+An entry stores structured, pre-render data: the result, ordered transcript
+events, source regions, failure data, and raw or structured Roc payloads needed
+to render `dbg`, failed expects, crashes, and per-test status/failure reports.
+It stores enough information to render the current stdout/stderr transcript
+just in time, under the current renderer choices, but it does not store
+terminal bytes, ANSI escapes, color mode, verbosity, terminal width, elapsed
+time or final summary text. A reused result is represented to the output
+coordinator as an already-finished plan entry containing the same structured
+transcript events and test status data that a fresh run would have sent, so a
+reused failure renders the same report and gives the same exit status.
 
-Cached test results store structured, pre-render data: the result, ordered
-transcript events, source regions, failure data, and raw or structured Roc
-payloads needed to render `dbg`, failed expects, crashes, and per-test
-status/failure reports.
-This cache format predates terminal rendering. It stores enough information to
-render the current stdout/stderr transcript just in time, under the current
-renderer choices, but it does not store terminal bytes, ANSI escapes, color
-mode, verbosity, terminal width, elapsed time, cache-hit labels, or final
-summary text. A cached result is represented to the output coordinator as an
-already-finished plan entry containing the same structured transcript events
-and test status data that a fresh run would have sent. Checked test status data,
-including passes, failed expects, and Roc runtime crashes, may be cached.
-Compiler backend failures while building or linking the command-level image are
-not checked test status data and are not written as successful test-result cache
-entries.
-
-If compiling or linking the command-level test library fails, each uncached root
+If compiling or linking the command-level test library fails, each root that runs
 in the plan receives a backend compiler-error result at its original source
 region. If one root crashes while running, that root records a failed result
 from its own invocation state. Other roots continue unless the process receives
