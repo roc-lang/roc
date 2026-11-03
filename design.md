@@ -5242,9 +5242,12 @@ and `unreachable` in release builds:
 
 - A thread never waits on a slot while it holds a lock another thread might
   need.
-- A thread never waits on a slot of a kind it currently holds a claim of.
-  This is why fixpoint analyses are claimed per component: two roots of one
-  component would otherwise each hold a claim while waiting on the other.
+- A thread never waits on a slot of a kind it currently holds a claim of in
+  the same module. This is why fixpoint analyses are claimed per component:
+  two roots of one component would otherwise each hold a claim while waiting
+  on the other. A claim may wait on a slot of an imported module, because
+  module imports are acyclic: a claim in the imported module never waits on
+  the importer.
 
 There is no scheduling edge between modules. A module's analyses are never
 ordered after its importers, nothing waits for demand to flow top-down, and
