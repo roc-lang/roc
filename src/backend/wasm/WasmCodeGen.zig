@@ -398,6 +398,9 @@ stack_plan_indexes: lir.StackPlan.Indexes,
 local_slots: collections.DenseMap(ProcLocalId, u32),
 /// Each planned slot's storage, once the first local of the slot is bound.
 slot_bindings: std.ArrayList(?Storage.LocalInfo) = .empty,
+/// The descriptor locals of the proc's dynamic locals, which the plan leaves
+/// out (`planProcLocals`).
+dyn_descriptors: collections.DenseMap(ProcLocalId, void),
 /// The fragment whose body is being emitted, or null in the root function.
 active_fragment: ?u32 = null,
 /// The control-flow depth the active fragment was entered at. A branch to a
@@ -525,6 +528,7 @@ pub fn init(
         .local_writes = lir.LocalWrites.init(allocator),
         .stack_plan_indexes = lir.StackPlan.Indexes.init(allocator),
         .local_slots = collections.DenseMap(ProcLocalId, u32).init(allocator),
+        .dyn_descriptors = collections.DenseMap(ProcLocalId, void).init(allocator),
     };
 }
 
@@ -652,6 +656,7 @@ pub fn deinit(self: *Self) void {
     self.stack_plan_indexes.deinit();
     self.local_slots.deinit();
     self.slot_bindings.deinit(self.allocator);
+    self.dyn_descriptors.deinit();
 }
 
 fn beginFunction(self: *Self, local_idx: LocalFunctionIndex) Allocator.Error!void {
@@ -3414,15 +3419,18 @@ fn procLocalBinding(self: *Self, value: ProcLocalId) Allocator.Error!Storage.Loc
     return info;
 }
 
-/// The native backend's explicit accesses beyond the shared LIR operand
-/// inventory, for `StackPlan.addProcGraph`: none, and dynamic locals are not
-/// planned, since their slots hold addresses the runtime writes through
-/// outside the statement graph.
+/// The wasm backend's explicit accesses beyond the shared LIR operand
+/// inventory, for `StackPlan.addProcGraph`: none, and neither dynamic locals
+/// nor their descriptors are planned. A dynamic local's slot holds an address
+/// the runtime writes through outside the statement graph, and every use of a
+/// dynamic local (and the `frame_alloc` that places it) reads its descriptor,
+/// which the operand inventory does not list. The native backend pins the
+/// same locals (`pinDynamicLocalSlots`).
 const WasmPlanExtra = struct {
     owner: *const Self,
 
     pub fn tracks(extra: WasmPlanExtra, local: ProcLocalId) bool {
-        return extra.owner.localDyn(local) == null;
+        return extra.owner.localDyn(local) == null and !extra.owner.dyn_descriptors.contains(local);
     }
 
     pub fn statement(_: WasmPlanExtra, _: *lir.StackPlan, _: u32, _: LIR.CFStmt) Allocator.Error!void {}
@@ -3435,7 +3443,13 @@ const WasmPlanExtra = struct {
 /// local for the whole call, and an engine's native frame grows with the
 /// declared locals. The plan's slots are per wasm value type, so a shared
 /// local always has the type every local of it needs.
-fn planProcLocals(self: *Self, root: CFStmtId) Allocator.Error!void {
+fn planProcLocals(self: *Self, frame_locals: ProcLocalSpan, root: CFStmtId) Allocator.Error!void {
+    self.dyn_descriptors.clearRetainingCapacity();
+    const locals = self.store.getLocalSpan(frame_locals);
+    for (0..locals.len) |i| {
+        const dyn = self.localDyn(GuardedList.at(locals, i)) orelse continue;
+        try self.dyn_descriptors.put(dyn.desc, {});
+    }
     const indexes = &self.stack_plan_indexes;
     var plan = indexes.takePlan();
     defer indexes.keepPlan(&plan);
@@ -6832,7 +6846,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     defer self.local_slots.clearRetainingCapacity();
     if (proc.body) |body| {
         try self.local_writes.collect(self.store, body);
-        try self.planProcLocals(body);
+        try self.planProcLocals(proc.frame_locals, body);
     }
 
     var saved = self.saveState() catch return error.OutOfMemory;
