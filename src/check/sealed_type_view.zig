@@ -41,7 +41,6 @@ const CheckedTypePayload = checked_artifact.CheckedTypePayload;
 const CheckedImportViews = checked_artifact.CheckedImportViews;
 const CheckedSourceTypeRoots = checked_artifact.CheckedSourceTypeRoots;
 const CheckedSourceTypeRootInputs = checked_artifact.CheckedSourceTypeRootInputs;
-const CheckedFieldKind = checked_artifact.CheckedFieldKind;
 const CheckedFieldDefault = checked_artifact.CheckedFieldDefault;
 const CheckedFunctionKind = checked_artifact.CheckedFunctionKind;
 const CheckedBuiltinNominal = checked_artifact.CheckedBuiltinNominal;
@@ -975,7 +974,9 @@ const Gate = struct {
 
 /// Check `source` against the builtin module, publish its source types, and
 /// verify the sealed type view against the publication.
-fn expectViewMatchesPublication(source: []const u8) !void {
+const ViewTestError = @import("test/TestEnv.zig").TestEnvError || error{ CorruptArtifact, CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch };
+
+fn expectViewMatchesPublication(source: []const u8) ViewTestError!void {
     const TestEnv = @import("test/TestEnv.zig");
     const compiled_builtins = @import("compiled_builtins");
     const CompactWriter = collections.CompactWriter;
