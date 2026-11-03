@@ -11626,10 +11626,11 @@ fn buildBoxyLibraryObjects(
         };
         try build_env.boxyAdoptExports(digests, task.artifact);
         if (known.restored) restored += 1 else built += 1;
-        objects[index] = known.pieces;
         if (want_images) {
             const image = known.image orelse base.invariant("roc build invariant violated: a fast dev link unit has no image", .{});
             images[index] = image.bytes;
+        } else {
+            objects[index] = known.pieces orelse base.invariant("roc build invariant violated: a unit compile-time evaluation recorded for a composing link has no pieces", .{});
         }
         keys[index] = task.key.bytes;
         for (known.hosted_symbols) |symbol| {
@@ -12623,10 +12624,14 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     defer releaseScratchDir(ctx, build_scratch_dir);
     var link_objects = link_artifacts.Objects.init(ctx.coreCtx(), ctx.arena, if (object_store) |store| .{ .store = store.native, .identity = store.linkObjectIdentity(@splat(0)) } else null, build_scratch_dir) catch return error.NativeCompilationFailed;
     defer link_objects.deinit();
-    // The link composes every unit's pieces, so compile-time evaluation
-    // builds the units the link needs as their modules are checked.
+    // The link reads every unit's object, so compile-time evaluation
+    // builds the units the link needs as their modules are checked, with
+    // their pieces when the link composes them.
     if (boxy_interfaces != null) if (build_env.boxy_object_lowering) |*lowering| {
-        if (lowering.target == target) lowering.links = true;
+        if (lowering.target == target) {
+            lowering.links = true;
+            lowering.link_reads_pieces = fast_link == null;
+        }
     };
     var program_probe: ?ProgramOutputProbe = null;
     if (object_store) |store| if (target_arch != .wasm32 and args.opt == .dev and runtime_lowering.target.specialization_strategy == .lss and !dev_diagnostics.isSet(.dev_pack_objects)) {
@@ -12809,7 +12814,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         // dev links, and into this build's own when it links that way.
         const root_image: ?[]align(backend.dev.UnitImage.alignment.toByteUnits()) u8 = if (compile.boxy_unit.producesImage(target) and !args.no_cache) image: {
             reporter.begin("Unit Image");
-            const image = object_compiler.buildUnitImage(&root_pieces, target, .entrypoints) catch |err| {
+            const image = object_compiler.buildUnitImage(&root_pieces, target, .entrypoints, null) catch |err| {
                 reporter.fail();
                 std.log.err("Building the root unit's image failed: {}", .{err});
                 return error.NativeCompilationFailed;

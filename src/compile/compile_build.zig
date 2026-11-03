@@ -2786,7 +2786,7 @@ pub const BuildEnv = struct {
         const coordinator = self.coordinator orelse return null;
         const objects = &(coordinator.boxy_objects orelse return null);
         const known = objects.objectWithKey(artifact, key) orelse return null;
-        return .{ .pieces = known.object.?.pieces, .image = objects.imageOf(artifact), .hosted_symbols = known.object.?.hosted_symbols, .restored = known.restored };
+        return .{ .pieces = objects.piecesOf(artifact), .image = objects.imageOf(artifact), .hosted_symbols = known.object.?.hosted_symbols, .restored = known.restored };
     }
 
     /// Record in `digests` the exports of `artifact`'s object, which this
@@ -2798,7 +2798,10 @@ pub const BuildEnv = struct {
     }
 
     pub const BoxyKnownObject = struct {
-        pieces: *const backend.dev.UnitPieces.Pieces,
+        /// The object's pieces, when it was recorded with them: on a host
+        /// that loads pieces for compile-time evaluation, or for a link
+        /// that composes them (`BoxyObjectLowering.link_reads_pieces`).
+        pieces: ?*const backend.dev.UnitPieces.Pieces,
         /// The object's unit image, owned by the compilation, for a target
         /// that `boxy_unit.producesImage`.
         image: ?@import("boxy_unit.zig").Image,

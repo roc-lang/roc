@@ -38,9 +38,10 @@ pub const Unit = struct {
     interfaces: *ExportInterfaces,
     cache_manager: ?*CacheManager,
     key: object_cache.Key,
-    /// Whether the caller reads the unit's pieces. A fast dev link reads
-    /// only the unit image, and a restored entry is then served from a
-    /// mapping without decoding its pieces.
+    /// Whether the caller reads the unit's pieces. A fast dev link, and
+    /// compile-time evaluation on a host that loads unit images, read only
+    /// the unit image, and a restored entry is then served from a mapping
+    /// without decoding its pieces.
     want_pieces: bool = true,
 };
 
@@ -51,18 +52,26 @@ pub fn producesImage(target: roc_target.RocTarget) bool {
     return target.toOsTag() == .linux and target.toCpuArch() == .x86_64;
 }
 
-/// A unit image's bytes and what keeps them alive.
+/// A unit image's bytes, its code locations, and what keeps them alive.
 pub const Image = struct {
     bytes: []align(backend.dev.UnitImage.alignment.toByteUnits()) const u8,
+    /// Where the image's code came from (`backend.dev.CodeLocations`), as
+    /// the cache entry files it beside the image
+    /// (`object_cache.Entry.code_locations`).
+    code_locations: []const u8,
     owner: union(enum) {
+        /// Both are allocated from the unit's allocator.
         owned,
-        /// The bytes are a slice of this mapped cache entry.
+        /// Both are slices of this mapped cache entry.
         mapped: CacheData,
     },
 
     pub fn deinit(self: Image, gpa: Allocator) void {
         switch (self.owner) {
-            .owned => gpa.free(self.bytes),
+            .owned => {
+                gpa.free(self.bytes);
+                gpa.free(self.code_locations);
+            },
             .mapped => |data| data.deinit(gpa),
         }
     }
@@ -160,14 +169,17 @@ pub fn restore(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.
     return entry;
 }
 
-/// Whether `entry`'s image, if it has one, is an image this compiler reads.
-/// An entry whose image does not read is bytes this compiler did not write
-/// (a miss), never a link-time failure.
+/// Whether `entry`'s image, if it has one, is an image this compiler reads,
+/// and its code locations, if it has them, a table this compiler reads. A
+/// library unit's entry carries both; the root unit's, which no
+/// compile-time evaluation loads, only the image. An entry that does not
+/// read is bytes this compiler did not write (a miss), never a link-time or
+/// compile-time evaluation failure.
 fn imageReads(entry: object_cache.Entry) bool {
-    if (entry.image.len == 0) return true;
+    if (entry.image.len == 0) return entry.code_locations.len == 0;
     const image: []align(backend.dev.UnitImage.alignment.toByteUnits()) const u8 = @alignCast(entry.image);
     _ = backend.dev.UnitImage.View.init(image) catch return false;
-    return true;
+    return entry.code_locations.len == 0 or backend.dev.CodeLocations.validate(entry.code_locations);
 }
 
 /// Restore `key`'s entry like `restore`, serving it from a mapping of the
@@ -333,7 +345,7 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
         return .{
             .restored = true,
             .pieces = pieces,
-            .image = if (keeps_mapping) .{ .bytes = @alignCast(entry.image), .owner = .{ .mapped = restored.data } } else null,
+            .image = if (keeps_mapping) .{ .bytes = @alignCast(entry.image), .code_locations = entry.code_locations, .owner = .{ .mapped = restored.data } } else null,
             .hosted_symbols = hosted_symbols,
             .exports = exports,
         };
@@ -346,7 +358,13 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     defer cache_scope.end();
     const encoded = try backend.dev.UnitPieces.encode(gpa, built.pieces.?);
     defer gpa.free(encoded);
-    try store(gpa, unit.cache_manager, unit.key, .{ .exports = built.exports, .hosted_symbols = built.hosted_symbols, .pieces = encoded, .image = if (built.image) |image| image.bytes else &.{} });
+    try store(gpa, unit.cache_manager, unit.key, .{
+        .exports = built.exports,
+        .hosted_symbols = built.hosted_symbols,
+        .pieces = encoded,
+        .code_locations = if (built.image) |image| image.code_locations else &.{},
+        .image = if (built.image) |image| image.bytes else &.{},
+    });
     if (unit.want_pieces) return built;
     var without_pieces = built;
     built.pieces.?.deinit();
@@ -404,12 +422,13 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     errdefer pieces.deinit();
     // The image goes into the unit's cache entry, which later fast dev links
     // read; a build without a cache has no use for it.
-    const image: ?Image = if (producesImage(unit.target) and unit.cache_manager != null) .{
-        .bytes = object_compiler.buildUnitImage(pieces, unit.target, .every_procedure) catch |err| {
+    const image: ?Image = if (producesImage(unit.target) and unit.cache_manager != null) image: {
+        var code_locations: []const u8 = &.{};
+        const bytes = object_compiler.buildUnitImage(pieces, unit.target, .every_procedure, &code_locations) catch |err| {
             std.log.err("Building the unit image of module {s} failed: {}", .{ module_name, err });
             return error.NativeCompilationFailed;
-        },
-        .owner = .owned,
+        };
+        break :image .{ .bytes = bytes, .code_locations = code_locations, .owner = .owned };
     } else null;
     errdefer if (image) |owned| owned.deinit(gpa);
     codegen_scope.end();

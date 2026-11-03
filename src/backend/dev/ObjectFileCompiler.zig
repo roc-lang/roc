@@ -321,6 +321,9 @@ pub const ObjectFileCompiler = struct {
         pieces: *const UnitPieces.Pieces,
         target: RocTarget,
         roots: ImageRoots,
+        /// Receives the image's code locations (`CodeLocations`, over offsets
+        /// from the start of its text), owned by the caller, when non-null.
+        code_locations: ?*[]const u8,
     ) CompilationError![]align(UnitImage.alignment.toByteUnits()) u8 {
         std.debug.assert(target.toOsTag() == .linux and target.toCpuArch() == .x86_64);
         var patched: PatchedRefs = .{};
@@ -332,9 +335,10 @@ pub const ObjectFileCompiler = struct {
             },
             .global_procs = true,
             .patched_refs = &patched,
+            .capture_code_locations = code_locations != null,
         });
         defer composed.deinit();
-        return UnitImage.build(self.allocator, &.{composed.object_bytes}, .{
+        const image = UnitImage.build(self.allocator, &.{composed.object_bytes}, .{
             .keep_debug = true,
             // Code reached only through references the image cannot see
             // keeps the whole image together.
@@ -350,6 +354,11 @@ pub const ObjectFileCompiler = struct {
             error.ImageTooLarge,
             => invariant("the dev backend's object for a unit is not convertible into a unit image: {s}", .{@errorName(err)}),
         };
+        if (code_locations) |out| {
+            out.* = composed.code_locations;
+            composed.code_locations = &.{};
+        }
+        return image;
     }
 
     pub fn compileToObjectFileAndWrite(

@@ -9,7 +9,8 @@
 //! code references, and the code itself in pieces (`backend.dev.UnitPieces`,
 //! design.md "Unit Pieces And Whole-Program Dead Code"), and for a Linux
 //! x86_64 target the code laid out once more as a unit image
-//! (`backend.dev.UnitImage`), which a fast dev link places directly. The
+//! (`backend.dev.UnitImage`), which a fast dev link places directly and
+//! compile-time evaluation loads, with the image's code locations. The
 //! image starts at a page-aligned offset in the entry, so a mapped entry
 //! serves it in place. Nothing in it refers to another cache.
 
@@ -20,7 +21,7 @@ const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 7;
+pub const format_version: u32 = 8;
 
 const magic = "RBXO";
 
@@ -122,6 +123,14 @@ pub const Entry = struct {
     app_export_symbols: []const []const u8 = &.{},
     /// The module's code in pieces, encoded (`UnitPieces.encode`).
     pieces: []const u8,
+    /// Where the unit image's code came from (`CodeLocations`, over offsets
+    /// from the start of the image's text), which compile-time evaluation
+    /// reports a failure in the loaded image with; empty without an image.
+    /// It stays beside the image rather than in it: it names modules by
+    /// their package-qualified names, which for a local package include the
+    /// package's path, and the image's bytes must be a function of the code
+    /// alone.
+    code_locations: []const u8 = &.{},
     /// The module's unit image (`UnitImage`), for a target a fast dev link
     /// serves; empty for any other target.
     image: []const u8 = &.{},
@@ -155,6 +164,8 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
     }
     try appendU64(&bytes, allocator, entry.pieces.len);
     try bytes.appendSlice(allocator, entry.pieces);
+    try appendU64(&bytes, allocator, entry.code_locations.len);
+    try bytes.appendSlice(allocator, entry.code_locations);
     try appendU64(&bytes, allocator, entry.image.len);
     if (entry.image.len != 0) {
         try bytes.appendNTimes(allocator, 0, std.mem.alignForward(usize, bytes.items.len, image_alignment) - bytes.items.len);
@@ -180,17 +191,20 @@ pub fn decode(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     errdefer deinitEntryView(allocator, view);
     const pieces = try allocator.dupe(u8, view.pieces);
     errdefer allocator.free(pieces);
+    const code_locations = try allocator.dupe(u8, view.code_locations);
+    errdefer allocator.free(code_locations);
     const image = try allocator.alignedAlloc(u8, .@"16", view.image.len);
     @memcpy(image, view.image);
     var entry = view;
     entry.pieces = pieces;
+    entry.code_locations = code_locations;
     entry.image = image;
     return entry;
 }
 
-/// Decode an entry's bytes, borrowing its pieces and image from `bytes`;
-/// every other slice is allocated from `allocator`. Free them with
-/// `deinitEntryView`. A page-aligned `bytes` holds the image page-aligned.
+/// Decode an entry's bytes, borrowing its pieces, code locations and image
+/// from `bytes`; every other slice is allocated from `allocator`. Free them
+/// with `deinitEntryView`. A page-aligned `bytes` holds the image page-aligned.
 pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     var reader = Reader{ .bytes = bytes };
     const found_magic = try reader.take(magic.len);
@@ -232,6 +246,9 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     const pieces_len = try reader.word64();
     if (pieces_len > std.math.maxInt(usize)) return error.InvalidEntry;
     const pieces = try reader.take(@intCast(pieces_len));
+    const code_locations_len = try reader.word64();
+    if (code_locations_len > std.math.maxInt(usize)) return error.InvalidEntry;
+    const code_locations = try reader.take(@intCast(code_locations_len));
     const image_len = try reader.word64();
     if (image_len > std.math.maxInt(usize)) return error.InvalidEntry;
     if (image_len != 0) _ = try reader.take(std.mem.alignForward(usize, reader.at, image_alignment) - reader.at);
@@ -243,6 +260,7 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
         .link_root_symbols = link_root_symbols,
         .app_export_symbols = app_export_symbols,
         .pieces = pieces,
+        .code_locations = code_locations,
         .image = image,
     };
 }
@@ -270,6 +288,7 @@ fn freeSymbols(allocator: Allocator, symbols: []const []const u8) void {
 /// Free an entry `decode` returned.
 pub fn deinitEntry(allocator: Allocator, entry: Entry) void {
     allocator.free(entry.pieces);
+    allocator.free(entry.code_locations);
     const image: []align(16) const u8 = @alignCast(entry.image);
     allocator.free(image);
     deinitEntryView(allocator, entry);
@@ -389,6 +408,7 @@ test "a Boxy object entry round-trips through its bytes" {
         .link_root_symbols = &.{"roc__d3"},
         .app_export_symbols = &.{ "roc__main_for_host", "roc__d3" },
         .pieces = "not really pieces",
+        .code_locations = "where the code came from",
         .image = "an image",
     };
     const bytes = try encode(allocator, entry);
@@ -400,6 +420,7 @@ test "a Boxy object entry round-trips through its bytes" {
     try std.testing.expectEqualDeep(entry.link_root_symbols, decoded.link_root_symbols);
     try std.testing.expectEqualDeep(entry.app_export_symbols, decoded.app_export_symbols);
     try std.testing.expectEqualStrings(entry.pieces, decoded.pieces);
+    try std.testing.expectEqualStrings(entry.code_locations, decoded.code_locations);
     try std.testing.expectEqualStrings(entry.image, decoded.image);
     try std.testing.expectEqual(@as(usize, 0), (bytes.len - entry.image.len) % image_alignment);
 

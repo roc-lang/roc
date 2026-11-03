@@ -15999,8 +15999,18 @@ tasks and receives its own completions, a token on the worker channel tells a
 worker a session has a task queued, and the session's owner takes completions
 it already has without waiting while checking continues. A platform module with
 requirements has no object of its own, so a module importing one runs as the
-whole program. Each object is filed with its `CodeLocations`: its line table,
-failure sites and source files (Compile-Time Failure Sites). A failure in an
+whole program. How an object is loaded depends only on the compiler's host,
+never on what a load finds: a Linux x86_64 host, whose units carry unit
+images (Fast Dev Link), loads each object's image as the cache mapping or
+the building unit holds it, copying its code and data into the process,
+binding its imports once (the compiler's own functions, then the objects
+already loaded, then the hosted-call trap) and filling its patch sites;
+every other host composes the unit's pieces into a relocatable object and
+loads that. Either way an object holds every procedure of its unit. A
+Linux x86_64 compilation therefore decodes a unit's pieces only for a link
+that composes them. Each object is filed with its `CodeLocations`: its line table,
+failure sites and source files (Compile-Time Failure Sites), beside its
+unit image where it has one. A failure in an
 object's code is therefore found and reported exactly as one in a whole
 program's own code, and the two forms report identically. The table is read
 only when something fails, so the code that succeeds carries nothing extra. A
@@ -25979,7 +25989,14 @@ Output), so two builds of a unit write identical images. The block divides
 into atoms, one per symbol start, each recording what it references; a link
 writes only the atoms the program reaches and leaves the rest as zero holes.
 The compiler's builtins and Boxy runtime objects are converted once, in Roc's
-own build graph, into a support image of the same format and embedded.
+own build graph, into a support image of the same format and embedded. A
+library unit's cache entry files the image's `CodeLocations` beside it, so
+compile-time evaluation loads the image itself into the compiler's process
+and reports failures in it without composing anything (Compile-Time
+Evaluation Strategy). The table stays out of the image because it names
+modules by their package-qualified names, which for a local package include
+the package's path, while the image's bytes, and so the link's placement and
+build id, are a function of the code alone.
 
 **Pre-linked host.** A platform's host is linked once with the existing LLD
 flags from the platform's link inputs plus one generated object, and filed as

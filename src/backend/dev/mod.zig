@@ -65,6 +65,9 @@ pub const PackFile = @import("PackFile.zig");
 pub const UnitPieces = @import("UnitPieces.zig");
 /// One unit's machine code laid out for a fast dev link.
 pub const UnitImage = @import("UnitImage.zig");
+/// Loads a unit image into this process; only a Linux x86_64 host loads
+/// the x86_64 code unit images hold.
+pub const UnitImageLoader = if (builtin.os.tag == .linux and builtin.cpu.arch == .x86_64) @import("UnitImageLoader.zig") else void;
 pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").Entrypoint;
 pub const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
 pub const StaticDataRelocation = @import("StaticDataExport.zig").StaticDataRelocation;
