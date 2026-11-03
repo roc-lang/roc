@@ -139,6 +139,47 @@ const max_stack_frame_prefix_bytes =
 /// only known then.
 const max_stack_prefix_bytes = max_stack_frame_prefix_bytes;
 
+/// The stack-bound check `prependStackCheck` may put before a body.
+const max_stack_check_prefix_bytes =
+    (1 + max_reloc_leb32_bytes) + // global.get __stack_pointer
+    (1 + max_reloc_leb32_bytes) + // i32.const __stack_low + room
+    1 + 2 + // i32.lt_u; if (void)
+    (1 + max_reloc_leb32_bytes) + // call roc_wasm_stack_overflow
+    1; // end
+
+/// The WebAssembly JS API's implementation limits on one function, which
+/// every engine a web page can host enforces: a module with a function past
+/// either does not compile (https://webassembly.github.io/spec/js-api/#limits).
+/// The body size counts the locals declaration and the code.
+pub const max_function_body_bytes: u32 = 7_654_321;
+/// Parameters count as locals.
+pub const max_function_locals: u32 = 50_000;
+
+/// The thresholds function splitting works to (see design.md, "Wasm Function
+/// Limits"). The defaults are the production ones; the developer-diagnostic
+/// variable `ROC_WASM_SPLIT_BYTES` lowers both byte thresholds so every
+/// program exercises splitting.
+pub const FunctionLimits = struct {
+    /// Code bytes past which a procedure's direct emission stops and the
+    /// procedure is emitted split instead.
+    split_bytes: u32 = max_function_body_bytes,
+    /// Code bytes at which a function of a split procedure hands the rest of
+    /// its statement chain to a fragment.
+    fragment_bytes: u32 = 1 << 20,
+    /// Declared locals at which it does the same.
+    fragment_locals: u32 = 1 << 14,
+
+    fn fromEnvironment() FunctionLimits {
+        var limits: FunctionLimits = .{};
+        if (base.dev_diagnostics.get(.wasm_split_bytes)) |text| {
+            const bytes = std.fmt.parseInt(u32, text, 10) catch std.debug.panic("ROC_WASM_SPLIT_BYTES must be an unsigned integer, not {s}", .{text});
+            limits.split_bytes = @max(bytes, 1);
+            limits.fragment_bytes = @max(bytes, 1);
+        }
+        return limits;
+    }
+};
+
 const StackPrefixRelocs = struct {
     buffer: [max_stack_prefix_relocations]CodeBuilder.Relocation = undefined,
     len: usize = 0,
@@ -282,9 +323,6 @@ registered_procs: collections.DenseMap(u32, u32),
 /// index. Populated before proc compilation so imports never shift function
 /// indices mid-codegen.
 hosted_symbol_targets: std.AutoHashMap(u32, HostedSymbolTarget),
-/// The C-ABI entries of linked object-cache objects, keyed by the proc spec
-/// id of the `c_abi_entry` procedure each one provides.
-linked_entry_targets: std.AutoHashMap(u32, HostedSymbolTarget),
 /// The fixed runtime symbols, resolved like hosted symbols before any
 /// defined function index is assigned.
 runtime_symbol_targets: ?RuntimeSymbolTargets = null,
@@ -328,11 +366,44 @@ proc_arg_counts_offset: u32 = 0,
 tail_area: ?DataAddress = null,
 /// One driver function per tail group and result type.
 tail_drivers: std.ArrayList(TailDriver) = .empty,
-/// Local index used to hold the current proc's return value until epilogue time.
-proc_return_local: u32 = 0,
+/// Where the current proc keeps its return value until epilogue time: a wasm
+/// local, or in split mode a frame slot every function of the family reads.
+proc_return: Storage.LocalInfo = .{ .idx = 0, .val_type = .i32 },
 /// Where the erased-callable proc being compiled keeps whether the
 /// erased-call runtime invoked it, when its body reads that.
-caller_drives_local: ?u32 = null,
+caller_drives: ?Storage.LocalInfo = null,
+/// The limits one wasm function may reach and the budgets splitting works to.
+limits: FunctionLimits = .{},
+/// Whether the proc being compiled is emitted split: its LIR locals live in
+/// frame slots and statement chains move to fragment functions at the
+/// budget (see design.md, "Wasm Function Limits").
+split_mode: bool = false,
+/// Set by the statement walker when the direct emission of the proc being
+/// compiled passed a limit, which ends that emission early.
+body_over_budget: bool = false,
+/// The fragment functions of the proc being compiled, in creation order.
+fragments: std.ArrayList(CodeBuilder) = .empty,
+/// How often the proc being compiled writes each of its locals, which decides
+/// when a `ref.local` of an aggregate shares its source's bytes
+/// (`refLocalAliasesSource`).
+local_writes: lir.LocalWrites,
+/// The shared stack planner's indexes, kept from proc to proc
+/// (`planProcLocals`).
+stack_plan_indexes: lir.StackPlan.Indexes,
+/// The planned slot of each LIR local of the proc being compiled whose
+/// lifetime the plan solved, by local id. Locals of one slot share storage.
+local_slots: collections.DenseMap(ProcLocalId, u32),
+/// Each planned slot's storage, once the first local of the slot is bound.
+slot_bindings: std.ArrayList(?Storage.LocalInfo) = .empty,
+/// The descriptor locals of the proc's dynamic locals, which the plan leaves
+/// out (`planProcLocals`).
+dyn_descriptors: collections.DenseMap(ProcLocalId, void),
+/// The fragment whose body is being emitted, or null in the root function.
+active_fragment: ?u32 = null,
+/// The control-flow depth the active fragment was entered at. A branch to a
+/// shallower label leaves the fragment by returning that depth as its exit
+/// code; the root function's base is zero, so it branches to every label.
+fragment_base_depth: u32 = 0,
 /// CFStmt block nesting depth (for br targets in proc compilation).
 cf_depth: u32 = 0,
 /// Structured control depth used for loop-break branch depths.
@@ -350,7 +421,7 @@ struct_field_values: std.ArrayList(StructFieldValue) = .empty,
 /// declaration or wrapper, reset for each.
 hosted_abi_arena: base.SingleThreadArena,
 /// Map from JoinPointId → state local selecting remainder or join body.
-join_point_state_locals: collections.DenseMap(u32, u32),
+join_point_state_locals: collections.DenseMap(u32, Storage.LocalInfo),
 /// Debug-only guard for recursive statement generation.
 active_stmt_generations: collections.DenseMap(u32, void),
 /// Debug-only count of how many times a statement has been generated.
@@ -371,7 +442,7 @@ external_calls: ExternalCalls = .unconfigured,
 boxy_runtime_symbols: ?BoxyRuntimeSignatures.SymbolTable = null,
 /// The procedure being compiled's tail carry parameter, if it takes one
 /// (`procCarriesTailArgs`).
-carry_local: ?u32 = null,
+carry: ?Storage.LocalInfo = null,
 /// Undefined `__stack_pointer` symbol used only while emitting relocatable app objects.
 stack_pointer_symbol: ?SymbolIndex = null,
 /// Undefined `__indirect_function_table` symbol used only while emitting relocatable app objects.
@@ -419,6 +490,7 @@ pub fn init(
     return .{
         .allocator = allocator,
         .cpu_level = cpu_level,
+        .limits = FunctionLimits.fromEnvironment(),
         .store = store,
         .layout_store = layout_store,
         .module = WasmModule.init(allocator),
@@ -430,7 +502,6 @@ pub fn init(
         .fp_local = 0,
         .registered_procs = collections.DenseMap(u32, u32).init(allocator),
         .hosted_symbol_targets = std.AutoHashMap(u32, HostedSymbolTarget).init(allocator),
-        .linked_entry_targets = std.AutoHashMap(u32, HostedSymbolTarget).init(allocator),
         .function_symbols_by_index = std.AutoHashMap(u32, SymbolIndex).init(allocator),
         .function_symbol_names = .empty,
         .rc_helper_funcs = std.AutoHashMap(u64, u32).init(allocator),
@@ -442,7 +513,7 @@ pub fn init(
         .func_type_cache = std.StringHashMap(u32).init(allocator),
         .func_type_key_scratch = .empty,
         .join_point_depths = collections.DenseMap(u32, u32).init(allocator),
-        .join_point_state_locals = collections.DenseMap(u32, u32).init(allocator),
+        .join_point_state_locals = collections.DenseMap(u32, Storage.LocalInfo).init(allocator),
         .hosted_abi_arena = base.SingleThreadArena.init(allocator),
         .active_stmt_generations = collections.DenseMap(u32, void).init(allocator),
         .stmt_generation_counts = collections.DenseMap(u32, u32).init(allocator),
@@ -450,6 +521,10 @@ pub fn init(
         .sequential_lane = tasks.LaneState.init(allocator),
         .sequential_scratch = base.SingleThreadArena.init(allocator),
         .helper_artifacts = std.AutoHashMap(u64, BodyArtifact.Artifact).init(allocator),
+        .local_writes = lir.LocalWrites.init(allocator),
+        .stack_plan_indexes = lir.StackPlan.Indexes.init(allocator),
+        .local_slots = collections.DenseMap(ProcLocalId, u32).init(allocator),
+        .dyn_descriptors = collections.DenseMap(ProcLocalId, void).init(allocator),
     };
 }
 
@@ -538,7 +613,6 @@ pub fn deinit(self: *Self) void {
     for (self.tail_drivers.items) |*driver| driver.members.deinit(self.allocator);
     self.tail_drivers.deinit(self.allocator);
     self.hosted_symbol_targets.deinit();
-    self.linked_entry_targets.deinit();
     self.function_symbols_by_index.deinit();
     for (self.function_symbol_names.items) |name| {
         self.allocator.free(name);
@@ -571,6 +645,13 @@ pub fn deinit(self: *Self) void {
     var helper_it = self.helper_artifacts.valueIterator();
     while (helper_it.next()) |artifact| artifact.deinit();
     self.helper_artifacts.deinit();
+    for (self.fragments.items) |*fragment| fragment.deinit(self.allocator);
+    self.fragments.deinit(self.allocator);
+    self.local_writes.deinit();
+    self.stack_plan_indexes.deinit();
+    self.local_slots.deinit();
+    self.slot_bindings.deinit(self.allocator);
+    self.dyn_descriptors.deinit();
 }
 
 fn beginFunction(self: *Self, local_idx: LocalFunctionIndex) Allocator.Error!void {
@@ -583,6 +664,7 @@ fn beginFunction(self: *Self, local_idx: LocalFunctionIndex) Allocator.Error!voi
 }
 
 fn currentBody(self: *Self) *CodeBuilder {
+    if (self.active_fragment) |fragment| return &self.fragments.items[fragment];
     if (self.active_fn_stack.items.len == 0) {
         base.invariant("WasmCodeGen invariant violated: no active function body", .{});
     }
@@ -1524,6 +1606,17 @@ pub fn flushPendingBodies(self: *Self) Allocator.Error!void {
 
     if (self.stack_checks) |symbols| try self.prependStackChecks(symbols, keys.items);
 
+    if (builtin.mode == .debug) for (keys.items) |local_idx| {
+        // Direct emission past a limit is re-emitted split, and splitting
+        // bounds every function of the family (see "Wasm Function Limits").
+        const body = self.pending_bodies.getPtr(local_idx).?;
+        const bytes = body.preamble.items.len + body.code.items.len;
+        if (bytes > max_function_body_bytes or body.local_count > max_function_locals) base.invariant(
+            "WASM/codegen invariant violated: local function {d} has {d} body bytes and {d} locals, past the function limits",
+            .{ local_idx.raw(), bytes, body.local_count },
+        );
+    };
+
     for (keys.items) |local_idx| {
         const expected: u32 = @intCast(self.module.function_offsets.items.len);
         if (local_idx.raw() != expected) {
@@ -1729,7 +1822,7 @@ pub fn generateEntrypointWrapper(
     self.stack_frame_size = 0;
     self.uses_stack_memory = false;
     self.fp_local = 0;
-    self.proc_return_local = 0;
+    self.proc_return = .{ .idx = 0, .val_type = .i32 };
     self.cf_depth = 0;
     self.in_proc = false;
     self.current_proc_id = null;
@@ -1996,7 +2089,7 @@ pub fn generateModule(
     self.uses_stack_memory = false;
 
     // Pre-allocate frame pointer local so it doesn't collide with user locals
-    self.fp_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    self.fp_local = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory;
 
     try self.emitCall(root_func_idx);
     try self.emitTailDrive(self.store.getProcSpec(root_proc_id));
@@ -2088,6 +2181,7 @@ pub fn generateModule(
 /// `skip_count` is the number of leading locals to skip (e.g., function parameters).
 fn encodeLocalsDecl(self: *Self, func_body: *std.ArrayList(u8), skip_count: u32) Allocator.Error!void {
     const all_types = self.storage.currentTypes();
+    self.currentBody().local_count = @intCast(all_types.len);
     if (self.cpu_level == .v1) for (all_types) |vt| {
         if (vt == .v128) wasmInvariantFmt("WASM/codegen invariant violated: v128 local declared for WebAssembly 1.0", .{});
     };
@@ -2130,7 +2224,7 @@ fn emitProcLocal(self: *Self, value: ProcLocalId) Allocator.Error!void {
     // `procLocalBinding` guarantees the slot holds the value type this local's
     // layout requires, so reading it needs no representation conversion.
     const local_info = try self.procLocalBinding(value);
-    try self.emitLocalGet(local_info.idx);
+    try self.emitBindingGet(local_info);
     try self.emitCanonicalizeScalarForLayout(self.procLocalLayoutIdx(value));
 }
 
@@ -3197,7 +3291,7 @@ fn emitRcHelperBody(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity
     self.stack_frame_size = 0;
     self.uses_stack_memory = false;
     self.fp_local = 0;
-    self.proc_return_local = 0;
+    self.proc_return = .{ .idx = 0, .val_type = .i32 };
     self.cf_depth = 0;
     self.in_proc = false;
     self.current_proc_id = null;
@@ -3211,7 +3305,7 @@ fn emitRcHelperBody(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity
         // The published on-drop ABI's ops slot, which generated adapters ignore.
         _ = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     }
-    self.fp_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    self.fp_local = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory;
 
     try self.emitVoidBlock();
     try self.emitLocalGet(value_ptr_local);
@@ -3297,8 +3391,172 @@ fn procLocalBinding(self: *Self, value: ProcLocalId) Allocator.Error!Storage.Loc
         return info;
     }
     const val_type = try self.procLocalValType(value);
-    const idx = self.storage.allocLocal(value, val_type) catch return error.OutOfMemory;
-    return .{ .idx = idx, .val_type = val_type };
+    const slot = self.local_slots.get(value);
+    if (slot) |index| if (self.slot_bindings.items[index]) |shared| {
+        // Another local of the slot, whose lifetime never overlaps this
+        // one's, already has the storage.
+        std.debug.assert(shared.val_type == val_type);
+        self.storage.bindLocalShared(value, shared) catch return error.OutOfMemory;
+        return shared;
+    };
+    const info: Storage.LocalInfo = if (self.split_mode) blk: {
+        // A split procedure's locals live in its frame, which every function
+        // of its family reads through the frame pointer.
+        const size = valTypeByteSize(val_type);
+        const offset = try self.allocStackMemory(size, size);
+        self.storage.bindLocalSlot(value, val_type, offset) catch return error.OutOfMemory;
+        break :blk .{ .idx = offset, .val_type = val_type, .home = .frame_slot };
+    } else blk: {
+        const idx = self.storage.allocLocal(value, val_type) catch return error.OutOfMemory;
+        break :blk .{ .idx = idx, .val_type = val_type };
+    };
+    if (slot) |index| self.slot_bindings.items[index] = info;
+    return info;
+}
+
+/// The wasm backend's explicit accesses beyond the shared LIR operand
+/// inventory, for `StackPlan.addProcGraph`: none, and neither dynamic locals
+/// nor their descriptors are planned. A dynamic local's slot holds an address
+/// the runtime writes through outside the statement graph, and every use of a
+/// dynamic local (and the `frame_alloc` that places it) reads its descriptor,
+/// which the operand inventory does not list. The native backend pins the
+/// same locals (`pinDynamicLocalSlots`).
+const WasmPlanExtra = struct {
+    owner: *const Self,
+
+    pub fn tracks(extra: WasmPlanExtra, local: ProcLocalId) bool {
+        return extra.owner.localDyn(local) == null and !extra.owner.dyn_descriptors.contains(local);
+    }
+
+    pub fn statement(_: WasmPlanExtra, _: *lir.StackPlan, _: u32, _: LIR.CFStmt) Allocator.Error!void {}
+};
+
+/// Plan the proc's locals with the shared LIR stack planner, so that LIR
+/// locals whose lifetimes never overlap share one wasm local (or one frame
+/// slot in split mode). A procedure that reads every field of a wide record
+/// defines a local per field read; without sharing, each would take a wasm
+/// local for the whole call, and an engine's native frame grows with the
+/// declared locals. The plan's slots are per wasm value type, so a shared
+/// local always has the type every local of it needs.
+fn planProcLocals(self: *Self, frame_locals: ProcLocalSpan, root: CFStmtId) Allocator.Error!void {
+    self.dyn_descriptors.clearRetainingCapacity();
+    const locals = self.store.getLocalSpan(frame_locals);
+    for (0..locals.len) |i| {
+        const dyn = self.localDyn(GuardedList.at(locals, i)) orelse continue;
+        try self.dyn_descriptors.put(dyn.desc, {});
+    }
+    const indexes = &self.stack_plan_indexes;
+    var plan = indexes.takePlan();
+    defer indexes.keepPlan(&plan);
+    var work: std.ArrayList(CFStmtId) = .empty;
+    defer {
+        indexes.clear();
+        work.deinit(plan.allocator);
+    }
+    try plan.addProcGraph(self.store, indexes, root, &work, WasmPlanExtra{ .owner = self });
+    for (work.items) |id| {
+        const stmt = self.store.getCFStmt(id);
+        if (stmt != .assign_low_level) continue;
+        if (OverflowFusion.findResultConsumer(self.store, id)) |fusion| {
+            // The producer binds the consumer's result early (`generateLowLevel`);
+            // its bytes are live from there through the consumer.
+            try plan.access(indexes.nodeOf(id).?, fusion.result_target, false, true);
+            try plan.access(indexes.nodeOf(fusion.consumer_stmt).?, fusion.result_target, true, false);
+        }
+    }
+    for (plan.values.items) |*value| {
+        // Slots are per wasm value type; the planner keys them by "size".
+        value.size = switch (try self.procLocalValType(value.local)) {
+            .i32 => 1,
+            .i64 => 2,
+            .f32 => 3,
+            .f64 => 4,
+            .v128 => 5,
+        };
+    }
+    try plan.solve();
+    try self.slot_bindings.resize(self.allocator, plan.slots.items.len);
+    @memset(self.slot_bindings.items, null);
+    for (plan.values.items) |value| {
+        if (value.slotIndex()) |slot| try self.local_slots.put(value.local, slot);
+    }
+}
+
+/// Push the value a binding holds.
+fn emitBindingGet(self: *Self, info: Storage.LocalInfo) Allocator.Error!void {
+    switch (info.home) {
+        .wasm_local => try self.emitLocalGet(info.idx),
+        .frame_slot => {
+            try self.emitLocalGet(self.fp_local);
+            try self.emitLoadOp(info.val_type, info.idx);
+        },
+    }
+}
+
+/// Pop the operand-stack value into a binding.
+fn emitBindingSet(self: *Self, info: Storage.LocalInfo) Allocator.Error!void {
+    switch (info.home) {
+        .wasm_local => try self.emitLocalSet(info.idx),
+        .frame_slot => {
+            // The store needs the address under the value.
+            const value = self.storage.allocScratchLocal(info.val_type) catch return error.OutOfMemory;
+            try self.emitLocalSet(value);
+            try self.emitLocalGets(.{ self.fp_local, value });
+            try self.emitStoreOp(info.val_type, info.idx);
+            try self.storage.releaseScratchLocal(.{ .idx = value, .val_type = info.val_type });
+        },
+    }
+}
+
+/// A wasm local holding a binding's value for code that reads it through a
+/// local index: the binding's own local, or a temporary loaded from its frame
+/// slot. Writing the temporary does not write the binding.
+fn bindingWasmLocal(self: *Self, info: Storage.LocalInfo) Allocator.Error!u32 {
+    switch (info.home) {
+        .wasm_local => return info.idx,
+        .frame_slot => {
+            const local = self.storage.allocAnonymousLocal(info.val_type) catch return error.OutOfMemory;
+            try self.emitBindingGet(info);
+            try self.emitLocalSet(local);
+            return local;
+        },
+    }
+}
+
+/// Move a binding from its wasm local into a fresh frame slot, so every
+/// function of a split procedure's family reads the same value, and return
+/// the slot binding.
+fn spillBindingToFrame(self: *Self, info: Storage.LocalInfo) Allocator.Error!Storage.LocalInfo {
+    std.debug.assert(info.home == .wasm_local);
+    const size = valTypeByteSize(info.val_type);
+    const offset = try self.allocStackMemory(size, size);
+    const slot: Storage.LocalInfo = .{ .idx = offset, .val_type = info.val_type, .home = .frame_slot };
+    try self.emitLocalGets(.{ self.fp_local, info.idx });
+    try self.emitStoreOp(info.val_type, offset);
+    return slot;
+}
+
+/// Pop the operand-stack value into the proc's return value.
+fn emitProcReturnSet(self: *Self) Allocator.Error!void {
+    try self.emitBindingSet(self.proc_return);
+}
+
+/// Push the proc's return value.
+fn emitProcReturnGet(self: *Self) Allocator.Error!void {
+    try self.emitBindingGet(self.proc_return);
+}
+
+/// The control-flow depth of the block a proc body's `ret` leaves.
+const ret_block_depth: u32 = 1;
+
+/// Leave for the label at control-flow depth `depth`: a branch when the label
+/// is in the function being emitted, otherwise the fragment's exit code
+/// return, which the function that called the fragment turns into the branch
+/// (`emitFragmentCall`).
+fn emitExitToDepth(self: *Self, depth: u32) Allocator.Error!void {
+    if (depth > self.fragment_base_depth) return self.emitBr(self.cf_depth - depth);
+    try self.emitI32Const(@intCast(depth));
+    try self.emitOps(.{Op.@"return"});
 }
 
 /// Bind a procedure parameter to the next wasm local index.
@@ -3311,7 +3569,10 @@ fn procLocalBinding(self: *Self, value: ProcLocalId) Allocator.Error!Storage.Loc
 fn bindProcParamLocal(self: *Self, param: ProcLocalId) Allocator.Error!Storage.LocalInfo {
     const val_type = try self.procLocalValType(param);
     const idx = self.storage.allocLocal(param, val_type) catch return error.OutOfMemory;
-    return .{ .idx = idx, .val_type = val_type };
+    const info: Storage.LocalInfo = .{ .idx = idx, .val_type = val_type };
+    // A parameter is the first local of its slot: it is live from entry.
+    if (self.local_slots.get(param)) |slot| self.slot_bindings.items[slot] = info;
+    return info;
 }
 
 /// Bind a parameter the surrounding ABI unpacking code reads as a fixed wasm
@@ -5523,12 +5784,14 @@ fn emitI128TryNarrow(
     try self.emitLoadAt(src_ptr, .i64, 8);
     const high = try self.emitSetNewLocal(.i64);
 
-    // Determine result layout
-    // Payload is the target type in wasm representation
-    const payload_wasm_size: u32 = if (target_bytes <= 4) 4 else 8;
-    const disc_offset: u32 = payload_wasm_size;
+    // The result is a Try tag union whose Ok payload is the target integer at
+    // offset 0 and whose discriminant follows the payload, as the payload's
+    // layout places it (`emitIntTryBound` builds the same shape): a one-byte
+    // target's discriminant is at offset 1, not at the width of the wasm
+    // value that carries it.
+    const disc_offset: u32 = target_bytes;
     const total_size = disc_offset + 1;
-    const alignment: u32 = payload_wasm_size;
+    const alignment: u32 = target_bytes;
     const padded = (total_size + alignment - 1) & ~(alignment - 1);
 
     // Allocate result
@@ -5695,7 +5958,7 @@ fn allocStackMemory(self: *Self, size: u32, alignment: u32) Allocator.Error!u32 
     if (!self.uses_stack_memory) {
         self.uses_stack_memory = true;
         // Reserve local 0 for frame pointer (or next available local)
-        self.fp_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        self.fp_local = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory;
     }
     // Align up
     const aligned_offset = (self.stack_frame_size + alignment - 1) & ~(alignment - 1);
@@ -5938,7 +6201,7 @@ fn compileProcBodies(self: *Self, proc_specs: []const LirProcSpec) Allocator.Err
 fn appendNamedHelpers(allocator: Allocator, entities: []const BodyArtifact.Entity, roots: *std.ArrayList(u64)) Allocator.Error!void {
     for (entities) |entity| switch (entity) {
         .rc_helper, .rc_helper_table => |cache_key| try roots.append(allocator, cache_key),
-        .reserved_rc_helper, .static_str, .static_data, .message, .pic_base => {},
+        .reserved_rc_helper, .static_str, .static_data, .message, .pic_base, .fragment => {},
     };
 }
 
@@ -6027,7 +6290,7 @@ fn generateBody(self: *const Self, unit: BodyUnit, worker: tasks.Worker) Allocat
             break :local local;
         },
     };
-    return BodyArtifact.Artifact.capture(worker.allocator, body_worker.pending_bodies.getPtr(local).?, &recorder);
+    return BodyArtifact.Artifact.capture(worker.allocator, body_worker.pending_bodies.getPtr(local).?, body_worker.fragments.items, &recorder);
 }
 
 const LaneStorageKey = struct {
@@ -6061,6 +6324,7 @@ fn bodyWorker(self: *const Self, allocator: Allocator, recorder: *BodyArtifact.R
     var worker = Self.init(allocator, self.store, self.layout_store, self.cpu_level);
     worker.frozen = self;
     worker.recorder = recorder;
+    worker.limits = self.limits;
     worker.external_calls = self.external_calls;
     worker.boxy_runtime_symbols = self.boxy_runtime_symbols;
     worker.runtime_symbol_targets = self.runtime_symbol_targets;
@@ -6101,8 +6365,19 @@ fn commitBody(self: *Self, local: LocalFunctionIndex, artifact: *const BodyArtif
     self.assertOwner();
     const resolved = try self.allocator.alloc(CodeBuilder.Resolved, artifact.entities.len);
     defer self.allocator.free(resolved);
-    for (artifact.entities, resolved) |entity, *out| out.* = try self.materializeEntity(entity);
-    var body = try artifact.body.resolveDeferred(self.allocator, resolved);
+    for (artifact.entities, resolved) |entity, *out| out.* = try self.materializeEntity(entity, local);
+    try self.placeCommittedBody(local, &artifact.body, resolved);
+    for (artifact.fragments, 0..) |*fragment, index| {
+        // The body that outlined the fragment named it (`fragmentFuncIdx`).
+        const func_idx = for (artifact.entities, resolved) |entity, entry| {
+            if (entity == .fragment and entity.fragment == index) break entry.value;
+        } else wasmInvariantFmt("WASM/codegen invariant violated: fragment {d} of local function {d} is not an entity of its body", .{ index, local.raw() });
+        try self.placeCommittedBody(self.localFunctionIndexFromGlobal(func_idx), fragment, resolved);
+    }
+}
+
+fn placeCommittedBody(self: *Self, local: LocalFunctionIndex, artifact_body: *const CodeBuilder, resolved: []const CodeBuilder.Resolved) Allocator.Error!void {
+    var body = try artifact_body.resolveDeferred(self.allocator, resolved);
     errdefer body.deinit(self.allocator);
     const gop = try self.pending_bodies.getOrPut(local);
     if (gop.found_existing) {
@@ -6111,9 +6386,29 @@ fn commitBody(self: *Self, local: LocalFunctionIndex, artifact: *const BodyArtif
     gop.value_ptr.* = body;
 }
 
+/// Create the function of fragment `index` of the procedure at `local`:
+/// `(param i32) (result i32)`, named after the procedure.
+fn createFragmentFunction(self: *Self, local: LocalFunctionIndex, index: u32) Allocator.Error!u32 {
+    self.assertOwner();
+    const proc_func_idx = index_types.localToFunction(local, self.module.importCount()).raw();
+    const proc_symbol = self.function_symbols_by_index.get(proc_func_idx) orelse wasmInvariantFmt(
+        "WASM/codegen invariant violated: split procedure at function {d} has no symbol",
+        .{proc_func_idx},
+    );
+    const proc_name = self.module.linking.symbol_table.items[proc_symbol.raw()].name orelse wasmInvariantFmt(
+        "WASM/codegen invariant violated: split procedure at function {d} has an unnamed symbol",
+        .{proc_func_idx},
+    );
+    const type_idx = try self.internFuncType(&.{.i32}, &.{.i32});
+    const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
+    _ = try self.addOwnedLocalFunctionSymbol(defined, proc_name, index + 1);
+    return defined.function.raw();
+}
+
 /// The entity, created now if this is the first commit that names it, through
 /// the same path a body emitted against the module would have created it.
-fn materializeEntity(self: *Self, entity: BodyArtifact.Entity) Allocator.Error!CodeBuilder.Resolved {
+/// `local` is the function whose body names it.
+fn materializeEntity(self: *Self, entity: BodyArtifact.Entity, local: LocalFunctionIndex) Allocator.Error!CodeBuilder.Resolved {
     return switch (entity) {
         .rc_helper => |cache_key| blk: {
             const helper = decodeRcHelperCacheKey(cache_key);
@@ -6128,6 +6423,7 @@ fn materializeEntity(self: *Self, entity: BodyArtifact.Entity) Allocator.Error!C
         .static_data => |id| .{ .value = 0, .symbol = try self.staticDataSymbol(@fromBackingInt(id)) },
         .message => |bytes| resolvedData(try self.messageDataAddress(bytes)),
         .pic_base => |which| .{ .value = 0, .symbol = try self.picBaseSymbol(which) },
+        .fragment => |index| self.resolvedFunction(try self.createFragmentFunction(local, index)),
     };
 }
 
@@ -6413,7 +6709,7 @@ fn generateFrameReplacingCall(self: *Self, proc_id: LIR.LirProcSpecId, call_args
         // for this procedure's.
         const own_result = self.currentDynResult() orelse wasmInvariantFmt("WASM/codegen invariant violated: frame-replacing call with a dynamic result from a procedure without one", .{});
         try self.emitDataAddressConst(area, @intCast(tail_area_args_offset + offsets[hidden_index]));
-        try self.emitLocalGet((try self.procLocalBinding(own_result)).idx);
+        try self.emitBindingGet(try self.procLocalBinding(own_result));
         try self.emitStoreOp(.i32, 0);
         hidden_index += 1;
     }
@@ -6427,9 +6723,8 @@ fn generateFrameReplacingCall(self: *Self, proc_id: LIR.LirProcSpecId, call_args
     try self.emitStoreOp(.i32, 0);
 
     try self.emitZeroValue(driver.result);
-    try self.emitLocalSet(self.proc_return_local);
-    self.currentCode().append(self.allocator, Op.br) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), self.cf_depth - 1) catch return error.OutOfMemory;
+    try self.emitProcReturnSet();
+    try self.emitExitToDepth(ret_block_depth);
 }
 
 /// Emit the zero value of a wasm value type.
@@ -6527,6 +6822,10 @@ fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) 
 }
 
 /// Compile a proc body. The proc must already be registered via registerProcSpec.
+/// Emit a procedure's body, directly first: a body within the function
+/// limits is kept, and one past them is discarded and emitted again split
+/// (see design.md, "Wasm Function Limits"). The direct emission stops at the
+/// first statement past a limit, and everything it created is undone.
 fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
     const ice = base.ice_context.enter(.{ .phase = .codegen, .stage = "wasm backend", .proc = self.store.iceContextProc(proc_id) });
     defer ice.leave();
@@ -6535,13 +6834,73 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     // Get the pre-registered func_idx (must exist—registerProcSpec runs in pass 1)
     const func_idx = self.tables().registered_procs.get(key) orelse unreachable; // pass 1 of compileAllProcSpecs registered every proc that pass 2 compiles
 
-    const args = self.store.getLocalSpan(proc.args);
     const ret_vt = try self.resolveValType(proc.ret_layout);
+    const entities_mark: u32 = if (self.recorder) |recorder| recorder.mark() else 0;
+    self.local_slots.clearRetainingCapacity();
+    self.slot_bindings.clearRetainingCapacity();
+    defer self.local_slots.clearRetainingCapacity();
+    if (proc.body) |body| {
+        try self.local_writes.collect(self.store, body);
+        try self.planProcLocals(proc.frame_locals, body);
+    }
 
-    // Save current codegen state
-    const saved = self.saveState() catch return error.OutOfMemory;
+    var saved = self.saveState() catch return error.OutOfMemory;
     errdefer self.abandonState(saved);
+    self.split_mode = false;
+    self.body_over_budget = false;
+    try self.emitProcSpecBody(proc_id, proc, func_idx, ret_vt, saved.storage_scope);
+    if (self.body_over_budget or !self.rootBodyWithinLimits(func_idx)) {
+        self.discardProcBody(func_idx, entities_mark);
+        self.abandonState(saved);
+        saved = self.saveState() catch return error.OutOfMemory;
+        @memset(self.slot_bindings.items, null);
+        self.split_mode = true;
+        self.body_over_budget = false;
+        try self.emitProcSpecBody(proc_id, proc, func_idx, ret_vt, saved.storage_scope);
+        self.split_mode = false;
+    }
+    self.restoreState(saved);
+}
 
+/// Whether the direct emission of the proc at `func_idx` fits one function
+/// with the stack-bound check `flushPendingBodies` may still put before it.
+fn rootBodyWithinLimits(self: *Self, func_idx: u32) bool {
+    const body = self.pending_bodies.getPtr(self.localFunctionIndexFromGlobal(func_idx)).?;
+    const bytes = body.preamble.items.len + body.code.items.len + max_stack_check_prefix_bytes;
+    return bytes <= max_function_body_bytes and body.local_count <= max_function_locals;
+}
+
+/// Undo everything the direct emission of the proc at `func_idx` created:
+/// its body, the entities it recorded, and the per-procedure bookkeeping a
+/// stopped emission leaves behind.
+fn discardProcBody(self: *Self, func_idx: u32, entities_mark: u32) void {
+    const local = self.localFunctionIndexFromGlobal(func_idx);
+    if (self.pending_bodies.getPtr(local)) |body| body.deinit(self.allocator);
+    _ = self.pending_bodies.remove(local);
+    for (self.fragments.items) |*fragment| fragment.deinit(self.allocator);
+    self.fragments.clearRetainingCapacity();
+    if (self.recorder) |recorder| recorder.rewind(entities_mark);
+    self.join_point_depths.clearRetainingCapacity();
+    self.join_point_state_locals.clearRetainingCapacity();
+    self.precomputed_overflow_results.clearRetainingCapacity();
+    self.pending_overflow_result_target = null;
+    self.struct_field_values.clearRetainingCapacity();
+    if (builtin.mode == .debug) {
+        self.active_stmt_generations.clearRetainingCapacity();
+        self.stmt_generation_counts.clearRetainingCapacity();
+    }
+}
+
+fn emitProcSpecBody(
+    self: *Self,
+    proc_id: LIR.LirProcSpecId,
+    proc: LirProcSpec,
+    func_idx: u32,
+    ret_vt: ValType,
+    scope: Storage.Scope,
+) Allocator.Error!void {
+    const key: u32 = @backingInt(proc_id);
+    const args = self.store.getLocalSpan(proc.args);
     // Initialize fresh state with ALL registered proc_specs (for mutual recursion)
     try self.beginFunction(self.localFunctionIndexFromGlobal(func_idx));
     self.current_proc_id = proc_id;
@@ -6551,13 +6910,15 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     self.stack_frame_size = 0;
     self.uses_stack_memory = false;
     self.fp_local = 0;
-    self.proc_return_local = 0;
-    self.caller_drives_local = null;
+    self.proc_return = .{ .idx = 0, .val_type = .i32 };
+    self.caller_drives = null;
     self.cf_depth = 0;
+    self.active_fragment = null;
+    self.fragment_base_depth = 0;
     self.in_proc = true;
-    const saved_carry_local = self.carry_local;
-    defer self.carry_local = saved_carry_local;
-    self.carry_local = null;
+    const saved_carry = self.carry;
+    defer self.carry = saved_carry;
+    self.carry = null;
 
     const erased_abi = proc.abi == .erased_callable or proc.abi == .erased_record;
     if (erased_abi) {
@@ -6593,7 +6954,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         const stored_args: ?u32 = if (direct_count < args.len) self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory else null;
         const hidden = self.hiddenParams(proc);
         if (hidden.result) _ = try self.bindProcParamLocal(proc.dyn_result.?);
-        if (hidden.carry) self.carry_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        if (hidden.carry) self.carry = .{ .idx = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory, .val_type = .i32 };
         if (stored_args) |base_local| {
             for (direct_count..args.len) |i| {
                 const binding = try self.bindProcParamLocal(GuardedList.at(args, i));
@@ -6608,7 +6969,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     if (proc.reads_caller_drives) {
         // Read before anything else can make an erased call: the runtime's
         // answer describes only this invocation.
-        const flag = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        const flag = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory;
         // The runtime names the callable it invokes by the function pointer
         // callable values hold, which is this procedure's table index. A
         // procedure without one is never the callee of an erased call.
@@ -6618,16 +6979,16 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
             try self.emitNullPtr();
         try self.emitBuiltinCall(.native_callable_caller_drives);
         try self.emitLocalSet(flag);
-        self.caller_drives_local = flag;
+        self.caller_drives = .{ .idx = flag, .val_type = .i32 };
     }
 
     // Pre-allocate frame pointer local (after params, so it doesn't conflict).
     // Erased-callable adapter parameter unpacking may already have allocated stack
     // memory for composite arguments, which creates the frame-pointer local there.
     if (!self.uses_stack_memory) {
-        self.fp_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        self.fp_local = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory;
     }
-    self.proc_return_local = self.storage.allocAnonymousLocal(ret_vt) catch return error.OutOfMemory;
+    self.proc_return = .{ .idx = self.storage.allocPersistentLocal(ret_vt) catch return error.OutOfMemory, .val_type = ret_vt };
 
     // A member's aggregate arguments may sit in the tail area, which the next
     // frame-replacing call anywhere overwrites, so it keeps its own copies.
@@ -6646,6 +7007,10 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         }
     }
 
+    // Everything the body reads across statements moves into the frame, which
+    // every function of a split procedure's family shares.
+    if (self.split_mode) try self.spillProcStateToFrame(scope);
+
     if (proc.hosted) |hosted| {
         if (builtin.mode == .debug and proc.body != null) {
             base.invariant(
@@ -6654,14 +7019,6 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
             );
         }
         try self.generateCAbiProcWrapper(self.hostedSymbolTarget(hosted), args, proc.ret_layout);
-    } else if (proc.c_abi_entry) {
-        // The procedure's code is a linked object-cache entry; this body
-        // forwards to its C-ABI entry.
-        const target = self.tables().linked_entry_targets.get(@backingInt(proc_id)) orelse wasmInvariantFmt(
-            "WASM/codegen invariant violated: linked proc {d} has no registered C-ABI entry",
-            .{@backingInt(proc_id)},
-        );
-        try self.generateCAbiProcWrapper(target, args, proc.ret_layout);
     } else {
         // Emit proc body block (ret branches to this block after storing the return local)
         try self.emitVoidBlock();
@@ -6678,8 +7035,8 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         }
         // This procedure owns its tail carry, which its dynamic parameters
         // point into, and releases it when it returns or replaces its frame.
-        if (self.carry_local) |carry| {
-            try self.emitLocalGet(carry);
+        if (self.carry) |carry| {
+            try self.emitBindingGet(carry);
             try self.emitBoxyRuntimeCall(.carry_free);
         }
     }
@@ -6729,14 +7086,32 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
 
     if (!erased_abi) {
         // Push the stored proc return value as the function result.
-        try self.emitLocalGet(self.proc_return_local);
+        try self.emitProcReturnGet();
     }
 
     // End opcode
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
     self.endFunction();
+    if (self.active_fragment != null) wasmInvariantFmt("WASM/codegen invariant violated: proc {d} ended inside a fragment", .{key});
+}
 
-    self.restoreState(saved);
+/// Move the state a split procedure's body reads across statements out of
+/// the root function's wasm locals into frame slots: every LIR local the
+/// prologue bound, the return value, the tail carry, and the caller-drives
+/// flag. Later bindings are made as frame slots directly (`procLocalBinding`).
+fn spillProcStateToFrame(self: *Self, scope: Storage.Scope) Allocator.Error!void {
+    var bound = self.storage.boundSince(scope);
+    while (bound.nextBinding()) |binding| {
+        if (binding.info.home != .wasm_local) continue;
+        const slot = try self.spillBindingToFrame(binding.info);
+        self.storage.rebindLocalToSlot(binding.local_id, slot.idx);
+        if (self.local_slots.get(binding.local_id)) |planned| self.slot_bindings.items[planned] = slot;
+    }
+    // Nothing has written the return value yet, so its slot needs no store.
+    const ret_size = valTypeByteSize(self.proc_return.val_type);
+    self.proc_return = .{ .idx = try self.allocStackMemory(ret_size, ret_size), .val_type = self.proc_return.val_type, .home = .frame_slot };
+    if (self.carry) |carry| self.carry = try self.spillBindingToFrame(carry);
+    if (self.caller_drives) |flag| self.caller_drives = try self.spillBindingToFrame(flag);
 }
 
 fn requireProcBody(proc_id: LIR.LirProcSpecId, proc: LirProcSpec) LIR.CFStmtId {
@@ -6962,34 +7337,6 @@ fn cAbiSignature(self: *Self, spec: LirProcSpec, params: *std.ArrayList(ValType)
     }
 }
 
-/// Bind every procedure a linked object-cache object provides
-/// (`LIR.LirProcSpec.c_abi_entry`) to the C-ABI entry that object defines.
-/// The objects must already be merged into the module
-/// (`WasmModule.mergeLinkedObject`).
-pub fn registerLinkedEntryTargets(self: *Self, proc_specs: []const LIR.LirProcSpec) Allocator.Error!void {
-    for (proc_specs, 0..) |spec, index| {
-        if (!spec.c_abi_entry) continue;
-        var name_buffer: [LIR.ProcIdentity.symbol_name_len]u8 = undefined;
-        const name = spec.identity.writeCAbiEntryName(&name_buffer);
-        const symbol = self.module.findDefinedFunctionSymbolExact(name) catch |err| wasmInvariantFmt(
-            "WASM/codegen invariant violated: linked proc {d} has no single C-ABI entry {s} in the merged objects: {}",
-            .{ index, name, err },
-        );
-        const func_idx = self.module.linking.symbol_table.items[symbol.raw()].index;
-        if (builtin.mode == .debug) {
-            var params = std.ArrayList(ValType).empty;
-            defer params.deinit(self.allocator);
-            var results = std.ArrayList(ValType).empty;
-            defer results.deinit(self.allocator);
-            try self.cAbiSignature(spec, &params, &results);
-            if (!self.module.funcTypeMatches(self.module.functionType(FunctionIndex.fromRaw(func_idx)), params.items, results.items)) {
-                wasmInvariantFmt("WASM/codegen invariant violated: C-ABI entry {s} does not have its procedure's C-ABI type", .{name});
-            }
-        }
-        try self.linked_entry_targets.put(@intCast(index), .{ .func_idx = func_idx, .symbol = symbol });
-    }
-}
-
 /// The linker symbol a hosted procedure's calls go to, registered before
 /// proc compilation by registerHostedSymbolTargets.
 fn hostedSymbolTarget(self: *const Self, hosted: LIR.HostedProc) HostedSymbolTarget {
@@ -7100,7 +7447,7 @@ fn generateCAbiProcWrapper(
     }
 
     try self.emitCAbiCall(arena, target, params, arg_layouts, ret_layout);
-    try self.emitLocalSet(self.proc_return_local);
+    try self.emitProcReturnSet();
 }
 
 fn bindErasedCallableAdapterParams(
@@ -7186,9 +7533,9 @@ fn emitErasedCallableAdapterReturnStore(
     if (ret_size == 0) return;
 
     if (try self.isCompositeLayout(ret_layout)) {
-        try self.emitMemCopy(ret_ptr_local, 0, self.proc_return_local, ret_size);
+        try self.emitMemCopy(ret_ptr_local, 0, try self.bindingWasmLocal(self.proc_return), ret_size);
     } else {
-        try self.emitLocalGet(self.proc_return_local);
+        try self.emitProcReturnGet();
         try self.emitStoreToMemSized(ret_ptr_local, 0, try self.resolveValType(ret_layout), ret_size);
     }
 }
@@ -7203,11 +7550,14 @@ const SavedState = struct {
     stack_frame_size: u32,
     uses_stack_memory: bool,
     fp_local: u32,
-    proc_return_local: u32,
-    caller_drives_local: ?u32,
+    proc_return: Storage.LocalInfo,
+    caller_drives: ?Storage.LocalInfo,
     cf_depth: u32,
     in_proc: bool,
     current_proc_id: ?LIR.LirProcSpecId,
+    split_mode: bool,
+    active_fragment: ?u32,
+    fragment_base_depth: u32,
 };
 
 /// Capture current codegen state and enter a fresh wasm-local binding scope.
@@ -7222,11 +7572,14 @@ fn saveState(self: *Self) Allocator.Error!SavedState {
         .stack_frame_size = self.stack_frame_size,
         .uses_stack_memory = self.uses_stack_memory,
         .fp_local = self.fp_local,
-        .proc_return_local = self.proc_return_local,
-        .caller_drives_local = self.caller_drives_local,
+        .proc_return = self.proc_return,
+        .caller_drives = self.caller_drives,
         .cf_depth = self.cf_depth,
         .in_proc = self.in_proc,
         .current_proc_id = self.current_proc_id,
+        .split_mode = self.split_mode,
+        .active_fragment = self.active_fragment,
+        .fragment_base_depth = self.fragment_base_depth,
     };
 }
 
@@ -7265,11 +7618,14 @@ fn restoreSavedFields(self: *Self, saved: SavedState) void {
     self.stack_frame_size = saved.stack_frame_size;
     self.uses_stack_memory = saved.uses_stack_memory;
     self.fp_local = saved.fp_local;
-    self.proc_return_local = saved.proc_return_local;
-    self.caller_drives_local = saved.caller_drives_local;
+    self.proc_return = saved.proc_return;
+    self.caller_drives = saved.caller_drives;
     self.cf_depth = saved.cf_depth;
     self.in_proc = saved.in_proc;
     self.current_proc_id = saved.current_proc_id;
+    self.split_mode = saved.split_mode;
+    self.active_fragment = saved.active_fragment;
+    self.fragment_base_depth = saved.fragment_base_depth;
 }
 
 /// Work item for the explicit (non-recursive) CFStmt walker.
@@ -7281,8 +7637,12 @@ fn restoreSavedFields(self: *Self, saved: SavedState) void {
 /// of the original recursive walker. `.deactivate` mirrors the Debug re-entry guard:
 /// a statement stays "active" until its whole subtree has been emitted.
 const StmtWork = union(enum) {
-    /// Process one statement, with the active `stop` boundary.
-    node: struct { stmt_id: CFStmtId, stop: ?CFStmtId },
+    /// Process one statement, with the active `stop` boundary. An `outlined`
+    /// node is the first of its fragment, which has room for it by construction.
+    node: struct { stmt_id: CFStmtId, stop: ?CFStmtId, outlined: bool = false },
+    /// Split-procedure glue: finish the active fragment and, back in the
+    /// function that outlined it, call it and dispatch on its exit code.
+    fragment_end: FragmentFrame,
     /// Debug-only: remove a statement key from the active set once its subtree is done.
     deactivate: u32,
     /// Switch glue: emit the per-branch `if`/cond test before that branch's body.
@@ -7309,6 +7669,15 @@ const SwitchEqState = struct {
     branch_count: usize,
 };
 
+/// What the function that outlined a fragment resumes with once the
+/// fragment's statement chain is emitted.
+const FragmentFrame = struct {
+    outer_scope: Storage.FragmentScope,
+    outer_fragment: ?u32,
+    outer_base_depth: u32,
+    outer_fp_local: u32,
+};
+
 /// Generate code for a control flow statement (used in LirProcSpec bodies).
 fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
     return self.generateCFStmtUntil(stmt_id, null);
@@ -7325,6 +7694,7 @@ fn generateCFStmtUntil(self: *Self, stmt_id: CFStmtId, stop: ?CFStmtId) Allocato
 
     while (work.pop()) |item| {
         switch (item) {
+            .fragment_end => |frame| try self.endFragment(frame),
             .deactivate => |key| {
                 if (builtin.mode == .debug) {
                     _ = self.active_stmt_generations.remove(key);
@@ -7352,6 +7722,7 @@ fn generateCFStmtUntil(self: *Self, stmt_id: CFStmtId, stop: ?CFStmtId) Allocato
                     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
                     self.cf_depth -= 1;
                 }
+                try self.storage.releaseScratchLocal(.{ .idx = state.cond_local, .val_type = state.cond_vt });
                 self.allocator.destroy(state);
             },
             .str_match_close => {
@@ -7372,11 +7743,136 @@ fn generateCFStmtUntil(self: *Self, stmt_id: CFStmtId, stop: ?CFStmtId) Allocato
                 // and so the locals/depths (which index only this proc) cannot be
                 // read by an unrelated proc.
                 _ = self.join_point_depths.remove(jp_key);
+                const state = self.join_point_state_locals.get(jp_key) orelse wasmInvariantFmt(
+                    "WASM/codegen invariant violated: join {d} closed without an active state",
+                    .{jp_key},
+                );
                 _ = self.join_point_state_locals.remove(jp_key);
+                if (state.home == .wasm_local) try self.storage.releaseScratchLocal(state);
             },
-            .node => |n| try self.generateCFStmtNode(&work, wa, n.stmt_id, n.stop),
+            .node => |n| {
+                if (self.split_mode and !n.outlined and self.fragmentBudgetReached()) {
+                    try self.beginFragment(&work, wa, n.stmt_id, n.stop);
+                    continue;
+                }
+                // Every anonymous local the statement allocates is finished with
+                // once its code is emitted; the glue a statement leaves for later
+                // keeps what it still reads in scratch locals it releases itself.
+                const temps = self.storage.tempMark();
+                try self.generateCFStmtNode(&work, wa, n.stmt_id, n.stop);
+                try self.storage.releaseTempsSince(temps);
+                if (!self.split_mode and self.directEmissionPassedLimit()) {
+                    // The body is discarded, so the rest of it is not emitted.
+                    self.body_over_budget = true;
+                    for (work.items) |pending| switch (pending) {
+                        .switch_close => |state| self.allocator.destroy(state),
+                        .node, .deactivate, .switch_test, .switch_else, .str_match_else, .str_match_close, .join_else, .join_close, .fragment_end => {},
+                    };
+                    return;
+                }
+            },
         }
     }
+}
+
+/// Whether the function being emitted has reached the budget at which the
+/// rest of a statement chain moves to a fragment.
+fn fragmentBudgetReached(self: *Self) bool {
+    return self.currentCode().items.len >= self.limits.fragment_bytes or
+        self.storage.nextLocalIdx() >= self.limits.fragment_locals;
+}
+
+/// Whether the direct emission of the proc being compiled can no longer fit
+/// one function. The locals limit counts parameters, which are the first
+/// locals of the scope.
+fn directEmissionPassedLimit(self: *Self) bool {
+    return self.currentCode().items.len > self.limits.split_bytes or
+        self.storage.nextLocalIdx() > max_function_locals;
+}
+
+/// Start a fragment function that emits the chain from `stmt_id` to `stop`:
+/// `(param fp i32) (result i32)`, whose result is the exit code
+/// `emitExitToDepth` returns, zero when the chain falls through. The
+/// enclosing function resumes at the `fragment_end` item pushed under the
+/// chain's first node.
+fn beginFragment(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator, stmt_id: CFStmtId, stop: ?CFStmtId) Allocator.Error!void {
+    const index: u32 = @intCast(self.fragments.items.len);
+    try self.fragments.append(self.allocator, CodeBuilder.init());
+    try work.append(wa, .{ .fragment_end = .{
+        .outer_scope = self.storage.beginFragment(),
+        .outer_fragment = self.active_fragment,
+        .outer_base_depth = self.fragment_base_depth,
+        .outer_fp_local = self.fp_local,
+    } });
+    try work.append(wa, .{ .node = .{ .stmt_id = stmt_id, .stop = stop, .outlined = true } });
+    self.active_fragment = index;
+    self.fragment_base_depth = self.cf_depth;
+    // The frame pointer is the fragment's one parameter.
+    self.fp_local = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory;
+}
+
+/// Finish the active fragment and emit its call in the function that
+/// outlined it.
+fn endFragment(self: *Self, frame: FragmentFrame) Allocator.Error!void {
+    const index = self.active_fragment orelse wasmInvariantFmt("WASM/codegen invariant violated: fragment end without an active fragment", .{});
+    if (self.cf_depth != self.fragment_base_depth) wasmInvariantFmt(
+        "WASM/codegen invariant violated: fragment {d} ended at control-flow depth {d}, began at {d}",
+        .{ index, self.cf_depth, self.fragment_base_depth },
+    );
+    // The chain fell through.
+    try self.emitI32Const(0);
+    try self.emitOps(.{Op.end});
+    try self.encodeLocalsDecl(&self.currentBody().preamble, 1);
+    self.storage.endFragment(frame.outer_scope);
+    self.active_fragment = frame.outer_fragment;
+    self.fragment_base_depth = frame.outer_base_depth;
+    self.fp_local = frame.outer_fp_local;
+    try self.emitFragmentCall(index);
+}
+
+/// Call fragment `index` with the frame pointer and act on its exit code: zero
+/// falls through, a depth within this function branches to that label, and a
+/// depth outside it is this fragment's own exit code.
+fn emitFragmentCall(self: *Self, index: u32) Allocator.Error!void {
+    try self.emitLocalGet(self.fp_local);
+    try self.emitCall(try self.fragmentFuncIdx(index));
+    const code = self.storage.allocScratchLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(code);
+    const depth = self.cf_depth;
+    const base_depth = self.fragment_base_depth;
+    // In the root function (base 0) every code is a label of its own:
+    //   block $fall; local.get code; br_table [0 → $fall, d → label d]; end
+    // A fragment also propagates the codes of labels outside it:
+    //   block $done; block $prop; block $fall
+    //     local.get code; br_table [0 → $fall, 1..base → $prop, d → label d]
+    //   end $fall; br $done; end $prop; local.get code; return; end $done
+    const propagates = base_depth > 0;
+    const wrappers: u32 = if (propagates) 3 else 1;
+    for (0..wrappers) |_| try self.emitVoidBlock();
+    try self.emitLocalGet(code);
+    try self.emitOps(.{Op.br_table});
+    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), depth + 1) catch return error.OutOfMemory;
+    for (0..depth + 1) |exit| {
+        const target: u32 = if (exit == 0) 0 else if (exit <= base_depth) 1 else @as(u32, @intCast(depth - exit)) + wrappers;
+        WasmModule.leb128WriteU32(self.allocator, self.currentCode(), target) catch return error.OutOfMemory;
+    }
+    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+    try self.emitOps(.{Op.end});
+    if (propagates) {
+        try self.emitBr(1);
+        try self.emitOps(.{Op.end});
+        try self.emitLocalGet(code);
+        try self.emitOps(.{ Op.@"return", Op.end });
+    }
+    try self.storage.releaseScratchLocal(.{ .idx = code, .val_type = .i32 });
+}
+
+/// The function index operand of a call to fragment `index` of the proc being
+/// compiled: a deferred entity of the body being recorded, created when the
+/// body is committed.
+fn fragmentFuncIdx(self: *Self, index: u32) Allocator.Error!u32 {
+    const recorder = self.recorder orelse wasmInvariantFmt("WASM/codegen invariant violated: fragment {d} emitted outside a recorded body", .{index});
+    return recorder.placeholder(.{ .fragment = index });
 }
 
 /// Process a single CFStmt node: emit its own code and push successor/glue work.
@@ -7418,8 +7914,15 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try work.append(wa, .{ .node = .{ .stmt_id = dyn_stmt.next, .stop = stop } });
         },
         .assign_ref => |assign| {
-            try self.generateRefOp(assign.op, self.procLocalLayoutIdx(assign.target));
-            try self.bindAssignedLocal(assign.target);
+            if (assign.op.kind == .local and try self.refLocalAliasesSource(assign.target, assign.op.source)) {
+                // The target names the source's bytes: a pointer copy, not a
+                // copy of the aggregate.
+                try self.emitProcLocal(assign.op.source);
+                try self.emitBindingSet(try self.procLocalBinding(assign.target));
+            } else {
+                try self.generateRefOp(assign.op, self.procLocalLayoutIdx(assign.target));
+                try self.bindAssignedLocal(assign.target);
+            }
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
         .assign_literal => |assign| {
@@ -7590,13 +8093,13 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 try self.generateDynResultReturn(result, r.value);
             } else {
                 try self.emitProcLocal(r.value);
-                try self.emitLocalSet(self.proc_return_local);
+                try self.emitProcReturnSet();
             }
-            try self.emitBr(self.cf_depth - 1);
+            try self.emitExitToDepth(ret_block_depth);
         },
         .switch_stmt => |sw| {
             const cond_vt = try self.procLocalValType(sw.cond);
-            const cond_local = self.storage.allocAnonymousLocal(cond_vt) catch return error.OutOfMemory;
+            const cond_local = self.storage.allocScratchLocal(cond_vt) catch return error.OutOfMemory;
             try self.emitProcLocal(sw.cond);
             try self.emitLocalSet(cond_local);
             if (cond_vt == .i32) {
@@ -7638,7 +8141,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         },
         .switch_initialized_payload => |sw| {
             const cond_vt = try self.procLocalValType(sw.cond);
-            const cond_local = self.storage.allocAnonymousLocal(cond_vt) catch return error.OutOfMemory;
+            const cond_local = self.storage.allocScratchLocal(cond_vt) catch return error.OutOfMemory;
             try self.emitProcLocal(sw.cond);
             switch (cond_vt) {
                 .i64 => {
@@ -7702,10 +8205,16 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             for (0..jp_params.len) |i| {
                 _ = try self.procLocalBinding(GuardedList.at(jp_params, i));
             }
-            const state_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            self.join_point_state_locals.put(jp_key, state_local) catch return error.OutOfMemory;
+            // A jump from a fragment of a split procedure sets the state from
+            // another function, so there it is a frame slot.
+            const state: Storage.LocalInfo = if (self.split_mode)
+                .{ .idx = try self.allocStackMemory(wasm_word_size, wasm_word_size), .val_type = .i32, .home = .frame_slot }
+            else
+                .{ .idx = self.storage.allocScratchLocal(.i32) catch return error.OutOfMemory, .val_type = .i32 };
+            self.join_point_state_locals.put(jp_key, state) catch return error.OutOfMemory;
 
-            try self.emitSetI32Local(state_local, 0);
+            try self.emitI32Const(0);
+            try self.emitBindingSet(state);
 
             self.currentCode().append(self.allocator, Op.block) catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, 0x40) catch return error.OutOfMemory;
@@ -7717,7 +8226,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
 
             self.join_point_depths.put(jp_key, self.cf_depth) catch return error.OutOfMemory;
 
-            try self.emitLocalGet(state_local);
+            try self.emitBindingGet(state);
             self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, 0x40) catch return error.OutOfMemory;
             self.cf_depth += 1;
@@ -7732,18 +8241,18 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         .jump => |jmp| {
             const jp_key = @backingInt(jmp.target);
 
-            const state_local = self.join_point_state_locals.get(jp_key) orelse wasmInvariantFmt(
+            const state = self.join_point_state_locals.get(jp_key) orelse wasmInvariantFmt(
                 "WASM/codegen invariant violated: jump target {d} has no active join-point state",
                 .{jp_key},
             );
-            try self.emitSetI32Local(state_local, 1);
+            try self.emitI32Const(1);
+            try self.emitBindingSet(state);
 
             const loop_depth = self.join_point_depths.get(jp_key) orelse wasmInvariantFmt(
                 "WASM/codegen invariant violated: jump target {d} has no active join-point depth",
                 .{jp_key},
             );
-            const br_target = self.cf_depth - loop_depth;
-            try self.emitBr(br_target);
+            try self.emitExitToDepth(loop_depth);
         },
         .incref => |inc| {
             try self.generateRcStmt(inc.value, self.store.rcHelper(inc.rc), inc.atomicity, inc.count);
@@ -8012,8 +8521,22 @@ fn bindLocalFromWasmStack(self: *Self, target: ProcLocalId) Allocator.Error!void
         },
         .primitive => {},
     }
-    const local_idx = (try self.procLocalBinding(target)).idx;
-    try self.emitLocalSet(local_idx);
+    try self.emitBindingSet(try self.procLocalBinding(target));
+}
+
+/// Whether `target = ref.local source` of an aggregate may bind the target to
+/// the source's address instead of copying the aggregate into a frame slot of
+/// its own. Every aggregate local holds the address of bytes that stay put
+/// for the rest of the procedure (its own frame slot, or a parameter's
+/// caller-owned storage), so the alias is exact whenever nothing writes those
+/// bytes afterwards, which `LocalWrites` proves for the pair. Dynamic locals
+/// hold addresses the runtime writes through and never alias.
+fn refLocalAliasesSource(self: *Self, target: ProcLocalId, source: ProcLocalId) Allocator.Error!bool {
+    if (self.localDyn(target) != null or self.localDyn(source) != null) return false;
+    const target_layout = self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(target));
+    if (target_layout != self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(source))) return false;
+    if (!try self.isCompositeLayout(target_layout)) return false;
+    return self.local_writes.immutableAlias(target, source);
 }
 
 fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Error!void {
@@ -8332,7 +8855,7 @@ fn emitBoxyRuntimeCall(self: *Self, entry: BoxyRuntimeSignatures.Entry) Allocato
 /// Push the address of a local's bytes: a dynamic local's address, a
 /// composite's memory, or a frame slot a primitive's bytes are stored to.
 fn emitBytesAddress(self: *Self, local: ProcLocalId) Allocator.Error!void {
-    if (self.localDyn(local) != null) return self.emitLocalGet((try self.procLocalBinding(local)).idx);
+    if (self.localDyn(local) != null) return self.emitBindingGet(try self.procLocalBinding(local));
     const layout_idx = self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(local));
     const size = try self.layoutStorageByteSize(layout_idx);
     if (size == 0) return self.emitI32Const(0);
@@ -8393,7 +8916,7 @@ const DynTarget = union(enum) {
 fn dynTarget(self: *Self, dst: ProcLocalId) Allocator.Error!DynTarget {
     if (self.localDyn(dst)) |dyn| {
         if (dyn.storage == .view) wasmInvariantFmt("WASM/codegen invariant violated: a statement wrote the bytes of view local {d}", .{@backingInt(dst)});
-        return .{ .dynamic = (try self.procLocalBinding(dst)).idx };
+        return .{ .dynamic = try self.bindingWasmLocal(try self.procLocalBinding(dst)) };
     }
     const layout_idx = self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(dst));
     const size = try self.layoutStorageByteSize(layout_idx);
@@ -8417,11 +8940,11 @@ fn finishTarget(self: *Self, dst: ProcLocalId, t: DynTarget) Allocator.Error!voi
             const layout_idx = self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(dst));
             try self.emitLocalGet(address);
             if (!try self.isCompositeLayout(layout_idx)) try self.emitLoadOpForLayout(layout_idx, 0);
-            try self.emitLocalSet((try self.procLocalBinding(dst)).idx);
+            try self.emitBindingSet(try self.procLocalBinding(dst));
         },
         .zero_sized => {
             try self.emitZeroValue(try self.procLocalValType(dst));
-            try self.emitLocalSet((try self.procLocalBinding(dst)).idx);
+            try self.emitBindingSet(try self.procLocalBinding(dst));
         },
     }
 }
@@ -8444,7 +8967,7 @@ fn bindReturnedScalar(self: *Self, dst: ProcLocalId, vt: ValType) Allocator.Erro
             try self.emitLocalGet(address);
         },
     }
-    try self.emitLocalSet((try self.procLocalBinding(dst)).idx);
+    try self.emitBindingSet(try self.procLocalBinding(dst));
 }
 
 /// A component address on the operand stack: a `view` target takes it, a
@@ -8452,7 +8975,7 @@ fn bindReturnedScalar(self: *Self, dst: ProcLocalId, vt: ValType) Allocator.Erro
 fn bindComponentAddress(self: *Self, dst: ProcLocalId) Allocator.Error!void {
     if (self.localDyn(dst)) |dyn| {
         if (dyn.storage != .view) wasmInvariantFmt("WASM/codegen invariant violated: component address target {d} is not a view", .{@backingInt(dst)});
-        return self.emitLocalSet((try self.procLocalBinding(dst)).idx);
+        return self.emitBindingSet(try self.procLocalBinding(dst));
     }
     const layout_idx = self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(dst));
     const size = try self.layoutStorageByteSize(layout_idx);
@@ -8469,7 +8992,7 @@ fn bindComponentAddress(self: *Self, dst: ProcLocalId) Allocator.Error!void {
     } else {
         try self.emitLoadOpForLayout(layout_idx, 0);
     }
-    try self.emitLocalSet(binding.idx);
+    try self.emitBindingSet(binding);
 }
 
 /// Copy a value's bytes from `src` into `dst` through `desc`. Reference
@@ -8514,10 +9037,10 @@ fn generateDynRc(self: *Self, value: ProcLocalId, op: layout.RcOp, count: u32) A
 /// written to the caller's result storage, whose address a `.roc`
 /// procedure also returns.
 fn generateDynResultReturn(self: *Self, result: ProcLocalId, value: ProcLocalId) Allocator.Error!void {
-    const result_local = (try self.procLocalBinding(result)).idx;
+    const result_local = try self.bindingWasmLocal(try self.procLocalBinding(result));
     if (result != value) try self.emitDescCopy(self.localDyn(result).?.desc, .{ .dynamic = result_local }, value);
     try self.emitLocalGet(result_local);
-    try self.emitLocalSet(self.proc_return_local);
+    try self.emitProcReturnSet();
 }
 
 /// Bind the parameters of a procedure entered through the uniform
@@ -8527,7 +9050,7 @@ fn generateDynResultReturn(self: *Self, result: ProcLocalId, value: ProcLocalId)
 fn bindErasedRecordParams(self: *Self, proc: LirProcSpec, ret_ptr: u32, args_ptr: u32, capture_ptr: u32) Allocator.Error!void {
     if (proc.dyn_result) |result| {
         try self.emitLocalGet(ret_ptr);
-        try self.emitLocalSet((try self.procLocalBinding(result)).idx);
+        try self.emitBindingSet(try self.procLocalBinding(result));
     }
     const capture_param = proc.erased_capture_arg orelse wasmInvariantFmt("WASM/codegen invariant violated: erased_record proc has no capture parameter", .{});
     const params = self.store.getLocalSpan(proc.args);
@@ -8537,13 +9060,13 @@ fn bindErasedRecordParams(self: *Self, proc: LirProcSpec, ret_ptr: u32, args_ptr
         const binding = try self.procLocalBinding(param);
         if (param == capture_param) {
             try self.emitLocalGet(capture_ptr);
-            try self.emitLocalSet(binding.idx);
+            try self.emitBindingSet(binding);
             continue;
         }
         explicit_count += 1;
         if (self.localDyn(param) != null) {
             try self.emitLocalGet(args_ptr);
-            try self.emitLocalSet(binding.idx);
+            try self.emitBindingSet(binding);
             continue;
         }
         const layout_idx = self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(param));
@@ -8559,7 +9082,7 @@ fn bindErasedRecordParams(self: *Self, proc: LirProcSpec, ret_ptr: u32, args_ptr
             try self.emitLocalGet(args_ptr);
             try self.emitLoadOpForLayout(layout_idx, 0);
         }
-        try self.emitLocalSet(binding.idx);
+        try self.emitBindingSet(binding);
     }
     if (explicit_count > 1) wasmInvariantFmt("WASM/codegen invariant violated: erased_record proc has {d} explicit parameters", .{explicit_count});
 }
@@ -8582,7 +9105,7 @@ fn callIsDynamic(self: *const Self, proc_id: LIR.LirProcSpecId, target: ProcLoca
 /// callee leaves pending are run into the target's storage as `drive` says.
 fn generateDynCall(self: *Self, proc_id: LIR.LirProcSpecId, args: ProcLocalSpan, target: ProcLocalId, drive: LIR.PendingDrive) Allocator.Error!void {
     const callee = self.store.getProcSpec(proc_id);
-    if (callee.hosted != null or callee.c_abi_entry) wasmInvariantFmt("WASM/codegen invariant violated: a call with dynamic operands targets a C-ABI procedure", .{});
+    if (callee.hosted != null) wasmInvariantFmt("WASM/codegen invariant violated: a call with dynamic operands targets a C-ABI procedure", .{});
     const arg_refs = self.store.getLocalSpan(args);
     const param_refs = self.store.getLocalSpan(callee.args);
     if (arg_refs.len != param_refs.len) wasmInvariantFmt(
@@ -8634,7 +9157,7 @@ fn generateDynCall(self: *Self, proc_id: LIR.LirProcSpecId, args: ProcLocalSpan,
     // A closed result written to a dynamic target's storage.
     const ret_layout = self.runtimeRepresentationLayoutIdx(callee.ret_layout);
     const size = try self.layoutStorageByteSize(ret_layout);
-    const dst = (try self.procLocalBinding(target)).idx;
+    const dst = try self.bindingWasmLocal(try self.procLocalBinding(target));
     if (size == 0) {
         self.currentCode().append(self.allocator, Op.drop) catch return error.OutOfMemory;
     } else if (try self.isCompositeLayout(ret_layout)) {
@@ -8724,9 +9247,8 @@ fn generateDynFrameAlloc(self: *Self) Allocator.Error!void {
         try self.emitI32Const(0);
         try self.emitLocalGet(alignment);
         try self.emitOps(.{ Op.i32_sub, Op.i32_and });
-        self.currentCode().append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
-        WasmModule.leb128WriteU32(self.allocator, self.currentCode(), total) catch return error.OutOfMemory;
-        try self.emitLocalSet((try self.procLocalBinding(local)).idx);
+        try self.emitLocalTee(total);
+        try self.emitBindingSet(try self.procLocalBinding(local));
         try self.emitLocalGet(total);
         try self.emitLoadAt(desc, .i32, desc_size_offset);
         try self.emitOps(.{Op.i32_add});
@@ -8748,10 +9270,11 @@ fn generateDynFrameAlloc(self: *Self) Allocator.Error!void {
         const local = GuardedList.at(locals, i);
         const dyn = self.localDyn(local) orelse continue;
         if (dyn.storage != .frame) continue;
-        const binding = (try self.procLocalBinding(local)).idx;
-        try self.emitLocalGets(.{ binding, total });
+        const binding = try self.procLocalBinding(local);
+        try self.emitBindingGet(binding);
+        try self.emitLocalGet(total);
         try self.emitOps(.{Op.i32_add});
-        try self.emitLocalSet(binding);
+        try self.emitBindingSet(binding);
     }
 }
 
@@ -9229,7 +9752,7 @@ fn generateDynElemLowLevel(self: *Self, assign: anytype) Allocator.Error!void {
         .list_prefetch => {
             if (self.localDyn(dst) == null) {
                 try self.emitZeroValue(try self.procLocalValType(dst));
-                try self.emitLocalSet((try self.procLocalBinding(dst)).idx);
+                try self.emitBindingSet(try self.procLocalBinding(dst));
             }
             return;
         },
@@ -9353,7 +9876,7 @@ fn generateDynElemLowLevel(self: *Self, assign: anytype) Allocator.Error!void {
     if (!direct and dynamic_target) {
         // A list result of a dynamic target: move the list's words into its
         // storage.
-        try self.emitMemCopy((try self.procLocalBinding(dst)).idx, 0, t.closed, roc_list_size);
+        try self.emitMemCopy(try self.bindingWasmLocal(try self.procLocalBinding(dst)), 0, t.closed, roc_list_size);
         return;
     }
     try self.finishTarget(dst, t);
@@ -9558,9 +10081,9 @@ fn emitDrivePending(self: *Self, drive: LIR.PendingDrive, ret_layout: layout.Idx
 fn emitDriveInto(self: *Self, drive: LIR.PendingDrive, slot_local: ?u32) Allocator.Error!void {
     if (!drive.canDriveHere()) return;
     if (drive == .unless_caller_drives) {
-        const flag = self.caller_drives_local orelse
+        const flag = self.caller_drives orelse
             wasmInvariantFmt("WASM/codegen invariant violated: procedure reads a caller-drives flag it never recorded", .{});
-        try self.emitLocalGet(flag);
+        try self.emitBindingGet(flag);
         self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
         self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
         self.currentCode().append(self.allocator, @backingInt(BlockType.void)) catch return error.OutOfMemory;
@@ -10015,52 +10538,168 @@ fn emitStoreToMemSized(self: *Self, base_local: u32, field_offset: u32, vt: ValT
     try self.emitStoreOpSized(vt, byte_size, field_offset);
 }
 
-/// Copy `byte_count` bytes from src_local pointer to (dst_local + dst_offset).
-/// Uses i32.load/i32.store in chunks, with i32.load8_u/i32.store8 for remainder.
+/// Copies and zero fills of at most this many bytes are straight-line loads
+/// and stores. A wider one is a single bulk-memory instruction, or on
+/// WebAssembly 1.0 a counted loop over eight-byte words followed by a
+/// straight-line tail, so the code one copy emits is bounded whatever the
+/// aggregate's size (see design.md, "Wasm Function Limits").
+const straight_line_copy_bytes: u32 = 32;
+
+/// Copy `byte_count` bytes from the address in `src_local` to `dst_offset`
+/// past the address in `dst_local`. Both locals keep their values.
 fn emitMemCopy(self: *Self, dst_local: u32, dst_offset: u32, src_local: u32, byte_count: u32) Allocator.Error!void {
-    var offset: u32 = 0;
-
-    // Copy i32-sized chunks
-    while (offset + 4 <= byte_count) : (offset += 4) {
-        // dst_local
-        try self.emitLocalGet(dst_local);
-        // load from src
-        try self.emitLocalGet(src_local);
-        try self.emitMemOp(Op.i32_load, 0, offset);
-        // store to dst
-        try self.emitMemOp(Op.i32_store, 0, dst_offset + offset);
+    if (byte_count <= straight_line_copy_bytes) {
+        return self.emitStraightLineCopy(dst_local, dst_offset, src_local, 0, byte_count);
     }
+    switch (self.cpu_level) {
+        .default => {
+            try self.emitLocalGet(dst_local);
+            if (dst_offset > 0) {
+                try self.emitI32Const(@intCast(dst_offset));
+                try self.emitOps(.{Op.i32_add});
+            }
+            try self.emitLocalGet(src_local);
+            try self.emitI32Const(@intCast(byte_count));
+            try self.emitMemoryCopy();
+        },
+        .v1 => {
+            const loop_bytes = byte_count & ~@as(u32, 7);
+            const offset_local = self.storage.allocScratchLocal(.i32) catch return error.OutOfMemory;
+            try self.emitSetI32Local(offset_local, 0);
+            try self.emitVoidLoop();
+            try self.emitLocalGets(.{ dst_local, offset_local });
+            try self.emitOps(.{Op.i32_add});
+            try self.emitLocalGets(.{ src_local, offset_local });
+            try self.emitOps(.{Op.i32_add});
+            try self.emitMemOp(Op.i64_load, 0, 0);
+            try self.emitMemOp(Op.i64_store, 0, dst_offset);
+            try self.emitLocalGet(offset_local);
+            try self.emitI32Const(8);
+            try self.emitOps(.{Op.i32_add});
+            try self.emitLocalTee(offset_local);
+            try self.emitI32Const(@intCast(loop_bytes));
+            try self.emitOps(.{Op.i32_lt_u});
+            try self.emitBrIf(0);
+            try self.emitOps(.{Op.end});
+            try self.emitStraightLineCopy(dst_local, dst_offset, src_local, loop_bytes, byte_count);
+            try self.storage.releaseScratchLocal(.{ .idx = offset_local, .val_type = .i32 });
+        },
+    }
+}
 
-    // Copy i16 chunk
-    if (offset + 2 <= byte_count) {
+/// Copy the bytes at `start..end` past the address in `src_local` to the same
+/// range past `dst_offset` past the address in `dst_local`, as loads and
+/// stores of the widest words that fit.
+fn emitStraightLineCopy(self: *Self, dst_local: u32, dst_offset: u32, src_local: u32, start: u32, end: u32) Allocator.Error!void {
+    var offset = start;
+    while (offset + 8 <= end) : (offset += 8) {
+        try self.emitLocalGets(.{ dst_local, src_local });
+        try self.emitMemOp(Op.i64_load, 0, offset);
+        try self.emitMemOp(Op.i64_store, 0, dst_offset + offset);
+    }
+    if (offset + 4 <= end) {
+        try self.emitLocalGets(.{ dst_local, src_local });
+        try self.emitMemOp(Op.i32_load, 0, offset);
+        try self.emitMemOp(Op.i32_store, 0, dst_offset + offset);
+        offset += 4;
+    }
+    if (offset + 2 <= end) {
         try self.emitLocalGets(.{ dst_local, src_local });
         try self.emitMemOp(Op.i32_load16_u, 0, offset);
         try self.emitMemOp(Op.i32_store16, 0, dst_offset + offset);
         offset += 2;
     }
-
-    // Copy remaining byte
-    if (offset < byte_count) {
+    if (offset < end) {
         try self.emitLocalGets(.{ dst_local, src_local });
         try self.emitMemOp(Op.i32_load8_u, 0, offset);
         try self.emitMemOp(Op.i32_store8, 0, dst_offset + offset);
     }
 }
 
-/// Zero-initialize a region of memory.
-/// Emits i32.store 0 for each 4-byte chunk, plus i32.store8 0 for remaining bytes.
+/// Zero the `byte_count` bytes at the address in `base_local`, which keeps
+/// its value.
 fn emitZeroInit(self: *Self, base_local: u32, byte_count: u32) Allocator.Error!void {
-    var offset: u32 = 0;
-    while (offset + 4 <= byte_count) : (offset += 4) {
+    if (byte_count <= straight_line_copy_bytes) {
+        return self.emitStraightLineZero(base_local, 0, byte_count);
+    }
+    switch (self.cpu_level) {
+        .default => {
+            try self.emitLocalGet(base_local);
+            try self.emitI32Const(0);
+            try self.emitI32Const(@intCast(byte_count));
+            try self.emitMemoryFill();
+        },
+        .v1 => {
+            const loop_bytes = byte_count & ~@as(u32, 7);
+            const offset_local = self.storage.allocScratchLocal(.i32) catch return error.OutOfMemory;
+            try self.emitSetI32Local(offset_local, 0);
+            try self.emitVoidLoop();
+            try self.emitLocalGets(.{ base_local, offset_local });
+            try self.emitOps(.{Op.i32_add});
+            try self.emitI64Const(0);
+            try self.emitMemOp(Op.i64_store, 0, 0);
+            try self.emitLocalGet(offset_local);
+            try self.emitI32Const(8);
+            try self.emitOps(.{Op.i32_add});
+            try self.emitLocalTee(offset_local);
+            try self.emitI32Const(@intCast(loop_bytes));
+            try self.emitOps(.{Op.i32_lt_u});
+            try self.emitBrIf(0);
+            try self.emitOps(.{Op.end});
+            try self.emitStraightLineZero(base_local, loop_bytes, byte_count);
+            try self.storage.releaseScratchLocal(.{ .idx = offset_local, .val_type = .i32 });
+        },
+    }
+}
+
+/// Zero the bytes at `start..end` past the address in `base_local` with
+/// stores of the widest words that fit.
+fn emitStraightLineZero(self: *Self, base_local: u32, start: u32, end: u32) Allocator.Error!void {
+    var offset = start;
+    while (offset + 8 <= end) : (offset += 8) {
+        try self.emitLocalGet(base_local);
+        try self.emitI64Const(0);
+        try self.emitMemOp(Op.i64_store, 0, offset);
+    }
+    if (offset + 4 <= end) {
         try self.emitLocalGet(base_local);
         try self.emitI32Const(0);
         try self.emitMemOp(Op.i32_store, 0, offset);
+        offset += 4;
     }
-    while (offset < byte_count) : (offset += 1) {
+    if (offset + 2 <= end) {
+        try self.emitLocalGet(base_local);
+        try self.emitI32Const(0);
+        try self.emitMemOp(Op.i32_store16, 0, offset);
+        offset += 2;
+    }
+    if (offset < end) {
         try self.emitLocalGet(base_local);
         try self.emitI32Const(0);
         try self.emitMemOp(Op.i32_store8, 0, offset);
     }
+}
+
+/// Emit a `0xFC`-prefixed instruction. The bulk-memory instructions are not
+/// WebAssembly 1.0, so the v1 level never reaches this.
+fn emitMiscOp(self: *Self, opcode: u32) Allocator.Error!void {
+    if (self.cpu_level == .v1) wasmInvariantFmt("WASM/codegen invariant violated: instruction 0xfc {d} emitted for WebAssembly 1.0", .{opcode});
+    self.currentCode().append(self.allocator, Op.misc_prefix) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), opcode) catch return error.OutOfMemory;
+}
+
+/// `memory.copy` within memory 0: pops the destination address, the source
+/// address, and the byte count.
+fn emitMemoryCopy(self: *Self) Allocator.Error!void {
+    try self.emitMiscOp(Op.memory_copy);
+    try self.emitOps(.{ 0x00, 0x00 });
+}
+
+/// `memory.fill` of memory 0: pops the address, the byte value, and the byte
+/// count.
+fn emitMemoryFill(self: *Self) Allocator.Error!void {
+    try self.emitMiscOp(Op.memory_fill);
+    try self.emitOps(.{0x00});
 }
 
 /// Generate a struct construction expression (unified record/tuple/empty_record).
@@ -13588,10 +14227,19 @@ fn emitExtractStrPtrLen(self: *Self, str_local: u32, ptr_local: u32, len_local: 
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 }
 
-/// Emit a byte-by-byte copy loop: memcpy(dst_base + dst_offset, src_ptr, len).
-/// Uses a wasm block+loop construct with a counter local.
+/// Emit a copy of a runtime byte count: memcpy(dst_base + dst_offset, src_ptr, len).
+/// One `memory.copy`, or on WebAssembly 1.0 a byte loop with a counter local.
 fn emitMemCopyLoop(self: *Self, dst_base_local: u32, dst_offset_local: u32, src_ptr_local: u32, len_local: u32) Allocator.Error!void {
-    const loop_i = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    switch (self.cpu_level) {
+        .default => {
+            try self.emitLocalGets(.{ dst_base_local, dst_offset_local });
+            try self.emitOps(.{Op.i32_add});
+            try self.emitLocalGets(.{ src_ptr_local, len_local });
+            return self.emitMemoryCopy();
+        },
+        .v1 => {},
+    }
+    const loop_i = self.storage.allocScratchLocal(.i32) catch return error.OutOfMemory;
 
     // loop_i = 0
     try self.emitSetI32Local(loop_i, 0);
@@ -13635,6 +14283,7 @@ fn emitMemCopyLoop(self: *Self, dst_base_local: u32, dst_offset_local: u32, src_
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
     // end block
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+    try self.storage.releaseScratchLocal(.{ .idx = loop_i, .val_type = .i32 });
 }
 
 fn emitNormalizedIntParts(
@@ -14072,6 +14721,12 @@ fn emitLocalGet(self: *Self, local: u32) Allocator.Error!void {
 /// Helper: emit local.set instruction
 fn emitLocalSet(self: *Self, local: u32) Allocator.Error!void {
     self.currentCode().append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), local) catch return error.OutOfMemory;
+}
+
+/// Helper: emit local.tee instruction
+fn emitLocalTee(self: *Self, local: u32) Allocator.Error!void {
+    self.currentCode().append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), local) catch return error.OutOfMemory;
 }
 
@@ -16486,9 +17141,8 @@ fn emitStrMatchCapture(
                     .{@backingInt(target)},
                 );
             }
-            const target_local = target_binding.idx;
             try self.emitLocalGet(result_ptr);
-            try self.emitLocalSet(target_local);
+            try self.emitBindingSet(target_binding);
         },
     }
 }
@@ -16573,9 +17227,11 @@ fn generateStrMatchWithSource(self: *Self, source: StrMatchSourceShape, str_matc
     return matched;
 }
 
+/// Returns the scratch local holding the matched arm's index, which the
+/// switch glue reading it releases.
 fn generateStrMatchSet(self: *Self, str_match_set: anytype) Allocator.Error!u32 {
     const source = try self.emitStrMatchSourceShape(str_match_set.source);
-    const matched_arm = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const matched_arm = self.storage.allocScratchLocal(.i32) catch return error.OutOfMemory;
     try self.emitSetI32Local(matched_arm, -1);
 
     const arms = self.store.getStrMatchArms(str_match_set.arms);
@@ -18519,6 +19175,9 @@ const ListWindowLengthError = Allocator.Error ||
     @import("bytebox").TrapError ||
     error{TestExpectedEqual};
 
+/// Every way building, running and checking a split or copy fixture can fail.
+const WasmFixtureError = ListWindowLengthError || error{TestUnexpectedResult};
+
 fn expectSublistWindowLength(element: layout.Idx, start: u64, len: u64, expected: i32) ListWindowLengthError!void {
     try expectListWindowLength(element, start, len, expected, .sublist);
 }
@@ -18587,4 +19246,508 @@ fn expectListWindowLength(element: layout.Idx, start: u64, len: u64, expected: i
     var returns = [_]bytebox.Val{.{ .I32 = 0 }};
     try instance.invoke(handle, &params, &returns, .{});
     try std.testing.expectEqual(expected, returns[0].I32);
+}
+
+/// The size and local count of one function body in an encoded code section
+/// entry, as the function limits count them.
+const BodyMeasure = struct { bytes: usize, locals: u32 };
+
+fn measureBody(entry: []const u8, param_count: u32) BodyMeasure {
+    var cursor: usize = 0;
+    const size = WasmModule.readU32(entry, &cursor) catch unreachable; // every code section entry starts with the body size the encoder wrote
+    const body = entry[cursor .. cursor + size];
+    var body_cursor: usize = 0;
+    const groups = WasmModule.readU32(body, &body_cursor) catch unreachable; // every body starts with the local group count the encoder wrote
+    var locals: u32 = param_count;
+    for (0..groups) |_| {
+        locals += WasmModule.readU32(body, &body_cursor) catch unreachable; // the encoder wrote one count per local group
+        body_cursor += 1;
+    }
+    return .{ .bytes = size, .locals = locals };
+}
+
+/// Instantiate an encoded module whose stack starts at the top of memory.
+fn instantiateForTest(allocator: Allocator, arena: Allocator, bytes: []const u8) WasmFixtureError!*@import("bytebox").ModuleInstance {
+    const bytebox = @import("bytebox");
+    var definition = try bytebox.createModuleDefinition(arena, .{});
+    try definition.decode(bytes);
+    const instance = try bytebox.createModuleInstance(.Stack, definition, allocator);
+    errdefer instance.destroy();
+    // Bytebox sizes its label and frame stacks as 16-bit fractions of this.
+    try instance.instantiate(.{ .stack_size = 65536 });
+    return instance;
+}
+
+/// `f(a, b) = a + b + (b - 1) + ... + 1`, as a loop through a join point with
+/// a switch on the counter inside it: a chain whose statements, once split
+/// one per fragment, return from, jump out of, and fall through fragments
+/// nested in other fragments.
+fn addSplitFixtureProc(store: *LirStore) Allocator.Error!void {
+    const a = try store.addLocal(.{ .layout_idx = .u64 });
+    const b = try store.addLocal(.{ .layout_idx = .u64 });
+    const acc = try store.addLocal(.{ .layout_idx = .u64 });
+    const counter = try store.addLocal(.{ .layout_idx = .u64 });
+    const one = try store.addLocal(.{ .layout_idx = .u64 });
+    const sum = try store.addLocal(.{ .layout_idx = .u64 });
+    const less = try store.addLocal(.{ .layout_idx = .u64 });
+    var next_join_point: u32 = 0;
+    const loop = freshJoinFixtureJoinPointId(&next_join_point);
+
+    // Join body: counter == 0 → ret acc; else acc += counter; counter -= 1; jump.
+    const jump_again = try store.addCFStmt(.{ .jump = .{ .target = loop } }, .test_fixture);
+    const set_counter = try store.addCFStmt(.{ .set_local = .{ .target = counter, .value = less, .mode = .replace_existing, .next = jump_again } }, .test_fixture);
+    const sub = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = less,
+        .op = .num_int_sub_wrap,
+        .rc_effect = try store.addRcEffect(LIR.LowLevel.num_int_sub_wrap.rcEffect()),
+        .args = try store.addLocalSpan(&.{ counter, one }),
+        .next = set_counter,
+    } }, .test_fixture);
+    const set_acc = try store.addCFStmt(.{ .set_local = .{ .target = acc, .value = sum, .mode = .replace_existing, .next = sub } }, .test_fixture);
+    const add = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = sum,
+        .op = .num_int_add_wrap,
+        .rc_effect = try store.addRcEffect(LIR.LowLevel.num_int_add_wrap.rcEffect()),
+        .args = try store.addLocalSpan(&.{ acc, counter }),
+        .next = set_acc,
+    } }, .test_fixture);
+    const ret_acc = try store.addCFStmt(.{ .ret = .{ .value = acc } }, .test_fixture);
+    const switch_counter = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = counter,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = ret_acc }}),
+        .default_branch = add,
+    } }, .test_fixture);
+
+    // Remainder: enter the loop.
+    const enter = try store.addCFStmt(.{ .jump = .{ .target = loop } }, .test_fixture);
+    const join = try store.addCFStmt(.{ .join = .{
+        .id = loop,
+        .params = LIR.LocalSpan.empty(),
+        .body = switch_counter,
+        .remainder = enter,
+    } }, .test_fixture);
+    const set_one = try store.addCFStmt(.{ .assign_literal = .{
+        .target = one,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+        .next = join,
+    } }, .test_fixture);
+    const init_counter = try store.addCFStmt(.{ .set_local = .{ .target = counter, .value = b, .mode = .replace_existing, .next = set_one } }, .test_fixture);
+    const init_acc = try store.addCFStmt(.{ .set_local = .{ .target = acc, .value = a, .mode = .replace_existing, .next = init_counter } }, .test_fixture);
+
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
+        .args = try store.addLocalSpan(&.{ a, b }),
+        .body = init_acc,
+        .ret_layout = .u64,
+    }, .none);
+}
+
+const SplitFixtureRun = struct {
+    results: [3]i64,
+    function_count: usize,
+    largest_body: usize,
+};
+
+const split_fixture_inputs = [3][2]i64{ .{ 1, 0 }, .{ 5, 3 }, .{ 100, 10 } };
+
+fn runSplitFixture(allocator: Allocator, limits: FunctionLimits) WasmFixtureError!SplitFixtureRun {
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+    try addSplitFixtureProc(&store);
+
+    var codegen = Self.init(allocator, &store, &layouts, .default);
+    defer codegen.deinit();
+    codegen.limits = limits;
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    try codegen.flushPendingBodies();
+    const function_count = codegen.module.function_offsets.items.len;
+    var largest_body: usize = 0;
+    for (0..function_count) |index| {
+        const measure = measureBody(emittedBody(&codegen.module, index), 2);
+        try std.testing.expect(measure.bytes <= max_function_body_bytes);
+        try std.testing.expect(measure.locals <= max_function_locals);
+        largest_body = @max(largest_body, measure.bytes);
+    }
+    try codegen.module.addExport("f", .func, codegen.registered_procs.get(0).?);
+    try codegen.module.finalizeMemoryAndTableWithConfig(.{ .stack_bytes = 65536, .export_memory = true });
+    try codegen.module.materializeFuncBodies();
+    const bytes = try codegen.module.encode(allocator);
+    defer allocator.free(bytes);
+
+    var arena_impl = std.heap.ArenaAllocator.init(allocator);
+    defer arena_impl.deinit();
+    const instance = try instantiateForTest(allocator, arena_impl.allocator(), bytes);
+    defer instance.destroy();
+    const handle = try instance.getFunctionHandle("f");
+    var results: [3]i64 = undefined;
+    for (split_fixture_inputs, &results) |input, *result| {
+        var params = [_]@import("bytebox").Val{ .{ .I64 = input[0] }, .{ .I64 = input[1] } };
+        var returns = [_]@import("bytebox").Val{.{ .I64 = 0 }};
+        try instance.invoke(handle, &params, &returns, .{});
+        result.* = returns[0].I64;
+    }
+    return .{ .results = results, .function_count = function_count, .largest_body = largest_body };
+}
+
+test "a procedure emitted split computes what its direct emission computes" {
+    const allocator = std.testing.allocator;
+    const direct = try runSplitFixture(allocator, .{});
+    try std.testing.expectEqual(@as(usize, 1), direct.function_count);
+    for (split_fixture_inputs, direct.results) |input, result| {
+        const b = input[1];
+        try std.testing.expectEqual(input[0] + @divExact(b * (b + 1), 2), result);
+    }
+
+    // One statement per function: every statement after the first of each
+    // function moves to a fragment, so the jumps and the return leave
+    // fragments nested several deep.
+    const split = try runSplitFixture(allocator, .{ .split_bytes = 1, .fragment_bytes = 1 });
+    try std.testing.expect(split.function_count > 4);
+    try std.testing.expectEqualSlices(i64, &direct.results, &split.results);
+
+    // Wider fragments: the same answers from fewer functions.
+    const coarse = try runSplitFixture(allocator, .{ .split_bytes = 1, .fragment_bytes = 24 });
+    try std.testing.expect(coarse.function_count > 1 and coarse.function_count < split.function_count);
+    try std.testing.expectEqualSlices(i64, &direct.results, &coarse.results);
+}
+
+test "a procedure within the limits is emitted once, directly" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+    try addSplitFixtureProc(&store);
+    var codegen = Self.init(allocator, &store, &layouts, .default);
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    try codegen.flushPendingBodies();
+    // No fragment function, and no frame: the body opens with its `ret`
+    // block rather than a stack prologue, since its scalars stay in wasm locals.
+    try std.testing.expectEqual(@as(usize, 1), codegen.module.function_offsets.items.len);
+    try std.testing.expectEqual(Op.block, firstInstruction(emittedBody(&codegen.module, 0)));
+}
+
+/// The opcode of the first instruction of an encoded code section entry.
+fn firstInstruction(entry: []const u8) u8 {
+    var cursor: usize = 0;
+    _ = WasmModule.readU32(entry, &cursor) catch unreachable; // every code section entry starts with the body size the encoder wrote
+    const groups = WasmModule.readU32(entry, &cursor) catch unreachable; // every body starts with the local group count the encoder wrote
+    for (0..groups) |_| {
+        _ = WasmModule.readU32(entry, &cursor) catch unreachable; // the encoder wrote one count per local group
+        cursor += 1;
+    }
+    return entry[cursor];
+}
+
+const CopyFixtureKind = enum { copy, fill };
+
+/// Build a module with one exported function that copies `byte_count` bytes
+/// from its first argument's address to its second's, or zeroes that many
+/// bytes at its first argument's address, and return its encoded bytes and
+/// the function's code size.
+fn buildCopyFixture(allocator: Allocator, cpu_level: CpuLevel, kind: CopyFixtureKind, byte_count: u32) WasmModule.EncodeError!struct { bytes: []u8, code_bytes: usize } {
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+    var codegen = Self.init(allocator, &store, &layouts, cpu_level);
+    defer codegen.deinit();
+    const signature = try codegen.module.addFuncType(&.{ .i32, .i32 }, &.{});
+    const function = try codegen.module.addDefinedFunction(signature);
+    try codegen.beginFunction(function.local);
+    const scope = codegen.storage.beginScope();
+    defer codegen.storage.endScope(scope);
+    const first = try codegen.storage.allocPersistentLocal(.i32);
+    const second = try codegen.storage.allocPersistentLocal(.i32);
+    switch (kind) {
+        .copy => try codegen.emitMemCopy(second, 0, first, byte_count),
+        .fill => try codegen.emitZeroInit(first, byte_count),
+    }
+    try codegen.emitOps(.{Op.end});
+    const code_bytes = codegen.currentBody().code.items.len;
+    try codegen.encodeLocalsDecl(&codegen.currentBody().preamble, 2);
+    codegen.endFunction();
+    try codegen.flushPendingBodies();
+    try codegen.module.addExport("run", .func, function.function.raw());
+    // Three pages: the source region, the destination region past the first
+    // page boundary, and the stack above them.
+    try codegen.module.finalizeMemoryAndTableWithConfig(.{ .stack_bytes = 3 * 65536, .export_memory = true });
+    try codegen.module.materializeFuncBodies();
+    return .{ .bytes = try codegen.module.encode(allocator), .code_bytes = code_bytes };
+}
+
+fn expectCopyFixture(cpu_level: CpuLevel, byte_count: u32) WasmFixtureError!void {
+    const allocator = std.testing.allocator;
+    const src: u32 = 4096;
+    const dst: u32 = 65536 + 8;
+    for ([_]CopyFixtureKind{ .copy, .fill }) |kind| {
+        const built = try buildCopyFixture(allocator, cpu_level, kind, byte_count);
+        defer allocator.free(built.bytes);
+        // Code is bounded past the straight-line size: one bulk instruction
+        // with its operands, or one counted loop with its tail.
+        if (byte_count > straight_line_copy_bytes) try std.testing.expect(built.code_bytes <= 96);
+
+        var arena_impl = std.heap.ArenaAllocator.init(allocator);
+        defer arena_impl.deinit();
+        const instance = try instantiateForTest(allocator, arena_impl.allocator(), built.bytes);
+        defer instance.destroy();
+        const memory = instance.store.getMemory(0).buffer();
+        for (0..byte_count + 1) |i| {
+            memory[src + i] = @intCast((i * 7 + 3) & 0xff);
+            memory[dst + i] = 0xAA;
+        }
+        memory[src + byte_count] = 0xBB;
+        const handle = try instance.getFunctionHandle("run");
+        var params = [_]@import("bytebox").Val{ .{ .I32 = @intCast(src) }, .{ .I32 = @intCast(dst) } };
+        var returns = [_]@import("bytebox").Val{};
+        try instance.invoke(handle, &params, &returns, .{});
+        switch (kind) {
+            .copy => {
+                for (0..byte_count) |i| try std.testing.expectEqual(@as(u8, @intCast((i * 7 + 3) & 0xff)), memory[dst + i]);
+                try std.testing.expectEqual(@as(u8, 0xAA), memory[dst + byte_count]);
+            },
+            .fill => {
+                for (0..byte_count) |i| try std.testing.expectEqual(@as(u8, 0), memory[src + i]);
+                try std.testing.expectEqual(@as(u8, 0xBB), memory[src + byte_count]);
+            },
+        }
+    }
+}
+
+test "copies and zero fills of every width write exactly their bytes with bounded code" {
+    for ([_]CpuLevel{ .default, .v1 }) |cpu_level| {
+        for ([_]u32{ 1, 3, 12, 31, 32, 33, 40, 100, 1003, 4096 + 7 }) |byte_count| {
+            try expectCopyFixture(cpu_level, byte_count);
+        }
+    }
+}
+
+/// The frame size an encoded code section entry's prologue reserves, or
+/// zero when it has no prologue.
+fn prologueFrameBytes(entry: []const u8) u32 {
+    var cursor: usize = 0;
+    _ = WasmModule.readU32(entry, &cursor) catch unreachable; // every code section entry starts with the body size the encoder wrote
+    const groups = WasmModule.readU32(entry, &cursor) catch unreachable; // every body starts with the local group count the encoder wrote
+    for (0..groups) |_| {
+        _ = WasmModule.readU32(entry, &cursor) catch unreachable; // the encoder wrote one count per local group
+        cursor += 1;
+    }
+    if (entry[cursor] != Op.global_get) return 0;
+    cursor += 1;
+    _ = WasmModule.readU32(entry, &cursor) catch unreachable; // a prologue's global.get names the stack pointer global
+    std.debug.assert(entry[cursor] == Op.i32_const);
+    cursor += 1;
+    var result: i64 = 0;
+    var shift: u6 = 0;
+    while (true) {
+        const byte = entry[cursor];
+        cursor += 1;
+        result |= @as(i64, byte & 0x7f) << shift;
+        shift += 7;
+        if (byte & 0x80 == 0) return @intCast(result);
+    }
+}
+
+/// A procedure `(a: u64, b: u64) -> u64` that reads a field of a two-field
+/// record through `alias_count` separate `ref.local` copies of it.
+fn addRecordAliasChainProc(store: *LirStore, layouts: *layout.Store, alias_count: usize) Allocator.Error!void {
+    const record = try layouts.putStructFields(&.{ .{ .index = 0, .layout = .u64 }, .{ .index = 1, .layout = .u64 } });
+    const a = try store.addLocal(.{ .layout_idx = .u64 });
+    const b = try store.addLocal(.{ .layout_idx = .u64 });
+    const built = try store.addLocal(.{ .layout_idx = record });
+    const sum = try store.addLocal(.{ .layout_idx = .u64 });
+    var next = try store.addCFStmt(.{ .ret = .{ .value = sum } }, .test_fixture);
+    // Emitted last to first: sum = a; then for each alias, sum = sum + alias.field1.
+    for (0..alias_count) |_| {
+        const alias = try store.addLocal(.{ .layout_idx = record });
+        const field = try store.addLocal(.{ .layout_idx = .u64 });
+        const total = try store.addLocal(.{ .layout_idx = .u64 });
+        const set = try store.addCFStmt(.{ .set_local = .{ .target = sum, .value = total, .mode = .replace_existing, .next = next } }, .test_fixture);
+        const add = try store.addCFStmt(.{ .assign_low_level = .{
+            .target = total,
+            .op = .num_int_add_wrap,
+            .rc_effect = try store.addRcEffect(LIR.LowLevel.num_int_add_wrap.rcEffect()),
+            .args = try store.addLocalSpan(&.{ sum, field }),
+            .next = set,
+        } }, .test_fixture);
+        const read = try store.addCFStmt(.{ .assign_ref = .{ .target = field, .op = LIR.RefOp.field(alias, 1), .next = add } }, .test_fixture);
+        next = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = LIR.RefOp.local(built), .next = read } }, .test_fixture);
+    }
+    const init_sum = try store.addCFStmt(.{ .set_local = .{ .target = sum, .value = a, .mode = .replace_existing, .next = next } }, .test_fixture);
+    const build = try store.addCFStmt(.{ .assign_struct = .{ .target = built, .fields = try store.addLocalSpan(&.{ a, b }), .next = init_sum } }, .test_fixture);
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
+        .args = try store.addLocalSpan(&.{ a, b }),
+        .body = build,
+        .ret_layout = .u64,
+    }, .none);
+}
+
+fn runRecordAliasChain(allocator: Allocator, alias_count: usize) WasmFixtureError!struct { result: i64, frame_bytes: u32 } {
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+    try addRecordAliasChainProc(&store, &layouts, alias_count);
+    var codegen = Self.init(allocator, &store, &layouts, .default);
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    try codegen.flushPendingBodies();
+    const frame_bytes = prologueFrameBytes(emittedBody(&codegen.module, 0));
+    try codegen.module.addExport("f", .func, codegen.registered_procs.get(0).?);
+    try codegen.module.finalizeMemoryAndTableWithConfig(.{ .stack_bytes = 65536, .export_memory = true });
+    try codegen.module.materializeFuncBodies();
+    const bytes = try codegen.module.encode(allocator);
+    defer allocator.free(bytes);
+    var arena_impl = std.heap.ArenaAllocator.init(allocator);
+    defer arena_impl.deinit();
+    const instance = try instantiateForTest(allocator, arena_impl.allocator(), bytes);
+    defer instance.destroy();
+    const handle = try instance.getFunctionHandle("f");
+    var params = [_]@import("bytebox").Val{ .{ .I64 = 5 }, .{ .I64 = 9 } };
+    var returns = [_]@import("bytebox").Val{.{ .I64 = 0 }};
+    try instance.invoke(handle, &params, &returns, .{});
+    return .{ .result = returns[0].I64, .frame_bytes = frame_bytes };
+}
+
+test "aliases of an immutable record share its bytes, so the frame does not grow with them" {
+    const allocator = std.testing.allocator;
+    const one = try runRecordAliasChain(allocator, 1);
+    const many = try runRecordAliasChain(allocator, 12);
+    try std.testing.expectEqual(@as(i64, 5 + 9), one.result);
+    try std.testing.expectEqual(@as(i64, 5 + 12 * 9), many.result);
+    try std.testing.expectEqual(one.frame_bytes, many.frame_bytes);
+}
+
+test "a ref.local of a record that is written again is a copy of the bytes it saw" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+    const record = try layouts.putStructFields(&.{ .{ .index = 0, .layout = .u64 }, .{ .index = 1, .layout = .u64 } });
+    // first = {a, b}; second = {b, a}; snapshot = ref.local first;
+    // first = second; ret snapshot.field0, which is a as snapshot saw it.
+    const a = try store.addLocal(.{ .layout_idx = .u64 });
+    const b = try store.addLocal(.{ .layout_idx = .u64 });
+    const first = try store.addLocal(.{ .layout_idx = record });
+    const second = try store.addLocal(.{ .layout_idx = record });
+    const snapshot = try store.addLocal(.{ .layout_idx = record });
+    const field = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = field } }, .test_fixture);
+    const read = try store.addCFStmt(.{ .assign_ref = .{ .target = field, .op = LIR.RefOp.field(snapshot, 0), .next = ret } }, .test_fixture);
+    const rewrite = try store.addCFStmt(.{ .set_local = .{ .target = first, .value = second, .mode = .replace_existing, .next = read } }, .test_fixture);
+    const take = try store.addCFStmt(.{ .assign_ref = .{ .target = snapshot, .op = LIR.RefOp.local(first), .next = rewrite } }, .test_fixture);
+    const build_second = try store.addCFStmt(.{ .assign_struct = .{ .target = second, .fields = try store.addLocalSpan(&.{ b, a }), .next = take } }, .test_fixture);
+    const build_first = try store.addCFStmt(.{ .assign_struct = .{ .target = first, .fields = try store.addLocalSpan(&.{ a, b }), .next = build_second } }, .test_fixture);
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
+        .args = try store.addLocalSpan(&.{ a, b }),
+        .body = build_first,
+        .ret_layout = .u64,
+    }, .none);
+    var codegen = Self.init(allocator, &store, &layouts, .default);
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    try codegen.flushPendingBodies();
+    try codegen.module.addExport("f", .func, codegen.registered_procs.get(0).?);
+    try codegen.module.finalizeMemoryAndTableWithConfig(.{ .stack_bytes = 65536, .export_memory = true });
+    try codegen.module.materializeFuncBodies();
+    const bytes = try codegen.module.encode(allocator);
+    defer allocator.free(bytes);
+    var arena_impl = std.heap.ArenaAllocator.init(allocator);
+    defer arena_impl.deinit();
+    const instance = try instantiateForTest(allocator, arena_impl.allocator(), bytes);
+    defer instance.destroy();
+    const handle = try instance.getFunctionHandle("f");
+    var params = [_]@import("bytebox").Val{ .{ .I64 = 5 }, .{ .I64 = 9 } };
+    var returns = [_]@import("bytebox").Val{.{ .I64 = 0 }};
+    try instance.invoke(handle, &params, &returns, .{});
+    try std.testing.expectEqual(@as(i64, 5), returns[0].I64);
+}
+
+/// Run `op` on a 128-bit source holding `value` and return the Try result's
+/// discriminant and, when Ok, its payload, read through the result layout.
+fn runI128Narrow(allocator: Allocator, op: LIR.LowLevel, source_layout: layout.Idx, target_layout: layout.Idx, value: i128) (WasmFixtureError || WasmLayout.Error)!struct { ok: bool, payload: i64 } {
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+    const try_layout = try layouts.putTagUnion(&.{ .zst, target_layout });
+    const source = try store.addLocal(.{ .layout_idx = source_layout });
+    const result = try store.addLocal(.{ .layout_idx = try_layout });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const convert = try store.addLowLevelStmt(result, op, &.{source}, ret, .test_fixture);
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
+        .args = try store.addLocalSpan(&.{source}),
+        .body = convert,
+        .ret_layout = try_layout,
+    }, .none);
+    var codegen = Self.init(allocator, &store, &layouts, .default);
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    try codegen.flushPendingBodies();
+    const tu = try WasmLayout.tagUnionLayoutWithStore(layouts.getLayout(try_layout).getTagUnion().idx, &layouts);
+    try codegen.module.addExport("f", .func, codegen.registered_procs.get(0).?);
+    try codegen.module.finalizeMemoryAndTableWithConfig(.{ .stack_bytes = 65536, .export_memory = true });
+    try codegen.module.materializeFuncBodies();
+    const bytes = try codegen.module.encode(allocator);
+    defer allocator.free(bytes);
+    var arena_impl = std.heap.ArenaAllocator.init(allocator);
+    defer arena_impl.deinit();
+    const instance = try instantiateForTest(allocator, arena_impl.allocator(), bytes);
+    defer instance.destroy();
+    const memory = instance.store.getMemory(0).buffer();
+    // The 128-bit source lives at 1024; the procedure takes its address.
+    std.mem.writeInt(i128, memory[1024..1040], value, .little);
+    const handle = try instance.getFunctionHandle("f");
+    var params = [_]@import("bytebox").Val{.{ .I32 = 1024 }};
+    var returns = [_]@import("bytebox").Val{.{ .I32 = 0 }};
+    try instance.invoke(handle, &params, &returns, .{});
+    const result_ptr: usize = @intCast(returns[0].I32);
+    const ok = memory[result_ptr + tu.discriminant_offset] == 1;
+    const size = layouts.layoutSize(layouts.getLayout(target_layout));
+    var payload: i64 = 0;
+    if (ok) payload = switch (size) {
+        1 => @as(i8, @bitCast(memory[result_ptr])),
+        2 => std.mem.readInt(i16, memory[result_ptr..][0..2], .little),
+        4 => std.mem.readInt(i32, memory[result_ptr..][0..4], .little),
+        8 => std.mem.readInt(i64, memory[result_ptr..][0..8], .little),
+        else => unreachable, // every narrowing case targets an 8- to 64-bit integer
+    };
+    return .{ .ok = ok, .payload = payload };
+}
+
+test "issue 12782: 128-bit narrowing try conversions write the discriminant where the result layout keeps it" {
+    const allocator = std.testing.allocator;
+    const Case = struct { op: LIR.LowLevel, source: layout.Idx, target: layout.Idx, value: i128, ok: bool, payload: i64 };
+    const cases = [_]Case{
+        .{ .op = .i128_to_u8_try, .source = .i128, .target = .u8, .value = 3, .ok = true, .payload = 3 },
+        .{ .op = .i128_to_u8_try, .source = .i128, .target = .u8, .value = -3, .ok = false, .payload = 0 },
+        .{ .op = .i128_to_u8_try, .source = .i128, .target = .u8, .value = 300, .ok = false, .payload = 0 },
+        .{ .op = .i128_to_i8_try, .source = .i128, .target = .i8, .value = -3, .ok = true, .payload = -3 },
+        .{ .op = .i128_to_i8_try, .source = .i128, .target = .i8, .value = 200, .ok = false, .payload = 0 },
+        .{ .op = .i128_to_u16_try, .source = .i128, .target = .u16, .value = 21000, .ok = true, .payload = 21000 },
+        .{ .op = .i128_to_i16_try, .source = .i128, .target = .i16, .value = -21000, .ok = true, .payload = -21000 },
+        .{ .op = .i128_to_i16_try, .source = .i128, .target = .i16, .value = 40000, .ok = false, .payload = 0 },
+        .{ .op = .u128_to_u8_try, .source = .u128, .target = .u8, .value = 255, .ok = true, .payload = -1 },
+        .{ .op = .u128_to_u8_try, .source = .u128, .target = .u8, .value = 256, .ok = false, .payload = 0 },
+        .{ .op = .u128_to_i16_try, .source = .u128, .target = .i16, .value = 3, .ok = true, .payload = 3 },
+        .{ .op = .u128_to_i16_try, .source = .u128, .target = .i16, .value = 1 << 70, .ok = false, .payload = 0 },
+        .{ .op = .i128_to_u32_try, .source = .i128, .target = .u32, .value = 3, .ok = true, .payload = 3 },
+        .{ .op = .i128_to_i64_try, .source = .i128, .target = .i64, .value = -3, .ok = true, .payload = -3 },
+    };
+    for (cases) |case| {
+        const got = try runI128Narrow(allocator, case.op, case.source, case.target, case.value);
+        try std.testing.expectEqual(case.ok, got.ok);
+        if (case.ok) try std.testing.expectEqual(case.payload, got.payload);
+    }
 }

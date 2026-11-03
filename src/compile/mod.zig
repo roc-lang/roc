@@ -4,7 +4,6 @@ const std = @import("std");
 const threading_mod = @import("threading.zig");
 
 pub const package = @import("compile_package.zig");
-pub const completed_compilation = @import("completed_compilation.zig");
 pub const build = @import("compile_build.zig");
 pub const targets_config = @import("targets_config.zig");
 pub const TargetsConfig = targets_config.TargetsConfig;
@@ -31,18 +30,15 @@ pub const key = @import("cache_key.zig");
 pub const boxy_object_cache = @import("boxy_object_cache.zig");
 pub const boxy_interface = @import("boxy_interface.zig");
 pub const boxy_unit = @import("boxy_unit.zig");
+pub const boxy_reach = @import("boxy_reach.zig");
 pub const config = @import("cache_config.zig");
 pub const manager = @import("cache_manager.zig");
 pub const artifacts = @import("artifact_store.zig");
-pub const maintenance = @import("cache_maintenance.zig");
-pub const cleanup = @import("cache_cleanup.zig");
 
 pub const CacheManager = manager.CacheManager;
 pub const CacheConfig = config.CacheConfig;
 pub const CacheStats = config.CacheStats;
 /// Cache cleanup utilities for managing temporary and persistent cache files.
-pub const CacheCleanup = cleanup;
-pub const CleanupStats = cleanup.CleanupStats;
 pub const BuildEnv = build.BuildEnv;
 pub const CoreCtx = @import("ctx").CoreCtx;
 
@@ -67,9 +63,7 @@ pub const CoreCtx = @import("ctx").CoreCtx;
 
 test "compile tests" {
     if (!threading_mod.is_freestanding) {
-        std.testing.refAllDecls(@import("cache_cleanup.zig"));
         std.testing.refAllDecls(artifacts);
-        std.testing.refAllDecls(maintenance);
     }
     std.testing.refAllDecls(boxy_object_cache);
     std.testing.refAllDecls(@import("cache_config.zig"));

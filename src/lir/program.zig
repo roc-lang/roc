@@ -405,19 +405,6 @@ pub fn staticDataNodeSymbolName(allocator: Allocator, owner: u32, index: u32) Al
     return try std.fmt.allocPrint(allocator, "roc__d{d}_{d}", .{ owner, index });
 }
 
-/// Complete LIR program and side data consumed by ARC, backends, and eval.
-/// A template specialization's content key and the procedure lowered for it.
-pub const SpecProc = struct {
-    key: [32]u8,
-    proc: LIR.LirProcSpecId,
-};
-
-/// A procedure an object-cache entry's served code calls by identity.
-pub const ServedCallee = struct {
-    entry: LIR.LirProcSpecId,
-    callee: LIR.LirProcSpecId,
-};
-
 /// Everything one lowering produced: the procedure store, its layouts, the
 /// root and specialization tables, and the static data the program carries.
 pub const Result = struct {
@@ -428,15 +415,6 @@ pub const Result = struct {
     /// (`LIR.LirProcSpec.exported`), roots of reachability and ARC beside
     /// `root_procs` (design.md "Per-Module Output").
     exported_procs: std.ArrayList(LIR.LirProcSpecId) = .empty,
-    /// The procedures each object-cache entry this program takes calls by
-    /// identity, which the program supplies its own code for. The entry's
-    /// procedure is body-less, so these are its only outgoing edges.
-    served_callees: std.ArrayList(ServedCallee) = .empty,
-    /// The procedure lowered for each template specialization, by the
-    /// specialization's content key (`Monotype.Ast.specIdentityKey`). Only
-    /// the specialization's own procedure is listed, never SpecConstr clones
-    /// or capture-bearing variants of it.
-    spec_procs: std.ArrayList(SpecProc) = .empty,
     root_metadata: std.ArrayList(root.RootMetadata) = .empty,
     requested_layouts: std.ArrayList(RequestedLayout) = .empty,
     const_types: const_store.ConstTypeStore,
@@ -493,8 +471,6 @@ pub const Result = struct {
         self.root_metadata.deinit(allocator);
         self.root_procs.deinit(allocator);
         self.exported_procs.deinit(allocator);
-        self.served_callees.deinit(allocator);
-        self.spec_procs.deinit(allocator);
         self.layouts.deinit();
         self.store.deinit();
     }

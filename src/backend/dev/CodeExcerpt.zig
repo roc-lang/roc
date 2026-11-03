@@ -162,24 +162,6 @@ const DataOwner = struct {
     }
 };
 
-/// Storage borrowed by an excerpt set, independently of its metadata arena.
-const Owner = union(enum) {
-    record: *base.retained_cache.Owner,
-    data: *DataOwner,
-
-    fn retain(self: Owner) void {
-        switch (self) {
-            inline .record, .data => |owner| owner.retain(),
-        }
-    }
-
-    fn release(self: Owner) void {
-        switch (self) {
-            inline .record, .data => |owner| owner.release(),
-        }
-    }
-};
-
 /// One pointer-sized relocation inside a data item.
 pub const DataRelocation = struct {
     offset: u32,
@@ -196,10 +178,6 @@ pub const content_data_prefix = lir.Program.content_data_symbol_prefix;
 
 /// One lifted region of machine code.
 pub const Excerpt = struct {
-    /// Producer-validated canonical payload. Relocations and dependency bindings
-    /// remain separate metadata; a byte-changing producer must clear this.
-    payload_record: ?*const base.retained_cache.Record = null,
-    metadata_origin: ?*const MetadataOrigin = null,
     kind: Kind,
     code: []const u8,
     /// Offset within `code` that references to this excerpt resolve to.
@@ -218,29 +196,6 @@ pub const Excerpt = struct {
     loc: base.SourceLoc = .none,
 };
 
-/// An excerpt's immutable dependency-component identity and producer metadata.
-/// The record owner also owns source and the dependency arrays.
-pub const MetadataOrigin = struct {
-    record: *const base.retained_cache.Record,
-    source: *const Set,
-    index: u32,
-    refs: []const Binding,
-    symbolic: []const ?Binding,
-};
-
-/// Exact content-addressed dependency endpoint, including its component ordinal.
-pub const Binding = struct { component: [32]u8, index: u32 };
-
-/// Canonical bytes retained across relocation-only assembly. Data metadata may
-/// have content names rebound; its ordered raw bytes retain the payload identity.
-pub const AssembledPayload = struct {
-    record: *const base.retained_cache.Record,
-    metadata_origin: ?*const MetadataOrigin,
-    code: []const u8,
-    data: []const DataItem,
-    data_graph: ?DataGraphView = null,
-};
-
 /// An ordered set of excerpts covering one code buffer. Order is emission
 /// order, which `assemble` reproduces.
 pub const Set = struct {
@@ -249,20 +204,18 @@ pub const Set = struct {
     /// The module content identity of each source-file index the excerpts'
     /// lines use (`LirStore.sourceFileModuleIdentity`).
     source_files: []const [32]u8 = &.{},
-    owners: []const Owner = &.{},
+    owners: []const *DataOwner = &.{},
 
     /// Allocate the owner list before transferring the arena to a result.
     /// No retain happens until the last fallible allocation has succeeded.
-    pub fn retainOwners(a: Allocator, excerpts: []const Excerpt) Allocator.Error![]const Owner {
-        var owners = std.AutoHashMap(Owner, void).init(a);
+    pub fn retainOwners(a: Allocator, excerpts: []const Excerpt) Allocator.Error![]const *DataOwner {
+        var owners = std.AutoHashMap(*DataOwner, void).init(a);
         defer owners.deinit();
         for (excerpts) |excerpt| {
-            if (excerpt.payload_record) |record| try owners.put(.{ .record = record.owner }, {});
-            if (excerpt.metadata_origin) |origin| try owners.put(.{ .record = origin.record.owner }, {});
-            if (excerpt.data_graph) |graph| try owners.put(.{ .data = graph.graph.owner }, {});
-            for (excerpt.data) |item| if (item.owner) |owner| try owners.put(.{ .data = owner }, {});
+            if (excerpt.data_graph) |graph| try owners.put(graph.graph.owner, {});
+            for (excerpt.data) |item| if (item.owner) |owner| try owners.put(owner, {});
         }
-        const retained = try a.alloc(Owner, owners.count());
+        const retained = try a.alloc(*DataOwner, owners.count());
         var it = owners.keyIterator();
         var i: usize = 0;
         while (it.next()) |owner| : (i += 1) retained[i] = owner.*;
@@ -431,176 +384,6 @@ const NameCopier = struct {
         return self.copied;
     }
 };
-
-/// Copy sets into one ownership domain, rebasing only set-local references.
-/// Immutable catalog data retains its owner; other payloads are copied.
-/// Callers select cache entries using their full compilation provenance.
-/// The excerpts of `sets` that `roots` reach, as one set: the walk of
-/// `retainReachable` over several sets at once, following every reference
-/// across them, with each procedure and helper defined once (the first set
-/// defining it) and the constants each excerpt carries supplying the code
-/// their relocations name. `host_visible` are the constants the host binds
-/// by name, whose relocations seed the walk beside `roots`. Only the
-/// reached excerpts are copied, so composing a program costs its reachable
-/// code, not every unit's.
-pub fn reachableAcross(allocator: Allocator, sets: []const *const Set, host_visible: []const DataItem, roots: ImageRoots) Allocator.Error!Set {
-    const Ref = struct { set: u32, index: u32 };
-    var by_proc = std.AutoHashMap(lir.ProcIdentity, Ref).init(allocator);
-    defer by_proc.deinit();
-    var by_name = std.StringHashMap(Ref).init(allocator);
-    defer by_name.deinit();
-    var names_arena = collections.SingleThreadArena.init(allocator);
-    defer names_arena.deinit();
-    const names_allocator = names_arena.allocator();
-    for (sets, 0..) |set, set_index| for (set.excerpts, 0..) |excerpt, index| {
-        const ref: Ref = .{ .set = @intCast(set_index), .index = @intCast(index) };
-        switch (excerpt.kind) {
-            .proc => |identity| {
-                const gop = try by_proc.getOrPut(identity);
-                if (gop.found_existing) continue;
-                gop.value_ptr.* = ref;
-                try by_name.put(try identity.symbolName(names_allocator), ref);
-            },
-            .rc_helper => |name| {
-                const gop = try by_name.getOrPut(name);
-                if (!gop.found_existing) gop.value_ptr.* = ref;
-            },
-            .entrypoint, .message_pool_run, .branch_island => {},
-        }
-    };
-    var aliases = roots.helper_aliases.iterator();
-    while (aliases.next()) |alias| {
-        if (by_name.get(alias.value_ptr.*)) |ref| try by_name.put(alias.key_ptr.*, ref);
-    }
-    // A procedure or helper another set also defines is the first set's:
-    // every edge to a later definition lands on the first.
-    const canonical = try allocator.alloc([]Ref, sets.len);
-    var canonical_count: usize = 0;
-    defer {
-        for (canonical[0..canonical_count]) |refs| allocator.free(refs);
-        allocator.free(canonical);
-    }
-    for (sets, canonical, 0..) |set, *refs, set_index| {
-        refs.* = try allocator.alloc(Ref, set.excerpts.len);
-        canonical_count += 1;
-        for (set.excerpts, refs.*, 0..) |excerpt, *ref, index| {
-            ref.* = switch (excerpt.kind) {
-                .proc => |identity| by_proc.get(identity).?,
-                .rc_helper => |name| by_name.get(name).?,
-                .entrypoint, .message_pool_run, .branch_island => .{ .set = @intCast(set_index), .index = @intCast(index) },
-            };
-        }
-    }
-    const reached = try allocator.alloc([]bool, sets.len);
-    var reached_count: usize = 0;
-    defer {
-        for (reached[0..reached_count]) |flags| allocator.free(flags);
-        allocator.free(reached);
-    }
-    for (sets, reached) |set, *flags| {
-        flags.* = try allocator.alloc(bool, set.excerpts.len);
-        @memset(flags.*, false);
-        reached_count += 1;
-    }
-    var excerpt_work = std.ArrayList(Ref).empty;
-    defer excerpt_work.deinit(allocator);
-    var data_work = std.ArrayList([]const u8).empty;
-    defer data_work.deinit(allocator);
-    var carried = DataCollector{ .allocator = allocator };
-    defer carried.deinit();
-    for (roots.procs) |identity| if (by_proc.get(identity)) |ref| try excerpt_work.append(allocator, ref);
-    if (roots.entrypoints) for (sets, 0..) |set, set_index| for (set.excerpts, 0..) |excerpt, index| {
-        if (excerpt.kind == .entrypoint) try excerpt_work.append(allocator, .{ .set = @intCast(set_index), .index = @intCast(index) });
-    };
-    for (roots.data) |name| try data_work.append(allocator, name);
-    for (host_visible) |item| for (item.relocations) |relocation| try data_work.append(allocator, relocation.name);
-    while (excerpt_work.items.len != 0 or data_work.items.len != 0) {
-        while (excerpt_work.pop()) |ref| {
-            const flags = reached[ref.set];
-            if (flags[ref.index]) continue;
-            flags[ref.index] = true;
-            const set = sets[ref.set];
-            const excerpt = set.excerpts[ref.index];
-            for (excerpt.refs) |edge| try excerpt_work.append(allocator, canonical[ref.set][edge.target]);
-            for (excerpt.symbolic_refs) |edge| {
-                const target: ?Ref = switch (edge.binding) {
-                    .local => |index| canonical[ref.set][index],
-                    .absent => null,
-                    .unresolved => switch (edge.target) {
-                        .proc => |identity| by_proc.get(identity),
-                        .rc_helper => |name| by_name.get(name),
-                    },
-                };
-                if (target) |next| try excerpt_work.append(allocator, next);
-            }
-            for (excerpt.relocations) |relocation| try data_work.append(allocator, relocation.name);
-            // Every constant the excerpt carries, and every constant those
-            // name, with the code their relocations point at.
-            const before = carried.items.items.len;
-            try carried.add(excerpt);
-            for (carried.items.items[before..]) |item| for (item.relocations) |relocation| {
-                if (relocation.function) try data_work.append(allocator, relocation.name);
-            };
-        }
-        while (data_work.pop()) |name| {
-            if (by_name.get(name)) |ref| try excerpt_work.append(allocator, ref);
-        }
-    }
-    // Copy the reached excerpts, each set's in order, into one set whose
-    // source-file table unites the sets'.
-    var arena = collections.SingleThreadArena.init(allocator);
-    errdefer arena.deinit();
-    const a = arena.allocator();
-    var excerpts = std.ArrayList(Excerpt).empty;
-    var source_files = std.ArrayList([32]u8).empty;
-    const maps = try allocator.alloc([]u32, sets.len);
-    var mapped: usize = 0;
-    defer {
-        for (maps[0..mapped]) |map| allocator.free(map);
-        allocator.free(maps);
-    }
-    var next: u32 = 0;
-    for (sets, reached, maps) |set, flags, *map| {
-        map.* = try allocator.alloc(u32, set.excerpts.len);
-        mapped += 1;
-        for (flags, map.*) |keep, *index| {
-            index.* = next;
-            if (keep) next += 1;
-        }
-    }
-    // Edges to a later set's duplicate land on the kept definition.
-    for (canonical, maps) |refs, map| {
-        for (refs, map) |ref, *index| {
-            if (reached[ref.set][ref.index]) index.* = maps[ref.set][ref.index];
-        }
-    }
-    for (sets, reached, maps) |set, flags, map| {
-        const file_map = try a.alloc(u32, set.source_files.len);
-        for (set.source_files, file_map) |identity, *file| {
-            file.* = for (source_files.items, 0..) |existing, index| {
-                if (std.mem.eql(u8, &existing, &identity)) break @intCast(index);
-            } else index: {
-                try source_files.append(a, identity);
-                break :index @intCast(source_files.items.len - 1);
-            };
-        }
-        for (set.excerpts, flags) |source, keep| {
-            if (!keep) continue;
-            const first: u32 = @intCast(excerpts.items.len);
-            try copyExcerpts(a, &excerpts, &.{ .arena = undefined, .excerpts = &.{source} }, file_map);
-            const refs: []Reference = @constCast(excerpts.items[first].refs);
-            for (refs, source.refs) |*edge, original| edge.target = map[original.target];
-            for (@constCast(excerpts.items[first].symbolic_refs), source.symbolic_refs) |*edge, original| if (original.binding == .local) {
-                edge.binding = .{ .local = map[original.binding.local] };
-            };
-        }
-    }
-    std.debug.assert(excerpts.items.len == next);
-    const owned = try excerpts.toOwnedSlice(a);
-    const owned_source_files = try source_files.toOwnedSlice(a);
-    const retained = try Set.retainOwners(arena.allocator(), owned);
-    return .{ .arena = arena, .excerpts = owned, .source_files = owned_source_files, .owners = retained };
-}
 
 /// Copies every excerpt from `sets` into one owned set, with each distinct source file listed once.
 pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!Set {
@@ -787,7 +570,7 @@ fn nameDataByContent(a: Allocator, excerpt: *Excerpt, names: *const ContentNames
 
 /// Copy a set whose lines index a source-file table it does not carry
 /// (`extractPrepared`), keeping its file indices.
-fn copySet(allocator: Allocator, set: *const Set) Allocator.Error!Set {
+pub fn copySet(allocator: Allocator, set: *const Set) Allocator.Error!Set {
     std.debug.assert(set.source_files.len == 0);
     var arena = collections.SingleThreadArena.init(allocator);
     errdefer arena.deinit();
@@ -1099,7 +882,7 @@ pub const ContentNames = struct {
 };
 
 /// Shared immutable graph; indices belong exclusively to this catalog.
-const DataGraph = struct {
+pub const DataGraph = struct {
     owner: *DataOwner,
     items: []const PreparedData.Entry,
     code_reachable: []const bool,
@@ -1582,16 +1365,7 @@ pub fn extractPrepared(
 
         // Every data item the region names, then every item those name, so
         // an excerpt carries the whole constant graph it points into.
-        const retained_payload = region.payload;
-        const region_data = if (retained_payload) |payload| data: {
-            const items = try arena_allocator.alloc(DataItem, payload.data.len);
-            for (payload.data, items) |item, *out| out.* = try cloneData(arena_allocator, item);
-            break :data items;
-        } else &.{};
-        const region_graph = if (retained_payload) |payload|
-            if (payload.data_graph) |graph| try graph.clone(arena_allocator) else null
-        else
-            try captureGraph(arena_allocator, region_relocations.items, prepared);
+        const region_graph = try captureGraph(arena_allocator, region_relocations.items, prepared);
 
         // Lines and failure sites are in code offset order, so each region's
         // are one contiguous run found by search. A failing call's return
@@ -1608,7 +1382,7 @@ pub fn extractPrepared(
             if (site.offset > region.end) break;
             try failure_sites.append(arena_allocator, .{ .offset = @intCast(site.offset - region.start), .meaning = site.meaning });
         }
-        const excerpt_code = if (retained_payload) |payload| try arena_allocator.dupe(u8, payload.code) else code_bytes: {
+        const excerpt_code = code_bytes: {
             const bytes = try arena_allocator.dupe(u8, code[region.start..region.end]);
             codegen.normalizeExcerptCode(region.start, bytes);
             for (region_refs.items) |ref| CG.normalizeExcerptRefSite(bytes, ref.site, codeRefForm(ref.form), if (ref.veneer) |offset| offset else null);
@@ -1616,8 +1390,6 @@ pub fn extractPrepared(
             break :code_bytes bytes;
         };
         excerpts[index] = .{
-            .payload_record = if (retained_payload) |payload| payload.record else null,
-            .metadata_origin = if (retained_payload) |payload| payload.metadata_origin else null,
             .kind = kind,
             .code = excerpt_code,
             .entry = @intCast(region.entry),
@@ -1627,7 +1399,7 @@ pub fn extractPrepared(
             .lines = try lines.toOwnedSlice(arena_allocator),
             .failure_sites = try failure_sites.toOwnedSlice(arena_allocator),
             .relocations = try region_relocations.toOwnedSlice(arena_allocator),
-            .data = region_data,
+            .data = &.{},
             .data_graph = region_graph,
             .loc = switch (region.kind) {
                 // A procedure placed from another set carries the location
@@ -2192,7 +1964,9 @@ pub fn arrange(allocator: Allocator, set: *const Set, host_visible: []const Data
     return .{ .set = .{ .arena = arena, .excerpts = excerpts, .source_files = source_files, .owners = retained }, .data = data[0..data_len] };
 }
 
-fn renamedData(a: Allocator, item: DataItem, names: *const ContentNames) Allocator.Error!DataItem {
+/// `item` under its content name, with its relocations renamed the same
+/// way, owned by `a`.
+pub fn renamedData(a: Allocator, item: DataItem, names: *const ContentNames) Allocator.Error!DataItem {
     const relocations = try a.dupe(DataRelocation, item.relocations);
     var copier = NameCopier{};
     var previous: ?[]const u8 = null;
@@ -2234,7 +2008,9 @@ fn canonicalBefore(set: *const Set, a: u32, b: u32) bool {
     };
 }
 
-fn canonicalRank(kind: Kind) u8 {
+/// Where a kind of excerpt sorts in canonical order, ahead of any tie-break
+/// within the kind.
+pub fn canonicalRank(kind: Kind) u8 {
     return switch (kind) {
         .proc => 0,
         .rc_helper => 1,
@@ -2415,7 +2191,6 @@ const LineBinding = union(enum) {
 };
 
 fn appendMetadata(comptime CG: type, codegen: *CG, excerpt: Excerpt, start: usize, lines: LineBinding) Allocator.Error!void {
-    if (excerpt.payload_record) |record| codegen.retainAssembledPayload(start, .{ .record = record, .metadata_origin = excerpt.metadata_origin, .code = excerpt.code, .data = excerpt.data, .data_graph = excerpt.data_graph });
     switch (excerpt.kind) {
         .proc => |identity| {
             try codegen.registerAssembledProc(identity, start + excerpt.entry);
@@ -3000,7 +2775,6 @@ test "excerpt metadata queues unresolved targets, preserves same-offset line ord
             self.proc_entry = entry;
         }
         pub fn registerAssembledProcLoc(_: *Self, _: lir.ProcIdentity, _: base.SourceLoc) Allocator.Error!void {}
-        pub fn retainAssembledPayload(_: *Self, _: usize, _: AssembledPayload) void {}
         pub fn registerSplicedHelper(_: *Self, _: []const u8, _: usize) Allocator.Error!void {}
         pub fn queueAssembledSymbolicRef(self: *Self, ref: SymbolicReference) Allocator.Error!void {
             self.refs[self.refs_len] = ref;
@@ -3447,13 +3221,8 @@ test "boxy composition slots keep identity through canonical arrangement and pac
     var arranged = try arrange(a, &source, &.{});
     defer arranged.deinit();
     try std.testing.expectEqual(@as(usize, 3), arranged.data.len);
-    const Pack = @import("PackFile.zig");
-    const bytes = try Pack.write(a, &arranged.set, &.{});
-    defer a.free(bytes);
-    var read_back = try Pack.read(a, bytes);
-    defer read_back.deinit();
     var mutable: usize = 0;
-    for (read_back.set.excerpts[0].data) |item| {
+    for (arranged.set.excerpts[0].data) |item| {
         if (!item.is_mutable) continue;
         mutable += 1;
         try std.testing.expect(std.mem.eql(u8, item.name, "site_a") or std.mem.eql(u8, item.name, "site_b"));
@@ -3543,7 +3312,7 @@ test "shared constant graphs visit each node once and survive independent owners
     try std.testing.checkAllAllocationFailures(deterministic.allocator(), testSharedGraphs, .{});
 }
 
-fn testSharedGraphs(allocator: Allocator) (@import("PackFile.zig").ReadError || Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+fn testSharedGraphs(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const refs = [_]NamedRelocation{.{ .offset = 0, .name = "roc__d0", .scope = .program, .kind = .{ .data = .rel32 } }};
     const edges = [_]DataRelocation{
         .{ .offset = 0, .name = "roc__d1", .addend = 0, .function = false },
@@ -3585,13 +3354,6 @@ fn testSharedGraphs(allocator: Allocator) (@import("PackFile.zig").ReadError || 
     try std.testing.expectEqual(@as(usize, 2), arranged.data.len);
     try std.testing.expectEqual(@as(usize, 0), arranged.set.excerpts[0].data.len);
     try std.testing.expect(arranged.set.excerpts[0].data_graph != null);
-    const pack_bytes = try @import("PackFile.zig").write(allocator, &arranged.set, &.{});
-    defer allocator.free(pack_bytes);
-    var loaded = try @import("PackFile.zig").read(allocator, pack_bytes);
-    defer loaded.deinit();
-    const rewritten = try @import("PackFile.zig").write(allocator, &loaded.set, &.{});
-    defer allocator.free(rewritten);
-    try std.testing.expectEqualSlices(u8, pack_bytes, rewritten);
     var combined = try combineDistinct(allocator, &.{&copy});
     defer combined.deinit();
     try std.testing.expect(combined.excerpts[0].data_graph != null);

@@ -39,13 +39,17 @@ pub const Entity = union(enum) {
     message: []const u8,
     /// A PIC base global.
     pic_base: PicBase,
+    /// A fragment function of the procedure whose body this is, by its
+    /// position in the artifact's fragment list (see design.md, "Wasm
+    /// Function Limits").
+    fragment: u32,
 
     const Key = struct { tag: std.meta.Tag(Entity), id: u64 };
 
     fn key(self: Entity) ?Key {
         return .{ .tag = self, .id = switch (self) {
             .rc_helper, .reserved_rc_helper, .rc_helper_table => |id| id,
-            .static_str, .static_data => |id| id,
+            .static_str, .static_data, .fragment => |id| id,
             .pic_base => |which| @backingInt(which),
             .message => return null,
         } };
@@ -63,12 +67,25 @@ pub const Recorder = struct {
     }
 
     pub fn deinit(self: *Recorder) void {
-        for (self.entities.items) |entity| switch (entity) {
-            .message => |bytes| self.allocator.free(bytes),
-            .rc_helper, .reserved_rc_helper, .rc_helper_table, .static_str, .static_data, .pic_base => {},
-        };
+        self.rewind(0);
         self.entities.deinit(self.allocator);
         self.refs.deinit(self.allocator);
+    }
+
+    /// The entity list's length, for `rewind`.
+    pub fn mark(self: *const Recorder) u32 {
+        return @intCast(self.entities.items.len);
+    }
+
+    /// Forget every entity recorded since `mark`: what a discarded body named.
+    /// A keyed entity recorded again is appended again, since `ref` ignores a
+    /// position past the list's end.
+    pub fn rewind(self: *Recorder, entities_mark: u32) void {
+        for (self.entities.items[entities_mark..]) |entity| switch (entity) {
+            .message => |bytes| self.allocator.free(bytes),
+            .rc_helper, .reserved_rc_helper, .rc_helper_table, .static_str, .static_data, .pic_base, .fragment => {},
+        };
+        self.entities.shrinkRetainingCapacity(entities_mark);
     }
 
     /// The entity-list position naming `entity`, appending it on first use.
@@ -77,7 +94,7 @@ pub const Recorder = struct {
         const ref_index: u32 = @intCast(self.entities.items.len);
         if (entity.key()) |entity_key| {
             const entry = try self.refs.getOrPut(self.allocator, entity_key);
-            if (entry.found_existing) return entry.value_ptr.*;
+            if (entry.found_existing and entry.value_ptr.* < ref_index) return entry.value_ptr.*;
             entry.value_ptr.* = ref_index;
             errdefer _ = self.refs.remove(entity_key);
             try self.entities.append(self.allocator, entity);
@@ -95,30 +112,42 @@ pub const Recorder = struct {
     }
 };
 
-/// A generated body and the entities it names, owned by its own arena so it
-/// can move from the worker that generated it to the module's owner.
+/// A generated body, the fragment bodies of its procedure, and the entities
+/// they name, owned by its own arena so it can move from the worker that
+/// generated it to the module's owner.
 pub const Artifact = struct {
     arena: base.SingleThreadArena,
     body: CodeBuilder,
+    /// The procedure's fragment functions, each named by a `fragment` entity.
+    fragments: []CodeBuilder,
     entities: []const Entity,
 
-    /// Copy `body` and `recorder`'s entities into an arena backed by `allocator`.
-    pub fn capture(allocator: Allocator, body: *const CodeBuilder, recorder: *const Recorder) Allocator.Error!Artifact {
+    /// Copy `body`, `fragments`, and `recorder`'s entities into an arena
+    /// backed by `allocator`.
+    pub fn capture(allocator: Allocator, body: *const CodeBuilder, fragments: []const CodeBuilder, recorder: *const Recorder) Allocator.Error!Artifact {
         var arena = base.SingleThreadArena.init(allocator);
         errdefer arena.deinit();
         const a = arena.allocator();
+        const copy = try copyBody(a, body);
+        const fragment_copies = try a.alloc(CodeBuilder, fragments.len);
+        for (fragments, fragment_copies) |*fragment, *fragment_copy| fragment_copy.* = try copyBody(a, fragment);
+        const entities = try a.dupe(Entity, recorder.entities.items);
+        for (entities) |*entity| switch (entity.*) {
+            .message => |bytes| entity.* = .{ .message = try a.dupe(u8, bytes) },
+            .rc_helper, .reserved_rc_helper, .rc_helper_table, .static_str, .static_data, .pic_base, .fragment => {},
+        };
+        return .{ .arena = arena, .body = copy, .fragments = fragment_copies, .entities = entities };
+    }
+
+    fn copyBody(a: Allocator, body: *const CodeBuilder) Allocator.Error!CodeBuilder {
         var copy = CodeBuilder.init();
         copy.frame_bytes = body.frame_bytes;
+        copy.local_count = body.local_count;
         try copy.code.appendSlice(a, body.code.items);
         try copy.preamble.appendSlice(a, body.preamble.items);
         try copy.import_relocations.appendSlice(a, body.import_relocations.items);
         try copy.deferred.appendSlice(a, body.deferred.items);
-        const entities = try a.dupe(Entity, recorder.entities.items);
-        for (entities) |*entity| switch (entity.*) {
-            .message => |bytes| entity.* = .{ .message = try a.dupe(u8, bytes) },
-            .rc_helper, .reserved_rc_helper, .rc_helper_table, .static_str, .static_data, .pic_base => {},
-        };
-        return .{ .arena = arena, .body = copy, .entities = entities };
+        return copy;
     }
 
     pub fn deinit(self: *Artifact) void {

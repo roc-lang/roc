@@ -21,15 +21,6 @@ const check = @import("check");
 const lir = @import("lir");
 const unbundle = if (is_freestanding) struct {} else @import("unbundle");
 const CoreCtx = @import("ctx").CoreCtx;
-const completed_compilation = @import("completed_compilation.zig");
-
-/// Probes a completed compilation after frontend validation, before any
-/// platform evaluation or app pairing. The returned outcome is an explicit
-/// alternative to a live evaluation session, owned by the build driver.
-pub const RuntimeOutputProbe = struct {
-    context: *anyopaque,
-    cached: *const fn (*anyopaque, *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!?*const @import("completed_compilation.zig").Outcome,
-};
 
 /// Runtime demand fixed before post-check finalization. Explicit plans may be
 /// declared from prepared checked modules after the frontend completes.
@@ -243,16 +234,12 @@ pub const BuildEnv = struct {
     /// The strategy whose compile-time evaluator completes every module's
     /// compile-time roots (`Coordinator.specialization_strategy`).
     specialization_strategy: base.SpecializationStrategy = .lss,
-    runtime_output_probe: ?RuntimeOutputProbe = null,
     debug_observer: ?eval.CompileTimeFinalization.DebugObserver = null,
     /// Instrumentation only; never participates in checked or object identity.
     detailed_monotype_diagnostics: bool = false,
-    /// See `eval.CompileTimeFinalization.CompileTimeObjectCache`.
-    compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
     /// The lowering of the module objects a `.boxy` compile-time evaluation
     /// links against.
     boxy_object_lowering: ?@import("coordinator.zig").BoxyObjectLowering = null,
-    compile_time_object_cache_owner: ?CompileTimeObjectCacheOwner = null,
     /// Let a caller declare a test plan from prepared artifacts before CTFE.
     defer_post_check: bool = false,
     // Cache manager for compiled modules
@@ -313,9 +300,6 @@ pub const BuildEnv = struct {
 
     /// Optional source directory used to resolve imports from the root module.
     root_source_dir_override: ?[]const u8 = null,
-    /// An early completed result owns its outcome without creating a coordinator.
-    recorded_completion: ?*const completed_compilation.Outcome = null,
-    recorded_inputs: ?completed_compilation.Inputs = null,
     diagnostic_observer: ?struct {
         context: *anyopaque,
         record: *const fn (*anyopaque, *const reporting.Report) Allocator.Error!void,
@@ -519,8 +503,6 @@ pub const BuildEnv = struct {
         self.workspace_roots.deinit();
 
         self.sink.deinit();
-        // Last: the coordinator's retained programs may borrow cached code.
-        if (self.compile_time_object_cache_owner) |owner| owner.deinit(owner.context);
     }
 
     /// Set the cache manager for this build environment
@@ -544,156 +526,7 @@ pub const BuildEnv = struct {
         self.cache_manager = manager;
     }
 
-    /// The resolver's complete current package graph, independent of checked IR.
-    pub fn completionResolutionKey(self: *BuildEnv, allocator: Allocator) Allocator.Error![32]u8 {
-        const Edge = struct { alias: []const u8, package: []const u8 };
-        const PackageInput = struct { name: []const u8, root_file: completed_compilation.InputPath, kind: PackageKind, state: ?watch_inputs.State, edges: []Edge };
-        const packages = try allocator.alloc(PackageInput, self.packages.count());
-        var it = self.packages.iterator();
-        var i: usize = 0;
-        while (it.next()) |entry| : (i += 1) {
-            const pkg = entry.value_ptr;
-            const edges = try allocator.alloc(Edge, pkg.shorthands.count());
-            var aliases = pkg.shorthands.iterator();
-            var j: usize = 0;
-            while (aliases.next()) |alias| : (j += 1) edges[j] = .{ .alias = alias.key_ptr.*, .package = alias.value_ptr.name };
-            std.mem.sort(Edge, edges, {}, struct {
-                fn less(_: void, a: Edge, b: Edge) bool {
-                    return std.mem.lessThan(u8, a.alias, b.alias);
-                }
-            }.less);
-            packages[i] = .{ .name = pkg.name, .root_file = try self.completionInputPath(allocator, pkg.root_file), .kind = pkg.kind, .state = pkg.root_file_state, .edges = edges };
-        }
-        std.mem.sort(PackageInput, packages, {}, struct {
-            fn less(_: void, a: PackageInput, b: PackageInput) bool {
-                return std.mem.lessThan(u8, a.name, b.name);
-            }
-        }.less);
-        const bytes = try completed_compilation.encode(allocator, packages);
-        var key: [32]u8 = undefined;
-        std.crypto.hash.Blake3.hash(bytes, &key, .{});
-        return key;
-    }
-
-    /// Relocate only registered compiler-owned source directories. All other
-    /// paths are native compilation inputs, including paths through symlinks.
-    pub fn completionInputPath(self: *BuildEnv, allocator: Allocator, path: []const u8) Allocator.Error!completed_compilation.InputPath {
-        var owner: ?*const Package = null;
-        var it = self.packages.iterator();
-        while (it.next()) |entry| {
-            const pkg = entry.value_ptr;
-            if (!std.mem.eql(u8, pkg.name, package_identity.synthetic_app_identity) and
-                !std.mem.eql(u8, pkg.name, package_identity.synthetic_platform_identity) and
-                compiler_platforms.fromIdentity(pkg.name) == null) continue;
-            if (isPathInDir(path, pkg.root_dir) and (owner == null or pkg.root_dir.len > owner.?.root_dir.len)) owner = pkg;
-        }
-        if (owner) |pkg| return .{
-            .package = pkg.name,
-            .path = try std.fs.path.relative(allocator, self.cwd, null, pkg.root_dir, path),
-        };
-        return .{ .path = path };
-    }
-
-    /// Bind a recorded input path to the current invocation's package graph.
-    pub fn completionPath(self: *BuildEnv, allocator: Allocator, path: completed_compilation.InputPath) Allocator.Error!?[]const u8 {
-        const name = path.package orelse return path.path;
-        const pkg = self.packages.get(name) orelse return null;
-        return try std.fs.path.resolve(allocator, &.{ pkg.root_dir, path.path });
-    }
-
-    /// Record the source, asset and import facts consumed by a successful build.
-    pub fn captureCompletionInputs(self: *BuildEnv, allocator: Allocator, resolution: [32]u8, modules: []const completed_compilation.Module) Allocator.Error!completed_compilation.Inputs {
-        const watched = try self.collectWatchInputStates();
-        defer self.freeWatchInputStates(watched);
-        const files = try allocator.alloc(completed_compilation.FileInput, watched.len);
-        for (watched, files) |input, *out| out.* = .{ .path = try self.completionInputPath(allocator, try allocator.dupe(u8, input.path)), .state = input.state };
-        var checks = std.ArrayList(completed_compilation.PathCheck).empty;
-        var seen_checks = std.StringHashMapUnmanaged([]const u8){};
-        var directories = std.ArrayList(completed_compilation.DirectoryInput).empty;
-        var it = self.coordinator.?.packages.iterator();
-        while (it.next()) |entry| {
-            const pkg = entry.value_ptr.*;
-            // URL bundles have already been admitted by the resolver's
-            // immutable bundle contract; only local inputs need revalidation.
-            if (pkg.url != null) continue;
-            for (pkg.source_path_checks.items) |input| {
-                if (seen_checks.get(input.path)) |previous| if (std.mem.eql(u8, previous, input.canonical)) continue;
-                try seen_checks.put(allocator, input.path, input.canonical);
-                try checks.append(allocator, .{
-                    .path = try self.completionInputPath(allocator, input.path),
-                    .canonical = try self.completionInputPath(allocator, input.canonical),
-                });
-            }
-            if (pkg.source_entries != null) {
-                const root = if (pkg.root_module_id) |id| pkg.getModule(id).?.source_dir_override orelse pkg.root_dir else pkg.root_dir;
-                var paths = std.ArrayList(completed_compilation.InputPath).empty;
-                for (pkg.source_path_checks.items) |input| {
-                    if (input.spelling_checked) try paths.append(allocator, try self.completionInputPath(allocator, input.path));
-                }
-                try directories.append(allocator, .{ .path = try self.completionInputPath(allocator, root), .entries = paths.items });
-            }
-        }
-        const module_paths = try allocator.alloc(completed_compilation.InputPath, modules.len);
-        for (modules, module_paths) |module, *path| path.* = try self.completionInputPath(allocator, module.path);
-        return .{ .resolution = resolution, .files = files, .path_checks = checks.items, .directories = directories.items, .module_paths = module_paths };
-    }
-
-    /// Content and path validation performs no IR admission or relocation.
-    /// I/O failure makes this candidate unusable; ordinary compilation owns
-    /// the corresponding source diagnostic.
-    pub fn validateCompletionInputs(self: *BuildEnv, allocator: Allocator, inputs: completed_compilation.Inputs, resolution: [32]u8, bytes_read: *u64) Allocator.Error!bool {
-        if (!std.mem.eql(u8, &inputs.resolution, &resolution)) return false;
-        for (inputs.files) |input| {
-            const path = try self.completionPath(allocator, input.path) orelse return false;
-            const bytes = self.filesystem.readFile(path, self.gpa) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => return false,
-            };
-            defer self.gpa.free(bytes);
-            bytes_read.* += bytes.len;
-            switch (input.state) {
-                .hash => |hash| if (!std.mem.eql(u8, &hash, &watch_inputs.hashBytes(bytes))) return false,
-                .missing, .unreadable => return false,
-            }
-        }
-        for (inputs.path_checks) |input| {
-            const path = try self.completionPath(allocator, input.path) orelse return false;
-            const expected = try self.completionPath(allocator, input.canonical) orelse return false;
-            const canonical = self.filesystem.canonicalize(path, self.gpa) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => return false,
-            };
-            defer self.gpa.free(@constCast(canonical));
-            if (!std.mem.eql(u8, canonical, expected)) return false;
-        }
-        for (inputs.directories) |input| {
-            const path = try self.completionPath(allocator, input.path) orelse return false;
-            const entries = self.filesystem.listDir(path, self.gpa) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => return false,
-            };
-            defer {
-                for (entries) |entry| self.gpa.free(entry.path);
-                self.gpa.free(entries);
-            }
-            var current = std.StringHashMapUnmanaged(void){};
-            defer current.deinit(self.gpa);
-            for (entries) |entry| try current.put(self.gpa, entry.path, {});
-            for (input.entries) |old| {
-                const expected = try self.completionPath(allocator, old) orelse return false;
-                if (!current.contains(expected)) return false;
-            }
-        }
-        return true;
-    }
-
-    /// Get the TargetsConfig from the platform package, if any.
     pub fn getPlatformTargetsConfig(self: *const BuildEnv) ?targets_config_mod.TargetsConfig {
-        if (self.recorded_completion) |outcome| return outcome.targets;
-        if (self.coordinator) |coord| switch (coord.compilation_result) {
-            .recorded => |outcome| return outcome.targets,
-            .live => {},
-        };
         const name = self.selected_platform_package_name orelse return null;
         const platform = self.packages.get(name) orelse return null;
         std.debug.assert(platform.kind == .platform);
@@ -1101,49 +934,11 @@ pub const BuildEnv = struct {
         coord.setReleaseCheckedSolverTypes(self.release_checked_solver_types);
         coord.cancel_request = self.cancel_request;
         coord.runtime_lowering = self.runtime_lowering;
-        coord.runtime_output_probe = self.runtime_output_probe;
         coord.debug_observer = self.debug_observer;
         coord.setDetailedLoweringTiming(self.detailed_lowering_timing);
-        coord.compile_time_object_cache = self.compile_time_object_cache;
         coord.boxy_object_lowering = self.boxy_object_lowering;
         if (self.detailed_monotype_diagnostics) coord.ctfe_timing.lowering.enableDetailedMonotypeBody();
         self.coordinator = coord;
-    }
-
-    /// The storage behind a compile-time object cache, which this build
-    /// environment owns once attached.
-    pub const CompileTimeObjectCacheOwner = struct {
-        context: *anyopaque,
-        /// Gives the cache this build environment, whose module set decides
-        /// which packs it loads, before compile-time evaluation reads it.
-        bind: *const fn (*anyopaque, *BuildEnv) void,
-        deinit: *const fn (*anyopaque) void,
-    };
-
-    /// Every command that checks a program attaches this the same way, so
-    /// compile-time evaluation reads one object cache whatever the command.
-    pub fn setCompileTimeObjectCache(
-        self: *BuildEnv,
-        cache: eval.CompileTimeFinalization.CompileTimeObjectCache,
-        owner: CompileTimeObjectCacheOwner,
-    ) void {
-        std.debug.assert(self.compile_time_object_cache_owner == null);
-        if (self.coordinator) |coordinator| coordinator.compile_time_object_cache = cache;
-        self.compile_time_object_cache = cache;
-        self.compile_time_object_cache_owner = owner;
-    }
-
-    pub fn setRuntimeOutputProbe(self: *BuildEnv, probe: RuntimeOutputProbe) void {
-        if (self.coordinator) |coordinator| coordinator.runtime_output_probe = probe;
-        self.runtime_output_probe = probe;
-    }
-
-    /// Whether the driver is consuming a completed compilation instead of a
-    /// live program session. No module evaluation state is changed by a hit.
-    pub fn runtimeOutputCached(self: *const BuildEnv) bool {
-        if (self.recorded_completion != null) return true;
-        const coordinator = self.coordinator orelse return false;
-        return coordinator.compilation_result == .recorded;
     }
 
     /// Set the strategy whose compile-time evaluator completes every
@@ -1169,14 +964,6 @@ pub const BuildEnv = struct {
             base.invariant("build env invariant violated: runtime lowering is configured before coordinator initialization", .{});
         if (coordinator.program_session) |*session| return session;
         base.invariant("build env invariant violated: runtime lowering is configured but the checked program retained no program session", .{});
-    }
-
-    /// The compile-time reads of the specializations compile-time
-    /// evaluation lowered, while its program session retains them.
-    pub fn compileTimeSpecReads(self: *BuildEnv) ?*const lir.CheckedPipeline.SpecComptimeReads {
-        const coordinator = self.coordinator orelse return null;
-        const session = if (coordinator.program_session) |*session| session else return null;
-        return session.specComptimeReads();
     }
 
     /// The programs compile-time evaluation lowered and completed, while
@@ -1543,7 +1330,6 @@ pub const BuildEnv = struct {
     pub fn finishCheckedProgram(self: *BuildEnv) CompileDiscoveredError!void {
         const coord = self.coordinator orelse
             base.invariant("build env invariant violated: checked program finished before coordinator initialization", .{});
-        if (self.compile_time_object_cache_owner) |owner| owner.bind(owner.context, self);
         const test_modules = try self.collectProgramTestModules(self.gpa, coord);
         defer self.gpa.free(test_modules);
         coord.program_test_modules = test_modules;
@@ -1552,9 +1338,9 @@ pub const BuildEnv = struct {
             self.emitAccumulatedReportsForError();
             return err;
         };
-        self.executable_artifacts_finalized = coord.hasCheckedProgram() and !self.runtimeOutputCached();
+        self.executable_artifacts_finalized = coord.hasCheckedProgram();
 
-        if (!self.runtimeOutputCached()) try self.resolvePlatformTargetConfigConstants();
+        try self.resolvePlatformTargetConfigConstants();
 
         try self.emitCoordinatorReports();
 
@@ -2831,21 +2617,6 @@ pub const BuildEnv = struct {
             base.invariant("build env invariant violated: collectWatchInputStates called without watch input tracking enabled", .{});
         }
 
-        if (self.recorded_inputs) |recorded| {
-            const inputs = try self.gpa.alloc(watch_inputs.Input, recorded.files.len);
-            var initialized: usize = 0;
-            errdefer {
-                for (inputs[0..initialized]) |input| self.gpa.free(input.path);
-                self.gpa.free(inputs);
-            }
-            for (recorded.files, inputs) |file, *input| {
-                const path = try self.completionPath(self.gpa, file.path) orelse
-                    base.invariant("validated completion lost its input package", .{});
-                input.* = .{ .path = if (file.path.package != null) path else try self.gpa.dupe(u8, path), .state = file.state };
-                initialized += 1;
-            }
-            return inputs;
-        }
         var inputs = std.ArrayList(watch_inputs.Input).empty;
         errdefer {
             for (inputs.items) |input| self.gpa.free(input.path);
@@ -3627,53 +3398,8 @@ pub const BuildEnv = struct {
             base.invariant("build env invariant violated: executable root has no checked artifact", .{});
     }
 
-    /// How the object cache files a module's pack: `pkg` for a module of a
-    /// package or platform that arrived as a URL bundle, written once per
-    /// package version and only ever read; `local` for a module reached by
-    /// path, rewritten on every edit.
-    pub const PackOrigin = enum { local, pkg };
-
-    /// Where the object cache files a module's packs and how.
-    pub const PackPlacement = struct {
-        origin: PackOrigin,
-        /// Digest of what stays the same across edits of the module: for a
-        /// URL package its URL, otherwise the package's root directory, plus
-        /// the module's path within it. Every version of the module's pack
-        /// files under this one directory, so an edit still finds the
-        /// previous version's entries.
-        identity: [32]u8,
-    };
-
-    /// The pack placement of the module `key` names, or null when the build
-    /// does not know the module.
-    pub fn packPlacementForArtifactKey(
-        self: *const BuildEnv,
-        key: check.CheckedArtifact.CheckedModuleArtifactKey,
-    ) ?PackPlacement {
-        const coord = self.coordinator orelse return null;
-        const location = coord.checked_artifact_index.get(key.bytes) orelse return null;
-        const pkg = self.packages.get(location.pkg.name) orelse return null;
-        const module = location.pkg.getModule(location.module_id) orelse return null;
-        var hasher = base.Sha256.init(.{});
-        if (pkg.url) |url| {
-            hasher.update("pkg\x00");
-            hasher.update(url.url);
-        } else {
-            hasher.update("local\x00");
-            hasher.update(pkg.root_dir);
-        }
-        hasher.update("\x00");
-        hasher.update(module.path);
-        return .{
-            .origin = if (pkg.url != null) .pkg else .local,
-            .identity = hasher.finalResult(),
-        };
-    }
-
     /// Every checked artifact `root_artifact` can lower against, other than
     /// itself and the builtin module: its lowering-visible modules in order.
-    /// Builtins get no pack of their own; their instantiations belong to the
-    /// pack of the module that requests them.
     pub fn collectVisibleArtifacts(
         self: *const BuildEnv,
         allocator: Allocator,
@@ -4780,66 +4506,4 @@ test "findModuleByQualifiedNameInPackage strictly preserves shorthand identity a
     coord.app_package_name = "app";
     const null_pkg_res = env.findModuleByQualifiedNameInPackage(null, "dep.RealModule");
     try std.testing.expect(null_pkg_res == null);
-}
-
-test "completed input validation hashes contents and checks resolution without a coordinator" {
-    const testing = std.testing;
-    var arena = base.SingleThreadArena.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
-    const path = try std.fs.path.join(allocator, &.{ root, "input.bin" });
-    var env = try BuildEnv.init(testing.allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), root, testing.io);
-    defer env.deinit();
-    const inputs = completed_compilation.Inputs{
-        .resolution = @splat(1),
-        .files = &.{.{ .path = .{ .path = path }, .state = .{ .hash = watch_inputs.hashBytes("abc") } }},
-        .path_checks = &.{},
-        .directories = &.{.{ .path = .{ .path = root }, .entries = &.{.{ .path = path }} }},
-        .module_paths = &.{},
-    };
-    var bytes: u64 = 0;
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "input.bin", .data = "abc" });
-    try testing.expect(try env.validateCompletionInputs(allocator, inputs, @splat(1), &bytes));
-    try testing.expectEqual(@as(u64, 3), bytes);
-    try testing.expect(env.coordinator == null);
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "unrelated-output", .data = "output" });
-    try testing.expect(try env.validateCompletionInputs(allocator, inputs, @splat(1), &bytes));
-    try testing.expect(!try env.validateCompletionInputs(allocator, inputs, @splat(2), &bytes));
-    // Equal size and a readable path are insufficient evidence of freshness.
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "input.bin", .data = "xyz" });
-    try testing.expect(!try env.validateCompletionInputs(allocator, inputs, @splat(1), &bytes));
-    try tmp.dir.deleteFile(testing.io, "input.bin");
-    try testing.expect(!try env.validateCompletionInputs(allocator, inputs, @splat(1), &bytes));
-}
-
-test "completed input validation rejects changed symlink identity with identical contents" {
-    const testing = std.testing;
-    var arena = base.SingleThreadArena.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "first.roc", .data = "same" });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "second.roc", .data = "same" });
-    tmp.dir.symLink(testing.io, "first.roc", "Import.roc", .{}) catch return error.SkipZigTest;
-    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
-    const path = try std.fs.path.join(allocator, &.{ root, "Import.roc" });
-    const canonical = try tmp.dir.realPathFileAlloc(testing.io, "Import.roc", allocator);
-    var env = try BuildEnv.init(testing.allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), root, testing.io);
-    defer env.deinit();
-    const inputs = completed_compilation.Inputs{
-        .resolution = @splat(1),
-        .files = &.{.{ .path = .{ .path = path }, .state = .{ .hash = watch_inputs.hashBytes("same") } }},
-        .path_checks = &.{.{ .path = .{ .path = path }, .canonical = .{ .path = canonical } }},
-        .directories = &.{},
-        .module_paths = &.{},
-    };
-    var bytes: u64 = 0;
-    try testing.expect(try env.validateCompletionInputs(allocator, inputs, @splat(1), &bytes));
-    try tmp.dir.deleteFile(testing.io, "Import.roc");
-    try tmp.dir.symLink(testing.io, "second.roc", "Import.roc", .{});
-    try testing.expect(!try env.validateCompletionInputs(allocator, inputs, @splat(1), &bytes));
 }

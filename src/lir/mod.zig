@@ -21,7 +21,6 @@ pub const DynOps = core.DynOps;
 /// Public checked-module-to-LIR lowering entrypoint.
 pub const CheckedPipeline = @import("checked_pipeline.zig");
 /// One module's closed exports lowered as a program of their own.
-pub const PackProgram = @import("pack_program.zig");
 /// Direct boxed update wrapper rewrite before ARC.
 pub const BoxReuse = @import("box_reuse.zig");
 /// Internal aggregate return-slot variants before ARC.
@@ -33,6 +32,7 @@ pub const BodyClone = @import("body_clone.zig");
 /// Exact procedure-local stack lifetimes, shared by the native and LLVM
 /// backends.
 pub const StackPlan = @import("StackPlan.zig");
+pub const LocalWrites = @import("LocalWrites.zig");
 /// Struct-typed join parameters split into per-field parameters before ARC.
 pub const PruneJoinParams = @import("prune_join_params.zig");
 pub const ScalarizeJoins = @import("scalarize_joins.zig");
@@ -191,7 +191,6 @@ test "lir tests" {
     std.testing.refAllDecls(@import("arc_liveness.zig"));
     std.testing.refAllDecls(ArcDismantle);
     std.testing.refAllDecls(LirImage);
-    std.testing.refAllDecls(PackProgram);
 }
 
 /// Canonical packed product data and committed-layout copy plans.
