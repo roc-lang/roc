@@ -339,6 +339,8 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         .section_index = .{ text_index, data_index, bss_index },
         .reached_atoms = reached_atoms,
     };
+    var copy_list: std.ArrayList(Copy) = .empty;
+    defer copy_list.deinit(gpa);
     var copies: std.ArrayList(Task) = .empty;
     defer copies.deinit(gpa);
     var patches: std.ArrayList(Task) = .empty;
@@ -358,19 +360,30 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
             const first = view.atomRange(atom).start;
             while (atom < atoms_reached.len and atoms_reached[atom]) atom += 1;
             const end = view.atomRange(atom - 1).end;
-            try addCopies(gpa, &copies, &context, view.block()[first..end], context.fileOffsetOf(place.block) + first);
+            try addCopies(gpa, &copy_list, view.block()[first..end], context.fileOffsetOf(place.block) + first);
         }
-        if (view.data().len != 0) try addCopies(gpa, &copies, &context, view.data(), context.fileOffsetOf(place.data));
+        if (view.data().len != 0) try addCopies(gpa, &copy_list, view.data(), context.fileOffsetOf(place.data));
         for ([_]UnitImage.Region{ .debug_abbrev, .debug_info, .debug_line }, 0..) |region, slot| {
-            try addCopies(gpa, &copies, &context, view.regionBytes(region), debug_offsets[slot] + place.debug[slot]);
+            try addCopies(gpa, &copy_list, view.regionBytes(region), debug_offsets[slot] + place.debug[slot]);
         }
-        try addCopies(gpa, &copies, &context, view.strings(), strtab_offset + place.strings);
+        try addCopies(gpa, &copy_list, view.strings(), strtab_offset + place.strings);
         try addRanges(gpa, &copies, &context, .symbols, index, view.symbols().len);
         try addRanges(gpa, &patches, &context, .sites, index, view.sites().len);
     }
-    if (host_symtab) |symtab| try addCopies(gpa, &copies, &context, hostBytes(host, symtab.offset + sym_size, symtab.size -| sym_size), symtab_offset + (1 + app_symbol_count) * sym_size);
+    if (host_symtab) |symtab| try addCopies(gpa, &copy_list, hostBytes(host, symtab.offset + sym_size, symtab.size -| sym_size), symtab_offset + (1 + app_symbol_count) * sym_size);
     for (debug_host_index, 0..) |host_index, slot| {
-        if (host_index != 0) try addCopies(gpa, &copies, &context, hostBytes(host, host.section(host_index).offset, host.section(host_index).size), debug_offsets[slot]);
+        if (host_index != 0) try addCopies(gpa, &copy_list, hostBytes(host, host.section(host_index).offset, host.section(host_index).size), debug_offsets[slot]);
+    }
+    // Copies in tasks of about `copy_chunk` bytes each, however many
+    // pieces that takes.
+    var batch_first: usize = 0;
+    var batch_bytes: usize = 0;
+    for (copy_list.items, 0..) |copy, at| {
+        batch_bytes += copy.from.len;
+        if (batch_bytes < copy_chunk and at + 1 < copy_list.items.len) continue;
+        try copies.append(gpa, .{ .context = &context, .work = .{ .copies = copy_list.items[batch_first .. at + 1] } });
+        batch_first = at + 1;
+        batch_bytes = 0;
     }
     try runTasks(gpa, executor, copies.items);
     try runTasks(gpa, executor, patches.items);
@@ -589,11 +602,16 @@ const copy_chunk: usize = 256 * 1024;
 /// The most sites or symbols one task handles.
 const entry_chunk: u32 = 8192;
 
-fn addCopies(gpa: Allocator, tasks: *std.ArrayList(Task), context: *const Context, from: []const u8, to: u64) Allocator.Error!void {
+/// One run of bytes to copy into the output.
+const Copy = struct { from: []const u8, to: u64 };
+
+/// Add the copy of `from` to output offset `to`, in pieces of at most
+/// `copy_chunk` bytes.
+fn addCopies(gpa: Allocator, list: *std.ArrayList(Copy), from: []const u8, to: u64) Allocator.Error!void {
     var at: usize = 0;
     while (at < from.len) : (at += copy_chunk) {
         const len = @min(copy_chunk, from.len - at);
-        try tasks.append(gpa, .{ .context = context, .work = .{ .copy = .{ .from = from[at..][0..len], .to = to + at } } });
+        try list.append(gpa, .{ .from = from[at..][0..len], .to = to + at });
     }
 }
 
@@ -613,7 +631,7 @@ const Range = struct { image: u32, first: u32, count: u32 };
 const Task = struct {
     context: *const Context,
     work: union(enum) {
-        copy: struct { from: []const u8, to: u64 },
+        copies: []const Copy,
         symbols: Range,
         sites: Range,
     },
@@ -623,12 +641,9 @@ const Task = struct {
     fn run(opaque_task: *anyopaque, _: base.post_check_task_executor.Worker) ?*anyopaque {
         const self: *Task = @ptrCast(@alignCast(opaque_task));
         switch (self.work) {
-            .copy => |copy| {
-                const out = self.context.out[@intCast(copy.to)..][0..copy.from.len];
-                populate(out, madv_populate_write);
-                populate(@constCast(copy.from), madv_populate_read);
-                @memcpy(out, copy.from);
-                self.bytes = copy.from.len;
+            .copies => |list| for (list) |copy| {
+                @memcpy(self.context.out[@intCast(copy.to)..][0..copy.from.len], copy.from);
+                self.bytes += copy.from.len;
             },
             .symbols => |range| self.writeSymbols(range),
             .sites => |range| self.applySites(range),
@@ -702,18 +717,6 @@ fn runTasks(gpa: Allocator, executor: ?Executor, tasks: []Task) Allocator.Error!
     const completions = try gpa.alloc(base.post_check_task_executor.Completion, tasks.len);
     defer gpa.free(completions);
     try pool.run(work, completions);
-}
-
-const madv_populate_read = 22;
-const madv_populate_write = 23;
-
-/// Fault in the pages of `bytes` in one call (`MADV_POPULATE_READ` or
-/// `MADV_POPULATE_WRITE`); a hint whose failure changes nothing but speed.
-fn populate(bytes: []u8, advice: u32) void {
-    if (bytes.len == 0) return;
-    const start = std.mem.alignBackward(usize, @intFromPtr(bytes.ptr), page_size);
-    const end = std.mem.alignForward(usize, @intFromPtr(bytes.ptr) + bytes.len, page_size);
-    _ = linux.madvise(@ptrFromInt(start), end - start, advice);
 }
 
 fn writeLoad(entry: *[56]u8, offset: u64, vaddr: u64, filesz: u64, memsz: u64, flags: u32) void {
