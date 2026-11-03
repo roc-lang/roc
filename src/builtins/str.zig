@@ -1409,35 +1409,46 @@ pub fn strConcat(
     }
 }
 
-/// The bits of a small string: its three words as one 192-bit value, the
-/// first byte lowest.
-inline fn smallBits(string: RocStr) u192 {
-    return @as(u192, @intFromPtr(string.bytes)) |
-        (@as(u192, string.capacity_or_alloc_ptr) << 64) |
-        (@as(u192, string.length) << 128);
+/// A small string's three words as one integer, its first byte lowest:
+/// 192 bits on a 64-bit target, 96 on wasm32.
+pub const SmallWords = @Int(.unsigned, 3 * @bitSizeOf(usize));
+const SmallShift = std.math.Log2Int(SmallWords);
+const word_bits = @bitSizeOf(usize);
+
+/// A small string's words as one integer, its bytes past the length and
+/// its flag byte as they are.
+pub inline fn smallWords(string: RocStr) SmallWords {
+    return @as(SmallWords, @intFromPtr(string.bytes)) |
+        (@as(SmallWords, string.capacity_or_alloc_ptr) << word_bits) |
+        (@as(SmallWords, string.length) << (2 * word_bits));
 }
 
-inline fn smallFromBits(bits: u192) RocStr {
+/// The small string whose words are `words`, the flag byte among them.
+pub inline fn smallFromWords(words: SmallWords) RocStr {
     return .{
-        .bytes = @ptrFromInt(@as(usize, @truncate(bits))),
-        .capacity_or_alloc_ptr = @truncate(bits >> 64),
-        .length = @truncate(bits >> 128),
+        .bytes = @ptrFromInt(@as(usize, @truncate(words))),
+        .capacity_or_alloc_ptr = @truncate(words >> word_bits),
+        .length = @truncate(words >> (2 * word_bits)),
     };
+}
+
+/// The flag byte of a small string of `length` bytes, in place in its words.
+pub inline fn smallFlagWords(length: usize) SmallWords {
+    return @as(SmallWords, RocStr.smallStrFlagByte(length)) << (SMALL_STRING_SIZE * 8 - 8);
 }
 
 /// Two small strings whose result is small: each masked to its bytes, the
 /// second shifted up by the first's length, the flag byte set. All of it in
 /// whole words, so the result's words forward from the stores that made
 /// them; no byte copies, and no wide load waiting on narrow stores.
-fn concatSmall(arg1: RocStr, arg2: RocStr, combined_length: usize) RocStr {
+pub fn concatSmall(arg1: RocStr, arg2: RocStr, combined_length: usize) RocStr {
     std.debug.assert(arg1.isSmallStr() and arg2.isSmallStr());
     std.debug.assert(combined_length < SMALL_STRING_SIZE);
-    const first_bits: u8 = @intCast(arg1.len() * 8);
-    const second_bits: u8 = @intCast(arg2.len() * 8);
-    const first = smallBits(arg1) & ((@as(u192, 1) << first_bits) - 1);
-    const second = smallBits(arg2) & ((@as(u192, 1) << second_bits) - 1);
-    const flag = @as(u192, RocStr.smallStrFlagByte(combined_length)) << (SMALL_STRING_SIZE * 8 - 8);
-    return smallFromBits(first | (second << first_bits) | flag);
+    const first_bits: SmallShift = @intCast(arg1.len() * 8);
+    const second_bits: SmallShift = @intCast(arg2.len() * 8);
+    const first = smallWords(arg1) & ((@as(SmallWords, 1) << first_bits) - 1);
+    const second = smallWords(arg2) & ((@as(SmallWords, 1) << second_bits) - 1);
+    return smallFromWords(first | (second << first_bits) | smallFlagWords(combined_length));
 }
 
 /// Str.contains
