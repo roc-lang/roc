@@ -3233,7 +3233,7 @@ pub fn build(b: *std.Build) void {
         build_test_strategy_differential_runner_step,
         run_test_strategy_differential_step,
         eval_host_effects_run_args,
-        verify_sealed_type_view_env,
+        &.{},
     );
 
     // One explicitly expensive proof gate owns every execution lane. Keep the
@@ -6513,9 +6513,11 @@ fn addBuildPathCheck(b: *std.Build, binary: std.Build.LazyPath) *Step {
 /// An environment variable a tool's run step sets, as name and value.
 const RunEnvVar = struct { []const u8, []const u8 };
 
-/// Debug tool runs check the sealed type view against checked type
-/// publication for every module they compile (`verify_sealed_type_view` in
-/// src/base/dev_diagnostics.zig).
+/// The snapshot tool and eval runner check the sealed type view against
+/// checked type publication for every module they compile
+/// (`verify_sealed_type_view` in src/base/dev_diagnostics.zig). The strategy
+/// differential runner does not: checked types are the same under every
+/// specialization strategy, so the eval runner's check already covers them.
 const verify_sealed_type_view_env: []const RunEnvVar = &.{.{ "ROC_VERIFY_SEALED_TYPE_VIEW", "1" }};
 
 fn install_and_run(
