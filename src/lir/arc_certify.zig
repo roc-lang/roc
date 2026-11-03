@@ -4514,6 +4514,7 @@ const Certifier = struct {
         // here, so the claim crosses the join on the container instead of a
         // negative balance failing below.
         try self.settleNegativeClaims(state);
+        try self.addUnclaimedSelectionCarriers(state);
 
         // Every bound value's lowest carrier names provenance anchors.
         self.repr_scratch.clearRetainingCapacity();
@@ -4764,6 +4765,43 @@ const Certifier = struct {
             };
             const holds_unit = state.balanceOf(value) != 0 and !try self.claimsSpendUnit(state, value);
             if (!reaches_carried and !(holds_unit and self.payloadChainStoresOwnership(state, value))) continue;
+            var link = self.values.items[value].payload_source;
+            while (link != no_value and !self.carrier_scratch.contains(link)) : (link = self.values.items[link].payload_source) {
+                const carrier = self.repr_scratch.get(link) orelse continue;
+                try self.provenance_carrier_scratch.put(carrier, {});
+                try self.relevant_bound_scratch.append(self.allocator, carrier);
+                try self.carrier_scratch.put(link, carrier);
+            }
+        }
+        if (self.relevant_bound_scratch.items.len != relevant_len) {
+            std.mem.sort(u32, self.relevant_bound_scratch.items, {}, std.sort.asc(u32));
+        }
+    }
+
+    /// A relevant selection that holds no unit and reaches no carried
+    /// container claims its stored unit before quotienting. When a sibling's
+    /// take already claimed part of that unit, as when a record's `name` is
+    /// released on one branch and its `value` is read after the join, the
+    /// claim is unavailable and the rest of the unit stays with the container,
+    /// which the selection's later reads still need. Every carrier on the
+    /// selection's chain then joins the relevant bound positions, exactly as
+    /// for a selection that holds a unit of its own.
+    fn addUnclaimedSelectionCarriers(self: *Certifier, state: *const State) Allocator.Error!void {
+        const relevant_len = self.relevant_bound_scratch.items.len;
+        for (0..relevant_len) |index| {
+            const value = state.valueAtDense(self.relevant_bound_scratch.items[index]);
+            if (value == no_value or self.values.items[value].payload_source == no_value) continue;
+            if (!self.holdsNoOwnership(state, value)) continue;
+            if (!self.payloadChainStoresOwnership(state, value)) continue;
+            var reaches_carried = false;
+            var probe = self.values.items[value].payload_source;
+            while (probe != no_value) : (probe = self.values.items[probe].payload_source) {
+                if (self.carrier_scratch.contains(probe)) {
+                    reaches_carried = true;
+                    break;
+                }
+            }
+            if (reaches_carried) continue;
             var link = self.values.items[value].payload_source;
             while (link != no_value and !self.carrier_scratch.contains(link)) : (link = self.values.items[link].payload_source) {
                 const carrier = self.repr_scratch.get(link) orelse continue;
