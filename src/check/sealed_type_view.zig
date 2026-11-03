@@ -41,7 +41,6 @@ const CheckedTypePayload = checked_artifact.CheckedTypePayload;
 const CheckedImportViews = checked_artifact.CheckedImportViews;
 const CheckedSourceTypeRoots = checked_artifact.CheckedSourceTypeRoots;
 const CheckedSourceTypeRootInputs = checked_artifact.CheckedSourceTypeRootInputs;
-const CheckedFieldKind = checked_artifact.CheckedFieldKind;
 const CheckedFieldDefault = checked_artifact.CheckedFieldDefault;
 const CheckedFunctionKind = checked_artifact.CheckedFunctionKind;
 const CheckedBuiltinNominal = checked_artifact.CheckedBuiltinNominal;
@@ -760,8 +759,22 @@ const Gate = struct {
 
     fn compare(self: *Gate, published: CheckedTypePayload, pair: Pair) Allocator.Error!void {
         const sealed = try self.view.payload(pair.var_);
-        if (published == .pending) mismatch("a pending published payload", pair);
-        if (!std.mem.eql(u8, @tagName(published), @tagName(sealed))) mismatch("the payload kind", pair);
+        const same_kind = switch (published) {
+            .pending => mismatch("a pending published payload", pair),
+            .err => sealed == .err,
+            .flex => sealed == .flex,
+            .rigid => sealed == .rigid,
+            .alias => sealed == .alias,
+            .record => sealed == .record,
+            .tuple => sealed == .tuple,
+            .nominal => sealed == .nominal,
+            .function => sealed == .function,
+            .empty_record => sealed == .empty_record,
+            .tag_union => sealed == .tag_union,
+            .empty_tag_union => sealed == .empty_tag_union,
+            .field_kind => sealed == .field_kind,
+        };
+        if (!same_kind) mismatch("the payload kind", pair);
         switch (published) {
             .pending => unreachable, // rejected above
             .err, .empty_record, .empty_tag_union => {},
@@ -973,9 +986,11 @@ const Gate = struct {
     }
 };
 
+const ViewTestError = @import("test/TestEnv.zig").TestEnvError || error{ CorruptArtifact, CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch };
+
 /// Check `source` against the builtin module, publish its source types, and
 /// verify the sealed type view against the publication.
-fn expectViewMatchesPublication(source: []const u8) !void {
+fn expectViewMatchesPublication(source: []const u8) ViewTestError!void {
     const TestEnv = @import("test/TestEnv.zig");
     const compiled_builtins = @import("compiled_builtins");
     const CompactWriter = collections.CompactWriter;
