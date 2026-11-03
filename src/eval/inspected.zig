@@ -406,15 +406,9 @@ pub const BoolRootModule = struct {
     static_data: RuntimeStaticData = .{},
 };
 
-/// Native test code capability. The provider owns admitted bytes until all
-/// invocations complete; publication borrows only code this execution emitted.
-pub const DevTestArtifacts = struct {
-    splice_source: ?backend.dev.SpliceSource = null,
+/// Options for compiling native test procedures with the shared executor.
+pub const DevTestOptions = struct {
     executor: ?base.post_check_task_executor.Executor = null,
-    publication: ?struct {
-        context: *anyopaque,
-        accept: *const fn (*anyopaque, *const backend.dev.CodeExcerpt.Set) Allocator.Error!void,
-    } = null,
 };
 
 /// Timings for JIT-compiling and running boolean test roots with the dev backend.
@@ -430,7 +424,6 @@ pub const DevBoolRootTimingSnapshot = struct {
     executable_memory_ns: u64 = 0,
     root_execution_ns: u64 = 0,
     procedures_emitted: u64 = 0,
-    procedures_spliced: u64 = 0,
     root_codegen_count: u64 = 0,
     root_execution_count: u64 = 0,
 };
@@ -2333,12 +2326,12 @@ pub fn devEvalBoolRootModule(allocator: Allocator, module: BoolRootModule, timin
 
 /// Compile one explicitly shared program once, retaining module observation partitions.
 pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolRootModule, timing: ?*DevBoolRootTiming, max_workers: ?usize) Error!BoolRootEvalBatch {
-    return devEvalSharedBoolRootModulesWithArtifacts(allocator, modules, timing, max_workers, null);
+    return devEvalSharedBoolRootModulesWithOptions(allocator, modules, timing, max_workers, null);
 }
 
 /// The specialized native consumer; null retains the interpreter helpers' and
 /// Boxy caller's in-process emission contract.
-pub fn devEvalSharedBoolRootModulesWithArtifacts(allocator: Allocator, modules: []const BoolRootModule, timing: ?*DevBoolRootTiming, max_workers: ?usize, artifacts: ?DevTestArtifacts) Error!BoolRootEvalBatch {
+pub fn devEvalSharedBoolRootModulesWithOptions(allocator: Allocator, modules: []const BoolRootModule, timing: ?*DevBoolRootTiming, max_workers: ?usize, artifacts: ?DevTestOptions) Error!BoolRootEvalBatch {
     try validateSharedBoolRootModules(modules);
     const module = modules[0];
     const store = module.store;
@@ -2422,7 +2415,6 @@ pub fn devEvalSharedBoolRootModulesWithArtifacts(allocator: Allocator, modules: 
             if (proc.is_static_initializer) continue;
             try demand.append(allocator, @fromBackingInt(@intCast(index)));
         }
-        if (artifacts) |options| if (options.splice_source) |source| try splice.spliceExternal(&codegen, demand.items, source);
         const static_rc_helpers = try backend.collectRequiredRcHelpers(allocator, module.static_data.exports);
         defer allocator.free(static_rc_helpers);
         var retained: ?backend.dev.NativeProcCompiler.Retained = null;
@@ -2442,7 +2434,6 @@ pub fn devEvalSharedBoolRootModulesWithArtifacts(allocator: Allocator, modules: 
             try splice.addDataItems(carried);
             if (timing) |timings| {
                 timings.snapshot_value.procedures_emitted += metrics.procedures_emitted;
-                timings.snapshot_value.procedures_spliced += splice.spliced_procs;
             }
         } else {
             base.dev_diagnostics.countTestWork(.native_test_procedures, demand.items.len);
@@ -2507,15 +2498,6 @@ pub fn devEvalSharedBoolRootModulesWithArtifacts(allocator: Allocator, modules: 
                 else => zeroArgRootInvariant("invalid frozen data placement for native tests"),
             };
         }
-        if (artifacts) |options| if (options.publication) |publication| {
-            var extracted = backend.dev.CodeExcerpt.extract(HostLirCodeGen, allocator, &codegen, store.getProcSpecs(), layouts, static_strings.exports, module.static_data.exports, splice.data.items) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => zeroArgRootInvariant("native test emission produced invalid procedure artifacts"),
-            };
-            defer extracted.deinit();
-            try publication.accept(publication.context, &extracted);
-        };
-
         const Resolver = struct {
             codegen: *const HostLirCodeGen,
             executable: *const ExecutableMemory,

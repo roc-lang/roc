@@ -912,7 +912,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// One contiguous range of the code buffer with a known producer.
         pub const CodeRegion = struct {
-            payload: ?@import("CodeExcerpt.zig").AssembledPayload = null,
             start: usize,
             end: usize,
             /// Offset from `start` that references to this region resolve to.
@@ -13958,9 +13957,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (proc_spec.hosted) |hosted| {
                 return try self.generateCAbiCall(.{ .hosted = hosted }, arg_locs, arg_layouts, call.ret_layout);
             }
-            if (proc_spec.c_abi_entry) {
-                return try self.generateCAbiCall(.{ .entry = proc_spec.identity }, arg_locs, arg_layouts, call.ret_layout);
-            }
             if (proc_spec.linked) {
                 return try self.generateRocCall(.{ .linked = proc_spec.identity }, arg_locs, arg_layouts, call.ret_layout);
             }
@@ -13988,7 +13984,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateDynCall(self: *Self, proc_id: lir.LIR.LirProcSpecId, args: LocalSpan, target_local: LocalId, drive: lir.LIR.PendingDrive) Allocator.Error!void {
             try self.spillAllVectorLocals();
             const callee = self.store.getProcSpec(proc_id);
-            if (callee.hosted != null or callee.c_abi_entry) base.invariant("LIR/codegen invariant violated: a call with dynamic operands targets a C-ABI procedure", .{});
+            if (callee.hosted != null) base.invariant("LIR/codegen invariant violated: a call with dynamic operands targets a C-ABI procedure", .{});
             const arg_refs = self.store.getLocalSpan(args);
             const param_refs = self.store.getLocalSpan(callee.args);
             if (arg_refs.len != param_refs.len) base.invariant(
@@ -14811,12 +14807,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return on_drop_reg;
         }
 
-        /// The callee of a call made through the platform C ABI: a hosted
-        /// function, or the C-ABI entry of a procedure a linked object-cache
-        /// object provides.
+        /// A hosted callee reached through the platform C ABI.
         const CAbiCallee = union(enum) {
             hosted: lir.LIR.HostedProc,
-            entry: lir.ProcIdentity,
         };
 
         fn generateCAbiCall(
@@ -14855,16 +14848,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (size_align.size > 0) {
                     try self.copyBytesToStackOffset(args_slot + @as(i32, @intCast(arg_offset)), arg_loc_raw, size_align.size);
                 }
-            }
-
-            // A linked object-cache entry exists only in a linked object: an
-            // object output links it, a `roc run` image's shim resolves it by
-            // name in the host executable that links it, and a fragment
-            // compiled for either emits relocatable calls too.
-            const linked_output = self.generation_mode == .object_file or self.generation_mode == .shim_execution or
-                (self.fragment_mode and (self.fragment_source_mode == .object_file or self.fragment_source_mode == .shim_execution));
-            if (callee == .entry and !linked_output) {
-                base.invariant("{s}", .{"a C-ABI object-cache entry reached code that is not linked as an object"});
             }
 
             // Native execution resolves the hosted symbol through the host
@@ -14958,10 +14941,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             } else {
                 const symbol = switch (callee) {
                     .hosted => |hosted| try self.hostedSymbol(hosted.symbol),
-                    .entry => |identity| symbol: {
-                        var name: [lir.ProcIdentity.symbol_name_len]u8 = undefined;
-                        break :symbol try self.internSymbolName(identity.writeCAbiEntryName(&name), .shared);
-                    },
                 };
                 try builder.callRelocatable(symbol, &self.codegen);
             }
@@ -18552,7 +18531,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.generation_mode = .shim_execution;
             defer self.generation_mode = mode;
             const proc = self.store.getProcSpec(proc_id);
-            std.debug.assert(!(proc.external and !proc.c_abi_entry) and !proc.is_static_initializer);
+            std.debug.assert(!(proc.external) and !proc.is_static_initializer);
             try self.compileProcSpec(proc_id, proc);
             try self.finishFragment();
         }
@@ -18653,7 +18632,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (proc.linked) {
                     base.invariant("Dev/codegen invariant violated: an image compiles procedure {d}, which another object of a link defines", .{i});
                 }
-                if (proc.external and !proc.c_abi_entry) {
+                if (proc.external) {
                     base.invariant("Dev/codegen invariant violated: external proc {d} had no object-cache entry spliced before compilation", .{i});
                 }
                 switch (isa) {
@@ -18924,11 +18903,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             if (proc.hosted) |hosted| {
                 try self.generateCAbiProcWrapper(.{ .hosted = hosted }, proc);
-            } else if (proc.c_abi_entry) {
-                // The procedure's code is a linked object-cache entry; this
-                // body forwards to its C-ABI entry, for callers that reach
-                // the procedure other than by a direct call.
-                try self.generateCAbiProcWrapper(.{ .entry = proc.identity }, proc);
             } else {
                 const body = requireProcBody(proc_id, proc);
                 try self.ensureStableLocationsForStmtLocals(body);
@@ -23086,15 +23060,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.logBranchIsland(island_start);
         }
 
-        /// Every range of the code buffer with its producer, in emission order.
-        /// Assembly copies canonical bytes and changes only relocation sites.
-        /// The source set owns this borrow until extraction retains its owner.
-        pub fn retainAssembledPayload(self: *Self, start: usize, payload: @import("CodeExcerpt.zig").AssembledPayload) void {
-            const region = &self.code_regions.items[self.code_regions.items.len - 1];
-            std.debug.assert(region.start == start and region.end - region.start == payload.code.len);
-            region.payload = payload;
-        }
-
         pub fn codeRegions(self: *const Self) []const CodeRegion {
             return self.code_regions.items;
         }
@@ -23725,7 +23690,7 @@ fn compileProcSpecsInOrder(cg: anytype, demand: []const lir.LIR.LirProcSpecId) A
         if (cg.proc_registry.get(@backingInt(proc_id))) |registered| {
             if (registered.code_start != unresolved_proc_code_start) continue;
         }
-        std.debug.assert(!proc.external or proc.c_abi_entry);
+        std.debug.assert(!proc.external);
         switch (comptime isaOf(@TypeOf(cg.*).roc_target)) {
             .aarch64 => {
                 try cg.emitBranchIslandIfNeeded();

@@ -35,7 +35,6 @@
 
 const backend = @import("backend");
 const std = @import("std");
-const completed = @import("completed_compilation.zig");
 const builtin = @import("builtin");
 const threading = @import("threading.zig");
 const can = @import("can");
@@ -782,9 +781,6 @@ pub const ModuleState = struct {
     external_dependents: std.ArrayList(ModuleRef),
     /// Diagnostic reports
     reports: std.ArrayList(Report),
-    completion_report_start: usize = 0,
-    /// Diagnostic ownership before app/platform pairing replaces an artifact.
-    completion_module_key: ?[32]u8 = null,
     /// Reports already present before checked-cache lookup: parsing and
     /// canonicalization produced them, and their own caches reproduce them.
     /// Checking (including the deferred import drain) and evaluation append
@@ -2269,7 +2265,6 @@ pub const Coordinator = struct {
     /// which requires a checked app root.
     checked_program: bool = false,
     runtime_lowering: ?compile_build.RuntimeLoweringConfig = null,
-    runtime_output_probe: ?compile_build.RuntimeOutputProbe = null,
     /// The strategy whose compile-time evaluator completes every module's
     /// compile-time roots: `.boxy` under `--specialize=no`, `.lss`
     /// otherwise (design.md "Caching Under `.boxy`"). It is part of each
@@ -2280,19 +2275,9 @@ pub const Coordinator = struct {
     boxy_object_lowering: ?BoxyObjectLowering = null,
     /// The compilation's module objects, once it has one to build.
     boxy_objects: ?BoxyObjects = null,
-    /// A completed result owns the semantic outcome independently of checked
-    /// modules, which can remain prepared when no live finalization is needed.
-    compilation_result: union(enum) { live, recorded: *const completed.Outcome } = .live,
-    completion_arena: ?*base.SingleThreadArena = null,
-    completion_outcome: completed.Outcome = .{},
-    completion_capture_ns: u64 = 0,
-    completion_observations: std.ArrayList([]const u8) = .empty,
-    completion_demand: std.ArrayList(completed.Demand) = .empty,
     debug_observer: ?eval.CompileTimeFinalization.DebugObserver = null,
-    compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
-    /// Keep the code compile-time evaluation ran as artifacts even without
-    /// an object cache to publish it to, so a test can compare it with a
-    /// build's code.
+    /// Keep compile-time evaluation artifacts so tests can compare them
+    /// with the code emitted by a build.
     keep_compile_time_artifacts: bool = false,
     /// The checked modules whose `expect`s are the developer's own tests, in
     /// the order their test roots join compile-time evaluation. Every command
@@ -2573,12 +2558,6 @@ pub const Coordinator = struct {
         if (thread_lanes == &self.coordinator_lanes) thread_lanes = null;
         self.coordinator_lanes.deinit();
 
-        if (self.completion_arena) |arena| {
-            self.completion_demand.deinit(self.gpa);
-            self.completion_observations.deinit(self.gpa);
-            arena.deinit();
-            self.gpa.destroy(arena);
-        }
         if (self.program_session) |*session| session.deinit();
         self.program_session = null;
         for (self.program_literal_values.items) |entry| {
@@ -3175,17 +3154,6 @@ pub const Coordinator = struct {
         try self.checkCancelRequest();
         if (self.release_checked_solver_types) try self.releaseCheckedSolverTypes();
         self.checked_program = mode == .executable_artifacts and self.appRootChecked();
-        if (self.checked_program and self.runtime_lowering != null and !self.hasUserErrors()) {
-            if (self.runtime_output_probe) |probe| {
-                if (try probe.cached(probe.context, self.executableRootCheckedArtifact())) |outcome| {
-                    try self.replayCompleted(outcome);
-                    self.compilation_result = .{ .recorded = outcome };
-                    return;
-                }
-                try self.beginCompletion();
-            }
-        }
-
         if (self.checked_program and self.findRootModule(.platform) != null) {
             const platform_root = self.findRootModule(.platform).?;
             const platform = platform_root.mod.checkedArtifact().?;
@@ -3214,11 +3182,9 @@ pub const Coordinator = struct {
             const program_root = if (self.checked_program) self.executableRootCheckedArtifact() else null;
             try self.evaluateProgram(null, program_root);
         }
-        if (self.completion_arena != null) try self.captureCompletionReports();
     }
 
-    /// Evaluate only the live alternative. Recorded compilations return before
-    /// platform evaluation, pairing and shared demand discovery.
+    /// Evaluate the checked program and its compile-time demands.
     fn evaluateProgram(
         self: *Coordinator,
         extra_cached: ?*const CheckedArtifact.CheckedModuleArtifact,
@@ -3227,142 +3193,6 @@ pub const Coordinator = struct {
         return self.evaluatePreparedModules(true, null, extra_cached, program_root);
     }
 
-    /// Full checked closure after resolution and content validation, before any
-    /// evaluation or app/platform pairing. Physical paths serve diagnostic
-    /// rebinding; identity paths exclude compiler-owned staging directories.
-    pub fn compilationModules(self: *Coordinator, allocator: Allocator) Allocator.Error![]completed.Module {
-        var modules = std.ArrayList(completed.Module).empty;
-        errdefer modules.deinit(allocator);
-        var packages = self.packages.iterator();
-        while (packages.next()) |entry| {
-            const pkg = entry.value_ptr.*;
-            const compiler_source = std.mem.eql(u8, pkg.name, package_identity.synthetic_platform_identity) or compiler_platforms.fromIdentity(pkg.name) != null;
-            for (pkg.modules.items) |*mod| {
-                if (mod.checkedArtifact()) |artifact| try modules.append(allocator, .{
-                    .key = artifact.key.bytes,
-                    .path = mod.path,
-                    // Compiler-owned platform locations are logical names;
-                    // their materialization directory is not a program input.
-                    .identity_path = if (compiler_source) mod.name else self.crashReportPath(mod.path),
-                });
-            }
-        }
-        std.mem.sort(completed.Module, modules.items, {}, struct {
-            fn lessThan(_: void, a: completed.Module, b: completed.Module) bool {
-                const order = std.mem.order(u8, &a.key, &b.key);
-                return if (order == .eq) std.mem.lessThan(u8, a.identity_path, b.identity_path) else order == .lt;
-            }
-        }.lessThan);
-        return modules.toOwnedSlice(allocator);
-    }
-
-    fn beginCompletion(self: *Coordinator) Allocator.Error!void {
-        const started = std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds;
-        defer self.completion_capture_ns += @intCast(std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds - started);
-        const arena = try self.gpa.create(base.SingleThreadArena);
-        arena.* = base.SingleThreadArena.init(self.gpa);
-        self.completion_arena = arena;
-        self.completion_outcome.modules = try self.compilationModules(arena.allocator());
-        var packages = self.packages.iterator();
-        while (packages.next()) |entry| for (entry.value_ptr.*.modules.items) |*mod| {
-            mod.completion_report_start = mod.reports.items.len;
-            mod.completion_module_key = if (mod.checkedArtifact()) |artifact| artifact.key.bytes else null;
-        };
-    }
-
-    fn captureDebug(context: *anyopaque, message: []const u8) Allocator.Error!void {
-        const self: *Coordinator = @ptrCast(@alignCast(context));
-        const started = std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds;
-        defer self.completion_capture_ns += @intCast(std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds - started);
-        try self.completion_observations.append(self.gpa, try self.completion_arena.?.allocator().dupe(u8, message));
-    }
-
-    fn captureDemand(context: *anyopaque, demand: lir.CheckedPipeline.ComptimeDemand, roots: []const lir.CheckedPipeline.MonotypeRoot, modules: []const CheckedArtifact.ModuleId, literals: []const lir.CheckedPipeline.MonotypeLiteralRoot) Allocator.Error!void {
-        const self: *Coordinator = @ptrCast(@alignCast(context));
-        const started = std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds;
-        defer self.completion_capture_ns += @intCast(std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds - started);
-        const allocator = self.completion_arena.?.allocator();
-        const evaluated = try allocator.alloc(completed.RootDemand, roots.len);
-        for (roots, evaluated, 0..) |root, *out, i| out.* = .{
-            .root = .{ .module = modules[@backingInt(root.owner)].bytes, .root = @backingInt(root.request.compile_time_root.?) },
-            .reads = try copyCompletionRoots(allocator, demand.rootReads(i)),
-        };
-        const literal_demands = try allocator.alloc(completed.LiteralDemand, demand.literals.len);
-        for (demand.literals, literals, literal_demands) |literal, source, *out| out.* = .{
-            .module = source.module.bytes,
-            .checked_expr = source.site.checked_expr,
-            .kind = source.site.kind,
-            .identity = literal.identity,
-            .reads = try copyCompletionRoots(allocator, demand.reads[literal.reads.start..][0..literal.reads.len]),
-        };
-        try self.completion_demand.append(self.gpa, .{
-            .evaluated = evaluated,
-            .stored = try copyCompletionRoots(allocator, demand.stored),
-            .literals = literal_demands,
-        });
-    }
-
-    fn copyCompletionRoots(allocator: Allocator, roots: []const lir.CheckedPipeline.ComptimeDemandRoot) Allocator.Error![]const completed.Root {
-        const result = try allocator.alloc(completed.Root, roots.len);
-        for (roots, result) |root, *out| out.* = .{ .module = root.module.bytes, .root = @backingInt(root.root) };
-        return result;
-    }
-
-    fn captureCompletionReports(self: *Coordinator) Allocator.Error!void {
-        const started = std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds;
-        defer self.completion_capture_ns += @intCast(std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds - started);
-        const allocator = self.completion_arena.?.allocator();
-        var diagnostics = std.ArrayList(completed.Diagnostic).empty;
-        var packages = self.packages.iterator();
-        while (packages.next()) |entry| for (entry.value_ptr.*.modules.items) |*mod| {
-            const module_key = mod.completion_module_key orelse continue;
-            for (mod.reports.items[mod.completion_report_start..]) |report| try diagnostics.append(allocator, .{
-                .module = module_key,
-                .title = report.title,
-                .severity = report.severity,
-                .file = report.file,
-                .headline = report.headline.elements.items,
-                .body = report.document.elements.items,
-            });
-        };
-        // Reports move to the build's sink after finalization; retain structured
-        // copies before their owner can render and release them.
-        const bytes = try completed.encode(allocator, diagnostics.items);
-        var reader = completed.Reader{ .bytes = bytes, .arena = allocator, .remaining = bytes.len * 4 };
-        self.completion_outcome.diagnostics = reader.read([]completed.Diagnostic) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.InvalidRecord => coordinatorInvariant("the completion writer produced an invalid diagnostic record", .{}),
-        };
-        self.completion_outcome.observations = self.completion_observations.items;
-        self.completion_outcome.demand = self.completion_demand.items;
-    }
-
-    fn replayCompleted(self: *Coordinator, outcome: *const completed.Outcome) Allocator.Error!void {
-        const modules = try self.compilationModules(self.gpa);
-        defer self.gpa.free(modules);
-        for (outcome.diagnostics) |diagnostic| {
-            const location = self.checked_artifact_index.get(diagnostic.module) orelse
-                coordinatorInvariant("validated completion diagnostic omitted its checked module", .{});
-            const mod = location.module();
-            var report = try Report.init(self.gpa, diagnostic.title, "", diagnostic.severity);
-            errdefer report.deinit();
-            report.title = try report.addOwnedString(diagnostic.title);
-            // The record's arena outlives all reports emitted by this build.
-            completed.rebindElements(diagnostic.headline, outcome.modules, modules);
-            completed.rebindElements(diagnostic.body, outcome.modules, modules);
-            try report.headline.elements.appendSlice(diagnostic.headline);
-            try report.document.elements.appendSlice(diagnostic.body);
-            if (completed.rebindPath(diagnostic.file, outcome.modules, modules)) |path| try report.setFile(path);
-            try mod.reports.append(self.gpa, report);
-        }
-        for (outcome.observations) |message| {
-            self.roc_ctx.writeStderr("[dbg] ") catch {};
-            self.roc_ctx.writeStderr(message) catch {};
-            self.roc_ctx.writeStderr("\n") catch {};
-        }
-    }
-
-    /// Return `error.Canceled` when the embedder has asked to abandon this build.
     fn checkCancelRequest(self: *const Coordinator) error{Canceled}!void {
         const request = self.cancel_request orelse return;
         if (request.load(.acquire)) return error.Canceled;
@@ -3853,7 +3683,6 @@ pub const Coordinator = struct {
             // cannot return the error itself, so it recorded the OOM here.
             if (self.worker_oom.load(.acquire)) return error.OutOfMemory;
             try self.checkCancelRequest();
-            if (comptime !threading.is_freestanding) @import("cache_cleanup.zig").safePoint(.serial);
 
             var made_progress = false;
 
@@ -3869,10 +3698,6 @@ pub const Coordinator = struct {
                 // Multi-threaded: receive from workers via channel
                 // Use blocking recv with timeout to avoid busy spinning
                 const next_result = self.result_channel.tryRecv() orelse blk: {
-                    if (comptime !threading.is_freestanding) @import("cache_cleanup.zig").safePoint(.{ .waiting = .{
-                        .budget = self.max_threads,
-                        .tasks = self.inflight.load(.acquire),
-                    } });
                     break :blk self.result_channel.recvTimeout(10_000_000);
                 };
                 if (next_result) |result| {
@@ -4183,8 +4008,7 @@ pub const Coordinator = struct {
             if (self.checked_program) try objects.offerPending();
         }
         options.cancel_request = self.cancel_request;
-        options.object_cache = self.compile_time_object_cache;
-        options.keep_artifacts = self.compile_time_object_cache != null or self.keep_compile_time_artifacts;
+        options.keep_artifacts = self.keep_compile_time_artifacts;
         options.cached_debug_modules = cached_debug_modules.items;
         if (self.runtime_lowering) |config| {
             const configured = config.compile_time_discovery_roots;
@@ -4241,7 +4065,6 @@ pub const Coordinator = struct {
         if (eval.CompileTimeReuse.traceEnabled()) std.debug.print("ctfe-reuse settled test discovery: {d} roots\n", .{discovery_cache.hits});
         options.discovery_roots = .{ .requests = discovery_requests.items, .source_modules = discovery_sources.items };
         options.defer_debug_replay = !replay_cached_debug;
-        if (self.completion_arena != null) options.completion_sink = .{ .context = self, .demand = captureDemand, .debug = captureDebug };
         options.debug_observer = self.debug_observer;
         var runtime_target: ?lir.CheckedPipeline.TargetConfig = if (self.runtime_lowering) |config| config.target else null;
         // An explicitly empty test execution subset has no runtime consumer.
@@ -11546,22 +11369,31 @@ fn countHoistedValidations(
     return count;
 }
 
-/// Test-only access to published payloads, without corrupting control records.
+/// Test-only access to published cache payloads.
 fn testCachePaths(allocator: Allocator, root: []const u8, scope: []const u8, family: @import("artifact_store.zig").Family) @import("artifact_store.zig").Error![][]u8 {
     var store = try @import("artifact_store.zig").Store.init(allocator, std.testing.io, root);
     defer store.deinit();
-    const keys = try store.groupKeys(allocator, CacheManager.identity(family, @splat(0), scope));
-    defer allocator.free(keys);
+    const directory = try store.groupPath(allocator, CacheManager.identity(family, @splat(0), scope));
+    defer allocator.free(directory);
+    const filesystem = CoreCtx.os(allocator, allocator, std.testing.io);
+    const entries = filesystem.listDirTop(directory, allocator) catch |err| switch (err) {
+        error.FileNotFound => return allocator.alloc([]u8, 0),
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.IoFailure,
+    };
+    defer {
+        for (entries) |entry| allocator.free(entry.path);
+        allocator.free(entries);
+    }
     var paths: std.ArrayList([]u8) = .empty;
     errdefer {
         for (paths.items) |path| allocator.free(path);
         paths.deinit(allocator);
     }
-    for (keys) |key| {
-        var artifact = (try store.acquireKey(key, store.now())) orelse continue;
-        defer artifact.deinit();
+    for (entries) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.path, ".data")) continue;
         try paths.ensureUnusedCapacity(allocator, 1);
-        paths.appendAssumeCapacity(try allocator.dupe(u8, artifact.path));
+        paths.appendAssumeCapacity(try allocator.dupe(u8, entry.path));
     }
     return paths.toOwnedSlice(allocator);
 }
@@ -12038,7 +11870,7 @@ fn readCheckedModuleCacheEntry(allocator: Allocator, cache_dir: []const u8, key:
     defer allocator.free(entries_dir);
     var store = try @import("artifact_store.zig").Store.init(allocator, io, cache_dir);
     defer store.deinit();
-    return store.read(allocator, CacheManager.identity(.checked, key, entries_dir), store.now());
+    return store.read(allocator, CacheManager.identity(.checked, key, entries_dir));
 }
 
 test "issue 12059: a checked module's cache entry does not depend on how an importer reads its constants" {
@@ -14093,9 +13925,9 @@ test "shared CTFE and runtime requests specialize once per evaluation across wor
     for ([_]usize{ 1, 4 }) |jobs| {
         for ([_]lir.CheckedPipeline.TargetConfig{
             .{ .target_usize = .native, .inline_expects = .run },
-            .{ .target_usize = .native, .inline_expects = .run, .code_provision = .host_dev_objects },
+            .{ .target_usize = .native, .inline_expects = .run },
             .{ .target_usize = other_width, .inline_expects = .run },
-            .{ .target_usize = other_width, .inline_expects = .run, .code_provision = .target_dev_objects },
+            .{ .target_usize = other_width, .inline_expects = .run },
             .{ .target_usize = .native, .inline_expects = .omit },
         }) |consumer| {
             const width = consumer.target_usize;
@@ -14128,7 +13960,6 @@ test "shared CTFE and runtime requests specialize once per evaluation across wor
             const target: lir.CheckedPipeline.TargetConfig = .{
                 .target_usize = width,
                 .inline_expects = consumer.inline_expects,
-                .code_provision = consumer.code_provision,
                 .work_metrics = &metrics,
                 .post_check_executor = coord.postCheckExecutor(),
             };

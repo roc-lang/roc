@@ -1,206 +1,50 @@
-//! Native, indexed artifact storage. All payloads, including unfinished ones,
-//! have a catalog slot before creation. Shard locks protect only metadata and
-//! acquisition; payload production never holds a catalog lock.
+//! Direct file storage for checked modules and Boxy objects.
+//! Each identity names one file. Writers stage complete bytes beside it and
+//! atomically rename them into place; readers own an open file or mapping.
 
 const std = @import("std");
 const base = @import("base");
-pub const catalog = @import("cache_index.zig");
-const threading = @import("threading.zig");
+const Allocator = std.mem.Allocator;
 const Io = std.Io;
 const Dir = Io.Dir;
-const Allocator = std.mem.Allocator;
-const put = catalog.put;
-const get = catalog.get;
 
-/// Storage-format namespace shared by all compiler compatibility identities.
-pub const format_directory = "artifacts-v3";
-/// Fixed number of independently coordinated catalogs.
-pub const shard_count = 16;
-/// One minute in the timestamp units used by retention.
-pub const minute_ns: i64 = 60 * std.time.ns_per_s;
-/// One day in the timestamp units used by retention.
-pub const day_ns: i64 = 24 * 60 * minute_ns;
+/// Separates direct files from the retired indexed store.
+pub const format_directory = "files-v1";
 
-/// Exhaustive retention policy for compiler-owned artifacts. Sources materialized
-/// for tooling, downloaded packages, and installed applications are not artifacts.
-pub const Family = enum(u8) {
+/// Independent compiler cache families.
+pub const Family = enum {
     checked,
     canonicalized,
     placement,
     literals,
     pairing,
-    executable,
-    test_result,
-    wasm_host,
-    glue_plugin,
-    local_pack,
-    package_pack,
-    optimized_pack,
     local_discovery,
-    package_discovery,
-    program_output,
-    scratch,
-    /// A module's Boxy object (`compile.boxy_object_cache`).
     boxy_object,
     /// A platform host linked once for fast dev links of its executables.
     prelinked_host,
-
-    pub fn age(self: Family) i64 {
-        return switch (self) {
-            .scratch => 5 * minute_ns,
-            .local_pack, .local_discovery, .program_output => day_ns,
-            .checked,
-            .canonicalized,
-            .placement,
-            .literals,
-            .pairing,
-            .executable,
-            .test_result,
-            .wasm_host,
-            .glue_plugin,
-            .package_pack,
-            .optimized_pack,
-            .package_discovery,
-            .boxy_object,
-            .prelinked_host,
-            => 30 * day_ns,
-        };
-    }
-
-    pub fn isPack(self: Family) bool {
-        return switch (self) {
-            .local_pack, .package_pack, .optimized_pack, .local_discovery, .package_discovery, .program_output => true,
-            .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .scratch, .boxy_object, .prelinked_host => false,
-        };
-    }
-
-    fn expiresByUse(self: Family) bool {
-        return self.isPack();
-    }
+    /// The host executable a composed `.boxy` dev run launches.
+    run_host,
 };
 
-/// Explicit semantic identity, independent of physical payload placement.
+/// Explicit producer identity for one file.
 pub const Identity = struct {
     namespace: [32]u8,
     family: Family,
     group: [32]u8 = @splat(0),
     key: [32]u8,
-    pack_format: u32 = 0,
-    variant: [32]u8 = @splat(0),
-
-    pub fn indexedKey(self: Identity) catalog.Key {
-        var hash = base.Sha256.init(.{});
-        hash.update("roc-artifact-group-v2");
-        hash.update(&self.namespace);
-        hash.update(&self.variant);
-        hash.update(&.{@backingInt(self.family)});
-        hash.update(&self.group);
-        var result: catalog.Key = undefined;
-        hash.final(result[0..32]);
-        @memcpy(result[32..], &self.key);
-        return result;
-    }
 };
 
-/// Recoverable storage, coordination, and allocation failures.
-pub const Error = catalog.Error || error{ Busy, Missing, Changed, InvalidArtifact, PathTooLong, OutOfMemory };
+/// Optional storage failures; allocation failures remain explicit.
+pub const Error = error{ IoFailure, OutOfMemory };
 
-/// Hash explicit identity components with SHA-256.
+/// Hash the bytes of a cache identity component.
 pub fn hashBytes(bytes: []const u8) [32]u8 {
     var result: [32]u8 = undefined;
     base.Sha256.hash(bytes, &result, .{});
     return result;
 }
 
-/// Publication and reclamation phases of an owned physical slot.
-pub const State = enum(u8) { staging, published, retiring };
-
-/// Persisted ownership, retention, and accounting for one payload generation.
-pub const Metadata = struct {
-    state: State,
-    family: Family,
-    pack_format: u32,
-    namespace: [32]u8,
-    generation: u64,
-    size: u64,
-    created: i64,
-    used: i64,
-    /// Lower bound published in the recency tree. Only maintenance advances it.
-    indexed_used: i64,
-    key: catalog.Key,
-    slot: u64,
-    variant: [32]u8 = @splat(0),
-
-    /// A slice has no physical file and accounts zero bytes; its container
-    /// owns the bytes. Slot AND generation validate the immutable placement.
-    storage: enum(u8) { file, container, slice } = .file,
-    container_slot: u64 = 0,
-    container_generation: u64 = 0,
-    offset: u64 = 0,
-    length: u64 = 0,
-
-    pub fn encode(self: Metadata) catalog.Value {
-        var bytes: catalog.Value = @splat(0);
-        @memcpy(bytes[0..8], "ROCART03");
-        bytes[8] = @backingInt(self.state);
-        bytes[9] = @backingInt(self.family);
-        bytes[10] = @backingInt(self.storage);
-        put(u32, &bytes, 12, self.pack_format);
-        @memcpy(bytes[16..48], &self.namespace);
-        put(u64, &bytes, 48, self.generation);
-        put(u64, &bytes, 56, self.size);
-        put(i64, &bytes, 64, self.created);
-        put(i64, &bytes, 72, self.used);
-        @memcpy(bytes[80..144], &self.key);
-        put(u64, &bytes, 144, self.slot);
-        @memcpy(bytes[152..184], &self.variant);
-        put(i64, &bytes, 184, self.indexed_used);
-        put(u64, &bytes, 192, self.container_slot);
-        put(u64, &bytes, 200, self.container_generation);
-        put(u64, &bytes, 208, self.offset);
-        put(u64, &bytes, 216, self.length);
-        return bytes;
-    }
-
-    pub fn decode(bytes: catalog.Value) Error!Metadata {
-        if (!std.mem.eql(u8, bytes[0..8], "ROCART03") or get(i64, &bytes, 184) > get(i64, &bytes, 72)) return error.CorruptCatalog;
-        return .{
-            .state = std.enums.fromInt(State, bytes[8]) orelse return error.CorruptCatalog,
-            .family = std.enums.fromInt(Family, bytes[9]) orelse return error.CorruptCatalog,
-            .pack_format = get(u32, &bytes, 12),
-            .namespace = bytes[16..48].*,
-            .generation = get(u64, &bytes, 48),
-            .size = get(u64, &bytes, 56),
-            .created = get(i64, &bytes, 64),
-            .used = get(i64, &bytes, 72),
-            .indexed_used = get(i64, &bytes, 184),
-            .key = bytes[80..144].*,
-            .slot = get(u64, &bytes, 144),
-            .variant = bytes[152..184].*,
-            .storage = std.enums.fromInt(@FieldType(Metadata, "storage"), bytes[10]) orelse return error.CorruptCatalog,
-            .container_slot = get(u64, &bytes, 192),
-            .container_generation = get(u64, &bytes, 200),
-            .offset = get(u64, &bytes, 208),
-            .length = get(u64, &bytes, 216),
-        };
-    }
-
-    pub fn expired(self: Metadata, now: i64, pack_format: u32) bool {
-        if (self.family.isPack() and self.pack_format != pack_format) return true;
-        const stamp = if (self.state == .staging or !self.family.expiresByUse()) self.created else self.used;
-        const age: i128 = @as(i128, now) - stamp;
-        return age > if (self.state == .staging) 5 * minute_ns else self.family.age();
-    }
-
-    pub fn recency(self: Metadata, slot: u64) catalog.Key {
-        var key: catalog.Key = @splat(0);
-        std.mem.writeInt(u64, key[0..8], @as(u64, @bitCast(self.indexed_used)) ^ (@as(u64, 1) << 63), .big);
-        std.mem.writeInt(u64, key[8..16], slot, .big);
-        return key;
-    }
-};
-
-/// Shared artifact namespace; operations acquire individual shard ownership.
+/// Direct storage rooted in one cache directory.
 pub const Store = struct {
     allocator: Allocator,
     io: Io,
@@ -214,1802 +58,182 @@ pub const Store = struct {
         self.allocator.free(self.root);
     }
 
-    pub fn now(self: *const Store) i64 {
-        return @intCast(std.math.clamp(Io.Timestamp.now(self.io, .real).nanoseconds, std.math.minInt(i64), std.math.maxInt(i64)));
+    pub fn groupPath(self: *const Store, allocator: Allocator, identity: Identity) Allocator.Error![]u8 {
+        return std.fs.path.join(allocator, &.{ self.root, &std.fmt.bytesToHex(identity.namespace, .lower), @tagName(identity.family), &std.fmt.bytesToHex(identity.group, .lower) });
     }
 
-    pub fn openRoot(self: *const Store, create: bool) Error!Dir {
-        if (create) Dir.cwd().createDirPath(self.io, self.root) catch return error.IoFailure;
-        return Dir.cwd().openDir(self.io, self.root, .{}) catch |err| switch (err) {
-            error.FileNotFound => error.Missing,
-            else => error.IoFailure,
-        };
+    pub fn entryPath(self: *const Store, allocator: Allocator, identity: Identity) Allocator.Error![]u8 {
+        const group = try self.groupPath(allocator, identity);
+        defer allocator.free(group);
+        return std.fmt.allocPrint(allocator, "{s}{s}{s}.data", .{ group, std.fs.path.sep_str, std.fmt.bytesToHex(identity.key, .lower) });
     }
 
-    pub fn shardFor(key: catalog.Key) u4 {
-        return @truncate(key[0]);
-    }
-
-    pub fn reserve(self: *const Store, identity: Identity, size: u64, timestamp: i64) Error!Staging {
-        return self.reserveWith(identity, size, timestamp, true);
-    }
-
-    fn reserveWith(self: *const Store, identity: Identity, size: u64, timestamp: i64, required: bool) Error!Staging {
-        return self.reserveKey(identity, identity.indexedKey(), size, timestamp, required);
-    }
-
-    fn reserveKey(self: *const Store, identity: Identity, key: catalog.Key, size: u64, timestamp: i64, required: bool) Error!Staging {
-        var counters = catalog.Counters{};
-        var shard = try Shard.openWith(self, shardFor(key), true, &counters, required);
-        defer shard.close();
-        return self.reserveInShard(&shard, identity, key, size, timestamp);
-    }
-
-    /// Reserve a slot in `shard`, which the caller holds open and locked.
-    fn reserveInShard(self: *const Store, shard: *Shard, identity: Identity, key: catalog.Key, size: u64, timestamp: i64) Error!Staging {
-        var tx = shard.index.transaction();
-        if (tx.header.user[0] == std.math.maxInt(u64)) return error.CapacityExceeded;
-        tx.header.user[0] += 1;
-        const generation = tx.header.user[0];
-        var metadata: Metadata = .{
-            .state = .staging,
-            .family = identity.family,
-            .pack_format = identity.pack_format,
-            .namespace = identity.namespace,
-            .variant = identity.variant,
-            .generation = generation,
-            .size = size,
-            .created = timestamp,
-            .used = timestamp,
-            .indexed_used = timestamp,
-            .key = key,
-            .slot = 0,
-        };
-        const slot = try tx.putValue(.owners, storageKey(generation), metadata.encode());
-        metadata.slot = slot;
-        _ = try tx.putValue(.owners, storageKey(generation), metadata.encode());
-        var path_buffer: [128]u8 = undefined;
-        const stem = try slotStem(&path_buffer, slot);
-        // Directory fanout is fixed by ID bytes, independent of artifact names.
-        shard.dir.createDirPath(self.io, std.fs.path.dirname(stem).?) catch return error.IoFailure;
-        var lease_buffer: [140]u8 = undefined;
-        const lease_path = std.fmt.bufPrint(&lease_buffer, "{s}.lease", .{stem}) catch return error.PathTooLong;
-        const lease = try leaseFile(shard.dir, self.io, lease_path, false, true);
-        errdefer lease.close(self.io);
-        tx.header.user[2] = std.math.add(u64, tx.header.user[2], size) catch return error.CapacityExceeded;
-        try tx.commit();
-        const path = try self.payloadPath(shard.number, slot, ".pending");
-        return .{ .store = self, .key = key, .slot = slot, .generation = generation, .lease = lease, .path = path };
-    }
-
-    pub fn write(self: *const Store, identity: Identity, bytes: []const u8, timestamp: i64) Error!void {
-        var staging = try self.reserve(identity, bytes.len, timestamp);
-        defer staging.deinit();
-        const file = Dir.cwd().createFile(self.io, staging.path, .{ .exclusive = true }) catch return error.IoFailure;
-        {
-            defer file.close(self.io);
-            file.writeStreamingAll(self.io, bytes) catch return error.IoFailure;
-        }
-        try staging.publish();
-    }
-
-    /// Copy into our registered staging name directly. Generic atomic-copy
-    /// helpers may create unregistered sibling temporary files on interruption.
-    pub fn importFile(self: *const Store, identity: Identity, source_path: []const u8) Error!void {
-        const source = Dir.cwd().openFile(self.io, source_path, .{}) catch return error.IoFailure;
-        defer source.close(self.io);
-        const info = source.stat(self.io) catch return error.IoFailure;
-        if (info.kind != .file) return error.InvalidArtifact;
-        var staging = try self.reserve(identity, info.size, self.now());
-        defer staging.deinit();
-        {
-            const destination = Dir.cwd().createFile(self.io, staging.path, .{ .exclusive = true, .permissions = info.permissions }) catch return error.IoFailure;
-            defer destination.close(self.io);
-            var buffer: [64 * 1024]u8 = undefined;
-            var offset: u64 = 0;
-            while (offset < info.size) {
-                const chunk = buffer[0..@min(buffer.len, info.size - offset)];
-                const count = source.readPositionalAll(self.io, chunk, offset) catch return error.IoFailure;
-                if (count != chunk.len) return error.InvalidArtifact;
-                destination.writePositionalAll(self.io, chunk, offset) catch return error.IoFailure;
-                offset += count;
-            }
-        }
-        try staging.publish();
-    }
-
-    pub fn acquire(self: *const Store, identity: Identity, timestamp: i64) Error!?Artifact {
-        return self.acquireKey(identity.indexedKey(), timestamp);
-    }
-
-    pub fn acquireKey(self: *const Store, key: catalog.Key, timestamp: i64) Error!?Artifact {
-        return self.acquireKeyObserved(key, timestamp, null);
-    }
-
-    fn acquireKeyObserved(self: *const Store, key: catalog.Key, timestamp: i64, deferred: ?*?Session.Observation) Error!?Artifact {
-        var counters = catalog.Counters{};
-        var shard = Shard.openRequired(self, shardFor(key), false, &counters) catch |err| switch (err) {
-            error.Missing, error.Busy => return null,
-            else => return err,
-        };
-        defer shard.close();
-        return self.acquireFromShard(key, timestamp, deferred, &shard, null);
-    }
-
-    fn acquireFromShard(self: *const Store, key: catalog.Key, timestamp: i64, deferred: ?*?Session.Observation, shard: *Shard, containers: ?*ContainerReaders) Error!?Artifact {
-        var tx = shard.index.transaction();
-        const found = (try tx.find(.artifacts, key)) orelse return null;
-        var metadata = try currentMetadata(&tx, key, found.value);
-        if (metadata.state != .published or metadata.family == .scratch) return null;
-        if (metadata.storage == .slice) {
-            const container = (try sliceContainer(&tx, metadata)) orelse return null;
-            var result = if (containers) |readers|
-                (try readers.acquire(self, shard, container, timestamp)) orelse return null
-            else
-                (try self.acquireFromShard(container.key, timestamp, deferred, shard, null)) orelse return null;
-            errdefer result.deinit();
-            if (metadata.offset > result.size or metadata.length > result.size - metadata.offset) {
-                result.deinit();
-                return null;
-            }
-            // A slice may be retired while its accepted bytes remain pinned.
-            // Its container's observation is advanced once per reader session.
-            tx = shard.index.transaction();
-            if (metadata.used < timestamp) {
-                if (deferred) |observation| {
-                    observation.* = .{ .key = key, .slot = metadata.slot, .generation = metadata.generation, .timestamp = timestamp };
-                } else {
-                    metadata.used = timestamp;
-                    try tx.replaceValue(metadata.slot, storageKey(metadata.generation), metadata.encode());
-                    try tx.commit();
-                }
-            }
-            result.offset = metadata.offset;
-            result.size = metadata.length;
-            return result;
-        }
-        const path = try self.payloadPath(shard.number, metadata.slot, ".data");
-        errdefer self.allocator.free(path);
-        var stem_buffer: [128]u8 = undefined;
-        const stem = try slotStem(&stem_buffer, metadata.slot);
-        var lease_buffer: [140]u8 = undefined;
-        const relative_lease = std.fmt.bufPrint(&lease_buffer, "{s}.lease", .{stem}) catch return error.PathTooLong;
-        const lease = leaseFile(shard.dir, self.io, relative_lease, true, false) catch |err| switch (err) {
-            error.Missing, error.Busy => {
+    pub fn reserve(self: *const Store, identity: Identity) Error!Staging {
+        const destination = try self.entryPath(self.allocator, identity);
+        errdefer self.allocator.free(destination);
+        Dir.cwd().createDirPath(self.io, std.fs.path.dirname(destination).?) catch return error.IoFailure;
+        while (true) {
+            var nonce: [16]u8 = undefined;
+            self.io.random(&nonce);
+            const path = try std.fmt.allocPrint(self.allocator, "{s}.{s}.pending", .{ destination, std.fmt.bytesToHex(nonce, .lower) });
+            const file = Dir.cwd().createFile(self.io, path, .{ .exclusive = true }) catch |err| {
                 self.allocator.free(path);
-                return null;
-            },
-            else => return err,
-        };
-        errdefer lease.close(self.io);
-        var data_buffer: [140]u8 = undefined;
-        const relative_data = std.fmt.bufPrint(&data_buffer, "{s}.data", .{stem}) catch return error.PathTooLong;
-        const file = shard.dir.openFile(self.io, relative_data, .{}) catch |err| {
-            return switch (err) {
-                error.FileNotFound => blk: {
-                    self.allocator.free(path);
-                    lease.close(self.io);
-                    break :blk null;
-                },
-                else => error.IoFailure,
+                switch (err) {
+                    error.PathAlreadyExists => continue,
+                    else => return error.IoFailure,
+                }
             };
+            file.close(self.io);
+            return .{ .allocator = self.allocator, .io = self.io, .path = path, .destination = destination };
+        }
+    }
+
+    pub fn acquire(self: *const Store, identity: Identity) Error!?Artifact {
+        const path = try self.entryPath(self.allocator, identity);
+        errdefer self.allocator.free(path);
+        const file = Dir.cwd().openFile(self.io, path, .{}) catch |err| {
+            switch (err) {
+                error.FileNotFound => {
+                    self.allocator.free(path);
+                    return null;
+                },
+                else => return error.IoFailure,
+            }
         };
         errdefer file.close(self.io);
-        // Acquire storage before releasing metadata protection. An accepted
-        // reader owns this open file even if maintenance unlinks its name.
-        if (metadata.used < timestamp) {
-            if (deferred) |observation| {
-                observation.* = .{ .key = key, .slot = metadata.slot, .generation = metadata.generation, .timestamp = timestamp };
-            } else {
-                metadata.used = timestamp;
-                try tx.replaceValue(metadata.slot, storageKey(metadata.generation), metadata.encode());
-                try tx.commit();
-            }
-        }
-        const actual_size = file.length(self.io) catch return error.IoFailure;
-        return .{ .store = self, .file = file, .lease = lease, .path = path, .size = actual_size };
+        const stat = file.stat(self.io) catch return error.IoFailure;
+        if (stat.kind != .file) return error.IoFailure;
+        return .{ .allocator = self.allocator, .io = self.io, .path = path, .file = file, .size = stat.size };
     }
 
-    /// Invalidate a rejected cache offer under the same generation validation
-    /// used by maintenance. A reader holding its lease keeps accepted storage.
-    pub fn invalidate(self: *const Store, identity: Identity) Error!void {
-        const key = identity.indexedKey();
-        var counters = catalog.Counters{};
-        var shard = try Shard.openRequired(self, shardFor(key), false, &counters);
-        defer shard.close();
-        var tx = shard.index.transaction();
-        const entry = (try tx.find(.artifacts, key)) orelse return;
-        const metadata = try currentMetadata(&tx, key, entry.value);
-        _ = try shard.retire(key, metadata.generation);
-    }
-
-    pub fn read(self: *const Store, allocator: Allocator, identity: Identity, timestamp: i64) Error!?[]u8 {
-        var artifact = (try self.acquire(identity, timestamp)) orelse return null;
+    pub fn read(self: *const Store, allocator: Allocator, identity: Identity) Error!?[]u8 {
+        var artifact = (try self.acquire(identity)) orelse return null;
         defer artifact.deinit();
         return try artifact.read(allocator);
     }
 
-    /// Group placement is explicit in the indexed key. Enumerating one group
-    /// visits only its shard, under one metadata transaction; unrelated groups
-    /// and historical compiler namespaces require no probes.
-    pub fn groupKeys(self: *const Store, allocator: Allocator, identity: Identity) Error![]catalog.Key {
-        var keys: std.ArrayList(catalog.Key) = .empty;
-        errdefer keys.deinit(allocator);
-        const group_key = identity.indexedKey();
-        var counters = catalog.Counters{};
-        var shard = Shard.openRequired(self, shardFor(group_key), false, &counters) catch |err| switch (err) {
-            error.Missing => return keys.toOwnedSlice(allocator),
-            else => return err,
-        };
-        defer shard.close();
-        return groupKeysInShard(allocator, group_key, &shard);
-    }
-
-    fn groupKeysInShard(allocator: Allocator, group_key: catalog.Key, shard: *Shard) Error![]catalog.Key {
-        var keys: std.ArrayList(catalog.Key) = .empty;
-        errdefer keys.deinit(allocator);
-        var tx = shard.index.transaction();
-        var cursor: catalog.Key = @splat(0);
-        @memcpy(cursor[0..32], group_key[0..32]);
-        while (try tx.lowerBound(.artifacts, cursor)) |entry| {
-            if (!std.mem.eql(u8, entry.key[0..32], group_key[0..32])) break;
-            const metadata = try Metadata.decode(entry.value);
-            if (metadata.state == .published and metadata.storage != .container) try keys.append(allocator, entry.key);
-            cursor = entry.key;
-            if (!advanceKey(&cursor)) break;
-        }
-        return keys.toOwnedSlice(allocator);
-    }
-
-    pub fn payloadPath(self: *const Store, shard: u4, slot: u64, suffix: []const u8) Error![]u8 {
-        var stem_buffer: [128]u8 = undefined;
-        const stem = try slotStem(&stem_buffer, slot);
-        return std.fmt.allocPrint(self.allocator, "{s}/{x:0>2}/{s}{s}", .{ self.root, shard, stem, suffix });
+    pub fn write(self: *const Store, identity: Identity, bytes: []const u8) Error!void {
+        var stage = try self.reserve(identity);
+        defer stage.deinit();
+        Dir.cwd().writeFile(self.io, .{ .sub_path = stage.path, .data = bytes }) catch return error.IoFailure;
+        try stage.publish();
     }
 };
 
-/// One process's handle on the store for the length of a compilation: each
-/// shard it touches stays open, with its catalog mapped and its read cache
-/// kept, and the shard's kernel lock is taken only around each operation.
-/// A hit's retention observation is recorded here and written back in one
-/// transaction per shard when the session flushes, instead of one write per
-/// read. Callers flush before releasing their leases; a failed acquisition
-/// may close its lease early, and exact generation validation discards an
-/// obsolete observation. Operations on one session may run from several
-/// threads at once: a mutex per shard serializes them, and the kernel lock
-/// still excludes other processes. The session owns its store path and may
-/// outlive the Store that created it.
-pub const Session = struct {
-    const Observation = struct { key: catalog.Key, slot: u64, generation: u64, timestamp: i64 };
-
-    store: Store,
-    pending: [shard_count][catalog.max_changes]Observation = undefined,
-    counts: [shard_count]u8 = @splat(0),
-    shards: [shard_count]?Shard = @splat(null),
-    caches: [shard_count]catalog.ReadCache = @splat(.{}),
-    counters: [shard_count]catalog.Counters = @splat(.{}),
-    mutexes: [shard_count]threading.Mutex = @splat(.init),
-    containers: [shard_count]ContainerReaders = @splat(.{}),
-
-    pub fn init(store: *const Store) Allocator.Error!Session {
-        return .{ .store = .{ .allocator = store.allocator, .io = store.io, .root = try store.allocator.dupe(u8, store.root) } };
-    }
-
-    pub fn deinit(self: *Session) void {
-        // Retention publication is optional cache I/O. A failed write never
-        // turns validated code into a failed compilation; leases remain held
-        // until this flush attempt has finished.
-        self.flush() catch {};
-        for (&self.shards) |*entry| if (entry.*) |*shard| shard.close();
-        for (&self.containers) |*readers| readers.deinit(self.store.allocator);
-        self.store.deinit();
-    }
-
-    pub fn now(self: *const Session) i64 {
-        return self.store.now();
-    }
-
-    pub fn acquire(self: *Session, identity: Identity, timestamp: i64) Error!?Artifact {
-        return self.acquireKey(identity.indexedKey(), timestamp);
-    }
-
-    pub fn acquireKey(self: *Session, key: catalog.Key, timestamp: i64) Error!?Artifact {
-        const number = Store.shardFor(key);
-        const shard = self.acquireShard(number, false) catch |err| switch (err) {
-            error.Missing => return null,
-            else => return err,
-        };
-        defer self.releaseShard(number);
-        if (self.counts[number] == catalog.max_changes) try self.flushHeldShard(number);
-        var observation: ?Observation = null;
-        const artifact = try self.store.acquireFromShard(key, timestamp, &observation, shard, &self.containers[number]);
-        if (observation) |value| {
-            self.pending[number][self.counts[number]] = value;
-            self.counts[number] += 1;
-        }
-        return artifact;
-    }
-
-    /// Acquire a producer-supplied group under bounded shard ownership. Each
-    /// result still owns its individual generation lease and open payload.
-    /// The output has the same order as keys; absence remains per-record.
-    pub fn acquireKeys(self: *Session, allocator: Allocator, keys: []const catalog.Key, timestamp: i64) Error![]?Artifact {
-        const result = try allocator.alloc(?Artifact, keys.len);
-        errdefer allocator.free(result);
-        @memset(result, null);
-        errdefer for (result) |*item| if (item.*) |*artifact| artifact.deinit();
-        const order = try allocator.alloc(usize, keys.len);
-        defer allocator.free(order);
-        var counts: [shard_count]usize = @splat(0);
-        for (keys) |key| counts[Store.shardFor(key)] += 1;
-        var starts: [shard_count + 1]usize = @splat(0);
-        for (counts, 0..) |count, i| starts[i + 1] = starts[i] + count;
-        var cursors = starts[0..shard_count].*;
-        for (keys, 0..) |key, i| {
-            const number = Store.shardFor(key);
-            order[cursors[number]] = i;
-            cursors[number] += 1;
-        }
-        for (0..shard_count) |raw_number| {
-            const number: u4 = @intCast(raw_number);
-            var next = starts[number];
-            const end = starts[raw_number + 1];
-            while (next < end) {
-                const shard = self.acquireShard(number, false) catch |err| switch (err) {
-                    error.Missing => break,
-                    else => return err,
-                };
-                defer self.releaseShard(number);
-                if (self.counts[number] == catalog.max_changes) try self.flushHeldShard(number);
-                // Reuse the retention transaction's existing bound, also when
-                // every item is absent or already has a current timestamp.
-                const limit = next + @min(end - next, catalog.max_changes - self.counts[number]);
-                while (next < limit) : (next += 1) {
-                    const index = order[next];
-                    var observation: ?Observation = null;
-                    result[index] = try self.store.acquireFromShard(keys[index], timestamp, &observation, shard, &self.containers[number]);
-                    if (observation) |value| {
-                        self.pending[number][self.counts[number]] = value;
-                        self.counts[number] += 1;
-                    }
-                }
-            }
-        }
-        return result;
-    }
-
-    pub fn read(self: *Session, allocator: Allocator, identity: Identity, timestamp: i64) Error!?[]u8 {
-        var artifact = (try self.acquire(identity, timestamp)) orelse return null;
-        defer artifact.deinit();
-        return try artifact.read(allocator);
-    }
-
-    /// Reserve a slot through the session's open shard. The staging publishes
-    /// through the session as well.
-    pub fn reserve(self: *Session, identity: Identity, size: u64, timestamp: i64) Error!Staging {
-        const number = Store.shardFor(identity.indexedKey());
-        const shard = try self.acquireShard(number, true);
-        defer self.releaseShard(number);
-        var staging = try self.store.reserveInShard(shard, identity, identity.indexedKey(), size, timestamp);
-        staging.session = self;
-        return staging;
-    }
-
-    pub fn write(self: *Session, identity: Identity, bytes: []const u8, timestamp: i64) Error!void {
-        var staging = try self.reserve(identity, bytes.len, timestamp);
-        defer staging.deinit();
-        const file = Dir.cwd().createFile(self.store.io, staging.path, .{ .exclusive = true }) catch return error.IoFailure;
-        {
-            defer file.close(self.store.io);
-            file.writeStreamingAll(self.store.io, bytes) catch return error.IoFailure;
-        }
-        try staging.publish();
-    }
-
-    fn publishStaging(self: *Session, staging: *Staging) Error!void {
-        const number = Store.shardFor(staging.key);
-        const shard = try self.acquireShard(number, false);
-        defer self.releaseShard(number);
-        return staging.publishInShard(shard);
-    }
-
-    pub fn groupKeys(self: *Session, allocator: Allocator, identity: Identity) Error![]catalog.Key {
-        const group_key = identity.indexedKey();
-        const number = Store.shardFor(group_key);
-        _ = self.acquireShard(number, false) catch |err| switch (err) {
-            error.Missing => return allocator.alloc(catalog.Key, 0),
-            else => return err,
-        };
-        defer self.releaseShard(number);
-        return Store.groupKeysInShard(allocator, group_key, &self.shards[number].?);
-    }
-
-    /// Hold shard `number`: its mutex, then its kernel lock, with its catalog
-    /// refreshed against what other processes committed meanwhile. The
-    /// caller releases it with `releaseShard`.
-    fn acquireShard(self: *Session, number: u4, create: bool) Error!*Shard {
-        const io = self.store.io;
-        self.mutexes[number].lockUncancelable(io);
-        errdefer self.mutexes[number].unlock(io);
-        if (self.shards[number]) |*shard| {
-            shard.lock.lock(io, .exclusive) catch return error.IoFailure;
-            errdefer shard.lock.unlock(io);
-            try shard.index.refresh();
-            return shard;
-        }
-        var shard = try Shard.openWith(&self.store, number, create, &self.counters[number], true);
-        shard.index.read_cache = &self.caches[number];
-        self.shards[number] = shard;
-        return &self.shards[number].?;
-    }
-
-    fn releaseShard(self: *Session, number: u4) void {
-        const io = self.store.io;
-        self.shards[number].?.lock.unlock(io);
-        self.mutexes[number].unlock(io);
-    }
-
-    pub fn containerCount(self: *Session) usize {
-        var count: usize = 0;
-        for (0..shard_count) |number| {
-            self.mutexes[number].lockUncancelable(self.store.io);
-            count += self.containers[number].entries.count();
-            self.mutexes[number].unlock(self.store.io);
-        }
-        return count;
-    }
-
-    pub fn flush(self: *Session) Error!void {
-        for (0..shard_count) |raw_number| {
-            const number: u4 = @intCast(raw_number);
-            if (self.counts[number] == 0) continue;
-            _ = try self.acquireShard(number, false);
-            defer self.releaseShard(number);
-            try self.flushHeldShard(number);
-        }
-    }
-
-    /// Write shard `number`'s pending observations; the caller holds the shard.
-    fn flushHeldShard(self: *Session, number: u4) Error!void {
-        const count = self.counts[number];
-        if (count == 0) return;
-        const shard = &self.shards[number].?;
-        var tx = shard.index.transaction();
-        for (self.pending[number][0..count]) |observation| {
-            // A rejected payload may have released its lease. Never apply that
-            // observation to a replacement generation reusing the same slot.
-            if (observation.slot == 0 or observation.slot >= tx.header.next) continue;
-            const row = try tx.node(observation.slot);
-            const expected = storageKey(observation.generation);
-            if (row.kind != .leaf or !std.mem.eql(u8, &row.key, &expected)) continue;
-            var metadata = try Metadata.decode(row.value);
-            if (metadata.slot != observation.slot or metadata.generation != observation.generation or
-                !std.mem.eql(u8, &metadata.key, &observation.key)) return error.CorruptCatalog;
-            if (metadata.state != .published or metadata.used >= observation.timestamp) continue;
-            metadata.used = observation.timestamp;
-            try tx.replaceValue(metadata.slot, expected, metadata.encode());
-        }
-        if (tx.count != 0) try tx.commit();
-        self.counts[number] = 0;
-    }
-};
-
-/// The artifact index supplies the immutable generation and physical owner slot.
-/// Its copied retention fields are not authoritative. Reads and maintenance use
-/// the owner leaf, whose use timestamp a foreground hit updates in one write.
-pub fn currentMetadata(tx: *catalog.Transaction, key: catalog.Key, pointer: catalog.Value) Error!Metadata {
-    const address = try Metadata.decode(pointer);
-    if (!std.mem.eql(u8, &address.key, &key)) return error.CorruptCatalog;
-    const owner = try tx.node(address.slot);
-    const expected = storageKey(address.generation);
-    if (owner.kind != .leaf or !std.mem.eql(u8, &owner.key, &expected)) return error.CorruptCatalog;
-    const metadata = try Metadata.decode(owner.value);
-    if (metadata.slot != address.slot or metadata.generation != address.generation or
-        !std.mem.eql(u8, &metadata.key, &key)) return error.CorruptCatalog;
-    return metadata;
-}
-
-test "artifact reads update only the authoritative owner and replacement uses repaired recency" {
-    const a = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const path = try tmp.dir.realPathFileAlloc(io, ".", a);
-    defer a.free(path);
-    var store = try Store.init(a, io, path);
-    defer store.deinit();
-    const identity: Identity = .{ .namespace = @splat(1), .family = .local_pack, .key = @splat(2) };
-    const key = identity.indexedKey();
-    try store.write(identity, "old", 10);
-    {
-        var read = (try store.acquire(identity, 100)).?;
-        defer read.deinit();
-    }
-    {
-        var counters = catalog.Counters{};
-        var shard = try Shard.openRequired(&store, Store.shardFor(key), false, &counters);
-        defer shard.close();
-        var tx = shard.index.transaction();
-        const pointer = (try tx.find(.artifacts, key)).?.value;
-        try std.testing.expectEqual(10, (try Metadata.decode(pointer)).used);
-        const current = try currentMetadata(&tx, key, pointer);
-        try std.testing.expectEqual(100, current.used);
-        try std.testing.expectEqual(10, current.indexed_used);
-        try std.testing.expect(!current.expired(day_ns + 50, identity.pack_format));
-        try shard.refreshRecency(current);
-        var refreshed = shard.index.transaction();
-        const after = try currentMetadata(&refreshed, key, pointer);
-        try std.testing.expectEqual(100, after.indexed_used);
-        var next = after;
-        next.used = 200;
-        try refreshed.replaceValue(next.slot, storageKey(next.generation), next.encode());
-        try std.testing.expectEqual(@as(usize, 1), refreshed.count);
-        try refreshed.commit();
-    }
-    try store.write(identity, "new", 300);
-    const bytes = (try store.read(a, identity, 400)).?;
-    defer a.free(bytes);
-    try std.testing.expectEqualStrings("new", bytes);
-}
-
-/// POSIX flock belongs to the open file description and survives inheritance.
-/// Windows byte-range locks belong to the locking process; use sharing denial
-/// for leases instead, which lasts until the last inherited handle is closed.
-fn leaseFile(dir: Dir, io: Io, path: []const u8, shared: bool, create: bool) Error!Io.File {
-    if (comptime @import("builtin").os.tag == .windows) {
-        const w = std.os.windows;
-        var wide: [140]u16 = undefined;
-        if (path.len > wide.len) return error.PathTooLong;
-        for (path, 0..) |byte, i| wide[i] = if (byte == '/') '\\' else byte;
-        var status: w.IO_STATUS_BLOCK = undefined;
-        var handle: w.HANDLE = undefined;
-        const result = w.ntdll.NtCreateFile(&handle, .{ .STANDARD = .{ .SYNCHRONIZE = true }, .GENERIC = .{ .READ = true, .WRITE = !shared } }, &.{ .RootDirectory = dir.handle, .ObjectName = @constCast(&w.UNICODE_STRING.init(wide[0..path.len])) }, &status, null, .{ .NORMAL = true }, if (shared) .{ .READ = true } else .{}, if (create) .OPEN_IF else .OPEN, .{ .NON_DIRECTORY_FILE = true, .IO = .SYNCHRONOUS_NONALERT }, null, 0);
-        if (result == .SUCCESS) return .{ .handle = handle, .flags = .{ .nonblocking = false } };
-        if (result == .SHARING_VIOLATION) return error.Busy;
-        if (result == .OBJECT_NAME_NOT_FOUND or result == .OBJECT_PATH_NOT_FOUND) return error.Missing;
-        return error.IoFailure;
-    } else {
-        return (if (create)
-            dir.createFile(io, path, .{ .read = true, .truncate = false, .lock = .exclusive, .lock_nonblocking = true })
-        else
-            dir.openFile(io, path, .{ .mode = if (shared) .read_only else .read_write, .lock = if (shared) .shared else .exclusive, .lock_nonblocking = true })) catch |err| switch (err) {
-            error.WouldBlock => error.Busy,
-            error.FileNotFound => error.Missing,
-            else => error.IoFailure,
-        };
-    }
-}
-
-/// A catalog and its held kernel coordination lock.
-pub const Shard = struct {
-    io: Io,
-    dir: Dir,
-    lock: Io.File,
-    index: catalog.Index,
-    number: u4,
-
-    /// Repair one stale recency lower bound. This is one bounded maintenance
-    /// unit, separate from eviction; a freshly read artifact is never selected
-    /// using the older position it still occupies in the recency index.
-    pub fn refreshRecency(self: *Shard, metadata: Metadata) Error!void {
-        var tx = self.index.transaction();
-        var current = metadata;
-        if (!try tx.remove(.recency, current.recency(current.slot))) return error.CorruptCatalog;
-        current.indexed_used = current.used;
-        try tx.replaceValue(current.slot, storageKey(current.generation), current.encode());
-        var value: catalog.Value = @splat(0);
-        @memcpy(value[0..64], &current.key);
-        _ = try tx.putValue(.recency, current.recency(current.slot), value);
-        try tx.commit();
-    }
-
-    /// Opportunistic maintenance never waits for a foreground transaction.
-    pub fn open(store: *const Store, number: u4, create: bool, counters: *catalog.Counters) Error!Shard {
-        return openWith(store, number, create, counters, false);
-    }
-
-    /// Foreground readers and publishers wait for short metadata transactions.
-    /// Contention is not absence, corruption, or a reason to discard a write.
-    pub fn openRequired(store: *const Store, number: u4, create: bool, counters: *catalog.Counters) Error!Shard {
-        return openWith(store, number, create, counters, true);
-    }
-
-    fn openWith(store: *const Store, number: u4, create: bool, counters: *catalog.Counters, required: bool) Error!Shard {
-        var root = try store.openRoot(create);
-        defer root.close(store.io);
-        var name_buffer: [2]u8 = undefined;
-        const name = std.fmt.bufPrint(&name_buffer, "{x:0>2}", .{number}) catch return error.PathTooLong;
-        if (create) root.createDirPath(store.io, name) catch return error.IoFailure;
-        const dir = root.openDir(store.io, name, .{}) catch |err| switch (err) {
-            error.FileNotFound => return error.Missing,
-            else => return error.IoFailure,
-        };
-        errdefer dir.close(store.io);
-        // macOS can fail concurrent non-exclusive creations of one name with
-        // FileNotFound. Exactly one exclusive creation succeeds; every opener
-        // then locks the existing file without creating it.
-        if (dir.createFile(store.io, "coordination", .{ .exclusive = true })) |created| {
-            created.close(store.io);
-        } else |err| switch (err) {
-            error.PathAlreadyExists => {},
-            else => return error.IoFailure,
-        }
-        const lock = dir.openFile(store.io, "coordination", .{ .mode = .read_write, .lock = .exclusive, .lock_nonblocking = !required }) catch |err| switch (err) {
-            error.WouldBlock => return error.Busy,
-            else => return error.IoFailure,
-        };
-        errdefer lock.close(store.io);
-        return .{ .io = store.io, .dir = dir, .lock = lock, .index = try catalog.Index.open(dir, store.io, counters), .number = number };
-    }
-
-    pub fn close(self: *Shard) void {
-        self.index.close();
-        self.lock.close(self.io);
-        self.dir.close(self.io);
-    }
-
-    /// A retiring slot is only freed after all names have been removed. The
-    /// lease identity is kept until retirement, while the shard lock excludes
-    /// anyone from opening that slot's lease for a new generation.
-    pub fn retire(self: *Shard, key: catalog.Key, generation: u64) Error!bool {
-        var tx = self.index.transaction();
-        const found = (try tx.find(.owners, storageKey(generation))) orelse return false;
-        var metadata = try Metadata.decode(found.value);
-        if (metadata.generation != generation or !std.mem.eql(u8, &metadata.key, &key) or metadata.slot != found.id) return error.CorruptCatalog;
-        var stem_buffer: [128]u8 = undefined;
-        const stem = try slotStem(&stem_buffer, found.id);
-        const physical = if (metadata.storage == .slice) try sliceContainer(&tx, metadata) else metadata;
-        var lease_stem_buffer: [128]u8 = undefined;
-        const lease_stem = try slotStem(&lease_stem_buffer, if (physical) |owner| owner.slot else found.id);
-        var lease_buffer: [140]u8 = undefined;
-        const lease_path = std.fmt.bufPrint(&lease_buffer, "{s}.lease", .{lease_stem}) catch return error.PathTooLong;
-        const lease = if (physical == null) null else try leaseFile(self.dir, self.io, lease_path, false, false);
-        defer if (lease) |held| held.close(self.io);
-        if (metadata.state != .retiring) {
-            const counter: usize = if (metadata.state == .staging) 2 else 1;
-            if (tx.header.user[counter] < metadata.size) return error.CorruptCatalog;
-            tx.header.user[counter] -= metadata.size;
-            tx.header.user[3] = std.math.add(u64, tx.header.user[3], metadata.size) catch return error.CapacityExceeded;
-            if (metadata.state == .published and !try tx.remove(.recency, metadata.recency(found.id))) return error.CorruptCatalog;
-            if (try tx.find(.artifacts, key)) |current| {
-                if ((try Metadata.decode(current.value)).generation == generation) _ = try tx.remove(.artifacts, key);
-            }
-            metadata.state = .retiring;
-            _ = try tx.putValue(.owners, storageKey(generation), metadata.encode());
-            try tx.commit();
-        }
-        if (metadata.family == .scratch and !try drainScratch(self, stem, metadata.generation)) return false;
-        if (metadata.storage != .slice) for ([_][]const u8{ ".pending", ".data", ".pending.txt", ".cursor" }) |suffix| {
-            var buffer: [140]u8 = undefined;
-            const path = std.fmt.bufPrint(&buffer, "{s}{s}", .{ stem, suffix }) catch return error.PathTooLong;
-            self.dir.deleteFile(self.io, path) catch |err| switch (err) {
-                error.FileNotFound => {},
-                else => return error.IoFailure,
-            };
-        };
-        var finish = self.index.transaction();
-        if (finish.header.user[3] < metadata.size) return error.CorruptCatalog;
-        finish.header.user[3] -= metadata.size;
-        if (!try finish.remove(.owners, storageKey(generation))) return error.CorruptCatalog;
-        try finish.commit();
-        // Keep the lease filename stable across slot reuse. Empty directories
-        // and this small control record never participate in size eviction.
-        return true;
-    }
-};
-
-/// Registered unpublished payload whose exclusive lease pins its slot.
+/// An unpublished file owned by one writer.
 pub const Staging = struct {
-    store: *const Store,
-    key: catalog.Key,
-    slot: u64,
-    generation: u64,
-    lease: Io.File,
+    allocator: Allocator,
+    io: Io,
     path: []u8,
-    /// Publication releases the lease while the shard lock still excludes
-    /// readers, so no reader ever finds a published slot leased exclusively.
-    published: bool = false,
-    /// The session whose open shard publication uses, for a slot a session
-    /// reserved.
-    session: ?*Session = null,
+    destination: []u8,
 
-    /// Closing a failed staging operation leaves a registered, abandoned slot.
-    /// Maintenance can reclaim it after the staging window; no finalizer must
-    /// run for its ownership to become recoverable.
     pub fn deinit(self: *Staging) void {
-        if (!self.published) self.lease.close(self.store.io);
-        self.store.allocator.free(self.path);
-    }
-
-    /// Account an exact producer-declared length before extending its file.
-    pub fn resizeContainer(self: *Staging, size: u64) Error!void {
-        var counters = catalog.Counters{};
-        var shard = try Shard.openRequired(self.store, Store.shardFor(self.key), false, &counters);
-        defer shard.close();
-        var tx = shard.index.transaction();
-        const found = (try tx.find(.owners, storageKey(self.generation))) orelse return error.Changed;
-        var metadata = try Metadata.decode(found.value);
-        if (found.id != self.slot or metadata.state != .staging or tx.header.user[2] < metadata.size) return error.Changed;
-        tx.header.user[2] -= metadata.size;
-        tx.header.user[2] = std.math.add(u64, tx.header.user[2], size) catch return error.CapacityExceeded;
-        metadata.size = size;
-        metadata.storage = .container;
-        try tx.replaceValue(self.slot, storageKey(self.generation), metadata.encode());
-        try tx.commit();
+        Dir.cwd().deleteFile(self.io, self.path) catch {};
+        self.allocator.free(self.path);
+        self.allocator.free(self.destination);
     }
 
     pub fn publish(self: *Staging) Error!void {
-        if (self.session) |session| return session.publishStaging(self);
-        var counters = catalog.Counters{};
-        var shard = try Shard.openRequired(self.store, Store.shardFor(self.key), false, &counters);
-        defer shard.close();
-        return self.publishInShard(&shard);
-    }
-
-    /// Publish into `shard`, which the caller holds open and locked.
-    fn publishInShard(self: *Staging, shard: *Shard) Error!void {
-        var tx = shard.index.transaction();
-        const found = (try tx.find(.owners, storageKey(self.generation))) orelse return error.Changed;
-        var metadata = try Metadata.decode(found.value);
-        if (found.id != self.slot or metadata.generation != self.generation or metadata.state != .staging) return error.Changed;
-        const stat = Dir.cwd().statFile(self.store.io, self.path, .{}) catch return error.IoFailure;
-        if (stat.kind != .file or stat.size != metadata.size) return error.InvalidArtifact;
-        const final_path = try self.store.payloadPath(shard.number, self.slot, ".data");
-        defer self.store.allocator.free(final_path);
-        Dir.cwd().rename(self.path, Dir.cwd(), final_path, self.store.io) catch return error.IoFailure;
-        if (try tx.find(.artifacts, self.key)) |previous| {
-            var old = try currentMetadata(&tx, self.key, previous.value);
-            if (old.state != .published or tx.header.user[1] < old.size) return error.CorruptCatalog;
-            if (!try tx.remove(.recency, old.recency(old.slot))) return error.CorruptCatalog;
-            tx.header.user[1] -= old.size;
-            tx.header.user[3] = std.math.add(u64, tx.header.user[3], old.size) catch return error.CapacityExceeded;
-            old.state = .retiring;
-            _ = try tx.putValue(.owners, storageKey(old.generation), old.encode());
-        }
-        metadata.state = .published;
-        if (tx.header.user[2] < metadata.size) return error.CorruptCatalog;
-        tx.header.user[2] -= metadata.size;
-        tx.header.user[1] = std.math.add(u64, tx.header.user[1], metadata.size) catch return error.CapacityExceeded;
-        _ = try tx.putValue(.artifacts, self.key, metadata.encode());
-        _ = try tx.putValue(.owners, storageKey(self.generation), metadata.encode());
-        var value: catalog.Value = @splat(0);
-        @memcpy(value[0..64], &self.key);
-        _ = try tx.putValue(.recency, metadata.recency(self.slot), value);
-        try tx.commit();
-        self.lease.close(self.store.io);
-        self.published = true;
+        Dir.cwd().rename(self.path, Dir.cwd(), self.destination, self.io) catch return error.IoFailure;
     }
 };
 
-/// Acquired payload file and shared lease, both owned until deinit.
+/// An open immutable cache payload owned by its reader.
 pub const Artifact = struct {
-    store: *const Store,
-    file: Io.File,
-    lease: Io.File,
+    allocator: Allocator,
+    io: Io,
     path: []u8,
+    file: Io.File,
     size: u64,
-    offset: u64 = 0,
-    shared: ?*SharedContainer = null,
 
     pub fn deinit(self: *Artifact) void {
-        if (self.shared) |container| {
-            container.release();
-            return;
-        }
-        self.file.close(self.store.io);
-        self.lease.close(self.store.io);
-        self.store.allocator.free(self.path);
+        self.file.close(self.io);
+        self.allocator.free(self.path);
     }
 
     pub fn read(self: *const Artifact, allocator: Allocator) Error![]u8 {
         const size = std.math.cast(usize, self.size) orelse return error.OutOfMemory;
         const bytes = try allocator.alloc(u8, size);
         errdefer allocator.free(bytes);
-        const len = self.file.readPositionalAll(self.store.io, bytes, self.offset) catch return error.IoFailure;
-        if (len != bytes.len) return error.InvalidArtifact;
+        const len = self.file.readPositionalAll(self.io, bytes, 0) catch return error.IoFailure;
+        if (len != size) return error.IoFailure;
         return bytes;
     }
 };
 
-/// Validate a slice's physical owner without trusting a recycled slot. Missing
-/// containers are optional cache misses, including after independent eviction.
-pub fn sliceContainer(tx: *catalog.Transaction, slice: Metadata) Error!?Metadata {
-    if (slice.container_slot == 0 or slice.container_slot >= tx.header.next) return null;
-    const row = try tx.node(slice.container_slot);
-    if (row.kind != .leaf or !std.mem.eql(u8, &row.key, &storageKey(slice.container_generation))) return null;
-    const container = try Metadata.decode(row.value);
-    if (container.slot != slice.container_slot or container.generation != slice.container_generation or
-        container.storage != .container or container.state != .published) return null;
-    if (slice.offset > container.size or slice.length > container.size - slice.offset) return null;
-    return container;
-}
-
-/// One open file and lease shared by all acquired slices, including captured
-/// native code that outlives the lookup session. Reference release can be parallel.
-const SharedContainer = struct {
+/// Invocation-owned scratch directory, independent of persistent cache entries.
+pub const Scratch = struct {
     allocator: Allocator,
     io: Io,
-    file: Io.File,
-    lease: Io.File,
-    path: []u8,
-    size: u64,
-    references: std.atomic.Value(usize) = .init(1),
+    directory: []u8,
+    keep: bool = false,
 
-    fn release(self: *SharedContainer) void {
-        if (self.references.fetchSub(1, .acq_rel) != 1) return;
-        self.file.close(self.io);
-        self.lease.close(self.io);
-        self.allocator.free(self.path);
-        self.allocator.destroy(self);
-    }
-
-    fn artifact(self: *SharedContainer, store: *const Store) Artifact {
-        _ = self.references.fetchAdd(1, .monotonic);
-        return .{ .store = store, .file = self.file, .lease = self.lease, .path = self.path, .size = self.size, .shared = self };
-    }
-};
-
-const ContainerReaders = struct {
-    const Key = struct { shard: u4, generation: u64 };
-    entries: std.AutoHashMapUnmanaged(Key, *SharedContainer) = .{},
-
-    fn deinit(self: *ContainerReaders, allocator: Allocator) void {
-        var it = self.entries.valueIterator();
-        while (it.next()) |entry| entry.*.release();
-        self.entries.deinit(allocator);
-    }
-
-    fn acquire(self: *ContainerReaders, store: *const Store, shard: *Shard, metadata: Metadata, timestamp: i64) Error!?Artifact {
-        const key: Key = .{ .shard = shard.number, .generation = metadata.generation };
-        if (self.entries.get(key)) |existing| {
-            if (metadata.used < timestamp) {
-                var tx = shard.index.transaction();
-                var current = metadata;
-                current.used = timestamp;
-                try tx.replaceValue(current.slot, storageKey(current.generation), current.encode());
-                try tx.commit();
-            }
-            return existing.artifact(store);
+    pub fn create(allocator: Allocator, io: Io, cache_root: []const u8) Error!Scratch {
+        const root = try std.fs.path.join(allocator, &.{ cache_root, "tmp" });
+        defer allocator.free(root);
+        Dir.cwd().createDirPath(io, root) catch return error.IoFailure;
+        while (true) {
+            var nonce: [16]u8 = undefined;
+            io.random(&nonce);
+            const directory = try std.fs.path.join(allocator, &.{ root, &std.fmt.bytesToHex(nonce, .lower) });
+            Dir.cwd().createDir(io, directory, .default_dir) catch |err| {
+                allocator.free(directory);
+                switch (err) {
+                    error.PathAlreadyExists => continue,
+                    else => return error.IoFailure,
+                }
+            };
+            return .{ .allocator = allocator, .io = io, .directory = directory };
         }
-        try self.entries.ensureUnusedCapacity(store.allocator, 1);
-        const shared = try store.allocator.create(SharedContainer);
-        errdefer store.allocator.destroy(shared);
-        var original = (try store.acquireFromShard(metadata.key, timestamp, null, shard, null)) orelse {
-            store.allocator.destroy(shared);
-            return null;
-        };
-        errdefer original.deinit();
-        shared.* = .{ .allocator = store.allocator, .io = store.io, .file = original.file, .lease = original.lease, .path = original.path, .size = original.size };
-        self.entries.putAssumeCapacity(key, shared);
-        return shared.artifact(store);
-    }
-};
-
-/// Streams new immutable records directly into a private registered container.
-/// Containers are homogeneous in group/retention policy and never rewritten.
-/// Publication installs one exact slice per bounded redo transaction. An
-/// interrupted writer exposes only complete bytes; unpublished staging remains
-/// reclaimable. Independent writers never replace a directory-wide manifest.
-pub const ContainerWriter = struct {
-    store: *const Store,
-    stage: ?Staging = null,
-    file: ?Io.File = null,
-    size: u64 = 0,
-    entries: std.ArrayList(Entry) = .empty,
-    held: ?Artifact = null,
-    const Entry = struct { identity: Identity, offset: u64, length: u64 };
-
-    pub fn deinit(self: *ContainerWriter) void {
-        if (self.held) |*held| held.deinit();
-        if (self.file) |file| file.close(self.store.io);
-        if (self.stage) |*stage| stage.deinit();
-        self.entries.deinit(self.store.allocator);
-    }
-
-    pub fn append(self: *ContainerWriter, identity: Identity, bytes: []const u8) Error!void {
-        try self.entries.ensureUnusedCapacity(self.store.allocator, 1);
-        if (self.stage == null) {
-            var key = identity.indexedKey();
-            self.store.io.random(key[32..]);
-            self.stage = try self.store.reserveKey(identity, key, 0, self.store.now(), true);
-            self.file = Dir.cwd().createFile(self.store.io, self.stage.?.path, .{ .exclusive = true }) catch return error.IoFailure;
-        }
-        const key = identity.indexedKey();
-        if (!std.mem.eql(u8, key[0..32], self.stage.?.key[0..32])) base.invariant("container producer supplies one artifact group", .{});
-        const end = std.math.add(u64, self.size, bytes.len) catch return error.CapacityExceeded;
-        try self.stage.?.resizeContainer(end);
-        self.file.?.writePositionalAll(self.store.io, bytes, self.size) catch return error.IoFailure;
-        self.entries.appendAssumeCapacity(.{ .identity = identity, .offset = self.size, .length = bytes.len });
-        self.size = end;
-    }
-
-    pub fn publish(self: *ContainerWriter) Error!void {
-        const stage = if (self.stage) |*value| value else return;
-        self.file.?.close(self.store.io);
-        self.file = null;
-        try stage.publish();
-        self.held = (try self.store.acquireKey(stage.key, self.store.now())) orelse return error.Changed;
-        for (self.entries.items) |entry| try self.publishSlice(entry);
-    }
-
-    fn publishSlice(self: *ContainerWriter, entry: Entry) Error!void {
-        const stage = &self.stage.?;
-        const key = entry.identity.indexedKey();
-        var counters = catalog.Counters{};
-        var shard = try Shard.openRequired(self.store, Store.shardFor(key), false, &counters);
-        defer shard.close();
-        var tx = shard.index.transaction();
-        if (tx.header.user[0] == std.math.maxInt(u64)) return error.CapacityExceeded;
-        tx.header.user[0] += 1;
-        const generation = tx.header.user[0];
-        const timestamp = self.store.now();
-        var metadata: Metadata = .{
-            .state = .published,
-            .family = entry.identity.family,
-            .pack_format = entry.identity.pack_format,
-            .namespace = entry.identity.namespace,
-            .variant = entry.identity.variant,
-            .generation = generation,
-            .size = 0,
-            .created = timestamp,
-            .used = timestamp,
-            .indexed_used = timestamp,
-            .key = key,
-            .slot = 0,
-            .storage = .slice,
-            .container_slot = stage.slot,
-            .container_generation = stage.generation,
-            .offset = entry.offset,
-            .length = entry.length,
-        };
-        // Replacement keeps accepted readers alive through their container
-        // leases. A concurrent publisher's unrelated keys are never touched.
-        if (try tx.find(.artifacts, key)) |previous| {
-            var old = try currentMetadata(&tx, key, previous.value);
-            if (old.state != .published or tx.header.user[1] < old.size) return error.CorruptCatalog;
-            if (!try tx.remove(.recency, old.recency(old.slot))) return error.CorruptCatalog;
-            tx.header.user[1] -= old.size;
-            tx.header.user[3] = std.math.add(u64, tx.header.user[3], old.size) catch return error.CapacityExceeded;
-            old.state = .retiring;
-            _ = try tx.putValue(.owners, storageKey(old.generation), old.encode());
-        }
-        metadata.slot = try tx.putValue(.owners, storageKey(generation), metadata.encode());
-        _ = try tx.putValue(.owners, storageKey(generation), metadata.encode());
-        _ = try tx.putValue(.artifacts, key, metadata.encode());
-        var value: catalog.Value = @splat(0);
-        @memcpy(value[0..64], &key);
-        _ = try tx.putValue(.recency, metadata.recency(metadata.slot), value);
-        try tx.commit();
-    }
-};
-
-/// One CLI-owned scratch directory. The lease, not the timestamp, establishes
-/// whether its contents may still be used. All files in an abandoned directory
-/// are eligible, so bounded destructive traversal can always consume its first
-/// entry without persisting an opaque iterator or rescanning a retained prefix.
-pub const Scratch = struct {
-    store: *Store,
-    staging: Staging,
-    keep_until_expired: bool = false,
-
-    pub fn create(allocator: Allocator, io: Io, cache_root: []const u8, namespace: [32]u8) Error!Scratch {
-        const store = try allocator.create(Store);
-        errdefer allocator.destroy(store);
-        store.* = try Store.init(allocator, io, cache_root);
-        errdefer store.deinit();
-        var nonce: [32]u8 = undefined;
-        io.random(&nonce);
-        var staging = try store.reserveWith(.{ .namespace = namespace, .family = .scratch, .key = nonce }, 0, store.now(), true);
-        errdefer staging.deinit();
-        // Native application children use this same lease. Merely closing the
-        // parent's copy never unlocks a file description still held by a child.
-        if (comptime @import("builtin").os.tag == .windows) {
-            const w = std.os.windows;
-            if (w.ntdll.NtSetInformationObject(staging.lease.handle, .HandleFlag, &w.OBJECT.HANDLE_FLAG{ .INHERIT = true }, @sizeOf(w.OBJECT.HANDLE_FLAG)) != .SUCCESS) return error.IoFailure;
-        } else {
-            if (std.posix.errno(std.posix.system.fcntl(staging.lease.handle, std.posix.F.SETFD, @as(u32, 0))) != .SUCCESS) return error.IoFailure;
-        }
-        Dir.cwd().createDir(io, staging.path, .default_dir) catch return error.IoFailure;
-        return .{ .store = store, .staging = staging };
     }
 
     pub fn path(self: *const Scratch) []const u8 {
-        return self.staging.path;
+        return self.directory;
     }
 
     pub fn deinit(self: *Scratch) void {
-        const allocator = self.store.allocator;
-        const key = self.staging.key;
-        const generation = self.staging.generation;
-        self.staging.deinit();
-        defer {
-            self.store.deinit();
-            allocator.destroy(self.store);
-        }
-        if (self.keep_until_expired) return;
-        // Normal completion makes the entry immediately eligible. A crash
-        // leaves it eligible after the abandoned-work window instead.
-        var counters = catalog.Counters{};
-        if (Shard.open(self.store, Store.shardFor(key), false, &counters)) |opened| {
-            var shard = opened;
-            defer shard.close();
-            var tx = shard.index.transaction();
-            if (tx.find(.owners, storageKey(generation)) catch null) |entry| {
-                if (Metadata.decode(entry.value)) |value| {
-                    var metadata = value;
-                    metadata.state = .retiring;
-                    _ = tx.putValue(.owners, storageKey(generation), metadata.encode()) catch 0;
-                    tx.commit() catch {};
-                } else |_| {}
-            }
-        } else |_| {}
+        if (!self.keep) Dir.cwd().deleteTree(self.io, self.directory) catch {};
+        self.allocator.free(self.directory);
     }
 };
 
-/// One filesystem leaf or empty directory per call. The cursor has a fixed
-/// byte limit, checksum, and generation. Invalid cursors restart at the owned
-/// root; they never provide deletion authority.
-fn drainScratch(shard: *Shard, stem: []const u8, generation: u64) Error!bool {
-    var path_buffer: [140]u8 = undefined;
-    const scratch_path = std.fmt.bufPrint(&path_buffer, "{s}.pending", .{stem}) catch return error.PathTooLong;
-    var root = shard.dir.openDir(shard.io, scratch_path, .{ .follow_symlinks = false }) catch |err| switch (err) {
-        error.FileNotFound => return true,
-        else => return error.IoFailure,
-    };
-    var root_closed = false;
-    defer if (!root_closed) root.close(shard.io);
-    var cursor_name_buffer: [140]u8 = undefined;
-    const cursor_name = std.fmt.bufPrint(&cursor_name_buffer, "{s}.cursor", .{stem}) catch return error.PathTooLong;
-    var cursor: [std.fs.max_path_bytes]u8 = @splat(0);
-    const capacity = cursor.len - 32;
-    var relative: []const u8 = "";
-    if (shard.dir.openFile(shard.io, cursor_name, .{})) |file| {
-        defer file.close(shard.io);
-        const len = file.readPositionalAll(shard.io, &cursor, 0) catch return error.IoFailure;
-        if (len == cursor.len and get(u64, &cursor, 0) == std.hash.Wyhash.hash(0, cursor[8..]) and get(u64, &cursor, 8) == generation) {
-            const path_len = get(u64, &cursor, 16);
-            if (path_len <= capacity) relative = cursor[32..][0..@intCast(path_len)];
-        }
-    } else |err| switch (err) {
-        error.FileNotFound => {},
-        else => return error.IoFailure,
-    }
-    // Validate every component and prohibit following any symlink on the
-    // route from the registered scratch root to the current directory.
-    var directory = root;
-    var owns_directory = false;
-    defer if (owns_directory) directory.close(shard.io);
-    var parts = std.mem.splitScalar(u8, relative, '/');
-    var valid_relative = true;
-    while (parts.next()) |part| {
-        if (part.len == 0) {
-            if (relative.len != 0) valid_relative = false;
-            break;
-        }
-        if (std.mem.eql(u8, part, ".") or std.mem.eql(u8, part, "..") or std.mem.findScalar(u8, part, '\\') != null or std.mem.findScalar(u8, part, 0) != null or std.mem.findScalar(u8, part, ':') != null) {
-            valid_relative = false;
-            break;
-        }
-        const child = directory.openDir(shard.io, part, .{ .follow_symlinks = false }) catch {
-            valid_relative = false;
-            break;
-        };
-        if (owns_directory) directory.close(shard.io);
-        directory = child;
-        owns_directory = true;
-    }
-    if (!valid_relative) {
-        relative = "";
-    } else {
-        var iterable = directory.openDir(shard.io, ".", .{ .iterate = true, .follow_symlinks = false }) catch return error.IoFailure;
-        var iterable_closed = false;
-        defer if (!iterable_closed) iterable.close(shard.io);
-        var iterator = iterable.iterate();
-        if (iterator.next(shard.io) catch return error.IoFailure) |entry| {
-            if (entry.kind == .directory) {
-                var next: [std.fs.max_path_bytes]u8 = undefined;
-                const name = std.fmt.bufPrint(&next, "{s}{s}{s}", .{ relative, if (relative.len == 0) "" else "/", entry.name }) catch return error.PathTooLong;
-                if (name.len > capacity) return error.PathTooLong;
-                @memcpy(cursor[32..][0..name.len], name);
-                relative = cursor[32..][0..name.len];
-            } else {
-                directory.deleteFile(shard.io, entry.name) catch |err| switch (err) {
-                    error.FileNotFound => {},
-                    else => return error.IoFailure,
-                };
-            }
-        } else if (relative.len == 0) {
-            iterable.close(shard.io);
-            iterable_closed = true;
-            root.close(shard.io);
-            root_closed = true;
-            shard.dir.deleteDir(shard.io, scratch_path) catch |err| switch (err) {
-                error.FileNotFound => {},
-                else => return error.IoFailure,
-            };
-            shard.dir.deleteFile(shard.io, cursor_name) catch {};
-            return true;
-        } else {
-            iterable.close(shard.io);
-            iterable_closed = true;
-            if (owns_directory) {
-                directory.close(shard.io);
-                owns_directory = false;
-            }
-            root.deleteDir(shard.io, relative) catch |err| switch (err) {
-                error.FileNotFound => {},
-                else => return error.IoFailure,
-            };
-            relative = if (std.mem.findScalarLast(u8, relative, '/')) |index| relative[0..index] else "";
-        }
-    }
-    put(u64, &cursor, 8, generation);
-    put(u64, &cursor, 16, relative.len);
-    if (relative.len != 0) std.mem.copyForwards(u8, cursor[32..][0..relative.len], relative);
-    @memset(cursor[32 + relative.len ..], 0);
-    put(u64, &cursor, 0, std.hash.Wyhash.hash(0, cursor[8..]));
-    // The ownership lease serializes this disposable cursor. A torn write
-    // simply restarts at the root; the already removed leaves stay removed.
-    shard.dir.writeFile(shard.io, .{ .sub_path = cursor_name, .data = &cursor }) catch return error.IoFailure;
-    return false;
-}
-
-/// Encode a physical slot in a fixed-depth directory fanout.
-pub fn slotStem(buffer: *[128]u8, slot: u64) Error![]const u8 {
-    var bytes: [8]u8 = undefined;
-    std.mem.writeInt(u64, &bytes, slot, .big);
-    return std.fmt.bufPrint(buffer, "data/{x:0>2}/{x:0>2}/{x:0>2}/{x:0>2}/{x:0>2}/{x:0>2}/{x:0>2}/{x:0>2}", .{
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-    }) catch return error.PathTooLong;
-}
-
-/// Order allocation generations lexicographically for resumable traversal.
-pub fn storageKey(generation: u64) catalog.Key {
-    var key: catalog.Key = @splat(0);
-    std.mem.writeInt(u64, key[0..8], generation, .big);
-    return key;
-}
-
-/// Advance a fixed-width ordered cursor; false means the key space ended.
-pub fn advanceKey(key: *catalog.Key) bool {
-    var index: usize = key.len;
-    while (index != 0) {
-        index -= 1;
-        key[index] +%= 1;
-        if (key[index] != 0) return true;
-    }
-    return false;
-}
-
-test "publication owns staging and an accepted reader survives eviction" {
-    const allocator = std.testing.allocator;
+test "direct cache publication preserves readers and discards abandoned writes" {
+    const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
-    defer allocator.free(root);
-    var store = try Store.init(allocator, io, root);
+    const root = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(root);
+    var store = try Store.init(gpa, io, root);
     defer store.deinit();
-    const identity: Identity = .{ .namespace = @splat(1), .family = .checked, .key = @splat(2) };
-    var stage = try store.reserve(identity, 5, 1);
-    try Dir.cwd().writeFile(io, .{ .sub_path = stage.path, .data = "hello" });
-    try std.testing.expect((try store.acquire(identity, 2)) == null);
+    const identity = Identity{ .namespace = @splat(1), .family = .checked, .key = @splat(2) };
+    try std.testing.expect((try store.acquire(identity)) == null);
+    try store.write(identity, "first");
+    var reader = (try store.acquire(identity)).?;
+    defer reader.deinit();
     {
-        var counters = catalog.Counters{};
-        var shard = try Shard.open(&store, Store.shardFor(stage.key), false, &counters);
-        defer shard.close();
-        try std.testing.expectError(error.Busy, shard.retire(stage.key, stage.generation));
+        var abandoned = try store.reserve(identity);
+        defer abandoned.deinit();
+        try Dir.cwd().writeFile(io, .{ .sub_path = abandoned.path, .data = "incomplete" });
+        const current = (try store.read(gpa, identity)).?;
+        defer gpa.free(current);
+        try std.testing.expectEqualStrings("first", current);
     }
-    try stage.publish();
-    const generation = stage.generation;
-    stage.deinit();
-    var reader = (try store.acquire(identity, 3)).?;
-    {
-        var counters = catalog.Counters{};
-        var shard = try Shard.open(&store, Store.shardFor(identity.indexedKey()), false, &counters);
-        defer shard.close();
-        try std.testing.expectError(error.Busy, shard.retire(identity.indexedKey(), generation));
-    }
-    const bytes = try reader.read(allocator);
-    defer allocator.free(bytes);
-    try std.testing.expectEqualStrings("hello", bytes);
-    reader.deinit();
-    var counters = catalog.Counters{};
-    var shard = try Shard.open(&store, Store.shardFor(identity.indexedKey()), false, &counters);
-    try std.testing.expect(try shard.retire(identity.indexedKey(), generation));
-    shard.close();
-    try std.testing.expect((try store.acquire(identity, 4)) == null);
-}
-
-test "shard ownership is nonblocking and lock-file existence does not imply ownership" {
-    const io = std.testing.io;
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
-    defer allocator.free(root);
-    var store = try Store.init(allocator, io, root);
-    defer store.deinit();
-    var counters = catalog.Counters{};
-    var first = try Shard.open(&store, 0, true, &counters);
-    try std.testing.expectError(error.Busy, Shard.open(&store, 0, false, &counters));
-    first.close();
-    var second = try Shard.open(&store, 0, false, &counters);
-    second.close();
-}
-
-test "interleaved publication and retirement preserve generations and acquired storage" {
-    const allocator = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
-    defer allocator.free(root);
-    var store = try Store.init(allocator, io, root);
-    defer store.deinit();
-    const id: Identity = .{ .namespace = @splat(1), .family = .checked, .key = @splat(2) };
-    var first = try store.reserve(id, 3, 1);
-    defer first.deinit();
-    var second = try store.reserve(id, 3, 2);
-    var second_open = true;
-    defer if (second_open) second.deinit();
-    try std.testing.expect(!std.mem.eql(u8, first.path, second.path));
-    try Dir.cwd().writeFile(io, .{ .sub_path = first.path, .data = "o" });
-    try std.testing.expectError(error.InvalidArtifact, first.publish());
-    try Dir.cwd().writeFile(io, .{ .sub_path = second.path, .data = "new" });
-    try second.publish();
-    // Readers accept a published generation while its producer is still open.
-    var accepted = (try store.acquire(id, 2)).?;
-    defer accepted.deinit();
-    second.deinit();
-    second_open = false;
-    try Dir.cwd().writeFile(io, .{ .sub_path = first.path, .data = "old" });
-    try first.publish();
-    const bytes = try accepted.read(allocator);
-    defer allocator.free(bytes);
-    try std.testing.expectEqualStrings("new", bytes);
-    var counters = catalog.Counters{};
-    var shard = try Shard.open(&store, Store.shardFor(first.key), false, &counters);
-    defer shard.close();
-    try std.testing.expectError(error.Busy, shard.retire(second.key, second.generation));
-    var tx = shard.index.transaction();
-    try std.testing.expectEqual(@as(u64, 3), tx.header.user[1]);
-    try std.testing.expectEqual(@as(u64, 3), tx.header.user[3]);
-    const current = try Metadata.decode((try tx.find(.artifacts, first.key)).?.value);
-    try std.testing.expectEqual(first.generation, current.generation);
-}
-
-test "file import registers exact bytes and permissions before publication" {
-    const allocator = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
-    defer allocator.free(root);
-    try tmp.dir.writeFile(io, .{ .sub_path = "executable", .data = "executable bytes" });
-    const source = try tmp.dir.realPathFileAlloc(io, "executable", allocator);
-    defer allocator.free(source);
-    var store = try Store.init(allocator, io, root);
-    defer store.deinit();
-    const id: Identity = .{ .namespace = @splat(1), .family = .executable, .key = @splat(2) };
-    try store.importFile(id, source);
-    const bytes = (try store.read(allocator, id, store.now())).?;
-    defer allocator.free(bytes);
-    try std.testing.expectEqualStrings("executable bytes", bytes);
-}
-
-test "scratch ownership survives the parent closing its inherited lease" {
-    if (comptime @import("builtin").os.tag == .windows) return error.SkipZigTest;
-    const allocator = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
-    defer allocator.free(root);
-    var store = try Store.init(allocator, io, root);
-    defer store.deinit();
-    var scratch = try Scratch.create(allocator, io, root, @splat(1));
-    var scratch_open = true;
-    defer if (scratch_open) scratch.deinit();
-    const key = scratch.staging.key;
-    const generation = scratch.staging.generation;
-    var child = try std.process.spawn(io, .{
-        .argv = &.{ "/bin/sh", "-c", "printf r; read line" },
-        .inherit_files = &.{scratch.staging.lease},
-        .stdin = .pipe,
-        .stdout = .pipe,
-    });
-    defer child.kill(io);
-    var ready: [1]u8 = undefined;
-    try std.testing.expectEqual(@as(usize, 1), try child.stdout.?.readStreaming(io, &.{&ready}));
-    scratch.deinit();
-    scratch_open = false;
-    var counters = catalog.Counters{};
-    {
-        var shard = try Shard.open(&store, Store.shardFor(key), false, &counters);
-        defer shard.close();
-        try std.testing.expectError(error.Busy, shard.retire(key, generation));
-    }
-    try child.stdin.?.writeStreamingAll(io, "done\n");
-    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, try child.wait(io));
-    var shard = try Shard.open(&store, Store.shardFor(key), false, &counters);
-    defer shard.close();
-    try std.testing.expect(try shard.retire(key, generation));
-}
-
-test "foreground artifact contention never becomes a cache miss or lost publication" {
-    const allocator = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
-    defer allocator.free(root);
-    var store = try Store.init(allocator, io, root);
-    defer store.deinit();
-    const id: Identity = .{ .namespace = @splat(17), .family = .checked, .key = @splat(23) };
-    try store.write(id, "validated bytes", 1);
-    const workers = 8;
-    const Shared = struct {
-        store: *const Store,
-        identity: Identity,
-        ready: std.atomic.Value(usize) = .init(0),
-        start: std.atomic.Value(bool) = .init(false),
-        failed: std.atomic.Value(bool) = .init(false),
-        fn run(self: *@This()) void {
-            _ = self.ready.fetchAdd(1, .release);
-            while (!self.start.load(.acquire)) std.atomic.spinLoopHint();
-            for (0..16) |iteration| {
-                const bytes = (self.store.read(self.store.allocator, self.identity, @intCast(iteration + 2)) catch {
-                    self.failed.store(true, .release);
-                    return;
-                }) orelse {
-                    self.failed.store(true, .release);
-                    return;
-                };
-                defer self.store.allocator.free(bytes);
-                if (!std.mem.eql(u8, bytes, "validated bytes")) self.failed.store(true, .release);
-                self.store.write(self.identity, "validated bytes", @intCast(iteration + 2)) catch {
-                    self.failed.store(true, .release);
-                    return;
-                };
-            }
-        }
-    };
-    var shared = Shared{ .store = &store, .identity = id };
-    var threads: [workers]std.Thread = undefined;
-    var spawned: usize = 0;
-    defer {
-        shared.start.store(true, .release);
-        for (threads[0..spawned]) |thread| thread.join();
-    }
-    for (&threads) |*thread| {
-        thread.* = try std.Thread.spawn(.{}, Shared.run, .{&shared});
-        spawned += 1;
-    }
-    while (shared.ready.load(.acquire) != workers) std.atomic.spinLoopHint();
-    shared.start.store(true, .release);
-    for (threads) |thread| thread.join();
-    spawned = 0;
-    try std.testing.expect(!shared.failed.load(.acquire));
-    const bytes = (try store.read(allocator, id, 20)).?;
-    defer allocator.free(bytes);
-    try std.testing.expectEqualStrings("validated bytes", bytes);
-}
-
-test "artifact groups route all members to one shard and enumerate only published members" {
-    const allocator = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
-    defer allocator.free(root);
-    var store = try Store.init(allocator, io, root);
-    defer store.deinit();
-    const identity: Identity = .{ .namespace = @splat(7), .family = .local_pack, .group = @splat(11), .key = @splat(0) };
-    const shard = Store.shardFor(identity.indexedKey());
-    for (0..32) |i| {
-        var member = identity;
-        member.key[0] = @intCast(31 - i);
-        try std.testing.expectEqual(shard, Store.shardFor(member.indexedKey()));
-        var stage = try store.reserve(member, 1, 1);
-        defer stage.deinit();
-        try Dir.cwd().writeFile(io, .{ .sub_path = stage.path, .data = "x" });
-        try stage.publish();
-    }
-    var unfinished = identity;
-    unfinished.key[0] = 32;
-    var stage = try store.reserve(unfinished, 1, 1);
-    defer stage.deinit();
-    var other = identity;
-    other.group = @splat(12);
-    var other_stage = try store.reserve(other, 1, 1);
-    defer other_stage.deinit();
-    try Dir.cwd().writeFile(io, .{ .sub_path = other_stage.path, .data = "y" });
-    try other_stage.publish();
-    const keys = try store.groupKeys(allocator, identity);
-    defer allocator.free(keys);
-    try std.testing.expectEqual(32, keys.len);
-    for (keys, 0..) |key, i| {
-        try std.testing.expectEqual(i, key[32]);
-        var reader = (try store.acquireKey(key, 2)).?;
-        defer reader.deinit();
-        const bytes = try reader.read(allocator);
-        defer allocator.free(bytes);
-        try std.testing.expectEqualStrings("x", bytes);
-    }
-    const other_keys = try store.groupKeys(allocator, other);
-    defer allocator.free(other_keys);
-    try std.testing.expectEqual(1, other_keys.len);
-}
-
-test "session reads batch one exact owner update per generation before releasing leases" {
-    const a = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const path = try tmp.dir.realPathFileAlloc(io, ".", a);
-    defer a.free(path);
-    var store = try Store.init(a, io, path);
-    defer store.deinit();
-    var batch = try Session.init(&store);
-    defer batch.deinit();
-    var ids: [6]Identity = undefined;
-    var held: [6]?Artifact = @splat(null);
-    defer for (&held) |*item| if (item.*) |*artifact| artifact.deinit();
-    for (&ids, 0..) |*id, i| {
-        id.* = .{ .namespace = @splat(7), .family = .local_pack, .group = @splat(5), .key = @splat(@intCast(i)) };
-        try store.write(id.*, "payload", 10);
-    }
-    for (ids, &held) |id, *item| item.* = (try batch.acquireKey(id.indexedKey(), 20)).?;
-    const key = ids[0].indexedKey();
-    var counters = catalog.Counters{};
-    var sequence: u64 = undefined;
-    {
-        var shard = try Shard.openRequired(&store, Store.shardFor(key), false, &counters);
-        defer shard.close();
-        sequence = shard.index.header.sequence;
-        var tx = shard.index.transaction();
-        for (ids) |id| {
-            const k = id.indexedKey();
-            const ptr = (try tx.find(.artifacts, k)).?;
-            const m = try currentMetadata(&tx, k, ptr.value);
-            try std.testing.expectEqual(10, m.used);
-            try std.testing.expectError(error.Busy, shard.retire(k, m.generation));
-        }
-    }
-    try batch.flush();
-    {
-        var shard = try Shard.openRequired(&store, Store.shardFor(key), false, &counters);
-        defer shard.close();
-        try std.testing.expectEqual(sequence + 1, shard.index.header.sequence);
-        var tx = shard.index.transaction();
-        for (ids) |id| {
-            const k = id.indexedKey();
-            const ptr = (try tx.find(.artifacts, k)).?;
-            try std.testing.expectEqual(20, (try currentMetadata(&tx, k, ptr.value)).used);
-        }
-    }
-    // A newer concurrent reader wins even when an older batch flushes last.
-    var older = (try batch.acquireKey(key, 25)).?;
-    defer older.deinit();
-    var newer = (try store.acquireKey(key, 30)).?;
-    defer newer.deinit();
-    try batch.flush();
-    {
-        var shard = try Shard.openRequired(&store, Store.shardFor(key), false, &counters);
-        defer shard.close();
-        var tx = shard.index.transaction();
-        const ptr = (try tx.find(.artifacts, key)).?;
-        try std.testing.expectEqual(30, (try currentMetadata(&tx, key, ptr.value)).used);
-    }
-}
-
-test "sessions discard observations of a retired generation" {
-    const a = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const path = try tmp.dir.realPathFileAlloc(io, ".", a);
-    defer a.free(path);
-    var store = try Store.init(a, io, path);
-    defer store.deinit();
-    var batch = try Session.init(&store);
-    defer batch.deinit();
-    const id: Identity = .{ .namespace = @splat(8), .family = .local_pack, .key = @splat(3) };
-    const key = id.indexedKey();
-    try store.write(id, "rejected", 10);
-    var rejected = (try batch.acquireKey(key, 40)).?;
-    rejected.deinit();
-    var counters = catalog.Counters{};
-    {
-        var shard = try Shard.openRequired(&store, Store.shardFor(key), false, &counters);
-        defer shard.close();
-        var tx = shard.index.transaction();
-        const ptr = (try tx.find(.artifacts, key)).?;
-        try std.testing.expect(try shard.retire(key, (try currentMetadata(&tx, key, ptr.value)).generation));
-    }
-    try store.write(id, "replacement", 20);
-    try batch.flush();
-    {
-        var shard = try Shard.openRequired(&store, Store.shardFor(key), false, &counters);
-        defer shard.close();
-        var tx = shard.index.transaction();
-        const ptr = (try tx.find(.artifacts, key)).?;
-        try std.testing.expectEqual(20, (try currentMetadata(&tx, key, ptr.value)).used);
-    }
-}
-
-test "grouped acquisitions preserve order absence duplicates and generation leases" {
-    const a = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const path = try tmp.dir.realPathFileAlloc(io, ".", a);
-    defer a.free(path);
-    var store = try Store.init(a, io, path);
-    defer store.deinit();
-    var identities: [80]Identity = undefined;
-    for (&identities, 0..) |*id, i| {
-        id.* = .{ .namespace = @splat(7), .family = .local_pack, .group = @splat(if (i < 64) 1 else @intCast(i)), .key = @splat(@intCast(i)) };
-        try store.write(id.*, &.{@intCast(i)}, 1);
-    }
-    var keys: [83]catalog.Key = undefined;
-    for (identities, 0..) |id, i| keys[79 - i] = id.indexedKey();
-    keys[80] = identities[0].indexedKey();
-    var missing = identities[0];
-    missing.key = @splat(255);
-    keys[81] = missing.indexedKey();
-    keys[82] = identities[79].indexedKey();
-    var batch = try Session.init(&store);
-    defer batch.deinit();
-    const held = try batch.acquireKeys(a, &keys, 100);
-    defer a.free(held);
-    defer for (held) |*item| if (item.*) |*artifact| artifact.deinit();
-    try std.testing.expect(held[81] == null);
-    for (held, 0..) |item, i| {
-        if (i == 81) continue;
-        const bytes = try item.?.read(a);
-        defer a.free(bytes);
-        const expected: u8 = if (i == 80) 0 else if (i == 82) 79 else @intCast(79 - i);
-        try std.testing.expectEqualSlices(u8, &.{expected}, bytes);
-    }
-    try batch.flush();
-    try store.write(identities[0], "replacement", 200);
-    const old = try held[80].?.read(a);
-    defer a.free(old);
-    try std.testing.expectEqualSlices(u8, &.{0}, old);
-    const current = (try store.read(a, identities[0], 300)).?;
-    defer a.free(current);
+    try store.write(identity, "replacement");
+    const old = try reader.read(gpa);
+    defer gpa.free(old);
+    try std.testing.expectEqualStrings("first", old);
+    const current = (try store.read(gpa, identity)).?;
+    defer gpa.free(current);
     try std.testing.expectEqualStrings("replacement", current);
-    try std.testing.expectError(error.Busy, store.invalidate(identities[79]));
-}
-
-test "container slices share physical ownership and survive logical retirement" {
-    const a = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
-    defer a.free(root);
-    var store = try Store.init(a, io, root);
-    defer store.deinit();
-    const id: Identity = .{ .namespace = @splat(71), .family = .local_pack, .key = @splat(1) };
-    var other = id;
-    other.key = @splat(2);
-    var writer: ContainerWriter = .{ .store = &store };
-    defer writer.deinit();
-    try writer.append(id, "first");
-    try writer.append(other, "second");
-    try std.testing.expect((try store.acquire(id, 1)) == null);
-    try writer.publish();
-    var reads = try Session.init(&store);
-    var first = (try reads.acquireKey(id.indexedKey(), store.now())).?;
-    defer first.deinit();
-    var second = (try reads.acquireKey(other.indexedKey(), store.now())).?;
-    defer second.deinit();
-    try std.testing.expect(first.shared == second.shared);
-    try std.testing.expectEqual(@as(usize, 1), reads.containerCount());
-    reads.deinit(); // Captured slices outlive the acquisition session.
-    try std.testing.expectError(error.Busy, store.invalidate(id));
-    // Replacement may detach the logical generation, but cannot change bytes
-    // retained by the accepted reader.
-    try store.write(id, "new generation", store.now());
-    const first_bytes = try first.read(a);
-    defer a.free(first_bytes);
-    const second_bytes = try second.read(a);
-    defer a.free(second_bytes);
-    try std.testing.expectEqualStrings("first", first_bytes);
-    try std.testing.expectEqualStrings("second", second_bytes);
-    var counters: catalog.Counters = .{};
-    var shard = try Shard.openRequired(&store, Store.shardFor(id.indexedKey()), false, &counters);
-    defer shard.close();
-    try std.testing.expectError(error.Busy, shard.retire(writer.stage.?.key, writer.stage.?.generation));
-    try std.testing.expectEqual(@as(u64, 25), shard.index.header.user[1]);
-}
-
-test "container abandoned writers and retired physical generations are cache misses" {
-    const a = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
-    defer a.free(root);
-    var store = try Store.init(a, io, root);
-    defer store.deinit();
-    const id: Identity = .{ .namespace = @splat(72), .family = .local_pack, .key = @splat(3) };
-    var abandoned: ContainerWriter = .{ .store = &store };
-    try abandoned.append(id, "incomplete");
-    const abandoned_key = abandoned.stage.?.key;
-    const abandoned_generation = abandoned.stage.?.generation;
-    abandoned.deinit();
-    try std.testing.expect((try store.acquire(id, 1)) == null);
-    var writer: ContainerWriter = .{ .store = &store };
-    try writer.append(id, "complete");
-    try writer.publish();
-    const key = writer.stage.?.key;
-    const generation = writer.stage.?.generation;
-    writer.deinit();
-    {
-        var counters: catalog.Counters = .{};
-        var shard = try Shard.openRequired(&store, Store.shardFor(id.indexedKey()), false, &counters);
-        defer shard.close();
-        try std.testing.expect(try shard.retire(abandoned_key, abandoned_generation));
-        try std.testing.expect(try shard.retire(key, generation));
-    }
-    try std.testing.expect((try store.acquire(id, 2)) == null);
-    var replacement: ContainerWriter = .{ .store = &store };
-    defer replacement.deinit();
-    try replacement.append(id, "replacement");
-    try replacement.publish();
-    const bytes = (try store.read(a, id, 3)).?;
-    defer a.free(bytes);
-    try std.testing.expectEqualStrings("replacement", bytes);
-}
-
-test "shared session acquires container slices concurrently across shards" {
-    const a = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", a);
-    defer a.free(root);
-    var store = try Store.init(a, std.testing.io, root);
-    defer store.deinit();
-    var identities: [32]Identity = undefined;
-    var covered: [shard_count]bool = @splat(false);
-    for (&identities, 0..) |*identity, i| {
-        identity.* = .{ .namespace = @splat(7), .family = .local_pack, .group = @splat(@intCast(i)), .key = @splat(11) };
-        covered[Store.shardFor(identity.indexedKey())] = true;
-        var writer: ContainerWriter = .{ .store = &store };
-        defer writer.deinit();
-        try writer.append(identity.*, "shared container payload");
-        try writer.publish();
-    }
-    try std.testing.expect(std.mem.count(bool, &covered, &.{true}) > 1);
-    var session = try Session.init(&store);
-    defer session.deinit();
-    const Worker = struct {
-        session: *Session,
-        identities: []const Identity,
-        start: *std.atomic.Value(bool),
-        failed: bool = false,
-        fn run(self: *@This()) void {
-            while (!self.start.load(.acquire)) std.atomic.spinLoopHint();
-            for (0..4) |_| {
-                for (self.identities) |identity| {
-                    var artifact = (self.session.acquire(identity, self.session.now()) catch {
-                        self.failed = true;
-                        return;
-                    }) orelse {
-                        self.failed = true;
-                        return;
-                    };
-                    defer artifact.deinit();
-                    const bytes = artifact.read(self.session.store.allocator) catch {
-                        self.failed = true;
-                        return;
-                    };
-                    defer self.session.store.allocator.free(bytes);
-                    if (!std.mem.eql(u8, bytes, "shared container payload")) self.failed = true;
-                }
-            }
-        }
+    var dir = try Dir.cwd().openDir(io, store.root, .{ .iterate = true });
+    defer dir.close(io);
+    var walker = try dir.walk(gpa);
+    defer walker.deinit();
+    var files: usize = 0;
+    while (try walker.next(io)) |entry| if (entry.kind == .file) {
+        try std.testing.expect(std.mem.endsWith(u8, entry.basename, ".data"));
+        files += 1;
     };
-    var start = std.atomic.Value(bool).init(false);
-    var workers: [4]Worker = undefined;
-    var threads: [workers.len]std.Thread = undefined;
-    var spawned: usize = 0;
-    defer {
-        start.store(true, .release);
-        for (threads[0..spawned]) |thread| thread.join();
-    }
-    for (&workers, &threads) |*worker, *thread| {
-        worker.* = .{ .session = &session, .identities = &identities, .start = &start };
-        thread.* = try std.Thread.spawn(.{}, Worker.run, .{worker});
-        spawned += 1;
-    }
-    start.store(true, .release);
-    for (threads) |thread| thread.join();
-    spawned = 0;
-    for (workers) |worker| try std.testing.expect(!worker.failed);
-    try std.testing.expectEqual(identities.len, session.containerCount());
-}
-
-test "container concurrent publishers preserve shared and independent records" {
-    const a = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
-    defer a.free(root);
-    var store = try Store.init(a, io, root);
-    defer store.deinit();
-    const Worker = struct {
-        store: *const Store,
-        id: u8,
-        failure: ?Error = null,
-        fn run(self: *@This()) void {
-            self.publish() catch |err| {
-                self.failure = err;
-            };
-        }
-        fn publish(self: *@This()) Error!void {
-            const identity: Identity = .{ .namespace = @splat(73), .family = .local_pack, .key = @splat(self.id) };
-            var shared = identity;
-            shared.key = @splat(0);
-            var writer: ContainerWriter = .{ .store = self.store };
-            defer writer.deinit();
-            try writer.append(identity, &.{self.id});
-            try writer.append(shared, "shared bytes");
-            try writer.publish();
-        }
-    };
-    var workers: [4]Worker = undefined;
-    var threads: [4]std.Thread = undefined;
-    var started: usize = 0;
-    errdefer for (threads[0..started]) |thread| thread.join();
-    for (&workers, &threads, 0..) |*worker, *thread, i| {
-        worker.* = .{ .store = &store, .id = @intCast(i + 1) };
-        thread.* = try std.Thread.spawn(.{}, Worker.run, .{worker});
-        started += 1;
-    }
-    for (threads) |thread| thread.join();
-    started = 0;
-    for (workers) |worker| {
-        if (worker.failure) |err| return err;
-        const id: Identity = .{ .namespace = @splat(73), .family = .local_pack, .key = @splat(worker.id) };
-        const bytes = (try store.read(a, id, store.now())).?;
-        defer a.free(bytes);
-        try std.testing.expectEqualSlices(u8, &.{worker.id}, bytes);
-    }
-    const shared: Identity = .{ .namespace = @splat(73), .family = .local_pack, .key = @splat(0) };
-    const bytes = (try store.read(a, shared, store.now())).?;
-    defer a.free(bytes);
-    try std.testing.expectEqualStrings("shared bytes", bytes);
-}
-
-test "container allocation failures release staging handles and shared readers" {
-    const a = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", a);
-    defer a.free(root);
-    const Check = struct {
-        fn run(allocator: Allocator, directory: []const u8) Error!void {
-            var store = try Store.init(allocator, std.testing.io, directory);
-            defer store.deinit();
-            const id: Identity = .{ .namespace = @splat(74), .family = .local_pack, .key = @splat(4) };
-            var writer: ContainerWriter = .{ .store = &store };
-            defer writer.deinit();
-            try writer.append(id, "allocation test");
-            try writer.publish();
-            var reads = try Session.init(&store);
-            defer reads.deinit();
-            var record = (try reads.acquireKey(id.indexedKey(), store.now())) orelse return error.Missing;
-            defer record.deinit();
-            const bytes = try record.read(allocator);
-            defer allocator.free(bytes);
-        }
-    };
-    var deterministic = base.DeterministicAllocator.init(a);
-    try std.testing.checkAllAllocationFailures(deterministic.allocator(), Check.run, .{root});
+    try std.testing.expectEqual(@as(usize, 1), files);
 }

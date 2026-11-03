@@ -755,8 +755,9 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
 
     // Encode.
     var layout = Layout{};
-    const header_end = layout.reserve(@sizeOf(Header), 8);
-    _ = header_end;
+    // The header begins the image.
+    const header_offset = layout.reserve(@sizeOf(Header), 8);
+    std.debug.assert(header_offset == 0);
     const block_offset = layout.reserve(block_bytes.len, page_size);
     const data_offset = layout.reserve(data_bytes.len, 16);
     const symbols_offset = layout.reserve(symbol_records.items.len * @sizeOf(Symbol), 8);

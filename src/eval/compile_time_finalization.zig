@@ -57,40 +57,6 @@ pub const DebugObserver = struct {
     observe: *const fn (*anyopaque, []const u8) Allocator.Error!void,
 };
 
-/// Where the compile-time evaluator splices object-cache entries from.
-pub const SpliceSource = backend.dev.SpliceSource;
-
-/// The object cache compile-time evaluation reads, the same way in every
-/// command: entries compiled for the host under the dev policy, which run
-/// expects. The evaluator's program takes a hit for a procedure it runs only
-/// when the entry names that procedure's own identity, and splices its cached
-/// code in place of compiling it.
-pub const CompileTimeObjectCache = struct {
-    spec_cache: lir.CheckedPipeline.SpecCacheLookup,
-    splice_source: SpliceSource,
-    /// Receives each level's program once the level has run, while its code
-    /// still exists, so a cache that publishes the evaluation's code can take
-    /// what it needs of that level's procedures before the code is released.
-    stage_sink: ?StageSink = null,
-};
-
-/// Takes one evaluation level's program and the specializations'
-/// compile-time reads. Everything it keeps must be its own: the level's code
-/// is released when it returns.
-pub const StageSink = struct {
-    context: *anyopaque,
-    accept: *const fn (
-        context: *anyopaque,
-        stage: *const lir.CheckedPipeline.LoweredProgram,
-        comptime_reads: *const lir.CheckedPipeline.SpecComptimeReads,
-    ) Allocator.Error!void,
-};
-/// Observes the completed semantic decisions while their producer owns them.
-pub const CompletionSink = struct {
-    context: *anyopaque,
-    demand: *const fn (*anyopaque, lir.CheckedPipeline.ComptimeDemand, []const lir.CheckedPipeline.MonotypeRoot, []const checked.ModuleId, []const lir.CheckedPipeline.MonotypeLiteralRoot) Allocator.Error!void,
-    debug: *const fn (*anyopaque, []const u8) Allocator.Error!void,
-};
 /// Runtime options for compile-time finalization.
 pub const Options = struct {
     pub const StderrWriter = struct {
@@ -118,7 +84,6 @@ pub const Options = struct {
     event_callback: ?EventCallback = null,
     debug_observer: ?DebugObserver = null,
     debug_events: ?*DebugEvents = null,
-    completion_sink: ?CompletionSink = null,
     /// Artifact copies store results independently; shared slots publish once.
     publish_shared_slots: bool = true,
     /// A coordinator may persist an early dependency batch, then replay all
@@ -131,9 +96,7 @@ pub const Options = struct {
     slow_root_threshold_ns: u64 = 3 * std.time.ns_per_s,
     slow_root_period_ns: u64 = std.time.ns_per_s,
     timing: ?*Timing = null,
-    object_cache: ?CompileTimeObjectCache = null,
-    /// Keep each stage's code as object-cache artifacts
-    /// (`CompletedStages.excerpts`): what an object cache publishes.
+    /// Retain each stage's native excerpts for in-memory consumers.
     keep_artifacts: bool = false,
     /// The strategy whose evaluator lowers and runs the compile-time roots:
     /// `.lss` specializes them into a Solved program and evaluates it in
@@ -652,15 +615,6 @@ pub const ProgramSession = struct {
         self.* = undefined;
     }
 
-    /// The compile-time reads of the specializations compile-time
-    /// evaluation lowered: its own, or, while a runtime consumer is still to
-    /// continue the same Solved program, that program's.
-    pub fn specComptimeReads(self: *const ProgramSession) ?*const lir.CheckedPipeline.SpecComptimeReads {
-        if (self.completed) |*completed| if (completed.specComptimeReads()) |reads| return reads;
-        const prepared = if (self.runtime_prepared) |*prepared| prepared else return null;
-        return if (prepared.spec_comptime_reads) |*reads| reads else null;
-    }
-
     pub fn takeRuntime(
         self: *ProgramSession,
         allocator: Allocator,
@@ -669,10 +623,8 @@ pub const ProgramSession = struct {
     ) RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
         base.dev_diagnostics.countTestWork(.runtime_lir, 1);
         const configured = self.runtime_target orelse finalizationInvariant("check-only session has no runtime consumer");
-        // Whether the program's specializations go to the object cache was
-        // decided with the consumer, before the shared program was lowered.
-        var target = requested_target;
-        target.spec_comptime_reads = configured.spec_comptime_reads;
+        // The consumer policy was declared before lowering the shared program.
+        const target = requested_target;
         inline for (comptime std.meta.tags(std.meta.FieldEnum(lir.CheckedPipeline.TargetConfig))) |field| {
             if (comptime field == .timing or
                 field == .work_metrics or
@@ -795,16 +747,8 @@ pub const CompletedStages = struct {
     /// level evaluates (`evaluatesLater`).
     levels: std.AutoHashMapUnmanaged(ProducerSlotKey, u32) = .empty,
     level: u32 = 0,
-    /// The specializations' compile-time reads, which the object cache
-    /// writes beside the program's procedures.
-    spec_comptime_reads: ?lir.CheckedPipeline.SpecComptimeReads = null,
-    /// Each stage's code as object-cache excerpts, when the evaluation
-    /// writes to an object cache.
+    /// Native excerpts retained from each evaluation stage.
     excerpts: std.ArrayList(backend.dev.CodeExcerpt.Set) = .empty,
-    /// The discovery summaries of the evaluation's program (design.md
-    /// "Discovery Summaries"); null when the evaluation produced a message a
-    /// later compilation that skipped its bodies would not repeat.
-    discovery_summaries: ?lir.CheckedPipeline.DiscoverySummary.Summaries = null,
 
     const ComptimeRootOwner = @typeInfo(@FieldType(LirProgram.StaticDataValue, "compile_time_root")).optional.child;
     const SlotKey = struct {
@@ -835,10 +779,8 @@ pub const CompletedStages = struct {
         self.erased_members.deinit(self.allocator);
         self.pending.deinit(self.allocator);
         self.levels.deinit(self.allocator);
-        if (self.spec_comptime_reads) |*reads| reads.deinit();
         for (self.excerpts.items) |*set| set.deinit();
         self.excerpts.deinit(self.allocator);
-        if (self.discovery_summaries) |*summaries| summaries.deinit();
         self.* = undefined;
     }
 
@@ -855,17 +797,6 @@ pub const CompletedStages = struct {
     /// representation metadata remain.
     pub fn programs(self: *const CompletedStages) []const *const lir.CheckedPipeline.LoweredProgram {
         return self.stages.items;
-    }
-
-    /// The discovery summaries a compilation that reports no error publishes.
-    pub fn discoverySummaries(self: *const CompletedStages) []const lir.CheckedPipeline.DiscoverySummary.Summary {
-        return if (self.discovery_summaries) |summaries| summaries.items else &.{};
-    }
-
-    /// The specializations' compile-time reads, when this evaluation's
-    /// Solved program has no later consumer to hand them to.
-    pub fn specComptimeReads(self: *const CompletedStages) ?*const lir.CheckedPipeline.SpecComptimeReads {
-        return if (self.spec_comptime_reads) |*reads| reads else null;
     }
 
     /// Lower the next stage: the producers `stage_producers` name, reading
@@ -1172,98 +1103,13 @@ fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.Solved
         // Specialization records procedure names for every consumer of the
         // program; a runtime consumer's diagnostics read them.
         .proc_debug_names = true,
-        .spec_cache = if (options.object_cache) |cache| cache.spec_cache else null,
         .site_code_keys = true,
         .owned_proc_signatures = true,
-        .code_provision = if (!compilerHostMustUseInterpreterForCtfe() and backend.host_lir_codegen_available and options.object_cache != null)
-            .host_dev_objects
-        else
-            .source_bodies,
         .post_check_executor = options.post_check_executor,
         .timing = if (options.timing) |timing| &timing.lowering else null,
     };
     solved_policy.applyTo(&target);
     return target;
-}
-
-/// Name every reader before a shared Monotype producer can erase bodies.
-/// `.boxy` runtime lowering does not read this producer.
-fn sharedProducerProvision(
-    host: lir.CheckedPipeline.TargetConfig,
-    runtime: ?lir.CheckedPipeline.TargetConfig,
-) lir.CheckedPipeline.CodeProvision {
-    const consumer = runtime orelse return host.code_provision;
-    if (consumer.specialization_strategy != .lss) return host.code_provision;
-    const host_provider = host.spec_cache orelse return .source_bodies;
-    const runtime_provider = consumer.spec_cache orelse return .source_bodies;
-    if (!host_provider.sameProvider(runtime_provider)) return .source_bodies;
-    return host.code_provision.sharedDomain(consumer.code_provision);
-}
-
-test "shared producer requires the exact non-null provider capability" {
-    const Lookup = lir.CheckedPipeline.SpecCacheLookup;
-    const LookupFn = @typeInfo(@typeInfo(@FieldType(Lookup, "find")).pointer.child).@"fn";
-    const LookupResult = LookupFn.return_type.?;
-    const Takes = LookupFn.param_types[2].?;
-    const Callbacks = struct {
-        fn first(_: *anyopaque, _: [32]u8, _: Takes, _: LookupFn.param_types[3].?) LookupResult {
-            return null;
-        }
-        fn second(context: *anyopaque, _: [32]u8, _: Takes, _: LookupFn.param_types[3].?) LookupResult {
-            // Distinct behavior keeps optimized builds from merging callbacks.
-            const count: *u8 = @ptrCast(context);
-            count.* += 1;
-            return null;
-        }
-    };
-    var contexts = [_]u8{ 0, 0 };
-    const provider: Lookup = .{ .context = &contexts[0], .find = Callbacks.first };
-    const Provision = lir.CheckedPipeline.CodeProvision;
-    for (std.enums.values(Provision)) |host_domain| {
-        const host: lir.CheckedPipeline.TargetConfig = .{ .code_provision = host_domain, .spec_cache = provider };
-        for (std.enums.values(Provision)) |runtime_domain| {
-            for ([_]?Lookup{
-                provider,
-                .{ .context = &contexts[1], .find = Callbacks.first },
-                .{ .context = &contexts[0], .find = Callbacks.second },
-                null,
-            }, 0..) |lookup, index| {
-                const runtime: lir.CheckedPipeline.TargetConfig = .{
-                    .specialization_strategy = .lss,
-                    .code_provision = runtime_domain,
-                    .spec_cache = lookup,
-                };
-                try std.testing.expectEqual(
-                    if (index == 0) host_domain.sharedDomain(runtime_domain) else Provision.source_bodies,
-                    sharedProducerProvision(host, runtime),
-                );
-                var boxy = runtime;
-                boxy.specialization_strategy = .boxy;
-                try std.testing.expectEqual(host_domain, sharedProducerProvision(host, boxy));
-                var missing_host = host;
-                missing_host.spec_cache = null;
-                try std.testing.expectEqual(Provision.source_bodies, sharedProducerProvision(missing_host, runtime));
-            }
-        }
-        try std.testing.expectEqual(host_domain, sharedProducerProvision(host, null));
-    }
-}
-
-test "declared consumers choose shared producer provision before discovery" {
-    const Provision = lir.CheckedPipeline.CodeProvision;
-    for (std.enums.values(Provision)) |host| {
-        try std.testing.expectEqual(host, sharedProducerProvision(.{ .code_provision = host }, null));
-        for (std.enums.values(Provision)) |runtime| {
-            try std.testing.expectEqual(Provision.source_bodies, sharedProducerProvision(.{ .code_provision = host }, .{
-                .specialization_strategy = .lss,
-                .code_provision = runtime,
-            }));
-            try std.testing.expectEqual(host, sharedProducerProvision(.{ .code_provision = host }, .{
-                .specialization_strategy = .boxy,
-                .code_provision = runtime,
-            }));
-        }
-    }
 }
 
 /// Complete checked values in the caller's dependency order, using the
@@ -1335,12 +1181,6 @@ pub fn finalizeProgram(
         var evaluated_prepared = runtime_prepared.?;
         runtime_prepared = null;
         defer evaluated_prepared.deinit();
-        // The compile-time reads of the evaluation's specializations go into
-        // the compile-time pack beside its stages' code.
-        if (specialized.completed) |*stages| {
-            stages.spec_comptime_reads = evaluated_prepared.spec_comptime_reads;
-            evaluated_prepared.spec_comptime_reads = null;
-        }
         const quiet_modules = try allocator.alloc(ProgramModule, modules.len);
         defer allocator.free(quiet_modules);
         for (modules, quiet_modules) |entry, *quiet| quiet.* = .{ .module = entry.module, .problem_store = null };
@@ -1349,18 +1189,14 @@ pub fn finalizeProgram(
         quiet_options.stderr = null;
         quiet_options.debug_observer = null;
         quiet_options.event_callback = null;
-        quiet_options.completion_sink = null;
         quiet_options.keep_artifacts = false;
         // The first specialization settled discovery-only test roots and
         // reported their observations. They contribute no runtime entrypoint;
         // only the runtime program's own literal roots belong in this pass.
         quiet_options.discovery_roots = .{};
         quiet_options.unfinalized_reports = if (options.unfinalized_reports != null) quiet_unfinalized.reports() else null;
-        // The evaluation's run verified the program's restored literal
-        // values, and the compile-time pack holds the evaluation's code, so
-        // this specialization's levels are offered to no pack.
+        // The evaluation already verified the restored literal values.
         quiet_options.verify_literal_values = false;
-        if (quiet_options.object_cache) |*cache| cache.stage_sink = null;
         var quiet_events = DebugEvents{ .allocator = allocator };
         defer quiet_events.deinit();
         if (options.timing) |timing| timing.respecialization_passes.add(1);
@@ -1597,19 +1433,9 @@ fn specializeAndEvaluate(
         host_target.verify_literal_values = options.verify_literal_values;
     }
     const host_lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(host_target);
-    // All readers of this producer are declared before any cache hit can
-    // erase a source body. CTFE still owns its native late-splice policy.
-    host_target.code_provision = sharedProducerProvision(host_target, runtime_target);
-    // Counting work observes the evaluation without shaping it. A program
-    // whose specializations go into the object cache needs what each one
-    // reads of compile-time evaluation: the runtime consumer's, when it
-    // asks for them, and this program's own, which the compile-time pack
-    // publishes whenever there is an object cache.
     if (runtime_target) |target| {
         host_target.work_metrics = target.work_metrics;
-        host_target.spec_comptime_reads = target.spec_comptime_reads;
     }
-    if (options.object_cache != null) host_target.spec_comptime_reads = true;
     try options.checkCancelRequest();
     if (options.timing) |timing| timing.specialization_passes.add(1);
     var monotype = lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, lowering_modules, union_roots, host_target) catch |err| switch (err) {
@@ -1624,7 +1450,6 @@ fn specializeAndEvaluate(
     if (!demand_driven and compile_time_root_count != requested_root_count)
         finalizationInvariant("compile-time evaluation published a different count of compile-time roots than it requested");
     if (options.timing) |timing| timing.recordRoots(demand.?);
-    if (options.completion_sink) |sink| try sink.demand(sink.context, demand.?, monotype.program.rootsView()[0..compile_time_root_count], monotype.program.view().lowering_modules, monotype.program.view().literal_roots);
     try published.init(allocator, modules, monotype.program.rootsView()[0..compile_time_root_count], monotype.program.view().lowering_modules);
     // An LSS runtime consumer continues this Solved program.
     const shares_solved = lss_runtime;
@@ -1656,21 +1481,6 @@ fn specializeAndEvaluate(
             .lir_policy = host_lir_policy,
         }, compile_time_root_count, evaluation_options);
         if (literal_capture) |*capture| try finishLiteralValues(allocator, options.literal_values.?, capture, &demand.?, prepared.program.lifted.literalRootsView(), lowering_modules);
-        // Every literal root the program registered is evaluated now;
-        // its outcome is settled unless evaluation printed a message.
-        const fresh_message = for (debug_events.events.items) |event| {
-            if (event.fresh) break true;
-        } else false;
-        if (options.object_cache != null and !fresh_message and !debug_events.emitted) {
-            result.completed.?.discovery_summaries = try lir.CheckedPipeline.DiscoverySummary.collect(allocator, &prepared.program.lifted);
-        }
-        if (!shares_solved) {
-            // The specializations' compile-time reads outlive the
-            // Solved program: the object cache writes them beside the
-            // program's procedures.
-            result.completed.?.spec_comptime_reads = prepared.spec_comptime_reads;
-            prepared.spec_comptime_reads = null;
-        }
     } else {
         for (modules) |entry| {
             if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
@@ -2121,11 +1931,8 @@ fn evaluateRootsBoxy(
     var evaluation_options = options;
     evaluation_options.debug_events = debug_events;
     // A module's program reads each root it completes from the root's
-    // compile-time value slot (`markRootSlotsUnfilled`). The object cache
-    // holds specialized code, which a `.boxy` program neither splices nor
-    // offers.
+    // compile-time value slot (`markRootSlotsUnfilled`).
     evaluation_options.publish_shared_slots = true;
-    evaluation_options.object_cache = null;
     evaluation_options.keep_artifacts = false;
     evaluation_options.retry = null;
 
@@ -3201,9 +3008,6 @@ fn evaluateStaged(
             try completed.excerpts.append(allocator, set);
         }
         try completed.finishStage();
-        if (options.object_cache) |cache| if (cache.stage_sink) |sink| if (prepared.spec_comptime_reads) |*reads| {
-            try sink.accept(sink.context, stage, reads);
-        };
         // Later levels and a runtime consumer read only the level's completed
         // values and their representation metadata, never its procedures.
         stage.releaseCode();
@@ -6020,85 +5824,22 @@ const StaticSlotEnvironment = struct {
     }
 };
 
-/// The procedures the compile-time evaluator compiles: the closures of the
-/// roots it runs, and of every procedure of the program that the
-/// object-cache code it splices calls, to a fixed point. A spliced entry's
-/// call to a procedure the program has binds to the program's own code
-/// (`CodeExcerpt.splice`), so that procedure is compiled too, and the
-/// object-cache entries its closure reaches are spliced in turn.
-fn evaluationDemand(
-    allocator: Allocator,
-    result: *LirProgram.Result,
-    roots: []const lir.LIR.LirProcSpecId,
-    materialized: []LirProgram.StaticDataExport,
-    splice_source: ?backend.dev.SpliceSource,
-) Allocator.Error![]lir.LIR.LirProcSpecId {
+/// Collect the current evaluation's reachable procedures, excluding linked units.
+fn evaluationDemand(allocator: Allocator, result: *LirProgram.Result, roots: []const lir.LIR.LirProcSpecId, materialized: []LirProgram.StaticDataExport) Allocator.Error![]lir.LIR.LirProcSpecId {
     const proc_specs = result.store.getProcSpecs();
-    const source = splice_source orelse {
-        // A worker another object defines is reached by symbol
-        // (`LIR.LirProcSpec.linked`); nothing compiles it here.
-        const demand = try lir.ReachableProcs.collectProcDemand(allocator, result, roots, materialized);
-        var kept: usize = 0;
-        for (demand) |proc_id| {
-            if (proc_specs[@backingInt(proc_id)].linked) continue;
-            demand[kept] = proc_id;
-            kept += 1;
-        }
-        if (kept == demand.len) return demand;
-        const trimmed = try allocator.dupe(lir.LIR.LirProcSpecId, demand[0..kept]);
-        allocator.free(demand);
-        return trimmed;
-    };
-    var procs_by_identity = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(allocator);
-    defer procs_by_identity.deinit();
-    for (proc_specs, 0..) |proc, index| {
-        if (proc.is_static_initializer) continue;
-        try procs_by_identity.put(proc.identity, @fromBackingInt(@intCast(@as(u32, @intCast(index)))));
+    // A worker another object defines is reached by symbol
+    // (`LIR.LirProcSpec.linked`); nothing compiles it here.
+    const demand = try lir.ReachableProcs.collectProcDemand(allocator, result, roots, materialized);
+    var kept: usize = 0;
+    for (demand) |proc_id| {
+        if (proc_specs[@backingInt(proc_id)].linked) continue;
+        demand[kept] = proc_id;
+        kept += 1;
     }
-    var demand_roots = std.ArrayList(lir.LIR.LirProcSpecId).empty;
-    defer demand_roots.deinit(allocator);
-    try demand_roots.appendSlice(allocator, roots);
-    var added = collections.DenseMap(lir.LIR.LirProcSpecId, void).init(allocator);
-    defer added.deinit();
-    for (roots) |root| try added.put(root, {});
-    const Visit = struct { set: *const backend.dev.CodeExcerpt.Set, index: u32 };
-    var visited = std.AutoHashMapUnmanaged(Visit, void).empty;
-    defer visited.deinit(allocator);
-    var stack = std.ArrayList(Visit).empty;
-    defer stack.deinit(allocator);
-    while (true) {
-        const demand = try lir.ReachableProcs.collectProcDemand(allocator, result, demand_roots.items, materialized);
-        var grew = false;
-        for (demand) |proc_id| {
-            const proc = proc_specs[@backingInt(proc_id)];
-            if (!proc.external or proc.c_abi_entry) continue;
-            const key = proc.cache_key orelse continue;
-            const located = source.find(source.context, key) orelse continue;
-            try stack.append(allocator, .{ .set = located.set, .index = located.index });
-        }
-        // Every excerpt the spliced closures place, walked once, as
-        // `CodeExcerpt.splice` places them: set-local references, and
-        // symbolic references to code the program does not have.
-        while (stack.pop()) |visit| {
-            if ((try visited.getOrPut(allocator, visit)).found_existing) continue;
-            const excerpt = visit.set.excerpts[visit.index];
-            for (excerpt.refs) |ref| try stack.append(allocator, .{ .set = visit.set, .index = ref.target });
-            for (excerpt.symbolic_refs) |ref| {
-                switch (ref.target) {
-                    .proc => |identity| if (procs_by_identity.get(identity)) |proc_id| {
-                        if ((try added.getOrPut(proc_id)).found_existing) continue;
-                        try demand_roots.append(allocator, proc_id);
-                        grew = true;
-                        continue;
-                    },
-                    .rc_helper => {},
-                }
-                if (visit.set.definitionOf(ref.target)) |definition| try stack.append(allocator, .{ .set = visit.set, .index = definition });
-            }
-        }
-        if (!grew) return demand;
-        allocator.free(demand);
-    }
+    if (kept == demand.len) return demand;
+    const trimmed = try allocator.dupe(lir.LIR.LirProcSpecId, demand[0..kept]);
+    allocator.free(demand);
+    return trimmed;
 }
 
 const DevProgram = struct {
@@ -6106,8 +5847,7 @@ const DevProgram = struct {
     static_strings: backend.StaticStringData.Table,
     slots: StaticSlotEnvironment,
     codegen: backend.HostLirCodeGen,
-    /// The object-cache entries spliced into the image and the names the
-    /// image binds for them.
+    /// Native data and symbols linked into the evaluation image.
     splice: backend.dev.HostSplice,
     executable: backend.ExecutableMemory,
     entry_offsets: collections.DenseMap(lir.LIR.LirProcSpecId, usize),
@@ -6160,13 +5900,12 @@ const DevProgram = struct {
         defer allocator.free(evaluation_roots);
         for (lowered.lir_result.const_roots.items, evaluation_roots[0..const_root_count]) |root, *proc| proc.* = root.proc;
         for (lowered.lir_result.literal_roots.items, evaluation_roots[const_root_count..]) |root, *proc| proc.* = root.proc;
-        const evaluation_demand = try evaluationDemand(allocator, &lowered.lir_result, evaluation_roots, materialized, if (options.object_cache) |cache| cache.splice_source else null);
+        const evaluation_demand = try evaluationDemand(allocator, &lowered.lir_result, evaluation_roots, materialized);
         defer allocator.free(evaluation_demand);
         var splice = backend.dev.HostSplice.init(allocator);
         errdefer splice.deinit();
         splice.reserveStaticData(&static_layout);
         if (options.boxy_linked_images) |images| splice.external = .{ .context = images, .resolve = BoxyLinkedImages.external };
-        if (options.object_cache) |cache| try splice.spliceExternal(&codegen, evaluation_demand, cache.splice_source);
         const static_rc_helpers = try static_data_exports.collectRequiredRcHelpers(allocator, materialized);
         defer allocator.free(static_rc_helpers);
         var artifacts = try compileProcedures(allocator, &codegen, evaluation_demand, static_rc_helpers, options);
@@ -6383,7 +6122,7 @@ const DevProgram = struct {
         return self.slots.freezeCompleted();
     }
 
-    /// The image's code as object-cache artifacts, carrying the completed
+    /// The image's native excerpts, carrying the completed
     /// values it reads. Its procedures are a dev build's object code, so a
     /// build splices them as its own.
     fn extractExcerpts(self: *DevProgram, lowered: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error!backend.dev.CodeExcerpt.Set {
@@ -6914,7 +6653,6 @@ fn reportDebugMessage(allocator: Allocator, options: Options, module: checked.Mo
 
 fn emitDebugMessage(allocator: Allocator, options: Options, is_repl: bool, message: []const u8) Allocator.Error!void {
     if (options.debug_events) |events| events.emitted = true;
-    if (options.completion_sink) |sink| try sink.debug(sink.context, message);
     if (options.debug_observer) |observer| try observer.observe(observer.context, message);
     if (is_repl) {
         if (options.event_callback) |callback| callback.notify(callback.context, .{ .dbg = message });

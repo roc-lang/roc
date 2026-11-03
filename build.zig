@@ -1899,7 +1899,7 @@ pub fn build(b: *std.Build) void {
     const shared_memory_size = b.option(u64, "shared-memory-size", "Explicitly set shared-memory arena sizes in bytes");
     const print_trmc = b.option(bool, "print-trmc", "Print one line for each transformed TRMC/TCE proc") orelse false;
     const print_ir_after_trmc = b.option(bool, "print-ir-after-trmc", "Print full LIR for each proc transformed by TRMC/TCE") orelse false;
-    const dev_diagnostics = b.option(bool, "dev-diagnostics", "Honor the developer-diagnostic environment variables (ROC_LIR_DUMP, ROC_PACK_TRACE, ...) in a non-Debug compiler; Debug compilers always honor them") orelse false;
+    const dev_diagnostics = b.option(bool, "dev-diagnostics", "Honor the developer-diagnostic environment variables (ROC_LIR_DUMP, ROC_SPEC_CENSUS, ...) in a non-Debug compiler; Debug compilers always honor them") orelse false;
     const llvm_keep_ir = b.option([]const u8, "llvm-keep-ir", "Write statement LLVM IR to this build-time path") orelse "";
     const llvm_keep_bitcode = b.option([]const u8, "llvm-keep-bitcode", "Write merged LLVM bitcode to this build-time path") orelse "";
     const llvm_keep_object = b.option([]const u8, "llvm-keep-object", "Write the temporary LLVM object file to this build-time path") orelse "";
@@ -1999,9 +1999,8 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "dev_diagnostics_requested", dev_diagnostics);
     build_options.contents.appendSlice(b.allocator,
         \\/// Whether this compiler honors the developer-diagnostic environment
-        \\/// variables (`ROC_LIR_DUMP`, `ROC_SPEC_CENSUS`, `ROC_PACK_TRACE`,
-        \\/// `ROC_PACK_STATS`, `ROC_CTFE_DEMAND_TRACE`, `ROC_DEV_PACK_OBJECTS`,
-        \\/// `ROC_DEV_PACK_HITS`, `ROC_DEV_EXCERPT_ROUNDTRIP`,
+        \\/// variables (`ROC_LIR_DUMP`, `ROC_SPEC_CENSUS`,
+        \\/// `ROC_CTFE_DEMAND_TRACE`, `ROC_DEV_EXCERPT_ROUNDTRIP`,
         \\/// `ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE` and `ROC_BACKGROUND_OBJECTS`). Each executable reads its
         \\/// own optimize mode: a Debug compiler always does, and any other build
         \\/// only with `-Ddev-diagnostics`, so a release compiler reads none of
@@ -2543,11 +2542,6 @@ pub fn build(b: *std.Build) void {
     const roc_exe = main_exe_result.exe;
     roc_exe.root_module.addImport("compiler_version", compiler_version_module);
     const fixture_roc = executableRuntimePath(b, roc_exe, strip_macho_exports_tool);
-    const outcome_cache_check = b.addSystemCommand(&.{"python3"});
-    outcome_cache_check.addFileArg(b.path("ci/test_outcome_cache.py"));
-    outcome_cache_check.addArg("--roc");
-    outcome_cache_check.addFileArg(fixture_roc);
-    b.step("run-test-outcome-cache", "Check per-root test outcome reuse with focused CLI fixtures").dependOn(&outcome_cache_check.step);
     const fixture_options = b.addOptions();
     // Zig resolves this path against the build runner's directory. Tests run
     // in prepared fixture roots, so they also need the absolute build root.

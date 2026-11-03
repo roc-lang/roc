@@ -562,7 +562,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     }
 
     const base_proc_count = store.procSpecCount();
-    try recordObjectCacheFacts(store, &solution, &dismantles, options.specialize);
+    try recordProcedureFacts(store, &solution);
     const sources = try store.allocator.alloc(SourceCache, base_proc_count);
     defer store.allocator.free(sources);
     for (sources, 0..) |*source, index| {
@@ -684,12 +684,6 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     }
 }
 
-/// Records on every base proc with a body what an object-cache entry for it
-/// needs: its solved uniqueness facts, and `rc_variant_demandable` when a
-/// direct call could demand a variant of it (the capabilities
-/// `callArgOwnership` consults before upgrading a borrowed position or
-/// seeding an owned one, and the outcome spans it can select). A body-less
-/// proc keeps the facts its cache entry supplied.
 /// A demand-shaped procedure never consumes a value holding a hole: its
 /// body demands nothing of the hole's type, so its signature borrows every
 /// such parameter (design.md "Specialization By Demand").
@@ -702,22 +696,8 @@ fn requireHoleParamsBorrowed(store: *const LirStore, layouts: *const layout_mod.
     }
 }
 
-fn recordObjectCacheFacts(
-    store: *LirStore,
-    solution: *const arc_solve.Solution,
-    dismantles: *const arc_dismantle.Dismantles,
-    specialize: bool,
-) ResourceError!void {
+fn recordProcedureFacts(store: *LirStore, solution: *const arc_solve.Solution) ResourceError!void {
     const proc_count = store.procSpecCount();
-    var tail_targets = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(store.allocator, proc_count);
-    defer tail_targets.deinit(store.allocator);
-    for (0..proc_count) |proc_index| {
-        const caller: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        for (solution.tailCallsOf(caller)) |tail_call| {
-            const callee = store.getCFStmtImmediate(tail_call.stmt).assign_call.proc;
-            if (callee != caller) tail_targets.set(@backingInt(callee));
-        }
-    }
     try recordTailGroups(store, solution);
     for (0..proc_count) |proc_index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
@@ -733,24 +713,6 @@ fn recordObjectCacheFacts(
         spec.rc_ret_unique = sig.ret_unique;
         spec.rc_ret_unique_fields = sig.ret_unique_fields;
         spec.rc_ret_conditions = conditions;
-        spec.rc_variant_demandable = false;
-        // Nothing shares an isolated procedure's unit, so no call demands a
-        // variant of it.
-        if (spec.emission_unit == .isolated) continue;
-        if (solution.isPinnedProc(proc)) {
-            // A proc pinned only for stability still has its outcome
-            // variant, for callers compiled with its current body.
-            spec.rc_variant_demandable = solution.stability_pinned.isSet(proc_index) and !solution.availableOutcomeSpanOf(proc).isEmpty();
-            continue;
-        }
-        const borrowed = sig.borrowed_params;
-        const specialized_demand = specialize and
-            (solution.uniqueSeedMaskOf(proc) != 0 or
-                (sig.ret_mode == .borrowed and (sig.ret_lenders & borrowed) != 0));
-        spec.rc_variant_demandable = (dismantles.ownedOnlyParamBenefits(proc) & borrowed) != 0 or
-            !solution.availableOutcomeSpanOf(proc).isEmpty() or
-            (borrowed != 0 and tail_targets.isSet(proc_index)) or
-            specialized_demand;
     }
 }
 
@@ -17819,7 +17781,6 @@ test "ARC outcome capability excludes conventions that return no ownership units
             try testing.expect(solution.availableOutcomeSpanOf(proc).isEmpty());
         }
         try insert(&f.store, &f.layouts, .{ .specialize = false });
-        try testing.expect(!f.store.getProcSpec(proc).rc_variant_demandable);
     }
 }
 

@@ -30,10 +30,10 @@ pub const CacheManager = struct {
     /// compiler worker threads, so every recording path goes through here while
     /// the file work itself stays outside the lock.
     stats_mutex: threading.Mutex = .init,
-    /// The store session every read and write of this manager goes through,
+    /// The store every read and write of this manager goes through,
     /// opened on first use and closed by `deinit`.
-    session: ?*artifacts.Session = null,
-    session_mutex: threading.Mutex = .init,
+    store: ?*artifacts.Store = null,
+    store_mutex: threading.Mutex = .init,
 
     const Self = @This();
 
@@ -70,33 +70,31 @@ pub const CacheManager = struct {
         };
     }
 
-    /// Flush the session's retention observations and close its shards.
+    /// Release the cache directory owned by this manager.
     pub fn deinit(self: *Self) void {
         if (comptime threading.is_freestanding) return;
-        if (self.session) |session| {
-            session.deinit();
-            self.allocator.destroy(session);
-            self.session = null;
+        if (self.store) |store| {
+            store.deinit();
+            self.allocator.destroy(store);
+            self.store = null;
         }
     }
 
-    /// The manager's store session, opened on first use. Null when the cache
+    /// The manager's store, opened on first use. Null when the cache
     /// directory cannot be resolved, which every caller counts as a miss or a
     /// store failure.
-    fn sessionHandle(self: *Self) ?*artifacts.Session {
+    fn storeHandle(self: *Self) ?*artifacts.Store {
         if (comptime threading.is_freestanding) return null;
-        self.session_mutex.lockUncancelable(self.roc_ctx.std_io);
-        defer self.session_mutex.unlock(self.roc_ctx.std_io);
-        if (self.session) |session| return session;
-        var store = self.openStore(self.allocator) catch return null;
-        defer store.deinit();
-        const session = self.allocator.create(artifacts.Session) catch return null;
-        session.* = artifacts.Session.init(&store) catch {
-            self.allocator.destroy(session);
+        self.store_mutex.lockUncancelable(self.roc_ctx.std_io);
+        defer self.store_mutex.unlock(self.roc_ctx.std_io);
+        if (self.store) |store| return store;
+        const store = self.allocator.create(artifacts.Store) catch return null;
+        store.* = self.openStore(self.allocator) catch {
+            self.allocator.destroy(store);
             return null;
         };
-        self.session = session;
-        return session;
+        self.store = store;
+        return store;
     }
 
     pub fn recordStoreFailure(self: *Self) void {
@@ -141,8 +139,7 @@ pub const CacheManager = struct {
         self.stats.recordStoreFor(kind, bytes_written);
     }
 
-    /// The caller's cache scope is explicit identity data. It is no longer a
-    /// directory that maintenance must discover by walking the filesystem.
+    /// Keep each producer's scope in the direct file identity.
     pub fn identity(family: artifacts.Family, key: [32]u8, scope: []const u8) artifacts.Identity {
         return .{
             .namespace = artifacts.hashBytes(@import("build_options").compiler_compatibility_id),
@@ -190,15 +187,11 @@ pub const CacheManager = struct {
     fn storeEntry(self: *Self, allocator: Allocator, kind: Kind, family: artifacts.Family, key: [32]u8, source: EntrySource, size: usize, scope: []const u8, name: []const u8) void {
         if (comptime threading.is_freestanding) return;
         if (!self.config.enabled) return;
-        const session = self.sessionHandle() orelse {
+        const store = self.storeHandle() orelse {
             self.recordStoreFailureFor(kind);
             return;
         };
-        var stage = session.reserve(identity(family, key, scope), size, session.now()) catch |err| {
-            switch (err) {
-                error.Busy => return,
-                else => {},
-            }
+        var stage = store.reserve(identity(family, key, scope)) catch |err| {
             self.verboseLog(allocator, "Failed to reserve {s} cache entry for {s}: {}\n", .{ @tagName(kind), name, err });
             self.recordStoreFailureFor(kind);
             return;
@@ -214,10 +207,6 @@ pub const CacheManager = struct {
             return;
         };
         stage.publish() catch |err| {
-            switch (err) {
-                error.Busy => return,
-                else => {},
-            }
             self.verboseLog(allocator, "Failed to publish {s} cache entry for {s}: {}\n", .{ @tagName(kind), name, err });
             self.recordStoreFailureFor(kind);
             return;
@@ -233,15 +222,12 @@ pub const CacheManager = struct {
     pub fn stageCheckedPart(self: *Self, key: [32]u8, stream: CoreCtx.FileStream, size: usize, scope: []const u8, name: []const u8) ?StagedPart {
         if (comptime threading.is_freestanding) return null;
         if (!self.config.enabled) return null;
-        const session = self.sessionHandle() orelse {
+        const store = self.storeHandle() orelse {
             self.recordStoreFailure();
             return null;
         };
-        var stage = session.reserve(identity(.checked, key, scope), size, session.now()) catch |err| {
-            switch (err) {
-                error.Busy => {},
-                else => self.recordStoreFailure(),
-            }
+        var stage = store.reserve(identity(.checked, key, scope)) catch {
+            self.recordStoreFailure();
             return null;
         };
         self.roc_ctx.writeFileStream(stage.path, stream) catch |err| {
@@ -267,10 +253,9 @@ pub const CacheManager = struct {
     }
 
     pub fn discardStagedPart(self: *Self, part: StagedPart) void {
+        if (comptime threading.is_freestanding) return;
         self.roc_ctx.deleteFile(part.stage.path) catch {};
         var stage = part.stage;
-        // The catalog owns reclamation if this process exits or cannot acquire
-        // metadata ownership here. It never depends on this destructor running.
         stage.deinit();
     }
 
@@ -281,11 +266,11 @@ pub const CacheManager = struct {
     pub fn loadFamilyBytes(self: *Self, family: artifacts.Family, key: [32]u8, scope: []const u8) ?[]const u8 {
         if (comptime threading.is_freestanding) return null;
         if (!self.config.enabled) return null;
-        const session = self.sessionHandle() orelse {
+        const store = self.storeHandle() orelse {
             self.recordMissFor(.checked);
             return null;
         };
-        const bytes = (session.read(self.allocator, identity(family, key, scope), session.now()) catch null) orelse {
+        const bytes = (store.read(self.allocator, identity(family, key, scope)) catch null) orelse {
             self.recordMissFor(.checked);
             return null;
         };
@@ -305,17 +290,17 @@ pub const CacheManager = struct {
         return self.loadMapped(allocator, kind, family, key, scope, true);
     }
 
-    /// Acquire `key`'s entry of `family` as an open file, held under a
-    /// shared lease until the caller's `deinit`, for a consumer that copies
-    /// its bytes by file range. Null for a miss.
+    /// Acquire `key`'s entry of `family` as an open file, owned by the
+    /// caller until its `deinit`, for a consumer that copies its bytes by
+    /// file range. Null for a miss.
     pub fn acquireFamily(self: *Self, family: artifacts.Family, key: [32]u8, scope: []const u8) ?artifacts.Artifact {
         if (comptime threading.is_freestanding) return null;
         if (!self.config.enabled) return null;
-        const session = self.sessionHandle() orelse {
+        const store = self.storeHandle() orelse {
             self.recordMissFor(.checked);
             return null;
         };
-        const artifact = (session.acquire(identity(family, key, scope), session.now()) catch null) orelse {
+        const artifact = (store.acquire(identity(family, key, scope)) catch null) orelse {
             self.recordMissFor(.checked);
             return null;
         };
@@ -326,11 +311,11 @@ pub const CacheManager = struct {
     fn loadMapped(self: *Self, allocator: Allocator, kind: Kind, family: artifacts.Family, key: [32]u8, scope: []const u8, counted: bool) ?CacheModule.CacheData {
         if (comptime threading.is_freestanding) return null;
         if (!self.config.enabled) return null;
-        const session = self.sessionHandle() orelse {
+        const store = self.storeHandle() orelse {
             if (counted) self.recordMissFor(kind);
             return null;
         };
-        var artifact = (session.acquire(identity(family, key, scope), session.now()) catch null) orelse {
+        var artifact = (store.acquire(identity(family, key, scope)) catch null) orelse {
             if (counted) self.recordMissFor(kind);
             return null;
         };
@@ -346,7 +331,7 @@ pub const CacheManager = struct {
             }
         }
         const bytes = allocator.alignedAlloc(u8, CacheModule.SERIALIZATION_ALIGNMENT, size) catch return null;
-        const len = artifact.file.readPositionalAll(session.store.io, bytes, 0) catch {
+        const len = artifact.file.readPositionalAll(store.io, bytes, 0) catch {
             allocator.free(bytes);
             return null;
         };
@@ -386,7 +371,7 @@ pub const CacheManager = struct {
     pub fn loadCheckedEntryUncounted(self: *Self, key: [32]u8) ?CacheModule.CacheData {
         const directory = self.config.getCheckedArtifactCacheDir(self.allocator) catch return null;
         defer self.allocator.free(directory);
-        // This is a real cache acquisition for retention, even though it is a
+        // Read the entry even though this is a
         // reuse probe rather than the ordinary current-key lookup.
         return self.loadMapped(self.allocator, .checked, .checked, key, directory, false);
     }
