@@ -125,9 +125,12 @@ const PathTable = struct {
     /// The path each step from a parent reaches: a new node, or the ancestor
     /// it folds to, found once when the pair is first interned.
     children: std.AutoHashMapUnmanaged(ChildKey, PathId) = .empty,
+    /// The path `under` gives each base and path it has joined.
+    joined: std.AutoHashMapUnmanaged(JoinKey, PathId) = .empty,
 
     const Node = struct { parent: PathId, step: Step, depth: u32 };
     const ChildKey = struct { parent: PathId, step: Step };
+    const JoinKey = struct { base: PathId, path: PathId };
 
     fn init(allocator: Allocator) Allocator.Error!PathTable {
         var table: PathTable = .{};
@@ -160,6 +163,21 @@ const PathTable = struct {
             };
         }
         return gop.value_ptr.*;
+    }
+
+    /// `base` followed by the steps of `path`, as `concat` folds them. A
+    /// pattern places every read of the local it binds under the pattern's
+    /// prefix on each pass of the fixed point, so joins repeat and each is
+    /// interned once.
+    fn under(self: *PathTable, allocator: Allocator, base: PathId, path: PathId) Allocator.Error!PathId {
+        if (path == .root) return base;
+        if (base == .root) return path;
+        const key: JoinKey = .{ .base = base, .path = path };
+        if (self.joined.get(key)) |joined| return joined;
+        const path_node = self.node(path);
+        const result = try self.child(allocator, try self.under(allocator, base, path_node.parent), path_node.step);
+        try self.joined.put(allocator, key, result);
+        return result;
     }
 
     fn concat(self: *PathTable, allocator: Allocator, base: PathId, steps: []const Step) Allocator.Error!PathId {
@@ -235,28 +253,25 @@ pub const Placement = struct { value: PathId, result: PathId };
 
 /// What the code around a value consumes of it.
 pub const DemandSet = struct {
-    /// Each read path once, in first-read order, with its consumers at the
-    /// same position. A value's distinct read paths are few, so a scan finds
-    /// a path's position.
-    read_paths: std.ArrayList(PathId) = .empty,
-    read_consumers: std.ArrayList(Consumers) = .empty,
+    /// Each read path once, in first-read order, with its consumers. Most
+    /// values read a few paths, which the map scans without an index; a value
+    /// with many parts read, such as a large record, gets an index.
+    reads: std.AutoArrayHashMapUnmanaged(PathId, Consumers) = .empty,
     placements: std.AutoArrayHashMapUnmanaged(Placement, void) = .empty,
 
     fn addRead(self: *DemandSet, allocator: Allocator, path: PathId, consumers: Consumers) Allocator.Error!bool {
-        if (std.mem.findScalar(PathId, self.read_paths.items, path)) |index| {
-            const existing = &self.read_consumers.items[index];
-            if (existing.supersetOf(consumers)) return false;
-            existing.setUnion(consumers);
+        const gop = try self.reads.getOrPut(allocator, path);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = consumers;
             return true;
         }
-        try self.read_paths.append(allocator, path);
-        try self.read_consumers.append(allocator, consumers);
+        if (gop.value_ptr.supersetOf(consumers)) return false;
+        gop.value_ptr.setUnion(consumers);
         return true;
     }
 
     fn removeReadAt(self: *DemandSet, index: usize) void {
-        _ = self.read_paths.swapRemove(index);
-        _ = self.read_consumers.swapRemove(index);
+        self.reads.swapRemoveAt(index);
     }
 
     fn addPlacement(self: *DemandSet, allocator: Allocator, placement: Placement) Allocator.Error!bool {
@@ -277,8 +292,8 @@ pub const DemandSet = struct {
 
     pub fn view(self: *const DemandSet) Demand {
         return .{
-            .read_paths = self.read_paths.items,
-            .read_consumers = self.read_consumers.items,
+            .read_paths = self.reads.keys(),
+            .read_consumers = self.reads.values(),
             .placements = self.placements.keys(),
         };
     }
@@ -833,12 +848,10 @@ const Builder = struct {
         const base = try paths.concat(self.persistent(), .root, prefix);
         var set: DemandSet = .{};
         for (demand.read_paths, demand.read_consumers) |path, consumers| {
-            try paths.stepsOf(self.temp(), path, &self.steps);
-            _ = try set.addRead(self.temp(), try paths.concat(self.persistent(), base, self.steps.items), consumers);
+            _ = try set.addRead(self.temp(), try paths.under(self.persistent(), base, path), consumers);
         }
         for (demand.placements) |placement| {
-            try paths.stepsOf(self.temp(), placement.value, &self.steps);
-            _ = try set.addPlacement(self.temp(), .{ .value = try paths.concat(self.persistent(), base, self.steps.items), .result = placement.result });
+            _ = try set.addPlacement(self.temp(), .{ .value = try paths.under(self.persistent(), base, placement.value), .result = placement.result });
         }
         return set.view();
     }
@@ -1043,8 +1056,8 @@ const Builder = struct {
                     // The update supplies this field, so the base's field is
                     // never read.
                     var read_index: usize = 0;
-                    while (read_index < base.read_paths.items.len) {
-                        try self.analysis.paths.stepsOf(self.temp(), base.read_paths.items[read_index], &self.steps);
+                    while (read_index < base.reads.count()) {
+                        try self.analysis.paths.stepsOf(self.temp(), base.reads.keys()[read_index], &self.steps);
                         if (self.steps.items.len != 0 and self.steps.items[0].sameLabel(field_step)) {
                             base.removeReadAt(read_index);
                         } else {
@@ -1298,8 +1311,8 @@ const Builder = struct {
     fn mergedParts(self: *Builder, parts: []const Read) Allocator.Error![]const Read {
         var merged: DemandSet = .{};
         for (parts) |part| _ = try merged.addRead(self.temp(), part.path, part.consumers);
-        const out = try self.temp().alloc(Read, merged.read_paths.items.len);
-        for (out, merged.read_paths.items, merged.read_consumers.items) |*read, path, consumers| read.* = .{ .path = path, .consumers = consumers };
+        const out = try self.temp().alloc(Read, merged.reads.count());
+        for (out, merged.reads.keys(), merged.reads.values()) |*read, path, consumers| read.* = .{ .path = path, .consumers = consumers };
         return out;
     }
 
@@ -1400,13 +1413,11 @@ const Builder = struct {
         const base = try paths.concat(self.persistent(), .root, prefix);
         const parts = try self.temp().alloc(Read, b.parts.len);
         for (parts, b.parts) |*out, part| {
-            try paths.stepsOf(self.temp(), part.path, &self.steps);
-            out.* = .{ .path = try paths.concat(self.persistent(), base, self.steps.items), .consumers = part.consumers };
+            out.* = .{ .path = try paths.under(self.persistent(), base, part.path), .consumers = part.consumers };
         }
         const passes = try self.temp().alloc(PassThrough, b.passes.len);
         for (passes, b.passes) |*out, pass| {
-            try paths.stepsOf(self.temp(), pass.result, &self.steps);
-            out.* = .{ .result = try paths.concat(self.persistent(), base, self.steps.items), .slot = pass.slot, .value = pass.value };
+            out.* = .{ .result = try paths.under(self.persistent(), base, pass.result), .slot = pass.slot, .value = pass.value };
         }
         return .{ .parts = parts, .passes = passes };
     }
@@ -1745,4 +1756,29 @@ test "a read meets the part it names across two types of that part" {
     try std.testing.expect(try table.stepsBelow(allocator, below, narrow, &steps));
     try std.testing.expectEqual(@as(usize, 1), steps.items.len);
     try std.testing.expect(steps.items[0].isItem(0));
+}
+
+test "joining a path under a base folds as appending its steps does" {
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var table = try PathTable.init(allocator);
+
+    const list_ty = testType(1);
+    const cell_ty = testType(2);
+    const head_ty = testType(3);
+    const cons = Step.payload(testTag(0), 0, cell_ty);
+    const rest = Step.field(testField(0), list_ty);
+    const head = Step.field(testField(1), head_ty);
+    const base = try table.concat(allocator, .root, &.{ cons, rest });
+    const path = try table.concat(allocator, .root, &.{ cons, head });
+
+    const joined = try table.under(allocator, base, path);
+    try std.testing.expectEqual(try table.concat(allocator, base, &.{ cons, head }), joined);
+    // `cons` under `rest` folds to the first `cons`, so the head read lands
+    // on the first cell's head.
+    try std.testing.expectEqual(path, joined);
+    try std.testing.expectEqual(joined, try table.under(allocator, base, path));
+    try std.testing.expectEqual(base, try table.under(allocator, base, .root));
+    try std.testing.expectEqual(path, try table.under(allocator, .root, path));
 }
