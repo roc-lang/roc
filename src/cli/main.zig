@@ -11069,6 +11069,8 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
 /// (`fast_dev_link.zig`): a `.boxy` dev build of a Linux x86_64 executable.
 /// Every other combination composes a program object and links it with LLD.
 fn fastDevLinkApplies(target: RocTarget, link_type: roc_target.OutputKind, args: cli_args.BuildArgs) bool {
+    // The fast dev link writes its output through Linux system calls.
+    if (comptime builtin.target.os.tag != .linux) return false;
     if (args.opt != .dev or currentRuntimeSpecializationStrategy(args.specialization_strategy) != .boxy) return false;
     // The fast dev link reads unit images and the pre-linked host from the
     // cache; without one, a build composes and links with LLD as before

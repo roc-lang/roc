@@ -9,6 +9,7 @@
 //! On a miss the link step prelinks the host with LLD, files it, and writes
 //! it into the output.
 const std = @import("std");
+const builtin = @import("builtin");
 const compile = @import("compile");
 const linker = @import("linker.zig");
 const host_prelink = @import("host_prelink.zig");
@@ -92,6 +93,7 @@ pub const HostJob = struct {
         self.wait();
         switch (self.outcome) {
             .hit => |*hit| {
+                if (comptime builtin.os.tag != .linux) unreachable; // only a Linux host's job finds a pre-linked host
                 std.posix.munmap(hit.mapping);
                 hit.artifact.deinit();
             },
@@ -104,6 +106,7 @@ pub const HostJob = struct {
     }
 
     fn run(self: *HostJob) void {
+        if (comptime builtin.os.tag != .linux) unreachable; // fastDevLinkApplies selects the fast dev link only on Linux hosts
         const hash_started = now(self.std_io);
         var digests: std.ArrayList([32]u8) = .empty;
         defer digests.deinit(self.gpa);
@@ -140,7 +143,7 @@ pub const HostJob = struct {
             self.outcome = .miss;
             return;
         };
-        const mapping = std.posix.mmap(null, size, .{ .READ = true }, .{ .TYPE = .PRIVATE }, artifact.file.handle, 0) catch {
+        const mapping = mapReadOnly(artifact.file.handle, size) catch {
             artifact.deinit();
             self.outcome = .miss;
             return;
@@ -165,6 +168,16 @@ pub const HostJob = struct {
     }
 };
 
+/// Map `size` bytes of a file read-only. Only a compiler running on Linux
+/// makes a fast dev link (`fastDevLinkApplies`).
+fn mapReadOnly(handle: std.Io.File.Handle, size: usize) error{MapFailed}![]align(std.heap.page_size_min) u8 {
+    if (comptime builtin.os.tag != .linux) {
+        unreachable; // fastDevLinkApplies selects the fast dev link only on Linux hosts
+    } else {
+        return std.posix.mmap(null, size, .{ .READ = true }, .{ .TYPE = .PRIVATE }, handle, 0) catch error.MapFailed;
+    }
+}
+
 /// The bytes hashed as one piece of a host input; the pieces of all inputs
 /// are hashed in parallel.
 const hash_chunk: usize = 4 * 1024 * 1024;
@@ -188,7 +201,7 @@ fn contentDigests(gpa: Allocator, std_io: std.Io, paths: []const []const u8, dig
         input.file = file;
         const stat = file.stat(std_io) catch return index;
         const size = std.math.cast(usize, stat.size) orelse return index;
-        if (size != 0) input.bytes = std.posix.mmap(null, size, .{ .READ = true }, .{ .TYPE = .PRIVATE }, file.handle, 0) catch return index;
+        if (size != 0) input.bytes = mapReadOnly(file.handle, size) catch return index;
         input.first_chunk = chunk_count;
         chunk_count += std.math.divCeil(usize, size, hash_chunk) catch unreachable; // hash_chunk is nonzero
     }

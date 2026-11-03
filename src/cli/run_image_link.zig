@@ -18,6 +18,7 @@
 //! is left zero. Placement is a pure function of the images: the support
 //! image first, then the units in content-digest order.
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const backend = @import("backend");
 const unit_walk = @import("unit_walk.zig");
@@ -437,7 +438,11 @@ fn clearPages(composed: RunImage.Composed) error{ClearFailed}!void {
         @intFromPtr(composed.code.ptr) + composed.code.len;
     const end = std.mem.alignForward(usize, end_address, page);
     const pages: [*]align(std.heap.page_size_min) u8 = @ptrFromInt(start);
-    std.posix.madvise(pages, end - start, std.posix.MADV.REMOVE) catch return error.ClearFailed;
+    if (comptime builtin.os.tag != .linux) {
+        unreachable; // unitImageRunApplies selects composed runs only on Linux x86_64 hosts
+    } else {
+        std.posix.madvise(pages, end - start, std.posix.MADV.REMOVE) catch return error.ClearFailed;
+    }
 }
 
 fn now(std_io: std.Io) i96 {

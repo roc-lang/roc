@@ -24760,8 +24760,8 @@ qualified source names.
 
 ## Fast Dev Link
 
-A `roc build --opt=dev --specialize=no` of a Linux x86_64 executable with a
-cache links its executable without composing a program object and without
+A `roc build --opt=dev --specialize=no` of a Linux x86_64 executable, by a
+compiler running on Linux with a cache, links its executable without composing a program object and without
 LLD. The per-build work after the edited module's code exists is a function
 of that module and of the output's size, never of the program's module count
 or the host's size. Every other target, output kind and `--no-cache` composes
