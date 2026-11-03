@@ -5499,9 +5499,9 @@ function, including an inline expect condition, blocks the calling expect only
 when the expect's evaluation reaches it, and it never becomes a runtime test
 failure. Each blocked expect produces one compiler-error test result, even when
 several diagnostics belong to one expect or one diagnostic blocks several
-expects. These results follow from the checked module alone, so they are cached
-and replayed with the module's passes and failures; a test backend failing to
-run is never cached. Checking diagnostics are rendered once and are counted
+expects. These results follow from the checked module alone; test planning
+records them without running anything. Checking diagnostics are rendered once
+and are counted
 separately from test outcomes; errors outside tests also prevent an unqualified
 success summary. Inline expects remain execution observations.
 
@@ -14303,12 +14303,9 @@ the same sources, and `roc build` adds exactly the module objects still
 missing (`compile.boxy_object_cache`, the `boxy_object` family).
 `roc test` checks its root for explicit test roots
 (`Validation.explicit_roots`), which is its own check under either strategy,
-and with `--specialize=no` it leaves exactly what that check leaves plus its
-test outcomes and completed-command records (Completed dev test commands).
-Those are not lowered output: they are the same `test_result` family under
-either strategy, and whether a command reads and writes them is separate from
-the policy above (`cachesPostCheckWork`), which stays the policy of lowered
-output, packs and program artifacts. `roc
+and with `--specialize=no` it leaves exactly what that check leaves; it writes
+no test outcomes under either strategy. `cachesPostCheckWork` is the policy of lowered output, packs
+and program artifacts. `roc
 check` accepts `--opt` and ignores it; it honors `--specialize`, because the
 strategy selects the compile-time evaluator that completes the module's
 roots. The checked module itself names no strategy: both evaluators store
@@ -22894,44 +22891,40 @@ tested root reaches into a dependency is compiled and linked the same way.
 
 ## Optimized Test Execution
 
-Result-cache admission precedes runtime root construction and checked-program
-finalization. The complete ordered reporting plan remains command-owned; its
-execution subset contains only roots of modules whose structured result bundle
-missed admission. Subset request positions are distinct from original result
-slots. Each request retains its checked module identity, original module index,
-source root index and order, and result slot through `RootTestPlanMetadata`.
-Consumers select module roots by that explicit module index, never by ranges
-of result slots or generated symbol names.
+`roc test` runs every test root it plans, on every invocation. There is no
+cache of test outcomes: a test's result is an observation of running it, and
+the command produces each one by running the root. Checking and compile-time
+evaluation still use the checked module cache as every command does, so a warm
+`roc test` skips checking unchanged modules and evaluating their stored
+roots, but never skips running a test root.
 
-The explicit subset is also the runtime demand of compile-time finalization,
-including its normalization specialization from completed stored values. A
-validated cached result discharges that test's runtime observation requirement;
-it does not discharge non-test compile-time requirements. The finalizer still
-evaluates pending compile-time roots and replays stored diagnostics and debug
-observations under the checking contract, even when the subset is empty. An
-explicit empty subset has no runtime consumer and performs no test runtime
-preparation. It must not turn back into the program's default root set.
-A source file with no test plan keeps ordinary checking without installing a
-runtime configuration; a plain type module need not have a runnable owner.
+The command-level test plan is built after checking and before runtime root
+construction and checked-program finalization. It contains every test root of
+every module whose package the command tests ("Test Root Ownership"), in
+reporting order. Each request retains its checked module identity, original
+module index, source root index and order, and result slot through
+`RootTestPlanMetadata`. Consumers select module roots by that explicit module
+index, never by ranges of result slots or generated symbol names.
 
-Cached test roots remain explicit compile-time discovery requirements, separate
-from execution demand. The established `LiteralDemand` analysis selects only
-those that can register specialization-dependent literal conversions. These
-follow runtime requests as discovery roots in the shared producer, with no
-test-plan execution metadata. Their literal conversions still report rejected
-literals and replay compile-time observations; the cached test entrypoints
-never run. Both initial evaluation and normalization use this separation.
-Runtime continuation selects only execution-subset positions, so discovery
-bodies cannot enlarge its LIR or native image. Discovery analysis over checked
-metadata is reported separately from specialized bodies and emitted code.
+The plan's roots are also the runtime demand of compile-time finalization,
+including its normalization specialization from completed stored values. The
+finalizer evaluates pending compile-time roots and replays stored diagnostics
+and debug observations under the checking contract, even when the plan has no
+executable roots. A plan with no executable roots (every planned expect was
+rejected during checking) has no runtime consumer and performs no test runtime
+preparation; it never turns into the program's default root set. A source
+file with no test plan keeps ordinary checking without installing a runtime
+configuration; a plain type module need not have a runnable owner.
 
-Only the subset's required closure reaches runtime LIR, ARC, frozen static
-data and native emission. All uncached modules borrow one program and image;
-their expect-counter partitions retain the subset program's source-site table.
-Cached observations retain their original source identities and combine with
-fresh observations only during the existing deterministic reporting merge.
-Work counters distinguish the complete reporting plan and cache admission
-from the procedures and entrypoints actually emitted for execution.
+An expect that checking rejected outright, and a platform expect that reads a
+value the platform `requires`, are not executable roots: test planning records
+each as a compiler-error result in its result slot, and nothing lowers it.
+
+Only the plan's required closure reaches runtime LIR, ARC, frozen static data
+and native emission. All modules with test roots borrow one program and
+image; their expect-counter partitions retain the program's source-site table.
+Work counters distinguish the complete reporting plan from the procedures and
+entrypoints actually emitted for execution.
 
 ### Command-level execution
 
@@ -22939,8 +22932,7 @@ from the procedures and entrypoints actually emitted for execution.
 plan for all discovered test roots in the app and its imports. The plan is
 explicit compiler data. It owns the stable source-order display order, the
 checked module owner for each root, the source region used for reporting, the
-checked cache id for the root's result, the generated test symbol for uncached
-roots, the cached or uncached execution decision, and the result slot. Later
+generated test symbol for each root, and the result slot. Later
 stages consume this plan directly; they never reconstruct test identity from
 source paths, symbol names, module traversal order, filesystem order, package
 cache paths, or backend output.
@@ -22956,9 +22948,8 @@ Optimized test execution performs at most one LLVM shared-library link for the
 whole command for the selected optimization mode and native target. It must not
 link one shared library per checked module. The per-module checked cache
 boundary remains intact, but cache boundaries are not native link/load
-boundaries for optimized tests. Cached test results are merged into the command
-result stream before reporting; uncached test roots are compiled into the single
-test library and committed as individual outcome records after execution.
+boundaries for optimized tests. Every planned root is compiled into the single
+test library, and its result enters the command result stream in plan order.
 
 The command-level plan is built after checking has produced all checked modules
 and before any optimized test backend code is generated:
@@ -22966,15 +22957,13 @@ and before any optimized test backend code is generated:
 ```text
 checked modules
   -> command-level test plan
-  -> cached-result admission for plan entries
-  -> one command-level lowering batch containing every uncached test root
+  -> one command-level lowering batch containing every planned test root
   -> ARC insertion for each checked-module lowering result
   -> per-module LLVM bitcode with exported test entrypoints
   -> one merged LLVM module/object
   -> one native shared library
   -> parallel test-root calls
   -> deterministic transcript and result merge by test-plan order
-  -> per-root outcome writes for fresh test roots
   -> final timing summary
 ```
 
@@ -22985,19 +22974,19 @@ the byte-for-byte contract: for the same source code and the same renderer
 configuration, captured stdout bytes and captured stderr bytes in this
 transcript are independently byte-for-byte identical regardless of selected
 optimization mode, backend, worker count, core count, scheduling, test
-completion order, or whether a result was read from cache. The selected
+completion order, or whether checking read its modules from the checked module
+cache. The selected
 optimization mode is not checked source input and is not a renderer configuration;
 it must never change test output data or rendered transcript bytes. A different
 per-test transcript under `--opt=size` and `--opt=speed` is a compiler/backend
-bug, not a cache-key distinction. Changing color mode, verbosity, terminal
+bug. Changing color mode, verbosity, terminal
 width, or another renderer setting may change only the rendering chosen from
 the same structured transcript data. Determinism tests compare each stream's
 transcript bytes directly; they do not normalize source snippets, whitespace,
-ANSI escapes, or cache labels inside the transcript. The final aggregate
+or ANSI escapes inside the transcript. The final aggregate
 summary is a run epilogue and is outside the byte-for-byte transcript
-guarantee; it may include elapsed time and cache/timing annotations for this
-invocation. Cache-hit labels such as `(cached)` belong only in that epilogue,
-never in the per-test transcript.
+guarantee; it may include elapsed time and timing annotations for this
+invocation.
 
 The command-level lowering batch may name roots from multiple checked modules.
 Each per-module lowering request is built with explicit imported checked-module
@@ -23038,8 +23027,8 @@ another top-level expect remains inline; collecting it as a second entrypoint
 would execute and count the same source statement twice.
 When roots from separate checked modules reach the same source site, the
 command combines their counts by qualified declaring module and exact region
-after execution. Per-root outcome records retain the uncombined counts so any
-mix of cached and freshly executed roots produces the same command result.
+after execution. Each root's result retains its uncombined counts, so the
+command result does not depend on how roots were partitioned among workers.
 
 After the single library is loaded, test roots run on a worker pool. Each root
 call owns its `RuntimeHostEnv`, `RocOps`, allocation tracker, crash boundary,
@@ -23085,79 +23074,23 @@ not write transcript spill files into user source directories.
 
 Worker completion order is never user-visible. Results are merged by the
 command-level test-plan order: checked module source order first, then checked
-test root source order within each module. Cached results and freshly-run
-results use the same ordering path. Diagnostics, `dbg`, `expect` failures,
+test root source order within each module. Diagnostics, `dbg`, `expect` failures,
 `expect_err` regions, crashes, and backend compiler errors stay attached to
-their test-plan entries until rendering and cache writes replay the plan order.
+their test-plan entries until rendering replays the plan order.
 
-The execution strategy, execution mode, compiler compatibility and payload
-version partition outcome admission. Rendering settings, elapsed time, root
-order and the whole enclosing module are not checked identity. Each current
-plan entry independently loads its outcome, so identical roots retain their
-output multiplicity. Missing, corrupt or incompatible records are misses;
-atomic cache commit prevents incomplete records from becoming hits. Each
-record also contains its expected key and a checksum. Atomic replacement under
-one key can refresh reporting provenance for the same checked outcome; reads
-still validate that provenance against the current sources.
+Each executing root owns its inline-expect counts as well as its transcript
+and result. Worker-local counters are harvested and cleared at root
+completion, retaining sparse nonzero observations with that root. Root
+observations are merged before command-level coalescing, preserving every
+root's uncombined contribution. Shared code and static data remain
+command-owned.
 
-Source provenance is validated separately from meaning. Outcome format V2
-contains no absolute root offsets in its key or payload. A root's checked body
-and checked dependency identity, compiler compatibility, native target,
-specialization strategy and execution policy decide its outcome. Current root
-order, source owner and region form an occurrence, supplied by the current test
-plan. Identical roots may share an outcome, but each occurrence independently
-instantiates that outcome and contributes its observations.
+A root that runs out of stack reports the overflow explicitly
+(`BoolRootEvalResult.stack_overflowed`); how deep it got depended on the
+executing thread's stack and on the compiler frames beneath it. Allocation
+failure ends the process.
 
-The decoder validates every reference, span, counter, event and checksum before
-returning an outcome for merging or rendering. Missing, corrupt, incompatible
-or ambiguous reporting data rejects the entire outcome without emitting a
-partial transcript. Source maps borrow the command's checked sources, or the
-complete-command arena's validated source snapshots, through final rendering.
-Raw `dbg` and crash payload bytes remain checked output and are never rewritten.
-Failure excerpts of mentioned bindings are covered by checked definition
-identity; primary source excerpts and line numbers render from current sources.
-Passes and failures are equally admissible; compiler errors and incomplete
-execution are not durable outcomes. Neither is a root that ran out of stack:
-how deep it got depended on the executing thread's stack and on the compiler
-frames beneath it, which no identity records, so the host reports the overflow
-explicitly (`BoolRootEvalResult.stack_overflowed`) and the root runs again on
-every command. Allocation failure ends the process and publishes nothing.
-
-Nothing else a root observes lies outside its identity. Roc has no ambient
-input a pure `expect` can read, and an `expect` body cannot be effectful, so no
-root calls a hosted function: the host's code and environment are not inputs.
-
-Completed-command format V2 references durable individual outcomes and retains
-producer-authored report maps and each occurrence's current region, order and
-key under its exact validated input manifest. Both replay paths call the same
-outcome decoder. After an edit the command manifest misses, and current checking
-supplies fresh maps for individual reuse; a complete hit needs no checked graph.
-
-Admission precedes submission of runtime roots. Only misses enter specialization,
-LIR, code generation and execution. Each executing root owns its inline-expect
-counts as well as its transcript and result. Worker-local counters are harvested
-and cleared at root completion, retaining sparse nonzero observations with that
-root. Cached and fresh root observations are merged before command-level
-coalescing. Commit happens before coalescing, preserving every root's
-uncombined contribution. Shared code and static data remain command-owned.
-
-Cached test results store structured, pre-render data: the result, ordered
-transcript events, source regions, failure data, and raw or structured Roc
-payloads needed to render `dbg`, failed expects, crashes, and per-test
-status/failure reports.
-This cache format predates terminal rendering. It stores enough information to
-render the current stdout/stderr transcript just in time, under the current
-renderer choices, but it does not store terminal bytes, ANSI escapes, color
-mode, verbosity, terminal width, elapsed time, cache-hit labels, or final
-summary text. A cached result is represented to the output coordinator as an
-already-finished plan entry containing the same structured transcript events
-and test status data that a fresh run would have sent. Checked test status data,
-including passes, failed expects, and Roc runtime crashes, may be cached.
-Compiler backend failures while building or linking the command-level image are
-not checked test status data and are not written as successful test-result cache
-entries.
-
-If compiling or linking the command-level test library fails, each uncached root
+If compiling or linking the command-level test library fails, each root
 in the plan receives a backend compiler-error result at its original source
 region. If one root crashes while running, that root records a failed result
 from its own invocation state. Other roots continue unless the process receives
@@ -23167,7 +23100,7 @@ The interpreter and dev backend may consume the same command-level test plan,
 but they are not allowed to change the result contract. The interpreter may run
 roots serially. The dev backend may compile one callable batch and then execute
 roots through the same per-invocation state model. Backend choice changes only
-how entrypoints are produced, not how tests are identified, ordered, cached, or
+how entrypoints are produced, not how tests are identified, ordered, or
 reported.
 
 `ConstStore` uses node ids so stored constants can preserve sharing without
@@ -24940,8 +24873,8 @@ and installation phases under the same diagnostic.
 
 `ROC_TEST_COMMAND_WORK` prints deterministic test-command counters at exit.
 The specialization, evaluation, runtime LIR, ARC, static-data and native test
-execution producers increment their own counters. A complete result hit leaves
-every counter zero. This variable uses the same developer-only gate.
+execution producers increment their own counters. This variable uses the same
+developer-only gate.
 
 
 ## Integer SIMD Builtins
