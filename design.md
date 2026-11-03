@@ -654,17 +654,20 @@ scope LIR inlining made, and a digest of the lifted function's checked source
 for a scope SpecConstr made. The LLVM backend names inlined debug subprograms
 and source frames from it.
 
-### Closed Named Occurrences
+### Named Type Identity
 
-A Monotype named type is identified by its declaration (the declaring
-module's content identity and declaration statement) and its argument types.
-The checked occurrence it was lowered from (`named_type.ty`, a type id of
-`named_type.ty_module`) is a locator for re-entering checked types, never part
-of its identity: every digest mode hashes the declaration and the arguments'
-digests, so one named type digests alike in every module and every lowering.
-Lowering a module's checked types names that module's own occurrence
-(`Builder.namedOccurrence`); nothing chooses a representative occurrence among
-modules, and there is no program-wide index of closed occurrences.
+A Monotype named type, and a named type the constant store holds, consists of
+its declaring module (`named_type.module`), its declaration (`def`: the
+declaring module's content identity and declaration statement) and its
+argument types. That is its whole identity: every digest mode hashes the
+declaration and the arguments' digests, and every equality compares exactly
+those parts, so one named type digests and compares alike in every module and
+every lowering. A named type holds no checked type id. Nothing re-enters a
+module's checked types through a stored or lowered named type; a consumer that
+needs the declaration's checked data resolves the declaring module to its live
+checked module and reads the declaration there. Nothing chooses a
+representative among a named type's checked occurrences, and there is no
+program-wide index of them.
 
 ### Cache storage
 
@@ -2267,18 +2270,12 @@ transaction-local ids and ids from another workspace never enter that map.
 This shares immutable type descriptions, not Lambda Solved's mutable row
 occurrences, which continue to follow the Row Joins contract.
 
-A stored named type carries its canonical type key for identity and
-comparison, and a locator for resolution: `named_type.ty`, a type id of
-`named_type.ty_module`, the module whose checked types the occurrence is in,
-which is explicit and need not be `named_type.module` ("Canonical Type
-Keys"). Static data planning resolves the locator, re-entering
-`ty_module`'s types at `ty`. A Monotype type's digests cover a named type's
-declaration and arguments, not its occurrence ("Closed Named
-Occurrences"). Monotype lowering names only
-occurrences inside the storing module's import closure ("Occurrence scope"),
-so a module's cache entry names only modules its own key covers, the locator
-is valid for exactly as long as the entry, and a stored type is restored with
-the occurrences it holds.
+A stored named type names its declaring module, its declaration and its
+argument types, exactly as a Monotype named type does ("Named Type
+Identity"); restoring it into Monotype copies those parts and re-enters no
+checked type. Monotype lowering names only declaring modules inside the
+storing module's import closure ("Lowering scope"), so a module's cache entry
+names only modules its own key covers.
 
 ## Builtins Build Their Own Tag Unions
 
@@ -8547,13 +8544,11 @@ whose arguments are the parts the callee immediately observes, normalizes
 function bodies, and projects unused loop results.
 
 SpecConstr compares types, and keys workers and call patterns, by the
-representation digest: the full stored-content digest without a named type's
-checked re-entry reference (`named_type.ty`). Monotype may hold several ids for
-one type whose nominals point at different checked occurrences, and which
-occurrence a body's type carries depends on the route that produced it, such as
-an interface summary replay versus an expansion, and so on scheduling and on the
-worker count. That reference must never change a SpecConstr decision. Backings
-remain part of the comparison: two equal types whose nominal backings differ are
+representation digest: the full stored-content digest. Monotype may hold
+several ids for one type, and which id a body's type carries depends on the
+route that produced it, such as an interface summary replay versus an
+expansion, and so on scheduling and on the worker count. That route must never
+change a SpecConstr decision. Backings remain part of the comparison: two equal types whose nominal backings differ are
 distinct representations, and a value that replaces a use site of the other
 representation keeps the site's type through an explicit `typed_boundary`.
 
@@ -15247,8 +15242,7 @@ instance table, and an instance's arguments change only while it is out of the
 index, so every resident hash is the hash of its instance's current key.
 Generated identity hashes a snapshot of the current graph representation after
 joins, under the equality digest: `typeEql` compares the stamped identity, so
-checked provenance such as `named_type.ty` must not make requests that are
-equal under `typeEql` mint unequal iterator types. An imported request's
+requests that are equal under `typeEql` mint equal iterator types. An imported request's
 retained type remains its original witness and
 cannot supply the identity of a graph-owned producer that replaced it.
 Joining distinct iterator representations invalidates current snapshots and
@@ -25567,23 +25561,21 @@ scope does not hold, or an exact occurrence outside it, rejects the optional
 record. Nominal declaration, generated representation and default-expression
 validation remain mandatory after rebinding.
 
-**Occurrence scope.** A Monotype named type names the checked occurrence it
-was lowered from (`named_type.ty`, an id in `ty_module`'s store). Every
-occurrence a lowering names lies in that lowering's occurrence scope: the
-reflexive import closure of the module whose checked types or body it lowers
-(`direct_import_module_keys`, restricted to the lowering input), together with
-the modules that the lowering's input types already name (a replayed request's
-leaves, a completed body's requested function type). The scope is what keeps
-stored results reusable elsewhere: a compile-time value of module M is lowered
-from M's types and the bodies M's closure reaches, so every occurrence it
-stores names a module M's checked key covers, and any program holding M holds
-that module too. The program-wide module set is never a scope: a lowering must
-not name a module merely because the current program happens to contain it,
-since another program that reuses the stored result need not. Lowering a
-module's checked types names that module's own occurrence. A fresh lowering
-and an in-memory replay of one named type agree whichever occurrences they
-carry, because a named type's identity is its declaration and arguments
-("Closed Named Occurrences").
+**Lowering scope.** A Monotype named type names its declaring module
+(`named_type.module`). Every module a lowering names lies in that lowering's
+scope: the reflexive import closure of the module whose checked types or body
+it lowers (`direct_import_module_keys`, restricted to the lowering input),
+together with the modules that the lowering's input types already name (a
+replayed request's leaves, a completed body's requested function type). The
+scope is what keeps stored results reusable elsewhere: a compile-time value of
+module M is lowered from M's types and the bodies M's closure reaches, so every
+named type it stores names a module M's checked key covers, and any program
+holding M holds that module too. The program-wide module set is never a scope:
+a lowering must not name a module merely because the current program happens
+to contain it, since another program that reuses the stored result need not.
+A fresh lowering and an in-memory replay of one named type agree, because a
+named type's identity is its declaration and arguments ("Named Type
+Identity").
 
 Each Monotype builder indexes its immutable input views by module content
 identity before lowering. The first view in root/import/relation order wins,

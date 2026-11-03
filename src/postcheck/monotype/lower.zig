@@ -11095,7 +11095,7 @@ const Builder = struct {
                 const def = try typeDef(self.activeNameStore(), self.app_module_identity, view, nominal.origin_module, nominal.name, nominal.source_decl);
                 self.noteBuiltinTryDef(nominal.builtin, self.activeNameStore(), def);
                 const named: @FieldType(Type.Content, "named") = .{
-                    .named_type = namedOccurrence(view, frame.checked_ty, self.declaredModuleForNominal(view, nominal)),
+                    .named_type = .{ .module = self.declaredModuleForNominal(view, nominal) },
                     .def = def,
                     .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
                     .builtin_owner = builtinOwner(nominal.builtin),
@@ -11477,13 +11477,6 @@ const Builder = struct {
         };
         const view = self.moduleForDigest(names.procTemplateModuleDigest(checked_template));
         return view.templates.templateHasSingleSourceCall(checked_template.template);
-    }
-
-    /// The named type a nominal lowered from checked occurrence `ty` of
-    /// `view` names: the declaring module `owner`, and the occurrence itself
-    /// as the locator a stored type re-enters the checked types through.
-    fn namedOccurrence(view: ModuleView, ty: checked.CheckedTypeId, owner: names.CheckedModuleDigest) Type.NamedType {
-        return .{ .module = owner, .ty = ty, .ty_module = moduleDigestFromId(view.key) };
     }
 
     fn moduleForDigest(self: *Builder, module_digest: names.CheckedModuleDigest) ModuleView {
@@ -26562,7 +26555,7 @@ const BodyContext = struct {
         const nominal = task.nominal;
         task.def = try typeDef(self.nameStoreMut(), self.builder.app_module_identity, self.view, nominal.origin_module, nominal.name, nominal.source_decl);
         self.builder.noteBuiltinTryDef(nominal.builtin, self.nameStore(), task.def);
-        task.named_type = Builder.namedOccurrence(self.view, task.checked_ty, self.builder.declaredModuleForNominal(self.view, nominal));
+        task.named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal) };
         frame.cursor = InstNominalCursor.declared_order;
         return .{ .call = .{ .declared_order = try self.boxInstTask(InstDeclaredOrderTask, .{ .nominal = nominal, .args = task.args }) } };
     }
@@ -47254,15 +47247,11 @@ const BodyContext = struct {
                 const def = results[cursor].named_def;
                 const args_span = results[cursor + 1].span;
                 cursor += 2;
-                // A stored occurrence lies inside the storing module's
-                // occurrence scope, so every program reusing the value holds
-                // its module (design.md "Occurrence scope").
+                // A stored named type's declaring module lies inside the
+                // storing module's lowering scope, so every program reusing
+                // the value holds it (design.md "Lowering scope").
                 break :blk .{ .named = .{
-                    .named_type = .{
-                        .module = named.named_type.module,
-                        .ty = named.named_type.ty,
-                        .ty_module = named.named_type.ty_module,
-                    },
+                    .named_type = .{ .module = named.named_type.module },
                     .def = def,
                     .kind = monotypeNamedKind(named.kind),
                     .builtin_owner = named.builtin_owner,
@@ -66465,7 +66454,7 @@ test "completion analysis separates backing visibility authority and changed bac
     inline for (.{ .inspectable, .runtime_layout_only }) |use| {
         inline for (.{ .checked_public, .generated_private }) |authority| {
             const wrapped_empty = try graph.newNode(try graph.namedContent(.{
-                .named_type = .{ .module = .{}, .ty = @fromBackingInt(1), .ty_module = .{} },
+                .named_type = .{ .module = .{} },
                 .def = .{ .module = module, .type_name = name },
                 .kind = .nominal,
                 .builtin_owner = null,
@@ -67381,7 +67370,7 @@ test "shape queries cross alias layers for every aggregate a constant restores a
     const Aliased = struct {
         fn of(store: *Type.Store, store_names: *const names.NameStore, def: Type.TypeDef, backing: Type.TypeId) Allocator.Error!Type.TypeId {
             return try store.internNamed(store_names, .{
-                .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(@backingInt(backing))), .ty_module = .{} },
+                .named_type = .{ .module = .{} },
                 .def = def,
                 .kind = .alias,
                 .backing = .{ .ty = backing, .use = .inspectable },
@@ -67438,18 +67427,17 @@ test "monotype sameType keeps failed alias alternatives out of recursion stack" 
 
     const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try program.names.internTypeName("Alias");
-    const checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(1));
     const i64_ty = try program.types.add(.{ .primitive = .i64 });
     const str_ty = try program.types.add(.{ .primitive = .str });
     const alias_i64 = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Type.Span.empty(),
         .backing = .{ .ty = i64_ty, .use = .inspectable },
     } });
     const alias_str = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Type.Span.empty(),
@@ -67618,7 +67606,7 @@ test "graph constructor representation follows aliases and preserves nominal lay
     const outer_alias_name = try name_store.internTypeName("OuterAlias");
     const structural = try graph.newNode(.empty_tag_union);
     const alias = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module_identity, .type_name = alias_name },
         .kind = .alias,
         .builtin_owner = null,
@@ -67626,7 +67614,7 @@ test "graph constructor representation follows aliases and preserves nominal lay
         .backing = .{ .node = structural, .use = .inspectable },
     }));
     const nominal = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module_identity, .type_name = nominal_name },
         .kind = .nominal,
         .builtin_owner = null,
@@ -67634,7 +67622,7 @@ test "graph constructor representation follows aliases and preserves nominal lay
         .backing = .{ .node = alias, .use = .inspectable },
     }));
     const outer_alias = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module_identity, .type_name = outer_alias_name },
         .kind = .alias,
         .builtin_owner = null,
@@ -69342,7 +69330,7 @@ test "hosted extern boundary admits only the declared host ABI type" {
         .module = module_identity,
         .type_name = try program.names.internTypeName("Try"),
     };
-    const try_named = Type.NamedType{ .module = .{}, .ty = @fromBackingInt(@intCast(4)), .ty_module = .{} };
+    const try_named = Type.NamedType{ .module = .{} };
     const str_ty = try program.types.add(.{ .primitive = .str });
     const i32_ty = try program.types.add(.{ .primitive = .i32 });
 
@@ -69477,8 +69465,8 @@ test "request component relation follows root authority before nested private ev
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xE1))));
     const type_name = try name_store.internTypeName("OuterEvidence");
     const inner_type_name = try name_store.internTypeName("InnerEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(8)), .ty_module = .{} };
-    const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(9)), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
+    const inner_named_type: Type.NamedType = .{ .module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const inner_def: Type.TypeDef = .{ .module = module_identity, .type_name = inner_type_name };
     const private_arg = try graph.newNode(try graph.namedContent(.{
@@ -69536,8 +69524,8 @@ test "request component relation descends through matching private-bearing conta
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xE2))));
     const type_name = try name_store.internTypeName("ElementEvidence");
     const inner_type_name = try name_store.internTypeName("InnerEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(10)), .ty_module = .{} };
-    const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(11)), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
+    const inner_named_type: Type.NamedType = .{ .module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const inner_def: Type.TypeDef = .{ .module = module_identity, .type_name = inner_type_name };
     const shared_private_arg = try graph.newNode(try graph.namedContent(.{
@@ -69601,7 +69589,7 @@ test "checked-to-mono relation preserves generated-private evidence inside a com
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xCE))));
     const type_name = try name_store.internTypeName("CompositeEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const checked_backing = try graph.newNode(.empty_record);
     const mono_backing = try graph.newNode(.empty_record);
@@ -69654,7 +69642,7 @@ test "checked-to-mono relation joins exact tag request roots without collapsing 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xCF))));
     const type_name = try name_store.internTypeName("PayloadEvidence");
     const tag_name = try name_store.internTagLabel("One");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const checked_backing = try graph.newNode(.empty_record);
     const mono_backing = try graph.newNode(.empty_record);
@@ -69748,7 +69736,7 @@ test "direct call request preserves generated-private return provenance" {
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD3))));
     const type_name = try name_store.internTypeName("DirectReturnEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(4)), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
@@ -69795,7 +69783,7 @@ test "dispatch call target relation preserves generated-private return provenanc
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD4))));
     const type_name = try name_store.internTypeName("DispatchReturnEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(5)), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
@@ -69845,7 +69833,7 @@ test "iterator request nodes preserve generated-private operand and result prove
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD1))));
     const type_name = try name_store.internTypeName("IteratorEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
@@ -69899,7 +69887,7 @@ test "partial synthetic request nodes preserve generated-private argument and re
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD2))));
     const type_name = try name_store.internTypeName("PartialEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
@@ -71979,34 +71967,15 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     var constants = check.ConstStore.ConstStore.init(gpa);
     defer constants.deinit();
     const stored_types = &constants.type_store;
-    // Two distinct closed checked occurrences in the storing module's own
-    // checked types, as a stored type carries them: the opaque nominal, and
-    // the alias chain that wraps it. Restoring resolves each to that same
-    // occurrence.
+    // A stored opaque nominal declared by the storing module, and the alias
+    // chain that wraps it.
     const module_key: checked.ModuleId = .{ .bytes = @splat(7) };
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
-    const nominal_checked_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(1) }, false);
-    try checked_types.fillSyntheticTypeRoot(gpa, nominal_checked_ty, .{ .nominal = .{
-        .name = type_name,
-        .origin_module = origin,
-        .owner_module = module_key,
-        .source_decl = 100,
-        .is_opaque = true,
-        .representation = .opaque_without_backing,
-    } });
-    const alias_checked_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(2) }, false);
-    try checked_types.fillSyntheticTypeRoot(gpa, alias_checked_ty, .{ .alias = .{
-        .name = type_name,
-        .origin_module = origin,
-        .owner_module = module_key,
-        .source_decl = 101,
-        .backing = nominal_checked_ty,
-    } });
     const stored_owner: names.CheckedModuleDigest = .{ .bytes = module_key.bytes };
     const str = try stored_types.append(.{ .primitive = .str });
     const nominal = try stored_types.append(.{ .named = .{
-        .named_type = .{ .module = stored_owner, .ty = nominal_checked_ty, .ty_module = stored_owner },
+        .named_type = .{ .module = stored_owner },
         .def = .{ .module = origin, .type_name = type_name },
         .kind = .@"opaque",
         .args = .{},
@@ -72015,7 +71984,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     var alias = nominal;
     for (0..32) |_| {
         alias = try stored_types.append(.{ .named = .{
-            .named_type = .{ .module = stored_owner, .ty = alias_checked_ty, .ty_module = stored_owner },
+            .named_type = .{ .module = stored_owner },
             .def = .{ .module = origin, .type_name = type_name },
             .kind = .alias,
             .args = .{},
@@ -72024,7 +71993,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     }
     const recursive = try stored_types.reserve();
     const recursive_alias = try stored_types.append(.{ .named = .{
-        .named_type = .{ .module = stored_owner, .ty = alias_checked_ty, .ty_module = stored_owner },
+        .named_type = .{ .module = stored_owner },
         .def = .{ .module = origin, .type_name = type_name },
         .kind = .alias,
         .args = .{},
@@ -72070,8 +72039,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     try std.testing.expectEqual(restored_nominal, GuardedList.at(items, 1));
     const named = program.types.get(restored_nominal).named;
     try std.testing.expectEqual(Type.NamedKind.@"opaque", named.kind);
-    try std.testing.expectEqual(nominal_checked_ty, named.named_type.ty);
-    try std.testing.expectEqualSlices(u8, &module_key.bytes, &named.named_type.ty_module.bytes);
+    try std.testing.expectEqualSlices(u8, &module_key.bytes, &named.named_type.module.bytes);
     try std.testing.expectEqual(Type.BackingUse.runtime_layout_only, named.backing.?.use);
     try std.testing.expectEqual(GuardedList.at(items, 2), named.backing.?.ty);
     try std.testing.expect(restored_nominal != named.backing.?.ty);

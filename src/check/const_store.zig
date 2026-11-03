@@ -565,12 +565,6 @@ pub const ConstFn = struct {
 pub const NamedType = struct {
     /// The checked module that declares the type.
     module: names.CheckedModuleDigest,
-    /// The checked type occurrence the stored type was lowered from, an id in
-    /// the type store of `ty_module`.
-    ty: checked_ids.CheckedTypeId,
-    /// The checked module whose type store `ty` indexes, which need not be
-    /// `module`.
-    ty_module: names.CheckedModuleDigest,
 };
 
 /// Checked function definition referenced by a stored function value.
@@ -1901,7 +1895,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     const capture_ty = try store.type_store.append(.{ .primitive = .u64 });
     const private_backing_ty = try store.type_store.append(.{ .record = .{} });
     const private_named_ty = try store.type_store.append(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(8)), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = @fromBackingInt(@intCast(9)), .type_name = @fromBackingInt(@intCast(10)) },
         .kind = .@"opaque",
         .args = .{},

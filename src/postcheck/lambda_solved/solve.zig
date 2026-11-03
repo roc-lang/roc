@@ -5979,7 +5979,7 @@ test "solved type digest treats a transparent alias as its backing" {
     const module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xA5))));
     const type_name = try name_store.internTypeName("Count");
     const alias = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module, .type_name = type_name },
         .kind = .alias,
         .args = .empty(),
@@ -7220,7 +7220,7 @@ test "every occurrence of a callable-free recursive nominal that no row join rea
         .{ .name = leaf_name, .checked_name = leaf_name, .payloads = .empty() },
     }) });
     lifted.types.finishRecursive(slot, .{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module, .type_name = node_name },
         .kind = .nominal,
         .args = .empty(),
