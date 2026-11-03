@@ -682,6 +682,17 @@ linked objects, executables, glue plugins, or test outcomes. Every invocation
 specializes and emits its requested program from the current checked artifacts.
 In-memory sharing within a compilation remains independent of disk caching.
 
+### Native executable publication
+
+Native dev links produce their executable in an invocation-private sibling
+of the output directory, preserving the basename and filesystem. After link
+completion and host-input validation, one atomic rename replaces the public
+name. Concurrent builds, including identical working directories and output
+paths, never truncate or delete each other's completed executable. A failed
+build leaves the last completed publication intact and reports failure. No
+build-wide lock is held through linking. Scratch object ownership remains
+independent of the public executable name.
+
 ### Deterministic Dev Images
 
 A build's executable binary is a function of its source, command line, and
@@ -4477,8 +4488,8 @@ classification, declaration and method bindings, complete copied schemes
 templates, declaration annotations and their argument-position meaning,
 generated-method and hosted-declaration classifications, invoking-callable
 results, diagnostic hosted origins, and the results that govern stored-constant
-eligibility. The ordered import, type-owner and method-lookup scope is part of
-the dependency. An implementation edit can change one of these results without
+eligibility. The ordered imports and type-owner bindings are part of
+the dependency; methods come from the type owner's declaring module alone. An implementation edit can change one of these results without
 changing a printed type signature.
 
 Module ownership is a parameter of reusable inference. A checking dependency
@@ -4512,7 +4523,7 @@ An inference capsule carries the old dependency reference tables and their owner
 parameters. Admission establishes equal interfaces and owner equality partitions
 before translating each retained foreign reference through old node -> committed
 slot -> current node. Translation covers CIR value, associated, nominal, pattern
-and annotation references, suffix and hosted targets, method-owner keys, nominal
+and annotation references, suffix and hosted targets, nominal
 and alias source declarations, record defaults, and their type-store indices.
 Dispatch evidence's type variables and relations are local to the stored solved
 graph and are preserved; only their foreign declaration locators change. A
@@ -10439,7 +10450,11 @@ Equating the rows instead would write `Bad(a)` into the callback's row, so the
 inferred signature would be strictly less general than an annotation the
 checker accepts. Two tagless contributions share the one tail. A tag the
 source turns out to carry at a use merges with a same-named head whose
-payload agrees and is a mismatch otherwise (Row Union Normalization).
+payload agrees and is a mismatch otherwise (Row Union Normalization). An error
+that is not a row at all, such as a nominal tag union, is not a tagless
+contribution: it has no residual extension, so it is related to the whole
+result row as a contribution with tags is, and a bare tag returned beside
+`check(x)?` on a `Try(_, Error)` joins `Error`.
 
 Under an ANNOTATED result the residual tail is the annotation's—rigid, or
 bounded by it—so a tagless source there is a row still being resolved (a
@@ -14532,20 +14547,30 @@ resolved, dead-stripped from the `provides` roots, and localized").
   keeps every piece of every module. The entry format is its own
   (`compile.boxy_object_cache`), and its file is byte-identical for its key.
 - REACHABILITY is a walk over the pieces' own references
-  (`CodeExcerpt.retainReachable`), which the backend recorded when it
-  emitted the code: from the entrypoint wrappers and the host-visible
-  constants, through every call, address and constant each kept piece
-  names, across units, to a fixed point. Helpers, codecs and other code the
-  backend emits below the procedure level are reached the same way, since
-  each piece records what it needs. Nothing in it is a guess, and the walk
-  over a program's pieces costs milliseconds, so it runs where the pieces
-  are composed. The set of procedures the program reaches is also a
-  function of the checked program alone once every call's dispatch target
-  is resolved, so a walk over the checked modules from the app's
-  entrypoints can decide the procedures on a post-check worker while units
-  are still compiling, leaving the composition only the pieces below that
-  level to follow; that is a refinement of this design, not a change to
-  what is kept.
+  (`backend.dev.Composition`), which the backend recorded when it emitted
+  the code: from the entrypoint wrappers and the host-visible constants,
+  through every call, address and constant each kept piece names, across
+  units, to a fixed point. Helpers, codecs and other code the backend emits
+  below the procedure level are reached the same way, since each piece
+  records what it needs. Nothing in it is a guess. The costly half of the
+  walk, resolving what each piece names (references by index, symbolic
+  references by identity or name, relocations by symbol, and the function
+  pointers in the constants it carries) against the program's index of
+  definitions, depends on nothing but the piece, so it runs per unit on
+  the post-check executor before the walk that decides what is kept, which
+  then follows resolved edges and resolves on the spot whatever was not.
+  What is resolved in parallel is chosen by the checked program: the set
+  of procedures a program reaches is a function of the checked modules
+  alone once every call's dispatch target is resolved, so a walk over them
+  from the root's provided exports (`compile.boxy_reach`, over the edges a
+  compile-time root's evaluation follows) runs as a post-check task beside
+  the library units and names each reached template's worker by the
+  identity its unit defines it under. That walk over-approximates (a
+  function value never called is still followed) and can miss what only
+  the pieces know (a dictionary's method entries, a lambda another unit's
+  constant names), so it seeds the resolution and nothing else: the pieces
+  decide what is kept, and the composed object is the same with any seeds
+  or none.
 - THE LINK takes ONE OBJECT: as units are restored or built, their pieces
   join one program-wide set, and when the walk and the units are done the
   reachable pieces, and the constants they name, are placed into one image
@@ -14576,12 +14601,17 @@ resolved, dead-stripped from the `provides` roots, and localized").
 
 A unit stops at its pieces (`ObjectFileCompiler.compileToPieces`):
 extraction lifts each function's bytes and references out of the unit's code
-generator and names its constants by content, and the arrangement, symbol
-table and object encoding that each unit paid for happen once, for the
-program, over the reachable set (`ObjectFileCompiler.composeObject`). The
-composed object is a function of the units alone: they are taken in the
-order of their source-file tables, and host-visible constants in name order,
-so the order units finish in changes nothing in it. A unit's program-local
+generator and names its constants by content, the host-visible ones and the
+constants they name included, so constants of different units meet under
+one name and the composition renames nothing. The arrangement, symbol table
+and object encoding that each unit paid for happen once, for the program,
+over the reachable set (`ObjectFileCompiler.composeObject`); the arranged
+image borrows the units' code, metadata and constants, and owns only its
+references, which index the image, and its line entries, which name its
+source-file table. The composed object is a function of the units alone:
+they are taken in the order of their source-file tables, and host-visible
+constants in name order, so the order units finish in changes nothing in
+it. A unit's program-local
 workers (adapters, roots, static-data initializers) are named under the
 unit's link name, since pieces of different units meet in one program.
 `ROC_VERIFY_BOXY_OBJECT_REUSE` compares a restored unit's encoded pieces

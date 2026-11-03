@@ -9072,23 +9072,44 @@ fn failLink(ctx: *CliCtx, err: linker.LinkError, target: []const u8) CliError {
     };
 }
 
-/// Removes whatever a previous build left at the output path before this
-/// build does anything else, so a build that fails cannot leave the earlier
-/// program behind looking like its result. An absent output file is fine,
-/// but an absent parent directory is an output-path error.
-fn removeStaleBuildOutput(ctx: *CliCtx, final_output_path: []const u8) CliError!void {
-    std.Io.Dir.cwd().deleteFile(ctx.io.std_io, final_output_path) catch |err| switch (err) {
-        error.FileNotFound => {
-            // Deleting a missing file and deleting through a missing parent
-            // both return FileNotFound. Only the former is ready for a build.
-            const parent = std.fs.path.dirname(final_output_path) orelse ".";
-            var dir = std.Io.Dir.cwd().openDir(ctx.io.std_io, parent, .{}) catch |open_err|
-                return ctx.fail(.{ .file_write_failed = .{ .path = final_output_path, .err = open_err } });
-            dir.close(ctx.io.std_io);
-        },
-        else => return ctx.fail(.{ .file_write_failed = .{ .path = final_output_path, .err = err } }),
-    };
+/// Validate the destination without deleting another invocation's completed
+/// output. Failed builds report failure and leave the last publication intact.
+fn prepareBuildOutput(ctx: *CliCtx, final_output_path: []const u8) CliError!void {
+    const parent = std.fs.path.dirname(final_output_path) orelse ".";
+    var dir = std.Io.Dir.cwd().openDir(ctx.io.std_io, parent, .{}) catch |err|
+        return ctx.fail(.{ .file_write_failed = .{ .path = final_output_path, .err = err } });
+    dir.close(ctx.io.std_io);
 }
+
+/// A private link destination on the output filesystem. Rename is the only
+/// operation that modifies the user-visible name; the last complete publisher
+/// wins. The linker never opens a competing build's executable for writing.
+const BuildOutputPublication = struct {
+    ctx: *CliCtx,
+    destination: []const u8,
+    path: []const u8,
+    directory: []const u8,
+
+    fn init(ctx: *CliCtx, destination: []const u8) CliMainError!BuildOutputPublication {
+        var nonce: [16]u8 = undefined;
+        ctx.io.std_io.random(&nonce);
+        const directory = try std.fmt.allocPrint(ctx.arena, "{s}/.roc-link-{s}", .{ std.fs.path.dirname(destination) orelse ".", std.fmt.bytesToHex(nonce, .lower) });
+        std.Io.Dir.cwd().createDir(ctx.io.std_io, directory, .default_dir) catch |err|
+            return ctx.fail(.{ .file_write_failed = .{ .path = destination, .err = err } });
+        errdefer std.Io.Dir.cwd().deleteDir(ctx.io.std_io, directory) catch {};
+        return .{ .ctx = ctx, .destination = destination, .directory = directory, .path = try std.fs.path.join(ctx.arena, &.{ directory, std.fs.path.basename(destination) }) };
+    }
+
+    fn deinit(self: *BuildOutputPublication) void {
+        std.Io.Dir.cwd().deleteFile(self.ctx.io.std_io, self.path) catch {};
+        std.Io.Dir.cwd().deleteDir(self.ctx.io.std_io, self.directory) catch {};
+    }
+
+    fn publish(self: *BuildOutputPublication) CliError!void {
+        std.Io.Dir.cwd().rename(self.path, std.Io.Dir.cwd(), self.destination, self.ctx.io.std_io) catch |err|
+            return self.ctx.fail(.{ .file_write_failed = .{ .path = self.destination, .err = err } });
+    }
+};
 
 test "build output preparation reports a missing parent directory" {
     const testing = std.testing;
@@ -9107,19 +9128,48 @@ test "build output preparation reports a missing parent directory" {
 
     // https://github.com/roc-lang/roc/issues/12476: an absent parent must be
     // reported as an output-path failure before compilation or linking.
-    try testing.expectError(error.CliError, removeStaleBuildOutput(&ctx, output_path));
+    try testing.expectError(error.CliError, prepareBuildOutput(&ctx, output_path));
     try testing.expectEqual(@as(usize, 1), ctx.problems.items.len);
     const problem = ctx.problems.items[0].file_write_failed;
     try testing.expectEqualStrings(output_path, problem.path);
     try testing.expectEqual(error.FileNotFound, problem.err);
 
     try tmp.dir.createDir(testing.io, "missing", .default_dir);
-    try removeStaleBuildOutput(&ctx, output_path);
+    try prepareBuildOutput(&ctx, output_path);
 
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "missing/app", .data = "old output" });
-    try removeStaleBuildOutput(&ctx, output_path);
-    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "missing/app", .{}));
+    try prepareBuildOutput(&ctx, output_path);
+    try tmp.dir.access(testing.io, "missing/app", .{});
     try testing.expectEqual(@as(usize, 1), ctx.problems.items.len);
+}
+
+test "native output publication isolates concurrent writers and preserves completed output" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(testing.allocator, arena.allocator(), &io_state, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", arena.allocator());
+    const destination = try std.fs.path.join(arena.allocator(), &.{ root, "app" });
+    var first = try BuildOutputPublication.init(&ctx, destination);
+    defer first.deinit();
+    var second = try BuildOutputPublication.init(&ctx, destination);
+    defer second.deinit();
+    try testing.expect(!std.mem.eql(u8, first.path, second.path));
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = first.path, .data = "first complete" });
+    try first.publish();
+    try prepareBuildOutput(&ctx, destination);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = second.path, .data = "second partial" });
+    const before = try std.Io.Dir.cwd().readFileAlloc(testing.io, destination, arena.allocator(), .limited(128));
+    try testing.expectEqualStrings("first complete", before);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = second.path, .data = "second complete" });
+    try second.publish();
+    const after = try std.Io.Dir.cwd().readFileAlloc(testing.io, destination, arena.allocator(), .limited(128));
+    try testing.expectEqualStrings("second complete", after);
 }
 
 /// Final output path for `roc build`: an explicit `--output` is used as-is,
@@ -9253,12 +9303,40 @@ const BoxyLibraryObjects = struct {
     /// The checked keys of the platform modules the root unit lowers, whose
     /// implementations its object holds.
     paired_platforms: []const [32]u8,
+    /// Every library unit's checked module key, in unit order.
+    module_keys: []const [32]u8,
+    /// The checked keys of the modules the root unit lowers: the root, and
+    /// every module with platform requirements.
+    root_modules: []const [32]u8,
+    /// The template workers the checked program reaches, by module.
+    reach: compile.boxy_reach.Reach,
 
     fn deinit(self: BoxyLibraryObjects, gpa: Allocator) void {
         for (self.owned_pieces) |pieces| {
             pieces.deinit();
             gpa.destroy(pieces);
         }
+        var reach = self.reach;
+        reach.deinit();
+    }
+};
+
+/// The checked program's reachability (`compile.boxy_reach`), run as a
+/// post-check task beside the library units.
+const BoxyReachTask = struct {
+    gpa: Allocator,
+    root: *const check.CheckedArtifact.CheckedModuleArtifact,
+    modules: compile.boxy_reach.Modules,
+    outcome: union(enum) { pending, failed: Allocator.Error, done: compile.boxy_reach.Reach } = .pending,
+
+    fn compute(self: *BoxyReachTask) void {
+        self.outcome = if (compile.boxy_reach.compute(self.gpa, self.root, self.modules)) |reach| .{ .done = reach } else |err| .{ .failed = err };
+    }
+
+    fn run(context: *anyopaque, _: base.post_check_task_executor.Worker) ?*anyopaque {
+        const self: *BoxyReachTask = @ptrCast(@alignCast(context));
+        self.compute();
+        return null;
     }
 };
 
@@ -9308,6 +9386,31 @@ fn buildBoxyLibraryObjects(
         }
     }
     const platform = try boxyPlatformView(ctx, build_env, root_artifact, visible);
+    // The checked program's reachability runs beside the units: the
+    // composition resolves the procedures it names in parallel first
+    // (design.md "Unit Pieces And Whole-Program Dead Code").
+    const link_modules = try ctx.arena.alloc(*const Artifact, digests.artifacts.count());
+    const link_names = try ctx.arena.alloc([32]u8, link_modules.len);
+    {
+        var linked = digests.artifacts.valueIterator();
+        var i: usize = 0;
+        while (linked.next()) |artifact| : (i += 1) {
+            link_modules[i] = artifact.*;
+            link_names[i] = digests.module_names.get(artifact.*.key.bytes) orelse base.invariant("roc build invariant violated: a module of the link has no link name", .{});
+        }
+    }
+    var reach_task: BoxyReachTask = .{ .gpa = ctx.gpa, .root = root_artifact, .modules = .{ .artifacts = link_modules, .link_names = link_names } };
+    var reach_session: ?base.post_check_task_executor.Session = if (build_env.postCheckExecutor()) |executor| try executor.begin() else null;
+    defer if (reach_session) |*open| {
+        while (open.outstanding != 0) _ = open.receive();
+        open.end();
+    };
+    var reach_taken = false;
+    defer if (!reach_taken) switch (reach_task.outcome) {
+        .done => |*reach| reach.deinit(),
+        .pending, .failed => {},
+    };
+    if (reach_session) |*open| try open.submit(.{ .id = 0, .context = &reach_task, .run = BoxyReachTask.run }) else reach_task.compute();
     if (dev_diagnostics.isSet(.trace_boxy_work)) {
         std.debug.print("boxy-work: root {s} key {s} codegen {s} identity {s}\n", .{ root_artifact.canonical_names.moduleNameText(root_artifact.module_identity.module_name), &std.fmt.bytesToHex(root_artifact.key.bytes[0..8], .lower), &std.fmt.bytesToHex(root_artifact.codeGenerationKey().bytes[0..8], .lower), &std.fmt.bytesToHex(root_artifact.module_identity.stable_hash[0..8], .lower) });
         for (units.items) |artifact| std.debug.print("boxy-work: unit {s} key {s} codegen {s} identity {s}\n", .{ artifact.canonical_names.moduleNameText(artifact.module_identity.module_name), &std.fmt.bytesToHex(artifact.key.bytes[0..8], .lower), &std.fmt.bytesToHex(artifact.codeGenerationKey().bytes[0..8], .lower), &std.fmt.bytesToHex(artifact.module_identity.stable_hash[0..8], .lower) });
@@ -9467,7 +9570,15 @@ fn buildBoxyLibraryObjects(
             },
         }
     }
+    if (reach_session) |*open| _ = open.receive();
     if (first_error) |err| return err;
+    const reach = switch (reach_task.outcome) {
+        .done => |reach| reach,
+        .failed => |err| return err,
+        .pending => base.invariant("roc build invariant violated: the checked reachability task completed without an outcome", .{}),
+    };
+    reach_taken = true;
+    if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: the checked program reaches {d} template workers in {d} modules\n", .{ reach.identities.len, reach.modules.count() });
     // The summary counts cache work; a build without a cache does none.
     if (!args.no_cache) build_env.recordBoxyObjects(restored, built);
     reporter.end();
@@ -9475,11 +9586,30 @@ fn buildBoxyLibraryObjects(
     const ordered = try ctx.arena.alloc(*const backend.dev.UnitPieces.Pieces, units.items.len);
     for (objects, ordered) |object, *slot| slot.* = object orelse base.invariant("roc build invariant violated: a .boxy unit completed without an object", .{});
     var paired_platforms: std.ArrayList([32]u8) = .empty;
-    if (platform) |view| try paired_platforms.append(ctx.arena, (view.code_generation_key orelse view.key).bytes);
-    for (visible) |artifact| {
-        if (artifact.platform_type_inputs.requirements.len != 0) try paired_platforms.append(ctx.arena, artifact.codeGenerationKey().bytes);
+    var root_modules: std.ArrayList([32]u8) = .empty;
+    try root_modules.append(ctx.arena, root_artifact.key.bytes);
+    if (platform) |view| {
+        try paired_platforms.append(ctx.arena, (view.code_generation_key orelse view.key).bytes);
+        try root_modules.append(ctx.arena, view.key.bytes);
     }
-    return .{ .pieces = ordered, .keys = keys, .owned_pieces = owned_pieces.items, .hosted_symbols = hosted_symbols.items, .platform = platform, .paired_platforms = paired_platforms.items };
+    for (visible) |artifact| {
+        if (artifact.platform_type_inputs.requirements.len == 0) continue;
+        try paired_platforms.append(ctx.arena, artifact.codeGenerationKey().bytes);
+        try root_modules.append(ctx.arena, artifact.key.bytes);
+    }
+    const module_keys = try ctx.arena.alloc([32]u8, units.items.len);
+    for (units.items, module_keys) |artifact, *key| key.* = artifact.key.bytes;
+    return .{
+        .pieces = ordered,
+        .keys = keys,
+        .owned_pieces = owned_pieces.items,
+        .hosted_symbols = hosted_symbols.items,
+        .platform = platform,
+        .paired_platforms = paired_platforms.items,
+        .module_keys = module_keys,
+        .root_modules = root_modules.items,
+        .reach = reach,
+    };
 }
 
 /// Compose the program's pieces into the one object its link takes: every
@@ -9498,6 +9628,7 @@ fn composeBoxyProgramObject(
     library: BoxyLibraryObjects,
     target: RocTarget,
     synthetic_default_platform: bool,
+    executor: ?base.post_check_task_executor.Executor,
 ) CliMainError![]const u8 {
     const program_key: ?[32]u8 = if (root_key) |key| key: {
         var hasher = base.Sha256.init(.{});
@@ -9527,12 +9658,23 @@ fn composeBoxyProgramObject(
     const inputs = try ctx.arena.alloc(*const backend.dev.UnitPieces.Pieces, library.pieces.len + 1);
     inputs[0] = root;
     @memcpy(inputs[1..], library.pieces);
+    // The procedures the checked program reaches in each unit, resolved in
+    // parallel before the walk that decides what the object keeps.
+    const seeds = try ctx.arena.alloc([]const lir.ProcIdentity, inputs.len);
+    {
+        var root_seeds: std.ArrayList(lir.ProcIdentity) = .empty;
+        for (library.root_modules) |key| try root_seeds.appendSlice(ctx.arena, library.reach.of(key));
+        seeds[0] = root_seeds.items;
+        for (library.module_keys, seeds[1..]) |key, *unit_seeds| unit_seeds.* = library.reach.of(key);
+    }
     var compiler = backend.ObjectFileCompiler.init(ctx.gpa);
+    compiler.post_check_executor = executor;
     var timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
     compiler.timing = &timing;
     var composed = compiler.composeObject(inputs, target, .{
         .enable_default_platform_runtime = synthetic_default_platform,
         .roots = &.{},
+        .seeds = seeds,
     }) catch |err| {
         reporter.fail();
         std.log.err("Composing the program's object failed: {}", .{err});
@@ -9788,7 +9930,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     }
 
     const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
-    try removeStaleBuildOutput(ctx, final_output_path);
+    try prepareBuildOutput(ctx, final_output_path);
 
     build_env.setTarget(target);
     build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(
@@ -10007,7 +10149,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     const code_generation_phase_name = devBackendPhaseName(target);
 
     const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
-    try removeStaleBuildOutput(ctx, final_output_path);
+    try prepareBuildOutput(ctx, final_output_path);
 
     build_env.setTarget(target);
     const runtime_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
@@ -10078,7 +10220,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             error.MalformedPieces, error.UnsupportedPiecesVersion => base.invariant("the cached pieces of the root unit were admitted but do not decode: {s}", .{@errorName(err)}),
         };
         defer root_pieces.deinit();
-        const obj_path = try composeBoxyProgramObject(ctx, &reporter, &link_objects, boxy_cache_manager, boxy_root_key.?.bytes, &root_pieces, library, target, args.synthetic_default_platform);
+        const obj_path = try composeBoxyProgramObject(ctx, &reporter, &link_objects, boxy_cache_manager, boxy_root_key.?.bytes, &root_pieces, library, target, args.synthetic_default_platform, build_env.postCheckExecutor());
         reporter.begin("Preparing Link Inputs");
         const root_hosted = try ctx.arena.alloc([]const u8, entry.hosted_symbols.len);
         for (entry.hosted_symbols, root_hosted) |symbol, *owned| owned.* = try ctx.arena.dupe(u8, symbol);
@@ -10150,7 +10292,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         defer root_pieces.deinit();
         reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
         reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(backend_timing.snapshot().native_emission));
-        const obj_path = try composeBoxyProgramObject(ctx, &reporter, &link_objects, boxy_cache_manager, if (boxy_root_key) |key| key.bytes else null, &root_pieces, library, target, args.synthetic_default_platform);
+        const obj_path = try composeBoxyProgramObject(ctx, &reporter, &link_objects, boxy_cache_manager, if (boxy_root_key) |key| key.bytes else null, &root_pieces, library, target, args.synthetic_default_platform, build_env.postCheckExecutor());
         const root_hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
         const link_facts: LinkFacts = .{
             .hosted_symbols = try unionSymbols(ctx.arena, root_hosted_symbols, library.hosted_symbols),
@@ -10227,6 +10369,11 @@ fn linkNativeBuild(
     extra_objects: []const []const u8,
     facts: LinkFacts,
 ) CliMainError!void {
+    // Executables have one publication unit. Shared libraries can also emit
+    // import libraries, so their existing multi-output path remains separate.
+    var publication: ?BuildOutputPublication = if (link_type == .exe) try BuildOutputPublication.init(ctx, final_output_path) else null;
+    defer if (publication) |*pending| pending.deinit();
+    const link_output_path = if (publication) |pending| pending.path else final_output_path;
     const target_os = target.toOsTag();
     const target_arch = target.toCpuArch();
     const paths_started = std.Io.Timestamp.now(ctx.io.std_io, .awake);
@@ -10266,7 +10413,7 @@ fn linkNativeBuild(
     var inspection_counters: host_symbols.Counters = .{};
     if (link_type == .archive) {
         const started = std.Io.Timestamp.now(ctx.io.std_io, .awake);
-        try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
+        try writeArchiveOutput(ctx, target, link_output_path, link_inputs, object_files.items);
         timing.finalization_ns = @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - started.nanoseconds);
     } else {
         const inspection_started = std.Io.Timestamp.now(ctx.io.std_io, .awake);
@@ -10298,7 +10445,7 @@ fn linkNativeBuild(
             .target_abi = buildLinkAbi(target, args.synthetic_default_platform),
             .target_os = target_os,
             .target_arch = target_arch,
-            .output_path = final_output_path,
+            .output_path = link_output_path,
             .output_kind = linkerOutputKind(link_type),
             // Dev output uses the symbol ABI, so host archives resolve by
             // symbol reference and unused host code can be stripped.
@@ -10325,6 +10472,7 @@ fn linkNativeBuild(
         };
     }
     try validateLinkInputStates(ctx, host_paths, input_states, link_inputs.target_name);
+    if (publication) |*pending| try pending.publish();
     reporter.endWithParentBreakdown(&.{
         .{ .name = "Host symbols and exports", .ns = inspection_ns },
         .{ .name = "Link arguments", .ns = timing.arguments_ns },
@@ -10393,7 +10541,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     const target_arch = target.toCpuArch();
     const target_os = target.toOsTag();
     const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
-    try removeStaleBuildOutput(ctx, final_output_path);
+    try prepareBuildOutput(ctx, final_output_path);
 
     build_env.setTarget(target);
     build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(

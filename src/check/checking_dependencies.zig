@@ -13,7 +13,7 @@ const Hash = base.ModuleIdentity.Hash;
 
 /// Domain-separated checking identity format. Its version is also folded into
 /// inference-cache admission; it is never an implementation-artifact key.
-pub const format_version: u32 = 2;
+pub const format_version: u32 = 3;
 
 /// Encode an interface scalar in fixed-width little-endian order.
 pub fn hashU32(hasher: *base.Sha256, value: u32) void {
