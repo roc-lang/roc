@@ -6,7 +6,7 @@ checking has completed and before backend code generation begins.
 The design is deliberately narrow. It keeps the existing checked boundary:
 
 - checked CIR
-- the checked type store
+- the sealed solver type store
 - checked module caching
 - all user-facing checking and static-dispatch reporting
 
@@ -1519,7 +1519,7 @@ emits a `.malformed` header annotation for every declaration kind. Nominal and
 opaque declarations may use an underscore-prefixed name such as `_a` for an
 intentionally phantom parameter; aliases and where aliases reject those names.
 This keeps every valid declaration formal's identity explicit through checking and
-`CheckedModule` construction.
+every reader of the checked module.
 
 A declaration body binds every type variable it mentions: an undeclared
 variable or a written `_` there is an error. A bare reference to a type
@@ -1555,7 +1555,7 @@ generated before finalization. Where aliases and standalone annotations are
 annotations, which no type declaration can reference; they are generated once
 validity is final, so a reference from any annotation to an invalid
 declaration resolves to the error type rather than to an application of a
-declaration that `CheckedModule` construction omits.
+declaration that no checked reader admits.
 
 Recursion shape is not the only declaration-level validity rule: a nominal
 declaration group must also admit a finite set of instantiations, because
@@ -1576,11 +1576,11 @@ rule admits terminates in Monotype backing instantiation: formal arguments
 resolve to the enclosing instance's own cells, closed arguments memoize once
 per instantiation context, and growing edges descend the formal-flow
 condensation, so the argument tuples reachable from any application form a
-finite set. CheckedModule construction enforces this invariant: a nominal
-declaration marked valid always has an error-free checked template, and
-encountering malformed template data for one is an invariant violation.
-`CheckedTypeStore` construction and public-API dependency collection both omit
-nominal declarations that checking explicitly marked invalid.
+finite set. A declaration's synthesized template relies on this invariant: a
+nominal declaration marked valid always has an error-free checked template,
+and encountering malformed template data for one is an invariant violation.
+Synthesized templates and the module's interface views never include nominal
+declarations that checking explicitly marked invalid.
 
 ### Associated Item Lookup Through Aliases
 
@@ -2818,8 +2818,9 @@ representations unexpectedly differ for the same value at the same boundary,
 that is an invariant violation; fix the producer instead of adding a later
 conversion.
 
-Outside the existing Canonicalization phase, the word `canonical` is banned in
-new post-check docs and code. Use the exact term instead: `authoritative` for source-of-truth documents,
+Outside the existing Canonicalization phase and the canonical type key (see
+"Canonical Type Keys"), the word `canonical` is banned in new post-check docs
+and code. Use the exact term instead: `authoritative` for source-of-truth documents,
 `lexicographic order by name` for sorted rows, `payload position order` for tag
 payloads, `TypeDef`/`NamedType` for named type definitions, and `TypeDigest` for
 structural checked-type digests.
@@ -2844,12 +2845,12 @@ discriminants, callable variant encodings, erased callable code entries, ABI
 shape, and runtime schemas.
 
 Vague owner terms are banned in new post-check docs and code. Use the precise
-owner instead: `CheckedModule`, `CheckedModuleBuilder`, `checked module cache`,
+owner instead: `CheckedModule`, the evaluation output, `checked module cache`,
 checked module data, platform relation data, or another exact producer/consumer
 name.
 
 The word `semantic` is banned in new post-check docs and code. Use the precise
-term instead: checked data, checked type store, source meaning,
+term instead: checked data, sealed solver store, source meaning,
 checked identity, source row position, `FnDef` identity, `FnSet` context, or
 another exact stage-owned name.
 
@@ -3052,8 +3053,7 @@ warning. Canonicalization reports a mutable binder whose name lacks `$`, or an
 immutable binder whose name starts with `$`, when it identifies the source
 construct as a declaration. Identifier references do not report this warning,
 and neither parsing nor identifier interning treats `$` as a mutability marker.
-`CheckedBodyStoreBuilder` copies a binder's reassignability directly from its CIR
-pattern tag.
+Lowering reads a binder's reassignability directly from its CIR pattern tag.
 
 Canonicalization also outputs two exact module-global value-definition lists.
 The selected-name list contains one definition for each source-visible value
@@ -3278,8 +3278,8 @@ an `expect`.
 
 ## Checked Type Equivalence Classes
 
-The checked type store represents each solved equivalence class with two
-independent identities:
+The solver type store (`types.Store`) represents each solved equivalence class
+with two independent identities:
 
 - the **storage root** is an internal union-find node chosen only to keep the
   equivalence-class forest shallow;
@@ -3290,8 +3290,8 @@ These identities must not be conflated. Ordinary unification continues to
 select its second resolved operand as the checked representative. Expected
 return variables, deferred dispatch constraints, generalization pools, checked
 type keys, and every other consumer of solved variable identity observe that
-checked representative exactly as they did before structural balancing. They
-must never observe or infer meaning from the storage root.
+checked representative whatever shape structural balancing gives the forest.
+They must never observe or infer meaning from the storage root.
 
 The storage root is selected by a separate union-find rank. This structural
 rank is not `Descriptor.rank`: descriptor rank is the Hindley-Milner scope level
@@ -3341,7 +3341,7 @@ resolved variable means that the queried variable is the checked
 representative, which is the only root notion checker consumers may use.
 
 Solver savepoints journal storage-parent, structural-rank, and root-metadata
-mutations and restore all three byte-for-byte. Checked-store serialization
+mutations and restore all three byte-for-byte. Serializing the sealed store
 includes both metadata stores, so loading a cached store preserves its checked
 representatives and balanced structure. A declared solver-mutating redirect
 joins whole classes through the same balanced mechanism while explicitly
@@ -3427,8 +3427,8 @@ the condition, to the `Bool` the operator demands, and reports a rejection as
 a bool operation on that side. The operator owns both relations, so a
 rejection retires the operator, whose value stays `Bool`.
 
-Because `.err` no longer merges, it also no longer relates the operands unified
-against it. A checker site that only needs diagnostic recovery may accept both
+Because `.err` never merges with information, it never relates the operands
+unified against it. A checker site that only needs diagnostic recovery may accept both
 `unified` and `suppressed_by_error`. A site that uses the relation as evidence
 for a speculative commit, a shared representative, dispatch success, or another
 checked output whose validity depends on the whole requested relation must
@@ -3725,12 +3725,12 @@ retired with its explicit subtree invalidation state.
 
 The compile coordinator records phase progress separately from user diagnostics.
 A source module that reaches checking has no user-error `Failure` outcome. It
-must produce its complete `ModuleEnv`, final content identity, and CheckedModule
-data required by importers. After rendering static diagnostics, checking releases its solver state. Every
-module outputs its complete parametric checked interface and selected roots.
-The coordinator retains only evaluation diagnostics and their source-name
-display mapping until the selected roots complete. Platform/app composition
-consumes these checked modules; it never suspends or reconstructs a checker.
+must produce its complete `ModuleEnv`, final content identity, and sealed
+solver store, which importers read. Checking seals its solver store when it
+finishes, and the sealed store stays alive until every consumer of the module
+is done ("The Live Checked Module"). Every module provides its complete
+parametric checked interface and selected roots. Platform/app composition
+reads these checked modules; it never suspends or reconstructs a checker.
 
 User diagnostics never suppress checked module output or propagate dependency failure. Every invalid source construct is represented at its first owning
 producer boundary by explicit checked data: a checked runtime-error expression,
@@ -4849,7 +4849,7 @@ Checked CIR is the last source-level representation. It owns:
 - checked procedure templates
 - resolved value references
 - method registries
-- normalized static-dispatch plans
+- resolved static-dispatch outcomes
 - platform/app relation data
 - `ConstStore` and dependency summaries
 - checked module serialization
@@ -4883,266 +4883,156 @@ runtime representation of the union.
 
 Those forms do not survive runtime lowering. The `.lss` strategy removes them
 while producing Monotype IR. The `.boxy` strategy removes them while producing
-LIR directly from checked data.
+LIR directly from checked CIR.
 
-### Immutable Platform/App Composition
+### The Live Checked Module
 
-Platform requirement declarations record their checked type roots, the
-producer-assigned order of requirement identity variables, and each for-clause alias's
-checked identity and backing roots. Pairing consumes these exact rows and the
-app's recorded solution rows; it never revisits source annotations or rebuilds
-identity order. Deferred exhaustiveness diagnostics retain checked display text,
-missing patterns, source regions, and checked site IDs as serializable data.
-Their eventual evaluation outcome never requires a solver snapshot.
+A checked module is live data, owned once and read by everyone after it is
+sealed. It consists of exactly these parts:
 
-A parametric platform outputs every root selected by the producer, including
-roots that require app bindings, and the complete same-module evaluation order.
-Binding dependence follows the checked constant and procedure dependency
-graph transitively, including captured values; it is distinct from strict
-evaluation demand, which determines scheduling.
-Its reusable module cache contains only context-independent evaluation results;
-app-dependent requests and deferred diagnostics remain explicit checked data.
-Program composition activates those recorded requests. It applies the recorded
-app substitutions to body expression, pattern, call, interpolation, and field-access
-types as well as procedure signatures and roots. One substitution memo preserves
-shared type identities across these columns. The pairing cache retains the changed
-body columns so cache hits use the same types. Calls to requirement declarations
-receive their direct-call classification from the bound app procedure kind using
-the checked output rule; callable-evaluation bindings remain indirect unless they
-are exact procedure aliases, which forward (see "Procedure Aliases").
-This classification is session-owned and persisted with the paired body columns.
-Exact procedure aliases
-whose required bindings are now known use the existing checked forwarding rule
-and require no compile-time evaluator. Composition borrows the platform's
-unchanged body columns, dispatch plans, declaration tables and closure
-inventories, and owns the
-projected types, bindings, root manifests and evaluation results in a session.
-Completed independent roots are consumed as stored values and never evaluated
-again. Both lowering strategies consume this same checked view. A session view
-cannot be serialized into the reusable module cache. Its completed changed
-columns may be persisted in the separate composition cache described above.
-Type columns borrow the immutable platform until their first write; ownership
-is explicit for every column, and a write copies that column before mutation.
-The checked root index accompanies the scheme index, preserving the
-first representative even when distinct identity roots share a key. Pairing
-borrows those indexes and never reconstructs them from root rows.
+- The canonical IR: the module's `ModuleEnv` with its `NodeStore`. It is
+  source-pure and cached by the content hash of its source ("Canonicalization
+  output cache").
+- The solver type store (`types.Store`). Checking seals it when it finishes
+  (`seal()`), and every write funnel of the store asserts that the store is
+  unsealed in debug builds. The sealed store stays alive, unchanged, until
+  every consumer of the module is done: importers' checking, lowering under
+  either strategy, compile-time evaluation, glue, bump and the LSP. Nothing
+  releases or replaces a module's solver store while a build runs.
+- The checker's recorded outputs, kept in `ModuleEnv` side lists and in the
+  inference output: scheme use records, dispatch relation merges, rejected
+  static dispatches, generated codec derivations, calls and renamings, binding
+  schemes, codec requirements, inspect override instances, `for`-loop and
+  literal dispatch plans, row-coerced results, record omitted defaults,
+  top-level demand dependencies, invoking definitions, callable checking
+  facts, the checking dependency digest, problems, the import mapping,
+  selected hoisted roots, promoted local procedures, platform requirement
+  solutions, and the per-expression checking facts ("Per-Expression Checking
+  Facts").
+- The evaluation output: the constant store (`ConstStore`), compile-time root
+  payloads and compile-time root reads. Compile-time evaluation writes it and
+  nothing else does.
 
-The checked boundary outputs immutable checked modules. A checked module is
-either complete or unavailable to later stages. Later stages may read checked
-modules but may not mutate checked source data, perform additional user-facing
+There is no second representation of any of this. No pass copies types,
+bodies, templates, names, plans or roots into another table after checking.
+Lowering, compile-time evaluation, glue, bump and the LSP read the live data
+through one reader API per concern (types, bodies, templates, dispatch,
+roots), and every reader is a view over the parts above:
+
+- a type id names either a solver variable of a module or an entry of that
+  module's synthesized-type store ("Synthesized Types"), and a reader never
+  needs to know which;
+- an expression id is a CIR node id;
+- a template is a definition id or a promoted local procedure id.
+
+A checked module is either complete or unavailable to later stages. Later
+stages read checked modules but never mutate checked source data, the sealed
+store or the checker's recorded outputs, perform additional user-facing
 checking, or derive missing checked data by scanning source syntax.
+`ci/check_postcheck_architecture.pl` rejects post-check code that mutates a
+sealed store and permits post-check code to read sealed stores through the
+type reader.
 
-During checking finalization, compile-time evaluation may need to lower and run
-checked roots before the checked module can be output. That work uses a
-`CheckedModuleBuilder`, not a complete checked module. The builder is the only
-mutable owner of the in-progress `ConstStore`, dependency summaries, and checked
-root payloads.
+Compile-time evaluation runs after checking seals the store and before the
+module is complete. It reads the module through the same readers every later
+stage uses and writes only the evaluation output. Lowering for compile-time
+evaluation is ordinary post-check lowering of the sealed module; it has no
+separate view of in-progress checked data, and nothing it does is visible to
+importers' checking, which reads only the sealed store and the checker's
+recorded outputs.
 
-Compile-time lowering during checking finalization receives a
-`CheckingFinalizationView`. That view exposes checked data plus
-builder-owned checked result sinks. It is not a `CheckedModule`, and it
-is not visible to importers or later post-check stages.
+The checked module stores checked-stage constant values in `ConstStore` and
+checked procedure templates for promoted callables. It does not store
+post-check representation data. In particular, the checked module does not
+contain runtime type payloads, value conversion plans, callable-set
+descriptors, boxy `TypeDesc` data, boxy dictionaries, erased callable ABI
+decisions, layout ids, runtime tag discriminants, or backend encodings.
 
-The builder has one transition:
+The method registry is a view over the checked module: each retained method's
+callable type is the solver variable of its definition. Derived declarations
+own this root even when a containing expression has been replaced by a checked
+error. Rejected declarations retain their explicit target-less registry entry;
+skipped associated values request no method callable root. The method registry
+view a consumer reads is a per-module on-demand analysis ("On-Demand Analyses
+And Write-Once Slots").
 
-```text
-CheckedModuleBuilder.finish() -> CheckedModule
-```
-
-After this transition, the checked module is immutable. Post-check runtime lowering,
-importers, LirImage construction, and backends only consume
-`CheckedModule`. Compile-time lowering during finalization may receive a
-builder-owned sink for checked results, but that sink is not an alternate
-post-check state and is never visible to importers.
-
-The checked module may store checked-stage constant values in `ConstStore` and
-checked procedure templates for promoted callables. It must not store post-check
-representation data. In particular, the checked module does not contain runtime
-type payloads, value conversion plans, callable-set descriptors, boxy
-`TypeDesc` data, boxy dictionaries, erased callable ABI decisions, layout ids,
-runtime tag discriminants, or backend encodings.
-
-Method registry construction produces checked types from source types. Each
-retained method emits its exact callable source variable through the same type
-builder as body type construction and stores the returned checked type id.
-Derived declarations own this root even when a containing expression has been
-replaced by a checked error. Rejected declarations retain their explicit target-less registry
-entry; skipped associated values request no method callable root.
-
-The source-variable-to-checked-type index is a direct, paged index shared by
-checked type construction and its consumers; it is not copied, sorted, and
-searched again. Source graph-analysis and digest scratch live until the registry
-has emitted its callable types, then are released. Each method's type output
-embeds imported nominal declarations for only the payloads it adds, making its
-types self-contained without rescanning existing payloads or emitting unrelated
-producers' dependencies. The source index and source-scheme index are released
-before compile-time evaluation, including on error exits, and neither is
-serialized.
-
-The checked type store is an interned graph, not a collection of independently
-duplicated checked type trees. During construction it maintains an exact
-checked-type-digest index for O(1) root lookup. Closed roots (roots with no
-reachable flex or rigid identity) with the same checked-type digest are one
-`CheckedTypeId`; identity-bearing roots remain distinct when their explicit
-identity instance changes checked meaning. Each root stores whether an identity
-is reachable, computed by the producer that constructs or projects it.
-Consumers use that metadata instead of repeatedly traversing the graph.
-
-Three notions of variable identity coexist over that graph, and they are
+Three notions of variable identity coexist over a module's types, and they are
 deliberately different questions; each is documented here so they cannot
 drift silently:
 
-- DIGEST IDENTITY (`rootContainsIdentityVariables`): does any flex or rigid
-  reach the root at all? Checked-type store construction marks every
-  variable, a defaultable row tail included, as an identity variable. This
-  decides whether a root may be shared by digest, whether substitution can
-  reuse a root unchanged (the closed-root fast path), and which roots the
-  payload identity walk pairs slot by slot with a platform requirement.
-- COMPILE-TIME-ROOT CONCRETENESS (`checkedTypeIsConcreteCompileTimeRoot`):
-  may a value of this type be evaluated at check time? Any flex answers no,
-  a rigid answers no in the `value_graph` walk and yes only as a declaration
-  template's formal; a defaultable tail is still a variable here.
+- DIGEST IDENTITY: does any flex or rigid reach the root at all? Every
+  variable, a defaultable row tail included, counts as an identity variable.
+  This decides whether a root's canonical key is independent of the
+  specialization that reads it, whether substitution can reuse a root
+  unchanged (the closed-root fast path), and which roots the payload identity
+  walk pairs slot by slot with a platform requirement.
+- COMPILE-TIME-ROOT CONCRETENESS: may a value of this type be evaluated at
+  check time? Any flex answers no, a rigid answers no in the `value_graph`
+  walk and yes only as a declaration template's formal; a defaultable tail is
+  still a variable here.
 - SPECIALIZATION INDEPENDENCE (`callableIdentityIsSpecializationIndependent`,
   the direct-dispatch classification): does the callable need an input from
   the enclosing specialization? A defaultable, unconstrained flex row tail
   that no enclosing scheme quantifies has exactly one instantiation and does
-  not; every other variable does. Glue already reads such a tail as
-  closed (`glue.zig`
-  `appendTagRowTags` tag-union conversion, the hosted `Try` adapter's
-  `checkedTypeIsClosedTagRow`, and—on row tails only—Monotype's
-  hosted-generic scan `checkedTypeHasVariable`, which also treats a
-  numeric-default variable as closed where this classification does
-  not), so this classification agrees with the representation consumers
-  rather than with the digest.
+  not; every other variable does. Glue reads such a tail as closed
+  (`glue.zig` `appendTagRowTags` tag-union conversion, the hosted `Try`
+  adapter's closed-tag-row test, and—on row tails only—Monotype's
+  hosted-generic variable scan, which also treats a numeric-default variable
+  as closed where this classification does not), so this classification
+  agrees with the representation consumers rather than with the digest.
   Monotype's sealed-cell guard (`checkedTypeSealsWithoutSpecialization`)
   asks the same question from the lowering side: a sealed cell may pair
   with a checked type whose only variables are such tails. Both sides make
-  the variable decision through one helper,
-  `CheckedTypePayload.variableSealsToRowDefault`, so they agree by
-  construction; the guard trusts its producers for the quantification half.
+  the variable decision through one helper, `variableSealsToRowDefault`, so
+  they agree by construction; the guard trusts its producers for the
+  quantification half.
 
-Because substituting an identity-bearing root reserves distinct roots for the
-variables it leaves unsubstituted, a specialized dispatch callable and its
-enclosing template root name one variable by different ids. The build-only
-`CheckedTypeStore.identity_origins` records the identity instance each
-substitution-cloned variable was minted from, and `identityOrigin` follows
-that record (through nested clones) so the specialization question compares
-origins, never raw clone ids. Every variable root filled through the
-synthetic path must declare an origin—its clone source, or itself when it
-is a fresh instance such as an imported or viewed variable brought into
-this store—and `identityOrigin` refuses one that declares none, so a
-forgotten origin fails loudly instead of reading as an unquantified tail.
-Serialized stores carry no origins: no post-check consumer asks the question.
-A post-check consumer that reads a direct dispatch's function type in its
-enclosing scope reads the edge's callable relation
-(`EvidenceTargetInstantiation`), a root the scope's own scheme variables
-appear in, never the specialized plan callable, whose variables no scope
-binds.
-
-Type substitution preserves this graph discipline. A substitution of a closed
-root is the original root, because no formal can occur in it. A real
-substitution is memoized by its complete source/formal/actual input and interns
-its result through the same checked-type-digest index. Dispatch callable
-instantiation additionally memoizes the complete target-callable/plan-callable
-pair, so equal checked dispatch edges share one result. Checked-type digest
-construction is memoized over already-stored child roots; cryptographic hashing
-is performed once for a new checked-type root, never as a linear search
-mechanism. This is part of the key's definition, not a cache: identity-variable
-slots and cycle back-references are the only bytes whose value depends on where
-a subtree is walked, so every nested subtree whose encoding writes neither is
-encoded as a `child_key` reference to that subtree's own key. The solver-side
-and checked-side encoders compose at exactly these nodes, a key requested for
-a root hashes that root's own encoding, and error-sensitive dispatch-state keys,
-which name each erroneous root, compose only error-free subtrees. Each checked
-root records whether its key is composable, and a synthetic function root over
-composable children is keyed exactly as a source function node with those
-children, so the two share one root.
-
-Type digests, checked type keys, recursive layout keys, and derived callable
-and evidence digests use the shared `base.TypeDigestHasher`: SHA-256 over the
-structural byte encoding, 32 bytes wide. The hash must be cryptographic and
-this wide. A package author controls every byte these digests see, several
-consumers treat equal digests as one type with no structural comparison
-(`CheckedTypeStore.root_index` when imported types are projected, the layout
-store's recursive-graph index, erased callable and generated nominal
-identities inside `typeEql`, format-codec call addresses), and the checker
-accepts a package's code by structural unification before the checked type
-store interns its types by digest. A package containing two structurally different types
-with one digest would therefore type-check and then be lowered with a single
-payload for both: a miscompile with memory-unsafe consequences from a pure
-dependency. A non-cryptographic hash makes such a pair cheap to construct, and
-because the attacker supplies both halves the relevant bound is a birthday
-collision, so 128 bits (2^64 work) is not enough and 256 bits is required. The
-digests are also persisted in caches and compared across machines, which rules
-out keying them with a secret. aarch64 compiler targets are built with the
-CPU's SHA-256 instructions enabled (`addSha256Floor` in build.zig) and have no
-software rounds. x86_64 stays at the architecture baseline, because Intel's
-Skylake through Comet Lake cores have no SHA extension: a released x86_64
-compiler for anything but macOS carries both the hardware and the portable
-rounds and picks one with CPUID the first time a process digests a type
-(`dispatches_at_runtime` in src/base/sha256.zig), and x86_64 macOS,
-whose Intel Macs are all such cores, always uses the portable rounds
-(`uses_software_rounds` there), as do 32-bit targets such as wasm32. Every path
-yields the same digest bytes; only the speed differs. The rounds themselves are
-shared with the `Crypto` builtins (`src/builtins/sha256.zig`); the runtime
-dispatch is the compiler's alone.
-
-All producers for a key domain must agree on the encoding, including child
-digests, length prefixes, identity numbering, and domain tags. The hash
-algorithm does not change type equality or the exact payload and topology
-comparisons already required by interners and evidence lookup. Non-cryptographic
-hashes (`std.hash.Wyhash`) remain in use only as bucket selectors in front of an
-exact comparison of the full key, where a collision costs a probe and never an
-identity. Module identities, checked module cache keys and filenames, and
-Monotype cache validity and compiler layout hashes hash with
-`std.crypto.hash.sha2.Sha256` directly, including when their inputs contain
-type digests. The digest widths and domain versions are part of serialized
-compatibility. Changing them requires invalidating affected checked-module and
-Monotype caches through their explicit entry and format versions, as well as
-updating layout versions and layout-hash goldens. Compiler build identity alone
-does not invalidate caches for an uncommitted compiler change.
+A specialized dispatch callable and its enclosing template name the same
+quantified variable through different type ids: the callable is a resolved
+dispatch target instantiation in the synthesized-type store, and the template
+root is a solver variable. A post-check consumer that reads a direct
+dispatch's function type in its enclosing scope reads the edge's callable
+relation (`EvidenceTargetInstantiation`), a root the scope's own scheme
+variables appear in, never the specialized plan callable, whose variables no
+scope binds.
 
 This is a checked-boundary rule, not merely a pipeline rule. Any checked
 module field outside `ConstStore` whose only purpose is to feed post-check
 runtime representation is not part of the checked boundary. If later lowering
-needs data, checking must output it as target-independent checked data such as
+needs data, checking records it as target-independent checked data such as
 templates, dispatch plans, method registry entries, platform relation data,
-hosted declarations, or `ConstStore` entries. Target-specific runtime
-representation data is produced after checking.
+hosted declarations, or `ConstStore` entries, or a post-check consumer derives
+it on demand from the sealed module. Target-specific runtime representation
+data is produced after checking.
 
-The checked module may output checked data that later stages need, such
+The checked module provides checked data that later stages need, such
 as:
 
 - checked procedure templates
 - `ConstStore` entries for compile-time constants
-- checked dispatch plans
+- resolved dispatch outcomes and dispatch plans
 - method registries
 - platform, hosted, and exposed function declarations
 - opaque, nominal, alias, row, and builtin ownership data
 
-Those data must remain target-independent. Outside the explicit Monotype
-evidence attached to evaluated `ConstStore` values, they are also
-representation-free.
+Those data remain target-independent. Outside the explicit Monotype evidence
+attached to evaluated `ConstStore` values, they are also representation-free.
 
 Named checked types carry explicit owner identity. The source-origin module
-identity remains the source identity used for `TypeDef`, diagnostics, source
-locations, and name-store interning. Alias and nominal checked payloads also
-carry the checked module id that owns the declaration or representation
-authority. For local named types, that id is the current checked module id; for
-imports, checked type copying preserves the imported owner id; for builtins, it
-is the builtin checked module id.
-
-Monotype and runtime lowering consume the owner checked module id directly as a
-checked module address. If a checked type mentions an owner checked module id
-that is not present in lowering visibility, the checked module producer is
-incomplete.
+identity is the source identity used for `TypeDef`, diagnostics, source
+locations, and name-store interning. Alias and nominal types also name the
+module that owns the declaration or representation authority. For local named
+types, that is the current module; for imports, it is the imported owner; for
+builtins, it is the Builtin module. Monotype and runtime lowering resolve that
+owner directly to the owner's live checked module. Every module a checked type
+can name is a module of the build, so the owner is always available.
 
 Builtin identity and declaration backing are independent. `Dict` and `Set`
 retain their builtin dispatch identities, while their storage comes from the
-ordinary checked declarations in `Builtin.roc`. Each checked type store owns a
-fixed builtin-identity-to-declaration-id index, populated when declarations are
-recorded or imported and serialized with the store. Both post-check strategies
-consume that index directly; they do not scan source statements to find builtin
+ordinary checked declarations in `Builtin.roc`. The Builtin module's checked
+data holds a fixed builtin-identity-to-declaration-id index, recorded by
+checking and serialized with the module. Both post-check strategies consume
+that index directly; they do not scan source statements to find builtin
 backings or duplicate the containers' storage definitions. Declaration formals
 and backing templates remain shared checked data. Each strategy substitutes the
 actual arguments only when lowering a reachable use, with Boxy composing the
@@ -5152,6 +5042,233 @@ scoped to one use's backing, with actuals resolved in the enclosing scope: in
 `Try(Try(U64, Str), Str)` the outer backing binds `ok` to `Try(U64, Str)` and
 the inner backing binds it to `U64`. The innermost binding shadows the others;
 type arguments themselves belong to the enclosing scope.
+
+### Per-Expression Checking Facts
+
+Facts that are a function of one expression's checked state are byproducts of
+checking. The checker records them as it finishes the expression's frame, in
+the module's own check task, into per-node columns of `ModuleEnv`:
+
+- whether the expression contains a diagnostic error: its own, one propagated
+  from a child, or one propagated from a rejected binding use;
+- whether the expression diverges: a checked-error or unreachable static
+  dispatch, or a runtime error;
+- for each dispatch node, its resolved static dispatch outcome (a direct
+  target, a constraint index, a structural derivation, or a checked error),
+  recorded once the deferred-constraint drain settles it.
+
+There is no separate propagation pass over finished bodies. The columns are
+part of the checked module and of its cache entry, and every consumer reads
+them directly.
+
+### Synthesized Types
+
+Some types lowering needs have no solver variable:
+
+- nominal declaration templates (backing, formals, declared fields and
+  padding), built from the declaration annotation;
+- instantiated named applications;
+- entry and intrinsic wrapper function types;
+- resolved dispatch target instantiations;
+- literal-argument roots;
+- synthetic schemes;
+- the images of platform types under a platform/app pairing.
+
+Each module owns a synthesized-type store that grows on demand. A synthesized
+type is created the first time something asks for it, through the module's
+slot for that request ("On-Demand Analyses And Write-Once Slots"), and lives
+as long as the module. A type id names either a solver variable of a module or
+an entry of its synthesized-type store; readers never need to know which.
+
+### Platform/App Composition
+
+Platform requirement declarations record their checked type roots, the
+producer-assigned order of requirement identity variables, and each for-clause
+alias's checked identity and backing roots. Pairing consumes these exact rows
+and the app's recorded solution rows; it never revisits source annotations or
+rebuilds identity order. Deferred exhaustiveness diagnostics retain checked
+display text, missing patterns, source regions, and checked site IDs as
+serializable data.
+
+A parametric platform outputs every root selected by the producer, including
+roots that require app bindings, and the complete same-module evaluation order.
+Binding dependence follows the checked constant and procedure dependency
+graph transitively, including captured values; it is distinct from strict
+evaluation demand, which determines scheduling. The platform's own checked
+module holds only context-independent evaluation results; app-dependent
+requests and deferred diagnostics remain explicit checked data that a pairing
+activates.
+
+Platform/app composition is an overlay, not a clone. A pairing owns a map from
+each platform identity formal (its solver variable, including alias
+statements) to the app's solved actual. A type read of platform data under
+that pairing resolves through the map lazily, and the pairing memoizes each
+image it actually reads as a synthesized-type entry of its own. Facts that
+depend on the substituted types (direct targets, required-reference
+classification, root requests, exhaustiveness policy) are per-pairing
+on-demand analyses. Bodies, templates, names and roots are never rewritten:
+both lowering strategies read the platform's own CIR, templates and roots, and
+only the types they read through the pairing differ.
+
+Calls to requirement declarations receive their direct-call classification
+from the bound app procedure kind using the checked output rule;
+callable-evaluation bindings remain indirect unless they are exact procedure
+aliases, which forward (see "Procedure Aliases"). Exact procedure aliases whose
+required bindings are known through the pairing use the checked forwarding
+rule and require no compile-time evaluator. Completed independent roots are
+read as stored values and never evaluated again. A pairing is never serialized
+into the platform's checked module.
+
+### Canonical Type Keys
+
+A canonical type key is the content identity of a type: alpha-invariant over
+its variables, equal across modules for equal types, and stable across
+compilations. Keys exist because procedure identities, evidence digests,
+generated-codec content digests and the constant store need an identity with
+exactly those properties. A key is computed on first demand for one root,
+through that root's key slot, and never eagerly for a whole module.
+In-workspace memos that only need "the same type within this program" use
+in-workspace structural identity, not keys.
+
+A key composes the keys of its subtrees. Identity-variable slots and cycle
+back-references are the only bytes whose value depends on where a subtree is
+walked, so every nested subtree whose encoding writes neither is encoded as a
+`child_key` reference to that subtree's own key. A key requested for a root
+hashes that root's own encoding, and error-sensitive dispatch-state keys,
+which name each erroneous root, compose only error-free subtrees. A
+synthesized function type over composable children is keyed exactly as a
+source function node with those children, so the two share one key. This is
+part of the key's definition, not a cache.
+
+A stored reference to a type (in the constant store) carries the key for
+identity and comparison, and a locator (the owning module's key plus a type
+id) for resolution. The locator is valid for exactly as long as the entry that
+stores it, because that entry's content hash covers the referenced module.
+Resolving a type from its key alone (bump, glue) builds the owning module's
+key index on first demand, through the module's index slot.
+
+Type digests, canonical type keys, recursive layout keys, and derived callable
+and evidence digests use the shared `base.TypeDigestHasher`: SHA-256 over the
+structural byte encoding, 32 bytes wide. The hash must be cryptographic and
+this wide. A package author controls every byte these digests see, several
+consumers treat equal digests as one type with no structural comparison (the
+layout store's recursive-graph index, erased callable and generated nominal
+identities inside `typeEql`, format-codec call addresses, procedure
+identities), and the checker accepts a package's code by structural
+unification before any consumer names its types by key. A package containing
+two structurally different types with one digest would therefore type-check and
+then be lowered with a single payload for both: a miscompile with
+memory-unsafe consequences from a pure dependency. A non-cryptographic hash
+makes such a pair cheap to construct, and because the attacker supplies both
+halves the relevant bound is a birthday collision, so 128 bits (2^64 work) is
+not enough and 256 bits is required. The digests are also persisted in caches
+and compared across machines, which rules out keying them with a secret.
+aarch64 compiler targets are built with the CPU's SHA-256 instructions enabled
+(`addSha256Floor` in build.zig) and have no software rounds. x86_64 stays at
+the architecture baseline, because Intel's Skylake through Comet Lake cores
+have no SHA extension: a released x86_64 compiler for anything but macOS
+carries both the hardware and the portable rounds and picks one with CPUID the
+first time a process digests a type (`dispatches_at_runtime` in
+src/base/sha256.zig), and x86_64 macOS, whose Intel Macs are all such cores,
+always uses the portable rounds (`uses_software_rounds` there), as do 32-bit
+targets such as wasm32. Every path yields the same digest bytes; only the
+speed differs. The rounds themselves are shared with the `Crypto` builtins
+(`src/builtins/sha256.zig`); the runtime dispatch is the compiler's alone.
+
+All producers for a key domain must agree on the encoding, including child
+digests, length prefixes, identity numbering, and domain tags. The hash
+algorithm does not change type equality or the exact payload and topology
+comparisons already required by interners and evidence lookup. Non-cryptographic
+hashes (`std.hash.Wyhash`) remain in use only as bucket selectors in front of an
+exact comparison of the full key, where a collision costs a probe and never an
+identity. Module identities, checked module cache keys and filenames, and
+compiler layout hashes hash with `std.crypto.hash.sha2.Sha256` directly,
+including when their inputs contain type digests. The digest widths and domain
+versions are part of serialized compatibility. Changing them requires
+invalidating affected checked-module caches through their explicit entry and
+format versions, as well as updating layout versions and layout-hash goldens.
+Compiler build identity alone does not invalidate caches for an uncommitted
+compiler change.
+
+### On-Demand Analyses And Write-Once Slots
+
+Every derived fact that is a pure function of a module's sealed data is
+computed by whichever consumer first needs it, exactly once, into a slot owned
+by the module. Nothing computes such a fact eagerly for a whole module, and no
+cache entry stores one: a cache hit recomputes each fact on its first demand.
+
+- Per-root slots: a type's canonical key; a definition's call-edge evidence
+  (the total resolution of its dispatch plans against the settled store, its
+  evidence vectors and its callable specialization); a template's nested
+  procedure sites; a declaration's synthesized template; a template's
+  exhaustiveness sites; a template's body-level lowering analyses ("Lowering
+  Reads Bodies From The Canonical IR").
+- Per-component slots: analyses that are fixpoints over the call graph
+  (template demand vectors, literal requirements) are claimed for a whole
+  strongly connected component of the module's call graph, never per root.
+- Per-module slots: the key index, interface capabilities, the method registry
+  view, and provided exports.
+
+A slot is a state word with three states: empty, claimed and done. A consumer
+that finds the slot empty claims it with one compare-and-swap, computes the
+result, stores the result pointer, marks the slot done and wakes waiters. A
+consumer that finds it claimed waits on the word with `std.Thread.Futex` until
+it is done. A consumer that finds it done reads the pointer with an acquire
+load; that is the whole read path.
+
+A slot's result is:
+
+- allocated from a thread-safe allocator;
+- self-contained, with no pointer into any worker's workspace;
+- published only when complete;
+- deterministic: a function of the sealed data alone, independent of which
+  thread computed it or when;
+- freed with the module.
+
+These are compiler invariants, so each is a debug assertion in debug builds
+and `unreachable` in release builds:
+
+- A thread never waits on a slot while it holds a lock another thread might
+  need.
+- A thread never waits on a slot of a kind it currently holds a claim of.
+  This is why fixpoint analyses are claimed per component: two roots of one
+  component would otherwise each hold a claim while waiting on the other.
+
+There is no scheduling edge between modules. A module's analyses are never
+ordered after its importers, nothing waits for demand to flow top-down, and
+the read path takes no lock.
+
+### Lowering Reads Bodies From The Canonical IR
+
+Monotype and Boxy lowering walk CIR expressions and patterns directly. Each
+node's type is its solver variable, resolved through the pairing overlay when
+one is active. Synthetic expressions that lowering needs and the IR does not
+contain (pattern-error arms, extraction wrappers, literal pattern guards) are
+lowering-side constructs created in the worker's workspace; they are never
+added to the checked module. Body-level analyses that are lowering concerns
+(loop mutations, state merges, inspect elision, single-source calls) are
+per-template on-demand analyses that both lowering strategies read.
+
+### Forbidden Checked-Boundary Shapes
+
+The checked boundary has exactly the live data of "The Live Checked Module",
+and these shapes are forbidden:
+
+- a frozen copy of a checked module (`CheckedModuleArtifact`) or a pass that
+  builds one (`publishFromTypedModule`);
+- a copy of the solver store (`CheckedTypeStore`) or of bodies
+  (`CheckedBodyStore`);
+- template, binding or constant closures, a lowering-visibility closure, or a
+  public-API dependency closure;
+- imported declarations embedded into an importer's checked data, or an
+  import projector;
+- a pairing that rewrites bodies or templates;
+- a value identity, or reuse of a previous cache entry;
+- a verification gate that compares a view against a second representation;
+- releasing a module's solver store before every consumer of the module is
+  done.
+
+`ci/check_postcheck_architecture.pl` rejects every one of those names.
 
 ### Platform/App Relation
 
@@ -5165,38 +5282,34 @@ of the requirement's identity variables in identity-slot order—the
 first-encounter order the type key digest assigns, shared byte-for-byte
 between the solver-var digest and the checked-payload digest.
 
-Finalization and platform-root output are readers of those rows. Building the
-platform/app relation resolves each platform requirement declaration to the
-recorded app export by requires index; the relation-bearing platform root
-output projects the recorded solved roots into its store while preserving each
-source root's identity
-and pairs the platform requirement payload's identity nodes with the recorded
-solutions slot by slot. No stage after check completion resolves an app export
+The pairing is a reader of those rows. Building the platform/app relation
+resolves each platform requirement declaration to the recorded app export by
+requires index, and maps the platform requirement payload's identity formals to
+the recorded solved actuals slot by slot. No stage after check completion resolves an app export
 by name, re-checks requirement/provided type compatibility, or re-derives
 identity bindings by structurally matching platform types against app types. A
 requirement/app mismatch is only ever a check-time diagnostic.
 
 The requirement's identity variables stand for exactly the app's solved types,
-so a relation-bearing platform CheckedModule resolves every checked source
-root through those `formal -> actual` pairs once, before any checked body,
-pattern, template, provided export, or root request reads a type. A platform
+so every type read of platform data under the pairing resolves through those
+`formal -> actual` pairs: a checked body, pattern, template, provided export,
+or root request read under the pairing sees the app's actual types. A platform
 body that calls a requirement therefore sees the app's actual types: the
 requirement's `_` is the app's payload type, and its `..` row tail is the
 app's actual row, never a bare tail that a consumer would read as closed. The
-resolution shares one clone memo across the whole module so every other
-identity variable keeps a single root, and it clones only roots that reach a
-formal; nothing downstream re-applies the relation. Finalization
-constructs one total outcome per platform requirement: an exact relation/binding
-for a successful solution or an explicit checked-error requirement index for a
-failed solution. The relation-bearing platform CheckedModule preserves successful
-sibling bindings, and a lookup at a checked-error index lowers to a runtime
-crash. There is no relation-less error fallback and no separate flow that
-"permits" user errors.
-Pairing turns each rejected requirement lookup into a checked runtime-error
-expression and updates expression and statement divergence through the
-existing checked dependency traversal. The unpaired platform stays immutable;
-the pairing cache preserves the changed bodies and divergence. A rejected
-lookup never supplies argument type evidence to a downstream call.
+pairing memoizes each image it reads once, so every other identity variable
+keeps a single image, and a root that reaches no formal reads as itself
+("Platform/App Composition"). The pairing has one total outcome per platform
+requirement: an exact relation/binding for a successful solution or an
+explicit checked-error requirement index for a failed solution. Successful
+sibling bindings stay available, and a lookup at a checked-error index lowers
+to a runtime crash. There is no relation-less error fallback and no separate
+flow that "permits" user errors.
+The pairing's required-reference classification marks each rejected
+requirement lookup, and lowering under the pairing emits the crash at that
+lookup and treats it as divergent. The platform's bodies and per-expression
+facts are never rewritten. A rejected lookup never supplies argument type
+evidence to a downstream call.
 
 Requirement rows may be allocated before their app definitions are checked, but
 they remain explicitly pending checker state until all definition checking and
@@ -5208,13 +5321,13 @@ inspecting solved type shape or by comparing the eventual runtime value kind.
 A procedure requirement's root evidence follows the complete scheme of its
 recorded app definition, including captured codec requirements. The copied
 platform requirement type supplies the solved interface, not the scheme's
-evidence identity. Checked output validates a direct procedure's root vector
-against the app template's parameter count. Monotype selects this root evidence
-before materializing an edge for a direct call, procedure value, or interface
-relation; downstream specialization receives only that selected edge. Boxy
-lowering selects the same root evidence, read through the app CheckedModule's
-evidence table, for every direct call and procedure-value use of a platform
-requirement.
+evidence identity. The pairing's root-request analysis validates a direct
+procedure's root vector against the app template's parameter count. Monotype
+selects this root evidence before materializing an edge for a direct call,
+procedure value, or interface relation; downstream specialization receives
+only that selected edge. Boxy lowering selects the same root evidence, read
+through the app definition's call-edge evidence, for every direct call and
+procedure-value use of a platform requirement.
 
 A platform `provides` declaration must name a top-level value defined in the
 platform module. It cannot name a value from `requires` directly; a platform
@@ -5222,8 +5335,8 @@ that wants to expose an app-provided value to its host defines an explicit
 platform-local entrypoint whose definition uses that requirement.
 Canonicalization writes `local_def` into every `ModuleEnv.ProvidesEntry`; it is
 non-null exactly when the header target is a top-level definition in the
-platform module. Header validation inspects all declarations, while checked
-provides output contains only entries with non-null `local_def`. Rejected
+platform module. Header validation inspects all declarations, while the
+provided-exports view contains only entries with non-null `local_def`. Rejected
 declarations also produce source diagnostics.
 
 A platform requirement's for-clause alias is a binder over an app-supplied
@@ -5235,37 +5348,29 @@ source substitutions while copying each requirement into the app store. The
 copier resolves every declaration-owned alias occurrence and every recorded
 identity slot directly to the app's own type declaration; no copied
 platform-owned alias enters the solved app graph. Nothing in the app's checked
-output needs the platform root's checked module as a type owner, which is what
-lets an app build's platform root defer its checked-module output.
+module needs a pairing as a type owner, so the app is checked against the
+platform's sealed requirement surface and nothing else.
 
-The platform root's checked module is output exactly once per build:
-relation-bearing at finalization when an app root is paired (keyed by the
-platform/app relation identity), or relation-less at check completion when the
-workspace has no app root. While a paired platform root's output is deferred,
-its requirement surface installs from its checked env and a requirement context
-computed from the same declaration data the output required-declaration table
-hashes, so the checker input and the cache identity cannot disagree.
-Deferral is enabled only when the Coordinator will construct relation-bearing
-checked module data. The retained `Check` owner supplies that construction's
-problem store, selected hoisted roots,
-requirement context, imported diagnostic environments, and CTFE options. A
-checked module cache entry contains both `ModuleEnv` bytes and `CheckedModule`
-bytes; `ModuleEnv` bytes alone cannot stand in for the retained `Check` data.
-A runtime build must not admit a relation-less platform cache entry through
-the ordinary completed-module path: that output does not contain a checking-finalization
-continuation. The platform is checked with deferral enabled, and finalization
-probes only the exact pairing-keyed completed checked module. A hit releases the
-continuation; a miss consumes its selected roots and diagnostic store directly.
-Checking finalization consumes the retained `Check` inputs directly. This
-also applies to erroneous requirement signatures, whose early checked output keeps
-the checker alive for evaluation and finalization.
+The platform root's checked module is the same whether or not an app pairs
+with it: checking it never depends on an app, and its cache entry is keyed by
+its own inputs. The app's checking installs the requirement surface from the
+platform's checked env and a requirement context computed from the same
+declaration data the platform's required-declaration table hashes, so the
+checker input and the cache identity cannot disagree. When the workspace has
+an app root, the coordinator creates the pairing over the two sealed modules
+once both are checked; the pairing's app-dependent roots evaluate under it,
+and the pairing's evaluation output is stored in a pairing entry keyed by the
+content hashes of the platform's and the app's checked entries. Erroneous
+requirement signatures follow the same path: their checked-error outcomes are
+part of the pairing.
 
-A relation-less platform output preserves its complete `provides` metadata for
-glue and interface consumers. If it also declares app requirements, it does not
-output provided runtime roots and cannot enter Monotype;
-runtime commands reject it until an app relation exists. This decision depends
-only on the explicit relation state and requirement surface, never on scanning
-provided bodies to guess whether the missing requirements happen to be used.
+An unpaired platform's checked module preserves its complete `provides`
+metadata for glue and interface consumers. If it also declares app
+requirements, it has no provided runtime roots without a pairing and cannot
+enter Monotype unpaired; runtime commands reject it until an app relation
+exists. This decision depends only on the explicit relation state and
+requirement surface, never on scanning provided bodies to guess whether the
+missing requirements happen to be used.
 
 ### Compile-Time Constants and Hoisted Roots
 
@@ -5356,13 +5461,13 @@ with its error (a dispatch rejected after selection, whose argument may read
 runtime locals) is therefore pruned and evaluates at runtime, in source
 order, where it reaches the error. It does not poison sibling definitions, unrelated top-level
 values, unrelated imported modules, or the checked program as a whole. A checked
-CheckedModule data that carries diagnostics is still a valid input to every independent
+module that carries diagnostics is still a valid input to every independent
 compile-time-evaluation decision whose expression/dependency region is
 well-checked. If one definition is erroneous and another definition is
 independently compile-time-known, the independent definition must still be
 evaluated during checking and, when reachable, emitted as static data.
-The CheckedModule data must therefore be able to contain both diagnostics and
-successful compile-time root requests. The presence of diagnostics is not an
+A checked module therefore contains both diagnostics and successful
+compile-time root requests. The presence of diagnostics is not a
 module-level root-selection failure.
 
 `roc test` runs every top-level expect it can evaluate. An expect whose
@@ -5409,8 +5514,8 @@ These top-level extraction roots are required binding definitions, not optional
 runtime-body hoists. Post-solve pruning must retain every well-checked top-level
 extraction independently of the optional-hoist dependency predicate. Its full
 checked body uses ordinary top-level constant/callable evaluation rules,
-including `expect`, `dbg`, loops, and mutable intermediate values. CheckedModule
-construction retains each binder's own source scheme and independently decides whether its
+including `expect`, `dbg`, loops, and mutable intermediate values. The checker
+records each binder's own source scheme and independently decides whether its
 result is context-free or requires specialization; retaining a definition does
 not force its type to be concrete or make a runtime-body expression hoistable.
 
@@ -5478,10 +5583,9 @@ in dependency-first order as it proves and selects them. The request order is
 then computed from explicit checked references across all same-module
 compile-time roots: ordinary top-level constants, selected hoisted constants,
 callable eval roots, and literal conversion roots. Sorting may build
-temporary dependency edges while sorting, but it must discard those edges before
-the checked module is finalized. The durable checked module data stores only the
-roots, the sorted request stream, stored `ConstStore` payloads, and sparse
-lookup indexes.
+temporary dependency edges while sorting, but it discards those edges before
+checking finishes. The checked module stores only the roots, the sorted
+request stream, stored `ConstStore` payloads, and sparse lookup indexes.
 
 The exact strict-demand edges between top-level definitions are computed once,
 at the checked boundary, because literal conversions and method dispatches
@@ -5496,8 +5600,7 @@ demands only the body its own instantiation selects. A resolved dispatch is an
 eager call, so the selected callable body's top-level demands flow into its
 caller exactly like those of any other statically known call. Checking then
 reports every non-function definition in a cyclic SCC of the relation as a
-circular value definition and poisons it before constructing the
-CheckedModule.
+circular value definition and poisons it before sealing the solver store.
 
 Most value cycles need neither a dispatch target nor a function value to be
 seen, and those are rejected before any definition is checked, so no type is
@@ -5659,8 +5762,8 @@ method's right-hand side with a checked error. An associated binding whose
 right-hand side is a checked error is a rejected method: the method registry records it with
 no target, so a dispatch to it is a `checked_error` dispatch that evaluates its
 operands and then crashes; checking retires every lookup of its binding; and
-its declaration evaluates nothing, so `CheckedModule` construction omits it
-from its block. A rejected method is never promoted, and checking treats it as
+its declaration evaluates nothing, so lowering omits it from its block. A
+rejected method is never promoted, and checking treats it as
 its own local procedure, so no dispatch selecting it is available at compile
 time.
 
@@ -5673,7 +5776,7 @@ method selection with runtime captures as an invariant failure.
 A block-local value binding whose own binders are referenced inside its
 expression is a recursive value. Canonicalization rejects an eager
 self-reference, so every such reference is delayed through a function in the
-value. Checking records each one as a recursive reference, and CheckedModule construction sets
+value. Checking records each one as a recursive reference and sets
 `recursive` on the checked `decl` statement. Monotype lowering consumes that
 flag and emits a recursive `let`, so a function's capture of the value closes
 over the value itself. A single binder is that `let`'s local directly. A
@@ -5690,7 +5793,7 @@ addresses the slot's Box itself (`ptr_store` accepts a Box address and borrows
 it), so the slot stays alive through the store even when no callable captured
 it.
 
-CheckedModule construction also marks each binder of a recursive value declaration
+Checking also marks each binder of a recursive value declaration
 `recursive_value`. `.boxy` consumes that mark instead of a recursive `let`: a
 callable that captures such a binder captures the binder's slot, lowered as a
 `Box` of a one-item tuple holding the value. The tuple keeps the slot an
@@ -5816,7 +5919,7 @@ const GeneratedFn = union(enum) {
 
 const FnTemplate = struct {
     fn_def: FnDef,
-    source_fn_ty: CheckedTypeId,
+    source_fn_ty: TypeId,
     source_fn_key: TypeDigest,
     mono_fn_ty: MonotypeTypeId,
 };
@@ -6103,16 +6206,19 @@ reference resolves its name through the ordinary type namespace, so it may be
 qualified (`a.Json.Encodable`) exactly like a type reference in any other
 position.
 
-The checked module outputs normalized dispatch plans. A dispatch plan is a
-checked record, not lowered code:
+The checker records a dispatch plan for each dispatch site, and the
+per-expression checking facts hold each dispatch node's resolved outcome. A
+dispatch plan is a checked record, not lowered code. Its type fields are type
+ids of the owning module ("The Live Checked Module"), and its sites and
+operands are CIR node ids:
 
 ```zig
 const DispatchPlan = struct {
     site: DispatchSite,
     dispatcher: DispatchDispatcher,
     method: MethodNameId,
-    dispatcher_ty: CheckedTypeId,
-    callable_ty: CheckedTypeId,
+    dispatcher_ty: TypeId,
+    callable_ty: TypeId,
     args: []const DispatchOperand,
     result_mode: DispatchResultMode,
     resolution: CheckedCallResolution,
@@ -6129,7 +6235,7 @@ const CheckedCallResolution = union(enum) {
 
 const DirectCall = struct {
     target: MethodTarget,
-    target_instantiated_callable: CheckedTypeId,
+    target_instantiated_callable: TypeId,
     nested_evidence: EvidenceIdentity,
     local_context: ?LocalProcedureContext,
     runtime_target: RuntimeTarget,
@@ -6145,8 +6251,8 @@ const RuntimeTarget = union(enum) {
 };
 
 const DispatchSite = union(enum) {
-    checked_expr: CheckedExprId,
-    checked_node: CheckedNodeId,
+    checked_expr: CIR.Expr.Idx,
+    checked_node: CIR.Node.Idx,
 };
 
 const DispatchDispatcher = union(enum) {
@@ -6155,8 +6261,8 @@ const DispatchDispatcher = union(enum) {
 };
 
 const DispatchOperand = union(enum) {
-    checked_expr: CheckedExprId,
-    generated_interpolation_segments: CheckedExprId,
+    checked_expr: CIR.Expr.Idx,
+    generated_interpolation_segments: CIR.Expr.Idx,
     generated_numeral: NumeralLiteral,
     generated_quote: CheckedStringLiteralId,
 };
@@ -6194,11 +6300,11 @@ Every live literal-origin record leaves checking with one explicit resolution:
 - `custom_dispatch` means checking selected and typechecked one concrete custom
   conversion callable. This does not prove independence from its lexical
   scheme: a concrete receiver's nested codec evidence may still be supplied by
-  that scheme. `CheckedModule` construction retains the dispatcher and callable
-  types, resolves dispatch evidence once, and uses the finalized `direct_closed`
-  classification to give independent conversions exactly one
-  `numeral_conversion`/`quote_conversion` root, linked from the checked literal
-  data (`conversion_root`). Root wrappers are appended after this decision,
+  that scheme. The checker retains the dispatcher and callable types; the
+  owning definition's call-edge evidence analysis resolves dispatch evidence
+  once, and its `direct_closed` classification gives independent conversions
+  exactly one `numeral_conversion`/`quote_conversion` root, linked from the
+  checked literal data (`conversion_root`). Root wrappers follow this decision,
   with their single conversion reference recorded directly; evidence resolution
   and source-body collection are not repeated. A dependent conversion keeps no
   standalone root and follows the specialization-owned hoisting path below,
@@ -6247,7 +6353,7 @@ Every live literal-origin record leaves checking with one explicit resolution:
   with the rest of compile-time evaluation and under its fixed configuration,
   so `roc check` reports every rejected or crashing conversion a build would.
 - `checked_error` means checking rejected the conversion while retaining the
-  literal node for diagnostic recovery. `CheckedModule` stores no
+  literal node for diagnostic recovery. The checked module stores no
   callable, runtime dispatch plan, or compile-time root for it; the containing
   checked `runtime_error` expression is the failure.
 
@@ -6311,7 +6417,7 @@ diagnostic recovery either retires the record with its owner or seals it as
 checker-selected callable is sealed as `checked_error` only when checking has
 already reported an error; in an otherwise valid module it is an invariant
 violation, because every successful concrete conversion must have positive
-builtin or callable evidence. `CheckedModule` construction,
+builtin or callable evidence. Call-edge evidence analysis,
 compile-time-root selection, and Monotype consume this resolution directly.
 They must not inspect the checked target type to reconstruct which literal path
 checking selected. In particular, `builtin_direct` stores neither the synthetic
@@ -6321,15 +6427,16 @@ conversion callable nor a runtime dispatch plan, and
 Custom and generalized literal patterns retain the exact equality constraint
 created alongside their conversion constraint. CIR keeps the failure owner and
 equality callable in a pattern-only context referenced by its five-word literal
-plan; expression literals allocate no context. Checked body construction emits a
-matched-value binder and an ordinary `method_eq` expression whose operands are
-that binder and the existing conversion expression. The pattern's optional
-guard expression id replaces its former conversion id, so checked pattern nodes
-do not grow. Builtin-direct patterns emit no binder, guard, or equality plan.
-The guard participates in its enclosing procedure's ordinary expression,
-dispatch-evidence, and specialization-relation inventories. Both lowering
-strategies bind the matched value and consume that expression through ordinary
-equality lowering; neither reconstructs the pattern's equality target.
+plan; expression literals allocate no context. The literal pattern guard is a
+lowering-side construct ("Lowering Reads Bodies From The Canonical IR"): both
+lowering strategies create, in the worker's workspace, a matched-value binder
+and an ordinary `method_eq` comparison whose operands are that binder and the
+pattern's conversion expression, using the equality callable the pattern
+context names. Builtin-direct patterns get no binder, guard, or equality plan.
+The guard's dispatch participates in its enclosing procedure's call-edge
+evidence and specialization relations. Both lowering strategies consume the
+guard through ordinary equality lowering; neither reconstructs the pattern's
+equality target.
 Multiple literal guards and a source guard compose in source evaluation order
 with short-circuiting. Monotype consumes each as a condition and produces an
 explicit internal predicate; it does not equate the representation of a source
@@ -6365,8 +6472,9 @@ the same operand record and leave the erroneous iterable expression in
 `erroneous_value_exprs`. Checked for-nodes require a topology plan even on
 recovery, so the checker mints the plan's callable shapes without attaching
 constraints, marks both callable classes rejected, and records the required
-plan. CheckedModule construction consumes those rejection markers to seal
-both calls with explicit `checked_error` resolutions. An iterable can also be
+plan. The checker consumes those rejection markers when it records the loop's
+dispatch outcomes, settling both calls as explicit `checked_error`
+resolutions. An iterable can also be
 rejected after its loop was checked (`for c in "a"..="z" { echo!(c) }` decides
 the bounds are `Str`, which has no `range_inclusive_to`, only once the body
 relates the item type), when the loop's `iter` and `next` plans were already
@@ -6476,16 +6584,17 @@ iterator `.iter`/`.next`, `dispatcher` is an argument index into `args`; iterato
 dispatch, `dispatcher` is `type_only`, and `dispatcher_ty` is the checked type
 that determines the owner.
 
-CheckedModule construction chooses every target that checking made exact.
-It projects the target callable through the checked call relation and classifies
-the result as closed or parametric. A closed direct call has no reachable
+A definition's call-edge evidence analysis chooses every target that checking
+made exact. It instantiates the target callable through the checked call
+relation, as a resolved dispatch target instantiation in the synthesized-type
+store, and classifies the result as closed or parametric. A closed direct call has no reachable
 checked identity variables and no nested evidence forwarded from an enclosing
 specialization. A parametric direct call still has an exact target but retains
 one of those explicit specialization inputs. Evidence-dependent calls are the
 only calls whose target itself comes from an enclosing specialization.
 
 The runtime target category is producer-authored. Canonicalization records the
-exact low-level operation when it replaces a provided definition; CheckedModule
+exact low-level operation when it replaces a provided definition; the checker
 records ordinary procedure targets, annotation-only compiler intrinsics whose
 monomorphic implementation is emitted at the checked call site, and operations
 whose runtime representation must participate in a Monotype graph. Graph participation
@@ -6658,7 +6767,7 @@ procedure bodies. A nominal or opaque type can opt in to a compiler-derived
 structural codec with an annotation-only associated method such as
 `parser_for : _` or `encoder_for : _`. Canonicalization may represent this marker
 as `e_anno_only` or, for hosted/type-module processing, as a zero-argument
-`e_hosted_lambda`; `CheckedModule.method_registry` records it explicitly as a
+`e_hosted_lambda`; the module's method registry records it explicitly as a
 generated parser or generated encoder target. Post-check lowering must consume
 that explicit target kind and lower the structural parser/encoder from the
 dispatch plan's concrete callable type. It must not treat the marker as a
@@ -6986,8 +7095,9 @@ fields within the payload.
 
 The evidence schema of a binding includes its explicitly captured codec
 requirements as well as constraints attached to variables in its callable.
-CheckedModule construction enumerates that complete schema once per owning scheme and reuses
-it for aliases and use sites. A captured codec requirement names its exact
+Call-edge evidence analysis enumerates that complete schema once per owning
+scheme, in the scheme owner's slot, and reads it for aliases and use sites. A
+captured codec requirement names its exact
 receiver and callable relation; a composite receiver is not a quantified
 variable and occupies no specialization-substitution slot. Such a requirement
 is supplied by checked use-site evidence, either a validated contract or an
@@ -7007,15 +7117,15 @@ A generic local declaration binds its own composite evidence parameters. Its
 construction recipe records those entries as `from_scheme`, separately from
 checked callable paths and captured enclosing evidence. Checked use edges
 supply those parameters before Monotype or Boxy lowers dispatch; neither
-CheckedModule construction nor lowering may derive a concrete codec from the declaration's generic shape.
+call-edge evidence analysis nor lowering may derive a concrete codec from the declaration's generic shape.
 
 A forwarded composite requirement carries both its lexical evidence coordinate
 and the absolute index of its owner parameter in the checked module's evidence
 pool. Monotype uses the lexical coordinate; Boxy uses the owner index to bind
 and capture a dictionary without recovering ownership from a receiver type.
 These source identities transport checked evidence and do not add specialization
-key components. CheckedModule construction caches the complete schema by its checker-authored
-owner; aliases and local scopes share the same evidence and quantified-variable
+key components. Call-edge evidence analysis keys the complete schema by its
+checker-authored owner; aliases and local scopes share the same evidence and quantified-variable
 pool ranges. Schemes whose checker-authored codec requirements require
 instantiation have no concrete template-root evidence. Selecting one as a root
 requires an explicit instantiated root edge with its own evidence. A root has
@@ -7026,7 +7136,7 @@ Constant-evaluation entry wrappers retain the evaluated value's quantified type
 variables without accepting its dispatch requirements as wrapper arguments.
 Procedure definitions and hoisted source-pattern roots bind evidence chains;
 constant and expression wrappers resolve their bodies without caller-supplied
-evidence. CheckedModule construction and use-site enumeration consume the same
+evidence. Call-edge evidence analysis and use-site enumeration consume the same
 explicit root classification.
 
 Completed generated codec proof graphs also carry a producer-proven identity
@@ -10491,17 +10601,17 @@ Five consumers keep the rule exact:
   each label once, with its innermost occurrence, since that is what the row
   means. A conflicting repeat is the conflicting-label report's to show.
 
-Before `CheckedModule` is built, every tag and record row reachable from a
-type in the checked module's output is checked once; rows that repeat a label
+Before checking seals the solver store, every tag and record row reachable
+from a type the checked module provides is checked once; rows that repeat a label
 are normalized in ascending root order. Those types are the expression,
 pattern, and definition types and the roots inference recorded elsewhere: call
 and dispatch constraint functions, scheme-use substitutions and instances, and
 codec requirements and derivations. A scheme-use substitution can hold a copy
 of an unnormalized row that no expression's type still reaches, such as a
 mutually recursive member's error row copied before its group settled.
-`CheckedModule` construction and this walk enumerate the recorded roots
-through the same `output_type_roots` functions, so a root added to the output
-is normalized without a second list to keep in step.
+The checked module's type readers and this walk enumerate the recorded roots
+through the same `output_type_roots` functions, so a root added to the
+checker's recorded outputs is normalized without a second list to keep in step.
 
 The settled walk owns isolated scratch shared across all its output roots and
 released when the walk ends. Its module-sized visited set must not enlarge the
@@ -10748,7 +10858,7 @@ derived parser is validated as a child position with its own encoding, state,
 and error row, and the drain resumes at the next relation. A chain of custom
 parsers over derived shapes therefore never nests validations.
 An absent-constructor empty default is committed as a closed row on that method
-instance before CheckedModule output.
+instance before checking seals the solver store.
 Non-row format errors, such as `Str`, retain ordinary equality through
 `constrainDerivedParserFormatError`. Checked codec callables preserve child
 types and their shared payload relations with the parent. Each format-method
@@ -11067,7 +11177,7 @@ test/cli/issue_10204_imported_interpolation_metadata/Main.roc (an imported
 interpolation instantiated with `Str` checks successfully); rejected—
 test/cli/issue_10474_record_field_interpolation.roc (a generalized numeral
 record field cannot be instantiated as `Str` by interpolation and reports a
-type mismatch without `CheckedModule` construction panicking).
+type mismatch without a post-check reader panicking).
 
 ### Inspect Overrides
 
@@ -11111,8 +11221,8 @@ own type is never changed. When the instance exists, is pure, and still takes
 the owner over distinct type variables that carry no requirements, checking
 records it as inspection's use of the method
 (`ModuleEnv.inspect_override_instances`) with its scheme-use record,
-so CheckedModule construction derives that use's evidence like a dispatch
-target's.
+so the owning definition's call-edge evidence analysis derives that use's
+evidence like a dispatch target's.
 
 Eligibility is a property of the declaration alone, so it holds at every
 instantiation of the owner. Inspection therefore places no requirement on the
@@ -11348,7 +11458,7 @@ method that recurses by dispatching on another method's result
 (`x.pred().is_odd()`) closes, because `pred`'s selected target fixes the
 receiver of `is_odd`. The edge reuses the ancestor's selected method instance; it
 does not instantiate another copy of the same requirements. Checking records
-this recursive target explicitly, and CheckedModule construction emits a finite
+this recursive target explicitly, and call-edge evidence analysis emits a finite
 callable-based evidence recipe; Monotype derives the target's evidence from the
 concrete callable, relating each selected requirement target to its constraint
 callable to a fixpoint, which binds the receivers reached through those
@@ -11525,7 +11635,7 @@ relations selected are restated over the copy. The replayed use
 then relates its root's parts, and every variable of its own substitution
 that carries a relation, to the frozen node at the same position. Its own
 relations are skipped, and its scheme-use record names the source's restated
-substitution, so CheckedModule construction resolves that substitution's
+substitution, so call-edge evidence analysis resolves that substitution's
 evidence once for every use that shares it. The use's other copies are
 reachable only from its skipped relations and its former substitution, so
 nothing observes them. Builds with runtime safety check after every replay
@@ -11843,8 +11953,7 @@ The kind rules:
   a nested pattern that omits either side is diagnosed statically.
 
 The tagged representation (IMPLEMENTED—nothing about optional fields is
-deferred at lowering anymore; the CheckedModule output and lowering are both
-complete):
+deferred at lowering; the checked module and lowering are both complete):
 
 - Slot encoding: PER-FIELD TAG. Every optional field's Monotype slot is the
   closed STRUCTURAL tag union `[#Missing, #Present(τ)]` (the labels are
@@ -11865,10 +11974,9 @@ complete):
   stage output. The structural union is a pure function of the explicit
   row (kind + value type); its byte layout equals Try's backing anyway
   (two variants, one zero-sized payload). Lowering needs NO solver
-  witness—the kind is in the row (`CheckedRecordField.kind`, written into
-  the CheckedModule and keyed byte-identically by the solver-side and
-  checked-side type-digest writers, so `roc check` and full compilation
-  agree). A generalized record scheme retains an undetermined kind as its
+  witness—the kind is in the solver's record row, and the one type-key
+  encoder writes it, so `roc check` and full compilation agree). A
+  generalized record scheme retains an undetermined kind as its
   checked presence-variable identity. Instantiation gives that identity a
   dedicated field-kind cell plus distinct source-value and runtime-slot
   cells; row unification resolves the kind and relates value-to-value and
@@ -11996,11 +12104,9 @@ complete):
   becomes a compiler-local slot bind whose Try value is a `let` prelude
   around the branch body and guard, `OptionalDestructBind`), preserving
   fall-through refutability natively.
-- `.?` access: the CheckedModule output is complete—
-  `CheckedFieldAccessSegment.mode` records required/optional per segment
-  (introduced in `serialized_layout_version` 57; the current version is
-  defined beside the checked module's `Serialized` layout), and the body copier's
-  former required-only invariant is gone. Monotype field-access segment instantiation
+- `.?` access: the checked module is complete—each CIR field-access
+  segment records required/optional (its `mode`), and lowering reads it from
+  the canonical IR. Monotype field-access segment instantiation
   consumes that mode as field-kind evidence: a required segment commits an undetermined
   kind to required and relates its runtime slot to its source value; an
   optional segment commits optional and relates the explicit tagged slot and
@@ -12065,8 +12171,8 @@ states. A GENERALIZED kind var is skipped BY DESIGN: it is a scheme interior
 (e.g. `mk = |v| { a: v }`), and instantiations of the scheme may
 legitimately join a `?:` annotation later—which is also why the sweep
 never runs at per-def generalization boundaries. Consequently the read
-boundaries' still-flex arms (TypeWriter rendering, `copyCheckedRecordFields`
-CheckedModule output, the `writeFieldPresenceForKey` type-digest writer) now cover scheme
+boundaries' still-flex arms (TypeWriter rendering, the type reader's record
+fields, the `writeFieldPresenceForKey` type-key writer) cover scheme
 interiors. Source-facing readers render and digest that state as
 required-equivalent, while representation strategies must either resolve it
 per instantiation or preserve it explicitly: Boxy passes each kind variable a
@@ -12319,8 +12425,8 @@ Restrictions:
     parameter-dispatch cycle in
     src/check/test/type_checking_integration.zig ("dispatch-mediated
     cycle is check's residue") and the foreign-helper cycle in
-    src/check/test/cross_module_test.zig. This judgment still runs
-    before `CheckedModule` is built, so postcheck lowering only
+    src/check/test/cross_module_test.zig. This judgment runs before
+    checking seals the solver store, so postcheck lowering only
     receives acyclic defaults.
 - A default may constrain NO declaration type parameter: it must
   type-check while demanding NOTHING of the declaration's type
@@ -12381,7 +12487,7 @@ Restrictions:
   `checkDefaultRestrictions` RETIRES every rejected default (including
   field-type mismatches, whose standard recovery leaves the var `.err`)
   by replacing the default expression and its omitting construction
-  sites with runtime errors before the CheckedModule is built, so
+  sites with runtime errors before checking seals the solver store, so
   postcheck materialization can never observe a rejected default. A
   module that constructs an imported nominal while omitting one of its
   defaults retires that construction site the same way when the declaring
@@ -12389,21 +12495,15 @@ Restrictions:
   error), reporting nothing further: the problem was reported once, at the
   default, and the construction is never a compile-time crash of its own.
 
-The CheckedModule preserves the kind: a defaulted field serializes as a
-required field CARRYING its default identity (`CheckedFieldDefault`), with
-the origin half translated to the CheckedModule's identity form (the
-declaring module's content hash) and rebased at every store crossing,
-exactly like nominal identities. Type digests (`TypeDigest`) include the
-identity in the same form on both the solver and checked sides, so the two
-representations key identically and two rows defaulting a field
-differently digest differently.
+The sealed store preserves the kind: a defaulted field is a required field
+CARRYING its default identity, whose origin half names the declaring module,
+exactly like nominal identities. Canonical type keys include the identity as
+the declaring module's content hash, so two rows defaulting a field
+differently key differently.
 
-Construction-site materialization is PER SPECIALIZATION: the declaring
-module's CheckedModule archives each locally-declared default as a checked
-expression (`CheckedBodyStore.default_exprs`, keyed by
-`DefaultId.expr_node`—the source-node walk already records every checked
-expression, so the table is a serialized index over it, surviving the
-discard of the build-time source-node map), and that expression is the
+Construction-site materialization is PER SPECIALIZATION: each
+locally-declared default is a CIR expression of its declaring module, named
+by `DefaultId.expr_node`, and that expression is the
 SINGLE source of value: every construction site that omits the field
 lowers it inline at the site's field monotype (`defaultedFieldValueAt` in
 src/postcheck/monotype/lower.zig; boxy mirrors it). Each materialization lowers
@@ -12416,7 +12516,7 @@ fresh binder and lambda state for the declaring module's pattern-binder
 space, so even a same-module default materialized twice in one procedure
 never observes an earlier materialization's bindings, and the save/restore
 is stack-shaped so defaults that construct other defaulted nominals nest.
-Boxy reaches each omitted default through the same explicit CheckedModule
+Boxy reaches each omitted default through the same explicit checker-recorded
 data (`record_omitted_defaults` → `defaultExpr`) under the consuming site's
 worker; declaring modules resolve by content identity, and an unresolvable
 origin is an invariant violation, never a fallback. There is no archived
@@ -12430,22 +12530,20 @@ default may call a generic (unannotated) procedure, and that call's
 callee requirements resolve to concrete targets when
 `checkPendingDefaults` checks the default at an instantiated copy of
 its field type (a default constrains no declaration parameter, so
-nothing is left for a caller to supply). The seal pass walks every
-archived default expression (`CheckedBodyStore.default_exprs`) as a
-ROOT outside every procedure template: `sealCheckedProcedureTemplateRefs`
-collects the defaults' value refs, dispatch plans, iterator plans,
-scheme-use sites, and nested-procedure construction sites exactly like
-a template body, and the evidence pass resolves them with no enclosing
-template params—chain-free like compile-time root edges, while a
-generalized local function inside a default still contributes its own
-scope chain. The resulting `site_evidence` entries are keyed by the
-default's checked expressions, so every omitting site's
-per-specialization lowering finds the same finished vector through the
-ordinary `siteEvidence` lookup—lowering consumes explicit checked
-evidence and never reconstructs it. Defaults likewise carry their own
-CHECKED NESTED-FUNCTION SITES: the seal pass scans every archived
-default expression as a root, recording each interior lambda/closure
-as a `NestedProcSite` owned by the module's `default_root` (a default
+nothing is left for a caller to supply). Each default expression is a
+ROOT outside every procedure template with its own per-root slots: its
+call-edge evidence analysis covers the default's value refs, dispatch
+plans, iterator plans, scheme-use sites, and nested-procedure construction
+sites exactly like a template body, with no enclosing template params—
+chain-free like compile-time root edges, while a generalized local
+function inside a default still contributes its own scope chain. The
+resulting site evidence is keyed by the default's CIR expressions, so
+every omitting site's per-specialization lowering finds the same finished
+vector through the ordinary `siteEvidence` lookup—lowering consumes
+explicit checked evidence and never reconstructs it. Defaults likewise
+carry their own NESTED-FUNCTION SITES: the default root's nested
+procedure sites analysis records each interior lambda/closure as a
+`NestedProcSite` owned by the module's `default_root` (a default
 belongs to no procedure template). Lowering resolves those sites at
 exactly two sanctioned points. First, while materializing a default
 (the materialization context is explicit, mirroring its view/binder
@@ -12693,9 +12791,8 @@ Only the PER-FIELD demand becomes kind-directed:
   unify. Chained/nested updates compose because every update's type equals
   its base's type.
 
-Lowering (IMPLEMENTED). The CheckedModule carries each record
-expression's unset field labels explicitly (`CheckedExprData.record.unsets`,
-serialized through `record_unset_label_pool`)—lowering consumes that list,
+Lowering (IMPLEMENTED). The canonical IR carries each record
+expression's unset field labels explicitly (`record_unset_label_pool`)—lowering consumes that list,
 never re-derives it. In an UPDATE, both lowering pipelines (monotype
 `lowerRecordExpr`/`lowerRecordExprAtNode` in src/postcheck/monotype/lower.zig
 and boxy's record construction) turn each
@@ -18558,8 +18655,8 @@ layout decisions during the same lowering. `runtime_schemas` is for glue and
 static data. `boxy_type_descs` and `boxy_dicts` are LIR-owned static descriptor and
 dictionary tables, emitted as static data, used only when reachable LIR
 statements reference them. `fn_sets` and
-`erased_fns` are temporary compile-time output contexts used by
-`CheckedModuleBuilder` while storing function values in `ConstStore`. Capture
+`erased_fns` are temporary compile-time output contexts used by compile-time
+evaluation while storing function values in `ConstStore`. Capture
 slots are stored inside the corresponding function variant or erased-function
 entry.
 
@@ -22587,7 +22684,7 @@ prepared modules directly. This path is unaffected by the runtime
 
 ```text
 checked CIR
-  -> CheckedModuleBuilder prepares checked interfaces and selected roots
+  -> checking seals the solver store and records selected roots
   -> frontend task completion (coordinated compilations)
   -> Monotype IR
   -> Monotype Lifted IR
@@ -22604,8 +22701,8 @@ checked CIR
 An interactive REPL expression is an explicit `.repl_expr` compile-time root
 whose checked body returns `Str.inspect(expression)`. The evaluation helper
 that generated the zero-argument wrapper resolves its asserted body once and
-puts that exact expression identity in the root request; `CheckedModuleBuilder`
-and `CompileTimeFinalization` consume the identity directly. Checking retains the zero-argument
+puts that exact expression identity in the root request;
+`CompileTimeFinalization` consumes the identity directly. Checking retains the zero-argument
 REPL-root context so inspecting an
 uncalled constrained polymorphic function does not force its body, but checking
 finalization evaluates the selected body itself and stores its `Str` result in
