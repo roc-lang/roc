@@ -3449,7 +3449,7 @@ pub fn compute(
                         const callee_sig = solution.sigOf(call_stmt.assign_call.proc);
                         if (callee_sig.paramMode(position) != .owned) continue;
                         const outcomes = solution.outcomeSpanForCall(store, @fromBackingInt(@intCast(owner)), call_stmt.assign_call.proc);
-                        const refinement = (try arc_solve.findOutcomeRefinement(gpa, store, call_stmt.assign_call.target, call_stmt.assign_call.next, outcomes)) orelse continue;
+                        const refinement = (try arc_solve.findOutcomeRefinement(gpa, store, call_stmt.assign_call.target, call_stmt.assign_call.next, outcomes, .absent)) orelse continue;
                         const position_bit = arc_sig.paramBit(position).?;
                         var any_restitution = false;
                         for (solution.sigTable().outcomesOf(.{ .outcomes = outcomes })) |outcome| {
