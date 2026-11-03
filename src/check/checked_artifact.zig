@@ -2921,18 +2921,22 @@ pub const StoredTag = struct {
 
 /// The parts of one checked type that are read one at a time: the fields of
 /// a record row, the tags of a tag union row, or the static-dispatch
-/// constraints of a type variable. `Rows` holds them and reads part `index`
-/// with `get`.
-fn CheckedTypeParts(comptime Part: type, comptime Rows: type) type {
-    return struct {
+/// constraints of a type variable. A synthesized type's parts are rows of its
+/// store (`Rows`); a source type's are rows of the module's sealed solver
+/// store (`SealedRows`). Each reads part `index` with `get`.
+fn CheckedTypeParts(comptime Part: type, comptime Rows: type, comptime SealedRows: type) type {
+    return union(enum) {
         const Self = @This();
 
-        synthesized: Rows = .{},
+        synthesized: Rows,
+        sealed: SealedRows,
 
-        pub const empty: Self = .{};
+        pub const empty: Self = .{ .synthesized = .{} };
 
         pub fn len(self: Self) usize {
-            return self.synthesized.len();
+            return switch (self) {
+                inline else => |rows| rows.len(),
+            };
         }
 
         /// The parts a slice holds as themselves.
@@ -2941,7 +2945,9 @@ fn CheckedTypeParts(comptime Part: type, comptime Rows: type) type {
         }
 
         pub fn get(self: Self, index: usize) Part {
-            return self.synthesized.get(index);
+            return switch (self) {
+                inline else => |rows| rows.get(index),
+            };
         }
 
         pub fn iterator(self: Self) Iterator {
@@ -3033,11 +3039,11 @@ const CheckedTagRows = struct {
 };
 
 /// The fields of a checked record row.
-pub const CheckedRecordFields = CheckedTypeParts(CheckedRecordField, CheckedPartSlice(CheckedRecordField));
+pub const CheckedRecordFields = CheckedTypeParts(CheckedRecordField, CheckedPartSlice(CheckedRecordField), sealed_type_view.SealedRecordFieldRows);
 /// The tags of a checked tag union row.
-pub const CheckedTags = CheckedTypeParts(CheckedTag, CheckedTagRows);
+pub const CheckedTags = CheckedTypeParts(CheckedTag, CheckedTagRows, sealed_type_view.SealedTagRows);
 /// The static-dispatch constraints of a checked type variable.
-pub const CheckedConstraints = CheckedTypeParts(CheckedStaticDispatchConstraint, CheckedPartSlice(CheckedStaticDispatchConstraint));
+pub const CheckedConstraints = CheckedTypeParts(CheckedStaticDispatchConstraint, CheckedPartSlice(CheckedStaticDispatchConstraint), sealed_type_view.SealedConstraintRows);
 
 /// Public `CheckedTagUnionType` declaration (read form).
 pub const CheckedTagUnionType = struct {
@@ -3619,7 +3625,7 @@ fn reconstructTypeData(comptime Live: type, pool_owner: anytype, stored: anytype
     } else if (comptime info == .pointer and info.pointer.size == .one and info.pointer.child == Stored) {
         // A read form aliases the stored value rather than copying it.
         return stored;
-    } else if (comptime Stored == CheckedTypeRange and info == .@"struct") {
+    } else if (comptime Stored == CheckedTypeRange and (info == .@"struct" or info == .@"union")) {
         return Live.fromPool(pool_owner, stored.*);
     } else if (comptime Stored == CheckedTypeRange) {
         return storePool(pool_owner, info.pointer.child)[stored.start .. stored.start + stored.len];
@@ -4570,6 +4576,18 @@ pub const CheckedTypeStore = struct {
     tag_pool: std.ArrayList(StoredTag) = .empty,
     /// Interner backing variable names.
     var_names: canonical.NameInterner = .{},
+    /// The canonical names the module's identifiers stand for in its sealed
+    /// checked types, by identifier (`sealed_type_view.SealedNameRow`).
+    sealed_names: std.ArrayList(sealed_type_view.SealedNameRow) = .empty,
+    /// The checked identity and owner of each module identity the module's
+    /// sealed types name, by the module's identity index.
+    sealed_origins: std.ArrayList(sealed_type_view.SealedOriginRow) = .empty,
+    /// The checked facts of each nominal declaration of the module's solver
+    /// store, by declaration index.
+    sealed_nominals: std.ArrayList(sealed_type_view.SealedNominalRow) = .empty,
+    /// Per solver variable: whether publication reached it, and through which
+    /// row-tail positions.
+    sealed_var_facts: std.ArrayList(sealed_type_view.SealedVarFacts) = .empty,
     /// True for a store reconstructed from a serialized buffer (pools point into
     /// buffer-owned memory and must not be freed).
     serialized: bool = false,
@@ -4590,6 +4608,10 @@ pub const CheckedTypeStore = struct {
         constraint_pool,
         tag_pool,
         var_names,
+        sealed_names,
+        sealed_origins,
+        sealed_nominals,
+        sealed_var_facts,
     };
 
     fn borrowForPairing(source: *const CheckedTypeStore) CheckedTypeStore {
@@ -4773,6 +4795,7 @@ pub const CheckedTypeStore = struct {
         };
         var store = CheckedTypeStore{};
         errdefer store.deinit(allocator);
+        try sealed_type_view.buildColumns(allocator, module.moduleEnvConst(), names, import_views, store.sealedColumns());
         var source_schemes = collections.DenseMap(Var, CheckedTypeSchemeId).init(allocator);
         errdefer source_schemes.deinit();
         var active = try CheckedSourceTypeRoots.init(allocator, module);
@@ -4797,7 +4820,7 @@ pub const CheckedTypeStore = struct {
         try forEachCheckedSourceTypeRoot(allocator, module, root_inputs, &publisher);
 
         if (base.dev_diagnostics.isSet(.verify_sealed_type_view)) {
-            try sealed_type_view.verifyModulePublication(allocator, module, names, import_views, root_inputs, &store, &active);
+            try sealed_type_view.verifyAgainstPublication(allocator, store.sealedView(module.moduleEnvConst()), &store, &active);
         }
 
         // Self-containment (issue #9983 / Option A): the published declaration
@@ -4856,6 +4879,27 @@ pub const CheckedTypeStore = struct {
 
     pub fn rootForKey(self: *const CheckedTypeStore, key: canonical.CanonicalTypeKey) ?CheckedTypeId {
         return self.view().rootForKey(key);
+    }
+
+    /// The checked types of `env`'s sealed solver store, the module this
+    /// store was published for.
+    pub fn sealedView(self: *const CheckedTypeStore, env: *const ModuleEnv) sealed_type_view.SealedTypeView {
+        return .{
+            .env = env,
+            .names = self.sealed_names.items,
+            .origins = self.sealed_origins.items,
+            .nominals = self.sealed_nominals.items,
+            .var_facts = self.sealed_var_facts.items,
+        };
+    }
+
+    fn sealedColumns(self: *CheckedTypeStore) sealed_type_view.SealedTypeColumns {
+        return .{
+            .names = &self.sealed_names,
+            .origins = &self.sealed_origins,
+            .nominals = &self.sealed_nominals,
+            .var_facts = &self.sealed_var_facts,
+        };
     }
 
     /// Every root whose structure reaches one of `targets`, over exactly the
@@ -5548,12 +5592,16 @@ pub const CheckedTypeStore = struct {
         constraint_pool: SerializedSlice(CheckedStaticDispatchConstraint) = .{},
         tag_pool: SerializedSlice(StoredTag) = .{},
         var_names: canonical.NameInterner.Serialized,
+        sealed_names: SerializedSlice(sealed_type_view.SealedNameRow) = .{},
+        sealed_origins: SerializedSlice(sealed_type_view.SealedOriginRow) = .{},
+        sealed_nominals: SerializedSlice(sealed_type_view.SealedNominalRow) = .{},
+        sealed_var_facts: SerializedSlice(sealed_type_view.SealedVarFacts) = .{},
 
         comptime {
-            // 17 = 12 `SerializedSlice` fields + both indexes + 3 for `var_names`
+            // 21 = 16 `SerializedSlice` fields + both indexes + 3 for `var_names`
             // (`SerialStringInterner.Serialized` = 3 `SafeList` base pointers). The
             // count is the true total fixups, independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 17);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 21);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(CheckedTypeStore, @This());
@@ -6092,7 +6140,7 @@ fn appendCheckedNominalDeclarationFromStatement(
     _: bool,
 ) Allocator.Error!void {
     if (anno_idx == .placeholder) return;
-    if (!localNominalDeclarationIsValid(module, statement_idx)) return;
+    if (!localNominalDeclarationIsValid(module.moduleEnvConst(), statement_idx)) return;
 
     const statement_root = try appendCheckedTypeRoot(
         allocator,
@@ -8624,11 +8672,12 @@ fn appendCheckedTypeRootWithRowDefault(
     var_: Var,
     row_default_candidate: ?RowDefault,
 ) Allocator.Error!CheckedTypeId {
+    try sealed_type_view.reach(allocator, module.moduleEnvConst(), store.sealed_var_facts.items, var_);
     // Most requests name a variable that is already published; answer those
     // exactly as a publication's root step would, without starting one.
     const resolved = module.typeStoreConst().resolveVar(var_);
     if (active.get(resolved.var_)) |id| {
-        applyCheckedTypeRowDefault(store, id, checkedRowDefaultForContent(module, resolved.desc.content, row_default_candidate));
+        applyCheckedTypeRowDefault(store, id, checkedRowDefaultForContent(module.moduleEnvConst(), resolved.desc.content, row_default_candidate));
         return id;
     }
     var publisher = CheckedTypePublisher{
@@ -8796,7 +8845,7 @@ const CheckedTypePublisher = struct {
 
         const resolved = self.module.typeStoreConst().resolveVar(task.var_);
         task.resolved_var = resolved.var_;
-        task.row_default = checkedRowDefaultForContent(self.module, resolved.desc.content, task.row_default_candidate);
+        task.row_default = checkedRowDefaultForContent(self.module.moduleEnvConst(), resolved.desc.content, task.row_default_candidate);
         const resolved_var = task.resolved_var;
         const row_default = task.row_default;
 
@@ -8979,7 +9028,7 @@ const CheckedTypePublisher = struct {
                     return .{ .call = .{ .constraints = .{ .range = flex.constraints } } };
                 },
                 else => {
-                    const facts = flexVariableFacts(module, flex, task.bounded_row_ext);
+                    const facts = flexVariableFacts(module.moduleEnvConst(), flex, task.bounded_row_ext);
                     build.flex.constraints = input.?.get(.constraints);
                     build.flex.numeric_default_phase = facts.numeric_default_phase;
                     build.flex.row_default_discharges_constraints = facts.row_default_discharges_constraints;
@@ -8998,7 +9047,7 @@ const CheckedTypePublisher = struct {
                     return .{ .call = .{ .constraints = .{ .range = rigid.constraints } } };
                 },
                 else => {
-                    const facts = rigidVariableFacts(module, rigid);
+                    const facts = rigidVariableFacts(module.moduleEnvConst(), rigid);
                     build.rigid.constraints = input.?.get(.constraints);
                     build.rigid.numeric_default_phase = facts.numeric_default_phase;
                     build.rigid.row_default_discharges_constraints = facts.row_default_discharges_constraints;
@@ -9031,7 +9080,7 @@ const CheckedTypePublisher = struct {
                 .empty_tag_union => return payloadResult(build, .empty_tag_union),
                 .record => |record| switch (cursor) {
                     0 => {
-                        if (record.fields.len() == 0 and checkedRecordExtIsEmpty(module, record.ext)) {
+                        if (record.fields.len() == 0 and checkedRecordExtIsEmpty(module.moduleEnvConst(), record.ext)) {
                             return payloadResult(build, .empty_record);
                         }
                         return .{ .call = .{ .fields = .{ .range = record.fields } } };
@@ -9080,7 +9129,7 @@ const CheckedTypePublisher = struct {
                 .fn_effectful => |func| if (stepFunction(build, cursor, input, type_store, .effectful, func)) |step| return step,
                 .tag_union => |tag_union| switch (cursor) {
                     0 => {
-                        if (tag_union.tags.len() == 0 and checkedTagUnionExtIsEmpty(module, tag_union.ext)) {
+                        if (tag_union.tags.len() == 0 and checkedTagUnionExtIsEmpty(module.moduleEnvConst(), tag_union.ext)) {
                             return payloadResult(build, .empty_tag_union);
                         }
                         return .{ .call = .{ .tags = .{ .range = tag_union.tags } } };
@@ -9305,28 +9354,28 @@ pub const CheckedVariableFacts = struct {
 
 /// A flex variable's facts. `bounded_row_ext` is its class's
 /// `DescriptorFlags.bounded_row_ext`.
-pub fn flexVariableFacts(module: TypedCIR.Module, flex: types.Flex, bounded_row_ext: bool) CheckedVariableFacts {
+pub fn flexVariableFacts(module_env: *const ModuleEnv, flex: types.Flex, bounded_row_ext: bool) CheckedVariableFacts {
     return .{
-        .numeric_default_phase = numericDefaultPhaseForFlex(module, flex),
-        .row_default_discharges_constraints = rowDefaultDischargesConstraints(module, flex.constraints),
+        .numeric_default_phase = numericDefaultPhaseForFlex(module_env, flex),
+        .row_default_discharges_constraints = rowDefaultDischargesConstraints(module_env, flex.constraints),
         .bounded_row_ext = bounded_row_ext,
     };
 }
 
 /// A rigid variable's facts. Only an implicitly opened flex row is bounded.
-pub fn rigidVariableFacts(module: TypedCIR.Module, rigid: types.Rigid) CheckedVariableFacts {
+pub fn rigidVariableFacts(module_env: *const ModuleEnv, rigid: types.Rigid) CheckedVariableFacts {
     return .{
-        .numeric_default_phase = numericDefaultPhaseForConstraints(module, rigid.constraints),
-        .row_default_discharges_constraints = rowDefaultDischargesConstraints(module, rigid.constraints),
+        .numeric_default_phase = numericDefaultPhaseForConstraints(module_env, rigid.constraints),
+        .row_default_discharges_constraints = rowDefaultDischargesConstraints(module_env, rigid.constraints),
         .bounded_row_ext = false,
     };
 }
 
 /// The row default a variable takes when reached through a row-tail position
 /// offering `candidate`; see `checkedTypeVariableRowDefault`.
-pub fn checkedRowDefaultForContent(module: TypedCIR.Module, content: types.Content, candidate: ?RowDefault) ?RowDefault {
+pub fn checkedRowDefaultForContent(module_env: *const ModuleEnv, content: types.Content, candidate: ?RowDefault) ?RowDefault {
     return checkedTypeVariableRowDefault(content, candidate, switch (content) {
-        .flex => |flex| rowDefaultDischargesConstraints(module, flex.constraints),
+        .flex => |flex| rowDefaultDischargesConstraints(module_env, flex.constraints),
         .rigid, .err, .alias, .field_presence, .structure => false,
     });
 }
@@ -9351,10 +9400,10 @@ pub fn checkedTypeVariableRowDefault(
 
 /// Whether closing a row satisfies every constraint on its flex tail: each is
 /// an `is_eq` or `to_hash`, which the empty row derives.
-pub fn rowDefaultDischargesConstraints(module: TypedCIR.Module, constraints: types.StaticDispatchConstraint.SafeList.Range) bool {
+pub fn rowDefaultDischargesConstraints(module_env: *const ModuleEnv, constraints: types.StaticDispatchConstraint.SafeList.Range) bool {
     if (constraints.len() == 0) return false;
-    const idents = &module.moduleEnvConst().idents;
-    for (module.typeStoreConst().sliceStaticDispatchConstraints(constraints)) |constraint| {
+    const idents = &module_env.idents;
+    for ((&module_env.types).sliceStaticDispatchConstraints(constraints)) |constraint| {
         if (!constraint.fn_name.eql(idents.is_eq) and !constraint.fn_name.eql(idents.to_hash)) return false;
     }
     return true;
@@ -9398,17 +9447,17 @@ fn setStoredTypeVariableRowDefault(variable: *StoredTypeVariable, row_default: R
 }
 
 /// The numeric default phase a flex variable's constraints give it.
-pub fn numericDefaultPhaseForFlex(module: TypedCIR.Module, flex: types.Flex) ?NumericDefaultPhase {
-    return numericDefaultPhaseForConstraints(module, flex.constraints);
+pub fn numericDefaultPhaseForFlex(module_env: *const ModuleEnv, flex: types.Flex) ?NumericDefaultPhase {
+    return numericDefaultPhaseForConstraints(module_env, flex.constraints);
 }
 
 /// The numeric default phase a variable with these constraints takes.
 pub fn numericDefaultPhaseForConstraints(
-    module: TypedCIR.Module,
+    module_env: *const ModuleEnv,
     constraints_range: types.StaticDispatchConstraint.SafeList.Range,
 ) ?NumericDefaultPhase {
-    const constraints = module.typeStoreConst().sliceStaticDispatchConstraints(constraints_range);
-    const idents = module.commonIdents();
+    const constraints = (&module_env.types).sliceStaticDispatchConstraints(constraints_range);
+    const idents = module_env.idents;
     return types.literal_defaulting.numericDefaultPhase(.{
         .plus = idents.plus,
         .minus = idents.minus,
@@ -9425,16 +9474,16 @@ pub fn numericDefaultPhaseForConstraints(
 }
 
 /// Whether a record's extension is the closed empty record.
-pub fn checkedRecordExtIsEmpty(module: TypedCIR.Module, ext: Var) bool {
-    return switch (module.typeStoreConst().resolveVar(ext).desc.content) {
+pub fn checkedRecordExtIsEmpty(module_env: *const ModuleEnv, ext: Var) bool {
+    return switch ((&module_env.types).resolveVar(ext).desc.content) {
         .structure => |flat| flat == .empty_record,
         .flex, .rigid, .alias, .field_presence, .err => false,
     };
 }
 
 /// Whether a tag union's extension is the closed empty tag union.
-pub fn checkedTagUnionExtIsEmpty(module: TypedCIR.Module, ext: Var) bool {
-    return switch (module.typeStoreConst().resolveVar(ext).desc.content) {
+pub fn checkedTagUnionExtIsEmpty(module_env: *const ModuleEnv, ext: Var) bool {
+    return switch ((&module_env.types).resolveVar(ext).desc.content) {
         .structure => |flat| flat == .empty_tag_union,
         .flex, .rigid, .alias, .field_presence, .err => false,
     };
@@ -9544,6 +9593,20 @@ pub const ImportedOriginIndex = struct {
         return view.key.digest();
     }
 
+    /// The artifact that owns a named type from `origin_module`, or null when
+    /// no import view carries that module.
+    pub fn ownerIfAvailable(
+        self: *ImportedOriginIndex,
+        module_env: *const ModuleEnv,
+        imports: CheckedImportViews,
+        origin_module: base.ModuleIdentity.Idx,
+    ) Allocator.Error!?ModuleId {
+        if (origin_module == module_env.selfModuleIdentity()) return imports.current_owner;
+        const origin = try self.resolve(module_env, imports, origin_module);
+        const view = origin.view orelse return null;
+        return view.key.digest();
+    }
+
     /// The builtin a nominal names, if any.
     pub fn builtinNominal(
         self: *ImportedOriginIndex,
@@ -9575,12 +9638,24 @@ pub const ImportedOriginIndex = struct {
         origin_module: base.ModuleIdentity.Idx,
         source_decl: u32,
     ) Allocator.Error!ImportedNominalDeclarationRef {
+        return (try self.nominalDeclarationIfAvailable(module_env, imports, origin_module, source_decl)) orelse checkedArtifactInvariant(
+            "checked nominal representation referenced a missing imported nominal declaration for owner identity {any} statement {d}",
+            .{ module_env.moduleIdentityHash(origin_module).*, source_decl },
+        );
+    }
+
+    /// `nominalDeclaration`, or null when no import view carries the origin
+    /// module or its view holds no such declaration.
+    fn nominalDeclarationIfAvailable(
+        self: *ImportedOriginIndex,
+        module_env: *const ModuleEnv,
+        imports: CheckedImportViews,
+        origin_module: base.ModuleIdentity.Idx,
+        source_decl: u32,
+    ) Allocator.Error!?ImportedNominalDeclarationRef {
         const origin_hash = module_env.moduleIdentityHash(origin_module);
         const origin = try self.resolve(module_env, imports, origin_module);
-        const view = origin.view orelse checkedArtifactInvariant(
-            "checked nominal representation referenced a nominal from an origin with no import view {any}",
-            .{module_env.moduleIdentityHash(origin_module).*},
-        );
+        const view = origin.view orelse return null;
         const declarations = view.checked_types.nominal_declarations;
         if (!origin.declarations_indexed) {
             const next = try self.allocator.alloc(u32, declarations.len);
@@ -9617,10 +9692,7 @@ pub const ImportedOriginIndex = struct {
         }
         return .{
             .artifact = view.key.digest(),
-            .declaration = found orelse checkedArtifactInvariant(
-                "checked nominal representation referenced a missing imported nominal declaration for owner identity {any} statement {d}",
-                .{ origin_hash.*, source_decl },
-            ),
+            .declaration = found orelse return null,
         };
     }
 };
@@ -11119,6 +11191,26 @@ pub fn checkedNominalRepresentationForSourceNominal(
     ) };
 }
 
+/// `checkedNominalRepresentationForSourceNominal`, or null when the
+/// declaration's owner is not available to the module: a local declaration
+/// checking rejected, or an imported one no import view carries.
+pub fn checkedNominalRepresentationIfAvailable(
+    module_env: *const ModuleEnv,
+    imports: CheckedImportViews,
+    origins: *ImportedOriginIndex,
+    local_nominal_declarations: *const LocalNominalDeclarationIds,
+    nominal: types.NominalType,
+    builtin_nominal: ?CheckedBuiltinNominal,
+) Allocator.Error!?CheckedNominalRepresentationRef {
+    if (builtin_nominal) |builtin_id| return .{ .builtin = builtin_id };
+    if (nominal.origin_module == module_env.selfModuleIdentity()) {
+        const id = local_nominal_declarations.ids.get(@fromBackingInt(@intCast(nominal.statement()))) orelse return null;
+        return .{ .local_declaration = id };
+    }
+    const declaration = (try origins.nominalDeclarationIfAvailable(module_env, imports, nominal.origin_module, nominal.statement())) orelse return null;
+    return .{ .imported_declaration = declaration };
+}
+
 /// The checked declaration id of every published local nominal declaration,
 /// keyed by its statement. Ids are dense in statement order over exactly the
 /// declarations `appendCheckedNominalDeclarationFromStatement` publishes.
@@ -11126,15 +11218,18 @@ pub const LocalNominalDeclarationIds = struct {
     ids: std.AutoHashMap(CIR.Statement.Idx, CheckedNominalDeclarationId),
 
     pub fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!LocalNominalDeclarationIds {
+        return initFromEnv(allocator, module.moduleEnvConst());
+    }
+
+    pub fn initFromEnv(allocator: Allocator, module_env: *const ModuleEnv) Allocator.Error!LocalNominalDeclarationIds {
         var ids = std.AutoHashMap(CIR.Statement.Idx, CheckedNominalDeclarationId).init(allocator);
         errdefer ids.deinit();
         var next_id: u32 = 0;
-        const module_env = module.moduleEnvConst();
         for (module_env.store.sliceStatements(module_env.all_statements)) |candidate| {
-            const statement = module.getStatement(candidate);
+            const statement = module_env.store.getStatement(candidate);
             if (statement != .s_nominal_decl) continue;
             if (statement.s_nominal_decl.anno == .placeholder) continue;
-            if (!localNominalDeclarationIsValid(module, candidate)) continue;
+            if (!localNominalDeclarationIsValid(module_env, candidate)) continue;
             try ids.put(candidate, @fromBackingInt(@intCast(next_id)));
             next_id += 1;
         }
@@ -11153,12 +11248,12 @@ pub const LocalNominalDeclarationIds = struct {
 
 /// Whether checking accepted the local nominal declaration at `statement_idx`.
 pub fn localNominalDeclarationIsValid(
-    module: TypedCIR.Module,
+    module_env: *const ModuleEnv,
     statement_idx: CIR.Statement.Idx,
 ) bool {
-    const types_store = module.typeStoreConst();
+    const types_store = &module_env.types;
     const decl_idx = types_store.lookupNominalDeclByKey(
-        module.moduleEnvConst().selfModuleIdentity(),
+        module_env.selfModuleIdentity(),
         @backingInt(statement_idx),
     ) orelse checkedArtifactInvariant("checked local nominal declaration had no checker declaration entry", .{});
     return types_store.getNominalDecl(decl_idx).isValid();
@@ -11180,12 +11275,12 @@ pub fn copyIdentText(
     module: TypedCIR.Module,
     idx: Ident.Idx,
 ) Allocator.Error![]const u8 {
-    return try allocator.dupe(u8, checkedVariableNameText(module, idx));
+    return try allocator.dupe(u8, checkedVariableNameText(module.moduleEnvConst(), idx));
 }
 
 /// The text a checked type variable named `idx` publishes as its name.
-pub fn checkedVariableNameText(module: TypedCIR.Module, idx: Ident.Idx) []const u8 {
-    return module.getIdent(idx);
+pub fn checkedVariableNameText(module_env: *const ModuleEnv, idx: Ident.Idx) []const u8 {
+    return module_env.getIdent(idx);
 }
 
 /// Public `CheckedBody` declaration.
@@ -20527,7 +20622,7 @@ const EvidencePass = struct {
             .rigid => |rigid| rigid.constraints,
             .alias, .field_presence, .structure, .err => return null,
         };
-        return numericDefaultPhaseForConstraints(self.module, constraints);
+        return numericDefaultPhaseForConstraints(self.module.moduleEnvConst(), constraints);
     }
 
     fn planIsDefaultRoot(self: *const EvidencePass, plan_id: static_dispatch.StaticDispatchPlanId) bool {
@@ -21039,7 +21134,7 @@ const EvidencePass = struct {
         structural_kind: ?static_dispatch.StructuralKind,
         constraint_fn_var: ?Var,
     ) Allocator.Error!?ObligationStep {
-        const owner: static_dispatch.MethodOwner = switch (numericDefaultPhaseForConstraints(self.module, constraints) orelse return null) {
+        const owner: static_dispatch.MethodOwner = switch (numericDefaultPhaseForConstraints(self.module.moduleEnvConst(), constraints) orelse return null) {
             .mono_specialization => .{ .builtin = .dec },
             .mono_specialization_str => .{ .builtin = .str },
             // `checking_finalized` is stamped only on vars checking already
@@ -28533,7 +28628,7 @@ pub const PlatformPairing = struct {
 
     pub const Serialized = extern struct {
         relation: [32]u8,
-        borrowed_types: u16,
+        borrowed_types: u32,
         has_dependent_evaluation: bool,
         checked_types: CheckedTypeStore.Serialized,
         templates: SerializedSlice(CheckedProcedureTemplate),
@@ -28678,7 +28773,7 @@ pub const PlatformPairing = struct {
             result.checked_types = self.checked_types.deserialize(address);
             inline for (@typeInfo(CheckedTypeStore.BorrowedColumn).@"enum".field_names) |field_name| {
                 const bit = @backingInt(@field(CheckedTypeStore.BorrowedColumn, field_name));
-                if (self.borrowed_types & (@as(u16, 1) << bit) != 0) @field(result.checked_types, field_name) = @field(platform.checked_types, field_name);
+                if (self.borrowed_types & (@as(u32, 1) << bit) != 0) @field(result.checked_types, field_name) = @field(platform.checked_types, field_name);
             }
             result.checked_procedure_templates.templates = artifact_serialize.arrayListFromSlice(CheckedProcedureTemplate, self.templates.deserialize(address));
             result.checked_bodies.stored_exprs = artifact_serialize.arrayListFromSlice(StoredCheckedExpr, self.body_exprs.deserialize(address));
@@ -33411,7 +33506,7 @@ fn appendExposedTypeDeclarationPublicApiDependencies(
         const statement_idx: CIR.Statement.Idx = @fromBackingInt(@intCast(raw_node_idx));
         switch (module.getStatement(statement_idx)) {
             .s_alias_decl => {},
-            .s_nominal_decl => if (!localNominalDeclarationIsValid(module, statement_idx)) continue,
+            .s_nominal_decl => if (!localNominalDeclarationIsValid(module.moduleEnvConst(), statement_idx)) continue,
             .s_decl,
             .s_var,
             .s_var_uninitialized,
@@ -35977,7 +36072,8 @@ pub const CheckedModuleArtifact = struct {
             // function evidence keeps its target and structural payloads in
             // two pools of their own. Template demand vectors add one.
             // Literal arguments add the literal requirement pool, the demand pool, and the root lookup table.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 244);
+            // The sealed type columns of the checked type store add four.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 248);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and

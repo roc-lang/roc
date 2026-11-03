@@ -1,24 +1,24 @@
-//! A read-only view of a checked module's types read directly from its sealed
-//! solver type store.
+//! A module's checked source types, read in place from its sealed solver
+//! type store.
 //!
-//! The view renders each solver variable the way checked type publication
-//! (`CheckedTypePublisher` in checked_artifact.zig) renders it into a
-//! `CheckedTypePayload`, through the same decision helpers: canonical names,
-//! import owners, nominal representations, numeric defaults, empty-row
-//! normalization and function-kind finalization. Its identity is the solver's
-//! representative variable rather than a published `CheckedTypeId`, and its
-//! children are solver variables whose slices alias the solver store's own
-//! pools.
+//! Checking canonicalizes the store before sealing it
+//! (`types.Store.canonicalizeAndSeal`), so every child a descriptor names is
+//! its class's checked representative and every record and tag union row is
+//! flat. A checked type id of a source type is that representative's bit
+//! pattern, and the view renders it as a `CheckedTypePayload` without
+//! allocating: child ids alias the store's own variable pools, and record
+//! fields, tags and constraints are handles that read the store's rows one at
+//! a time.
 //!
-//! A variable's row default is the one decision that depends on more than the
-//! variable: it comes from the row-tail positions the variable is reached
-//! through. The view computes it once, at construction, by walking every
-//! position reachable from the module's checked source type roots
-//! (`checked_artifact.forEachCheckedSourceTypeRoot`).
-//!
-//! `verifyAgainstPublication` walks a checked type publication and the view in
-//! lockstep from every published source root and asserts that both render the
-//! same structure.
+//! What a payload needs besides the store lives in four columns of the
+//! module's checked type store, filled when the module is published: the
+//! canonical names its identifiers stand for, the checked identity and owning
+//! artifact of every module its named types come from, the checked facts of
+//! every nominal declaration it holds, and per variable whether publication
+//! reached it and through which row-tail positions. A variable's row default
+//! is the one rendering decision that depends on more than the variable: it
+//! comes from the row-tail positions publication reached it through
+//! (`reach`).
 
 const std = @import("std");
 const base = @import("base");
@@ -28,238 +28,151 @@ const types = @import("types");
 const TypedCIR = @import("typed_cir.zig");
 const canonical = @import("canonical_names.zig");
 const checked_artifact = @import("checked_artifact.zig");
+const type_ids = @import("checked_type_ids.zig");
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
-const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const Var = types.Var;
 
 const CheckedTypeId = checked_artifact.CheckedTypeId;
 const CheckedTypeStore = checked_artifact.CheckedTypeStore;
 const CheckedTypePayload = checked_artifact.CheckedTypePayload;
-const CheckedImportViews = checked_artifact.CheckedImportViews;
-const CheckedSourceTypeRoots = checked_artifact.CheckedSourceTypeRoots;
-const CheckedSourceTypeRootInputs = checked_artifact.CheckedSourceTypeRootInputs;
-const CheckedFieldDefault = checked_artifact.CheckedFieldDefault;
+const CheckedTypeVariable = checked_artifact.CheckedTypeVariable;
+const CheckedRecordField = checked_artifact.CheckedRecordField;
+const CheckedTag = checked_artifact.CheckedTag;
+const CheckedStaticDispatchConstraint = checked_artifact.CheckedStaticDispatchConstraint;
 const CheckedFunctionKind = checked_artifact.CheckedFunctionKind;
 const CheckedBuiltinNominal = checked_artifact.CheckedBuiltinNominal;
-const CheckedCommittedKind = checked_artifact.CheckedCommittedKind;
 const CheckedNominalRepresentationRef = checked_artifact.CheckedNominalRepresentationRef;
+const CheckedImportViews = checked_artifact.CheckedImportViews;
+const CheckedSourceTypeRoots = checked_artifact.CheckedSourceTypeRoots;
 const ImportedOriginIndex = checked_artifact.ImportedOriginIndex;
 const LocalNominalDeclarationIds = checked_artifact.LocalNominalDeclarationIds;
-const LocalTypeDeclarationIndex = checked_artifact.LocalTypeDeclarationIndex;
 const ModuleId = checked_artifact.ModuleId;
-const NumericDefaultPhase = checked_artifact.NumericDefaultPhase;
 const RowDefault = checked_artifact.RowDefault;
 const invariant = checked_artifact.checkedArtifactInvariant;
 
-/// A checked type variable as the view renders it; carries exactly what a
-/// `checked_artifact.CheckedTypeVariable` carries.
-pub const SealedTypeVariable = struct {
-    name: ?[]const u8,
-    /// The variable's constraints in the solver store; `SealedTypeView.constraint`
-    /// renders each one.
-    constraints: []const types.StaticDispatchConstraint,
-    numeric_default_phase: ?NumericDefaultPhase,
-    row_default: ?RowDefault,
-    row_default_discharges_constraints: bool,
-    bounded_row_ext: bool,
+/// The canonical names one identifier of the module stands for, one per name
+/// space a checked type uses identifiers in. A name space the module's types
+/// never use the identifier in holds `none`.
+pub const SealedNameRow = extern struct {
+    type_name: u32 = none,
+    record_field_label: u32 = none,
+    tag_label: u32 = none,
+    method_name: u32 = none,
+
+    pub const none: u32 = std.math.maxInt(u32);
 };
 
-/// One static-dispatch constraint of a checked type variable.
-pub const SealedConstraint = struct {
-    fn_name: canonical.MethodNameId,
-    fn_var: Var,
-    origin: types.StaticDispatchConstraint.Origin,
-    numeral: ?types.NumeralInfo,
+/// The checked identity of one module identity the module's types name, and
+/// the artifact owning that module's checked declarations when one is
+/// available to the module.
+pub const SealedOriginRow = extern struct {
+    owner: ModuleId = .{},
+    identity: u32 = SealedNameRow.none,
+    has_owner: u32 = 0,
 };
 
-/// A checked alias type.
-pub const SealedAliasType = struct {
-    name: canonical.TypeNameId,
-    origin_module: canonical.ModuleIdentityId,
-    owner_module: ModuleId,
-    source_decl: ?u32,
-    builtin_origin: bool,
-    backing: Var,
-    args: []const Var,
+/// The checked facts of one nominal declaration in the module's solver
+/// store. `representation` is null for a declaration whose owner the module
+/// cannot resolve; no reached type names such a declaration.
+pub const SealedNominalRow = struct {
+    builtin: ?CheckedBuiltinNominal = null,
+    representation: ?CheckedNominalRepresentationRef = null,
 };
 
-/// A checked nominal type.
-pub const SealedNominalType = struct {
-    name: canonical.TypeNameId,
-    origin_module: canonical.ModuleIdentityId,
-    owner_module: ModuleId,
-    source_decl: u32,
-    builtin: ?CheckedBuiltinNominal,
-    is_opaque: bool,
-    representation: CheckedNominalRepresentationRef,
-    args: []const Var,
-};
-
-/// A checked record type with at least one field or an open tail. The
-/// fields are the solver store's own; `SealedTypeView.recordField` renders
-/// each one.
-pub const SealedRecordType = struct {
-    fields: types.RecordField.SafeMultiList.Slice,
-    ext: Var,
-};
-
-/// The field kind axis of one record field (design.md "Field Kinds").
-pub const SealedFieldKind = union(enum) {
-    required,
-    optional,
-    defaulted: CheckedFieldDefault,
-    /// A still-flex kind variable of a scheme interior.
-    undetermined: Var,
-    err,
-};
-
-/// One record field.
-pub const SealedRecordField = struct {
-    name: canonical.RecordFieldLabelId,
-    ty: Var,
-    kind: SealedFieldKind,
-};
-
-/// A checked tag union with at least one tag or an open tail. The tags are
-/// the solver store's own; `SealedTypeView.tag` renders each one.
-pub const SealedTagUnionType = struct {
-    tags: types.Tag.SafeMultiList.Slice,
-    ext: Var,
-};
-
-/// One tag of a tag union.
-pub const SealedTag = struct {
-    name: canonical.TagLabelId,
-    args: []const Var,
-};
-
-/// A checked function type.
-pub const SealedFunctionType = struct {
-    kind: CheckedFunctionKind,
-    args: []const Var,
-    ret: Var,
-};
-
-/// One solver variable as checked type publication renders it, shape for
-/// shape with `CheckedTypePayload` (which a sealed store never leaves
-/// `pending`).
-pub const SealedTypePayload = union(enum) {
-    err,
-    flex: SealedTypeVariable,
-    rigid: SealedTypeVariable,
-    alias: SealedAliasType,
-    record: SealedRecordType,
-    tuple: []const Var,
-    nominal: SealedNominalType,
-    function: SealedFunctionType,
-    empty_record,
-    tag_union: SealedTagUnionType,
-    empty_tag_union,
-    /// The field kind a quantified kind variable was instantiated at.
-    field_kind: CheckedCommittedKind,
+/// Per solver variable: whether publication reached it, and through which
+/// row-tail positions.
+pub const SealedVarFacts = packed struct(u8) {
+    reached: bool = false,
+    record_tail: bool = false,
+    tag_tail: bool = false,
+    _padding: u5 = 0,
 };
 
 /// Checked types read directly from a module's sealed solver store.
 pub const SealedTypeView = struct {
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
-    imports: CheckedImportViews,
-    /// Owners of the named types the view has rendered, resolved once per
-    /// origin module.
-    imported_origins: *ImportedOriginIndex,
-    local_nominal_declarations: LocalNominalDeclarationIds,
-    /// The row default of every representative variable that takes one.
-    row_defaults: collections.DenseMap(Var, RowDefault),
-    /// The representatives reachable from the root set the view was built
-    /// over: the domain whose row defaults the view knows.
-    reached: std.DynamicBitSetUnmanaged,
+    env: *const ModuleEnv,
+    names: []const SealedNameRow,
+    origins: []const SealedOriginRow,
+    nominals: []const SealedNominalRow,
+    var_facts: []const SealedVarFacts,
 
-    /// A view over `module`, whose type store checking sealed, with row
-    /// defaults computed from `roots` (the variables
-    /// `collectSourceTypeRoots` enumerates).
-    pub fn init(
-        allocator: Allocator,
-        module: TypedCIR.Module,
-        names: *canonical.CanonicalNameStore,
-        imports: CheckedImportViews,
-        roots: []const Var,
-    ) Allocator.Error!SealedTypeView {
-        const type_store = module.typeStoreConst();
-        if (std.debug.runtime_safety and !type_store.isSealed()) {
-            invariant("a sealed type view was built over a type store checking never sealed", .{});
-        }
-        const imported_origins = try allocator.create(ImportedOriginIndex);
-        errdefer allocator.destroy(imported_origins);
-        imported_origins.* = ImportedOriginIndex.init(allocator);
-        errdefer imported_origins.deinit();
-        var local_nominal_declarations = try LocalNominalDeclarationIds.init(allocator, module);
-        errdefer local_nominal_declarations.deinit();
-        var reached = try std.DynamicBitSetUnmanaged.initEmpty(allocator, @intCast(type_store.len()));
-        errdefer reached.deinit(allocator);
-        var self = SealedTypeView{
-            .allocator = allocator,
-            .module = module,
-            .names = names,
-            .imports = imports,
-            .imported_origins = imported_origins,
-            .local_nominal_declarations = local_nominal_declarations,
-            .row_defaults = collections.DenseMap(Var, RowDefault).init(allocator),
-            .reached = reached,
-        };
-        errdefer self.row_defaults.deinit();
-        try self.computeRowDefaults(roots);
-        return self;
+    fn typeStore(self: SealedTypeView) *const types.Store {
+        return &self.env.types;
     }
 
-    pub fn deinit(self: *SealedTypeView) void {
-        self.row_defaults.deinit();
-        self.reached.deinit(self.allocator);
-        self.local_nominal_declarations.deinit();
-        self.imported_origins.deinit();
-        self.allocator.destroy(self.imported_origins);
-        self.* = undefined;
+    fn nameRow(self: SealedTypeView, ident: Ident.Idx) SealedNameRow {
+        const index: usize = ident.idx;
+        if (index >= self.names.len) invariant("a sealed checked type named an identifier publication never interned", .{});
+        return self.names[index];
     }
 
-    fn typeStore(self: *const SealedTypeView) *const types.Store {
-        return self.module.typeStoreConst();
+    fn present(id: u32) u32 {
+        if (id == SealedNameRow.none) invariant("a sealed checked type named an identifier in a name space publication never interned it in", .{});
+        return id;
     }
 
-    /// The solver variable that stands for `var_`'s whole equivalence class.
-    pub fn representative(self: *const SealedTypeView, var_: Var) Var {
+    fn typeName(self: SealedTypeView, ident: Ident.Idx) canonical.TypeNameId {
+        return @fromBackingInt(present(self.nameRow(ident).type_name));
+    }
+
+    fn recordFieldLabel(self: SealedTypeView, ident: Ident.Idx) canonical.RecordFieldLabelId {
+        return @fromBackingInt(present(self.nameRow(ident).record_field_label));
+    }
+
+    fn tagLabel(self: SealedTypeView, ident: Ident.Idx) canonical.TagLabelId {
+        return @fromBackingInt(present(self.nameRow(ident).tag_label));
+    }
+
+    fn methodName(self: SealedTypeView, ident: Ident.Idx) canonical.MethodNameId {
+        return @fromBackingInt(present(self.nameRow(ident).method_name));
+    }
+
+    fn originRow(self: SealedTypeView, origin: base.ModuleIdentity.Idx) *const SealedOriginRow {
+        const index: usize = @backingInt(origin);
+        if (index >= self.origins.len) invariant("a sealed checked type named a module identity publication never resolved", .{});
+        return &self.origins[index];
+    }
+
+    fn originIdentity(self: SealedTypeView, origin: base.ModuleIdentity.Idx) canonical.ModuleIdentityId {
+        return @fromBackingInt(present(self.originRow(origin).identity));
+    }
+
+    fn originOwner(self: SealedTypeView, origin: base.ModuleIdentity.Idx) *const ModuleId {
+        const row = self.originRow(origin);
+        if (row.has_owner == 0) invariant("a sealed checked type named a type from a module with no available checked owner", .{});
+        return &row.owner;
+    }
+
+    fn facts(self: SealedTypeView, var_: Var) SealedVarFacts {
+        return self.var_facts[@backingInt(var_)];
+    }
+
+    /// The checked representative of `var_`'s class.
+    pub fn representative(self: SealedTypeView, var_: Var) Var {
         return self.typeStore().resolveVar(var_).var_;
     }
 
-    /// Whether the view's root set reaches `var_`.
-    pub fn reaches(self: *const SealedTypeView, var_: Var) bool {
-        return self.reached.isSet(@backingInt(self.representative(var_)));
+    /// Whether publication reached `var_`'s class.
+    pub fn reaches(self: SealedTypeView, var_: Var) bool {
+        return self.facts(self.representative(var_)).reached;
     }
 
-    /// `var_` rendered as checked type publication renders it. Names are
-    /// interned in the view's canonical name store; nothing else allocates
-    /// beyond resolving an imported origin's owner the first time.
-    pub fn payload(self: *const SealedTypeView, var_: Var) Allocator.Error!SealedTypePayload {
-        const module = self.module;
+    /// `var_`'s checked type. `var_` is its class's checked representative,
+    /// and publication reached it.
+    pub fn payload(self: SealedTypeView, var_: Var) CheckedTypePayload {
+        const env = self.env;
         const type_store = self.typeStore();
         const resolved = type_store.resolveVar(var_);
-        if (std.debug.runtime_safety and !self.reached.isSet(@backingInt(resolved.var_))) {
-            invariant("a sealed type view rendered variable {d} outside its root closure", .{@backingInt(resolved.var_)});
+        if (std.debug.runtime_safety) {
+            if (resolved.var_ != var_) invariant("checked type {d} names a solver variable that is not its class's representative", .{@backingInt(var_)});
+            if (!self.facts(var_).reached) invariant("checked type {d} names a solver variable publication never reached", .{@backingInt(var_)});
         }
         // The checker marks an otherwise-unresolved identity it closed to
         // `[]`; it renders as a variable carrying `[]` only as its row default.
-        if (resolved.desc.flags.empty_tag_union_is_default) return .{ .flex = .{
-            .name = null,
-            .constraints = &.{},
-            .numeric_default_phase = null,
-            .row_default = .empty_tag_union,
-            .row_default_discharges_constraints = false,
-            .bounded_row_ext = false,
-        } };
-        const names = self.names;
-        const idents = module.identStoreConst();
+        if (resolved.desc.flags.empty_tag_union_is_default) return .{ .flex = .{ .row_default = .empty_tag_union } };
         switch (resolved.desc.content) {
             .err => return .err,
             .field_presence => |presence| return .{ .field_kind = switch (presence) {
@@ -267,434 +180,406 @@ pub const SealedTypeView = struct {
                 .optional => .optional,
             } },
             .flex => |flex| {
-                const facts = checked_artifact.flexVariableFacts(module, flex, resolved.desc.flags.bounded_row_ext);
+                const variable_facts = checked_artifact.flexVariableFacts(env, flex, resolved.desc.flags.bounded_row_ext);
                 return .{ .flex = .{
-                    .name = if (flex.name) |name| checked_artifact.checkedVariableNameText(module, name) else null,
-                    .constraints = type_store.sliceStaticDispatchConstraints(flex.constraints),
-                    .numeric_default_phase = facts.numeric_default_phase,
-                    .row_default = self.row_defaults.get(resolved.var_),
-                    .row_default_discharges_constraints = facts.row_default_discharges_constraints,
-                    .bounded_row_ext = facts.bounded_row_ext,
+                    .name = if (flex.name) |name| checked_artifact.checkedVariableNameText(env, name) else null,
+                    .constraints = .{ .sealed = .{ .constraints = type_store.sliceStaticDispatchConstraints(flex.constraints), .view = self } },
+                    .numeric_default_phase = variable_facts.numeric_default_phase,
+                    .row_default = self.rowDefault(var_, resolved.desc.content),
+                    .row_default_discharges_constraints = variable_facts.row_default_discharges_constraints,
+                    .bounded_row_ext = variable_facts.bounded_row_ext,
                 } };
             },
             .rigid => |rigid| {
-                const facts = checked_artifact.rigidVariableFacts(module, rigid);
+                const variable_facts = checked_artifact.rigidVariableFacts(env, rigid);
                 return .{ .rigid = .{
-                    .name = checked_artifact.checkedVariableNameText(module, rigid.name),
-                    .constraints = type_store.sliceStaticDispatchConstraints(rigid.constraints),
-                    .numeric_default_phase = facts.numeric_default_phase,
-                    .row_default = self.row_defaults.get(resolved.var_),
-                    .row_default_discharges_constraints = facts.row_default_discharges_constraints,
-                    .bounded_row_ext = facts.bounded_row_ext,
+                    .name = checked_artifact.checkedVariableNameText(env, rigid.name),
+                    .constraints = .{ .sealed = .{ .constraints = type_store.sliceStaticDispatchConstraints(rigid.constraints), .view = self } },
+                    .numeric_default_phase = variable_facts.numeric_default_phase,
+                    .row_default = self.rowDefault(var_, resolved.desc.content),
+                    .row_default_discharges_constraints = variable_facts.row_default_discharges_constraints,
+                    .bounded_row_ext = variable_facts.bounded_row_ext,
                 } };
             },
             .alias => |alias| return .{ .alias = .{
-                .name = try names.internTypeIdent(idents, alias.ident.ident_idx),
-                .origin_module = try names.internModuleIdentity(module.moduleEnvConst().moduleIdentityHash(alias.origin_module)),
-                .owner_module = try self.imported_origins.owner(module.moduleEnvConst(), self.imports, alias.origin_module),
+                .name = self.typeName(alias.ident.ident_idx),
+                .origin_module = self.originIdentity(alias.origin_module),
+                .owner_module = self.originOwner(alias.origin_module),
                 .source_decl = alias.source_decl.toOptional(),
                 .builtin_origin = alias.source_decl.originIsBuiltin(),
-                .backing = type_store.getAliasBackingVar(alias),
-                .args = type_store.sliceAliasArgs(alias),
+                .backing = type_ids.fromVar(type_store.getAliasBackingVar(alias)),
+                .args = type_ids.fromVars(type_store.sliceAliasArgs(alias)),
             } },
             .structure => |flat| switch (flat) {
                 .empty_record => return .empty_record,
                 .empty_tag_union => return .empty_tag_union,
                 .record => |record| {
-                    if (record.fields.len() == 0 and checked_artifact.checkedRecordExtIsEmpty(module, record.ext)) return .empty_record;
-                    return .{ .record = .{ .fields = type_store.getRecordFieldsSlice(record.fields), .ext = record.ext } };
+                    if (record.fields.len() == 0 and checked_artifact.checkedRecordExtIsEmpty(env, record.ext)) return .empty_record;
+                    return .{ .record = .{
+                        .fields = .{ .sealed = .{ .fields = type_store.getRecordFieldsSlice(record.fields), .view = self } },
+                        .ext = type_ids.fromVar(record.ext),
+                    } };
                 },
-                .tuple => |tuple| return .{ .tuple = type_store.sliceVars(tuple.elems) },
+                .tuple => |tuple| return .{ .tuple = type_ids.fromVars(type_store.sliceVars(tuple.elems)) },
                 .nominal_type => |nominal| {
                     checked_artifact.debugAssertNominalOpacityMatchesDeclaration(type_store, nominal);
-                    const module_env = module.moduleEnvConst();
-                    const builtin_nominal = try self.imported_origins.builtinNominal(module_env, self.imports, nominal);
+                    const declaration = type_store.lookupNominalDecl(nominal) orelse
+                        invariant("a sealed nominal type has no declaration in its store", .{});
+                    const row = self.nominals[@backingInt(declaration)];
                     return .{ .nominal = .{
-                        .name = try names.internTypeIdent(idents, nominal.ident.ident_idx),
-                        .origin_module = try names.internModuleIdentity(module_env.moduleIdentityHash(nominal.origin_module)),
-                        .owner_module = try self.imported_origins.owner(module_env, self.imports, nominal.origin_module),
+                        .name = self.typeName(nominal.ident.ident_idx),
+                        .origin_module = self.originIdentity(nominal.origin_module),
+                        .owner_module = self.originOwner(nominal.origin_module),
                         .source_decl = nominal.statement(),
-                        .builtin = builtin_nominal,
+                        .builtin = row.builtin,
                         .is_opaque = nominal.isOpaque(),
-                        .representation = try checked_artifact.checkedNominalRepresentationForSourceNominal(
-                            module,
-                            self.imports,
-                            self.imported_origins,
-                            &self.local_nominal_declarations,
-                            nominal,
-                            builtin_nominal,
-                        ),
-                        .args = type_store.sliceNominalArgs(nominal),
+                        .representation = row.representation orelse
+                            invariant("a sealed nominal type names a declaration whose owner publication could not resolve", .{}),
+                        .args = type_ids.fromVars(type_store.sliceNominalArgs(nominal)),
                     } };
                 },
                 .fn_pure, .fn_unbound => |func| return .{ .function = functionType(type_store, .pure, func) },
                 .fn_effectful => |func| return .{ .function = functionType(type_store, .effectful, func) },
                 .tag_union => |tag_union| {
-                    if (tag_union.tags.len() == 0 and checked_artifact.checkedTagUnionExtIsEmpty(module, tag_union.ext)) return .empty_tag_union;
-                    return .{ .tag_union = .{ .tags = type_store.getTagsSlice(tag_union.tags), .ext = tag_union.ext } };
+                    if (tag_union.tags.len() == 0 and checked_artifact.checkedTagUnionExtIsEmpty(env, tag_union.ext)) return .empty_tag_union;
+                    return .{ .tag_union = .{
+                        .tags = .{ .sealed = .{ .tags = type_store.getTagsSlice(tag_union.tags), .view = self } },
+                        .ext = type_ids.fromVar(tag_union.ext),
+                    } };
                 },
             },
         }
     }
 
-    fn functionType(type_store: *const types.Store, kind: CheckedFunctionKind, func: types.Func) SealedFunctionType {
+    fn functionType(type_store: *const types.Store, kind: CheckedFunctionKind, func: types.Func) checked_artifact.CheckedFunctionType {
         return .{
             .kind = checked_artifact.finalizedFunctionKind(kind),
-            .args = type_store.sliceVars(func.args),
-            .ret = func.ret,
+            .args = type_ids.fromVars(type_store.sliceVars(func.args)),
+            .ret = type_ids.fromVar(func.ret),
         };
     }
 
-    /// One constraint of a rendered variable.
-    pub fn constraint(self: *const SealedTypeView, source: types.StaticDispatchConstraint) Allocator.Error!SealedConstraint {
-        return .{
-            .fn_name = try self.names.internMethodIdent(self.module.identStoreConst(), source.fn_name),
-            .fn_var = source.fn_var,
-            .origin = source.origin,
-            .numeral = self.typeStore().constraintNumeralInfo(source),
-        };
+    /// The row default of the variable `var_` whose content is `content`,
+    /// from the row-tail positions publication reached it through.
+    fn rowDefault(self: SealedTypeView, var_: Var, content: types.Content) ?RowDefault {
+        const var_facts = self.facts(var_);
+        const candidate: ?RowDefault = if (var_facts.record_tail) .empty_record else if (var_facts.tag_tail) .empty_tag_union else null;
+        return checked_artifact.checkedRowDefaultForContent(self.env, content, candidate);
+    }
+};
+
+/// The fields of a sealed record row, in the row's order.
+pub const SealedRecordFieldRows = struct {
+    fields: types.RecordField.SafeMultiList.Slice,
+    view: SealedTypeView,
+
+    pub fn len(self: SealedRecordFieldRows) usize {
+        return self.fields.len;
     }
 
-    /// The field at `index` of a rendered record, in the solver row's order.
-    pub fn recordField(self: *const SealedTypeView, record: SealedRecordType, index: usize) Allocator.Error!SealedRecordField {
-        const module = self.module;
-        const name = try self.names.internRecordFieldIdent(module.identStoreConst(), record.fields.items(.name)[index]);
+    pub fn get(self: SealedRecordFieldRows, index: usize) CheckedRecordField {
+        const view = self.view;
+        const name = view.recordFieldLabel(self.fields.items(.name)[index]);
         // The value and kind axes are independent; see design.md "Field Kinds".
-        return switch (record.fields.items(.presence)[index].decode()) {
-            .required => |type_var| .{ .name = name, .ty = type_var, .kind = .required },
-            .unknown => |unknown| .{ .name = name, .ty = unknown.var_, .kind = switch (self.typeStore().resolveVar(unknown.presence).desc.content) {
+        return switch (self.fields.items(.presence)[index].decode()) {
+            .required => |type_var| .{ .name = name, .ty = type_ids.fromVar(type_var), .kind = .required },
+            .unknown => |unknown| .{ .name = name, .ty = type_ids.fromVar(unknown.var_), .kind = switch (view.typeStore().resolveVar(unknown.presence).desc.content) {
                 .field_presence => |presence| switch (presence) {
                     .required => .required,
-                    .defaulted => |id| .{ .defaulted = CheckedFieldDefault.fromParts(
-                        try self.names.internModuleIdentity(module.moduleEnvConst().moduleIdentityHash(id.origin_module)),
-                        id.expr_node,
-                    ) },
+                    .defaulted => |id| .defaultedFromParts(view.originIdentity(id.origin_module), id.expr_node),
                     .optional => .optional,
                 },
-                .flex => .{ .undetermined = unknown.presence },
+                .flex => .undetermined(type_ids.fromVar(unknown.presence)),
                 .err => .err,
-                .rigid, .alias, .structure => invariant("a sealed type view reached a field presence variable holding non-presence content", .{}),
+                .rigid, .alias, .structure => invariant("a sealed field presence variable held non-presence content", .{}),
             } },
         };
     }
+};
 
-    /// The tag at `index` of a rendered tag union, in the solver row's order.
-    pub fn tag(self: *const SealedTypeView, tag_union: SealedTagUnionType, index: usize) Allocator.Error!SealedTag {
+/// The tags of a sealed tag union row, in the row's order.
+pub const SealedTagRows = struct {
+    tags: types.Tag.SafeMultiList.Slice,
+    view: SealedTypeView,
+
+    pub fn len(self: SealedTagRows) usize {
+        return self.tags.len;
+    }
+
+    pub fn get(self: SealedTagRows, index: usize) CheckedTag {
         return .{
-            .name = try self.names.internTagIdent(self.module.identStoreConst(), tag_union.tags.items(.name)[index]),
-            .args = self.typeStore().sliceVars(tag_union.tags.items(.args)[index]),
+            .name = self.view.tagLabel(self.tags.items(.name)[index]),
+            .args = type_ids.fromVars(self.view.typeStore().sliceVars(self.tags.items(.args)[index])),
         };
     }
+};
 
-    /// Walk every child position reachable from `roots`, in the order
-    /// `CheckedTypePublisher.stepPayload` visits children, recording each
-    /// representative reached and the row default its row-tail positions
-    /// give it.
-    fn computeRowDefaults(self: *SealedTypeView, roots: []const Var) Allocator.Error!void {
-        var pending: std.ArrayList(Var) = .empty;
-        defer pending.deinit(self.allocator);
-        for (roots) |root| try self.reach(&pending, root, null);
-        while (pending.pop()) |var_| try self.expand(&pending, var_);
+/// The static-dispatch constraints of a sealed type variable. A constraint
+/// keeps the function variable checking recorded for it, so reading one
+/// resolves that variable to its class's representative.
+pub const SealedConstraintRows = struct {
+    constraints: []const types.StaticDispatchConstraint,
+    view: SealedTypeView,
+
+    pub fn len(self: SealedConstraintRows) usize {
+        return self.constraints.len;
     }
 
-    fn reach(self: *SealedTypeView, pending: *std.ArrayList(Var), var_: Var, candidate: ?RowDefault) Allocator.Error!void {
-        const resolved = self.typeStore().resolveVar(var_);
-        const index = @backingInt(resolved.var_);
-        if (!self.reached.isSet(index)) {
-            self.reached.set(index);
-            if (resolved.desc.flags.empty_tag_union_is_default) {
-                try self.row_defaults.put(resolved.var_, .empty_tag_union);
-            } else {
-                try pending.append(self.allocator, resolved.var_);
-            }
-        }
-        const row_default = checked_artifact.checkedRowDefaultForContent(self.module, resolved.desc.content, candidate) orelse return;
-        const entry = try self.row_defaults.getOrPut(resolved.var_);
-        if (entry.found_existing) {
-            if (entry.value_ptr.* != row_default) invariant("checked row variable {d} received incompatible defaults", .{index});
-            return;
-        }
-        entry.value_ptr.* = row_default;
+    pub fn get(self: SealedConstraintRows, index: usize) CheckedStaticDispatchConstraint {
+        const source = self.constraints[index];
+        const type_store = self.view.typeStore();
+        return .{
+            .fn_name = self.view.methodName(source.fn_name),
+            .fn_ty = type_ids.fromVar(type_store.resolveVar(source.fn_var).var_),
+            .origin = source.origin,
+            .numeral = type_store.constraintNumeralInfo(source),
+        };
+    }
+};
+
+/// The columns a module's sealed checked types are read through, owned by
+/// its checked type store.
+pub const SealedTypeColumns = struct {
+    names: *std.ArrayList(SealedNameRow),
+    origins: *std.ArrayList(SealedOriginRow),
+    nominals: *std.ArrayList(SealedNominalRow),
+    var_facts: *std.ArrayList(SealedVarFacts),
+};
+
+/// Fill `columns` for `env`, whose solver store checking sealed: intern the
+/// canonical name of every identifier the store's types use, resolve every
+/// module identity they name and every nominal declaration the store holds,
+/// and mark no variable reached. `reach` marks the variables publication
+/// reaches.
+pub fn buildColumns(
+    allocator: Allocator,
+    env: *const ModuleEnv,
+    names: *canonical.CanonicalNameStore,
+    imports: CheckedImportViews,
+    columns: SealedTypeColumns,
+) Allocator.Error!void {
+    const type_store = &env.types;
+    if (std.debug.runtime_safety and !type_store.isSealed()) {
+        invariant("sealed type columns were built over a type store checking never sealed", .{});
+    }
+    var builder = ColumnBuilder{
+        .allocator = allocator,
+        .env = env,
+        .names = names,
+        .imports = imports,
+        .columns = columns,
+        .origins = ImportedOriginIndex.init(allocator),
+    };
+    defer builder.origins.deinit();
+
+    try columns.var_facts.appendNTimes(allocator, .{}, @intCast(type_store.len()));
+
+    var seen = try std.DynamicBitSetUnmanaged.initEmpty(allocator, type_store.descs.backing.len());
+    defer seen.deinit(allocator);
+    for (0..@as(usize, @intCast(type_store.len()))) |index| {
+        const resolved = type_store.resolveVar(@fromBackingInt(@intCast(index)));
+        const desc_index: usize = @backingInt(resolved.desc_idx);
+        if (seen.isSet(desc_index)) continue;
+        seen.set(desc_index);
+        try builder.content(resolved.desc.content);
     }
 
-    fn expand(self: *SealedTypeView, pending: *std.ArrayList(Var), var_: Var) Allocator.Error!void {
-        const module = self.module;
-        const type_store = self.typeStore();
+    var local_nominal_declarations = try LocalNominalDeclarationIds.initFromEnv(allocator, env);
+    defer local_nominal_declarations.deinit();
+    const declaration_count: usize = @intCast(type_store.nominalDeclCount());
+    try columns.nominals.ensureTotalCapacity(allocator, declaration_count);
+    for (0..declaration_count) |index| {
+        const declaration = type_store.getNominalDecl(@fromBackingInt(@intCast(index)));
+        try builder.origin(declaration.origin_module);
+        const application = types.NominalType{
+            .ident = declaration.ident,
+            .args = Var.SafeList.Range.empty(),
+            .origin_module = declaration.origin_module,
+            .source = declaration.source,
+        };
+        const builtin = try builder.origins.builtinNominal(env, imports, application);
+        columns.nominals.appendAssumeCapacity(.{
+            .builtin = builtin,
+            .representation = try checked_artifact.checkedNominalRepresentationIfAvailable(
+                env,
+                imports,
+                &builder.origins,
+                &local_nominal_declarations,
+                application,
+                builtin,
+            ),
+        });
+    }
+}
+
+const ColumnBuilder = struct {
+    allocator: Allocator,
+    env: *const ModuleEnv,
+    names: *canonical.CanonicalNameStore,
+    imports: CheckedImportViews,
+    columns: SealedTypeColumns,
+    origins: ImportedOriginIndex,
+
+    fn row(self: *ColumnBuilder, ident: Ident.Idx) Allocator.Error!*SealedNameRow {
+        const index: usize = ident.idx;
+        if (index >= self.columns.names.items.len) try self.columns.names.appendNTimes(self.allocator, .{}, index + 1 - self.columns.names.items.len);
+        return &self.columns.names.items[index];
+    }
+
+    fn typeName(self: *ColumnBuilder, ident: Ident.Idx) Allocator.Error!void {
+        const name_row = try self.row(ident);
+        if (name_row.type_name != SealedNameRow.none) return;
+        name_row.type_name = @backingInt(try self.names.internTypeIdent(&self.env.common.idents, ident));
+    }
+
+    fn recordFieldLabel(self: *ColumnBuilder, ident: Ident.Idx) Allocator.Error!void {
+        const name_row = try self.row(ident);
+        if (name_row.record_field_label != SealedNameRow.none) return;
+        name_row.record_field_label = @backingInt(try self.names.internRecordFieldIdent(&self.env.common.idents, ident));
+    }
+
+    fn tagLabel(self: *ColumnBuilder, ident: Ident.Idx) Allocator.Error!void {
+        const name_row = try self.row(ident);
+        if (name_row.tag_label != SealedNameRow.none) return;
+        name_row.tag_label = @backingInt(try self.names.internTagIdent(&self.env.common.idents, ident));
+    }
+
+    fn methodName(self: *ColumnBuilder, ident: Ident.Idx) Allocator.Error!void {
+        const name_row = try self.row(ident);
+        if (name_row.method_name != SealedNameRow.none) return;
+        name_row.method_name = @backingInt(try self.names.internMethodIdent(&self.env.common.idents, ident));
+    }
+
+    fn origin(self: *ColumnBuilder, origin_module: base.ModuleIdentity.Idx) Allocator.Error!void {
+        const index: usize = @backingInt(origin_module);
+        if (index >= self.columns.origins.items.len) try self.columns.origins.appendNTimes(self.allocator, .{}, index + 1 - self.columns.origins.items.len);
+        const origin_row = &self.columns.origins.items[index];
+        if (origin_row.identity != SealedNameRow.none) return;
+        origin_row.identity = @backingInt(try self.names.internModuleIdentity(self.env.moduleIdentityHash(origin_module)));
+        if (try self.origins.ownerIfAvailable(self.env, self.imports, origin_module)) |owner| {
+            origin_row.owner = owner;
+            origin_row.has_owner = 1;
+        }
+    }
+
+    fn constraints(self: *ColumnBuilder, range: types.StaticDispatchConstraint.SafeList.Range) Allocator.Error!void {
+        for (self.env.types.sliceStaticDispatchConstraints(range)) |constraint| try self.methodName(constraint.fn_name);
+    }
+
+    fn content(self: *ColumnBuilder, value: types.Content) Allocator.Error!void {
+        const type_store = &self.env.types;
+        switch (value) {
+            .err => {},
+            .field_presence => |presence| switch (presence) {
+                .required, .optional => {},
+                .defaulted => |id| try self.origin(id.origin_module),
+            },
+            .flex => |flex| try self.constraints(flex.constraints),
+            .rigid => |rigid| try self.constraints(rigid.constraints),
+            .alias => |alias| {
+                try self.typeName(alias.ident.ident_idx);
+                try self.origin(alias.origin_module);
+            },
+            .structure => |flat| switch (flat) {
+                .empty_record, .empty_tag_union, .tuple, .fn_pure, .fn_effectful, .fn_unbound => {},
+                .nominal_type => |nominal| {
+                    try self.typeName(nominal.ident.ident_idx);
+                    try self.origin(nominal.origin_module);
+                },
+                .record => |record| for (type_store.getRecordFieldsSlice(record.fields).items(.name)) |name| {
+                    try self.recordFieldLabel(name);
+                },
+                .tag_union => |tag_union| for (type_store.getTagsSlice(tag_union.tags).items(.name)) |name| {
+                    try self.tagLabel(name);
+                },
+            },
+        }
+    }
+};
+
+/// Mark every variable reachable from `root` reached, recording the row-tail
+/// positions each is reached through.
+pub fn reach(allocator: Allocator, env: *const ModuleEnv, var_facts: []SealedVarFacts, root: Var) Allocator.Error!void {
+    var walker = ReachWalker{ .env = env, .var_facts = var_facts };
+    defer walker.pending.deinit(allocator);
+    try walker.reach(allocator, root, null);
+    while (walker.pending.pop()) |var_| try walker.expand(allocator, var_);
+}
+
+const ReachWalker = struct {
+    env: *const ModuleEnv,
+    var_facts: []SealedVarFacts,
+    pending: std.ArrayList(Var) = .empty,
+
+    fn reach(self: *ReachWalker, allocator: Allocator, var_: Var, tail: ?RowDefault) Allocator.Error!void {
+        const resolved = self.env.types.resolveVar(var_);
+        const var_facts = &self.var_facts[@backingInt(resolved.var_)];
+        if (!var_facts.reached) {
+            var_facts.reached = true;
+            if (!resolved.desc.flags.empty_tag_union_is_default) try self.pending.append(allocator, resolved.var_);
+        }
+        switch (tail orelse return) {
+            .empty_record => var_facts.record_tail = true,
+            .empty_tag_union => var_facts.tag_tail = true,
+        }
+        if (std.debug.runtime_safety and var_facts.record_tail and var_facts.tag_tail and
+            checked_artifact.checkedRowDefaultForContent(self.env, resolved.desc.content, .empty_record) != null)
+        {
+            invariant("checked row variable {d} received incompatible defaults", .{@backingInt(resolved.var_)});
+        }
+    }
+
+    fn expand(self: *ReachWalker, allocator: Allocator, var_: Var) Allocator.Error!void {
+        const env = self.env;
+        const type_store = &env.types;
         switch (type_store.resolveVar(var_).desc.content) {
             .err, .field_presence => {},
             .flex => |flex| for (type_store.sliceStaticDispatchConstraints(flex.constraints)) |source| {
-                try self.reach(pending, source.fn_var, null);
+                try self.reach(allocator, source.fn_var, null);
             },
             .rigid => |rigid| for (type_store.sliceStaticDispatchConstraints(rigid.constraints)) |source| {
-                try self.reach(pending, source.fn_var, null);
+                try self.reach(allocator, source.fn_var, null);
             },
             .alias => |alias| {
-                try self.reach(pending, type_store.getAliasBackingVar(alias), null);
-                for (type_store.sliceAliasArgs(alias)) |arg| try self.reach(pending, arg, null);
+                try self.reach(allocator, type_store.getAliasBackingVar(alias), null);
+                for (type_store.sliceAliasArgs(alias)) |arg| try self.reach(allocator, arg, null);
             },
             .structure => |flat| switch (flat) {
                 .empty_record, .empty_tag_union => {},
                 .record => |record| {
-                    if (record.fields.len() == 0 and checked_artifact.checkedRecordExtIsEmpty(module, record.ext)) return;
+                    if (record.fields.len() == 0 and checked_artifact.checkedRecordExtIsEmpty(env, record.ext)) return;
                     for (type_store.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
                         switch (presence.decode()) {
-                            .required => |type_var| try self.reach(pending, type_var, null),
+                            .required => |type_var| try self.reach(allocator, type_var, null),
                             .unknown => |unknown| {
                                 switch (type_store.resolveVar(unknown.presence).desc.content) {
-                                    .flex => try self.reach(pending, unknown.presence, null),
+                                    .flex => try self.reach(allocator, unknown.presence, null),
                                     .field_presence, .err => {},
-                                    .rigid, .alias, .structure => invariant("a sealed type view reached a field presence variable holding non-presence content", .{}),
+                                    .rigid, .alias, .structure => invariant("a sealed field presence variable held non-presence content", .{}),
                                 }
-                                try self.reach(pending, unknown.var_, null);
+                                try self.reach(allocator, unknown.var_, null);
                             },
                         }
                     }
-                    try self.reach(pending, record.ext, .empty_record);
+                    try self.reach(allocator, record.ext, .empty_record);
                 },
-                .tuple => |tuple| for (type_store.sliceVars(tuple.elems)) |elem| try self.reach(pending, elem, null),
-                .nominal_type => |nominal| for (type_store.sliceNominalArgs(nominal)) |arg| try self.reach(pending, arg, null),
+                .tuple => |tuple| for (type_store.sliceVars(tuple.elems)) |elem| try self.reach(allocator, elem, null),
+                .nominal_type => |nominal| for (type_store.sliceNominalArgs(nominal)) |arg| try self.reach(allocator, arg, null),
                 .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    for (type_store.sliceVars(func.args)) |arg| try self.reach(pending, arg, null);
-                    try self.reach(pending, func.ret, null);
+                    for (type_store.sliceVars(func.args)) |arg| try self.reach(allocator, arg, null);
+                    try self.reach(allocator, func.ret, null);
                 },
                 .tag_union => |tag_union| {
-                    if (tag_union.tags.len() == 0 and checked_artifact.checkedTagUnionExtIsEmpty(module, tag_union.ext)) return;
+                    if (tag_union.tags.len() == 0 and checked_artifact.checkedTagUnionExtIsEmpty(env, tag_union.ext)) return;
                     for (type_store.getTagsSlice(tag_union.tags).items(.args)) |args| {
-                        for (type_store.sliceVars(args)) |arg| try self.reach(pending, arg, null);
+                        for (type_store.sliceVars(args)) |arg| try self.reach(allocator, arg, null);
                     }
-                    try self.reach(pending, tag_union.ext, .empty_tag_union);
+                    try self.reach(allocator, tag_union.ext, .empty_tag_union);
                 },
             },
         }
     }
 };
-
-/// Append every source variable `module`'s checked type publication
-/// publishes as a root to `out`: the roots
-/// `checked_artifact.forEachCheckedSourceTypeRoot` enumerates, and for each
-/// local nominal declaration the variables its declaration walk publishes.
-pub fn collectSourceTypeRoots(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    inputs: CheckedSourceTypeRootInputs,
-    out: *std.ArrayList(Var),
-) Allocator.Error!void {
-    var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module, inputs.source_nodes);
-    defer local_type_declarations.deinit();
-    var collector = RootCollector{
-        .allocator = allocator,
-        .module = module,
-        .local_type_declarations = &local_type_declarations,
-        .out = out,
-    };
-    defer collector.deinit();
-    try checked_artifact.forEachCheckedSourceTypeRoot(allocator, module, inputs, &collector);
-}
-
-/// A root visitor that records each root's variable. A nominal declaration
-/// publishes its statement, its formals, and the leaves of its annotation
-/// walk (`DeclarationAnnoWalk`), which the collector enumerates through the
-/// walk's own classification (`declarationAnnoNode`, `declarationApplyBase`).
-const RootCollector = struct {
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    local_type_declarations: *const LocalTypeDeclarationIndex,
-    out: *std.ArrayList(Var),
-    /// Local aliases whose bodies a declaration walk has enumerated. A body's
-    /// leaves depend only on the alias's own formals, so each is walked once.
-    walked_aliases: std.AutoHashMapUnmanaged(CIR.Statement.Idx, void) = .empty,
-    annos: std.ArrayList(PendingAnno) = .empty,
-
-    /// An annotation still to walk, under the formals (header argument
-    /// annotations) of the declaration whose body holds it.
-    const PendingAnno = struct {
-        anno: CIR.TypeAnno.Idx,
-        formals: []const CIR.TypeAnno.Idx,
-    };
-
-    fn deinit(self: *RootCollector) void {
-        self.walked_aliases.deinit(self.allocator);
-        self.annos.deinit(self.allocator);
-    }
-
-    pub fn visit(self: *RootCollector, var_: Var) Allocator.Error!void {
-        try self.out.append(self.allocator, var_);
-    }
-
-    pub fn visitRequired(self: *RootCollector, maybe_var: ?Var, comptime missing: []const u8) Allocator.Error!void {
-        try self.visit(maybe_var orelse invariant(missing, .{}));
-    }
-
-    pub fn visitScheme(self: *RootCollector, var_: Var) Allocator.Error!void {
-        try self.visit(var_);
-    }
-
-    /// The roots `appendCheckedNominalDeclarationFromStatement` publishes.
-    pub fn visitNominalDeclaration(self: *RootCollector, statement_idx: CIR.Statement.Idx, nominal: checked_artifact.NominalDeclStatement) Allocator.Error!void {
-        if (nominal.anno == .placeholder) return;
-        if (!checked_artifact.localNominalDeclarationIsValid(self.module, statement_idx)) return;
-        try self.visit(ModuleEnv.varFrom(statement_idx));
-
-        const store = &self.module.moduleEnvConst().store;
-        const formals = store.sliceTypeAnnos(store.getTypeHeader(nominal.header).args);
-        for (formals) |formal| {
-            if (store.getTypeAnno(formal) != .rigid_var) {
-                invariant("nominal declaration header argument was not a rigid type variable", .{});
-            }
-            try self.visit(ModuleEnv.varFrom(formal));
-        }
-
-        // Unnamed fields of a record backing publish as padding.
-        var record_anno = nominal.anno;
-        while (store.getTypeAnno(record_anno) == .parens) record_anno = store.getTypeAnno(record_anno).parens.anno;
-        switch (store.getTypeAnno(record_anno)) {
-            .record => |record| for (store.sliceAnnoRecordFields(record.fields)) |field_idx| {
-                const field = store.getAnnoRecordField(field_idx);
-                if (field.is_unnamed) try self.walk(field.ty, formals);
-            },
-            .apply,
-            .rigid_var,
-            .rigid_var_lookup,
-            .underscore,
-            .lookup,
-            .tag_union,
-            .tag,
-            .tuple,
-            .@"fn",
-            .parens,
-            .malformed,
-            => {},
-        }
-        try self.walk(nominal.anno, formals);
-    }
-
-    fn walk(self: *RootCollector, root: CIR.TypeAnno.Idx, root_formals: []const CIR.TypeAnno.Idx) Allocator.Error!void {
-        const gpa = self.allocator;
-        const module = self.module;
-        const store = &module.moduleEnvConst().store;
-        try self.annos.append(gpa, .{ .anno = root, .formals = root_formals });
-        while (self.annos.pop()) |pending| {
-            const formals = pending.formals;
-            switch (checked_artifact.declarationAnnoNode(module, self.local_type_declarations, pending.anno)) {
-                .leaf => |var_| try self.visit(var_),
-                .rigid => |rigid| {
-                    if (rigid.name) |name| if (formalNamed(store, formals, name)) continue;
-                    try self.visit(rigid.var_);
-                },
-                .local_alias => |local_alias| try self.enterAlias(local_alias.statement),
-                .composite => |composite| switch (store.getTypeAnno(composite)) {
-                    .tag_union => |tag_union| {
-                        for (store.sliceTypeAnnos(tag_union.tags)) |tag_anno| {
-                            const tag = switch (store.getTypeAnno(tag_anno)) {
-                                .tag => |tag| tag,
-                                .apply,
-                                .rigid_var,
-                                .rigid_var_lookup,
-                                .underscore,
-                                .lookup,
-                                .tag_union,
-                                .tuple,
-                                .record,
-                                .@"fn",
-                                .parens,
-                                .malformed,
-                                => invariant("nominal declaration tag union contained a non-tag annotation", .{}),
-                            };
-                            try self.pushAll(store.sliceTypeAnnos(tag.args), formals);
-                        }
-                        if (tag_union.ext) |ext| try self.annos.append(gpa, .{ .anno = ext, .formals = formals });
-                    },
-                    .record => |record| {
-                        for (store.sliceAnnoRecordFields(record.fields)) |field_idx| {
-                            const field = store.getAnnoRecordField(field_idx);
-                            if (!field.is_unnamed) try self.annos.append(gpa, .{ .anno = field.ty, .formals = formals });
-                        }
-                        if (record.ext) |ext| try self.annos.append(gpa, .{ .anno = ext, .formals = formals });
-                    },
-                    .tuple => |tuple| try self.pushAll(store.sliceTypeAnnos(tuple.elems), formals),
-                    .@"fn" => |func| {
-                        try self.pushAll(store.sliceTypeAnnos(func.args), formals);
-                        try self.annos.append(gpa, .{ .anno = func.ret, .formals = formals });
-                    },
-                    .apply => |apply| {
-                        const args = store.sliceTypeAnnos(apply.args);
-                        try self.pushAll(args, formals);
-                        switch (checked_artifact.declarationApplyBase(module, self.local_type_declarations, composite, apply, args.len)) {
-                            .leaf, .template => |var_| try self.visit(var_),
-                            .alias => |statement| try self.enterAlias(statement),
-                        }
-                    },
-                    .rigid_var,
-                    .rigid_var_lookup,
-                    .underscore,
-                    .lookup,
-                    .tag,
-                    .parens,
-                    .malformed,
-                    => unreachable, // declarationAnnoNode classifies only these five annotation kinds as composite
-                },
-            }
-        }
-    }
-
-    fn pushAll(self: *RootCollector, annos: []const CIR.TypeAnno.Idx, formals: []const CIR.TypeAnno.Idx) Allocator.Error!void {
-        for (annos) |anno| try self.annos.append(self.allocator, .{ .anno = anno, .formals = formals });
-    }
-
-    /// An alias reference publishes the alias's own root and walks its body
-    /// under the alias's formals.
-    fn enterAlias(self: *RootCollector, statement_idx: CIR.Statement.Idx) Allocator.Error!void {
-        try self.visit(ModuleEnv.varFrom(statement_idx));
-        const walked = try self.walked_aliases.getOrPut(self.allocator, statement_idx);
-        if (walked.found_existing) return;
-        const alias = self.module.getStatement(statement_idx).s_alias_decl;
-        if (alias.anno == .placeholder) {
-            invariant("checked declaration template alias application resolved to an unfinalized alias declaration", .{});
-        }
-        const store = &self.module.moduleEnvConst().store;
-        const formals = store.sliceTypeAnnos(store.getTypeHeader(alias.header).args);
-        for (formals) |formal| {
-            if (store.getTypeAnno(formal) != .rigid_var) {
-                invariant("alias declaration header argument was not a rigid type variable", .{});
-            }
-        }
-        try self.annos.append(self.allocator, .{ .anno = alias.anno, .formals = formals });
-    }
-
-    /// Whether a declaration whose header arguments are `formals` binds `name`.
-    fn formalNamed(store: anytype, formals: []const CIR.TypeAnno.Idx, name: Ident.Idx) bool {
-        for (formals) |formal| {
-            if (store.getTypeAnno(formal).rigid_var.name == name) return true;
-        }
-        return false;
-    }
-};
-
-/// Build the sealed type view of `module` and verify it against the source
-/// roots `store` published, before anything rewrites the publication. Every
-/// root the view enumerates must be one publication published, and every
-/// published root must lie in the view's root closure.
-pub fn verifyModulePublication(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
-    imports: CheckedImportViews,
-    inputs: CheckedSourceTypeRootInputs,
-    store: *const CheckedTypeStore,
-    active: *const CheckedSourceTypeRoots,
-) Allocator.Error!void {
-    var roots: std.ArrayList(Var) = .empty;
-    defer roots.deinit(allocator);
-    try collectSourceTypeRoots(allocator, module, inputs, &roots);
-    var view = try SealedTypeView.init(allocator, module, names, imports, roots.items);
-    defer view.deinit();
-    for (roots.items) |root| {
-        if (active.roots.get(view.representative(root)) == null) {
-            invariant("sealed type view root {d} is not a published source root", .{@backingInt(view.representative(root))});
-        }
-    }
-    try verifyAgainstPublication(allocator, &view, store, active);
-}
 
 /// A published type and the representative variable the view renders for it.
 const Pair = struct {
@@ -702,13 +587,13 @@ const Pair = struct {
     var_: Var,
 };
 
-/// Walk every published source root (`active`) and the view in lockstep and
-/// assert that both render the same structure. Publication shares one root
-/// between solver graphs with equal closed structure, so ids are never
-/// compared, only what they render.
+/// Walk every published source root (`active`) and the view of `publication`
+/// in lockstep and assert that both render the same structure. Publication
+/// shares one root between solver graphs with equal closed structure, so
+/// ids are never compared, only what they render.
 pub fn verifyAgainstPublication(
     allocator: Allocator,
-    view: *const SealedTypeView,
+    view: SealedTypeView,
     publication: *const CheckedTypeStore,
     active: *const CheckedSourceTypeRoots,
 ) Allocator.Error!void {
@@ -720,8 +605,8 @@ pub fn verifyAgainstPublication(
     var roots = active.roots.constIterator();
     while (roots.next()) |entry| {
         const var_ = view.representative(entry.key_ptr.*);
-        if (!view.reached.isSet(@backingInt(var_))) {
-            invariant("published source root {d} (solver variable {d}) lies outside the sealed type view's root closure", .{ @backingInt(entry.value_ptr.*), @backingInt(var_) });
+        if (!view.reaches(var_)) {
+            invariant("published source root {d} (solver variable {d}) was never reached", .{ @backingInt(entry.value_ptr.*), @backingInt(var_) });
         }
         try pending.append(allocator, .{ .id = entry.value_ptr.*, .var_ = var_ });
     }
@@ -736,7 +621,7 @@ pub fn verifyAgainstPublication(
 
 const Gate = struct {
     allocator: Allocator,
-    view: *const SealedTypeView,
+    view: SealedTypeView,
     publication: *const CheckedTypeStore,
     pending: *std.ArrayList(Pair),
 
@@ -748,19 +633,21 @@ const Gate = struct {
         if (!ok) mismatch(field, pair);
     }
 
-    fn child(self: *Gate, id: CheckedTypeId, var_: Var) Allocator.Error!void {
-        try self.pending.append(self.allocator, .{ .id = id, .var_ = self.view.representative(var_) });
+    fn child(self: *Gate, id: CheckedTypeId, sealed: CheckedTypeId) Allocator.Error!void {
+        const var_ = type_ids.asVar(sealed);
+        if (self.view.representative(var_) != var_) invariant("sealed type view rendered a child that is not its class's representative", .{});
+        try self.pending.append(self.allocator, .{ .id = id, .var_ = var_ });
     }
 
-    fn children(self: *Gate, ids: []const CheckedTypeId, vars: []const Var, comptime field: []const u8, pair: Pair) Allocator.Error!void {
-        expect(ids.len == vars.len, field ++ " count", pair);
-        for (ids, vars) |id, var_| try self.child(id, var_);
+    fn children(self: *Gate, ids: []const CheckedTypeId, sealed: []const CheckedTypeId, comptime field: []const u8, pair: Pair) Allocator.Error!void {
+        expect(ids.len == sealed.len, field ++ " count", pair);
+        for (ids, sealed) |id, other| try self.child(id, other);
     }
 
     fn compare(self: *Gate, published: CheckedTypePayload, pair: Pair) Allocator.Error!void {
-        const sealed = try self.view.payload(pair.var_);
+        const sealed = self.view.payload(pair.var_);
         if (published == .pending) mismatch("a pending published payload", pair);
-        if (!std.mem.eql(u8, @tagName(published), @tagName(sealed))) mismatch("the payload kind", pair);
+        if (std.meta.activeTag(published) != std.meta.activeTag(sealed)) mismatch("the payload kind", pair);
         switch (published) {
             .pending => unreachable, // rejected above
             .err, .empty_record, .empty_tag_union => {},
@@ -771,7 +658,7 @@ const Gate = struct {
                 const other = sealed.alias;
                 expect(alias.name == other.name, "alias name", pair);
                 expect(alias.origin_module == other.origin_module, "alias origin module", pair);
-                expect(std.meta.eql(alias.owner_module.*, other.owner_module), "alias owner module", pair);
+                expect(std.meta.eql(alias.owner_module.*, other.owner_module.*), "alias owner module", pair);
                 expect(std.meta.eql(alias.source_decl, other.source_decl), "alias source declaration", pair);
                 expect(alias.builtin_origin == other.builtin_origin, "alias builtin origin", pair);
                 try self.child(alias.backing, other.backing);
@@ -781,7 +668,7 @@ const Gate = struct {
                 const other = sealed.nominal;
                 expect(nominal.name == other.name, "nominal name", pair);
                 expect(nominal.origin_module == other.origin_module, "nominal origin module", pair);
-                expect(std.meta.eql(nominal.owner_module.*, other.owner_module), "nominal owner module", pair);
+                expect(std.meta.eql(nominal.owner_module.*, other.owner_module.*), "nominal owner module", pair);
                 expect(nominal.source_decl == other.source_decl, "nominal source declaration", pair);
                 expect(nominal.builtin == other.builtin, "nominal builtin", pair);
                 expect(nominal.is_opaque == other.is_opaque, "nominal opacity", pair);
@@ -807,164 +694,91 @@ const Gate = struct {
     /// published row and the solver row it stands for can split their fields
     /// across segments differently. Both sides are read as their flattened
     /// field set, in label order, followed by the chain's tail.
-    fn compareRecordRows(self: *Gate, published: checked_artifact.CheckedRecordType, sealed: SealedRecordType, pair: Pair) Allocator.Error!void {
+    fn compareRecordRows(self: *Gate, published: checked_artifact.CheckedRecordType, sealed: checked_artifact.CheckedRecordType, pair: Pair) Allocator.Error!void {
         const gpa = self.allocator;
-        var published_fields: std.ArrayList(checked_artifact.CheckedRecordField) = .empty;
+        var published_fields: std.ArrayList(CheckedRecordField) = .empty;
         defer published_fields.deinit(gpa);
-        var sealed_fields: std.ArrayList(SealedRecordField) = .empty;
+        var sealed_fields: std.ArrayList(CheckedRecordField) = .empty;
         defer sealed_fields.deinit(gpa);
-
-        var published_row = published;
-        const published_tail = while (true) {
-            try published_row.fields.appendTo(gpa, &published_fields);
-            switch (self.publication.payload(published_row.ext)) {
-                .record => |next| published_row = next,
-                .pending,
-                .err,
-                .flex,
-                .rigid,
-                .alias,
-                .tuple,
-                .nominal,
-                .function,
-                .empty_record,
-                .tag_union,
-                .empty_tag_union,
-                .field_kind,
-                => break published_row.ext,
-            }
-        };
-        var sealed_row = sealed;
-        const sealed_tail = while (true) {
-            for (0..sealed_row.fields.len) |index| try sealed_fields.append(gpa, try self.view.recordField(sealed_row, index));
-            switch (try self.view.payload(sealed_row.ext)) {
-                .record => |next| sealed_row = next,
-                .err,
-                .flex,
-                .rigid,
-                .alias,
-                .tuple,
-                .nominal,
-                .function,
-                .empty_record,
-                .tag_union,
-                .empty_tag_union,
-                .field_kind,
-                => break sealed_row.ext,
-            }
-        };
+        const published_tail = try self.flattenRecord(self.publication.view(), published, &published_fields);
+        try sealed.fields.appendTo(gpa, &sealed_fields);
+        if (self.view.payload(type_ids.asVar(sealed.ext)) == .record) mismatch("a sealed record row whose extension is a record", pair);
 
         expect(published_fields.items.len == sealed_fields.items.len, "record field count", pair);
-        std.mem.sort(checked_artifact.CheckedRecordField, published_fields.items, {}, publishedFieldLessThan);
-        std.mem.sort(SealedRecordField, sealed_fields.items, {}, sealedFieldLessThan);
+        std.mem.sort(CheckedRecordField, published_fields.items, {}, fieldLessThan);
+        std.mem.sort(CheckedRecordField, sealed_fields.items, {}, fieldLessThan);
         for (published_fields.items, sealed_fields.items) |field, other| {
             expect(field.name == other.name, "record field label", pair);
-            switch (other.kind) {
-                .required => expect(field.kind.tag == .required, "record field kind", pair),
-                .optional => expect(field.kind.tag == .optional, "record field kind", pair),
-                .err => expect(field.kind.tag == .err, "record field kind", pair),
-                .defaulted => |default| {
-                    expect(field.kind.tag == .defaulted, "record field kind", pair);
-                    expect(std.meta.eql(field.kind.default, default), "record field default", pair);
-                },
-                .undetermined => |presence| {
-                    const variable = field.kind.undeterminedVariable() orelse mismatch("record field kind", pair);
-                    try self.child(variable, presence);
-                },
-            }
+            expect(field.kind.tag == other.kind.tag, "record field kind", pair);
+            expect(std.meta.eql(field.kind.default, other.kind.default), "record field default", pair);
+            if (field.kind.undeterminedVariable()) |variable| try self.child(variable, other.kind.undeterminedVariable().?);
             try self.child(field.ty, other.ty);
         }
-        try self.child(published_tail, sealed_tail);
+        try self.child(published_tail, sealed.ext);
     }
 
-    fn publishedFieldLessThan(_: void, lhs: checked_artifact.CheckedRecordField, rhs: checked_artifact.CheckedRecordField) bool {
-        return @backingInt(lhs.name) < @backingInt(rhs.name);
+    fn flattenRecord(self: *Gate, view: checked_artifact.CheckedTypeStoreView, record: checked_artifact.CheckedRecordType, out: *std.ArrayList(CheckedRecordField)) Allocator.Error!CheckedTypeId {
+        var row = record;
+        while (true) {
+            try row.fields.appendTo(self.allocator, out);
+            switch (view.payload(row.ext)) {
+                .record => |next| row = next,
+                .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union, .field_kind => return row.ext,
+            }
+        }
     }
 
-    fn sealedFieldLessThan(_: void, lhs: SealedRecordField, rhs: SealedRecordField) bool {
+    fn fieldLessThan(_: void, lhs: CheckedRecordField, rhs: CheckedRecordField) bool {
         return @backingInt(lhs.name) < @backingInt(rhs.name);
     }
 
     /// Compare two tag unions as rows, flattened across their extension
     /// chains for the reason `compareRecordRows` gives.
-    fn compareTagRows(self: *Gate, published: checked_artifact.CheckedTagUnionType, sealed: SealedTagUnionType, pair: Pair) Allocator.Error!void {
+    fn compareTagRows(self: *Gate, published: checked_artifact.CheckedTagUnionType, sealed: checked_artifact.CheckedTagUnionType, pair: Pair) Allocator.Error!void {
         const gpa = self.allocator;
-        var published_tags: std.ArrayList(checked_artifact.CheckedTag) = .empty;
+        var published_tags: std.ArrayList(CheckedTag) = .empty;
         defer published_tags.deinit(gpa);
-        var sealed_tags: std.ArrayList(SealedTag) = .empty;
+        var sealed_tags: std.ArrayList(CheckedTag) = .empty;
         defer sealed_tags.deinit(gpa);
-
-        var published_row = published;
+        var row = published;
+        const view = self.publication.view();
         const published_tail = while (true) {
-            try published_row.tags.appendTo(gpa, &published_tags);
-            switch (self.publication.payload(published_row.ext)) {
-                .tag_union => |next| published_row = next,
-                .pending,
-                .err,
-                .flex,
-                .rigid,
-                .alias,
-                .record,
-                .tuple,
-                .nominal,
-                .function,
-                .empty_record,
-                .empty_tag_union,
-                .field_kind,
-                => break published_row.ext,
+            try row.tags.appendTo(gpa, &published_tags);
+            switch (view.payload(row.ext)) {
+                .tag_union => |next| row = next,
+                .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union, .field_kind => break row.ext,
             }
         };
-        var sealed_row = sealed;
-        const sealed_tail = while (true) {
-            for (0..sealed_row.tags.len) |index| try sealed_tags.append(gpa, try self.view.tag(sealed_row, index));
-            switch (try self.view.payload(sealed_row.ext)) {
-                .tag_union => |next| sealed_row = next,
-                .err,
-                .flex,
-                .rigid,
-                .alias,
-                .record,
-                .tuple,
-                .nominal,
-                .function,
-                .empty_record,
-                .empty_tag_union,
-                .field_kind,
-                => break sealed_row.ext,
-            }
-        };
+        try sealed.tags.appendTo(gpa, &sealed_tags);
+        if (self.view.payload(type_ids.asVar(sealed.ext)) == .tag_union) mismatch("a sealed tag union row whose extension is a tag union", pair);
 
         expect(published_tags.items.len == sealed_tags.items.len, "tag count", pair);
-        std.mem.sort(checked_artifact.CheckedTag, published_tags.items, {}, publishedTagLessThan);
-        std.mem.sort(SealedTag, sealed_tags.items, {}, sealedTagLessThan);
+        std.mem.sort(CheckedTag, published_tags.items, {}, tagLessThan);
+        std.mem.sort(CheckedTag, sealed_tags.items, {}, tagLessThan);
         for (published_tags.items, sealed_tags.items) |published_tag, other| {
             expect(published_tag.name == other.name, "tag label", pair);
             try self.children(published_tag.args, other.args, "tag argument", pair);
         }
-        try self.child(published_tail, sealed_tail);
+        try self.child(published_tail, sealed.ext);
     }
 
-    fn publishedTagLessThan(_: void, lhs: checked_artifact.CheckedTag, rhs: checked_artifact.CheckedTag) bool {
+    fn tagLessThan(_: void, lhs: CheckedTag, rhs: CheckedTag) bool {
         return @backingInt(lhs.name) < @backingInt(rhs.name);
     }
 
-    fn sealedTagLessThan(_: void, lhs: SealedTag, rhs: SealedTag) bool {
-        return @backingInt(lhs.name) < @backingInt(rhs.name);
-    }
-
-    fn compareVariable(self: *Gate, published: checked_artifact.CheckedTypeVariable, sealed: SealedTypeVariable, pair: Pair) Allocator.Error!void {
+    fn compareVariable(self: *Gate, published: CheckedTypeVariable, sealed: CheckedTypeVariable, pair: Pair) Allocator.Error!void {
         if (published.name) |name| {
             const other = sealed.name orelse mismatch("variable name", pair);
             expect(std.mem.eql(u8, name, other), "variable name", pair);
         } else expect(sealed.name == null, "variable name", pair);
-        expect(published.constraints.len() == sealed.constraints.len, "constraint count", pair);
-        for (sealed.constraints, 0..) |source, constraint_index| {
-            const published_constraint = published.constraints.get(constraint_index);
-            const other = try self.view.constraint(source);
+        expect(published.constraints.len() == sealed.constraints.len(), "constraint count", pair);
+        for (0..published.constraints.len()) |index| {
+            const published_constraint = published.constraints.get(index);
+            const other = sealed.constraints.get(index);
             expect(published_constraint.fn_name == other.fn_name, "constraint method name", pair);
             expect(std.meta.eql(published_constraint.origin, other.origin), "constraint origin", pair);
             expect(std.meta.eql(published_constraint.numeral, other.numeral), "constraint numeral", pair);
-            try self.child(published_constraint.fn_ty, other.fn_var);
+            try self.child(published_constraint.fn_ty, other.fn_ty);
         }
         expect(published.numeric_default_phase == sealed.numeric_default_phase, "numeric default phase", pair);
         expect(published.row_default == sealed.row_default, "row default", pair);
@@ -1018,15 +832,7 @@ fn expectViewMatchesPublication(source: []const u8) ViewTestError!void {
     var publication = try CheckedTypeStore.fromModule(allocator, module, &names, ModuleId{}, &imports, &.{}, &source_nodes, &.{}, &.{});
     defer publication.deinit(allocator);
 
-    try verifyModulePublication(
-        allocator,
-        module,
-        &names,
-        publication.imports,
-        .{ .source_nodes = &source_nodes, .selected_hoisted_roots = &.{}, .promoted_local_procedures = &.{} },
-        &publication.store,
-        &publication.source_types.?,
-    );
+    try verifyAgainstPublication(allocator, publication.store.sealedView(module.moduleEnvConst()), &publication.store, &publication.source_types.?);
 }
 
 test "sealed type view matches publication: open and closed records" {
