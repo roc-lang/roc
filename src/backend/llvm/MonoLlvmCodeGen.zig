@@ -4507,10 +4507,9 @@ pub const MonoLlvmCodeGen = struct {
         return self.inline_everywhere.items.len > @backingInt(proc_id) and self.inline_everywhere.items[@backingInt(proc_id)];
     }
 
-    /// The locals whose slot addresses `emitDirectCall` passes to an
-    /// out-of-line callee, for `SlotLifetimes`: the target of a result
-    /// returned through memory, and each argument passed by pointer. An
-    /// `alwaysinline` callee is never out of line.
+    /// The local addresses passed to out-of-line procedures and explicit RC
+    /// helpers. Procedure calls follow the fast ABI; RC calls follow the same
+    /// scratch-versus-local rule as emission. No ownership is inferred here.
     const AddressedCallLocals = struct {
         codegen: *MonoLlvmCodeGen,
 
@@ -4520,8 +4519,19 @@ pub const MonoLlvmCodeGen = struct {
             return self.codegen.value_plan.storageRoot(local);
         }
 
-        pub fn appendAddressed(self: AddressedCallLocals, call: @FieldType(lir.LIR.CFStmt, "assign_call"), out: *std.ArrayList(LocalId)) AppendError!void {
+        pub fn appendAddressed(self: AddressedCallLocals, stmt: lir.LIR.CFStmt, out: *std.ArrayList(LocalId)) AppendError!void {
             const codegen = self.codegen;
+            switch (stmt) {
+                inline .incref, .decref, .decref_if_initialized, .free => |rc| {
+                    if (codegen.localDyn(rc.value) == null and rcUsesLocalSlot(codegen.layoutByteSize(codegen.localLayout(rc.value)))) {
+                        try out.append(codegen.allocator, rc.value);
+                    }
+                    return;
+                },
+                .assign_call => {},
+                else => return,
+            }
+            const call = stmt.assign_call;
             if (codegen.store.stmtRowOrDefault(call.extra).replaces_frame) return;
             const proc = codegen.store.getProcSpec(call.proc);
             if (proc.hosted != null) return;
@@ -12219,6 +12229,10 @@ pub const MonoLlvmCodeGen = struct {
     /// wider than this pass their own slot pointer as before.
     const rc_arg_scratch_size = 64;
 
+    fn rcUsesLocalSlot(size: u32) bool {
+        return size > rc_arg_scratch_size;
+    }
+
     fn emitRcForLocal(self: *MonoLlvmCodeGen, op: layout.RcOp, local: LocalId, count: u32, atomicity: RcAtomicity) Error!void {
         const slot_v = self.slot(local);
         if (slot_v.size == 0) return;
@@ -12256,7 +12270,7 @@ pub const MonoLlvmCodeGen = struct {
         // hot iteration. Copying into a shared per-function scratch slot at
         // the call site keeps those stores next to the (usually cold) call,
         // and the helpers only read through the pointer.
-        const rc_ptr = if (slot_v.size <= rc_arg_scratch_size) blk: {
+        const rc_ptr = if (!rcUsesLocalSlot(slot_v.size)) blk: {
             if (self.rc_arg_scratch == null) {
                 self.rc_arg_scratch = try self.allocEntryBlockSlot(
                     .i8,
@@ -15170,6 +15184,147 @@ test "issue 12505: large record tuple and tag payload projections borrow storage
             // are offsets, and only the requested scalar is loaded.
             try std.testing.expect(std.mem.find(u8, function, ".fast(ptr ") != null);
             for ([_][]const u8{ "alloca", "memcpy", "store " }) |op| try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, function, op));
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, "load i64"));
+        }
+    }
+}
+
+test "issue 12819: RC helper arguments have bounded slot lifetimes" {
+    const gpa = std.testing.allocator;
+    inline for (.{ .incref, .decref, .decref_if_initialized, .free }) |kind| {
+        var store = lir.LirStore.init(gpa);
+        defer store.deinit();
+        var layouts = try layout.Store.init(gpa, .u64);
+        defer layouts.deinit();
+        var fields: [8]layout.StructField = undefined;
+        for (&fields, 0..) |*field, i| field.* = .{ .index = @intCast(i), .layout = .str };
+        const wide = try layouts.putStructFields(&fields);
+        const input = try store.addLocal(.{ .layout_idx = wide });
+        const value = try store.addLocal(.{ .layout_idx = wide });
+        const result = try store.addLocal(.{ .layout_idx = .u64 });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+        const helper: lir.LIR.RcHelper = .{ .concrete = .{
+            .op = if (kind == .decref_if_initialized) .decref else kind,
+            .layout_idx = wide,
+        } };
+        const release = try store.addCFStmt(if (kind == .decref_if_initialized)
+            .{ .decref_if_initialized = .{ .cond = result, .value = value, .data = try store.addStmtRow(lir.LIR.DecrefIfInitializedData, .{ .rc = helper }), .next = ret } }
+        else
+            @unionInit(lir.LIR.CFStmt, @tagName(kind), .{ .value = value, .rc = try store.addRcHelperRef(helper), .next = ret }), .test_fixture);
+        const body = try store.addCFStmt(.{ .set_local = .{
+            .target = value,
+            .value = input,
+            .mode = .initialize_join_param,
+            .next = release,
+        } }, .test_fixture);
+        _ = try store.addProcSpec(.{
+            .name = .fromRaw(1),
+            .identity = lir.LIR.ProcIdentity.forTest(1),
+            .args = try store.addLocalSpan(&.{ input, result }),
+            .frame_locals = try store.addLocalSpan(&.{value}),
+            .body = body,
+            .ret_layout = .u64,
+        }, .none);
+        var codegen = MonoLlvmCodeGen.init(gpa, &store);
+        defer codegen.deinit();
+        codegen.layout_store = &layouts;
+        var builder = try codegen.createBuilder("rc_slot_lifetime");
+        defer builder.deinit();
+        codegen.builder = &builder;
+        defer codegen.builder = null;
+        try codegen.compileAllProcSpecs(store.getProcSpecs());
+        var ir: std.Io.Writer.Allocating = .init(gpa);
+        defer ir.deinit();
+        try builder.print(&ir.writer);
+        const function = printedFunction(ir.written(), "roc_proc_0.fast") orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, "call void @llvm.lifetime.start"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, "call void @llvm.lifetime.end"));
+    }
+}
+
+test "issue 12819: large join parameter reads share storage" {
+    const gpa = std.testing.allocator;
+    const Shape = enum { record, tuple, tag_payload, tag_payload_struct };
+    inline for (.{ std.Target.Cpu.Arch.x86_64, .aarch64 }) |arch| {
+        inline for ([_]Shape{ .record, .tuple, .tag_payload, .tag_payload_struct }) |shape| {
+            var store = lir.LirStore.init(gpa);
+            defer store.deinit();
+            var layouts = try layout.Store.init(gpa, .u64);
+            defer layouts.deinit();
+            var fields: [64]layout.StructField = undefined;
+            for (&fields, 0..) |*field, i| field.* = .{ .index = @intCast(i), .layout = .u64 };
+            const wide = try layouts.putStructFields(&fields);
+            const wrapper = try layouts.putStructFields(&.{ .{ .index = 0, .layout = .u64 }, .{ .index = 1, .layout = wide } });
+            const outer = switch (shape) {
+                .record => wrapper,
+                .tuple => try layouts.putTuple(&.{ layouts.getLayout(.u64), layouts.getLayout(wide) }),
+                .tag_payload, .tag_payload_struct => try layouts.putTagUnion(&.{ .zst, wrapper }),
+            };
+            const input = try store.addLocal(.{ .layout_idx = outer });
+            const joined = try store.addLocal(.{ .layout_idx = outer });
+            const alias = try store.addLocal(.{ .layout_idx = outer });
+            const payload = try store.addLocal(.{ .layout_idx = wrapper });
+            const projected = try store.addLocal(.{ .layout_idx = wide });
+            const copied = try store.addLocal(.{ .layout_idx = wide });
+            const result = try store.addLocal(.{ .layout_idx = .u64 });
+            var body = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+            body = try store.addCFStmt(.{ .assign_ref = .{ .target = result, .op = lir.LIR.RefOp.field(copied, 63), .next = body } }, .test_fixture);
+            body = try store.addCFStmt(.{ .assign_ref = .{ .target = copied, .op = lir.LIR.RefOp.local(projected), .next = body } }, .test_fixture);
+            body = try store.addCFStmt(.{
+                .assign_ref = .{
+                    .target = projected,
+                    .op = switch (shape) {
+                        .record, .tuple => lir.LIR.RefOp.field(alias, 1),
+                        .tag_payload => lir.LIR.RefOp.tagPayload(alias, 1, 1, 1),
+                        .tag_payload_struct => lir.LIR.RefOp.field(payload, 1),
+                    },
+                    .next = body,
+                },
+            }, .test_fixture);
+            if (shape == .tag_payload_struct) body = try store.addCFStmt(.{ .assign_ref = .{ .target = payload, .op = lir.LIR.RefOp.tagPayloadStruct(alias, 1, 1), .next = body } }, .test_fixture);
+            body = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = lir.LIR.RefOp.local(joined), .next = body } }, .test_fixture);
+            const join_id: lir.LIR.JoinPointId = @fromBackingInt(0);
+            const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+            const initialize = try store.addCFStmt(.{ .set_local = .{
+                .target = joined,
+                .value = input,
+                .mode = .initialize_join_param,
+                .next = jump,
+            } }, .test_fixture);
+            body = try store.addCFStmt(.{ .join = .{
+                .id = join_id,
+                .params = try store.addLocalSpan(&.{joined}),
+                .body = body,
+                .remainder = initialize,
+            } }, .test_fixture);
+            const proc = try store.addProcSpec(.{
+                .name = .fromRaw(1),
+                .identity = lir.LIR.ProcIdentity.forTest(1),
+                .args = try store.addLocalSpan(&.{input}),
+                .frame_locals = try store.addLocalSpan(if (shape == .tag_payload_struct) &.{ joined, alias, payload, projected, copied, result } else &.{ joined, alias, projected, copied, result }),
+                .body = body,
+                .ret_layout = .u64,
+            }, .none);
+            const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = arch, .os_tag = .linux });
+            var codegen = MonoLlvmCodeGen.initForLinkedObject(gpa, &store, target);
+            defer codegen.deinit();
+            codegen.layout_store = &layouts;
+            codegen.proc_symbol_mode = .local_index;
+            var builder = try codegen.createBuilder("aggregate_views");
+            defer builder.deinit();
+            codegen.builder = &builder;
+            defer codegen.builder = null;
+            try codegen.compileAllProcSpecs(store.getProcSpecs());
+            var ir: std.Io.Writer.Allocating = .init(gpa);
+            defer ir.deinit();
+            try builder.print(&ir.writer);
+            const name = try std.fmt.allocPrint(gpa, "roc_proc_{d}.fast", .{@backingInt(proc)});
+            defer gpa.free(name);
+            const function = printedFunction(ir.written(), name) orelse return error.TestUnexpectedResult;
+            // The join owns one snapshot. Reading it, including through chains
+            // of aggregate projections, needs no additional slots or copies.
+            try std.testing.expect(std.mem.find(u8, function, ".fast(ptr ") != null);
+            for ([_][]const u8{ "alloca", "call void @llvm.memcpy" }) |op| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, op));
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, "load i64"));
         }
     }

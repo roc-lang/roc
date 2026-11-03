@@ -867,12 +867,7 @@ fn planMemory(self: *Self, store: *const LirStore, stack: *StackPlan, params: Lo
     }
     for (self.planned.items) |id| {
         const stmt = store.getCFStmt(id);
-        if (stmt == .join) {
-            const locals = store.getLocalSpan(stmt.join.params);
-            for (0..locals.len) |i| {
-                if (stack.localIndex(GuardedList.at(locals, i))) |index| stack.values.items[index].mutable = true;
-            }
-        } else if (stmt == .set_local) {
+        if (stmt == .set_local and stmt.set_local.mode != .initialize_join_param) {
             if (stack.localIndex(stmt.set_local.target)) |index| stack.values.items[index].mutable = true;
         } else if (stmt == .init_uninitialized) {
             if (stack.localIndex(stmt.init_uninitialized.target)) |index| stack.values.items[index].mutable = true;
@@ -1406,11 +1401,41 @@ test "issue 12505 memory aliases share immutable parameters but retain mutable s
     try std.testing.expect(plan_value.place(snapshot) == .slot);
     try std.testing.expectEqual(snapshot, plan_value.place(alias).view.source);
 
-    // Joining mutable storage also prevents treating the join's value as a
-    // permanently immutable origin, even when the join has no body writes.
+    // Multiple incoming writes require a snapshot even when both incoming
+    // values are themselves immutable.
     var join_points = JoinPointIds{};
-    const join = try store.addCFStmt(.{ .join = .{ .id = join_points.fresh(), .params = try store.addLocalSpan(&.{snapshot}), .body = read_snapshot, .remainder = original } }, .test_fixture);
-    try plan_value.plan(&store, params, frame, join, ops);
+    const join_id = join_points.fresh();
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const first = try store.addCFStmt(.{ .set_local = .{ .target = snapshot, .value = input, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
+    const second = try store.addCFStmt(.{ .set_local = .{ .target = snapshot, .value = replacement, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
+    const cond = try store.addLocal(.{ .layout_idx = .bool });
+    const choose = try store.addCFStmt(.{ .switch_stmt = .{ .cond = cond, .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = first }}), .default_branch = second } }, .test_fixture);
+    const join = try store.addCFStmt(.{ .join = .{ .id = join_id, .params = try store.addLocalSpan(&.{snapshot}), .body = read_snapshot, .remainder = choose } }, .test_fixture);
+    try plan_value.plan(&store, try store.addLocalSpan(&.{ input, replacement, cond }), frame, join, ops);
     try std.testing.expect(plan_value.place(snapshot) == .slot);
     try std.testing.expect(plan_value.place(alias) == .slot);
+}
+
+test "issue 12819 single-definition join views are refreshed on each loop iteration" {
+    const gpa = std.testing.allocator;
+    var store = LirStore.init(gpa);
+    defer store.deinit();
+    const input = try store.addLocal(.{ .layout_idx = .str });
+    const done = try store.addLocal(.{ .layout_idx = .bool });
+    const joined = try store.addLocal(.{ .layout_idx = .str });
+    const alias = try store.addLocal(.{ .layout_idx = .str });
+    const chained = try store.addLocal(.{ .layout_idx = .str });
+    const join_id: lir.LIR.JoinPointId = @fromBackingInt(0);
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const initialize = try store.addCFStmt(.{ .set_local = .{ .target = joined, .value = input, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = chained } }, .test_fixture);
+    const branch = try store.addCFStmt(.{ .switch_stmt = .{ .cond = done, .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = ret }}), .default_branch = initialize } }, .test_fixture);
+    const chain = try store.addCFStmt(.{ .assign_ref = .{ .target = chained, .op = .local(alias), .next = branch } }, .test_fixture);
+    const read = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .local(joined), .next = chain } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .join = .{ .id = join_id, .params = try store.addLocalSpan(&.{joined}), .body = read, .remainder = initialize } }, .test_fixture);
+    var value_plan = Self.init(gpa);
+    defer value_plan.deinit();
+    try value_plan.plan(&store, try store.addLocalSpan(&.{ input, done }), try store.addLocalSpan(&.{ joined, alias, chained }), body, TestOps{ .store = &store, .local_alias_views = true });
+    try std.testing.expectEqual(joined, value_plan.place(alias).view.source);
+    try std.testing.expectEqual(joined, value_plan.place(chained).view.source);
 }
