@@ -68,6 +68,8 @@ pub const Timing = struct {
     layout_ns: u64 = 0,
     fan_out_ns: u64 = 0,
     finalize_ns: u64 = 0,
+    /// Releasing the output's mapping.
+    unmap_ns: u64 = 0,
     images_placed: u64 = 0,
     bytes_written: u64 = 0,
     sites_patched: u64 = 0,
@@ -101,9 +103,11 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     try images.appendSlice(gpa, inputs.units);
     const root_image = inputs.root + 1;
 
-    // Every export of every image, by name. An exported name has exactly one
-    // owner in the program (procedures by identity, host-visible constants
-    // by declaration).
+    // Every export of every image, by name. A procedure is named by its
+    // identity, which is a function of its content, so two units can each
+    // define the same one (a conversion worker each memoizes for itself);
+    // the name resolves to the definition in the image with the smallest
+    // key, whatever order the images arrive in.
     var exports: std.StringHashMapUnmanaged(SymbolRef) = .empty;
     defer exports.deinit(gpa);
     var export_total: u32 = 0;
@@ -113,7 +117,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         const symbols = image.view.symbols();
         for (image.view.exports()) |symbol_index| {
             const gop = exports.getOrPutAssumeCapacity(image.view.name(symbols[symbol_index].name));
-            std.debug.assert(!gop.found_existing);
+            if (gop.found_existing and std.mem.order(u8, &images.items[gop.value_ptr.image].key, &image.key) != .gt) continue;
             gop.value_ptr.* = .{ .image = @intCast(image_index), .symbol = symbol_index };
         }
     }
@@ -318,7 +322,8 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
 
     try output.resize(file_size);
     const mapped = try output.map(file_size);
-    defer output.unmap(mapped);
+    var unmapped = false;
+    defer if (!unmapped) output.unmap(mapped);
     timing.layout_ns = elapsed(std_io, layout_started);
 
     // Fan-out, in two waves of bounded tasks: first every byte copy and
@@ -433,6 +438,10 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     std.mem.writeInt(u64, mapped[40..48], shoff, .little);
     std.mem.writeInt(u16, mapped[60..62], @intCast(headers.items.len), .little);
     timing.finalize_ns = elapsed(std_io, finalize_started);
+    const unmap_started = now(std_io);
+    output.unmap(mapped);
+    unmapped = true;
+    timing.unmap_ns = elapsed(std_io, unmap_started);
 }
 
 const SymbolRef = struct { image: u32, symbol: u32 };

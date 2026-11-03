@@ -12442,6 +12442,7 @@ const FastDevLink = struct {
             .{ .name = "Layout", .ns = timing.layout_ns },
             .{ .name = "Patch Fan-out", .ns = timing.fan_out_ns },
             .{ .name = "Finalize", .ns = timing.finalize_ns },
+            .{ .name = "Output Unmap", .ns = timing.unmap_ns },
         });
         reporter.recordCounters("Fast dev link", &.{
             .{ .name = "Images placed", .count = timing.images_placed },
