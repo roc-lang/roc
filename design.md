@@ -10812,6 +10812,12 @@ type reaches a cycle reports it by name and becomes `.err`. A cycle no
 rejected root's type reaches, such as one in a lambda passed straight to a
 call, is reported at the output root whose walk found it, and one of the
 cycle's variables becomes `.err` after every report has its snapshot.
+A dispatch this module resolved to a definition the check rejected was
+selected while that definition still had its inferred type, so it succeeded
+then; it is rejected now at the expression that owns it, with no report of
+its own (`Check.retireDispatchesOfRejectedDefs`), exactly as a dispatch to an
+imported definition whose type is an error is rejected at selection. A use by
+name is retired by the erroneous-use sweep the same way.
 
 Normalization needs no metadata on type variables and adds no work where no
 label repeats: detection rides on the unifier's gather, the key writer's row
