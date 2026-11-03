@@ -281,12 +281,13 @@ test "record paths name placed packages, never the checkout or cache root" {
     const second = Paths{ .cwd = "/other", .base = "/elsewhere/deep/b", .placed = &.{.{ .name = "https://example.com/pkg.tar.zst", .root_dir = "/other/cache/pkg" }} };
     const local = try first.portable(allocator, "/checkout/a/src/Main.roc");
     try std.testing.expectEqualStrings(local, try second.portable(allocator, "/elsewhere/deep/b/src/Main.roc"));
-    try std.testing.expectEqualStrings("/elsewhere/deep/b/src/Main.roc", (try second.bind(allocator, local)).?);
+    // Bound paths are native: resolved with this host's separators.
+    try std.testing.expectEqualStrings(try std.fs.path.resolve(allocator, &.{"/elsewhere/deep/b/src/Main.roc"}), (try second.bind(allocator, local)).?);
     const fetched = try first.portable(allocator, "/cache/one/pkg/Lib.roc");
     try std.testing.expectEqualStrings(fetched, try second.portable(allocator, "/other/cache/pkg/Lib.roc"));
-    try std.testing.expectEqualStrings("/other/cache/pkg/Lib.roc", (try second.bind(allocator, fetched)).?);
+    try std.testing.expectEqualStrings(try std.fs.path.resolve(allocator, &.{"/other/cache/pkg/Lib.roc"}), (try second.bind(allocator, fetched)).?);
     // A directory that only shares a name prefix is not inside the package.
-    try std.testing.expectEqualStrings("../../cache/one/pkg2/Lib.roc", try first.portable(allocator, "/cache/one/pkg2/Lib.roc"));
+    try std.testing.expectEqualStrings(try std.fs.path.join(allocator, &.{ "..", "..", "cache", "one", "pkg2", "Lib.roc" }), try first.portable(allocator, "/cache/one/pkg2/Lib.roc"));
     try std.testing.expect((try (Paths{ .cwd = "/", .base = "/checkout/a", .placed = &.{} }).bind(allocator, fetched)) == null);
 }
 
