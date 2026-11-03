@@ -24063,20 +24063,52 @@ locals are not a stand-in for a definition the producer failed to emit. Because
 the locals declaration is encoded after the body, first-encounter binding needs
 no separate declaration pass.
 
-The wasm backend therefore has no pre-pass that inventories a procedure's
-locals, and no pass that closes a local set over descriptor metadata. A
-descriptor local is bound by the site that emits it—a hidden descriptor
-parameter, an entry-block composition statement, a capture read—because each of those sites already
-reads the explicit LIR descriptor data that names it. Nothing searches the
-store for locals that some site might want, so each procedure's own binding
-cost is a function of the code it emits rather than of how many locals the
-whole store holds, and locals that a procedure's emitted code never
-names—including entries its `frame_locals` inventory retains—occupy no index,
-no declared type, and no output bytes. The binding column's one-time growth to
-the highest `LocalId` any procedure reaches is the only store-proportional
-cost, and it is paid once for the module. The same rule forbids reintroducing
-that search at the producer: a whole-module finalization pass whose only
-consumer is wasm local binding trades one redundant traversal for another.
+Which storage a first encounter binds comes from the procedure's stack plan
+(`planProcLocals`): before emitting a body, `WasmCodeGen` runs the shared LIR
+stack planner over the procedure's own statement graph, with slots keyed by
+wasm value type, so LIR locals whose lifetimes never overlap are planned into
+one slot, and the first local of a slot to be bound gives the slot its wasm
+local (or, in a split procedure, its frame slot), which every later local of
+the slot then shares. An engine keeps a native frame entry per declared
+local, so a procedure that reads every field of a wide record, which defines
+a local per read, otherwise grows its frame with the record's width times its
+call depth. The plan's lifetimes are runtime lifetimes over the control-flow
+graph, back edges included, so the sharing holds whatever order emission
+reaches the locals in; a fused overflow result's early binding
+(`OverflowFusion`) is an explicit access of the plan, and a dynamic local is
+not planned, because its slot holds an address the runtime writes through
+outside the statement graph.
+
+The wasm backend has no pass that closes a local set over descriptor
+metadata. A descriptor local is bound by the site that emits it—a hidden
+descriptor parameter, an entry-block composition statement, a capture
+read—because each of those sites already reads the explicit LIR descriptor
+data that names it. Nothing searches the store for locals that some site
+might want, so each procedure's own binding cost is a function of its own
+statements rather than of how many locals the whole store holds, and locals
+that a procedure's emitted code never names—including entries its
+`frame_locals` inventory retains—occupy no index, no declared type, and no
+output bytes. The binding column's one-time growth to the highest `LocalId`
+any procedure reaches is the only store-proportional cost, and it is paid
+once for the module. The same rule forbids reintroducing that search at the
+producer: a whole-module finalization pass whose only consumer is wasm local
+binding trades one redundant traversal for another.
+
+### Wasm Aggregate Aliases
+
+An aggregate local of the wasm backend holds the address of its bytes: a slot
+of the procedure's frame, or for a parameter the caller's storage, and
+either stays put for the rest of the procedure. An `assign_ref.local` of an
+aggregate therefore binds its target to the source's address rather than
+copying the bytes, exactly when `LocalWrites` proves the alias for the pair:
+the target has one definition, the source at most one, and neither is
+written in place (`set_local`, `init_uninitialized`, a join parameter, a
+string-match capture, a dynamic write); dynamic locals never alias. This is
+the rule the native dev backend's stack plan proves ("Dev Backend Register
+Lifetimes"), taken from the same shared definition walk, so a frame holds
+one copy of a record however many field reads name it. A `ref.local` the
+rule rejects copies, so a snapshot keeps the bytes it saw when its source is
+rewritten.
 
 ## Wasm Body Generation
 

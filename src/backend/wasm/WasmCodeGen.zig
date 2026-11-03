@@ -386,6 +386,18 @@ split_mode: bool = false,
 body_over_budget: bool = false,
 /// The fragment functions of the proc being compiled, in creation order.
 fragments: std.ArrayList(CodeBuilder) = .empty,
+/// How often the proc being compiled writes each of its locals, which decides
+/// when a `ref.local` of an aggregate shares its source's bytes
+/// (`refLocalAliasesSource`).
+local_writes: lir.LocalWrites,
+/// The shared stack planner's indexes, kept from proc to proc
+/// (`planProcLocals`).
+stack_plan_indexes: lir.StackPlan.Indexes,
+/// The planned slot of each LIR local of the proc being compiled whose
+/// lifetime the plan solved, by local id. Locals of one slot share storage.
+local_slots: collections.DenseMap(ProcLocalId, u32),
+/// Each planned slot's storage, once the first local of the slot is bound.
+slot_bindings: std.ArrayList(?Storage.LocalInfo) = .empty,
 /// The fragment whose body is being emitted, or null in the root function.
 active_fragment: ?u32 = null,
 /// The control-flow depth the active fragment was entered at. A branch to a
@@ -510,6 +522,9 @@ pub fn init(
         .sequential_lane = tasks.LaneState.init(allocator),
         .sequential_scratch = base.SingleThreadArena.init(allocator),
         .helper_artifacts = std.AutoHashMap(u64, BodyArtifact.Artifact).init(allocator),
+        .local_writes = lir.LocalWrites.init(allocator),
+        .stack_plan_indexes = lir.StackPlan.Indexes.init(allocator),
+        .local_slots = collections.DenseMap(ProcLocalId, u32).init(allocator),
     };
 }
 
@@ -633,6 +648,10 @@ pub fn deinit(self: *Self) void {
     self.helper_artifacts.deinit();
     for (self.fragments.items) |*fragment| fragment.deinit(self.allocator);
     self.fragments.deinit(self.allocator);
+    self.local_writes.deinit();
+    self.stack_plan_indexes.deinit();
+    self.local_slots.deinit();
+    self.slot_bindings.deinit(self.allocator);
 }
 
 fn beginFunction(self: *Self, local_idx: LocalFunctionIndex) Allocator.Error!void {
@@ -3372,16 +3391,86 @@ fn procLocalBinding(self: *Self, value: ProcLocalId) Allocator.Error!Storage.Loc
         return info;
     }
     const val_type = try self.procLocalValType(value);
-    if (self.split_mode) {
+    const slot = self.local_slots.get(value);
+    if (slot) |index| if (self.slot_bindings.items[index]) |shared| {
+        // Another local of the slot, whose lifetime never overlaps this
+        // one's, already has the storage.
+        std.debug.assert(shared.val_type == val_type);
+        self.storage.bindLocalShared(value, shared) catch return error.OutOfMemory;
+        return shared;
+    };
+    const info: Storage.LocalInfo = if (self.split_mode) blk: {
         // A split procedure's locals live in its frame, which every function
         // of its family reads through the frame pointer.
         const size = valTypeByteSize(val_type);
         const offset = try self.allocStackMemory(size, size);
         self.storage.bindLocalSlot(value, val_type, offset) catch return error.OutOfMemory;
-        return .{ .idx = offset, .val_type = val_type, .home = .frame_slot };
+        break :blk .{ .idx = offset, .val_type = val_type, .home = .frame_slot };
+    } else blk: {
+        const idx = self.storage.allocLocal(value, val_type) catch return error.OutOfMemory;
+        break :blk .{ .idx = idx, .val_type = val_type };
+    };
+    if (slot) |index| self.slot_bindings.items[index] = info;
+    return info;
+}
+
+/// The native backend's explicit accesses beyond the shared LIR operand
+/// inventory, for `StackPlan.addProcGraph`: none, and dynamic locals are not
+/// planned, since their slots hold addresses the runtime writes through
+/// outside the statement graph.
+const WasmPlanExtra = struct {
+    owner: *const Self,
+
+    pub fn tracks(extra: WasmPlanExtra, local: ProcLocalId) bool {
+        return extra.owner.localDyn(local) == null;
     }
-    const idx = self.storage.allocLocal(value, val_type) catch return error.OutOfMemory;
-    return .{ .idx = idx, .val_type = val_type };
+
+    pub fn statement(_: WasmPlanExtra, _: *lir.StackPlan, _: u32, _: LIR.CFStmt) Allocator.Error!void {}
+};
+
+/// Plan the proc's locals with the shared LIR stack planner, so that LIR
+/// locals whose lifetimes never overlap share one wasm local (or one frame
+/// slot in split mode). A procedure that reads every field of a wide record
+/// defines a local per field read; without sharing, each would take a wasm
+/// local for the whole call, and an engine's native frame grows with the
+/// declared locals. The plan's slots are per wasm value type, so a shared
+/// local always has the type every local of it needs.
+fn planProcLocals(self: *Self, root: CFStmtId) Allocator.Error!void {
+    const indexes = &self.stack_plan_indexes;
+    var plan = indexes.takePlan();
+    defer indexes.keepPlan(&plan);
+    var work: std.ArrayList(CFStmtId) = .empty;
+    defer {
+        indexes.clear();
+        work.deinit(plan.allocator);
+    }
+    try plan.addProcGraph(self.store, indexes, root, &work, WasmPlanExtra{ .owner = self });
+    for (work.items) |id| {
+        const stmt = self.store.getCFStmt(id);
+        if (stmt != .assign_low_level) continue;
+        if (OverflowFusion.findResultConsumer(self.store, id)) |fusion| {
+            // The producer binds the consumer's result early (`generateLowLevel`);
+            // its bytes are live from there through the consumer.
+            try plan.access(indexes.nodeOf(id).?, fusion.result_target, false, true);
+            try plan.access(indexes.nodeOf(fusion.consumer_stmt).?, fusion.result_target, true, false);
+        }
+    }
+    for (plan.values.items) |*value| {
+        // Slots are per wasm value type; the planner keys them by "size".
+        value.size = switch (try self.procLocalValType(value.local)) {
+            .i32 => 1,
+            .i64 => 2,
+            .f32 => 3,
+            .f64 => 4,
+            .v128 => 5,
+        };
+    }
+    try plan.solve();
+    try self.slot_bindings.resize(self.allocator, plan.slots.items.len);
+    @memset(self.slot_bindings.items, null);
+    for (plan.values.items) |value| {
+        if (value.slotIndex()) |slot| try self.local_slots.put(value.local, slot);
+    }
 }
 
 /// Push the value a binding holds.
@@ -3471,7 +3560,10 @@ fn emitExitToDepth(self: *Self, depth: u32) Allocator.Error!void {
 fn bindProcParamLocal(self: *Self, param: ProcLocalId) Allocator.Error!Storage.LocalInfo {
     const val_type = try self.procLocalValType(param);
     const idx = self.storage.allocLocal(param, val_type) catch return error.OutOfMemory;
-    return .{ .idx = idx, .val_type = val_type };
+    const info: Storage.LocalInfo = .{ .idx = idx, .val_type = val_type };
+    // A parameter is the first local of its slot: it is live from entry.
+    if (self.local_slots.get(param)) |slot| self.slot_bindings.items[slot] = info;
+    return info;
 }
 
 /// Bind a parameter the surrounding ABI unpacking code reads as a fixed wasm
@@ -5683,12 +5775,14 @@ fn emitI128TryNarrow(
     try self.emitLoadAt(src_ptr, .i64, 8);
     const high = try self.emitSetNewLocal(.i64);
 
-    // Determine result layout
-    // Payload is the target type in wasm representation
-    const payload_wasm_size: u32 = if (target_bytes <= 4) 4 else 8;
-    const disc_offset: u32 = payload_wasm_size;
+    // The result is a Try tag union whose Ok payload is the target integer at
+    // offset 0 and whose discriminant follows the payload, as the payload's
+    // layout places it (`emitIntTryBound` builds the same shape): a one-byte
+    // target's discriminant is at offset 1, not at the width of the wasm
+    // value that carries it.
+    const disc_offset: u32 = target_bytes;
     const total_size = disc_offset + 1;
-    const alignment: u32 = payload_wasm_size;
+    const alignment: u32 = target_bytes;
     const padded = (total_size + alignment - 1) & ~(alignment - 1);
 
     // Allocate result
@@ -6733,6 +6827,13 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
 
     const ret_vt = try self.resolveValType(proc.ret_layout);
     const entities_mark: u32 = if (self.recorder) |recorder| recorder.mark() else 0;
+    self.local_slots.clearRetainingCapacity();
+    self.slot_bindings.clearRetainingCapacity();
+    defer self.local_slots.clearRetainingCapacity();
+    if (proc.body) |body| {
+        try self.local_writes.collect(self.store, body);
+        try self.planProcLocals(body);
+    }
 
     var saved = self.saveState() catch return error.OutOfMemory;
     errdefer self.abandonState(saved);
@@ -6743,6 +6844,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         self.discardProcBody(func_idx, entities_mark);
         self.abandonState(saved);
         saved = self.saveState() catch return error.OutOfMemory;
+        @memset(self.slot_bindings.items, null);
         self.split_mode = true;
         self.body_over_budget = false;
         try self.emitProcSpecBody(proc_id, proc, func_idx, ret_vt, saved.storage_scope);
@@ -7002,6 +7104,7 @@ fn spillProcStateToFrame(self: *Self, scope: Storage.Scope) Allocator.Error!void
         if (binding.info.home != .wasm_local) continue;
         const slot = try self.spillBindingToFrame(binding.info);
         self.storage.rebindLocalToSlot(binding.local_id, slot.idx);
+        if (self.local_slots.get(binding.local_id)) |planned| self.slot_bindings.items[planned] = slot;
     }
     // Nothing has written the return value yet, so its slot needs no store.
     const ret_size = valTypeByteSize(self.proc_return.val_type);
@@ -7838,8 +7941,15 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try work.append(wa, .{ .node = .{ .stmt_id = dyn_stmt.next, .stop = stop } });
         },
         .assign_ref => |assign| {
-            try self.generateRefOp(assign.op, self.procLocalLayoutIdx(assign.target));
-            try self.bindAssignedLocal(assign.target);
+            if (assign.op.kind == .local and try self.refLocalAliasesSource(assign.target, assign.op.source)) {
+                // The target names the source's bytes: a pointer copy, not a
+                // copy of the aggregate.
+                try self.emitProcLocal(assign.op.source);
+                try self.emitBindingSet(try self.procLocalBinding(assign.target));
+            } else {
+                try self.generateRefOp(assign.op, self.procLocalLayoutIdx(assign.target));
+                try self.bindAssignedLocal(assign.target);
+            }
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
         .assign_literal => |assign| {
@@ -8439,6 +8549,21 @@ fn bindLocalFromWasmStack(self: *Self, target: ProcLocalId) Allocator.Error!void
         .primitive => {},
     }
     try self.emitBindingSet(try self.procLocalBinding(target));
+}
+
+/// Whether `target = ref.local source` of an aggregate may bind the target to
+/// the source's address instead of copying the aggregate into a frame slot of
+/// its own. Every aggregate local holds the address of bytes that stay put
+/// for the rest of the procedure (its own frame slot, or a parameter's
+/// caller-owned storage), so the alias is exact whenever nothing writes those
+/// bytes afterwards, which `LocalWrites` proves for the pair. Dynamic locals
+/// hold addresses the runtime writes through and never alias.
+fn refLocalAliasesSource(self: *Self, target: ProcLocalId, source: ProcLocalId) Allocator.Error!bool {
+    if (self.localDyn(target) != null or self.localDyn(source) != null) return false;
+    const target_layout = self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(target));
+    if (target_layout != self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(source))) return false;
+    if (!try self.isCompositeLayout(target_layout)) return false;
+    return self.local_writes.immutableAlias(target, source);
 }
 
 fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Error!void {
@@ -19422,5 +19547,231 @@ test "copies and zero fills of every width write exactly their bytes with bounde
         for ([_]u32{ 1, 3, 12, 31, 32, 33, 40, 100, 1003, 4096 + 7 }) |byte_count| {
             try expectCopyFixture(cpu_level, byte_count);
         }
+    }
+}
+
+/// The frame size an encoded code section entry's prologue reserves, or
+/// zero when it has no prologue.
+fn prologueFrameBytes(entry: []const u8) u32 {
+    var cursor: usize = 0;
+    _ = WasmModule.readU32(entry, &cursor) catch unreachable;
+    const groups = WasmModule.readU32(entry, &cursor) catch unreachable;
+    for (0..groups) |_| {
+        _ = WasmModule.readU32(entry, &cursor) catch unreachable;
+        cursor += 1;
+    }
+    if (entry[cursor] != Op.global_get) return 0;
+    cursor += 1;
+    _ = WasmModule.readU32(entry, &cursor) catch unreachable;
+    std.debug.assert(entry[cursor] == Op.i32_const);
+    cursor += 1;
+    var result: i64 = 0;
+    var shift: u6 = 0;
+    while (true) {
+        const byte = entry[cursor];
+        cursor += 1;
+        result |= @as(i64, byte & 0x7f) << shift;
+        shift += 7;
+        if (byte & 0x80 == 0) return @intCast(result);
+    }
+}
+
+/// A procedure `(a: u64, b: u64) -> u64` that reads a field of a two-field
+/// record through `alias_count` separate `ref.local` copies of it.
+fn addRecordAliasChainProc(store: *LirStore, layouts: *layout.Store, alias_count: usize) !void {
+    const record = try layouts.putStructFields(&.{ .{ .index = 0, .layout = .u64 }, .{ .index = 1, .layout = .u64 } });
+    const a = try store.addLocal(.{ .layout_idx = .u64 });
+    const b = try store.addLocal(.{ .layout_idx = .u64 });
+    const built = try store.addLocal(.{ .layout_idx = record });
+    const sum = try store.addLocal(.{ .layout_idx = .u64 });
+    var next = try store.addCFStmt(.{ .ret = .{ .value = sum } }, .test_fixture);
+    // Emitted last to first: sum = a; then for each alias, sum = sum + alias.field1.
+    for (0..alias_count) |_| {
+        const alias = try store.addLocal(.{ .layout_idx = record });
+        const field = try store.addLocal(.{ .layout_idx = .u64 });
+        const total = try store.addLocal(.{ .layout_idx = .u64 });
+        const set = try store.addCFStmt(.{ .set_local = .{ .target = sum, .value = total, .mode = .replace_existing, .next = next } }, .test_fixture);
+        const add = try store.addCFStmt(.{ .assign_low_level = .{
+            .target = total,
+            .op = .num_int_add_wrap,
+            .rc_effect = try store.addRcEffect(LIR.LowLevel.num_int_add_wrap.rcEffect()),
+            .args = try store.addLocalSpan(&.{ sum, field }),
+            .next = set,
+        } }, .test_fixture);
+        const read = try store.addCFStmt(.{ .assign_ref = .{ .target = field, .op = LIR.RefOp.field(alias, 1), .next = add } }, .test_fixture);
+        next = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = LIR.RefOp.local(built), .next = read } }, .test_fixture);
+    }
+    const init_sum = try store.addCFStmt(.{ .set_local = .{ .target = sum, .value = a, .mode = .replace_existing, .next = next } }, .test_fixture);
+    const build = try store.addCFStmt(.{ .assign_struct = .{ .target = built, .fields = try store.addLocalSpan(&.{ a, b }), .next = init_sum } }, .test_fixture);
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
+        .args = try store.addLocalSpan(&.{ a, b }),
+        .body = build,
+        .ret_layout = .u64,
+    }, .none);
+}
+
+fn runRecordAliasChain(allocator: Allocator, alias_count: usize) !struct { result: i64, frame_bytes: u32 } {
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+    try addRecordAliasChainProc(&store, &layouts, alias_count);
+    var codegen = Self.init(allocator, &store, &layouts, .default);
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    try codegen.flushPendingBodies();
+    const frame_bytes = prologueFrameBytes(emittedBody(&codegen.module, 0));
+    try codegen.module.addExport("f", .func, codegen.registered_procs.get(0).?);
+    try codegen.module.finalizeMemoryAndTableWithConfig(.{ .stack_bytes = 65536, .export_memory = true });
+    try codegen.module.materializeFuncBodies();
+    const bytes = try codegen.module.encode(allocator);
+    defer allocator.free(bytes);
+    var arena_impl = std.heap.ArenaAllocator.init(allocator);
+    defer arena_impl.deinit();
+    const instance = try instantiateForTest(allocator, arena_impl.allocator(), bytes);
+    defer instance.destroy();
+    const handle = try instance.getFunctionHandle("f");
+    var params = [_]@import("bytebox").Val{ .{ .I64 = 5 }, .{ .I64 = 9 } };
+    var returns = [_]@import("bytebox").Val{.{ .I64 = 0 }};
+    try instance.invoke(handle, &params, &returns, .{});
+    return .{ .result = returns[0].I64, .frame_bytes = frame_bytes };
+}
+
+test "aliases of an immutable record share its bytes, so the frame does not grow with them" {
+    const allocator = std.testing.allocator;
+    const one = try runRecordAliasChain(allocator, 1);
+    const many = try runRecordAliasChain(allocator, 12);
+    try std.testing.expectEqual(@as(i64, 5 + 9), one.result);
+    try std.testing.expectEqual(@as(i64, 5 + 12 * 9), many.result);
+    try std.testing.expectEqual(one.frame_bytes, many.frame_bytes);
+}
+
+test "a ref.local of a record that is written again is a copy of the bytes it saw" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+    const record = try layouts.putStructFields(&.{ .{ .index = 0, .layout = .u64 }, .{ .index = 1, .layout = .u64 } });
+    // first = {a, b}; second = {b, a}; snapshot = ref.local first;
+    // first = second; ret snapshot.field0, which is a as snapshot saw it.
+    const a = try store.addLocal(.{ .layout_idx = .u64 });
+    const b = try store.addLocal(.{ .layout_idx = .u64 });
+    const first = try store.addLocal(.{ .layout_idx = record });
+    const second = try store.addLocal(.{ .layout_idx = record });
+    const snapshot = try store.addLocal(.{ .layout_idx = record });
+    const field = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = field } }, .test_fixture);
+    const read = try store.addCFStmt(.{ .assign_ref = .{ .target = field, .op = LIR.RefOp.field(snapshot, 0), .next = ret } }, .test_fixture);
+    const rewrite = try store.addCFStmt(.{ .set_local = .{ .target = first, .value = second, .mode = .replace_existing, .next = read } }, .test_fixture);
+    const take = try store.addCFStmt(.{ .assign_ref = .{ .target = snapshot, .op = LIR.RefOp.local(first), .next = rewrite } }, .test_fixture);
+    const build_second = try store.addCFStmt(.{ .assign_struct = .{ .target = second, .fields = try store.addLocalSpan(&.{ b, a }), .next = take } }, .test_fixture);
+    const build_first = try store.addCFStmt(.{ .assign_struct = .{ .target = first, .fields = try store.addLocalSpan(&.{ a, b }), .next = build_second } }, .test_fixture);
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
+        .args = try store.addLocalSpan(&.{ a, b }),
+        .body = build_first,
+        .ret_layout = .u64,
+    }, .none);
+    var codegen = Self.init(allocator, &store, &layouts, .default);
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    try codegen.flushPendingBodies();
+    try codegen.module.addExport("f", .func, codegen.registered_procs.get(0).?);
+    try codegen.module.finalizeMemoryAndTableWithConfig(.{ .stack_bytes = 65536, .export_memory = true });
+    try codegen.module.materializeFuncBodies();
+    const bytes = try codegen.module.encode(allocator);
+    defer allocator.free(bytes);
+    var arena_impl = std.heap.ArenaAllocator.init(allocator);
+    defer arena_impl.deinit();
+    const instance = try instantiateForTest(allocator, arena_impl.allocator(), bytes);
+    defer instance.destroy();
+    const handle = try instance.getFunctionHandle("f");
+    var params = [_]@import("bytebox").Val{ .{ .I64 = 5 }, .{ .I64 = 9 } };
+    var returns = [_]@import("bytebox").Val{.{ .I64 = 0 }};
+    try instance.invoke(handle, &params, &returns, .{});
+    try std.testing.expectEqual(@as(i64, 5), returns[0].I64);
+}
+
+/// Run `op` on a 128-bit source holding `value` and return the Try result's
+/// discriminant and, when Ok, its payload, read through the result layout.
+fn runI128Narrow(allocator: Allocator, op: LIR.LowLevel, source_layout: layout.Idx, target_layout: layout.Idx, value: i128) !struct { ok: bool, payload: i64 } {
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+    const try_layout = try layouts.putTagUnion(&.{ .zst, target_layout });
+    const source = try store.addLocal(.{ .layout_idx = source_layout });
+    const result = try store.addLocal(.{ .layout_idx = try_layout });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const convert = try store.addLowLevelStmt(result, op, &.{source}, ret, .test_fixture);
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
+        .args = try store.addLocalSpan(&.{source}),
+        .body = convert,
+        .ret_layout = try_layout,
+    }, .none);
+    var codegen = Self.init(allocator, &store, &layouts, .default);
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    try codegen.flushPendingBodies();
+    const tu = try WasmLayout.tagUnionLayoutWithStore(layouts.getLayout(try_layout).getTagUnion().idx, &layouts);
+    try codegen.module.addExport("f", .func, codegen.registered_procs.get(0).?);
+    try codegen.module.finalizeMemoryAndTableWithConfig(.{ .stack_bytes = 65536, .export_memory = true });
+    try codegen.module.materializeFuncBodies();
+    const bytes = try codegen.module.encode(allocator);
+    defer allocator.free(bytes);
+    var arena_impl = std.heap.ArenaAllocator.init(allocator);
+    defer arena_impl.deinit();
+    const instance = try instantiateForTest(allocator, arena_impl.allocator(), bytes);
+    defer instance.destroy();
+    const memory = instance.store.getMemory(0).buffer();
+    // The 128-bit source lives at 1024; the procedure takes its address.
+    std.mem.writeInt(i128, memory[1024..1040], value, .little);
+    const handle = try instance.getFunctionHandle("f");
+    var params = [_]@import("bytebox").Val{.{ .I32 = 1024 }};
+    var returns = [_]@import("bytebox").Val{.{ .I32 = 0 }};
+    try instance.invoke(handle, &params, &returns, .{});
+    const result_ptr: usize = @intCast(returns[0].I32);
+    const ok = memory[result_ptr + tu.discriminant_offset] == 1;
+    const size = layouts.layoutSize(layouts.getLayout(target_layout));
+    var payload: i64 = 0;
+    if (ok) payload = switch (size) {
+        1 => @as(i8, @bitCast(memory[result_ptr])),
+        2 => std.mem.readInt(i16, memory[result_ptr..][0..2], .little),
+        4 => std.mem.readInt(i32, memory[result_ptr..][0..4], .little),
+        8 => std.mem.readInt(i64, memory[result_ptr..][0..8], .little),
+        else => unreachable,
+    };
+    return .{ .ok = ok, .payload = payload };
+}
+
+test "issue 12782: 128-bit narrowing try conversions write the discriminant where the result layout keeps it" {
+    const allocator = std.testing.allocator;
+    const Case = struct { op: LIR.LowLevel, source: layout.Idx, target: layout.Idx, value: i128, ok: bool, payload: i64 };
+    const cases = [_]Case{
+        .{ .op = .i128_to_u8_try, .source = .i128, .target = .u8, .value = 3, .ok = true, .payload = 3 },
+        .{ .op = .i128_to_u8_try, .source = .i128, .target = .u8, .value = -3, .ok = false, .payload = 0 },
+        .{ .op = .i128_to_u8_try, .source = .i128, .target = .u8, .value = 300, .ok = false, .payload = 0 },
+        .{ .op = .i128_to_i8_try, .source = .i128, .target = .i8, .value = -3, .ok = true, .payload = -3 },
+        .{ .op = .i128_to_i8_try, .source = .i128, .target = .i8, .value = 200, .ok = false, .payload = 0 },
+        .{ .op = .i128_to_u16_try, .source = .i128, .target = .u16, .value = 21000, .ok = true, .payload = 21000 },
+        .{ .op = .i128_to_i16_try, .source = .i128, .target = .i16, .value = -21000, .ok = true, .payload = -21000 },
+        .{ .op = .i128_to_i16_try, .source = .i128, .target = .i16, .value = 40000, .ok = false, .payload = 0 },
+        .{ .op = .u128_to_u8_try, .source = .u128, .target = .u8, .value = 255, .ok = true, .payload = -1 },
+        .{ .op = .u128_to_u8_try, .source = .u128, .target = .u8, .value = 256, .ok = false, .payload = 0 },
+        .{ .op = .u128_to_i16_try, .source = .u128, .target = .i16, .value = 3, .ok = true, .payload = 3 },
+        .{ .op = .u128_to_i16_try, .source = .u128, .target = .i16, .value = 1 << 70, .ok = false, .payload = 0 },
+        .{ .op = .i128_to_u32_try, .source = .i128, .target = .u32, .value = 3, .ok = true, .payload = 3 },
+        .{ .op = .i128_to_i64_try, .source = .i128, .target = .i64, .value = -3, .ok = true, .payload = -3 },
+    };
+    for (cases) |case| {
+        const got = try runI128Narrow(allocator, case.op, case.source, case.target, case.value);
+        try std.testing.expectEqual(case.ok, got.ok);
+        if (case.ok) try std.testing.expectEqual(case.payload, got.payload);
     }
 }

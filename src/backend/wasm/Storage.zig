@@ -220,6 +220,12 @@ pub fn bindLocalSlot(self: *Self, local_id: LocalId, val_type: ValType, offset: 
     try self.bind(local_id, .{ .idx = offset, .val_type = val_type, .home = .frame_slot });
 }
 
+/// Bind the LIR local to storage another local of the same planned slot
+/// already has (see `WasmCodeGen.planProcLocals`).
+pub fn bindLocalShared(self: *Self, local_id: LocalId, info: LocalInfo) Allocator.Error!void {
+    try self.bind(local_id, info);
+}
+
 fn bind(self: *Self, local_id: LocalId, info: LocalInfo) Allocator.Error!void {
     const row_index = try self.reserveBindingRow(local_id);
     if (builtin.is_test) self.rows_visited += 1;
