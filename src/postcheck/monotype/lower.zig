@@ -65385,9 +65385,7 @@ const BodyContext = struct {
         // materialized statement-EXPRESSION route scopes its internal binds
         // to that expression (the lift capture analysis is lexical), which
         // would leave later statements reading free locals.
-        if (!self.recordDestructsNeedExplicitRest(destructs) and
-            !try self.recordDestructsHaveOptionalField(self.view.bodies.pattern(pattern).ty, destructs))
-        {
+        if (!try self.recordPatternNeedsFieldStatements(pattern)) {
             self.restoreSourceLocation(&task.statement_saved);
             return null;
         }
@@ -65545,15 +65543,66 @@ const BodyContext = struct {
         }
     }
 
-    fn appendRecordRestPatternStatements(
-        self: *BodyContext,
+    /// Whether binding record pattern `root` as a statement needs per-field
+    /// `let` statements: it, or a record pattern nested in one of its fields,
+    /// has an explicit rest binder or an optional field. A nested record
+    /// pattern means what it means on its own, so it expands the same way.
+    fn recordPatternNeedsFieldStatements(self: *BodyContext, root: checked.CheckedPatternId) Allocator.Error!bool {
+        var pending: std.ArrayListUnmanaged(checked.CheckedPatternId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |pattern_id| {
+            const pattern = self.view.bodies.pattern(pattern_id);
+            const destructs = switch (pattern.data) {
+                .record_destructure => |destructs| destructs,
+                .pending, .assign, .as, .applied_tag, .nominal, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => continue,
+            };
+            if (self.recordDestructsNeedExplicitRest(destructs) or try self.recordDestructsHaveOptionalField(pattern.ty, destructs)) return true;
+            for (destructs) |destruct| switch (destruct.kind) {
+                .required, .sub_pattern => |child| try pending.append(self.allocator, child),
+                .rest => {},
+            };
+        }
+        return false;
+    }
+
+    const RecordFieldStatementsFrame = struct {
         value: DraftExprId,
         value_node: NodeId,
         record_checked_ty: checked.CheckedTypeId,
         destructs: []const checked.CheckedRecordDestruct,
+    };
+
+    fn appendRecordRestPatternStatements(
+        self: *BodyContext,
+        root_value: DraftExprId,
+        root_value_node: NodeId,
+        root_record_checked_ty: checked.CheckedTypeId,
+        root_destructs: []const checked.CheckedRecordDestruct,
         lowered: *LoweredStatements,
         comptime_site: ?DraftComptimeSiteId,
     ) Allocator.Error!void {
+        var frames: std.ArrayListUnmanaged(RecordFieldStatementsFrame) = .empty;
+        defer frames.deinit(self.allocator);
+        try frames.append(self.allocator, .{ .value = root_value, .value_node = root_value_node, .record_checked_ty = root_record_checked_ty, .destructs = root_destructs });
+        while (frames.pop()) |frame| try self.appendRecordFieldStatements(frame, &frames, lowered, comptime_site);
+    }
+
+    /// The statements binding one record pattern's fields. A field whose
+    /// sub-pattern is itself a record pattern needing per-field statements is
+    /// bound to a local and queued as a frame of its own, so its binders stay
+    /// in scope for the rest of the block too.
+    fn appendRecordFieldStatements(
+        self: *BodyContext,
+        frame: RecordFieldStatementsFrame,
+        frames: *std.ArrayListUnmanaged(RecordFieldStatementsFrame),
+        lowered: *LoweredStatements,
+        comptime_site: ?DraftComptimeSiteId,
+    ) Allocator.Error!void {
+        const value = frame.value;
+        const value_node = frame.value_node;
+        const record_checked_ty = frame.record_checked_ty;
+        const destructs = frame.destructs;
         for (destructs) |destruct| {
             switch (destruct.kind) {
                 .required, .sub_pattern => |child| {
@@ -65577,6 +65626,21 @@ const BodyContext = struct {
                             .value = try_value,
                             .comptime_site = if (try self.patternCanMiss(child)) comptime_site else null,
                         } }));
+                        continue;
+                    }
+                    const child_pattern = self.view.bodies.pattern(child);
+                    if (child_pattern.data == .record_destructure and try self.recordPatternNeedsFieldStatements(child)) {
+                        const field_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), field_cell, null);
+                        try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
+                            .pat = try self.addPatWithTypeCell(field_cell, .{ .bind = field_local }),
+                            .value = field_value,
+                        } }));
+                        try frames.append(self.allocator, .{
+                            .value = try self.addExprWithTypeCell(field_cell, .{ .local = field_local }),
+                            .value_node = field_node,
+                            .record_checked_ty = child_pattern.ty,
+                            .destructs = child_pattern.data.record_destructure,
+                        });
                         continue;
                     }
                     try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{

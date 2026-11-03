@@ -13413,6 +13413,14 @@ The kind rules:
   diagnostics enabled for relations grounded by those commits. Still-flex
   receivers remain parked, so quiescence does not speculatively select or
   reject a method.
+  A nested record pattern (`{ outer: { n } }`) is judged exactly as it is
+  on its own: each judgment pass first binds every destructure whose kind
+  is decided, repeating while a binding (which relates a nested pattern to
+  its field's value) decides more, and only then commits still-flex kinds
+  to `required`, one at a time and latest first, since a record pattern's
+  fields are queued after the patterns nested in them. Lowering binds such
+  a statement with per-field `let` statements at every nesting level that
+  needs them, so the inner binders stay in scope for the rest of the block.
   Nested sub-patterns (`{ x: Ok(y) }`) check against the binder, so on an
   optional field they see the Try. Exhaustiveness analysis consumes that
   exact checker-judged sub-pattern type for every record column, rather
