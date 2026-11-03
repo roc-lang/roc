@@ -253,25 +253,28 @@ pub const Placement = struct { value: PathId, result: PathId };
 
 /// What the code around a value consumes of it.
 pub const DemandSet = struct {
-    /// Each read path once, in first-read order, with its consumers. Most
-    /// values read a few paths, which the map scans without an index; a value
-    /// with many parts read, such as a large record, gets an index.
-    reads: std.AutoArrayHashMapUnmanaged(PathId, Consumers) = .empty,
+    /// Each read path once, in first-read order, with its consumers at the
+    /// same position. A value's distinct read paths are few, so a scan finds
+    /// a path's position.
+    read_paths: std.ArrayList(PathId) = .empty,
+    read_consumers: std.ArrayList(Consumers) = .empty,
     placements: std.AutoArrayHashMapUnmanaged(Placement, void) = .empty,
 
     fn addRead(self: *DemandSet, allocator: Allocator, path: PathId, consumers: Consumers) Allocator.Error!bool {
-        const gop = try self.reads.getOrPut(allocator, path);
-        if (!gop.found_existing) {
-            gop.value_ptr.* = consumers;
+        if (std.mem.findScalar(PathId, self.read_paths.items, path)) |index| {
+            const existing = &self.read_consumers.items[index];
+            if (existing.supersetOf(consumers)) return false;
+            existing.setUnion(consumers);
             return true;
         }
-        if (gop.value_ptr.supersetOf(consumers)) return false;
-        gop.value_ptr.setUnion(consumers);
+        try self.read_paths.append(allocator, path);
+        try self.read_consumers.append(allocator, consumers);
         return true;
     }
 
     fn removeReadAt(self: *DemandSet, index: usize) void {
-        self.reads.swapRemoveAt(index);
+        _ = self.read_paths.swapRemove(index);
+        _ = self.read_consumers.swapRemove(index);
     }
 
     fn addPlacement(self: *DemandSet, allocator: Allocator, placement: Placement) Allocator.Error!bool {
@@ -292,8 +295,8 @@ pub const DemandSet = struct {
 
     pub fn view(self: *const DemandSet) Demand {
         return .{
-            .read_paths = self.reads.keys(),
-            .read_consumers = self.reads.values(),
+            .read_paths = self.read_paths.items,
+            .read_consumers = self.read_consumers.items,
             .placements = self.placements.keys(),
         };
     }
@@ -1056,8 +1059,8 @@ const Builder = struct {
                     // The update supplies this field, so the base's field is
                     // never read.
                     var read_index: usize = 0;
-                    while (read_index < base.reads.count()) {
-                        try self.analysis.paths.stepsOf(self.temp(), base.reads.keys()[read_index], &self.steps);
+                    while (read_index < base.read_paths.items.len) {
+                        try self.analysis.paths.stepsOf(self.temp(), base.read_paths.items[read_index], &self.steps);
                         if (self.steps.items.len != 0 and self.steps.items[0].sameLabel(field_step)) {
                             base.removeReadAt(read_index);
                         } else {
@@ -1311,8 +1314,8 @@ const Builder = struct {
     fn mergedParts(self: *Builder, parts: []const Read) Allocator.Error![]const Read {
         var merged: DemandSet = .{};
         for (parts) |part| _ = try merged.addRead(self.temp(), part.path, part.consumers);
-        const out = try self.temp().alloc(Read, merged.reads.count());
-        for (out, merged.reads.keys(), merged.reads.values()) |*read, path, consumers| read.* = .{ .path = path, .consumers = consumers };
+        const out = try self.temp().alloc(Read, merged.read_paths.items.len);
+        for (out, merged.read_paths.items, merged.read_consumers.items) |*read, path, consumers| read.* = .{ .path = path, .consumers = consumers };
         return out;
     }
 
