@@ -593,6 +593,7 @@ reads that distinction, or anything else, back out of the spelling:
 | `roc__d{N}_{k}` | the `k`th further node (from 1) of owner `N`'s value | program |
 | `roc__h{hash}` | a datum named by content: a string literal's backing or a carried constant | shared |
 | `roc__p{hash}` | a procedure, by its `ProcIdentity` | shared |
+| `roc__p{hash}.{k}` | the `k`th fragment function (from 1) of a procedure's wasm code ("Wasm Function Limits") | shared |
 
 An owner is whoever freezes a value, and its number keeps names unique by
 construction without a counter shared between producers. Owners below the
@@ -22697,7 +22698,8 @@ a record crosses the boundary as one parameter.
 
 ## Wasm Local Binding
 
-`WasmCodeGen` binds each explicit LIR local to one wasm local index, and it
+`WasmCodeGen` binds each explicit LIR local to one wasm local index (or, in a
+procedure emitted split, to one frame slot; see "Wasm Function Limits"), and it
 binds it on the first emission site that names it. The wasm value type that
 slot must have comes from the `layout_idx` LIR already states for the local, so
 every site that names it agrees on the type whether it reads the local or
@@ -22722,20 +22724,52 @@ locals are not a stand-in for a definition the producer failed to emit. Because
 the locals declaration is encoded after the body, first-encounter binding needs
 no separate declaration pass.
 
-The wasm backend therefore has no pre-pass that inventories a procedure's
-locals, and no pass that closes a local set over descriptor metadata. A
-descriptor local is bound by the site that emits it—a hidden descriptor
-parameter, an entry-block composition statement, a capture read—because each of those sites already
-reads the explicit LIR descriptor data that names it. Nothing searches the
-store for locals that some site might want, so each procedure's own binding
-cost is a function of the code it emits rather than of how many locals the
-whole store holds, and locals that a procedure's emitted code never
-names—including entries its `frame_locals` inventory retains—occupy no index,
-no declared type, and no output bytes. The binding column's one-time growth to
-the highest `LocalId` any procedure reaches is the only store-proportional
-cost, and it is paid once for the module. The same rule forbids reintroducing
-that search at the producer: a whole-module finalization pass whose only
-consumer is wasm local binding trades one redundant traversal for another.
+Which storage a first encounter binds comes from the procedure's stack plan
+(`planProcLocals`): before emitting a body, `WasmCodeGen` runs the shared LIR
+stack planner over the procedure's own statement graph, with slots keyed by
+wasm value type, so LIR locals whose lifetimes never overlap are planned into
+one slot, and the first local of a slot to be bound gives the slot its wasm
+local (or, in a split procedure, its frame slot), which every later local of
+the slot then shares. An engine keeps a native frame entry per declared
+local, so a procedure that reads every field of a wide record, which defines
+a local per read, otherwise grows its frame with the record's width times its
+call depth. The plan's lifetimes are runtime lifetimes over the control-flow
+graph, back edges included, so the sharing holds whatever order emission
+reaches the locals in; a fused overflow result's early binding
+(`OverflowFusion`) is an explicit access of the plan, and a dynamic local is
+not planned, because its slot holds an address the runtime writes through
+outside the statement graph.
+
+The wasm backend has no pass that closes a local set over descriptor
+metadata. A descriptor local is bound by the site that emits it—a hidden
+descriptor parameter, an entry-block composition statement, a capture
+read—because each of those sites already reads the explicit LIR descriptor
+data that names it. Nothing searches the store for locals that some site
+might want, so each procedure's own binding cost is a function of its own
+statements rather than of how many locals the whole store holds, and locals
+that a procedure's emitted code never names—including entries its
+`frame_locals` inventory retains—occupy no index, no declared type, and no
+output bytes. The binding column's one-time growth to the highest `LocalId`
+any procedure reaches is the only store-proportional cost, and it is paid
+once for the module. The same rule forbids reintroducing that search at the
+producer: a whole-module finalization pass whose only consumer is wasm local
+binding trades one redundant traversal for another.
+
+### Wasm Aggregate Aliases
+
+An aggregate local of the wasm backend holds the address of its bytes: a slot
+of the procedure's frame, or for a parameter the caller's storage, and
+either stays put for the rest of the procedure. An `assign_ref.local` of an
+aggregate therefore binds its target to the source's address rather than
+copying the bytes, exactly when `LocalWrites` proves the alias for the pair:
+the target has one definition, the source at most one, and neither is
+written in place (`set_local`, `init_uninitialized`, a join parameter, a
+string-match capture, a dynamic write); dynamic locals never alias. This is
+the rule the native dev backend's stack plan proves ("Dev Backend Register
+Lifetimes"), taken from the same shared definition walk, so a frame holds
+one copy of a record however many field reads name it. A `ref.local` the
+rule rejects copies, so a snapshot keeps the bytes it saw when its source is
+rewritten.
 
 ## Wasm Body Generation
 
@@ -22780,6 +22814,105 @@ accepted callback drains before any owner state is touched, as for native
 procedure code. Without an executor every body is generated inline on a
 persistent sequential lane through the same callback, so `--jobs=1` and a
 multi-worker build emit the same bytes.
+
+## Wasm Function Limits
+
+The WebAssembly JS API fixes implementation limits every engine a web page
+can host enforces on one function: 7,654,321 bytes of body (the locals
+declaration and the code) and 50,000 locals, parameters included
+(`WasmCodeGen.max_function_body_bytes`, `max_function_locals`). A module with
+a function past either does not compile, so a wasm build never emits one, at
+any `--opt` level and under either lowering strategy. The limits belong to
+the engine, not the program: as the calling convention fits a program's
+arguments into the parameter limit without changing what it computes ("Wasm
+Calling Convention"), the backend fits a procedure's code into functions
+within these limits without changing what it computes, and nothing a program
+does depends on where the cuts fall. Native targets have no such limits and
+none of this machinery. Three things keep every function within the limits.
+
+**Copies are bounded.** A copy or zero fill of more than
+`straight_line_copy_bytes` (32) bytes is one `memory.copy` or `memory.fill`,
+or on `wasm32v1`, whose WebAssembly 1.0 instruction set has no bulk memory, a
+counted loop over eight-byte words followed by a straight-line tail
+(`emitMemCopy`, `emitZeroInit`, `emitMemCopyLoop`). A copy of at most that
+many bytes is straight-line loads and stores of the widest words that fit.
+The code a statement emits is therefore proportional to the statement, never
+to the bytes its values occupy: a 64 KiB record moved through ten match arms
+costs ten copies' worth of instructions.
+
+**Temporaries are reused.** A wasm local that holds no LIR local is anonymous,
+and almost every one is a temporary one statement's emission uses and is
+finished with. `Storage` keeps a free list per function: the statement walker
+marks the temporaries a statement allocates and releases them all once the
+statement's code is emitted, and the next allocation of a local of that type
+takes a released one before declaring a new one. A statement that leaves
+glue for later (a switch's condition, a join's state, a string match's arm)
+keeps what the glue reads in a scratch local the glue releases itself, and
+emission that runs no statement walk (helpers, drivers, entry wrappers) is
+unaffected. A LIR local, and a persistent local such as the frame pointer or
+the return value, never takes a released index: it is live across statements,
+and a join's remainder is emitted after the body that runs after it, so a
+temporary that looks finished in emission order can still write the index at
+runtime inside the local's live range. Temporaries only ever reuse
+temporaries, which no runtime path can interleave.
+
+**A procedure past the limits is emitted split.** Detection costs the
+procedure nothing beyond comparing its finished body against the limits: the
+walker compares the code length and local count after each statement, and
+`compileProcSpecBody` compares the finished body, with the stack-bound check
+`flushPendingBodies` may still add, exactly. Direct emission stops at the
+first statement past a limit, discards everything it created (its body, the
+entities it recorded, the join and fusion bookkeeping it left), and the
+procedure is emitted again split (`split_mode`):
+
+- Its LIR locals, its return value, its tail carry, its caller-drives flag,
+  and its join-point states live in frame slots (`Storage.Home.frame_slot`),
+  read and written through the frame pointer; the prologue binds its
+  parameters as the ABI fixes them and then spills every binding into the
+  frame (`spillProcStateToFrame`). Anonymous temporaries stay wasm locals of
+  whichever function uses them.
+- When the function being emitted reaches the fragment budget
+  (`FunctionLimits.fragment_bytes`, 1 MiB of code, or `fragment_locals`), the
+  statement walker emits the rest of the statement chain it is on, through
+  `stop`, as a fragment function `(param fp i32) (result i32)`, pushing the
+  work item that resumes the enclosing function under the chain's first
+  node, so a chain of any length is a chain of fragments and the walk stays
+  iterative ("Stack Safety"). The fragment shares the procedure's frame and
+  frame pointer, allocates its own temporaries, and declares its own locals.
+- Control-flow depths are absolute across the family. A `ret`, `jump`, or
+  frame-replacing call targets a label by depth (`emitExitToDepth`): a label
+  deeper than the fragment's base is a branch inside it; a shallower one
+  returns the depth as the fragment's exit code, and zero means the chain
+  fell through. The function that called the fragment dispatches on the code
+  with one `br_table` (`emitFragmentCall`): to its own label, or, when it is
+  a fragment too, by returning the code in turn. The root function returns
+  the procedure's value, so it has no code to return and every code is a
+  label of its own.
+- A fragment is an entity of the body that outlined it
+  (`BodyArtifact.Entity.fragment`), so the body worker names it by a deferred
+  operand and the owner creates its function when it commits the body, in
+  entity order like an RC helper, named after the procedure
+  (`roc__p{hash}.{k}`, a local hidden symbol). It has no frame or stack-bound
+  check of its own: the root's frame holds every slot the family allocates,
+  and its check covers the family.
+
+Every function of a split procedure is at most the fragment budget plus one
+statement's code and the call glue, and one statement's code is proportional
+to its operands, so a procedure fits the limits whenever each of its
+statements alone does, which is every procedure whose single statement has
+fewer than several hundred thousand operands. A function past the limits
+after splitting is a compiler invariant violation, checked in debug builds
+by `flushPendingBodies`. A procedure that fits directly pays nothing but the
+comparisons; a split procedure pays the memory traffic for its locals, which
+belongs to a procedure whose code already passes seven megabytes.
+
+The developer-diagnostic variable `ROC_WASM_SPLIT_BYTES` lowers both byte
+thresholds to its value, so every program with more than that many bytes of
+code in a procedure exercises splitting: the wasm static-library suite builds
+several of its programs with it set to a few dozen bytes, under both
+strategies and at both CPU levels, and requires the same output as the same
+programs emitted directly, and its runner checks every function of every
+program it runs against the limits, which bytebox does not enforce.
 
 ## Compile-Time Constants
 
