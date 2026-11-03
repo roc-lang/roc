@@ -195,6 +195,9 @@ pub const TargetConfig = struct {
     /// With `boxy_compile_time`, the roots hold function values
     /// (`postcheck.Boxy.Lower.Input.stored_functions`).
     boxy_stored_functions: bool = false,
+    /// The consumer reads composition sites
+    /// (`postcheck.Boxy.Lower.Input.composition_sites`).
+    boxy_composition_sites: bool = true,
     /// The compilation session evaluates the program's literal roots.
     literal_roots: bool = false,
     /// With `literal_roots`, the literal values an earlier compilation of the
@@ -1983,6 +1986,7 @@ pub const PreparedBoxy = struct {
             .host_boundary_digests = target.host_boundary_digests,
             .compile_time = target.boxy_compile_time,
             .stored_functions = target.boxy_stored_functions,
+            .composition_sites = target.boxy_composition_sites,
             .unit = if (target.boxy_unit) |unit| .{ .module = unit } else .program,
         });
         boxy_timing_scope.end();

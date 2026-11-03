@@ -27268,11 +27268,17 @@ const BodyContext = struct {
 
     /// A nominal instance's declared field order. Its padding types
     /// instantiate in the declaring view, with the declaration's formals bound
-    /// to this instance's argument nodes, exactly as its backing instantiates.
+    /// to this instance's argument nodes, exactly as its backing instantiates,
+    /// and terminate as it does: every padding type registers its placeholder
+    /// before any of them expands, so a recursive mention of this instance
+    /// finds them all. `padding_nodes` holds one node per padding type, and
+    /// `pending` the indices of those this task expands.
     const InstDeclaredOrderTask = struct {
         nominal: checked.CheckedNominalType,
         args: []NodeId,
         lookup: Builder.NominalDeclLookup = undefined,
+        padding_nodes: []NodeId = &.{},
+        pending: []u32 = &.{},
         /// The view and instantiation context the declaring module replaced.
         outer: ?struct { view: ModuleView, instantiation: TypeInstantiationContext } = null,
         scope: ?*InstantiatingNodeMap = null,
@@ -27290,13 +27296,34 @@ const BodyContext = struct {
             const fields = task.lookup.declaration.declaredRecordFields(task.lookup.view.types);
             if (fields.len == 0) return .{ .ret = .{ .declared_order = &.{} } };
             if (task.lookup.padding_field_tys.len == 0) return .{ .ret = .{ .declared_order = try self.instDeclaredOrderEntries(task, &.{}) } };
+            const padding_tys = task.lookup.padding_field_tys;
+            const module_bytes = task.lookup.view.key.bytes;
+            const declaration_id: u32 = @backingInt(task.lookup.declaration.id);
+            task.padding_nodes = try self.graph.arena().alloc(NodeId, padding_tys.len);
+            const pending = try self.graph.arena().alloc(u32, padding_tys.len);
+            var pending_count: usize = 0;
+            for (task.padding_nodes, 0..) |*node, index| {
+                const padding_index: u32 = @intCast(index);
+                if (self.graph.nominalPaddingNode(module_bytes, declaration_id, padding_index, task.args)) |cached| {
+                    node.* = cached;
+                    continue;
+                }
+                node.* = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+                try self.graph.putNominalPaddingNode(module_bytes, declaration_id, padding_index, task.args, node.*);
+                pending[pending_count] = padding_index;
+                pending_count += 1;
+            }
+            if (pending_count == 0) return .{ .ret = .{ .declared_order = try self.instDeclaredOrderEntries(task, task.padding_nodes) } };
+            task.pending = pending[0..pending_count];
             frame.cursor = 1;
             try self.enterDeclScopes(task, task.lookup.view, task.lookup.declaration, task.args);
-            return instSliceStep(task.lookup.padding_field_tys);
+            return instNodeStep(padding_tys[task.pending[0]]);
         }
-        const padding_nodes = input.?.get(.nodes);
+        try self.graph.unify(task.padding_nodes[task.pending[frame.index]], input.?.get(.node));
+        frame.index += 1;
+        if (frame.index < task.pending.len) return instNodeStep(task.lookup.padding_field_tys[task.pending[frame.index]]);
         self.leaveDeclBackingScopes(task);
-        return .{ .ret = .{ .declared_order = try self.instDeclaredOrderEntries(task, padding_nodes) } };
+        return .{ .ret = .{ .declared_order = try self.instDeclaredOrderEntries(task, task.padding_nodes) } };
     }
 
     fn instDeclaredOrderEntries(self: *BodyContext, task: *InstDeclaredOrderTask, padding_nodes: []const NodeId) Allocator.Error![]InstDeclaredField {
@@ -64285,9 +64312,7 @@ const BodyContext = struct {
         // materialized statement-EXPRESSION route scopes its internal binds
         // to that expression (the lift capture analysis is lexical), which
         // would leave later statements reading free locals.
-        if (!self.recordDestructsNeedExplicitRest(destructs) and
-            !try self.recordDestructsHaveOptionalField(self.view.bodies.pattern(pattern).ty, destructs))
-        {
+        if (!try self.recordPatternNeedsFieldStatements(pattern)) {
             self.restoreSourceLocation(&task.statement_saved);
             return null;
         }
@@ -64445,15 +64470,66 @@ const BodyContext = struct {
         }
     }
 
-    fn appendRecordRestPatternStatements(
-        self: *BodyContext,
+    /// Whether binding record pattern `root` as a statement needs per-field
+    /// `let` statements: it, or a record pattern nested in one of its fields,
+    /// has an explicit rest binder or an optional field. A nested record
+    /// pattern means what it means on its own, so it expands the same way.
+    fn recordPatternNeedsFieldStatements(self: *BodyContext, root: checked.CheckedPatternId) Allocator.Error!bool {
+        var pending: std.ArrayListUnmanaged(checked.CheckedPatternId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |pattern_id| {
+            const pattern = self.view.bodies.pattern(pattern_id);
+            const destructs = switch (pattern.data) {
+                .record_destructure => |destructs| destructs,
+                .pending, .assign, .as, .applied_tag, .nominal, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => continue,
+            };
+            if (self.recordDestructsNeedExplicitRest(destructs) or try self.recordDestructsHaveOptionalField(pattern.ty, destructs)) return true;
+            for (destructs) |destruct| switch (destruct.kind) {
+                .required, .sub_pattern => |child| try pending.append(self.allocator, child),
+                .rest => {},
+            };
+        }
+        return false;
+    }
+
+    const RecordFieldStatementsFrame = struct {
         value: DraftExprId,
         value_node: NodeId,
         record_checked_ty: checked.CheckedTypeId,
         destructs: []const checked.CheckedRecordDestruct,
+    };
+
+    fn appendRecordRestPatternStatements(
+        self: *BodyContext,
+        root_value: DraftExprId,
+        root_value_node: NodeId,
+        root_record_checked_ty: checked.CheckedTypeId,
+        root_destructs: []const checked.CheckedRecordDestruct,
         lowered: *LoweredStatements,
         comptime_site: ?DraftComptimeSiteId,
     ) Allocator.Error!void {
+        var frames: std.ArrayListUnmanaged(RecordFieldStatementsFrame) = .empty;
+        defer frames.deinit(self.allocator);
+        try frames.append(self.allocator, .{ .value = root_value, .value_node = root_value_node, .record_checked_ty = root_record_checked_ty, .destructs = root_destructs });
+        while (frames.pop()) |frame| try self.appendRecordFieldStatements(frame, &frames, lowered, comptime_site);
+    }
+
+    /// The statements binding one record pattern's fields. A field whose
+    /// sub-pattern is itself a record pattern needing per-field statements is
+    /// bound to a local and queued as a frame of its own, so its binders stay
+    /// in scope for the rest of the block too.
+    fn appendRecordFieldStatements(
+        self: *BodyContext,
+        frame: RecordFieldStatementsFrame,
+        frames: *std.ArrayListUnmanaged(RecordFieldStatementsFrame),
+        lowered: *LoweredStatements,
+        comptime_site: ?DraftComptimeSiteId,
+    ) Allocator.Error!void {
+        const value = frame.value;
+        const value_node = frame.value_node;
+        const record_checked_ty = frame.record_checked_ty;
+        const destructs = frame.destructs;
         for (destructs) |destruct| {
             switch (destruct.kind) {
                 .required, .sub_pattern => |child| {
@@ -64477,6 +64553,21 @@ const BodyContext = struct {
                             .value = try_value,
                             .comptime_site = if (try self.patternCanMiss(child)) comptime_site else null,
                         } }));
+                        continue;
+                    }
+                    const child_pattern = self.view.bodies.pattern(child);
+                    if (child_pattern.data == .record_destructure and try self.recordPatternNeedsFieldStatements(child)) {
+                        const field_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), field_cell, null);
+                        try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
+                            .pat = try self.addPatWithTypeCell(field_cell, .{ .bind = field_local }),
+                            .value = field_value,
+                        } }));
+                        try frames.append(self.allocator, .{
+                            .value = try self.addExprWithTypeCell(field_cell, .{ .local = field_local }),
+                            .value_node = field_node,
+                            .record_checked_ty = child_pattern.ty,
+                            .destructs = child_pattern.data.record_destructure,
+                        });
                         continue;
                     }
                     try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{

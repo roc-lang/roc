@@ -494,6 +494,9 @@ pub const BoolRootEvalResult = struct {
     events: []BoolRootEvent,
     /// Sparse source-site observations owned by this invocation.
     expect_observations: []ExpectObservation = &.{},
+    /// The crash is a caught stack overflow: how deep this root got depended
+    /// on the executing thread's stack, which no outcome identity records.
+    stack_overflowed: bool = false,
 };
 
 /// The uncombined counts contributed by one root to an inline expect site.
@@ -2644,6 +2647,7 @@ fn callBoolRoot(
     return .{
         .outcome = outcome,
         .events = events,
+        .stack_overflowed = runtime_env.stack_overflowed,
     };
 }
 

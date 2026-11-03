@@ -1163,15 +1163,13 @@ pub const RootRequestTable = struct {
         const all_requests = try requests.toOwnedSlice(allocator);
         errdefer allocator.free(all_requests);
 
-        const runtime_requests = try collectRuntimeRootRequests(allocator, all_requests);
-        errdefer allocator.free(runtime_requests);
-
         if (!module.moduleEnvConst().topLevelDemandDependenciesReady()) {
             checkedArtifactInvariant("checked module had no top-level demand dependencies", .{});
         }
         const full_schedule = try collectCompileTimeRootRequests(
             allocator,
             all_requests,
+            platform_required_declarations.declarations.len != 0,
             module.moduleIndex(),
             artifact_key,
             module.moduleEnvConst().topLevelDemandDependencies(),
@@ -1189,12 +1187,18 @@ pub const RootRequestTable = struct {
         verifyCompileTimeRequestsScheduled(full_schedule, compile_time_roots);
         var active_schedule = std.ArrayList(RootRequest).empty;
         errdefer active_schedule.deinit(allocator);
-        for (full_schedule, 0..) |request, i| {
-            all_requests[request.order].evaluation_order = @intCast(i);
+        var evaluation_order: u32 = 0;
+        for (full_schedule) |request| {
             all_requests[request.order].requires_pairing = request.requires_pairing;
+            if (request.abi != .compile_time) continue;
+            all_requests[request.order].evaluation_order = evaluation_order;
+            evaluation_order += 1;
             if (!request.requires_pairing) try active_schedule.append(allocator, all_requests[request.order]);
         }
         const compile_time_requests = try active_schedule.toOwnedSlice(allocator);
+        errdefer allocator.free(compile_time_requests);
+
+        const runtime_requests = try collectRuntimeRootRequests(allocator, all_requests);
 
         return .{
             .requests = all_requests,
@@ -1261,9 +1265,15 @@ const CompileTimeRequestScheduleEntry = struct {
     original_order: u32,
 };
 
+/// Every compile-time request in evaluation order. In a module that declares
+/// platform requirements (`include_expects`) each `expect` root is among them:
+/// an expect evaluates at runtime and no root depends on one, so it changes no
+/// other root's place, and scheduling it lets binding dependence reach it, as
+/// an expect that reads a requirement cannot run until the platform has its app.
 fn collectCompileTimeRootRequests(
     allocator: Allocator,
     requests: []const RootRequest,
+    include_expects: bool,
     module_idx: u32,
     artifact_key: CheckedModuleArtifactKey,
     top_level_demand_dependencies: []const TopLevelDemandDependency,
@@ -1281,7 +1291,7 @@ fn collectCompileTimeRootRequests(
     defer entries.deinit(allocator);
 
     for (requests) |request| {
-        if (request.abi != .compile_time) continue;
+        if (request.abi != .compile_time and !(include_expects and request.abi == .test_expect)) continue;
         const root_id = compileTimeRootIdForRequest(compile_time_roots, request);
         try entries.append(allocator, .{
             .request = request,
@@ -1644,7 +1654,8 @@ const CompileTimeRequestScheduler = struct {
     }
 
     /// Follow a procedure use through any chain of platform-required
-    /// bindings to the template it calls, adding the dependencies it passes.
+    /// bindings and exact procedure aliases to the template it calls, adding
+    /// the dependencies it passes.
     fn collectProcedureUseDependencies(
         self: *CompileTimeRequestScheduler,
         first: ProcedureUseTemplate,
@@ -1655,7 +1666,36 @@ const CompileTimeRequestScheduler = struct {
                 .top_level => |top_level| {
                     if (!top_level.artifact.eql(self.artifact_key.digest())) return null;
                     const binding = self.top_level_procedure_bindings.get(top_level.binding);
-                    return try self.collectProcedureBindingDependencies(binding.body);
+                    const template_id = switch (binding.body) {
+                        .callable_eval_template => |id| id,
+                        .direct_template, .checked_error => return try self.collectProcedureBindingDependencies(binding.body),
+                    };
+                    const template = self.callable_eval_templates.get(template_id);
+                    try self.addRootDependency(template.root);
+                    // A call of an exact procedure alias is a call of the
+                    // procedure its lookup forwards to.
+                    const lookup = template.forwarded_lookup orelse return null;
+                    const ref_id = self.resolved_value_refs.lookupIdByCheckedExpr(lookup) orelse
+                        checkedArtifactInvariant("an exact procedure alias's forwarded lookup had no resolved value reference", .{});
+                    const ref = self.resolved_value_refs.records[@backingInt(ref_id)].ref;
+                    switch (ref) {
+                        .top_level_proc, .promoted_top_level_proc => |next| procedure = next,
+                        .platform_required_proc => |required| procedure = required.procedure,
+                        .imported_proc,
+                        .hosted_proc,
+                        .top_level_const,
+                        .imported_const,
+                        .selected_hoisted_const,
+                        .platform_required_const,
+                        .local_param,
+                        .local_value,
+                        .local_mutable_version,
+                        .pattern_binder,
+                        .local_proc,
+                        .platform_required_declaration,
+                        .platform_required_checked_error,
+                        => return try self.collectResolvedRefDependency(ref),
+                    }
                 },
                 .platform_required => |required| {
                     if (!required.artifact.eql(self.artifact_key.digest())) return null;
@@ -1835,8 +1875,8 @@ fn verifyCompileTimeRequestsScheduled(
 ) void {
     if (builtin.mode != .debug) return;
     for (requests, 0..) |request, i| {
-        if (request.abi != .compile_time) {
-            base.invariant("checked artifact invariant violated: scheduled compile-time requests contained a non compile-time request", .{});
+        if (request.abi != .compile_time and request.abi != .test_expect) {
+            base.invariant("checked artifact invariant violated: scheduled compile-time requests contained a request that is neither compile-time nor an expect", .{});
         }
         const root_id = compileTimeRootIdForRequest(compile_time_roots, request);
         for (requests[0..i]) |previous| {
@@ -26452,6 +26492,36 @@ fn literalRequirementTypeIdentity(
     return hasher.finalResult();
 }
 
+/// Whether every variable of `ty` is quantified by the scheme `scope` names
+/// (a template's own, or a generalized local scope's) or by one enclosing it.
+fn literalRequirementTypeIsBound(
+    store: *const CheckedTypeStore,
+    orderer: *CheckedIdentityOrderer,
+    templates: *const CheckedProcedureTemplateTable,
+    key: anytype,
+    ty: CheckedTypeId,
+) Allocator.Error!bool {
+    variables: for (try orderer.identityRoots(ty)) |variable| {
+        const origin = store.identityOrigin(variable);
+        var current: ?u32 = key.scope;
+        while (current) |id| {
+            const dispatch_scope = templates.dispatch_scopes[id];
+            for (templates.scheme_vars_pool[dispatch_scope.scheme_vars.start..][0..dispatch_scope.scheme_vars.len]) |bound| {
+                if (store.identityOrigin(bound) == origin) continue :variables;
+            }
+            current = if (dispatch_scope.parent) |parent| @backingInt(parent) else null;
+        }
+        if (key.template) |template_index| {
+            const template = templates.templates.items[template_index];
+            for (templates.scheme_vars_pool[template.scheme_vars.start..][0..template.scheme_vars.len]) |bound| {
+                if (store.identityOrigin(bound) == origin) continue :variables;
+            }
+        }
+        return false;
+    }
+    return true;
+}
+
 /// Publish each scheme's literal requirements, the literal arguments of every
 /// edge, and the `literal_argument` roots this module's instantiations fix
 /// (design.md "Literal Arguments").
@@ -27013,7 +27083,7 @@ fn publishLiteralArgumentRoots(
     }
 
     // Instantiation of each edge's callee literal requirements, to a fixpoint.
-    const ArgBuild = union(enum) { root: u32, forwarded: u32 };
+    const ArgBuild = union(enum) { root: u32, forwarded: u32, unbound };
     var edge_args = std.ArrayListUnmanaged(std.ArrayListUnmanaged(ArgBuild)).empty;
     defer {
         for (edge_args.items) |*list| list.deinit(allocator);
@@ -27142,6 +27212,10 @@ fn publishLiteralArgumentRoots(
                         }
                     }
                     try args.append(allocator, .{ .root = slot.value_ptr.* });
+                } else if (edge.scope != null and !try literalRequirementTypeIsBound(store, &identity_orderer, templates, edge.scope.?, ty)) {
+                    // No use fixes a variable no scheme around the edge
+                    // quantifies, so nothing converts this literal.
+                    try args.append(allocator, .unbound);
                 } else {
                     const scope_key = edge.scope orelse checkedArtifactInvariant("a defaulted field expression instantiates a literal obligation at an open type", .{});
                     const state = try scope_states.getOrPut(allocator, scope_key);
@@ -27274,6 +27348,7 @@ fn publishLiteralArgumentRoots(
                 try pool.append(allocator, switch (arg) {
                     .root => |ordinal| .{ .root = @fromBackingInt(@intCast(@as(u32, @intCast(first_root + ordinal)))) },
                     .forwarded => |index| .{ .forwarded = index },
+                    .unbound => .unbound,
                 });
                 if (arg == .root) {
                     const id: ComptimeRootId = @fromBackingInt(@intCast(@as(u32, @intCast(first_root + arg.root))));
@@ -29629,6 +29704,12 @@ pub const LiteralRequirement = struct {
 pub const LiteralArgSource = union(enum(u8)) {
     root: ComptimeRootId,
     forwarded: u32,
+    /// The instantiated literal's type mentions a variable that no scheme
+    /// around the edge quantifies: a use's copy of a variable nothing relates
+    /// to the program, such as `_ = local` taking a generalized local function
+    /// that nothing calls. No use fixes that variable, so nothing reads the
+    /// argument.
+    unbound,
 };
 
 /// The literal arguments of one edge, in the instantiated scheme's
@@ -42195,8 +42276,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x86, 0x08, 0x40, 0x43, 0x02, 0x9B, 0xB8, 0xD8, 0xB9, 0xA5, 0x3E, 0x92, 0xCC, 0xD5, 0x04, 0xE8,
-        0xE6, 0xF9, 0x4D, 0x94, 0x85, 0xA5, 0xBE, 0x28, 0xAE, 0x28, 0xF3, 0x0C, 0xAA, 0xD2, 0xE6, 0x19,
+        0x20, 0x0C, 0x43, 0x88, 0xDD, 0x65, 0x8B, 0x52, 0x34, 0xA3, 0x7C, 0x2F, 0x65, 0xDA, 0x84, 0xC8,
+        0x16, 0x37, 0xF1, 0x3D, 0xB2, 0xC7, 0x5D, 0x37, 0x36, 0x7E, 0xF2, 0x8F, 0x58, 0xD9, 0xDC, 0x37,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

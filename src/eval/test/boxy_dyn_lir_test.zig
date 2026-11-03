@@ -125,6 +125,7 @@ const Builder = struct {
         abi: LIR.ProcAbi = .roc,
         erased_capture_arg: ?LocalId = null,
         tail_group: ?LIR.TailGroupId = null,
+        uses_pending_cell: bool = false,
     }) TestError!LirProcSpecId {
         defer self.proc_locals.clearRetainingCapacity();
         self.next_identity += 1;
@@ -140,6 +141,7 @@ const Builder = struct {
             .abi = options.abi,
             .erased_capture_arg = options.erased_capture_arg,
             .tail_group = options.tail_group,
+            .uses_pending_cell = options.uses_pending_cell,
         }, .none);
     }
 
@@ -1134,7 +1136,7 @@ fn buildUnaryArgumentProgram(b: *Builder, dynamic: bool, reuse: bool, deferred: 
     next = try b.dyn(null, .frame_alloc, next);
     next = try b.dyn(closure, .{ .dict_compose = .{ .worker = worker, .captures = try b.span(&.{desc}) } }, next);
     next = try b.static(desc, .{ .desc = boxy.compose.strDesc() }, next);
-    return b.proc(&.{}, next, .str, .{});
+    return b.proc(&.{}, next, .str, .{ .uses_pending_cell = deferred });
 }
 
 const unary_text = "a heap string passed without a temporary argument record";

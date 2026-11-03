@@ -369,6 +369,9 @@ boxy_runtime_symbols: ?BoxyRuntimeSignatures.SymbolTable = null,
 /// The procedure being compiled's tail carry parameter, if it takes one
 /// (`procCarriesTailArgs`).
 carry_local: ?u32 = null,
+/// The local holding the address of the pending cell of the procedure being
+/// compiled (`LirProcSpec.uses_pending_cell`).
+pending_cell_local: ?u32 = null,
 /// Undefined `__stack_pointer` symbol used only while emitting relocatable app objects.
 stack_pointer_symbol: ?SymbolIndex = null,
 /// Undefined `__indirect_function_table` symbol used only while emitting relocatable app objects.
@@ -6416,6 +6419,14 @@ fn generateFrameReplacingCall(self: *Self, proc_id: LIR.LirProcSpecId, call_args
         try self.emitDataAddressConst(area, @intCast(tail_area_args_offset + offsets[hidden_index]));
         try self.emitLocalGet(carry_local);
         try self.emitStoreOp(.i32, 0);
+        hidden_index += 1;
+    }
+    if (hidden.pending) {
+        // The callee leaves its pending call where this procedure's caller
+        // waits for this procedure's.
+        try self.emitDataAddressConst(area, @intCast(tail_area_args_offset + offsets[hidden_index]));
+        try self.emitPendingCell();
+        try self.emitStoreOp(.i32, 0);
     }
     try self.emitDataAddressConst(area, 0);
     try self.emitI32Const(@intCast(tailMemberNumber(driver, proc_id)));
@@ -6506,10 +6517,12 @@ fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) 
         param_types.append(self.allocator, vt) catch return error.OutOfMemory;
     }
     if (direct_count < args.len) param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
-    // The hidden result pointer and tail carry follow the explicit arguments.
+    // The hidden result pointer, tail carry, and pending cell follow the
+    // explicit arguments.
     const hidden = self.hiddenParams(proc);
     if (hidden.result) param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
     if (hidden.carry) param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
+    if (hidden.pending) param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
     const ret_vt = try self.resolveValType(proc.ret_layout);
     const type_idx = try self.internFuncType(param_types.items, &.{ret_vt});
     const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
@@ -6553,6 +6566,11 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     const saved_carry_local = self.carry_local;
     defer self.carry_local = saved_carry_local;
     self.carry_local = null;
+    const saved_pending_cell_local = self.pending_cell_local;
+    defer self.pending_cell_local = saved_pending_cell_local;
+    self.pending_cell_local = null;
+    // The erased ABI's last argument, once it is bound.
+    var erased_invocation: ?u32 = null;
 
     const erased_abi = proc.abi == .erased_callable or proc.abi == .erased_record;
     if (erased_abi) {
@@ -6561,9 +6579,9 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     }
 
     const erased_ret_ptr: ?u32 = if (proc.abi == .erased_callable) blk: {
-        // The last parameter is the erased-callable ABI's `out_desc` slot,
-        // which generated code ignores.
-        const ret_ptr, const args_ptr, const capture_ptr, const reuse_ptr, _ = try self.allocAnonymousLocals(.i32, 5);
+        // The last parameter names the waiter that invoked this procedure.
+        const ret_ptr, const args_ptr, const capture_ptr, const reuse_ptr, const invocation = try self.allocAnonymousLocals(.i32, 5);
+        erased_invocation = invocation;
         try self.bindErasedCallableAdapterParams(
             proc,
             args,
@@ -6574,8 +6592,9 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         );
         break :blk ret_ptr;
     } else if (proc.abi == .erased_record) blk: {
-        // The reuse and `out_desc` slots are never read.
-        const ret_ptr, const args_ptr, const capture_ptr, _, _ = try self.allocAnonymousLocals(.i32, 5);
+        // The reuse slot is never read.
+        const ret_ptr, const args_ptr, const capture_ptr, _, const invocation = try self.allocAnonymousLocals(.i32, 5);
+        erased_invocation = invocation;
         try self.bindErasedRecordParams(proc, ret_ptr, args_ptr, capture_ptr);
         break :blk ret_ptr;
     } else blk: {
@@ -6589,6 +6608,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         const hidden = self.hiddenParams(proc);
         if (hidden.result) _ = try self.bindProcParamLocal(proc.dyn_result.?);
         if (hidden.carry) self.carry_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        if (hidden.pending) self.pending_cell_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
         if (stored_args) |base_local| {
             for (direct_count..args.len) |i| {
                 const binding = try self.bindProcParamLocal(GuardedList.at(args, i));
@@ -6600,20 +6620,26 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         break :blk null;
     };
 
-    if (proc.reads_caller_drives) {
-        // Read before anything else can make an erased call: the runtime's
-        // answer describes only this invocation.
-        const flag = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        // The runtime names the callable it invokes by the function pointer
-        // callable values hold, which is this procedure's table index. A
-        // procedure without one is never the callee of an erased call.
-        if (self.tables().proc_table_indices.get(key)) |table_idx|
-            try self.emitFunctionTableIndexConst(table_idx)
-        else
-            try self.emitNullPtr();
-        try self.emitBuiltinCall(.native_callable_caller_drives);
-        try self.emitLocalSet(flag);
-        self.caller_drives_local = flag;
+    if (proc.uses_pending_cell and self.pending_cell_local == null) {
+        const own_cell = try self.emitFpOffsetToNewLocal(try self.allocStackMemory(builtins.native_callable.pending_words * 4, 4));
+        try self.emitLocalGet(own_cell);
+        try self.emitI32Const(0);
+        try self.emitStoreOp(.i32, 0);
+        self.pending_cell_local = own_cell;
+        if (proc.reads_caller_drives) {
+            // A cell in the erased ABI's last argument belongs to the runtime
+            // that invoked this procedure, and makes its calls.
+            try self.emitLocalGet(erased_invocation orelse
+                wasmInvariantFmt("WASM/codegen invariant violated: a procedure outside the erased ABI reads a caller's cell", .{}));
+            try self.emitBuiltinCall(.native_callable_caller_cell);
+            const caller_cell = try self.emitSetNewLocal(.i32);
+            self.caller_drives_local = caller_cell;
+            try self.emitLocalGet(caller_cell);
+            try self.emitLocalGet(own_cell);
+            try self.emitLocalGet(caller_cell);
+            self.currentCode().append(self.allocator, Op.select) catch return error.OutOfMemory;
+            self.pending_cell_local = try self.emitSetNewLocal(.i32);
+        }
     }
 
     // Pre-allocate frame pointer local (after params, so it doesn't conflict).
@@ -8237,13 +8263,14 @@ fn beginStoredArgs(self: *Self, proc: LirProcSpec) Allocator.Error!?StoredArgs {
 
 /// The hidden trailing parameters of a `.roc` procedure's wasm signature,
 /// after its explicit arguments: the address of its dynamic result's
-/// storage, then its tail carry.
+/// storage, then its tail carry, then its caller's pending cell.
 const HiddenParams = struct {
     result: bool,
     carry: bool,
+    pending: bool,
 
     fn count(self: HiddenParams) usize {
-        return @as(usize, @intFromBool(self.result)) + @intFromBool(self.carry);
+        return @as(usize, @intFromBool(self.result)) + @intFromBool(self.carry) + @intFromBool(self.pending);
     }
 };
 
@@ -8251,6 +8278,7 @@ fn hiddenParams(self: *const Self, proc: LirProcSpec) HiddenParams {
     return .{
         .result = proc.abi == .roc and proc.dyn_result != null,
         .carry = procCarriesTailArgs(self.store, proc),
+        .pending = proc.takesPendingCell(),
     };
 }
 
@@ -8523,11 +8551,11 @@ fn bindErasedRecordParams(self: *Self, proc: LirProcSpec, ret_ptr: u32, args_ptr
     if (explicit_count > 1) wasmInvariantFmt("WASM/codegen invariant violated: erased_record proc has {d} explicit parameters", .{explicit_count});
 }
 
-/// Whether a direct call passes or returns dynamic values: the callee has a
+/// Whether a direct call passes hidden values or dynamic ones: the callee has a
 /// dynamic parameter or result, or the target is dynamic.
 fn callIsDynamic(self: *const Self, proc_id: LIR.LirProcSpecId, target: ProcLocalId) bool {
     const callee = self.store.getProcSpec(proc_id);
-    if (callee.dyn_result != null or self.localDyn(target) != null) return true;
+    if (callee.dyn_result != null or callee.takesPendingCell() or self.localDyn(target) != null) return true;
     const params = self.store.getLocalSpan(callee.args);
     for (0..params.len) |i| {
         if (self.localDyn(GuardedList.at(params, i)) != null) return true;
@@ -8577,6 +8605,7 @@ fn generateDynCall(self: *Self, proc_id: LIR.LirProcSpecId, args: ProcLocalSpan,
     }
     // An ordinary call's arguments stay in this frame: no carry.
     if (procCarriesTailArgs(self.store, callee)) try self.emitI32Const(0);
+    if (callee.takesPendingCell()) try self.emitPendingCell();
     try self.emitCall(func_idx);
     try self.emitTailDrive(callee);
 
@@ -9089,6 +9118,7 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             try self.emitLeadingValue(c.closure, .i32);
             const payload = try self.emitSetNewLocal(.i32);
             const t = try self.dynTarget(dst);
+            if (c.deferred) try self.emitPendingCell();
             try self.emitLocalGet(payload);
             try self.emitLoadOpSized(.i32, 4, 0);
             if (c.deferred) {
@@ -9444,6 +9474,7 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
 
     const ret_size = try self.layoutStorageByteSize(self.runtimeRepresentationLayoutIdx(c.ret_layout));
     const ret_offset = if (ret_size == 0) null else try self.allocStackMemory(ret_size, try self.layoutStorageByteAlign(c.ret_layout));
+    if (c.deferred) try self.emitPendingCell();
     try self.emitLocalGet(fn_ptr);
     if (c.deferred) {
         try self.emitLocalGet(payload_ptr);
@@ -9510,6 +9541,12 @@ fn emitDrivePending(self: *Self, drive: LIR.PendingDrive, ret_layout: layout.Idx
     }
 }
 
+/// Push the address of this procedure's pending cell.
+fn emitPendingCell(self: *Self) Allocator.Error!void {
+    try self.emitLocalGet(self.pending_cell_local orelse
+        wasmInvariantFmt("WASM/codegen invariant violated: a statement that can leave an erased call pending in a procedure without a pending cell", .{}));
+}
+
 /// Run the erased calls pending after a statement marked `drive`, writing
 /// the last one's result to the storage whose address `slot_local` holds
 /// (none for a zero-sized result). Under `.unless_caller_drives` this
@@ -9524,6 +9561,7 @@ fn emitDriveInto(self: *Self, drive: LIR.PendingDrive, slot_local: ?u32) Allocat
         self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
         self.currentCode().append(self.allocator, @backingInt(BlockType.void)) catch return error.OutOfMemory;
     }
+    try self.emitPendingCell();
     if (slot_local) |slot| try self.emitLocalGet(slot) else try self.emitNullPtr();
     try self.emitBuiltinCall(.native_callable_drive);
     if (drive == .unless_caller_drives) {

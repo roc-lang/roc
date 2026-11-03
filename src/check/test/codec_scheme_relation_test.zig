@@ -139,3 +139,47 @@ test "a relation whose state is known validates at its boundary" {
     try env.assertNoErrors();
     try env.assertDefType("known", "U64 -> Try({ rest: U64, value: U64 }, [Negative])");
 }
+
+test "a local nothing calls still relates the enclosing variable it captures" {
+    var env = try TestEnv.init("Test", prelude ++
+        \\unused_local = |state| {
+        \\    _local = |_| U64.parser_for(Format.Default)(state)
+        \\    1
+        \\}
+        \\
+        \\at_text = unused_local("text")
+    );
+    defer env.deinit();
+    try env.assertOneTypeError("Type Mismatch");
+}
+
+test "a local read but never called still relates the enclosing variable it captures" {
+    var env = try TestEnv.init("Test", prelude ++
+        \\read_local = |state| {
+        \\    local = |_| U64.parser_for(Format.Default)(state)
+        \\    _ = local
+        \\    1
+        \\}
+        \\
+        \\at_text = read_local("text")
+    );
+    defer env.deinit();
+    try env.assertOneTypeError("Type Mismatch");
+}
+
+test "a local nothing calls accepts the enclosing variable at the format's state" {
+    var env = try TestEnv.init("Test", prelude ++
+        \\unused_local = |state| {
+        \\    _local = |_| U64.parser_for(Format.Default)(state)
+        \\    1
+        \\}
+        \\
+        \\at_state = |{}| {
+        \\    state : U64
+        \\    state = 3
+        \\    unused_local(state)
+        \\}
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
+}

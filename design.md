@@ -5655,7 +5655,13 @@ result: the interpreter recognizes the marked crash it stopped at, and compiled
 code records the crash through the in-process host's
 `roc_checked_error_reached` just before it happens. An expect whose own
 condition checking rejected outright, leaving the root no type to evaluate at,
-is counted the same way during test planning. A type error inside a called
+is counted the same way during test planning. So is a platform expect that
+reads a value the platform `requires`, directly or through the constants and
+procedures it uses, exact procedure aliases included: `roc test` pairs no
+platform with an app, so there is nothing for it to read. The checker marks
+such a root `requires_pairing` by the same binding dependence it follows for
+the platform's other roots, and neither test planning nor compile-time demand
+discovery lowers it. A type error inside a called
 function, including an inline expect condition, blocks the calling expect only
 when the expect's evaluation reaches it, and it never becomes a runtime test
 failure. Each blocked expect produces one compiler-error test result, even when
@@ -11180,6 +11186,16 @@ still has evidence at its construction.
 This validates in a private copy and rewrites no solved variable the program can
 reach, so it adds no Rewrite Inventory entry (Solver-Mutating Rewrites).
 
+A template relation that also reaches a variable of an enclosing scope
+(`_local = |_| U64.parser_for(Format.Default)(state)` inside a function of
+`state`) states something about that scope's values whether or not anything
+uses the definition. A use's copy carries it outward, and so does one copy the
+definition's boundary makes as a use would (`Check.copyRelationToEnclosingScope`):
+its own quantified variables fresh, the enclosing scope's shared. The enclosing
+scheme then validates it at each of its own uses, so a function whose dead
+local parser captures its argument is rejected at a `Str` call exactly as it
+would be if the local were called.
+
 A relation whose state is known at the boundary is unaffected: it is validated
 there, before generalization, so its constraints enter the definition's type
 before anything can copy it. Pinned by `src/check/test/codec_scheme_relation_test.zig` (accepted:
@@ -12095,6 +12111,14 @@ The kind rules:
   diagnostics enabled for relations grounded by those commits. Still-flex
   receivers remain parked, so quiescence does not speculatively select or
   reject a method.
+  A nested record pattern (`{ outer: { n } }`) is judged exactly as it is
+  on its own: each judgment pass first binds every destructure whose kind
+  is decided, repeating while a binding (which relates a nested pattern to
+  its field's value) decides more, and only then commits still-flex kinds
+  to `required`, one at a time and latest first, since a record pattern's
+  fields are queued after the patterns nested in them. Lowering binds such
+  a statement with per-field `let` statements at every nesting level that
+  needs them, so the inner binders stay in scope for the rest of the block.
   Nested sub-patterns (`{ x: Ok(y) }`) check against the binder, so on an
   optional field they see the Try. Exhaustiveness analysis consumes that
   exact checker-judged sub-pattern type for every record column, rather
@@ -13709,7 +13733,9 @@ the checker's rule. The reach never recurses (nominal rows are declared and
 aliases cannot be recursive), so every conversion worker is finite. A
 conversion whose destination row a type variable of the body opens is the
 descriptor-driven `adapt` (Dynamic Values In LIR), which re-tags by name
-under the destination's descriptor. Either conversion is elided when the two
+under the destination's descriptor, and `Bool`, the union `[False, True]`
+whose descriptor holds no variant table, takes part by the same names. Either
+conversion is elided when the two
 types are one or commit one layout, since a reached row's source tags are a
 subset of its destination's and equal variant counts mean equal tag sets.
 
@@ -13879,7 +13905,10 @@ Composing a record, tuple, or tag union therefore searches its components along
 size edges for a member with its structure behind recursion boxes, and yields
 that member, so a closed type has one layout however it was composed. Component addressing and construction see through recursion boxes: a
 field or payload address is the boxed value's, and building a value boxes
-the components its descriptor's slots box.
+the components its descriptor's slots box. A `Box` a type states itself,
+including through nominal wrappers, is the component's own representation and
+never a recursion box; value slots and static descriptors read this one rule
+(`Layouts.isRecursionBox`).
 
 Every descriptor a body needs depends only on its hidden parameters, so the
 lowerer hoists all composition statements to the worker's entry block. A body
@@ -14030,10 +14059,18 @@ hidden arguments the worker needs, bound as captures: the descriptors for the
 target scheme's variables under the edge's `subst`, and the dictionaries for
 the target scheme's own evidence parameters under the edge's nested evidence.
 A dictionary whose target and captures are all static is emitted as static,
-immortal data. One whose captures mention the enclosing worker's hidden
-parameters is composed at runtime, hoisted to entry like a descriptor, and
-interned in the same immortal cache keyed by the target worker and its capture
-identities, so composition allocates nothing after the first evaluation.
+immortal data, interned by procedure and capture words: its callable is a
+static-data node of the same shape a composed callable has, with a static
+refcount, and its slot's value points at the callable's payload. A local's
+static content (a static descriptor, a static dictionary, or the null word of
+an unread literal argument) is what decides this, so a closed type's dictionary
+is static in a generic body too. One whose captures mention the enclosing
+worker's hidden parameters is composed at runtime, hoisted to entry like a
+descriptor, and interned in the same immortal cache keyed by the target worker
+and its capture identities, so composition allocates nothing after the first
+evaluation. A compile-time program with stored functions composes every
+dictionary, because reading a function value back resolves its captured
+descriptors through what the program's compositions noted.
 
 A method whose scheme requires itself has a dictionary that captures itself,
 directly or through other dictionaries: resolving a requirement can reach a
@@ -14123,7 +14160,11 @@ strategy).
   of this module (`.root`), one per literal and closed type, whose wrapper
   body is the conversion at that edge. An instantiation at an open type is
   forwarded: the value is one of the enclosing scheme's own literal
-  arguments (`.forwarded`). A template's `literal_argument_demand` lists the
+  arguments (`.forwarded`). An instantiation at a type mentioning a variable
+  that no scheme around the edge quantifies (a use's copy that nothing relates
+  to the program, as in `_ = local` for a generalized local function nothing
+  calls) is fixed by no use, so nothing reads its value (`.unbound`). A
+  template's `literal_argument_demand` lists the
   roots its edges read, so compile-time evaluation orders them before any
   evaluation of the template.
 - A use of an exact procedure alias is an edge to the alias's entry wrapper,
@@ -14187,7 +14228,11 @@ frame's types are its environment.
 A body reads a
 literal of its own scheme by calling the argument (`lowerInstanceLiteral`); a
 call passes the callee's literal arguments from the edge's
-(`fillLiteralArgs`): a root's thunk or one of the caller's own arguments. A
+(`fillLiteralArgs`): a root's thunk or one of the caller's own arguments. An
+`.unbound` argument, and each literal argument of a generalized lambda whose
+construction checking recorded no instantiation for (no use instantiated it,
+so nothing calls it), is a crash dictionary nothing reads, as a `from_scheme`
+dictionary is. A
 generalized local function's own literal requirements travel with its dictionaries:
 per call for a local procedure, in its captures for any other generalized
 lambda; a nested lambda captures the enclosing scopes' literal arguments as
@@ -14335,8 +14380,11 @@ adding it, takes the lock, probes the current table again, and interns on a
 true miss. Only insertion and growth hold the lock. Keys are a few words of
 constructor tags and operand addresses, hashed by mixing each word.
 
-Each descriptor or dictionary composition statement also owns a one-entry site
-cache in zero-initialized writable static data. The lowerer assigns its slot
+Where the consumer is the interpreter or the native dev backend, each descriptor
+or dictionary composition statement also owns a one-entry site cache in
+zero-initialized writable static data; LLVM and wasm consumers read no sites, so
+their lowering emits no slots and every composition reaches the interner. The
+lowerer assigns its slot
 and stable worker/site identity; LIR cloning and compaction preserve that
 reference. Mutable slots are never content-deduplicated or pooled between
 program images. Dev run images place them on separate writable pages outside
@@ -14430,7 +14478,12 @@ the same sources, and `roc build` adds exactly the module objects still
 missing (`compile.boxy_object_cache`, the `boxy_object` family).
 `roc test` checks its root for explicit test roots
 (`Validation.explicit_roots`), which is its own check under either strategy,
-and with `--specialize=no` it leaves exactly what that check leaves. `roc
+and with `--specialize=no` it leaves exactly what that check leaves plus its
+test outcomes and completed-command records (Completed dev test commands).
+Those are not lowered output: they are the same `test_result` family under
+either strategy, and whether a command reads and writes them is separate from
+the policy above (`cachesPostCheckWork`), which stays the policy of lowered
+output, packs and program artifacts. `roc
 check` accepts `--opt` and ignores it; it honors `--specialize`, because the
 strategy selects the compile-time evaluator that completes the module's
 roots. The checked module itself names no strategy: both evaluators store
@@ -14611,9 +14664,14 @@ references, which index the image, and its line entries, which name its
 source-file table. The composed object is a function of the units alone:
 they are taken in the order of their source-file tables, and host-visible
 constants in name order, so the order units finish in changes nothing in
-it. A unit's program-local
-workers (adapters, roots, static-data initializers) are named under the
-unit's link name, since pieces of different units meet in one program.
+it. A worker a unit exports is named by content identity. Every other
+procedure of a unit (conversions, adapters, structural and codec workers,
+literal thunks, roots, static-data initializers and the rest) is numbered
+within its own lowering and named under the unit's link name
+(`Program.programLocalIdentity`), since pieces of different units meet in one
+program and composition treats one identity as one procedure: an edge to a
+procedure lands on the definition composition keeps, so two different
+procedures under one identity would run each other's code.
 `ROC_VERIFY_BOXY_OBJECT_REUSE` compares a restored unit's encoded pieces
 with a rebuilt unit's exactly as it compared objects.
 
@@ -18935,7 +18993,21 @@ it is rebuilt by the descriptor-driven `adapt` (Dynamic Values In LIR), which
 matches fields by name at any depth: `StorageDifference.record_order` on a
 result or a read, and the check of each explicit argument at a direct call. A
 function value converts by an adapter around it, like one a row widening reaches.
-A specialized program has one type for both and needs no conversion.
+
+A specialized program specializes each use at its own types, so a call that hands
+a padded nominal to a row parameter gets an instance at that nominal, and the row
+and the nominal rarely meet. A record row keeps its structural layout whichever
+nominals back onto it: several can, with different orders or different padding,
+and a plain record of the same fields is a value of that row. They meet where a
+type stays fixed across uses, a compile-time value read at a lifted type, and the
+read's typed boundary converts it: field by field for a record, and item by
+item for a list, in a loop that builds a new list of the target's layout. The
+loop runs only where the two layouts differ.
+
+An unnamed field instantiates with its nominal and terminates as a backing does:
+Monotype registers a placeholder for it, keyed by declaration and arguments,
+before expanding it, and the checker's nominal argument growth rule walks unnamed
+fields along with the backing.
 
 A function value stored inside data whose signature differs by a padded record's
 order is not converted: `adapt` copies an erased callable as it is, so
@@ -20252,9 +20324,38 @@ callee can return with a call pending, and on each deferred call:
   erased worker, which reads at entry whether the erased-call runtime invoked
   it. A host that calls an
   erased callable directly does not make pending calls, so then the
-  procedure makes them itself. The runtime names the callable it is invoking
-  by its function pointer and the procedure asks with its own, so a value no
-  callee read cannot answer for a different procedure entered later.
+  procedure makes them itself. The runtime marks the invocations it makes
+  (see Pending Cells), so the answer describes exactly this invocation.
+
+#### Pending Cells
+
+A pending call is recorded in a cell in the frame of the waiter that will make
+it, never in process or thread state. Host calls can run on several threads at
+once, and pending calls of different host calls must not meet. Thread-local
+storage cannot separate them: nothing compiled into a platform archive or shim
+touches it, and the builtins an LLVM object links are one target-neutral
+bitcode, which can name no operating system's thread. Each procedure with a
+statement that can leave a call pending (`LirProcSpec.uses_pending_cell`) has
+one cell, from one of three places:
+
+- A Roc-ABI procedure with `may_leave_pending` takes its caller's cell as a
+  hidden parameter after every other (`LirProcSpec.takesPendingCell`), and
+  passes it to the calls it hands up and to the procedures it replaces its
+  frame with. Only Roc code calls such a procedure, since one anything else can
+  enter makes its own pending calls, so no outside signature changes.
+- An erased-callable procedure the erased-call runtime invoked uses the
+  runtime's cell, which arrives in the erased ABI's last argument: an address
+  in the cell with its low bit set. A host passes an aligned pointer to its own
+  descriptor output, or null, so the bit is what says the runtime made this
+  call. A host's callable may write that output, and the cell keeps room for
+  the write to land without touching the record.
+- Every other procedure reserves a cell in its own frame and initializes it
+  empty at entry. Its `always` statements drive it; a statement that hands a
+  call up leaves it to the caller's cell.
+
+A cell is empty whenever a statement that can fill it starts, because whoever
+fills it returns straight to whoever drives it. One cell therefore serves every
+statement of a procedure.
 
 The pass also commits `LirProcSpec.may_leave_pending`, its exact procedure
 summary, into native cache offers. Reusing a body-less native entry seeds the
@@ -23240,7 +23341,15 @@ Raw `dbg` and crash payload bytes remain checked output and are never rewritten.
 Failure excerpts of mentioned bindings are covered by checked definition
 identity; primary source excerpts and line numbers render from current sources.
 Passes and failures are equally admissible; compiler errors and incomplete
-execution are not durable outcomes.
+execution are not durable outcomes. Neither is a root that ran out of stack:
+how deep it got depended on the executing thread's stack and on the compiler
+frames beneath it, which no identity records, so the host reports the overflow
+explicitly (`BoolRootEvalResult.stack_overflowed`) and the root runs again on
+every command. Allocation failure ends the process and publishes nothing.
+
+Nothing else a root observes lies outside its identity. Roc has no ambient
+input a pure `expect` can read, and an `expect` body cannot be effectful, so no
+root calls a hosted function: the host's code and environment are not inputs.
 
 Completed-command format V2 references durable individual outcomes and retains
 producer-authored report maps and each occurrence's current region, order and
