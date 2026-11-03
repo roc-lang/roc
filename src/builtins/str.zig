@@ -1488,6 +1488,38 @@ pub inline fn concatSmall(arg1: RocStr, arg2: RocStr, combined_length: usize) Ro
     return smallFromWords(words);
 }
 
+/// The bytes a result of `concatShort` may hold: its first two words, less
+/// one byte so no shift reaches their width.
+pub const SHORT_CONCAT_LENGTH_MAX = 2 * @sizeOf(usize) - 1;
+const DoubleWord = @Int(.unsigned, 2 * word_bits);
+const DoubleWordShift = std.math.Log2Int(DoubleWord);
+
+/// Two small strings whose result fits in the first two words, as
+/// `concatSmall` makes it, with less code: the two words as one integer of
+/// twice their width, which a target shifts by a run-time amount in
+/// registers (unlike three words), and a third word that is only the flag
+/// byte. Small enough to inline at every call site.
+pub inline fn concatShort(arg1: RocStr, arg2: RocStr, combined_length: usize) RocStr {
+    std.debug.assert(arg1.isSmallStr() and arg2.isSmallStr());
+    std.debug.assert(combined_length <= SHORT_CONCAT_LENGTH_MAX);
+    const first_bits: DoubleWordShift = @intCast(arg1.len() * 8);
+    const second_bits: DoubleWordShift = @intCast(arg2.len() * 8);
+    const one: DoubleWord = 1;
+    const first = shortWords(arg1) & ((one << first_bits) - 1);
+    const second = shortWords(arg2) & ((one << second_bits) - 1);
+    const joined = first | (second << first_bits);
+    return .{
+        .bytes = @ptrFromInt(@as(usize, @truncate(joined))),
+        .capacity_or_alloc_ptr = @truncate(joined >> word_bits),
+        .length = @as(usize, RocStr.smallStrFlagByte(combined_length)) << (word_bits - 8),
+    };
+}
+
+/// A small string's first two words as one integer, its first byte lowest.
+inline fn shortWords(string: RocStr) DoubleWord {
+    return @as(DoubleWord, @intFromPtr(string.bytes)) | (@as(DoubleWord, string.capacity_or_alloc_ptr) << word_bits);
+}
+
 /// Str.contains
 pub fn strContains(haystack: RocStr, needle: RocStr) callconv(.c) bool {
     return std.mem.find(u8, haystack.asSlice(), needle.asSlice()) != null;
@@ -3867,6 +3899,33 @@ test "RocStr.concat: a small first argument and every length, small and big resu
                     try std.testing.expect(!result.isSmallStr());
                 }
             }
+        }
+    }
+}
+
+test "RocStr.concat: concatShort is concatSmall for every pair of lengths it takes" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const roc_ops = test_env.getOps();
+    const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    // Both arguments cut short from full small strings, so each keeps its old
+    // bytes past its length and its flag byte says the cut length: the result
+    // must carry neither.
+    const first_full = RocStr.fromSliceSmall(letters[0 .. SMALL_STRING_SIZE - 1]);
+    const second_full = RocStr.fromSliceSmall(letters[letters.len - (SMALL_STRING_SIZE - 1) ..]);
+    for (0..SHORT_CONCAT_LENGTH_MAX + 1) |first_length| {
+        for (0..SHORT_CONCAT_LENGTH_MAX + 1 - first_length) |second_length| {
+            const first = substringUnsafe(first_full, 0, first_length, roc_ops);
+            const second = substringUnsafe(second_full, 0, second_length, roc_ops);
+            try std.testing.expect(first.isSmallStr() and second.isSmallStr());
+            const combined_length = first_length + second_length;
+            const short = concatShort(first, second, combined_length);
+            const small = concatSmall(first, second, combined_length);
+            try std.testing.expectEqualSlices(u8, std.mem.asBytes(&small), std.mem.asBytes(&short));
+            var expected: [SHORT_CONCAT_LENGTH_MAX]u8 = undefined;
+            @memcpy(expected[0..first_length], letters[0..first_length]);
+            @memcpy(expected[first_length..][0..second_length], second_full.asSlice()[0..second_length]);
+            try std.testing.expect(short.eqlSlice(expected[0..combined_length]));
         }
     }
 }
