@@ -3592,6 +3592,7 @@ pub const Builder = struct {
                 return switch (edge.args[index]) {
                     .root => |root| try self.composeRootThunk(root),
                     .forwarded => |forwarded| try self.scopeLiteral(.{ .depth = 0, .index = forwarded }),
+                    .unbound => try self.unreadLiteralArg(),
                 };
             },
         }
@@ -3649,7 +3650,14 @@ pub const Builder = struct {
         return switch (source) {
             .root => |root| try self.rootThunk(root),
             .forwarded => |index| try self.scopeLiteral(.{ .depth = 0, .index = index }),
+            .unbound => try self.unreadLiteralArg(),
         };
+    }
+
+    /// The literal argument of an instantiation no use fixes: like a
+    /// `from_scheme` dictionary, a crash nothing reads.
+    fn unreadLiteralArg(self: *Builder) Allocator.Error!LocalId {
+        return try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, .unreachable_value), &.{});
     }
 
     /// The immortal callable of this body's module's `literal_argument`
@@ -7572,10 +7580,17 @@ pub const Builder = struct {
             }
             try own_dicts.appendSlice(self.allocator, self.dict_locals);
             // Its own scheme's literal arguments, from the construction's
-            // edge, then the enclosing scope's.
+            // edge, then the enclosing scope's. A construction with no checked
+            // instantiation has no edge: no use instantiated the lambda, so
+            // nothing calls it, and like a `from_scheme` dictionary each
+            // argument is a crash nothing reads.
             const literal_args = self.view.view.checked_procedure_templates.literalEdgeArgs(.{ .use = expr_id });
-            if (literal_args.len != scheme.literal_requirements.len) invariant("a generalized lambda's construction has no literal arguments for its scheme's literal_requirements");
-            for (literal_args) |source| try own_dicts.append(self.allocator, try self.literalArg(source));
+            if (literal_args.len == scheme.literal_requirements.len) {
+                for (literal_args) |source| try own_dicts.append(self.allocator, try self.literalArg(source));
+            } else {
+                if (subst.len != 0) invariant("a generalized lambda's instantiated construction has no literal arguments for its scheme's literal_requirements");
+                for (scheme.literal_requirements) |_| try own_dicts.append(self.allocator, try self.unreadLiteralArg());
+            }
             try own_dicts.appendSlice(self.allocator, self.literal_locals);
             descs = own_descs.items;
             dicts = own_dicts.items;

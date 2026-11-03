@@ -6950,7 +6950,13 @@ result: the interpreter recognizes the marked crash it stopped at, and compiled
 code records the crash through the in-process host's
 `roc_checked_error_reached` just before it happens. An expect whose own
 condition checking rejected outright, leaving the root no type to evaluate at,
-is counted the same way during test planning. A type error inside a called
+is counted the same way during test planning. So is a platform expect that
+reads a value the platform `requires`, directly or through the constants and
+procedures it uses, exact procedure aliases included: `roc test` pairs no
+platform with an app, so there is nothing for it to read. The checker marks
+such a root `requires_pairing` by the same binding dependence it follows for
+the platform's other roots, and neither test planning nor compile-time demand
+discovery lowers it. A type error inside a called
 function, including an inline expect condition, blocks the calling expect only
 when the expect's evaluation reaches it, and it never becomes a runtime test
 failure. Each blocked expect produces one compiler-error test result, even when
@@ -12482,6 +12488,16 @@ still has evidence at its construction.
 This validates in a private copy and rewrites no solved variable the program can
 reach, so it adds no Rewrite Inventory entry (Solver-Mutating Rewrites).
 
+A template relation that also reaches a variable of an enclosing scope
+(`_local = |_| U64.parser_for(Format.Default)(state)` inside a function of
+`state`) states something about that scope's values whether or not anything
+uses the definition. A use's copy carries it outward, and so does one copy the
+definition's boundary makes as a use would (`Check.copyRelationToEnclosingScope`):
+its own quantified variables fresh, the enclosing scope's shared. The enclosing
+scheme then validates it at each of its own uses, so a function whose dead
+local parser captures its argument is rejected at a `Str` call exactly as it
+would be if the local were called.
+
 A relation whose state is known at the boundary is unaffected: it is validated
 there, before generalization, so its constraints enter the definition's type
 before anything can copy it. Pinned by `src/check/test/codec_scheme_relation_test.zig` (accepted:
@@ -15438,7 +15454,11 @@ strategy).
   of this module (`.root`), one per literal and closed type, whose wrapper
   body is the conversion at that edge. An instantiation at an open type is
   forwarded: the value is one of the enclosing scheme's own literal
-  arguments (`.forwarded`). A template's `literal_argument_demand` lists the
+  arguments (`.forwarded`). An instantiation at a type mentioning a variable
+  that no scheme around the edge quantifies (a use's copy that nothing relates
+  to the program, as in `_ = local` for a generalized local function nothing
+  calls) is fixed by no use, so nothing reads its value (`.unbound`). A
+  template's `literal_argument_demand` lists the
   roots its edges read, so compile-time evaluation orders them before any
   evaluation of the template.
 - A use of an exact procedure alias is an edge to the alias's entry wrapper,
@@ -15502,7 +15522,11 @@ frame's types are its environment.
 A body reads a
 literal of its own scheme by calling the argument (`lowerInstanceLiteral`); a
 call passes the callee's literal arguments from the edge's
-(`fillLiteralArgs`): a root's thunk or one of the caller's own arguments. A
+(`fillLiteralArgs`): a root's thunk or one of the caller's own arguments. An
+`.unbound` argument, and each literal argument of a generalized lambda whose
+construction checking recorded no instantiation for (no use instantiated it,
+so nothing calls it), is a crash dictionary nothing reads, as a `from_scheme`
+dictionary is. A
 generalized local function's own literal requirements travel with its dictionaries:
 per call for a local procedure, in its captures for any other generalized
 lambda; a nested lambda captures the enclosing scopes' literal arguments as

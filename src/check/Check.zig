@@ -2950,30 +2950,43 @@ fn copySchemeDispatchRequirements(
         // Instantiation grows the type store but not `type_schemes`; copy
         // the record before doing either copy operation.
         const requirement = self.type_schemes.items[scheme_idx].dispatch_requirements.items[requirement_idx];
-        // A generated codec requirement's receiver is copied as a scheme of
-        // its own, whose reachability its callable's copy depends on.
-        const deferred_slots = instantiator.deferred_slots;
-        if (requirement.deferred_generated_codec) instantiator.deferred_slots = null;
-        defer instantiator.deferred_slots = deferred_slots;
-        const receiver_var = if (requirement.deferred_generated_codec)
-            try instantiator.instantiateTypeScheme(requirement.receiver_var)
-        else
-            try instantiator.instantiateVar(requirement.receiver_var);
-        if (skip_shared_receiver_copies and
-            self.types.resolveVar(receiver_var).var_ == self.types.resolveVar(requirement.receiver_var).var_)
-        {
-            continue;
+        if (try self.copySchemeDispatchRequirement(requirement, instantiator, skip_shared_receiver_copies)) |copy| {
+            try out.append(self.gpa, copy);
         }
-        const constraint = try instantiator.instantiateStaticDispatchConstraint(requirement.constraint, true);
-        try out.append(self.gpa, .{
-            .scheme_receiver_var = requirement.receiver_var,
-            .receiver_var = receiver_var,
-            .scheme_fn_var = requirement.constraint.fn_var,
-            .constraint = constraint,
-            .deferred_generated_codec = requirement.deferred_generated_codec,
-            .structural_origin = self.substitutedStructuralOrigin(requirement.structural_origin, instantiator.var_map),
-        });
     }
+}
+
+/// One requirement's copy under `instantiator`'s current var_map, or null when
+/// `skip_shared_receiver_copies` leaves it on its original relation.
+fn copySchemeDispatchRequirement(
+    self: *Self,
+    requirement: SchemeDispatchRequirement,
+    instantiator: *Instantiator,
+    skip_shared_receiver_copies: bool,
+) std.mem.Allocator.Error!?InstantiatedSchemeDispatchRequirement {
+    // A generated codec requirement's receiver is copied as a scheme of
+    // its own, whose reachability its callable's copy depends on.
+    const deferred_slots = instantiator.deferred_slots;
+    if (requirement.deferred_generated_codec) instantiator.deferred_slots = null;
+    defer instantiator.deferred_slots = deferred_slots;
+    const receiver_var = if (requirement.deferred_generated_codec)
+        try instantiator.instantiateTypeScheme(requirement.receiver_var)
+    else
+        try instantiator.instantiateVar(requirement.receiver_var);
+    if (skip_shared_receiver_copies and
+        self.types.resolveVar(receiver_var).var_ == self.types.resolveVar(requirement.receiver_var).var_)
+    {
+        return null;
+    }
+    const constraint = try instantiator.instantiateStaticDispatchConstraint(requirement.constraint, true);
+    return .{
+        .scheme_receiver_var = requirement.receiver_var,
+        .receiver_var = receiver_var,
+        .scheme_fn_var = requirement.constraint.fn_var,
+        .constraint = constraint,
+        .deferred_generated_codec = requirement.deferred_generated_codec,
+        .structural_origin = self.substitutedStructuralOrigin(requirement.structural_origin, instantiator.var_map),
+    };
 }
 
 /// Append the (scheme var -> fresh var) evidence substitutions contributed by
@@ -20359,7 +20372,7 @@ fn finishRecursiveGroupBoundary(self: *Self, defs: []const CIR.Def.Idx, member_r
     }
     try self.retireNonGeneralizedTypeSchemes(member_roots);
     try self.retireStructurallyPublishedTypeSchemeRequirements(member_roots, env);
-    try self.activateSchemeDeferredCodecConstraints(member_roots);
+    try self.activateSchemeDeferredCodecConstraints(member_roots, env);
     try self.judgeAmbiguityCandidatesAtGeneralizationMultiRoot(member_roots);
     env.var_pool.popRank();
 }
@@ -27769,7 +27782,7 @@ const ExprCheckFrame = struct {
         try checker.activateSchemeDeferredCodecConstraints(&.{.{
             .owner = self.expr_var_raw,
             .interface = self.expr_var,
-        }});
+        }}, env);
         // The scheme's vars froze at generalized rank: judge this def's
         // dispatch-constrained receivers now, while the judgment is a
         // local question about one scheme (see
@@ -30394,7 +30407,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 try self.activateSchemeDeferredCodecConstraints(&.{.{
                     .owner = decl_pattern_var,
                     .interface = decl_pattern_var,
-                }});
+                }}, env);
                 try self.judgeAmbiguityCandidatesAtGeneralization(.{ .owner = decl_pattern_var, .interface = decl_pattern_var });
                 env.var_pool.popRank();
                 self.active_scheme_root = decl.saved_active_scheme_root;
@@ -41554,6 +41567,7 @@ fn retireNonGeneralizedTypeSchemes(self: *Self, roots: []const BoundaryRoot) All
 fn activateSchemeDeferredCodecConstraints(
     self: *Self,
     roots: []const BoundaryRoot,
+    env: *Env,
 ) Allocator.Error!void {
     for (roots) |root| {
         const scheme_idx = self.typeSchemeIndexForRoot(root.owner) orelse continue;
@@ -41567,6 +41581,7 @@ fn activateSchemeDeferredCodecConstraints(
             {
                 requirement.pristine_codec_is_scheme_only = true;
                 requirement.validates_final_instance = true;
+                try self.copyRelationToEnclosingScope(requirement.*, env);
             }
             if (!requirement.pristine_codec_is_scheme_only) continue;
             std.debug.assert(requirement.deferred_generated_codec);
@@ -41574,6 +41589,50 @@ fn activateSchemeDeferredCodecConstraints(
             try self.scheme_deferred_codec_constraint_fns.put(self.gpa, fn_root, {});
         }
     }
+}
+
+/// What a template relation says about a variable of an enclosing scope holds
+/// of that scope's values whether or not anything uses the definition, so the
+/// scope receives one copy of the relation, made as a use's would be: its
+/// variables quantified here are fresh, the enclosing scope's stay shared. A
+/// definition nothing uses has no other way to reach the enclosing scheme,
+/// whose uses validate the copy at their own types.
+fn copyRelationToEnclosingScope(
+    self: *Self,
+    requirement: SchemeDispatchRequirement,
+    env: *Env,
+) Allocator.Error!void {
+    const rank = env.rank();
+    var relation_vars = collections.DenseMap(Var, void).init(self.gpa);
+    defer relation_vars.deinit();
+    try self.collectReachableVars(requirement.receiver_var, &relation_vars);
+    try self.collectReachableVars(requirement.constraint.fn_var, &relation_vars);
+    if (!self.refinableVarsEscapeRank(&relation_vars, rank)) return;
+
+    self.var_map.clearRetainingCapacity();
+    var instantiator = self.baseInstantiator(@fromBackingInt(@backingInt(rank) - 1), .fresh_flex);
+    instantiator.polarity_var_behavior = .close;
+    const copy = (try self.copySchemeDispatchRequirement(requirement, &instantiator, false)) orelse
+        unreachable; // skip_shared_receiver_copies is false, so every requirement is copied
+    const region = self.getRegionAt(requirement.receiver_var);
+    const context: InstantiatedVarContext = .{
+        .records_scheme_use = false,
+        .target_fn_var = null,
+        .registers_use = false,
+        .instantiation_expr = requirement.failure_expr,
+        .group_index = self.currentGroupIndex(),
+        .region_behavior = .{ .explicit = region },
+        .root_region = region,
+        .deferred = null,
+    };
+    var copied = instantiator.var_map.iterator();
+    while (copied.next()) |entry| {
+        try self.registerInstantiatedVar(entry.key_ptr.*, entry.value_ptr.*, instantiator.var_map, context, .value, env);
+    }
+    const saved_source = self.instantiation_source_expr;
+    defer self.instantiation_source_expr = saved_source;
+    self.instantiation_source_expr = requirement.failure_expr;
+    try self.registerInstantiatedSchemeRequirement(copy, requirement.failure_expr, null, .value, env);
 }
 
 fn schemeDefersGeneratedCodecConstraint(self: *const Self, fn_var: Var) bool {
