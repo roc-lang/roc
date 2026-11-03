@@ -1522,7 +1522,20 @@ const CompileTimeRequestScheduler = struct {
                     switch (ref) {
                         .top_level_proc, .promoted_top_level_proc => |next| procedure = next,
                         .platform_required_proc => |required| procedure = required.procedure,
-                        else => return try self.collectResolvedRefDependency(ref),
+                        .imported_proc,
+                        .hosted_proc,
+                        .top_level_const,
+                        .imported_const,
+                        .selected_hoisted_const,
+                        .platform_required_const,
+                        .local_param,
+                        .local_value,
+                        .local_mutable_version,
+                        .pattern_binder,
+                        .local_proc,
+                        .platform_required_declaration,
+                        .platform_required_checked_error,
+                        => return try self.collectResolvedRefDependency(ref),
                     }
                 },
                 .platform_required => |required| {
