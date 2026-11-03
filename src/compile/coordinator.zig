@@ -1507,6 +1507,8 @@ const BoxyObjects = struct {
     unbound_hosted: std.ArrayList(*const Artifact) = .empty,
     /// The modules whose import closures are known (`closureKnown`).
     closures_known: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
+    /// Completed immutable import closures, owned by `arena` for this naming epoch.
+    object_sets: std.AutoHashMapUnmanaged([32]u8, eval.CompileTimeFinalization.BoxyObjectSet) = .empty,
     /// The pieces of every object recorded with its pieces, kept for the
     /// compilation.
     owned_pieces: std.ArrayList(*backend.dev.UnitPieces.Pieces) = .empty,
@@ -1584,6 +1586,7 @@ const BoxyObjects = struct {
         self.program_completions.deinit(gpa);
         self.unbound_hosted.deinit(gpa);
         self.closures_known.deinit(gpa);
+        self.object_sets.deinit(gpa);
         for (self.owned_pieces.items) |pieces| {
             pieces.deinit();
             gpa.destroy(pieces);
@@ -1654,7 +1657,7 @@ const BoxyObjects = struct {
     /// found them known.
     fn objectSet(context: *anyopaque, module: *const Artifact) Error!?eval.CompileTimeFinalization.BoxyObjectSet {
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
-        const arena = self.arena.allocator();
+        if (self.object_sets.get(module.key.bytes)) |known| return known;
         var ordered = std.ArrayList(Object).empty;
         var visited = std.AutoHashMapUnmanaged([32]u8, *const Artifact).empty;
         defer visited.deinit(self.coordinator.gpa);
@@ -1664,10 +1667,12 @@ const BoxyObjects = struct {
             const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse return null;
             if (!try self.visit(imported, &visited, &ordered)) return null;
         }
-        return .{
-            .objects = try arena.dupe(Object, ordered.items),
+        const result = eval.CompileTimeFinalization.BoxyObjectSet{
+            .objects = ordered.items,
             .views = try self.withEveryObjectsModule(try self.viewsOf(module), visited),
         };
+        try self.object_sets.put(self.coordinator.gpa, module.key.bytes, result);
+        return result;
     }
 
     /// `module`'s roots are complete: its object can be built, and its
@@ -1690,12 +1695,12 @@ const BoxyObjects = struct {
         const arena = self.arena.allocator();
         var all = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
         try all.appendSlice(arena, views);
+        var present = std.AutoHashMapUnmanaged([32]u8, void).empty;
+        defer present.deinit(self.coordinator.gpa);
+        for (views) |view| try present.put(self.coordinator.gpa, view.key.bytes, {});
         var artifacts = visited.valueIterator();
         while (artifacts.next()) |artifact| {
-            const present = for (views) |view| {
-                if (std.meta.eql(view.key, artifact.*.key)) break true;
-            } else false;
-            if (!present) try all.append(arena, CheckedArtifact.importedView(artifact.*));
+            if (!present.contains(artifact.*.key.bytes)) try all.append(arena, CheckedArtifact.importedView(artifact.*));
         }
         return all.items;
     }
@@ -1984,6 +1989,7 @@ const BoxyObjects = struct {
         self.ready.clearRetainingCapacity();
         self.records.clearRetainingCapacity();
         self.closures_known.clearRetainingCapacity();
+        self.object_sets.clearRetainingCapacity();
         self.interfaces.clear();
     }
 

@@ -14161,9 +14161,16 @@ A snapshot belongs to the program whose immortal table interned it. A cached
 module object is loaded once per compile-time evaluation and shared by every
 program of that evaluation, so its sites would otherwise hand a later program
 snapshots of a state that died with an earlier one. The evaluation therefore
-returns every loaded object's zero-filled data, where its sites live, to zero
-before each program runs (`BoxyLinkedImages.resetMutableData`), so a program
-finds the objects it shares holding no snapshot at all and publishes its own.
+returns each reused object's zero-filled data, where its sites live, to zero
+before a program that can reach it runs (`BoxyLinkedImages.resetMutableData`).
+On unit-image hosts, the program carries the complete transitive image-import
+closure of its emitted code and data references. Only those images are marked
+used and reset; newly loaded images are already zeroed. Unreached images may
+retain old snapshots but cannot execute until a later program resets them.
+Other hosts reset every loaded object. Evaluation is serial; image registration,
+loading and reset share a lock, and each program owns an immutable snapshot of
+its code ranges, so parallel program construction cannot invalidate an executing
+program's tables.
 
 A recursive-open operation can return a private, unfinished placeholder. It
 stores no site snapshot until it returns a completed descriptor from the
@@ -14491,8 +14498,9 @@ every value its roots read is complete and, where it links against its imports'
 objects, once those are known, so the programs of modules that read nothing of
 each other are built at the same time, and the evaluating thread runs each
 program as it is built, in the order the builds finish. The build of a program
-reads the checked modules and the loaded objects' symbols and writes nothing
-another thread reads; running it, which stores values and reports failures,
+reads the checked modules and loads its needed images under the shared image
+lock; its other writes belong to that program. Running it, which stores values
+and reports failures,
 stays on the evaluating thread, as do the programs of roots holding function
 values ("Stored Function Values"). A module's evaluation thus waits only for
 the values its roots read and the objects of its own import closure. The link
@@ -14525,10 +14533,14 @@ it already has without waiting while checking continues. A platform module with
 requirements has no object of its own, so a module importing one runs as the
 whole program. How an object is loaded depends only on the compiler's host,
 never on what a load finds: a Linux x86_64 host, whose units carry unit
-images (Fast Dev Link), loads each object's image as the cache mapping or
-the building unit holds it, copying its code and data into the process,
-binding its imports once (the compiler's own functions, then the objects
-already loaded, then the hosted-call trap) and filling its patch sites;
+images (Fast Dev Link), registers available images in imports-first order and
+loads only the whole images required by an evaluator's emitted relocations,
+including carried data and frozen callable pointers, and their transitive image
+imports. These are explicit producer records, not a reconstruction from LIR
+calls. Export providers are fixed by registration order, independent of worker
+load order. A selected image keeps its existing layout: the loader copies its
+code and data, binds its imports once (the compiler's own functions, then the
+registered image providers, then the hosted-call trap), and fills its patch sites;
 every other host composes the unit's pieces into a relocatable object and
 loads that. Either way an object holds every procedure of its unit. A
 Linux x86_64 compilation therefore decodes a unit's pieces only for a link
@@ -14539,6 +14551,13 @@ object's code is therefore found and reported exactly as one in a whole
 program's own code, and the two forms report identically. The table is read
 only when something fails, so the code that succeeds carries nothing extra. A
 compilation with no cache has no objects, and runs as the whole program.
+
+The coordinator memoizes a completed module's immutable object and diagnostic
+view lists by checked-module identity for the current naming epoch. Settling
+different link names invalidates these memos with the object records. Diagnostic
+view membership uses a key set, not repeated scans of the complete view list.
+These are compilation-local tables; they add no persistent cache or source-path
+identity and do not change the unit-image format.
 
 A root whose value holds a function value (anywhere in its type, or a
 callable binding) has no compile-time value slot, so it is evaluated by the
