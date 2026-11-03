@@ -2119,6 +2119,14 @@ fn finishLoweredOutput(
     defer arc_roots.deinit(allocator);
     try arc_roots.appendSlice(allocator, lowered.lir_result.root_procs.items);
     try arc_roots.appendSlice(allocator, lowered.lir_result.exported_procs.items);
+    // The procedures something other than Roc code or the erased-call runtime
+    // enters (design.md "Deferred Erased Calls"): the roots, and every procedure frozen
+    // data holds the address of. A unit's exported workers are not among
+    // them: only Roc code in other units calls them, compiled against the
+    // `may_leave_pending` their export interface carries.
+    var entered_from_outside = std.ArrayList(LIR.LirProcSpecId).empty;
+    defer entered_from_outside.deinit(allocator);
+    try entered_from_outside.appendSlice(allocator, lowered.lir_result.root_procs.items);
     if (frozen.*) |data| {
         var seen = try allocator.alloc(bool, lowered.lir_result.store.procSpecCount());
         defer allocator.free(seen);
@@ -2126,6 +2134,7 @@ fn finishLoweredOutput(
         for (arc_roots.items) |proc| seen[@backingInt(proc)] = true;
         for (data.exports) |export_| for (export_.relocations) |relocation| {
             const proc = relocation.procedure orelse continue;
+            try entered_from_outside.append(allocator, proc);
             if (seen[@backingInt(proc)]) continue;
             seen[@backingInt(proc)] = true;
             try arc_roots.append(allocator, proc);
@@ -2143,7 +2152,7 @@ fn finishLoweredOutput(
     if (target.timing) |timing| timing.addArcParallel(arc_metrics.?.*);
     arc_timing_scope.end();
 
-    try TailDrive.run(allocator, &lowered.lir_result.store, &.{arc_roots.items});
+    try TailDrive.run(allocator, &lowered.lir_result.store, &.{entered_from_outside.items});
 
     // ARC settled every read that named a fresh form, so a fresh-form
     // procedure no read chose is now unreferenced.

@@ -21580,7 +21580,10 @@ callee can return with a call pending, and on each deferred call:
 - `always`: pending calls are made here. This is every use of the value other
   than returning it, and every tail position in a procedure something other
   than Roc code or the erased-call runtime can enter: a root, a dictionary
-  worker, a procedure whose address is taken.
+  worker, a procedure whose address is taken. A module unit's exported
+  worker is not one: only Roc code in other units calls it, compiled against
+  the `may_leave_pending` its export interface carries, so it hands pending
+  calls up exactly as it would inside one program.
 - `unless_caller_drives`: in an erased-callable procedure or a `.boxy`
   erased worker, which reads at entry whether the erased-call runtime invoked
   it. A host that calls an
