@@ -541,7 +541,7 @@ test "a unit compiled alone imports what it calls and names its data through sit
             .global_index_leb => if (std.mem.eql(u8, view.name(view.imports()[site.target].name), "__memory_base")) {
                 reads_memory_base = true;
             },
-            else => {},
+            .type_index_leb, .table_index_sleb, .table_index_rel_sleb, .memory_addr_leb, .memory_addr_sleb, .table_number_leb, .stack_room_sleb, .memory_addr_i32, .table_index_i32 => {},
         }
     }
     try std.testing.expect(calls_import and addresses_data and reads_memory_base);
