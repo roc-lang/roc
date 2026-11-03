@@ -51,6 +51,18 @@ transitive_envs: []const *const ModuleEnv = &.{},
 /// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 const TestEnv = @This();
 
+/// What checking leaves the module's type store as: sealed, as every
+/// compiler caller of the checker leaves it, or open, for a test that drives
+/// solver machinery on the checked module or builds solver state in it.
+const StoreAfterCheck = enum { sealed, open };
+
+fn runChecker(checker: *Check, comptime store_after_check: StoreAfterCheck) Allocator.Error!void {
+    switch (store_after_check) {
+        .sealed => try checker.checkFile(),
+        .open => try checker.checkFileLeavingStoreOpen(),
+    }
+}
+
 /// Initialize where the provided source is an entire file
 ///
 /// Accepts another module that should already be can'd and type checked, and will
@@ -58,6 +70,21 @@ const TestEnv = @This();
 /// IMPORTANT: This reuses the Builtin module from the imported module to ensure
 /// type variables from auto-imported types (Bool, Try, Str) are shared across modules.
 pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_test_env: *const TestEnv) Allocator.Error!TestEnv {
+    return initWithImportLeaving(module_name, source, other_module_name, other_test_env, .sealed);
+}
+
+/// `initWithImport` leaving this module's type store open (see `StoreAfterCheck`).
+pub fn initWithImportOpen(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_test_env: *const TestEnv) Allocator.Error!TestEnv {
+    return initWithImportLeaving(module_name, source, other_module_name, other_test_env, .open);
+}
+
+fn initWithImportLeaving(
+    module_name: []const u8,
+    source: []const u8,
+    other_module_name: []const u8,
+    other_test_env: *const TestEnv,
+    comptime store_after_check: StoreAfterCheck,
+) Allocator.Error!TestEnv {
     const gpa = std.testing.allocator;
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);
@@ -205,7 +232,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     checker.fixupTypeWriter();
     errdefer checker.deinit();
 
-    try checker.checkFile();
+    try runChecker(&checker, store_after_check);
     _ = try checker.problems.flushAllPendingStaticExhaustiveness();
 
     var type_writer = try module_env.initTypeWriter();
@@ -230,9 +257,23 @@ pub fn init(module_name: []const u8, source: []const u8) TestEnvError!TestEnv {
     return initWithExecutableRootNames(module_name, source, &.{});
 }
 
+/// `init` leaving the module's type store open (see `StoreAfterCheck`).
+pub fn initOpen(module_name: []const u8, source: []const u8) TestEnvError!TestEnv {
+    return initLeaving(module_name, source, &.{}, .open);
+}
+
 /// Initialize a source file and mark selected top-level defs as executable
 /// zero-arg roots for checker validation.
 pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, explicit_root_names: []const []const u8) TestEnvError!TestEnv {
+    return initLeaving(module_name, source, explicit_root_names, .sealed);
+}
+
+fn initLeaving(
+    module_name: []const u8,
+    source: []const u8,
+    explicit_root_names: []const []const u8,
+    comptime store_after_check: StoreAfterCheck,
+) TestEnvError!TestEnv {
     const gpa = std.testing.allocator;
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);
@@ -332,7 +373,7 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
     }
     errdefer checker.deinit();
 
-    try checker.checkFile();
+    try runChecker(&checker, store_after_check);
     _ = try checker.problems.flushAllPendingStaticExhaustiveness();
 
     var type_writer = try module_env.initTypeWriter();
@@ -408,6 +449,15 @@ pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const 
 
 /// Initialize where the provided source a single expression
 pub fn initExpr(module_name: []const u8, comptime source_expr: []const u8) TestEnvError!TestEnv {
+    return initExprLeaving(module_name, source_expr, .sealed);
+}
+
+/// `initExpr` leaving the module's type store open (see `StoreAfterCheck`).
+pub fn initExprOpen(module_name: []const u8, comptime source_expr: []const u8) TestEnvError!TestEnv {
+    return initExprLeaving(module_name, source_expr, .open);
+}
+
+fn initExprLeaving(module_name: []const u8, comptime source_expr: []const u8, comptime store_after_check: StoreAfterCheck) TestEnvError!TestEnv {
     const gpa = std.testing.allocator;
 
     const source_wrapper =
@@ -422,7 +472,7 @@ pub fn initExpr(module_name: []const u8, comptime source_expr: []const u8) TestE
     source[source_wrapper.len] = ' ';
     std.mem.copyForwards(u8, source[source_wrapper.len + 1 ..], source_expr);
 
-    var test_env = try TestEnv.init(module_name, source);
+    var test_env = try TestEnv.initLeaving(module_name, source, &.{}, store_after_check);
     test_env.owned_source = source;
     return test_env;
 }
