@@ -629,6 +629,7 @@ const CustomCase = enum {
     issue_11710_shared_object_cache,
     issue_12220_shared_object_cache_literals,
     issue_12564_package_from_numeral_cache,
+    issue_12809_boxed_callable_warm_check,
     issue_12693_shared_package_cache,
     issue_12701_shared_package_codec_cache,
     issue_12747_check_then_build,
@@ -3473,6 +3474,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11710: shared object cache serves a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_11710_shared_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12220: shared object cache keeps each module's list literals in a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_12220_shared_object_cache_literals } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12564: a package from_numeral cached by one app's check converts another app's literal", .timeout_ms = 600_000, .body = .{ .custom = .issue_12564_package_from_numeral_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12809: a constant holding a boxed function behind imported nominal types checks and builds warm after an app edit", .timeout_ms = 600_000, .body = .{ .custom = .issue_12809_boxed_callable_warm_check } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12693: a package value cached by one app's check builds in another app that shares the package", .timeout_ms = 600_000, .body = .{ .custom = .issue_12693_shared_package_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12747: a dev build erasing a boxed function succeeds against the cache a roc check wrote without erasing it", .timeout_ms = 600_000, .body = .{ .custom = .issue_12747_check_then_build } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12747: an app boxing a function shares a package function with an app that boxes none", .timeout_ms = 600_000, .body = .{ .custom = .issue_12747_shared_package } },
@@ -5959,6 +5961,7 @@ fn runCustomCase(
         .issue_11710_shared_object_cache => customIssue11710SharedObjectCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12220_shared_object_cache_literals => customIssue12220SharedObjectCacheLiterals(io, allocator, &env, &timer, timeout_ms),
         .issue_12564_package_from_numeral_cache => customIssue12564PackageFromNumeralCache(io, allocator, &env, &timer, timeout_ms),
+        .issue_12809_boxed_callable_warm_check => customIssue12809BoxedCallableWarmCheck(io, allocator, &env, &timer, timeout_ms),
         .issue_12693_shared_package_cache => customIssue12693SharedPackageCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12701_shared_package_codec_cache => customIssue12701SharedPackageCodecCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12747_check_then_build => customIssue12747CheckThenBuild(io, allocator, &env, &timer, timeout_ms),
@@ -10905,6 +10908,60 @@ fn customIssue12564PackageFromNumeralCache(
     return runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
         .args = &.{},
         .stdout_exact = "10\n",
+    });
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/12809: the app's constant
+// `view` holds a boxed function behind the nominal types `Html` and
+// `Attribute`, each declared in its own module. The first check evaluates
+// `view` and caches every module. Editing the app alone makes the second
+// check evaluate `view` again with `Html` and `Attribute` restored from the
+// cache, and it must store the value without failing, as must a dev build on
+// the same cache, whose program prints the rendered element.
+fn customIssue12809BoxedCallableWarmCheck(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var app: []const u8 = undefined;
+    if (stageEditableApp(io, allocator, env, timer, .{
+        .dir_name = "issue_12809_boxed_callable_warm_check",
+        .platform = "test/fx/platform/main.roc",
+        .platform_spelling = "../../fx/platform/main.roc",
+        .sources = &.{ "test/cli/issue_12809_boxed_callable_warm_check/Attribute.roc", "test/cli/issue_12809_boxed_callable_warm_check/Html.roc", "test/cli/issue_12809_boxed_callable_warm_check/main.roc" },
+        .app_name = "main.roc",
+    }, &app)) |failure| return failure;
+    const original = std.Io.Dir.cwd().readFileAlloc(io, app, allocator, .limited(1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read app: {}", .{err});
+    const edited = std.fmt.allocPrint(allocator, "{s}\n# Edited between checks, so this check evaluates the app again.\n", .{original}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the edited app: {}", .{err});
+    for ([_][]const u8{ original, edited }) |source| {
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = source }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ app, err });
+        const check_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a check");
+        const checked = runRocInEnv(io, allocator, env, &.{"check"}, app, .absolute, &.{}, null, check_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "check spawn error: {}", .{err});
+        if (!processSucceeded(checked.term) or std.mem.find(u8, checked.stdout, "No errors found") == null or std.mem.find(u8, checked.stderr, "panic") != null) {
+            return failureFromRun(allocator, timer, checked, "check did not succeed on the cache the previous check wrote");
+        }
+    }
+    const exe = std.fmt.allocPrint(allocator, "{s}/issue_12809_app", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const out_arg = outputArg(allocator, exe) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+    const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+    const built = runRocInEnv(io, allocator, env, &.{ "build", "--opt=dev", out_arg }, app, .absolute, &.{}, null, build_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+    if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
+        return failureFromRun(allocator, timer, built, "dev build did not succeed on the cache the checks wrote");
+    }
+    return runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
+        .args = &.{},
+        .stdout_exact = "<input>\n",
     });
 }
 
