@@ -44,13 +44,43 @@ pub const Graph = struct {
 
 const RootKey = struct { module: [32]u8, root: checked.ComptimeRootId };
 
-const TemplateKey = struct { module: u32, template: canonical.CheckedProcedureTemplateId };
+/// A template of one listed module.
+pub const TemplateKey = struct { module: u32, template: canonical.CheckedProcedureTemplateId };
+
+/// Where a walk of the templates starts: a checked template, or a listed
+/// module's top-level procedure binding.
+pub const Start = union(enum) {
+    template: canonical.ProcedureTemplateRef,
+    binding: struct { module: u32, binding: checked.TopLevelProcedureBindingRef },
+};
+
+/// Every template `starts` reach over `modules` through the references a
+/// root's evaluation follows (`build`), each once, in no particular order.
+/// Like a root's dependencies, the set over-approximates what a run of the
+/// program calls: a reference inside a function value the program never
+/// calls is still followed.
+pub fn reachTemplates(allocator: Allocator, modules: []const *const checked.CheckedModuleArtifact, starts: []const Start) Allocator.Error![]TemplateKey {
+    var walker = try Walker.init(allocator, modules, &.{});
+    defer walker.deinit();
+    walker.visit += 1;
+    for (starts) |start| switch (start) {
+        .template => |ref| try walker.pushTemplate(ref),
+        .binding => |binding| try walker.topLevelBinding(binding.module, binding.binding),
+    };
+    while (walker.pending.pop()) |next| try walker.walkTemplate(next);
+    var out = std.ArrayList(TemplateKey).empty;
+    errdefer out.deinit(allocator);
+    for (walker.visited, 0..) |stamps, module| for (stamps, 0..) |stamp, index| {
+        if (stamp == walker.visit) try out.append(allocator, .{ .module = @intCast(module), .template = @fromBackingInt(@as(u32, @intCast(index))) });
+    };
+    return try out.toOwnedSlice(allocator);
+}
 
 /// Build the graph of `roots` over `modules`, the artifacts the finalization
 /// completes. A value a root reads that no listed root produces was completed
 /// earlier (an import finalized before this program, or a root this
 /// finalization does not evaluate), so it depends on nothing here.
-pub fn build(allocator: Allocator, modules: []const *checked.CheckedModuleArtifact, roots: []const Root) Allocator.Error!Graph {
+pub fn build(allocator: Allocator, modules: []const *const checked.CheckedModuleArtifact, roots: []const Root) Allocator.Error!Graph {
     var walker = try Walker.init(allocator, modules, roots);
     defer walker.deinit();
     const deps = try allocator.alloc([]const u32, roots.len);
@@ -77,7 +107,7 @@ const DirectDependencies = struct {
 
 const Walker = struct {
     allocator: Allocator,
-    modules: []const *checked.CheckedModuleArtifact,
+    modules: []const *const checked.CheckedModuleArtifact,
     /// The first listed module of each checked identity.
     by_key: std.AutoHashMapUnmanaged([32]u8, u32),
     root_ordinals: std.AutoHashMapUnmanaged(RootKey, u32),
@@ -101,7 +131,7 @@ const Walker = struct {
     nodes: std.ArrayList(static_dispatch.EvidenceNodeId) = .empty,
     derivations: std.ArrayList(static_dispatch.GeneratedCodecDerivationId) = .empty,
 
-    fn init(allocator: Allocator, modules: []const *checked.CheckedModuleArtifact, roots: []const Root) Allocator.Error!Walker {
+    fn init(allocator: Allocator, modules: []const *const checked.CheckedModuleArtifact, roots: []const Root) Allocator.Error!Walker {
         var by_key = std.AutoHashMapUnmanaged([32]u8, u32).empty;
         errdefer by_key.deinit(allocator);
         for (modules, 0..) |module, index| {
@@ -136,7 +166,7 @@ const Walker = struct {
     }
 
     /// Per module, a zeroed walk stamp per item `count` counts.
-    fn walkStamps(allocator: Allocator, modules: []const *checked.CheckedModuleArtifact, count: fn (*const checked.CheckedModuleArtifact) usize) Allocator.Error![][]u32 {
+    fn walkStamps(allocator: Allocator, modules: []const *const checked.CheckedModuleArtifact, count: fn (*const checked.CheckedModuleArtifact) usize) Allocator.Error![][]u32 {
         const out = try allocator.alloc([]u32, modules.len);
         var allocated: usize = 0;
         errdefer {
@@ -371,28 +401,22 @@ const Walker = struct {
     }
 
     fn procedureUse(self: *Walker, proc_use: checked.ProcedureUseTemplate) Allocator.Error!void {
-        var binding = proc_use.binding;
-        while (true) switch (binding) {
-            .top_level => |top_level| return try self.topLevelBinding(self.moduleOf(top_level.artifact) orelse return, top_level.binding),
+        switch (proc_use.binding) {
+            .top_level => |top_level| try self.topLevelBinding(self.moduleOf(top_level.artifact) orelse return, top_level.binding),
             .imported => |imported| {
                 const module = self.moduleOf(imported.artifact) orelse return;
                 const entry = self.modules[module].top_level_values.lookupByDef(imported.def) orelse return;
-                return switch (entry.value) {
+                switch (entry.value) {
                     .procedure_binding => |procedure_binding| try self.topLevelBinding(module, procedure_binding),
                     .const_ref => |const_ref| try self.constUse(.{ .const_ref = const_ref, .requested_source_ty_template = proc_use.source_fn_ty_template }),
-                };
-            },
-            .hosted => return,
-            .platform_required => |required| {
-                const module = self.moduleOf(required.artifact) orelse return;
-                const required_binding = self.modules[module].platform_required_bindings.lookupByBindingId(@backingInt(required.procedure_binding)) orelse
-                    base.invariant("compile-time finalization invariant violated: a platform-required procedure dependency named a missing binding", .{});
-                switch (required_binding.value_use) {
-                    .procedure_value => |procedure_use| binding = procedure_use.procedure.binding,
-                    .const_value => |const_use| return try self.constUse(const_use.const_use),
                 }
             },
-        };
+            .hosted => {},
+            // The app's top-level procedure binding the requirement is
+            // bound to, in the app artifact the reference names: what the
+            // lowering calls for the requirement.
+            .platform_required => |required| try self.topLevelBinding(self.moduleOf(required.artifact) orelse return, required.procedure_binding),
+        }
     }
 
     fn topLevelBinding(self: *Walker, module: u32, binding: checked.TopLevelProcedureBindingRef) Allocator.Error!void {
@@ -426,7 +450,7 @@ const Walker = struct {
 /// "Stored Function Values").
 pub fn rootHoldsFunction(
     allocator: Allocator,
-    modules: []const *checked.CheckedModuleArtifact,
+    modules: []const *const checked.CheckedModuleArtifact,
     imports: []const checked.ImportedModuleView,
     root: Root,
 ) Allocator.Error!bool {
@@ -509,7 +533,7 @@ pub fn rootHoldsFunction(
     return false;
 }
 
-fn typesOf(modules: []const *checked.CheckedModuleArtifact, imports: []const checked.ImportedModuleView, key: canonical.CheckedModuleDigest) ?checked.CheckedTypeStoreView {
+fn typesOf(modules: []const *const checked.CheckedModuleArtifact, imports: []const checked.ImportedModuleView, key: canonical.CheckedModuleDigest) ?checked.CheckedTypeStoreView {
     for (modules) |module| {
         if (module.key.digest().eql(key)) return module.checked_types.view();
     }

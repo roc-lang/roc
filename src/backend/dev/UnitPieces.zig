@@ -24,7 +24,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RUPC";
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 2;
+pub const format_version: u32 = 3;
 
 /// One source file the pieces' lines name, in the order the set indexes them.
 pub const SourceFile = struct {
@@ -52,8 +52,9 @@ pub const Pieces = struct {
     erased_capture_prefix: u32,
     /// Parallel to `set.source_files`.
     source_files: []const SourceFile,
-    /// The constants the host binds by name, with every constant they name:
-    /// the roots of the unit's static data, which no excerpt need reference.
+    /// The constants the host binds by name, with every constant they name,
+    /// under the content names the unit's code names them by: the roots of
+    /// the unit's static data, which no excerpt need reference.
     exported_data: []const CodeExcerpt.DataItem,
     helper_aliases: []const HelperAlias,
 
