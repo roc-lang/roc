@@ -30,6 +30,8 @@ deferred: std.ArrayList(Deferred),
 /// The shadow-stack frame this function's prologue reserves, or zero when it
 /// has no prologue.
 frame_bytes: u32 = 0,
+/// The function's locals, parameters included, once its declaration is encoded.
+local_count: u32 = 0,
 
 /// An operand whose value is a not-yet-created entity's index or address.
 pub const Deferred = struct {
@@ -148,6 +150,7 @@ pub fn resolveDeferred(self: *const Self, allocator: Allocator, resolved: []cons
     var out = Self.init();
     errdefer out.deinit(allocator);
     out.frame_bytes = self.frame_bytes;
+    out.local_count = self.local_count;
     try out.preamble.appendSlice(allocator, self.preamble.items);
 
     var code = try allocator.dupe(u8, self.code.items);

@@ -263,6 +263,14 @@ pub const Op = struct {
     pub const i32_extend8_s: u8 = 0xC0;
     pub const i32_extend16_s: u8 = 0xC1;
 
+    // Prefix of the bulk-memory and saturating-conversion instructions, and
+    // the bulk-memory sub-opcodes the backend emits. Sub-opcodes are varuint32
+    // values; each bulk-memory instruction then names its memory with one
+    // byte per memory operand.
+    pub const misc_prefix: u8 = 0xFC;
+    pub const memory_copy: u32 = 0x0A;
+    pub const memory_fill: u32 = 0x0B;
+
     // SIMD prefix and 128-bit integer SIMD sub-opcodes. Sub-opcodes are
     // varuint32 values from the WebAssembly SIMD specification.
     pub const simd_prefix: u8 = 0xFD;
