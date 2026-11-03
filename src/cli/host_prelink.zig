@@ -188,7 +188,7 @@ fn hashList(hasher: *std.crypto.hash.sha2.Sha256, list: []const []const u8) void
 }
 
 /// The record format; bumped whenever `finish`'s output changes.
-pub const format_version: u32 = 1;
+pub const format_version: u32 = 2;
 const magic = "RHST".*;
 /// The offset of the host's bytes in a record, so they can be copied by
 /// file range from a page boundary.

@@ -85,6 +85,24 @@ pub const ComposeOptions = struct {
     /// into its own process looks procedures up by name.
     global_procs: bool = false,
     capture_code_locations: bool = false,
+    /// Receives every code reference the assembly patched in place rather
+    /// than emitting a relocation for: an excerpt's references to other
+    /// excerpts of the object. A unit image needs them to know what each
+    /// piece of code reaches.
+    patched_refs: ?*PatchedRefs = null,
+};
+
+/// The code references a composition patched in place, as offsets in its
+/// text section.
+pub const PatchedRefs = struct {
+    edges: std.ArrayList(UnitImage.CodeEdge) = .empty,
+    /// Whether some excerpt also has symbolic references, which the
+    /// assembly resolves without reporting them here.
+    incomplete: bool = false,
+
+    pub fn deinit(self: *PatchedRefs, allocator: Allocator) void {
+        self.edges.deinit(allocator);
+    }
 };
 
 /// Errors that can occur during compilation
@@ -305,15 +323,23 @@ pub const ObjectFileCompiler = struct {
         roots: ImageRoots,
     ) CompilationError![]align(UnitImage.alignment.toByteUnits()) u8 {
         std.debug.assert(target.toOsTag() == .linux and target.toCpuArch() == .x86_64);
+        var patched: PatchedRefs = .{};
+        defer patched.deinit(self.allocator);
         var composed = try self.composeObject(&.{pieces}, target, .{
             .roots = switch (roots) {
                 .every_procedure => null,
                 .entrypoints => &.{},
             },
             .global_procs = true,
+            .patched_refs = &patched,
         });
         defer composed.deinit();
-        return UnitImage.build(self.allocator, &.{composed.object_bytes}, .{ .keep_debug = true }) catch |err| switch (err) {
+        return UnitImage.build(self.allocator, &.{composed.object_bytes}, .{
+            .keep_debug = true,
+            // Code reached only through references the image cannot see
+            // keeps the whole image together.
+            .atoms = if (patched.incomplete) .whole else .{ .symbols = patched.edges.items },
+        }) catch |err| switch (err) {
             error.OutOfMemory => return CompilationError.OutOfMemory,
             error.InvalidObject,
             error.UnsupportedSection,
@@ -1521,6 +1547,14 @@ fn composeWithCodeGen(
     defer helper_keys.deinit();
     const starts = CodeExcerpt.assembleArranged(CodeGen, allocator, &final, &canonical.set, &procs_by_identity, &helper_keys) catch return CompilationError.OutOfMemory;
     defer allocator.free(starts);
+    if (options.patched_refs) |patched| {
+        for (canonical.set.excerpts, starts) |excerpt, start| {
+            if (excerpt.symbolic_refs.len != 0) patched.incomplete = true;
+            for (excerpt.refs) |ref| {
+                patched.edges.append(allocator, .{ .site = start + ref.site, .target = starts[ref.target] + ref.delta }) catch return CompilationError.OutOfMemory;
+            }
+        }
+    }
     var symbols = std.ArrayList(SymbolDefinition).empty;
     defer symbols.deinit(allocator);
     var rodata = std.ArrayList(u8).empty;

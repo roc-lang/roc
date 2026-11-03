@@ -118,24 +118,28 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         }
     }
 
-    // The images the root reaches through its imports.
+    // What the program reaches, atom by atom, from the `provides` symbols:
+    // an image is placed when one of its atoms is reached, and within it
+    // only the reached atoms' bytes are written. Every import of a reached
+    // image is resolved, the app region first, then the host.
+    var walk: Walk = .{ .gpa = gpa, .images = images.items, .exports = &exports, .host = inputs.host, .host_required = inputs.host_required };
+    defer walk.deinit();
+    try walk.init();
+    for (0..inputs.host.provideCount()) |index| {
+        const found = exports.get(inputs.host.provideName(index)) orelse continue;
+        try walk.reachSymbol(found.image, found.symbol);
+    }
+    std.debug.assert(walk.states[root_image] != null);
+    try walk.run();
+    if (walk.missing.count() != 0) {
+        const names_out = try arena.alloc([]const u8, walk.missing.count());
+        for (walk.missing.keys(), names_out) |name, *out| out.* = try arena.dupe(u8, name);
+        outcome.missing = names_out;
+        return error.MissingHostSymbols;
+    }
     const reached = try gpa.alloc(bool, images.items.len);
     defer gpa.free(reached);
-    @memset(reached, false);
-    var queue: std.ArrayList(u32) = .empty;
-    defer queue.deinit(gpa);
-    reached[root_image] = true;
-    try queue.append(gpa, @intCast(root_image));
-    var next: usize = 0;
-    while (next < queue.items.len) : (next += 1) {
-        const view = images.items[queue.items[next]].view;
-        for (view.imports()) |import| {
-            const found = exports.get(view.name(import.name)) orelse continue;
-            if (reached[found.image]) continue;
-            reached[found.image] = true;
-            try queue.append(gpa, found.image);
-        }
-    }
+    for (walk.states, reached) |state, *placed| placed.* = state != null;
 
     // Placement order: the support image, then the units by key.
     var order: std.ArrayList(u32) = .empty;
@@ -274,44 +278,32 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     tail_at += headers.items.len * 64;
     const file_size = tail_at;
 
-    // Import addresses, resolved once per image: the app region first, then
-    // the host.
-    var missing: std.StringArrayHashMapUnmanaged(void) = .empty;
-    defer missing.deinit(gpa);
+    // Import addresses, now that every image has its place.
     const resolved = try gpa.alloc([]u64, images.items.len);
     defer {
         for (order.items) |index| gpa.free(resolved[index]);
         gpa.free(resolved);
     }
     for (order.items, 0..) |index, placed| {
-        const view = images.items[index].view;
-        resolved[index] = gpa.alloc(u64, view.imports().len) catch |err| {
+        const targets = walk.states[index].?.targets;
+        resolved[index] = gpa.alloc(u64, targets.len) catch |err| {
             for (order.items[0..placed]) |earlier| gpa.free(resolved[earlier]);
             return err;
         };
-        for (view.imports(), resolved[index]) |import, *address| {
-            const name = view.name(import.name);
-            if (exports.get(name)) |found| {
-                const owner = images.items[found.image].view;
-                const symbol = owner.symbols()[found.symbol];
-                address.* = places[found.image].base(@fromBackingInt(symbol.region)) + symbol.value;
-            } else if (host.findSymbol(name)) |vaddr| {
-                address.* = vaddr;
-            } else {
-                if (findSorted(inputs.host_required, name) == null) {
-                    base.invariant("fast dev link invariant violated: the app imports {s}, which is neither a program symbol, a hosted symbol, a runtime symbol, nor a support import", .{name});
-                }
-                try missing.put(gpa, name, {});
-                address.* = 0;
-            }
+        for (targets, resolved[index]) |target, *address| {
+            address.* = switch (target) {
+                .app => |found| app: {
+                    const symbol = images.items[found.image].view.symbols()[found.symbol];
+                    break :app places[found.image].base(@fromBackingInt(symbol.region)) + symbol.value;
+                },
+                .host => |vaddr| vaddr,
+                .missing => unreachable, // a missing host symbol failed the link above
+            };
         }
     }
-    if (missing.count() != 0) {
-        const names_out = try arena.alloc([]const u8, missing.count());
-        for (missing.keys(), names_out) |name, *out| out.* = try arena.dupe(u8, name);
-        outcome.missing = names_out;
-        return error.MissingHostSymbols;
-    }
+    const reached_atoms = try gpa.alloc([]const bool, images.items.len);
+    defer gpa.free(reached_atoms);
+    for (walk.states, reached_atoms) |state, *atoms| atoms.* = if (state) |placed| placed.atoms else &.{};
 
     // Provided values must fit their windows.
     const provided = try gpa.alloc(?SymbolRef, provide_count);
@@ -345,6 +337,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         .symtab_offset = symtab_offset,
         .strtab_offset = strtab_offset,
         .section_index = .{ text_index, data_index, bss_index },
+        .reached_atoms = reached_atoms,
     };
     var copies: std.ArrayList(Task) = .empty;
     defer copies.deinit(gpa);
@@ -353,7 +346,20 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     for (order.items) |index| {
         const view = images.items[index].view;
         const place = places[index];
-        try addCopies(gpa, &copies, &context, view.block(), context.fileOffsetOf(place.block));
+        // Only reached atoms are written; the rest of the block stays a
+        // hole of zeros.
+        const atoms_reached = reached_atoms[index];
+        var atom: u32 = 0;
+        while (atom < atoms_reached.len) {
+            if (!atoms_reached[atom]) {
+                atom += 1;
+                continue;
+            }
+            const first = view.atomRange(atom).start;
+            while (atom < atoms_reached.len and atoms_reached[atom]) atom += 1;
+            const end = view.atomRange(atom - 1).end;
+            try addCopies(gpa, &copies, &context, view.block()[first..end], context.fileOffsetOf(place.block) + first);
+        }
         if (view.data().len != 0) try addCopies(gpa, &copies, &context, view.data(), context.fileOffsetOf(place.data));
         for ([_]UnitImage.Region{ .debug_abbrev, .debug_info, .debug_line }, 0..) |region, slot| {
             try addCopies(gpa, &copies, &context, view.regionBytes(region), debug_offsets[slot] + place.debug[slot]);
@@ -418,6 +424,106 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
 
 const SymbolRef = struct { image: u32, symbol: u32 };
 
+/// What an import resolves to.
+const Target = union(enum) {
+    app: SymbolRef,
+    host: u64,
+    missing,
+};
+
+/// The atom-level reachability walk over every image.
+const Walk = struct {
+    gpa: Allocator,
+    images: []const ImageInput,
+    exports: *const std.StringHashMapUnmanaged(SymbolRef),
+    host: host_prelink.View,
+    host_required: []const []const u8,
+    /// Per image, once reached: its reached atoms and its import targets.
+    states: []?State = &.{},
+    stack: std.ArrayList(struct { image: u32, atom: u32 }) = .empty,
+    missing: std.StringArrayHashMapUnmanaged(void) = .empty,
+
+    const State = struct {
+        atoms: []bool,
+        targets: []Target,
+    };
+
+    fn init(self: *Walk) Allocator.Error!void {
+        self.states = try self.gpa.alloc(?State, self.images.len);
+        @memset(self.states, null);
+    }
+
+    fn deinit(self: *Walk) void {
+        for (self.states) |state_or_null| if (state_or_null) |state| {
+            self.gpa.free(state.atoms);
+            self.gpa.free(state.targets);
+        };
+        self.gpa.free(self.states);
+        self.stack.deinit(self.gpa);
+        self.missing.deinit(self.gpa);
+    }
+
+    /// Reach `image`'s symbol `symbol`, placing the image if it was not.
+    fn reachSymbol(self: *Walk, image: u32, symbol: u32) Allocator.Error!void {
+        const state = try self.place(image);
+        const atom = self.images[image].view.symbolAtoms()[symbol];
+        if (atom == UnitImage.no_atom) return;
+        try self.reachAtom(image, state, atom);
+    }
+
+    fn reachAtom(self: *Walk, image: u32, state: State, atom: u32) Allocator.Error!void {
+        if (state.atoms[atom]) return;
+        state.atoms[atom] = true;
+        try self.stack.append(self.gpa, .{ .image = image, .atom = atom });
+    }
+
+    /// Follow an edge or root entry of `image`.
+    fn follow(self: *Walk, image: u32, state: State, entry: u32) Allocator.Error!void {
+        if (entry & UnitImage.edge_import == 0) return self.reachAtom(image, state, entry);
+        switch (state.targets[entry & ~UnitImage.edge_import]) {
+            .app => |found| try self.reachSymbol(found.image, found.symbol),
+            .host, .missing => {},
+        }
+    }
+
+    /// `image`'s state, created with its imports resolved and its roots
+    /// reached the first time.
+    fn place(self: *Walk, image: u32) Allocator.Error!State {
+        if (self.states[image]) |state| return state;
+        const view = self.images[image].view;
+        const atoms = try self.gpa.alloc(bool, view.atoms().len);
+        errdefer self.gpa.free(atoms);
+        @memset(atoms, false);
+        const targets = try self.gpa.alloc(Target, view.imports().len);
+        errdefer self.gpa.free(targets);
+        for (view.imports(), targets) |import, *target| {
+            const name = view.name(import.name);
+            target.* = if (self.exports.get(name)) |found|
+                .{ .app = found }
+            else if (self.host.findSymbol(name)) |vaddr|
+                .{ .host = vaddr }
+            else missing: {
+                if (findSorted(self.host_required, name) == null) {
+                    base.invariant("fast dev link invariant violated: the app imports {s}, which is neither a program symbol, a hosted symbol, a runtime symbol, nor a support import", .{name});
+                }
+                try self.missing.put(self.gpa, name, {});
+                break :missing .missing;
+            };
+        }
+        const state: State = .{ .atoms = atoms, .targets = targets };
+        self.states[image] = state;
+        for (view.roots()) |entry| try self.follow(image, state, entry);
+        return state;
+    }
+
+    fn run(self: *Walk) Allocator.Error!void {
+        while (self.stack.pop()) |item| {
+            const state = self.states[item.image].?;
+            for (self.images[item.image].view.atomEdges(item.atom)) |entry| try self.follow(item.image, state, entry);
+        }
+    }
+};
+
 const Place = struct {
     block: u64 = 0,
     data: u64 = 0,
@@ -454,6 +560,8 @@ const Context = struct {
     strtab_offset: u64,
     /// Section indices of the app's text, data and zero-fill.
     section_index: [3]u32,
+    /// For each placed image, which of its atoms are reached.
+    reached_atoms: []const []const bool,
 
     /// The file offset of an address in the app region's file-backed bytes.
     fn fileOffsetOf(self: *const Context, address: u64) u64 {
@@ -564,7 +672,9 @@ const Task = struct {
         const view = context.images[range.image].view;
         const place = context.places[range.image];
         const addresses = context.resolved[range.image];
+        const atoms_reached = context.reached_atoms[range.image];
         for (view.sites()[range.first..][0..range.count]) |site| {
+            if (site.atom != UnitImage.no_atom and !atoms_reached[site.atom]) continue;
             const target = if (site.target_region == UnitImage.import_target) addresses[site.target] else place.base(@fromBackingInt(site.target_region));
             const region: UnitImage.Region = @fromBackingInt(site.region);
             const kind: UnitImage.SiteKind = @fromBackingInt(site.kind);

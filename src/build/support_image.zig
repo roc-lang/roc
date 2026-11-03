@@ -28,7 +28,7 @@ pub fn main(init: std.process.Init) MainError!void {
         bytes.* = try std.Io.Dir.cwd().readFileAlloc(init.io, path, gpa, .unlimited);
         read += 1;
     }
-    const image = UnitImage.build(gpa, objects, .{ .keep_debug = false }) catch |err| {
+    const image = UnitImage.build(gpa, objects, .{ .keep_debug = false, .atoms = .whole }) catch |err| {
         std.log.err("cannot convert support objects into a unit image: {s}", .{@errorName(err)});
         return err;
     };
