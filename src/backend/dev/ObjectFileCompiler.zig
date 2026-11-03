@@ -63,7 +63,7 @@ pub const CompilationResult = struct {
     /// Allocator used - caller must free object_bytes with this
     allocator: Allocator,
     /// The compiled program lifted into excerpts, when the compile ran in
-    /// pack mode on a target whose excerpts can be extracted.
+    /// capture mode on a target whose excerpts can be extracted.
     excerpts: ?CodeExcerpt.Set = null,
     /// The object's encoded `CodeLocations`, when the compile captured them.
     code_locations: []const u8 = &.{},
@@ -115,17 +115,14 @@ pub const ObjectFileCompiler = struct {
     /// Borrowed excerpts from this exact LIR program, never an executable image.
     reuse_same_program: ?*const NativeProcCompiler.Retained = null,
     /// Emit every procedure as a global symbol and emit the object even
-    /// without host entrypoints: the object is a module pack, not an app.
-    pack_mode: bool = false,
+    /// without host entrypoints, for callers inspecting all compiled excerpts.
+    capture_all_procedures: bool = false,
     /// The object is one unit of a multi-object link: it binds what its
     /// module exports, which may be nothing at all, and is emitted either
     /// way.
     link_unit: bool = false,
-    /// Where the excerpts of external (object-cache) procedures come from.
-    splice_source: ?SpliceSource = null,
     /// Lift the compiled program into excerpts and keep them in
-    /// `captured_excerpts` after `compileToObjectFileAndWrite`, so the
-    /// program's own pack can be written from the build that produced it.
+    /// `captured_excerpts` after `compileToObjectFileAndWrite`.
     capture_excerpts: bool = false,
     captured_excerpts: ?CodeExcerpt.Set = null,
     /// Keep the object's `CodeLocations` in the result, for an object a
@@ -195,10 +192,10 @@ pub const ObjectFileCompiler = struct {
         return .{ .allocator = allocator };
     }
 
-    /// Compile a pack program: every procedure is a global symbol and the
+    /// Capture all procedure excerpts: every procedure is a global symbol and the
     /// object is emitted even though no host entrypoint requests it.
-    pub fn initForPack(allocator: Allocator) ObjectFileCompiler {
-        return .{ .allocator = allocator, .pack_mode = true };
+    pub fn initForExcerpts(allocator: Allocator) ObjectFileCompiler {
+        return .{ .allocator = allocator, .capture_all_procedures = true };
     }
 
     /// Compile LIR to a native object file for the given RocTarget.
@@ -217,7 +214,7 @@ pub const ObjectFileCompiler = struct {
         proc_specs: []const LirProcSpec,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, target, self.enable_default_platform_runtime, self.erased_capture_prefix, self.timing, self.pack_mode, self.link_unit, self.splice_source, self.capture_excerpts, self.capture_code_locations, self.emit_object, self.post_check_executor, self.reuse_same_program);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, target, self.enable_default_platform_runtime, self.erased_capture_prefix, self.timing, self.capture_all_procedures, self.link_unit, self.capture_excerpts, self.capture_code_locations, self.emit_object, self.post_check_executor, self.reuse_same_program);
     }
 
     /// Compile to an object file and write it to a path.
@@ -389,9 +386,8 @@ fn compileWithCodeGen(
     enable_default_platform_runtime: bool,
     erased_capture_prefix: u32,
     timing: ?*ObjectFileCompiler.Timing,
-    pack_mode: bool,
+    capture_all_procedures: bool,
     link_unit: bool,
-    splice_source: ?SpliceSource,
     capture_excerpts: bool,
     capture_code_locations: bool,
     emit_object: bool,
@@ -401,7 +397,7 @@ fn compileWithCodeGen(
     const exports_procs = for (proc_specs) |proc| {
         if (proc.exported) break true;
     } else false;
-    if (!pack_mode and !link_unit and entrypoints.len == 0 and static_data_exports.len == 0 and !exports_procs) {
+    if (!capture_all_procedures and !link_unit and entrypoints.len == 0 and static_data_exports.len == 0 and !exports_procs) {
         return CompilationError.NoEntrypoints;
     }
 
@@ -436,22 +432,12 @@ fn compileWithCodeGen(
     // Native emission includes the transitive RC-helper closure. Do not time
     // or compile static-export helpers a second time.
     const procedure_instructions_started_ns = if (timing) |timings| timings.start() else 0;
-    var spliced_data = std.ArrayList(CodeExcerpt.DataItem).empty;
-    defer spliced_data.deinit(allocator);
-    if (splice_source) |source| {
-        var external_procs = std.ArrayList(lir.LIR.LirProcSpecId).empty;
-        defer external_procs.deinit(allocator);
-        for (proc_specs, 0..) |proc, index| {
-            if (proc.external and !proc.c_abi_entry) external_procs.append(allocator, @fromBackingInt(@intCast(@as(u32, @intCast(index))))) catch return CompilationError.OutOfMemory;
-        }
-        spliceExternalProcs(CodeGen, allocator, &codegen, proc_specs, external_procs.items, source, &spliced_data) catch return CompilationError.OutOfMemory;
-    }
     var demand = std.ArrayList(lir.LIR.LirProcSpecId).empty;
     defer demand.deinit(allocator);
     for (proc_specs, 0..) |proc, index| {
         // A procedure another object of the link defines is a symbol here,
         // never code (`LIR.LirProcSpec.linked`).
-        if (proc.is_static_initializer or proc.linked or (proc.external and !proc.c_abi_entry)) continue;
+        if (proc.is_static_initializer or proc.linked or (proc.external)) continue;
         demand.append(allocator, @fromBackingInt(@intCast(index))) catch return CompilationError.OutOfMemory;
     }
     var native_metrics: NativeProcCompiler.Metrics = .{};
@@ -464,23 +450,22 @@ fn compileWithCodeGen(
         .constant_exports = static_data_exports,
     }) catch return CompilationError.OutOfMemory;
     // Excerpt data remains borrowed by the destination until object encoding
-    // and optional pack capture have finished.
+    // and optional excerpt capture have finished.
     defer retained.deinit();
     const native_data = retained.dataItems(allocator) catch return CompilationError.OutOfMemory;
     defer allocator.free(native_data);
-    spliced_data.appendSlice(allocator, native_data) catch return CompilationError.OutOfMemory;
     if (timing) |timings| timings.snapshot_value.native_emission.add(native_metrics);
     if (timing) |timings| timings.finish(procedure_instructions_started_ns, .procedure_instructions);
 
     // Lay the program's code out canonically, so that whether each procedure
-    // was compiled now or spliced from an object-cache entry, and in which
-    // order either happened, changes nothing in the object (design.md
+    // was compiled serially or in parallel, its emission order changes
+    // nothing in the object (design.md
     // "Deterministic Dev Images"). The code generated so far is lifted into
     // excerpts and placed again, in arranged order and under canonical
     // names, into the code generator the object is encoded from.
     var symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;
     codegen.finishImage() catch return CompilationError.OutOfMemory;
-    var catalog = CodeExcerpt.PreparedData.init(allocator, static_strings.exports, static_data_exports, spliced_data.items) catch return CompilationError.OutOfMemory;
+    var catalog = CodeExcerpt.PreparedData.init(allocator, static_strings.exports, static_data_exports, native_data) catch return CompilationError.OutOfMemory;
     defer catalog.deinit();
     var staged = CodeExcerpt.extractCataloged(CodeGen, allocator, &codegen, proc_specs, layout_store, &catalog) catch |err| switch (err) {
         error.OutOfMemory => return CompilationError.OutOfMemory,
@@ -540,11 +525,10 @@ fn compileWithCodeGen(
         };
     }
     // A linked program's image holds the code its roots reach, however its
-    // procedures were provided; a pack program's holds every procedure it
-    // offers.
+    // procedures were emitted; excerpt capture retains every procedure.
     var reachable: ?CodeExcerpt.Set = null;
     defer if (reachable) |*retained_set| retained_set.deinit();
-    if (!pack_mode) {
+    if (!capture_all_procedures) {
         // The code the program's roots reach: its entrypoints', and that of
         // every procedure it defines for other objects of its link.
         var root_procs = std.ArrayList(lir.ProcIdentity).empty;
@@ -687,7 +671,7 @@ fn compileWithCodeGen(
                     .name = symbol_name,
                     .offset = start,
                     .size = excerpt.code.len,
-                    .is_global = pack_mode or exported,
+                    .is_global = capture_all_procedures or exported,
                     .is_function = true,
                     .is_external = false,
                     .section = .text,
@@ -823,13 +807,13 @@ fn compileWithCodeGen(
     errdefer allocator.free(object_bytes);
 
     var excerpts: ?CodeExcerpt.Set = null;
-    if (pack_mode or capture_excerpts) {
+    if (capture_all_procedures or capture_excerpts) {
         const canonical_data = allocator.alloc(CodeExcerpt.DataItem, canonical.data.len) catch return CompilationError.OutOfMemory;
         defer allocator.free(canonical_data);
         for (canonical.data, canonical_data) |datum, *item| item.* = datum.item;
         excerpts = CodeExcerpt.extract(CodeGen, allocator, &final, proc_specs, layout_store, &.{}, &.{}, canonical_data) catch |err| switch (err) {
             error.OutOfMemory => return CompilationError.OutOfMemory,
-            error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => invariant("pack excerpt extraction failed: {s}", .{@errorName(err)}),
+            error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => invariant("native excerpt extraction failed: {s}", .{@errorName(err)}),
         };
     }
 
@@ -937,61 +921,6 @@ const SymbolDefinition = struct {
     id: SymbolTable.Id,
     symbol: ObjectWriter.Symbol,
 };
-
-/// An excerpt in a loaded pack.
-pub const LocatedExcerpt = struct {
-    set: *const CodeExcerpt.Set,
-    index: u32,
-};
-
-/// The object cache's excerpts, asked by the key an entry was served under
-/// (`LIR.LirProcSpec.cache_key`). The consumer that loaded the packs
-/// supplies the context and the lookup.
-pub const SpliceSource = struct {
-    context: *anyopaque,
-    find: *const fn (context: *anyopaque, key: [32]u8) ?LocatedExcerpt,
-};
-
-/// Place the object-cache entry of each of `external_procs`, with its
-/// closure, into the code generator before the program's own procedures
-/// compile. Each pack's excerpts are placed once, in the given order. The
-/// data items the entries carry are appended to `data_out` for the caller
-/// to define.
-pub fn spliceExternalProcs(
-    comptime CodeGen: type,
-    allocator: Allocator,
-    codegen: *CodeGen,
-    proc_specs: []const LirProcSpec,
-    external_procs: []const lir.LIR.LirProcSpecId,
-    source: SpliceSource,
-    data_out: *std.ArrayList(CodeExcerpt.DataItem),
-) Allocator.Error!void {
-    var procs_by_identity = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(allocator);
-    defer procs_by_identity.deinit();
-    for (proc_specs, 0..) |proc, index| {
-        if (proc.is_static_initializer) continue;
-        try procs_by_identity.put(proc.identity, @fromBackingInt(@intCast(@as(u32, @intCast(index)))));
-    }
-
-    const PackState = struct { placed: std.AutoHashMap(u32, usize) };
-    var packs = std.AutoHashMap(*const CodeExcerpt.Set, PackState).init(allocator);
-    defer {
-        var states = packs.valueIterator();
-        while (states.next()) |state| state.placed.deinit();
-        packs.deinit();
-    }
-
-    for (external_procs) |proc_id| {
-        const proc = proc_specs[@backingInt(proc_id)];
-        if (!proc.external) invariant("procedure {d} was offered for splicing but is not an object-cache entry", .{@backingInt(proc_id)});
-        const key = proc.cache_key orelse invariant("object-cache procedure {d} had no cache key", .{@backingInt(proc_id)});
-        const located = source.find(source.context, key) orelse
-            invariant("object cache served a specialization whose excerpt {s} is not in any loaded pack", .{&proc.identity.symbolHex()});
-        const gop = try packs.getOrPut(located.set);
-        if (!gop.found_existing) gop.value_ptr.* = .{ .placed = std.AutoHashMap(u32, usize).init(allocator) };
-        try CodeExcerpt.splice(CodeGen, allocator, codegen, located.set, &.{located.index}, &procs_by_identity, &gop.value_ptr.placed, data_out);
-    }
-}
 
 fn appendDefinition(
     allocator: Allocator,
@@ -1268,7 +1197,7 @@ fn compilePiecesWithCodeGen(
     var demand = std.ArrayList(lir.LIR.LirProcSpecId).empty;
     defer demand.deinit(allocator);
     for (proc_specs, 0..) |proc, index| {
-        if (proc.is_static_initializer or proc.linked or (proc.external and !proc.c_abi_entry)) continue;
+        if (proc.is_static_initializer or proc.linked or (proc.external)) continue;
         demand.append(allocator, @fromBackingInt(@intCast(index))) catch return CompilationError.OutOfMemory;
     }
     var native_metrics: NativeProcCompiler.Metrics = .{};
@@ -1619,9 +1548,8 @@ fn crossCompileDispatch(
     enable_default_platform_runtime: bool,
     erased_capture_prefix: u32,
     timing: ?*ObjectFileCompiler.Timing,
-    pack_mode: bool,
+    capture_all_procedures: bool,
     link_unit: bool,
-    splice_source: ?SpliceSource,
     capture_excerpts: bool,
     capture_code_locations: bool,
     emit_object: bool,
@@ -1647,9 +1575,8 @@ fn crossCompileDispatch(
                     enable_default_platform_runtime,
                     erased_capture_prefix,
                     timing,
-                    pack_mode,
+                    capture_all_procedures,
                     link_unit,
-                    splice_source,
                     capture_excerpts,
                     capture_code_locations,
                     emit_object,
@@ -1690,7 +1617,7 @@ test "ObjectFileCompiler emits a link unit that defines nothing and refuses an e
     try std.testing.expect(std.mem.startsWith(u8, result.object_bytes, "\x7fELF"));
 }
 
-test "ObjectFileCompiler native emission skips static initializers and captures packs" {
+test "ObjectFileCompiler native emission skips static initializers and captures excerpts" {
     const allocator = std.testing.allocator;
     var store = LirStore.init(allocator);
     defer store.deinit();
@@ -1720,7 +1647,7 @@ test "ObjectFileCompiler native emission skips static initializers and captures 
     }, .none);
 
     var timing = ObjectFileCompiler.Timing.init(std.testing.io);
-    var compiler = ObjectFileCompiler.initForPack(allocator);
+    var compiler = ObjectFileCompiler.initForExcerpts(allocator);
     compiler.timing = &timing;
     const targets = [_]RocTarget{ .x64linux, .arm64linux, .x64v1linux, .arm64v1linux, .x64v1musl, .arm64v1musl };
     for (targets) |target| {
@@ -1743,9 +1670,8 @@ test "ObjectFileCompiler native emission skips static initializers and captures 
     try std.testing.expectEqual(@as(u64, 0), snapshot.rc_helper_instructions_ns);
 }
 
-test "ObjectFileCompiler runtime static-root pack owns only reachable canonical data" {
+test "ObjectFileCompiler runtime static-root excerpts own only reachable canonical data" {
     const allocator = std.testing.allocator;
-    const PackFile = @import("PackFile.zig");
     const text = "immutable runtime data survives its producer";
     const identity = lir.ProcIdentity.forTest(717);
     // The native target joins the fixed ones only where native LIR codegen exists.
@@ -1805,25 +1731,24 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
             };
             exports[2] = .{
                 .symbol_name = try a.dupe(u8, "roc__d8"),
-                .bytes = try a.dupe(u8, "must not travel in the pack"),
+                .bytes = try a.dupe(u8, "must not travel in the excerpts"),
                 .alignment = 1,
                 .is_exported = false,
             };
-            var compiler = ObjectFileCompiler.initForPack(allocator);
+            var compiler = ObjectFileCompiler.initForExcerpts(allocator);
             break :producer try compiler.compileToObjectFile(&store, &layouts, &.{}, exports, store.getProcSpecs(), target);
         };
         // No source descriptor, backing, symbol names, LIR or layout owners remain.
-        const bytes = serialized: {
-            defer result.deinit();
-            break :serialized try PackFile.write(allocator, &result.excerpts.?, &.{});
-        };
-        defer allocator.free(bytes);
-        var pack = try PackFile.read(allocator, bytes);
-        defer pack.deinit();
-        try std.testing.expectEqual(@as(usize, 1), pack.set.excerpts.len);
-        const excerpt = pack.set.excerpts[0];
-        try std.testing.expectEqual(@as(usize, 2), excerpt.data.len);
-        for (excerpt.data) |item| {
+        var owned = try CodeExcerpt.copySet(allocator, &result.excerpts.?);
+        defer owned.deinit();
+        result.deinit();
+        try std.testing.expectEqual(@as(usize, 1), owned.excerpts.len);
+        const excerpt = owned.excerpts[0];
+        var collector = CodeExcerpt.DataCollector{ .allocator = allocator };
+        defer collector.deinit();
+        try collector.add(excerpt);
+        try std.testing.expectEqual(@as(usize, 2), collector.items.items.len);
+        for (collector.items.items) |item| {
             try std.testing.expect(std.mem.startsWith(u8, item.name, CodeExcerpt.content_data_prefix));
             try std.testing.expect(!std.mem.eql(u8, item.name, "roc__d7"));
             try std.testing.expect(!std.mem.eql(u8, item.name, "roc__d7_1"));
@@ -1842,10 +1767,10 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
         // A different consumer has neither the procedure ordinal nor any static table.
         var store = LirStore.init(allocator);
         defer store.deinit();
-        // The consumer has the module versions the pack's code came from.
-        const files = try allocator.alloc(@import("base").SourceFileEntry, pack.set.source_files.len);
+        // The consumer has the module versions the excerpts came from.
+        const files = try allocator.alloc(@import("base").SourceFileEntry, owned.source_files.len);
         defer allocator.free(files);
-        for (files, pack.set.source_files) |*file, module_identity| file.* = .{ .name = "module", .qualified_name = "module", .module_identity = module_identity };
+        for (files, owned.source_files) |*file, module_identity| file.* = .{ .name = "module", .qualified_name = "module", .module_identity = module_identity };
         try store.setSourceFiles(files);
         var layouts = try layout.Store.init(allocator, .u64);
         defer layouts.deinit();
@@ -1858,7 +1783,7 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
         defer placed.deinit();
         var data = std.ArrayList(CodeExcerpt.DataItem).empty;
         defer data.deinit(allocator);
-        try CodeExcerpt.splice(CG, allocator, &receiver, &pack.set, &.{0}, &procs, &placed, &data);
+        try CodeExcerpt.splice(CG, allocator, &receiver, &owned, &.{0}, &procs, &placed, &data);
         try receiver.finishImage();
         if (comptime target == RocTarget.detectNative()) {
             var splice = @import("HostSplice.zig").HostSplice.init(allocator);

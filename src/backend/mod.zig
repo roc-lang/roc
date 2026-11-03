@@ -13,9 +13,7 @@ pub const dev = @import("dev/mod.zig");
 pub const wasm = @import("wasm/mod.zig");
 
 comptime {
-    if (@import("builtin").is_test) {
-        @import("std").testing.refAllDecls(dev.PackFile);
-    }
+    if (@import("builtin").is_test) {}
 }
 
 // Re-export dev backend types at top level.

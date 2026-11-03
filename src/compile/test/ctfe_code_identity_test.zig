@@ -193,7 +193,7 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
         .{ .include_provided_exports = true },
     );
     defer static_data_exports.deinitStaticData(allocator, image);
-    var compiler = backend.ObjectFileCompiler.initForPack(allocator);
+    var compiler = backend.ObjectFileCompiler.initForExcerpts(allocator);
     compiler.emit_object = false;
     var compiled = try compiler.compileToObjectFile(
         &runtime.lir_result.store,
@@ -205,34 +205,6 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
     );
     defer compiled.deinit();
     const built = &(compiled.excerpts orelse return error.TestUnexpectedResult);
-    // The same checked/LIR program emits identical normalized procedure packs
-    // for the declared libc pair. Compare every byte of code, relocations,
-    // carried data, source locations and excerpt metadata at each CPU floor.
-    if (roc_target.RocTarget.detectNative().toCpuArch() == .x86_64) {
-        for ([_][2]roc_target.RocTarget{ .{ .x64musl, .x64glibc }, .{ .x64v1musl, .x64v1glibc } }) |pair| {
-            var expected: ?[]u8 = null;
-            defer if (expected) |bytes| allocator.free(bytes);
-            for (pair) |target| {
-                var pair_compiler = backend.ObjectFileCompiler.initForPack(allocator);
-                pair_compiler.emit_object = false;
-                var result = try pair_compiler.compileToObjectFile(
-                    &runtime.lir_result.store,
-                    &runtime.lir_result.layouts,
-                    &.{},
-                    image,
-                    runtime.lir_result.store.getProcSpecs(),
-                    target,
-                );
-                defer result.deinit();
-                const bytes = try backend.dev.PackFile.write(allocator, &result.excerpts.?, &.{});
-                if (expected) |prior| {
-                    defer allocator.free(bytes);
-                    try std.testing.expectEqualSlices(u8, prior, bytes);
-                } else expected = bytes;
-            }
-        }
-    }
-
     var built_names = try CodeExcerpt.ContentNames.init(allocator, built);
     defer built_names.deinit();
     var built_by_identity = std.AutoHashMap(lir.ProcIdentity, usize).init(allocator);

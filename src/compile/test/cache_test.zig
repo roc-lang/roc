@@ -33,31 +33,6 @@ const CacheStoreTask = struct {
     }
 };
 
-test "getTestCacheDir returns test subdirectory" {
-    const allocator = testing.allocator;
-    // Use an explicit cache_dir so the test does not depend on HOME/XDG env vars
-    // (the default testing CoreCtx returns EnvironmentVariableMissing for all vars).
-    const config = CacheConfig{
-        .cache_dir = "/tmp/roc_test_cache",
-        .roc_ctx = CoreCtx.testing(testing.allocator, testing.allocator),
-    };
-
-    const version_dir = try config.getVersionCacheDir(allocator);
-    defer allocator.free(version_dir);
-    const namespace = std.fs.path.basename(version_dir);
-    try testing.expect(std.mem.startsWith(u8, namespace, "compat-"));
-    try testing.expectEqualStrings(@import("build_options").compiler_compatibility_id, namespace["compat-".len..]);
-
-    const test_dir = try config.getTestCacheDir(allocator);
-    defer allocator.free(test_dir);
-
-    // Should end with "/test" or "\\test"
-    try testing.expect(std.mem.endsWith(u8, test_dir, "/test") or std.mem.endsWith(u8, test_dir, "\\test"));
-
-    // Should start with the version cache dir
-    try testing.expect(std.mem.startsWith(u8, test_dir, version_dir));
-}
-
 test "storeRawBytes and loadRawBytes round-trip" {
     const allocator = testing.allocator;
 
@@ -218,8 +193,8 @@ const FailingCacheFilesystem = struct {
         if (self.stage == .write) return error.FileTooBig;
         try self.base.writeFile(path, bytes);
         if (self.stage == .publish) {
-            const blocked = std.fmt.allocPrint(self.capture.allocator, "{s}.data", .{path[0 .. path.len - ".pending".len]}) catch return error.IoError;
-            defer self.capture.allocator.free(blocked);
+            const end = (std.mem.findLast(u8, path, ".data.") orelse return error.IoError) + ".data".len;
+            const blocked = path[0..end];
             self.base.makePath(blocked) catch return error.IoError;
         }
     }

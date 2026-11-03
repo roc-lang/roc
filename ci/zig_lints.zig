@@ -824,17 +824,17 @@ test "dense ID hash map lint recognizes qualified and multiline keys" {
 
 test "developer-diagnostic lint flags string literals naming a variable, not comments" {
     const source =
-        \\// Prints when ROC_PACK_STATS is set.
-        \\const a = std.c.getenv("ROC_PACK_STATS");
+        \\// Prints when ROC_SPEC_CENSUS is set.
+        \\const a = std.c.getenv("ROC_SPEC_CENSUS");
         \\const b = std.c.getenv("ROC_CACHE_DIR");
-        \\const c = dev_diagnostics.isSet(.pack_stats);
+        \\const c = dev_diagnostics.isSet(.spec_census);
     ;
-    var name = "\"ROC_PACK_STATS\"".*;
+    var name = "\"ROC_SPEC_CENSUS\"".*;
     const names = [_][]u8{&name};
 
     var errors: std.ArrayList(u8) = .empty;
     defer errors.deinit(std.testing.allocator);
     try appendDevDiagnosticNameErrors(std.testing.allocator, &errors, "x.zig", source, &names);
 
-    try std.testing.expectEqualStrings("x.zig:2: developer-diagnostic variable \"ROC_PACK_STATS\" must be read through base.dev_diagnostics\n", errors.items);
+    try std.testing.expectEqualStrings("x.zig:2: developer-diagnostic variable \"ROC_SPEC_CENSUS\" must be read through base.dev_diagnostics\n", errors.items);
 }

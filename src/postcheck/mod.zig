@@ -42,7 +42,6 @@ pub const CompletedErasedMembers = @import("completed_erased_members.zig").Compl
 /// The compile-time producers each producer's evaluation reads.
 pub const ComptimeRootGraph = @import("comptime_root_graph.zig");
 /// Discovery summaries of a lowered program (design.md "Discovery Summaries").
-pub const DiscoverySummary = @import("discovery_summary.zig");
 /// `.boxy` runtime lowering (design.md "`.boxy` Runtime Lowering").
 pub const Boxy = @import("boxy/mod.zig");
 pub const StructuralTest = @import("structural_test.zig");
@@ -57,7 +56,6 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("monotype/lower.zig"));
     std.testing.refAllDecls(@import("monotype/worker_inputs.zig"));
     std.testing.refAllDecls(@import("monotype/solve.zig"));
-    std.testing.refAllDecls(@import("monotype/interface_summary.zig"));
     std.testing.refAllDecls(@import("monotype/specialize.zig"));
     std.testing.refAllDecls(@import("monotype/layout_key.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/ast.zig"));
@@ -74,7 +72,6 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("proc_identity.zig"));
     std.testing.refAllDecls(@import("structural_test.zig"));
     std.testing.refAllDecls(@import("comptime_root_graph.zig"));
-    std.testing.refAllDecls(@import("discovery_summary.zig"));
 }
 
 test "lambda solved unification loop is iterative" {

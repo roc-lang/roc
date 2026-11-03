@@ -52,7 +52,6 @@ const Type = @import("type.zig");
 const Allocator = std.mem.Allocator;
 const static_dispatch = check.StaticDispatchRegistry;
 const names = check.CheckedNames;
-const AnalysisCache = @import("analysis_cache.zig");
 
 const UninhabitedAnswer = struct {
     epoch: u64,
@@ -259,35 +258,10 @@ pub fn run(
     allocator: Allocator,
     lifted: Lifted.Program,
 ) Common.LowerError!Ast.Program {
-    return runWithCache(allocator, lifted, null);
-}
-
-/// The optional cache records only completed analysis, under the exact lifted
-/// input consumed by this solver. The current program remains the lowered IR.
-pub fn runWithCache(allocator: Allocator, lifted: Lifted.Program, cache: ?Common.InterfaceSummaryCache) Common.LowerError!Ast.Program {
     // `Ast.Program.init` cannot fail and takes ownership of `lifted`, so
     // `program.deinit()` is the only cleanup a later error needs.
     var program = Ast.Program.init(allocator, lifted);
     errdefer program.deinit();
-
-    const analysis_id = if (cache != null) try AnalysisCache.identity(allocator, program.lifted.view()) else null;
-    defer if (analysis_id) |id| id.deinit(allocator);
-    const key = if (analysis_id) |id| id.key else null;
-    if (diagnostics.isSet(.pack_trace)) AnalysisCache.traceIdentity(program.lifted.view());
-    var family: [32]u8 = undefined;
-    baseHash("roc.lambda-analysis-cache.v1", &family);
-    if (cache) |provider| {
-        if (try provider.load(provider.context, allocator, family, key.?)) |bytes| {
-            defer allocator.free(bytes);
-            if (try AnalysisCache.restore(allocator, &program.lifted, &analysis_id.?, bytes)) |restored| {
-                if (diagnostics.isSet(.lambda_solve_stats)) std.debug.print("lambda-analysis hit key={x} bytes={d}\n", .{ key.?, bytes.len });
-                // The empty annotation stores allocated by init own no storage;
-                // restore consumed its lifted input and owns the returned arena.
-                return restored;
-            }
-        }
-        if (diagnostics.isSet(.lambda_solve_stats)) std.debug.print("lambda-analysis miss key={x}\n", .{key.?});
-    }
 
     var row_joined = try findRowJoinedTypes(allocator, &program);
     var solver = Solver.init(allocator, &program) catch |err| {
@@ -299,11 +273,6 @@ pub fn runWithCache(allocator: Allocator, lifted: Lifted.Program, cache: ?Common
     var counters: WorkCounters = .{};
     if (diagnostics.isSet(.lambda_solve_stats)) solver.counters = &counters;
     try solver.solve();
-    if (cache) |provider| if (try AnalysisCache.encode(allocator, &program, &analysis_id.?)) |bytes| {
-        defer allocator.free(bytes);
-        try provider.record(provider.context, family, key.?, bytes);
-        if (diagnostics.isSet(.lambda_solve_stats)) std.debug.print("lambda-analysis record key={x} bytes={d}\n", .{ key.?, bytes.len });
-    };
     if (diagnostics.isSet(.lambda_solve_stats)) {
         var buffer: [2048]u8 = undefined;
         var out = std.Io.Writer.fixed(&buffer);
@@ -370,12 +339,6 @@ fn findRowJoinedTypes(allocator: Allocator, program: *Ast.Program) Common.LowerE
     defer parents.deinit(allocator);
     try parents.markAncestors(allocator, &found);
     return found;
-}
-
-fn baseHash(bytes: []const u8, out: *[32]u8) void {
-    var hash = @import("base").Sha256.init(.{});
-    hash.update(bytes);
-    out.* = hash.finalResult();
 }
 
 const Solver = struct {

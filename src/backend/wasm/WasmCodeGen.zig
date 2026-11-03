@@ -282,9 +282,6 @@ registered_procs: collections.DenseMap(u32, u32),
 /// index. Populated before proc compilation so imports never shift function
 /// indices mid-codegen.
 hosted_symbol_targets: std.AutoHashMap(u32, HostedSymbolTarget),
-/// The C-ABI entries of linked object-cache objects, keyed by the proc spec
-/// id of the `c_abi_entry` procedure each one provides.
-linked_entry_targets: std.AutoHashMap(u32, HostedSymbolTarget),
 /// The fixed runtime symbols, resolved like hosted symbols before any
 /// defined function index is assigned.
 runtime_symbol_targets: ?RuntimeSymbolTargets = null,
@@ -433,7 +430,6 @@ pub fn init(
         .fp_local = 0,
         .registered_procs = collections.DenseMap(u32, u32).init(allocator),
         .hosted_symbol_targets = std.AutoHashMap(u32, HostedSymbolTarget).init(allocator),
-        .linked_entry_targets = std.AutoHashMap(u32, HostedSymbolTarget).init(allocator),
         .function_symbols_by_index = std.AutoHashMap(u32, SymbolIndex).init(allocator),
         .function_symbol_names = .empty,
         .rc_helper_funcs = std.AutoHashMap(u64, u32).init(allocator),
@@ -541,7 +537,6 @@ pub fn deinit(self: *Self) void {
     for (self.tail_drivers.items) |*driver| driver.members.deinit(self.allocator);
     self.tail_drivers.deinit(self.allocator);
     self.hosted_symbol_targets.deinit();
-    self.linked_entry_targets.deinit();
     self.function_symbols_by_index.deinit();
     for (self.function_symbol_names.items) |name| {
         self.allocator.free(name);
@@ -6680,14 +6675,6 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
             );
         }
         try self.generateCAbiProcWrapper(self.hostedSymbolTarget(hosted), args, proc.ret_layout);
-    } else if (proc.c_abi_entry) {
-        // The procedure's code is a linked object-cache entry; this body
-        // forwards to its C-ABI entry.
-        const target = self.tables().linked_entry_targets.get(@backingInt(proc_id)) orelse wasmInvariantFmt(
-            "WASM/codegen invariant violated: linked proc {d} has no registered C-ABI entry",
-            .{@backingInt(proc_id)},
-        );
-        try self.generateCAbiProcWrapper(target, args, proc.ret_layout);
     } else {
         // Emit proc body block (ret branches to this block after storing the return local)
         try self.emitVoidBlock();
@@ -6985,34 +6972,6 @@ fn cAbiSignature(self: *Self, spec: LirProcSpec, params: *std.ArrayList(ValType)
         .registers => |registers| {
             for (registers.pieces) |piece| try results.append(self.allocator, pieceValType(piece));
         },
-    }
-}
-
-/// Bind every procedure a linked object-cache object provides
-/// (`LIR.LirProcSpec.c_abi_entry`) to the C-ABI entry that object defines.
-/// The objects must already be merged into the module
-/// (`WasmModule.mergeLinkedObject`).
-pub fn registerLinkedEntryTargets(self: *Self, proc_specs: []const LIR.LirProcSpec) Allocator.Error!void {
-    for (proc_specs, 0..) |spec, index| {
-        if (!spec.c_abi_entry) continue;
-        var name_buffer: [LIR.ProcIdentity.symbol_name_len]u8 = undefined;
-        const name = spec.identity.writeCAbiEntryName(&name_buffer);
-        const symbol = self.module.findDefinedFunctionSymbolExact(name) catch |err| wasmInvariantFmt(
-            "WASM/codegen invariant violated: linked proc {d} has no single C-ABI entry {s} in the merged objects: {}",
-            .{ index, name, err },
-        );
-        const func_idx = self.module.linking.symbol_table.items[symbol.raw()].index;
-        if (builtin.mode == .debug) {
-            var params = std.ArrayList(ValType).empty;
-            defer params.deinit(self.allocator);
-            var results = std.ArrayList(ValType).empty;
-            defer results.deinit(self.allocator);
-            try self.cAbiSignature(spec, &params, &results);
-            if (!self.module.funcTypeMatches(self.module.functionType(FunctionIndex.fromRaw(func_idx)), params.items, results.items)) {
-                wasmInvariantFmt("WASM/codegen invariant violated: C-ABI entry {s} does not have its procedure's C-ABI type", .{name});
-            }
-        }
-        try self.linked_entry_targets.put(@intCast(index), .{ .func_idx = func_idx, .symbol = symbol });
     }
 }
 
@@ -8610,7 +8569,7 @@ fn callIsDynamic(self: *const Self, proc_id: LIR.LirProcSpecId, target: ProcLoca
 /// callee leaves pending are run into the target's storage as `drive` says.
 fn generateDynCall(self: *Self, proc_id: LIR.LirProcSpecId, args: ProcLocalSpan, target: ProcLocalId, drive: LIR.PendingDrive) Allocator.Error!void {
     const callee = self.store.getProcSpec(proc_id);
-    if (callee.hosted != null or callee.c_abi_entry) wasmInvariantFmt("WASM/codegen invariant violated: a call with dynamic operands targets a C-ABI procedure", .{});
+    if (callee.hosted != null) wasmInvariantFmt("WASM/codegen invariant violated: a call with dynamic operands targets a C-ABI procedure", .{});
     const arg_refs = self.store.getLocalSpan(args);
     const param_refs = self.store.getLocalSpan(callee.args);
     if (arg_refs.len != param_refs.len) wasmInvariantFmt(
