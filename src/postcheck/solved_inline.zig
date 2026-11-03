@@ -100,24 +100,17 @@ pub const OwnedPlan = struct {
 };
 
 /// Analyze a Lambda Solved program and produce explicit inline decisions.
-/// With `keep_keyed_specializations`, a function that is a keyed template
-/// specialization is never inlined away by the whole-program single-use
-/// rule: a pack program offers those procedures from its manifest, so each
-/// must survive as a procedure even when its only caller is the export
-/// wrapper. Wrapper and source-single-use decisions depend on source alone,
-/// so a pack program makes them as any program does.
 pub fn analyze(
     allocator: std.mem.Allocator,
     mode: Mode,
     procedure_usage: SpecConstr.ProcedureUsage,
     solved: *const Solved.Program,
-    keep_keyed_specializations: bool,
 ) std.mem.Allocator.Error!OwnedPlan {
     return switch (mode) {
         .none => OwnedPlan.empty(allocator),
-        .procedures => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations, .provided_low_level),
-        .wrappers => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations, .program),
-        .wrappers_and_source_single_use => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations, .source),
+        .procedures => try InlineAnalyzer.run(allocator, procedure_usage, solved, .provided_low_level),
+        .wrappers => try InlineAnalyzer.run(allocator, procedure_usage, solved, .program),
+        .wrappers_and_source_single_use => try InlineAnalyzer.run(allocator, procedure_usage, solved, .source),
     };
 }
 
@@ -150,14 +143,12 @@ const InlineAnalyzer = struct {
     solved: *const Solved.Program,
     solved_types: SolvedType.Store.View,
     decisions: []Decision,
-    keep_keyed_specializations: bool,
     rule: CandidateRule,
 
     fn run(
         allocator: std.mem.Allocator,
         procedure_usage: SpecConstr.ProcedureUsage,
         solved: *const Solved.Program,
-        keep_keyed_specializations: bool,
         rule: CandidateRule,
     ) std.mem.Allocator.Error!OwnedPlan {
         if (rule != .provided_low_level and procedure_usage.items.len != solved.lifted.fnCount()) {
@@ -173,7 +164,6 @@ const InlineAnalyzer = struct {
             .solved = solved,
             .solved_types = solved.types.view(),
             .decisions = decisions,
-            .keep_keyed_specializations = keep_keyed_specializations,
             .rule = rule,
         };
         try analyzer.decideCandidates();
@@ -220,13 +210,6 @@ const InlineAnalyzer = struct {
         if (self.rule == .source) {
             if (self.sourceSingleUseCandidate(fn_id)) |body| return .{ .body = body, .kind = .source_single_use };
             return null;
-        }
-        // A single-use body is lowered only at its call site, and a keyed
-        // specialization a pack program offers must survive as a procedure.
-        if (self.keep_keyed_specializations) {
-            if (self.solved.lifted.getFn(fn_id).source) |template| {
-                if (template.spec_key != null) return null;
-            }
         }
         if (self.singleUseCandidate(fn_id)) |body| return .{ .body = body, .kind = .single_use };
         return null;

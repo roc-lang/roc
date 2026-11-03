@@ -1292,7 +1292,7 @@ fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
     lifted = undefined;
     defer solved.deinit();
 
-    var inline_plan = try postcheck.SolvedInline.analyze(allocator, .wrappers, procedure_usage.view(), &solved, false);
+    var inline_plan = try postcheck.SolvedInline.analyze(allocator, .wrappers, procedure_usage.view(), &solved);
     defer inline_plan.deinit();
     const plan = inline_plan.view();
 

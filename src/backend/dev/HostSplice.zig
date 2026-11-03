@@ -1,12 +1,6 @@
-//! Links object-cache entries spliced into the compile-time evaluator's
-//! image. Compile-time hooks remain symbolic until executable linking;
-//! a spliced entry was compiled as object
-//! code and reaches everything by name: the host's runtime symbols, the
-//! builtins, the Boxy runtime, compiler-rt and the C memory routines, hosted
-//! functions, static data and literal backings, and other procedures and
-//! refcount helpers. This binds those names to the evaluator's process,
-//! defines the data items the entries carry, and stands in for hosted
-//! functions, which no compile-time evaluation may call.
+//! Links native excerpts into the compile-time evaluator's image. Runtime
+//! symbols, builtins, Boxy support, hosted stubs, and carried data stay symbolic
+//! until executable linking binds them in the compiler's process.
 //!
 //! The image is one mapping: the generated code, then a jump stub for every
 //! function of the compiler the code calls, then the carried data, then the
@@ -28,8 +22,6 @@ const StaticDataImage = @import("StaticDataImage.zig").StaticDataImage;
 const relocation_mod = @import("Relocation.zig");
 const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
 const host_isa = @import("isa.zig").host;
-const SpliceSource = @import("ObjectFileCompiler.zig").SpliceSource;
-const spliceExternalProcs = @import("ObjectFileCompiler.zig").spliceExternalProcs;
 
 const Allocator = std.mem.Allocator;
 const HostLirCodeGen = LirCodeGenMod.HostLirCodeGen;
@@ -59,8 +51,6 @@ pub const HostSplice = struct {
     /// Hosted functions spliced code calls, by name, with the stub's code
     /// offset.
     hosted_stubs: std.StringHashMap(usize),
-    /// Procedures spliced so far.
-    spliced_procs: usize = 0,
     /// The name of the last relocation `link` could not bind.
     unresolved: ?[]const u8 = null,
     /// The program's static data, placed after the carried data.
@@ -119,27 +109,6 @@ pub const HostSplice = struct {
         while (stubs.next()) |name| self.allocator.free(name.*);
         self.hosted_stubs.deinit();
         self.* = undefined;
-    }
-
-    /// Place the object-cache entry of every external procedure in `demand`
-    /// into the open code generator, before the program's own procedures
-    /// compile.
-    pub fn spliceExternal(self: *HostSplice, codegen: *HostLirCodeGen, demand: []const lir.LIR.LirProcSpecId, source: SpliceSource) Allocator.Error!void {
-        var external = std.ArrayList(lir.LIR.LirProcSpecId).empty;
-        defer external.deinit(self.allocator);
-        for (demand) |proc_id| {
-            const proc = codegen.store.getProcSpecImmediate(proc_id);
-            if (!proc.external) continue;
-            // In-process code splices; it never links object-cache objects.
-            if (builtin.mode == .debug and proc.c_abi_entry) @import("base").invariant("{s}", .{"in-process code reached a linked object-cache entry"});
-            try external.append(self.allocator, proc_id);
-        }
-        if (external.items.len == 0) return;
-        var carried = std.ArrayList(CodeExcerpt.DataItem).empty;
-        defer carried.deinit(self.allocator);
-        try spliceExternalProcs(HostLirCodeGen, self.allocator, codegen, codegen.store.getProcSpecs(), external.items, source, &carried);
-        try self.addDataItems(carried.items);
-        self.spliced_procs += external.items.len;
     }
 
     /// Carry excerpt data into the executable mapping, once per exact name.

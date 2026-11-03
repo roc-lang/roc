@@ -69,22 +69,6 @@ pub const ProcIdentity = extern struct {
     /// Bytes that every procedure symbol name begins with.
     pub const symbol_name_prefix = "roc__p";
 
-    /// Bytes that every C-ABI entry symbol name begins with: the entry a
-    /// linked object-cache object exports for a procedure, which callers
-    /// compiled by any backend reach through the platform C ABI.
-    pub const c_abi_entry_name_prefix = "roc__c";
-
-    comptime {
-        std.debug.assert(c_abi_entry_name_prefix.len == symbol_name_prefix.len);
-    }
-
-    /// Write this procedure's C-ABI entry symbol into caller-owned storage.
-    pub fn writeCAbiEntryName(self: ProcIdentity, buffer: *[symbol_name_len]u8) []u8 {
-        @memcpy(buffer[0..c_abi_entry_name_prefix.len], c_abi_entry_name_prefix);
-        buffer[c_abi_entry_name_prefix.len..].* = self.symbolHex();
-        return buffer;
-    }
-
     /// Length of a procedure symbol name. The identity encoding fixes it: the
     /// prefix plus the hex of the leading 128 bits.
     pub const symbol_name_len = symbol_name_prefix.len + 32;
@@ -1880,15 +1864,9 @@ pub const LirProcSpec = struct {
     is_static_initializer: bool = false,
     /// Hosted call ABI metadata, when this proc is provided by the platform.
     hosted: ?HostedProc = null,
-    /// Set when the object cache provides this proc's code: the proc has no
-    /// body here, its `identity` names the cache entry, and its `rc_*`
-    /// fields carry the ownership signature the entry was compiled with.
+    /// The procedure is supplied by another emission unit. Its `rc_*` fields
+    /// carry the ownership facts declared by that unit.
     external: bool = false,
-    /// For an `external` proc, the object-cache key its entry was served
-    /// under, which locates the entry's artifact. Its identity cannot: a
-    /// procedure named by site has one identity for every version of its
-    /// code.
-    cache_key: ?[32]u8 = null,
     /// For a procedure whose identity names its template by site rather than
     /// content (`Mono.FnTemplate.site_identity`): its identity together with
     /// its module's content key, which names its code. Cached code of the
@@ -1904,19 +1882,6 @@ pub const LirProcSpec = struct {
     /// procedure's current body; ARC pins its base signature to the one its
     /// types determine (`Lowerer.markStableSignatures`).
     stable_signature: bool = false,
-    /// The Monotype function this procedure lowers, which keys the producer's
-    /// summary of the compile-time roots its code reads
-    /// (`SpecComptimeReads.fnReads`); null for a procedure no Monotype
-    /// function names.
-    source_monotype_fn: ?u32 = null,
-    /// Checked defining module for an app-independent direct template offer.
-    /// Null keeps generated, nested, and app-dependent code program-scoped.
-    cache_provider_module: ?[32]u8 = null,
-    /// Set on an `external` proc whose cache entry is a linked object rather
-    /// than spliced code: callers reach it through its C-ABI entry
-    /// (`ProcIdentity.writeCAbiEntryName`), classified from its argument and
-    /// return layouts by `layout.abi`.
-    c_abi_entry: bool = false,
     /// Set with `external` on a procedure another object of the same link
     /// defines (design.md "Per-Module Output"): it has no body here, its
     /// symbol (`ProcIdentity.writeSymbolName`) is an undefined reference the
@@ -1972,19 +1937,6 @@ pub const LirProcSpec = struct {
     rc_ret_unique: bool = false,
     rc_ret_unique_fields: u64 = 0,
     rc_ret_conditions: U32Span = U32Span.empty(),
-    /// The inline plan inlines this proc's body at its direct calls, so it has
-    /// a procedure only where a call could not inline it or it is a value. A
-    /// program that takes a cache hit for it before inlining (a pack program
-    /// takes hits during specialization) could not inline it, so the object
-    /// cache never offers it.
-    inlined_at_calls: bool = false,
-    /// Set by ARC on a solved base proc when a call to it may demand an
-    /// ownership variant emitted from its body (an owned field take, outcome
-    /// restitution, a same-SCC tail transfer, or, under mode specialization,
-    /// a born-unique seed or an owned return). An object-cache entry carries
-    /// only the base signature and no body, so a proc with this bit set is
-    /// never offered as one.
-    rc_variant_demandable: bool = false,
 
     /// The body ARC analyzes and places reference counts in. A static
     /// initializer is construction-only LIR that the static data
@@ -1997,10 +1949,9 @@ pub const LirProcSpec = struct {
     /// Whether direct calls pass this procedure the cell it leaves a pending
     /// call in, as a hidden parameter after every other. Only Roc code calls
     /// such a procedure. One anything else can enter makes its own pending
-    /// calls, an erased-callable one reads the cell from its invocation, and
-    /// a linked object's C-ABI entry makes the calls its body leaves.
+    /// calls, and an erased-callable one reads the cell from its invocation.
     pub fn takesPendingCell(self: LirProcSpec) bool {
-        return self.abi == .roc and self.may_leave_pending and !self.c_abi_entry;
+        return self.abi == .roc and self.may_leave_pending;
     }
 };
 

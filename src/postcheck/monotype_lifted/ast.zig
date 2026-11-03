@@ -1367,16 +1367,6 @@ pub const Program = struct {
         return dependencies;
     }
 
-    /// Whether `fn_id`'s code reaches the app, from the frozen record
-    /// preparation computed before any consumer borrows it. Such code is
-    /// never offered under a specialization key: Monotype would skip its
-    /// body, and with it the app functions the program must lower for it
-    /// (`appCalleesReachedBy`).
-    pub fn fnReachesAppRecord(self: *const Program, fn_id: FnId) bool {
-        if (self.platform_requirement_filling == null) return false;
-        return self.frozenAppDependencies().reaching.isSet(@backingInt(fn_id));
-    }
-
     /// Append each app function `fn_id`'s code reaches from outside the app.
     /// A program serving `fn_id`'s code from the object cache lowers these
     /// itself: the served code calls them by identity, an app function's

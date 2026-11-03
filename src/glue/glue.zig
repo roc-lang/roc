@@ -95,8 +95,8 @@ pub const GlueError = error{
 
 /// Print platform glue information for a platform's main.roc file using the checked-artifact pipeline.
 /// Hosted function ordering comes from published `HostedProcTable` records.
-pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, roc_ctx: compile.CoreCtx, std_io: std.Io) GlueError!void {
-    rocGlueInner(gpa, stderr, stdout, args, roc_ctx, std_io) catch |err| {
+pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, std_io: std.Io) GlueError!void {
+    rocGlueInner(gpa, stderr, stdout, args, std_io) catch |err| {
         (switch (err) {
             error.GlueSpecNotFound => printPath(gpa, stderr, "Error: Glue spec file not found: '{s}'\n", args.glue_spec, args.report_config),
             error.NotPlatformFile => blk: {
@@ -111,7 +111,7 @@ pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, a
             error.CompilationFailed => stderr.print("Error: Compilation failed\n", .{}),
             error.DevBackendUnavailable => stderr.print("Error: The dev backend is not available for this host.\n", .{}),
             error.GluePluginUnavailable => stderr.print("Error: Could not load the compiled glue plugin.\n", .{}),
-            error.GluePluginStampMismatch => stderr.print("Error: The compiled glue plugin cache entry did not match this compiler.\n", .{}),
+            error.GluePluginStampMismatch => stderr.print("Error: The compiled glue plugin did not match this compiler.\n", .{}),
             error.ModuleRetrieval => stderr.print("Error: Failed to get compiled modules\n", .{}),
             error.OutOfMemory => stderr.print("Error: Out of memory\n", .{}),
             error.WriteFailed => stderr.print("Error: Write failed\n", .{}),
@@ -120,8 +120,7 @@ pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, a
     };
 }
 
-fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, roc_ctx: compile.CoreCtx, std_io: std.Io) GlueError!void {
-
+fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, std_io: std.Io) GlueError!void {
     // 0. Validate glue spec file exists
     std.Io.Dir.cwd().access(std_io, args.glue_spec, .{}) catch {
         return error.GlueSpecNotFound;
@@ -305,7 +304,6 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
             &runtime_env,
             root_artifact.executableIdentity(),
             args,
-            roc_ctx,
             std_io,
         ),
     }
@@ -565,16 +563,12 @@ const GluePluginStampV1 = extern struct {
     artifact_input_hash: [32]u8,
 };
 
-/// A glue plugin object ready to load: its bytes, and the cache entry they
-/// came from when a stamp mismatch should evict it.
+/// A glue plugin object ready to load.
 const BuiltGluePlugin = struct {
     bytes: []u8,
-    cache_root: ?[]u8,
-    cache_identity: ?compile.artifacts.Identity = null,
 
     fn deinit(self: BuiltGluePlugin, allocator: Allocator) void {
         allocator.free(self.bytes);
-        if (self.cache_root) |path| allocator.free(path);
     }
 };
 
@@ -589,46 +583,14 @@ fn runGlueSpecPlugin(
     runtime_env: *eval_mod.RuntimeHostEnv,
     executable_identity: [32]u8,
     args: GlueArgs,
-    roc_ctx: compile.CoreCtx,
     std_io: std.Io,
 ) GlueError!void {
     if (builtin.target.os.tag == .freestanding) return error.GluePluginUnavailable;
 
     const stamp = gluePluginStamp(executable_identity, args.specialization_strategy);
-    var plugin: ?BuiltGluePlugin = try getOrBuildGluePlugin(gpa, lowered, glue_proc, arg_layouts, executable_identity, stamp, args, roc_ctx, std_io);
-    defer if (plugin) |built| built.deinit(gpa);
-
-    var lib = blk: {
-        const first = plugin.?;
-        break :blk loadVerifiedGluePlugin(gpa, stderr, first, &stamp, !cachesGluePlugin(args)) catch |err| {
-            switch (err) {
-                error.GluePluginUnavailable, error.GluePluginStampMismatch => {},
-                error.BuildEnvInit,
-                error.CompilationFailed,
-                error.DevBackendUnavailable,
-                error.FileNotFound,
-                error.GlueSpecNotFound,
-                error.ModuleRetrieval,
-                error.NotPlatformFile,
-                error.OutOfMemory,
-                error.ParseFailed,
-                error.PlatformPathResolution,
-                error.TempDirCreation,
-                error.WriteFailed,
-                => return err,
-            }
-            // An installed plugin is a managed artifact: never rebuild past a
-            // failure to load it; the remedy is reinstalling the shorthand.
-            if (!cachesGluePlugin(args) or args.installed_plugin_path != null or first.cache_root == null) return err;
-
-            deleteGluePluginCacheEntry(first, std_io);
-            first.deinit(gpa);
-            plugin = null;
-
-            plugin = try getOrBuildGluePlugin(gpa, lowered, glue_proc, arg_layouts, executable_identity, stamp, args, roc_ctx, std_io);
-            break :blk try loadVerifiedGluePlugin(gpa, stderr, plugin.?, &stamp, true);
-        };
-    };
+    const plugin = try getOrBuildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args, std_io);
+    defer plugin.deinit(gpa);
+    var lib = try loadVerifiedGluePlugin(gpa, stderr, plugin, &stamp, true);
     defer lib.deinit();
 
     const GlueEntryFn = *const fn ([*]u8, ?*anyopaque) callconv(.c) void;
@@ -662,54 +624,21 @@ fn runGlueSpecPlugin(
     }
 }
 
-/// Whether the compiled plugin is read from and filed in the cache. The
-/// plugin is post-check work, so a `.boxy` glue run neither reads nor files
-/// it (design.md "Caching Under `.boxy`").
-fn cachesGluePlugin(args: GlueArgs) bool {
-    if (args.no_cache) return false;
-    return switch (args.specialization_strategy) {
-        .lss => true,
-        .boxy => false,
-    };
-}
-
 fn getOrBuildGluePlugin(
     gpa: Allocator,
     lowered: *lir.CheckedPipeline.LoweredProgram,
     glue_proc: lir.LirProcSpecId,
     arg_layouts: []const layout.Idx,
-    executable_identity: [32]u8,
     stamp: GluePluginStampV1,
     args: GlueArgs,
-    roc_ctx: compile.CoreCtx,
     std_io: std.Io,
 ) GlueError!BuiltGluePlugin {
     if (args.installed_plugin_path) |installed_path| {
         const bytes = readPluginFile(gpa, installed_path, std_io) orelse return error.GluePluginUnavailable;
-        return .{ .bytes = bytes, .cache_root = null };
+        return .{ .bytes = bytes };
     }
 
-    if (!cachesGluePlugin(args)) {
-        return .{ .bytes = try buildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args.opt, std_io), .cache_root = null };
-    }
-
-    const logical_path = gluePluginCachePath(gpa, executable_identity, stamp, args.opt, roc_ctx) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.NoHomeDirectory => return error.BuildEnvInit,
-    };
-    defer gpa.free(logical_path);
-    const config: compile.CacheConfig = .{ .roc_ctx = roc_ctx };
-    const root = config.getEffectiveCacheDir(gpa) catch return error.BuildEnvInit;
-    errdefer gpa.free(root);
-    var store = try compile.artifacts.Store.init(gpa, std_io, root);
-    defer store.deinit();
-    var id: compile.artifacts.Identity = .{ .namespace = undefined, .family = .glue_plugin, .key = undefined, .variant = compile.artifacts.hashBytes(@tagName(args.opt)) };
-    std.crypto.hash.sha2.Sha256.hash(build_options.compiler_compatibility_id, &id.namespace, .{});
-    std.crypto.hash.sha2.Sha256.hash(logical_path, &id.key, .{});
-    if (store.read(gpa, id, store.now()) catch null) |bytes| return .{ .bytes = bytes, .cache_root = root, .cache_identity = id };
-    const bytes = try buildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args.opt, std_io);
-    store.write(id, bytes, store.now()) catch {};
-    return .{ .bytes = bytes, .cache_root = root, .cache_identity = id };
+    return .{ .bytes = try buildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args.opt, std_io) };
 }
 
 /// The bytes of a plugin object file, or null when it cannot be read.
@@ -826,38 +755,6 @@ fn targetPtrWidthBits(target_usize: base.target.TargetUsize) u8 {
     return @intCast(target_usize.size() * 8);
 }
 
-fn gluePluginCachePath(
-    allocator: Allocator,
-    executable_identity: [32]u8,
-    stamp: GluePluginStampV1,
-    opt: GlueOpt,
-    roc_ctx: compile.CoreCtx,
-) (Allocator.Error || error{NoHomeDirectory})![:0]u8 {
-    const config = compile.CacheConfig{ .roc_ctx = roc_ctx };
-    const version_dir = try config.getVersionCacheDir(allocator);
-    defer allocator.free(version_dir);
-
-    const digest = gluePluginOutputHash(executable_identity, stamp);
-    const digest_hex = std.fmt.bytesToHex(digest, .lower);
-    const filename = try std.fmt.allocPrint(allocator, "{s}{s}", .{ digest_hex[0..], objectExtension() });
-    defer allocator.free(filename);
-
-    return std.fs.path.joinZ(allocator, &.{
-        version_dir,
-        "glue-plugin",
-        RocTarget.detectNative().toName(),
-        @tagName(opt),
-        filename,
-    });
-}
-
-fn deleteGluePluginCacheEntry(plugin: BuiltGluePlugin, std_io: std.Io) void {
-    const root = plugin.cache_root orelse return;
-    var store = compile.artifacts.Store.init(std.heap.page_allocator, std_io, root) catch return;
-    defer store.deinit();
-    store.invalidate(plugin.cache_identity.?) catch {};
-}
-
 fn gluePluginOutputHash(executable_identity: [32]u8, stamp: GluePluginStampV1) [32]u8 {
     var hasher = std.crypto.hash.Blake3.init(.{});
     hashTaggedBytes(&hasher, "purpose", "roc-glue-plugin-object-v1");
@@ -923,13 +820,6 @@ fn hashTaggedBytes(hasher: *std.crypto.hash.Blake3, tag: []const u8, bytes: []co
     hasher.update(&len_buf);
     hasher.update(bytes);
     hasher.update(&[_]u8{0});
-}
-
-fn objectExtension() []const u8 {
-    return switch (roc_target.classifyOs(builtin.os.tag)) {
-        .windows => ".obj",
-        .macos, .linux, .freebsd, .openbsd, .netbsd, .other => ".o",
-    };
 }
 
 fn writeHostEvents(stderr: *std.Io.Writer, runtime_env: *const eval_mod.RuntimeHostEnv) GlueError!void {
