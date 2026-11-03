@@ -12591,7 +12591,16 @@ fn runInterpreterTestRoots(
                     .transcript = transcript,
                     .failure_detail = failure_detail,
                     .failure_detail_visibility = .always,
-                    .cacheable = err != error.OutOfMemory and !interpreter.stackOverflowed(),
+                    .cacheable = !interpreter.stackOverflowed() and switch (err) {
+                        error.OutOfMemory => false,
+                        error.Crash,
+                        error.DivisionByZero,
+                        error.ExpectErr,
+                        error.InvalidHostedFunctionSignature,
+                        error.RuntimeError,
+                        error.UnsupportedHostedFunction,
+                        => true,
+                    },
                 });
                 break :root_eval;
             };
