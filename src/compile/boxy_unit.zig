@@ -15,7 +15,6 @@ const object_cache = @import("boxy_object_cache.zig");
 const boxy_interface = @import("boxy_interface.zig");
 const cache_manager_mod = @import("cache_manager.zig");
 const CacheData = @import("cache_module.zig").CacheModule.CacheData;
-const watch_inputs = @import("watch_inputs.zig");
 
 const Allocator = std.mem.Allocator;
 const CacheManager = cache_manager_mod.CacheManager;
@@ -424,7 +423,7 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     defer gpa.free(test_metadata);
     var lowered = try eval.CompileTimeFinalization.lowerBoxyRuntime(gpa, modules, .{ .requests = test_requests, .test_plan_metadata = test_metadata }, unit.config);
     defer lowered.deinit();
-    const module_digest = moduleDigest(unit.artifact);
+    const module_digest = if (unit.test_unit) unit.config.boxy_unit.?.names.of(check.CheckedArtifact.importedView(unit.artifact)) else @as([32]u8, @splat(0));
     const test_modules = try gpa.alloc([32]u8, test_requests.len);
     defer gpa.free(test_modules);
     @memset(test_modules, module_digest);
@@ -526,12 +525,6 @@ pub fn testRootRequests(gpa: Allocator, artifact: *const Artifact) Allocator.Err
     return try roots.toOwnedSlice(gpa);
 }
 
-/// The digest a test unit's tables name `artifact`'s module by: its
-/// package-qualified name's (`watch_inputs.hashBytes`).
-pub fn moduleDigest(artifact: *const Artifact) [32]u8 {
-    return watch_inputs.hashBytes(artifact.moduleEnvConst().qualifiedModuleName());
-}
-
 /// The test-plan metadata of a test unit's roots: each root's slot is its
 /// own position, so the lowering is a function of the unit's sources alone.
 pub fn testPlanMetadata(gpa: Allocator, requests: []const check.CheckedArtifact.RootRequest) Allocator.Error![]lir.CheckedPipeline.RootTestPlanMetadata {
@@ -598,7 +591,7 @@ pub fn expectSiteRecords(gpa: Allocator, lowered: *const lir.CheckedPipeline.Low
     for (sites, records) |site, *record| {
         if (!site.loc.hasLocation()) base.invariant("a test unit's expect site has no source location", .{});
         record.* = .{
-            .module = watch_inputs.hashBytes(lowered.lir_result.store.sourceFileQualifiedName(site.loc.file)),
+            .module = lowered.lir_result.store.sourceFileModuleIdentity(site.loc.file),
             .region_start = site.region.start.offset,
             .region_end = site.region.end.offset,
         };

@@ -32,8 +32,6 @@ pub const Var = enum {
     fresh_type_analysis,
     /// Print every compile-time demand decision.
     ctfe_demand_trace,
-    /// Print what each module's compile-time evaluation reused, verified, and stored.
-    ctfe_reuse_trace,
     /// Check every object compile against one assembled from its artifacts.
     dev_excerpt_roundtrip,
     /// Append one record to the named file per in-process LLVM object compile.
@@ -59,7 +57,6 @@ pub const Var = enum {
             .lambda_solve_stats => "ROC_LAMBDA_SOLVE_STATS",
             .fresh_type_analysis => "ROC_FRESH_TYPE_ANALYSIS",
             .ctfe_demand_trace => "ROC_CTFE_DEMAND_TRACE",
-            .ctfe_reuse_trace => "ROC_CTFE_REUSE_TRACE",
             .dev_excerpt_roundtrip => "ROC_DEV_EXCERPT_ROUNDTRIP",
             .test_llvm_object_compile_count_file => "ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE",
             .test_command_work => "ROC_TEST_COMMAND_WORK",

@@ -28268,7 +28268,6 @@ pub const PlatformPairing = struct {
                 // moves values between versions of a module's own entry,
                 // never into a composition.
                 "compile_time_root_identities",
-                "compile_time_root_portability",
                 // Runtime ownership and preparation state, not checked data.
                 "evaluation_state",
                 "serialized_backing",
@@ -35255,18 +35254,12 @@ pub const CompileTimeRootReadTable = struct {
     pub const Ref = extern struct { module: [32]u8, root: ComptimeRootId };
     pub const Row = extern struct { start: u32 = 0, len: u32 = 0 };
     pub const Input = struct { root: ComptimeRootId, reads: []const Ref };
-    /// A read's placement and producer-authored identity, independent of the
-    /// checked module version and dense root numbering. Builtins and retained
-    /// interface artifacts use their exact key as placement. Published at commit.
-    pub const Identity = extern struct { placement: [32]u8, root: CompileTimeRootIdentity };
-    identities: []const Identity = &.{},
     rows: []const Row = &.{},
     refs: []const Ref = &.{},
 
     pub const Serialized = extern struct {
         rows: SerializedSlice(Row) = .{},
         refs: SerializedSlice(Ref) = .{},
-        identities: SerializedSlice(Identity) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CompileTimeRootReadTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -35315,7 +35308,6 @@ pub const CompileTimeRootReadTable = struct {
     }
 
     pub fn validate(self: CompileTimeRootReadTable, root_count: usize) error{CorruptArtifact}!void {
-        if (self.identities.len != 0 and self.identities.len != self.refs.len) return error.CorruptArtifact;
         if (self.rows.len != 0 and self.rows.len != root_count) return error.CorruptArtifact;
         for (self.rows) |row| {
             if (row.start > self.refs.len or row.len > self.refs.len - row.start) return error.CorruptArtifact;
@@ -35323,7 +35315,6 @@ pub const CompileTimeRootReadTable = struct {
     }
 
     pub fn deinit(self: *CompileTimeRootReadTable, allocator: Allocator) void {
-        allocator.free(self.identities);
         allocator.free(self.rows);
         allocator.free(self.refs);
         self.* = .{};
@@ -35335,15 +35326,6 @@ pub const CompileTimeRootReadTable = struct {
 pub const CompileTimeRootIdentity = value_identity.CompileTimeRootIdentity;
 /// A relocatable test observation site and its current source span.
 pub const TestReportSite = value_identity.TestReportSite;
-
-/// Persisted relocation proof for one named occurrence held by a cached value.
-pub const ReuseNominalIdentity = extern struct {
-    module: [32]u8,
-    ty_module: [32]u8,
-    ty: CheckedTypeId,
-    placement: [32]u8,
-    identity: [32]u8,
-};
 
 /// Every compile-time root's value identity and site, dense by root id, and
 /// the module's value context, computed when the module is published.
@@ -35376,8 +35358,6 @@ pub const CompileTimeRootIdentityTable = struct {
     test_definitions: []const value_identity.DefinitionIdentity = &.{},
     test_report_sites: []const value_identity.TestReportSite = &.{},
     test_declarations: []const value_identity.DeclarationIdentity = &.{},
-    reuse_types: []const value_identity.ReuseTypeIdentity = &.{},
-    reuse_nominals: []const ReuseNominalIdentity = &.{},
     /// The module's value context (`value_identity.ModuleIdentities.context`):
     /// one digest in every published module, none in a table that was never
     /// computed.
@@ -35398,8 +35378,6 @@ pub const CompileTimeRootIdentityTable = struct {
         test_definitions: SerializedSlice(value_identity.DefinitionIdentity) = .{},
         test_report_sites: SerializedSlice(value_identity.TestReportSite) = .{},
         test_declarations: SerializedSlice(value_identity.DeclarationIdentity) = .{},
-        reuse_types: SerializedSlice(value_identity.ReuseTypeIdentity) = .{},
-        reuse_nominals: SerializedSlice(ReuseNominalIdentity) = .{},
         context: SerializedSlice([32]u8) = .{},
         exports: SerializedSlice(value_identity.ExportIdentity) = .{},
         method_requires: SerializedSlice([32]u8) = .{},
@@ -35415,54 +35393,14 @@ pub const CompileTimeRootIdentityTable = struct {
         if (self.test_rows.len != 0 and self.test_rows.len != root_count) return error.CorruptArtifact;
         if (self.test_context.len > 1) return error.CorruptArtifact;
         for (self.test_report_sites) |site| if (site.start > site.end) return error.CorruptArtifact;
-        for (self.reuse_types, 0..) |row, i| {
-            if (i > 0 and @backingInt(self.reuse_types[i - 1].ty) >= @backingInt(row.ty)) return error.CorruptArtifact;
-        }
         for (self.test_declarations, 0..) |declaration, i| {
             if (i > 0 and @backingInt(self.test_declarations[i - 1].statement) >= @backingInt(declaration.statement)) return error.CorruptArtifact;
-        }
-    }
-
-    pub fn validateTypes(self: CompileTimeRootIdentityTable, payloads: []const StoredCheckedTypePayload) error{CorruptArtifact}!void {
-        for (self.reuse_types) |row| {
-            if (@backingInt(row.ty) >= payloads.len) return error.CorruptArtifact;
-            switch (payloads[@backingInt(row.ty)]) {
-                .nominal, .alias => {},
-                .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return error.CorruptArtifact,
-            }
         }
     }
 
     /// The module's value context, when it was computed.
     pub fn valueContext(self: CompileTimeRootIdentityTable) ?[32]u8 {
         return if (self.context.len == 1) self.context[0] else null;
-    }
-
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
-};
-
-/// Whether each completed compile-time root's stored data can move into a
-/// later version of its module (design.md "Compile-Time Value Reuse Across
-/// Edits"), dense by root id: one byte per root, 1 when portable. Recomputed
-/// after each finalization of the module; empty before its first.
-pub const CompileTimeRootPortability = struct {
-    portable: []const u8 = &.{},
-
-    pub const Serialized = extern struct {
-        portable: SerializedSlice(u8) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(CompileTimeRootPortability, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
-
-    pub fn isPortable(self: CompileTimeRootPortability, root: ComptimeRootId) bool {
-        if (self.portable.len == 0) return false;
-        return self.portable[@backingInt(root)] == 1;
-    }
-
-    pub fn validate(self: CompileTimeRootPortability, root_count: usize) error{CorruptArtifact}!void {
-        if (self.portable.len != 0 and self.portable.len != root_count) return error.CorruptArtifact;
-        for (self.portable) |flag| if (flag > 1) return error.CorruptArtifact;
     }
 
     pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
@@ -35518,7 +35456,6 @@ pub const CheckedModuleArtifact = struct {
     compile_time_debug: CompileTimeDebugStore = .{},
     compile_time_root_reads: CompileTimeRootReadTable = .{},
     compile_time_root_identities: CompileTimeRootIdentityTable = .{},
-    compile_time_root_portability: CompileTimeRootPortability = .{},
     /// Process-local publication state; cache entries always contain finalized output.
     evaluation_state: enum { prepared, finalized } = .finalized,
     /// Owns the evaluation columns of a finalized artifact that a compilation
@@ -35758,7 +35695,6 @@ pub const CheckedModuleArtifact = struct {
         compile_time_debug: CompileTimeDebugStore.Serialized,
         compile_time_root_reads: CompileTimeRootReadTable.Serialized,
         compile_time_root_identities: CompileTimeRootIdentityTable.Serialized,
-        compile_time_root_portability: CompileTimeRootPortability.Serialized,
 
         pub const root_contract: collections.serde_validation.RootContract = .{
             .Owner = CheckedModuleArtifact,
@@ -35785,15 +35721,14 @@ pub const CheckedModuleArtifact = struct {
             // plans add one, and state merge plans one more. Promoted local
             // procedure templates and callable contract types add one each,
             // and the single-source-call template list one more. Nested procedure runtime captures add one. The
-            // compile-time root read table adds its rows, refs and read identities, the root
+            // compile-time root read table adds its rows and refs, the root
             // identity table its rows, value context, exports and method and
-            // export requirements, and the portability column one more. Stored
+            // export requirements. Stored
             // function evidence keeps its target and structural payloads in
             // two pools of their own. Template demand vectors add one. Test outcome
             // identities add roots, context, definition summaries, report sites and declaration identities.
             // Literal arguments add the literal requirement pool, the demand pool, and the root lookup table.
-            // Nominal relocation adds checked type fingerprints and committed occurrence identities.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 258);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 254);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -35855,8 +35790,6 @@ pub const CheckedModuleArtifact = struct {
             try observations.validate(roots.roots.len);
             try self.compile_time_root_reads.deserialize(base_addr).validate(roots.roots.len);
             try self.compile_time_root_identities.deserialize(base_addr).validate(roots.roots.len);
-            try self.compile_time_root_identities.deserialize(base_addr).validateTypes(self.checked_types.payloads.deserialize(base_addr));
-            try self.compile_time_root_portability.deserialize(base_addr).validate(roots.roots.len);
         }
 
         pub fn deserialize(
@@ -39538,7 +39471,6 @@ pub fn publishFromTypedModule(
     defer allocator.free(module_identities.definitions);
     defer allocator.free(module_identities.report_sites);
     defer allocator.free(module_identities.declarations);
-    defer allocator.free(module_identities.reuse_types);
     var compile_time_root_identities = CompileTimeRootIdentityTable{
         .rows = module_identities.roots,
         .exports = module_identities.exports,
@@ -39574,7 +39506,6 @@ pub fn publishFromTypedModule(
         .available = inputs.available_artifacts,
         .relations = inputs.relation_artifacts,
     });
-    compile_time_root_identities.reuse_types = test_identities.reuse_types;
     compile_time_root_identities.test_declarations = test_identities.declarations;
     compile_time_root_identities.test_report_sites = test_identities.report_sites;
     compile_time_root_identities.test_rows = test_identities.roots;
@@ -42898,12 +42829,4 @@ test "checked polarity alias publication erases hidden arguments and preserves b
     const loaded_alias = roundtrip.loaded.payload(root).alias;
     try std.testing.expectEqual(@as(usize, 1), loaded_alias.args.len);
     try std.testing.expectEqual(row.ext, roundtrip.loaded.payload(loaded_alias.backing).tag_union.ext);
-}
-
-test "cached nominal fingerprints reject invalid checked type references" {
-    const payloads = [_]StoredCheckedTypePayload{.empty_record};
-    const out_of_range: CompileTimeRootIdentityTable = .{ .reuse_types = &.{.{ .ty = @fromBackingInt(1), .identity = @splat(0) }} };
-    try std.testing.expectError(error.CorruptArtifact, out_of_range.validateTypes(&payloads));
-    const not_named: CompileTimeRootIdentityTable = .{ .reuse_types = &.{.{ .ty = @fromBackingInt(payloads.len - 1), .identity = @splat(0) }} };
-    try std.testing.expectError(error.CorruptArtifact, not_named.validateTypes(&payloads));
 }

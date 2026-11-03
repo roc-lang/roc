@@ -14,7 +14,7 @@ const base = @import("base");
 const Allocator = std.mem.Allocator;
 const Sha256 = base.Sha256;
 
-const magic = "ROC_TEST_OUTCOME_FILE_V1";
+const magic = "ROC_TEST_OUTCOME_FILE_V2";
 
 /// Everything a module's outcome file is a function of besides each test's
 /// own identity. Paths, rendering settings and worker counts are not inputs.
@@ -23,7 +23,7 @@ pub const Inputs = struct {
     /// Imported modules are not part of it: each test's identity covers what it
     /// reads from them, so a dependency edit keeps the file.
     source: [32]u8,
-    /// The module's qualified name.
+    /// The module's semantic name, excluding workspace/package display prefixes.
     module: []const u8,
     /// The platform/app binding the module was checked under.
     relation: ?[32]u8,

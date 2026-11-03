@@ -12000,10 +12000,43 @@ const CliTestSourceModule = struct {
     common: *const base.CommonEnv,
     path: []const u8,
     name: []const u8 = "",
+    /// Content identity; never a checkout path or a package display name.
+    identity: [32]u8,
+    /// Content-derived reporting name. Body edits leave the interface name
+    /// stable; coexisting distinct modules with that name use content names.
+    report_identity: [32]u8,
     /// The module's checked report sites, in both directions.
     reports: CliTestReportMap = .{},
 };
-const CliTestSourceModuleMap = std.AutoHashMapUnmanaged([32]u8, CliTestSourceModule);
+const CliTestSourceModuleMap = struct {
+    // Workspace names select the current reporting occurrence only. They never
+    // enter persisted identities. Content and unit-link identities bind cached
+    // observations to those current occurrences.
+    modules: std.AutoHashMapUnmanaged([32]u8, CliTestSourceModule) = .{},
+    identities: std.AutoHashMapUnmanaged([32]u8, ?[32]u8) = .{},
+
+    fn deinit(self: *CliTestSourceModuleMap, allocator: Allocator) void {
+        self.modules.deinit(allocator);
+        self.identities.deinit(allocator);
+    }
+
+    fn bind(self: *CliTestSourceModuleMap, allocator: Allocator, identity: [32]u8, workspace: [32]u8) Allocator.Error!void {
+        const entry = try self.identities.getOrPut(allocator, identity);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = workspace;
+        } else if (entry.value_ptr.*) |existing| {
+            // Identical modules share code and reporting sites. Their first
+            // occurrence in the current plan owns diagnostics for that code.
+            // Distinct modules sharing a link name must use content names.
+            if (!std.mem.eql(u8, &self.modules.get(existing).?.identity, &self.modules.get(workspace).?.identity)) entry.value_ptr.* = null;
+        }
+    }
+
+    fn byIdentity(self: *const CliTestSourceModuleMap, identity: [32]u8) ?CliTestSourceModule {
+        const workspace = (self.identities.get(identity) orelse return null) orelse return null;
+        return self.modules.get(workspace);
+    }
+};
 
 const CliTestRunSummary = struct {
     passed: u32 = 0,
@@ -12300,7 +12333,7 @@ const cli_test_outcome_scope = "test outcomes";
 fn cliTestOutcomeFileKey(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, strategy: base.SpecializationStrategy, opt: cli_args.OptLevel) [32]u8 {
     const inputs = test_outcome_file.Inputs{
         .source = artifact.source_hash,
-        .module = artifact.moduleEnvConst().qualifiedModuleName(),
+        .module = artifact.moduleEnvConst().module_name,
         .relation = if (artifact.checking_context_identity.platform_app_relation) |relation| relation.bytes else null,
         .compiler = build_options.compiler_compatibility_id,
         .target = @tagName(RocTarget.detectNative()),
@@ -12308,6 +12341,24 @@ fn cliTestOutcomeFileKey(artifact: *const check.CheckedArtifact.CheckedModuleArt
         .opt = @tagName(opt),
     };
     return inputs.key();
+}
+
+test "test outcome file identity ignores checkout and local package display paths" {
+    const allocator = std.testing.allocator;
+    var env = try ModuleEnv.init(allocator, "module []\nexpect True\n");
+    defer env.deinit();
+    env.module_name = "Main";
+    // Only fields consumed by the cache-key API are needed for this test.
+    var artifact: check.CheckedArtifact.CheckedModuleArtifact = undefined;
+    artifact.module_env = .{ .checked_source = &env };
+    artifact.source_hash = compile.watch_inputs.hashBytes(env.getSourceAll());
+    artifact.checking_context_identity.platform_app_relation = null;
+    env.qualified_module_name = "/checkout-one/local-package.Main";
+    const first = cliTestOutcomeFileKey(&artifact, .boxy, .dev);
+    env.qualified_module_name = "/elsewhere/checkout-two/local-package.Main";
+    try std.testing.expectEqualSlices(u8, &first, &cliTestOutcomeFileKey(&artifact, .boxy, .dev));
+    artifact.source_hash = compile.watch_inputs.hashBytes("module []\nexpect False\n");
+    try std.testing.expect(!std.mem.eql(u8, &first, &cliTestOutcomeFileKey(&artifact, .boxy, .dev)));
 }
 
 /// The checked outcome identity of one test root, which keys its entry in
@@ -12338,7 +12389,7 @@ fn admitCliTestOutcomes(
     planned.outcome_file = .{ .key = key, .bytes = bytes, .bytes_allocator = manager.allocator, .entries = entries };
     const file = &planned.outcome_file.?;
     if (file.entries.count() == 0) return;
-    const source = source_modules.get(compile.watch_inputs.hashBytes(planned.module.semantic.env.qualifiedModuleName())) orelse
+    const source = source_modules.modules.get(compile.watch_inputs.hashBytes(planned.module.semantic.env.qualifiedModuleName())) orelse
         base.invariant("test module has no current source", .{});
     for (planned.test_roots, planned.cached_roots) |root, *slot| {
         const body = file.entries.get(cliTestOutcomeIdentity(planned.artifact, root)) orelse continue;
@@ -12410,8 +12461,8 @@ fn encodeCliTestOutcome(
         try appendU64(bytes, allocator, result.inline_passed);
         try appendU64(bytes, allocator, result.inline_failed);
         const source_env = result.source_env orelse artifact.moduleEnvConst();
-        const source_id = compile.watch_inputs.hashBytes(source_env.qualifiedModuleName());
-        const source = source_modules.get(source_id) orelse return false;
+        const source = source_modules.modules.get(compile.watch_inputs.hashBytes(source_env.qualifiedModuleName())) orelse return false;
+        const source_id = source.report_identity;
         // Root-relative spans instantiate at the current occurrence, including
         // duplicate bodies. Other sites resolve through the checked producer's map.
         const relative = source_env == artifact.moduleEnvConst() and
@@ -12534,7 +12585,7 @@ fn decodeCliTestOutcome(allocator: Allocator, data: []const u8, source_modules: 
             },
             0 => blk: {
                 if (data.len - offset < 64) return null;
-                source = source_modules.get(data[offset..][0..32].*) orelse return null;
+                source = source_modules.byIdentity(data[offset..][0..32].*) orelse return null;
                 const site = data[offset + 32 ..][0..32].*;
                 offset += 64;
                 break :blk (source.reports.by_identity.get(site) orelse return null) orelse return null;
@@ -12596,13 +12647,40 @@ fn decodeCliTestOutcome(allocator: Allocator, data: []const u8, source_modules: 
     return owned_results;
 }
 
+test "test source identities rebind across checkouts and disambiguate link names" {
+    const allocator = std.testing.allocator;
+    var common = try base.CommonEnv.init(allocator, "expect True");
+    defer common.deinit(allocator);
+    const identity: [32]u8 = @splat(1);
+    const link: [32]u8 = @splat(2);
+    for ([_][]const u8{ "/checkout-one/Main.roc", "/elsewhere/checkout-two/Main.roc" }) |path| {
+        var sources: CliTestSourceModuleMap = .{};
+        defer sources.deinit(allocator);
+        const workspace = compile.watch_inputs.hashBytes(path);
+        try sources.modules.put(allocator, workspace, .{ .env = null, .common = &common, .path = path, .identity = identity, .report_identity = link });
+        try sources.bind(allocator, identity, workspace);
+        try sources.bind(allocator, link, workspace);
+        try std.testing.expectEqualStrings(path, sources.byIdentity(identity).?.path);
+        try std.testing.expectEqualStrings(path, sources.byIdentity(link).?.path);
+        // A second version can have the same interface but different content.
+        const other_identity: [32]u8 = @splat(3);
+        const other_workspace: [32]u8 = @splat(4);
+        try sources.modules.put(allocator, other_workspace, .{ .env = null, .common = &common, .path = "other/Main.roc", .identity = other_identity, .report_identity = other_identity });
+        try sources.bind(allocator, other_identity, other_workspace);
+        try sources.bind(allocator, link, other_workspace);
+        try std.testing.expect(sources.byIdentity(link) == null);
+        try std.testing.expectEqualStrings(path, sources.byIdentity(identity).?.path);
+        try std.testing.expectEqualStrings("other/Main.roc", sources.byIdentity(other_identity).?.path);
+    }
+}
+
 test "outcome entries bind duplicates and reject incomplete reporting atomically" {
     const allocator = std.testing.allocator;
     var common = try base.CommonEnv.init(allocator, "\n\nexpect True\nexpect True\n");
     defer common.deinit(allocator);
     const source_id = compile.watch_inputs.hashBytes("Main");
     const site_id = compile.watch_inputs.hashBytes("helper observation");
-    var source = CliTestSourceModule{ .env = null, .common = &common, .path = "current/Main.roc" };
+    var source = CliTestSourceModule{ .env = null, .common = &common, .path = "current/Main.roc", .identity = source_id, .report_identity = source_id };
     source.reports = (try CliTestReportMap.init(allocator, &.{
         .{ .identity = site_id, .start = 4, .end = 8 },
         .{ .identity = site_id, .start = 4, .end = 8 },
@@ -12610,7 +12688,8 @@ test "outcome entries bind duplicates and reject incomplete reporting atomically
     defer source.reports.deinit(allocator);
     var sources = CliTestSourceModuleMap{};
     defer sources.deinit(allocator);
-    try sources.put(allocator, source_id, source);
+    try sources.modules.put(allocator, source_id, source);
+    try sources.bind(allocator, source_id, source_id);
     var bytes = std.ArrayList(u8).empty;
     defer bytes.deinit(allocator);
     try appendU32(&bytes, allocator, 2);
@@ -12648,9 +12727,9 @@ test "outcome entries bind duplicates and reject incomplete reporting atomically
     for (0..bytes.items.len) |len| try std.testing.expect(try decodeCliTestOutcome(allocator, bytes.items[0..len], &sources, occurrence) == null);
     // The first result has already been decoded when the second reference
     // fails; no partially owned result or transcript escapes the decoder.
-    sources.getPtr(source_id).?.reports.by_identity.getPtr(site_id).?.* = null;
+    sources.modules.getPtr(source_id).?.reports.by_identity.getPtr(site_id).?.* = null;
     try std.testing.expect(try decodeCliTestOutcome(allocator, bytes.items, &sources, occurrence) == null);
-    _ = sources.remove(source_id);
+    _ = sources.modules.remove(source_id);
     try std.testing.expect(try decodeCliTestOutcome(allocator, bytes.items, &sources, occurrence) == null);
     var ambiguous = (try CliTestReportMap.init(allocator, &.{
         .{ .identity = site_id, .start = 4, .end = 8 },
@@ -13941,7 +14020,7 @@ const LirExpectSites = struct {
     fn module(self: LirExpectSites, index: u32) [32]u8 {
         const site = self.sites[index];
         if (!site.loc.hasLocation()) base.invariant("test expect site has no source location", .{});
-        return compile.watch_inputs.hashBytes(self.store.sourceFileQualifiedName(site.loc.file));
+        return self.store.sourceFileModuleIdentity(site.loc.file);
     }
 
     fn region(self: LirExpectSites, index: u32) base.Region {
@@ -13998,7 +14077,7 @@ fn appendObservedInlineExpectResults(
     for (observed.items, 0..) |site_index, observed_index| {
         const count = counts[site_index];
         const result: CliTestResult = if (count.failed == 0) .passed else .failed;
-        const source_module = source_modules.get(sites.module(site_index)) orelse
+        const source_module = source_modules.byIdentity(sites.module(site_index)) orelse
             base.invariant("test expect source module was absent from the checked module plan", .{});
         if (source_module.env == null) base.invariant("test expect source module {s} has no module environment", .{source_module.name});
         try results.append(ctx.gpa, .{
@@ -14938,7 +15017,7 @@ fn unitTestRootImage(
     for (paired) |artifact| {
         const roots = try compile.boxy_unit.testRootRequests(ctx.gpa, artifact);
         defer ctx.gpa.free(roots);
-        const digest = compile.boxy_unit.moduleDigest(artifact);
+        const digest = program.tables.digests.nameOf(artifact.key.bytes);
         for (roots, 0..) |root, index| {
             try requests.append(ctx.gpa, root);
             try source_modules.append(ctx.gpa, artifact.key.digest());
@@ -15071,7 +15150,7 @@ fn runUnitImageTestPlan(
     for (test_plan.modules, 0..) |*planned, planned_index| {
         // Only roots without a reused outcome run (Test outcome files).
         if (planned.uncachedCount() == 0) continue;
-        const module = compile.boxy_unit.moduleDigest(planned.artifact);
+        const module = program.tables.digests.nameOf(planned.artifact.key.bytes);
         const roots = try ctx.gpa.alloc(eval.Inspected.UnitImageBoolRoot, planned.uncachedCount());
         errdefer ctx.gpa.free(roots);
         var cursor: usize = 0;
@@ -16330,20 +16409,34 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
     defer ctx.gpa.free(modules);
     var source_modules = CliTestSourceModuleMap{};
     defer {
-        var sources = source_modules.valueIterator();
+        var sources = source_modules.modules.valueIterator();
         while (sources.next()) |source| source.reports.deinit(ctx.gpa);
         source_modules.deinit(ctx.gpa);
     }
     for (modules) |module| {
+        // Failed checking produces diagnostics, but no executable report sites.
+        const artifact = module.semantic.checked_artifact orelse continue;
         const qualified_name = module.semantic.env.qualifiedModuleName();
-        const entry = try source_modules.getOrPut(ctx.gpa, compile.watch_inputs.hashBytes(qualified_name));
+        const workspace = compile.watch_inputs.hashBytes(qualified_name);
+        const entry = try source_modules.modules.getOrPut(ctx.gpa, workspace);
         if (entry.found_existing) {
             base.invariant("compiled module plan contains duplicate source module {s}", .{qualified_name});
         }
-        entry.value_ptr.* = .{ .env = module.semantic.env, .common = &module.semantic.env.common, .path = module.path, .name = qualified_name };
-        const sites = if (module.semantic.checked_artifact) |artifact| artifact.compile_time_root_identities.test_report_sites else &.{};
+        const identity = artifact.module_identity.stable_hash;
+        const report_identity = lir.CheckedPipeline.BoxyModuleNames.stableName(check.CheckedArtifact.importedView(artifact));
+        entry.value_ptr.* = .{ .env = module.semantic.env, .common = &module.semantic.env.common, .path = module.path, .name = qualified_name, .identity = identity, .report_identity = report_identity };
+        try source_modules.bind(ctx.gpa, identity, workspace);
+        try source_modules.bind(ctx.gpa, report_identity, workspace);
+        const sites = artifact.compile_time_root_identities.test_report_sites;
         entry.value_ptr.reports = (try CliTestReportMap.init(ctx.gpa, sites, module.semantic.env.getSourceAll().len)) orelse
             base.invariant("checked producer published invalid report sites", .{});
+    }
+
+    // As with unit link names, distinct modules sharing an interface name
+    // are disambiguated by content. This decision precedes all cache access.
+    var reporting_sources = source_modules.modules.valueIterator();
+    while (reporting_sources.next()) |source| {
+        if (source_modules.identities.get(source.report_identity).? == null) source.report_identity = source.identity;
     }
 
     const report_config = testReportingConfig(ctx);

@@ -21,7 +21,7 @@ const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 11;
+pub const format_version: u32 = 12;
 
 const magic = "RBXO";
 
@@ -125,7 +125,7 @@ pub const ExportRecord = struct {
 
 /// One inline `expect` a test unit counts, at the unit-local site id that
 /// is its index in `Entry.expect_sites`. The module is named by its
-/// package-qualified name's digest (`completed_test.hash`), never a path.
+/// content-derived lowering identity, never a workspace name or path.
 pub const ExpectSiteRecord = struct {
     module: [32]u8,
     region_start: u32,
@@ -133,7 +133,7 @@ pub const ExpectSiteRecord = struct {
 };
 
 /// One top-level `expect` a test unit exports a wrapper for: the module's
-/// package-qualified name's digest, the root's index among the module's
+/// content-derived link identity, the root's index among the module's
 /// test roots, and the image symbol the wrapper is exported under.
 pub const TestRootRecord = struct {
     module: [32]u8,
@@ -163,10 +163,9 @@ pub const Entry = struct {
     /// Where the unit image's code came from (`CodeLocations`, over offsets
     /// from the start of the image's text), which compile-time evaluation
     /// reports a failure in the loaded image with; empty without an image.
-    /// It stays beside the image rather than in it: it names modules by
-    /// their package-qualified names, which for a local package include the
-    /// package's path, and the image's bytes must be a function of the code
-    /// alone.
+    /// It stays beside the image so image placement depends only on code.
+    /// Module names are semantic; module identities bind locations to the
+    /// current compilation's source environments, independent of checkout.
     code_locations: []const u8 = &.{},
     /// The module's unit image (`UnitImage`), for a target a fast dev link
     /// serves; empty for any other target.
