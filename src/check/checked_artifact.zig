@@ -30142,6 +30142,17 @@ const TypeVarMentionFlags = packed struct(u8) {
     fn merge(left: TypeVarMentionFlags, right: TypeVarMentionFlags) TypeVarMentionFlags {
         return @bitCast(@as(u8, @bitCast(left)) | @as(u8, @bitCast(right)));
     }
+
+    /// The flags of a path that reaches a nominal's argument along `self` and
+    /// then, inside the nominal's backing, reaches the argument's formal
+    /// along `formal`.
+    fn through(self: TypeVarMentionFlags, formal: TypeVarMentionFlags) TypeVarMentionFlags {
+        return .{
+            .under_function = self.under_function or formal.under_function,
+            .outside_container = self.outside_container and formal.outside_container,
+            .decides_representation = self.decides_representation or formal.decides_representation,
+        };
+    }
 };
 
 /// One type variable a checked type mentions, and how.
@@ -30161,6 +30172,7 @@ const TypeVarMentions = struct {
     pending: std.ArrayList(Step) = .empty,
     visited: std.AutoHashMapUnmanaged(Step, void) = .empty,
     found: collections.DenseMap(CheckedTypeId, TypeVarMentionFlags),
+    reach: NominalFormalReach,
 
     const Step = struct {
         ty: CheckedTypeId,
@@ -30168,6 +30180,7 @@ const TypeVarMentions = struct {
     };
 
     fn deinit(self: *TypeVarMentions) void {
+        self.reach.deinit();
         self.memo.deinit();
         self.pool.deinit(self.allocator);
         self.pending.deinit(self.allocator);
@@ -30212,13 +30225,22 @@ const TypeVarMentions = struct {
             },
             .tuple => |elems| for (elems) |elem| try sink.push(elem, step.flags),
             .nominal => |nominal| {
-                var arg_flags = step.flags;
-                if (nominal.builtin) |builtin_nominal| switch (builtin_nominal) {
-                    .list, .box => arg_flags.outside_container = false,
-                    .fields, .field, .parse_tag_union_spec, .iter, .stream => arg_flags.decides_representation = true,
-                    .bool, .try_, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
-                };
-                for (nominal.args) |arg| try sink.push(arg, arg_flags);
+                if (try sink.nominalReach(nominal)) |reach| {
+                    // A declared backing reaches each formal as its paths
+                    // do: an argument stands where the backing places it.
+                    for (nominal.args, reach) |arg, formal| {
+                        try sink.push(arg, step.flags.through(formal.value orelse .{}));
+                        if (formal.row) |row| try expandRowExtension(checked_types, arg, step.flags.through(row), sink);
+                    }
+                } else {
+                    var arg_flags = step.flags;
+                    if (nominal.builtin) |builtin_nominal| switch (builtin_nominal) {
+                        .list, .box => arg_flags.outside_container = false,
+                        .fields, .field, .parse_tag_union_spec, .iter, .stream => arg_flags.decides_representation = true,
+                        .bool, .try_, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
+                    };
+                    for (nominal.args) |arg| try sink.push(arg, arg_flags);
+                }
                 for (nominal.padding_field_types) |padding| try sink.push(padding, step.flags);
             },
             .function => |function| {
@@ -30259,6 +30281,191 @@ const TypeVarMentions = struct {
         const entry = try self.found.getOrPut(var_ty);
         entry.value_ptr.* = if (entry.found_existing) entry.value_ptr.merge(flags) else flags;
     }
+
+    fn nominalReach(self: *TypeVarMentions, nominal: CheckedNominalType) Allocator.Error!?[]const FormalReach {
+        return self.reach.get(nominal);
+    }
+};
+
+/// How a nominal declaration's backing reaches one of its formal parameters:
+/// the merged flags of the paths that reach it other than as a row
+/// extension, and of the paths that reach it as one. Null when no such path
+/// exists.
+const FormalReach = struct {
+    value: ?TypeVarMentionFlags = null,
+    row: ?TypeVarMentionFlags = null,
+};
+
+/// How each user nominal declaration's backing reaches its formals, computed
+/// once per declaration on first use and indexed by declaration. A builtin
+/// nominal's arguments follow `TypeVarMentions.expandStep`'s builtin table
+/// instead, and an opaque nominal without a backing passes its arguments
+/// through unchanged. The declarations whose backings name one another form a
+/// group whose reaches are a least fixed point: every flag only rises, so
+/// re-walking the group until nothing changes converges.
+const NominalFormalReach = struct {
+    allocator: Allocator,
+    checked_types: *const CheckedTypeStore,
+    /// Each declaration's position in `checked_types.nominal_declarations`,
+    /// by key, for the representations that do not name the local position.
+    by_key: std.AutoHashMapUnmanaged(canonical.NominalTypeKey, u32) = .empty,
+    indexed: bool = false,
+    entries: std.ArrayList(Entry) = .empty,
+    pool: std.ArrayList(FormalReach) = .empty,
+    group: std.ArrayList(u32) = .empty,
+    pending: std.ArrayList(TypeVarMentions.Step) = .empty,
+    visited: std.AutoHashMapUnmanaged(TypeVarMentions.Step, void) = .empty,
+
+    const Entry = struct {
+        state: enum { unknown, computing, done } = .unknown,
+        start: u32 = 0,
+        len: u32 = 0,
+    };
+
+    fn deinit(self: *NominalFormalReach) void {
+        self.by_key.deinit(self.allocator);
+        self.entries.deinit(self.allocator);
+        self.pool.deinit(self.allocator);
+        self.group.deinit(self.allocator);
+        self.pending.deinit(self.allocator);
+        self.visited.deinit(self.allocator);
+    }
+
+    /// The reach of each formal of `nominal`'s declaration, or null when its
+    /// arguments are not read through a declared backing.
+    fn get(self: *NominalFormalReach, nominal: CheckedNominalType) Allocator.Error!?[]const FormalReach {
+        const index = (try self.declarationIndex(nominal)) orelse return null;
+        if (self.entries.items[index].state != .done) try self.computeGroup(index);
+        return self.slice(index);
+    }
+
+    fn slice(self: *const NominalFormalReach, index: u32) []const FormalReach {
+        const entry = self.entries.items[index];
+        return self.pool.items[entry.start .. entry.start + entry.len];
+    }
+
+    fn declarationIndex(self: *NominalFormalReach, nominal: CheckedNominalType) Allocator.Error!?u32 {
+        if (nominal.builtin != null) return null;
+        switch (nominal.representation) {
+            .builtin, .opaque_without_backing => return null,
+            .local_declaration => |id| {
+                try self.ensureEntries();
+                return @backingInt(id);
+            },
+            .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability => {},
+        }
+        try self.ensureEntries();
+        if (!self.indexed) {
+            for (self.checked_types.nominal_declarations.items, 0..) |declaration, index| {
+                try self.by_key.put(self.allocator, declaration.nominal, @intCast(index));
+            }
+            self.indexed = true;
+        }
+        return self.by_key.get(checkedNominalTypeKey(nominal)) orelse
+            checkedArtifactInvariant("a nominal payload's declaration was missing from its checked module", .{});
+    }
+
+    fn ensureEntries(self: *NominalFormalReach) Allocator.Error!void {
+        const count = self.checked_types.nominal_declarations.items.len;
+        if (self.entries.items.len < count) try self.entries.appendNTimes(self.allocator, .{}, count - self.entries.items.len);
+    }
+
+    /// Compute the reaches of `root`'s declaration and of every declaration
+    /// its backing reaches whose reaches are not yet known.
+    fn computeGroup(self: *NominalFormalReach, root: u32) Allocator.Error!void {
+        self.group.clearRetainingCapacity();
+        try self.join(root);
+        var collected: usize = 0;
+        while (collected < self.group.items.len) : (collected += 1) {
+            const declaration = self.checked_types.nominal_declarations.items[self.group.items[collected]];
+            self.pending.clearRetainingCapacity();
+            self.visited.clearRetainingCapacity();
+            try self.walk(declaration.backing, .{ .outside_container = true });
+            const sink: CollectSink = .{ .reach = self };
+            while (self.pending.pop()) |step| try TypeVarMentions.expandStep(self.checked_types, step, sink);
+        }
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (self.group.items) |index| {
+                const declaration = self.checked_types.nominal_declarations.items[index];
+                self.pending.clearRetainingCapacity();
+                self.visited.clearRetainingCapacity();
+                try self.walk(declaration.backing, .{ .outside_container = true });
+                var sink: FormalSink = .{ .reach = self, .formals = declaration.formalArgs(self.checked_types), .index = index };
+                while (self.pending.pop()) |step| try TypeVarMentions.expandStep(self.checked_types, step, &sink);
+                changed = changed or sink.changed;
+            }
+        }
+        for (self.group.items) |index| self.entries.items[index].state = .done;
+    }
+
+    fn join(self: *NominalFormalReach, index: u32) Allocator.Error!void {
+        const entry = &self.entries.items[index];
+        if (entry.state != .unknown) return;
+        const formals = self.checked_types.nominal_declarations.items[index].formalArgs(self.checked_types);
+        entry.* = .{ .state = .computing, .start = @intCast(self.pool.items.len), .len = @intCast(formals.len) };
+        try self.pool.appendNTimes(self.allocator, .{}, formals.len);
+        try self.group.append(self.allocator, index);
+    }
+
+    fn walk(self: *NominalFormalReach, ty: CheckedTypeId, flags: TypeVarMentionFlags) Allocator.Error!void {
+        const step: TypeVarMentions.Step = .{ .ty = ty, .flags = flags };
+        const entry = try self.visited.getOrPut(self.allocator, step);
+        if (entry.found_existing) return;
+        try self.pending.append(self.allocator, step);
+    }
+
+    /// Finds the declarations a backing names, so the group holds them.
+    const CollectSink = struct {
+        reach: *NominalFormalReach,
+
+        pub fn push(sink: CollectSink, ty: CheckedTypeId, _: TypeVarMentionFlags) Allocator.Error!void {
+            try sink.reach.walk(ty, .{});
+        }
+
+        pub fn noteMention(_: CollectSink, _: CheckedTypeId, _: TypeVarMentionFlags) Allocator.Error!void {}
+
+        pub fn nominalReach(sink: CollectSink, nominal: CheckedNominalType) Allocator.Error!?[]const FormalReach {
+            if (try sink.reach.declarationIndex(nominal)) |index| try sink.reach.join(index);
+            return null;
+        }
+    };
+
+    /// Records how one declaration's backing reaches its formals, reading the
+    /// group's current reaches for the declarations the backing names.
+    const FormalSink = struct {
+        reach: *NominalFormalReach,
+        formals: []const CheckedTypeId,
+        index: u32,
+        changed: bool = false,
+
+        pub fn push(sink: *FormalSink, ty: CheckedTypeId, flags: TypeVarMentionFlags) Allocator.Error!void {
+            try sink.reach.walk(ty, flags);
+        }
+
+        pub fn noteMention(sink: *FormalSink, var_ty: CheckedTypeId, flags: TypeVarMentionFlags) Allocator.Error!void {
+            const position = std.mem.indexOfScalar(CheckedTypeId, sink.formals, var_ty) orelse return;
+            const entry = sink.reach.entries.items[sink.index];
+            const formal = &sink.reach.pool.items[entry.start + position];
+            var path = flags;
+            path.row_extension = false;
+            const slot = if (flags.row_extension) &formal.row else &formal.value;
+            const merged = if (slot.*) |existing| existing.merge(path) else path;
+            if (slot.* == null or @as(u8, @bitCast(slot.*.?)) != @as(u8, @bitCast(merged))) {
+                slot.* = merged;
+                sink.changed = true;
+            }
+        }
+
+        pub fn nominalReach(sink: *FormalSink, nominal: CheckedNominalType) Allocator.Error!?[]const FormalReach {
+            const index = (try sink.reach.declarationIndex(nominal)) orelse return null;
+            if (sink.reach.entries.items[index].state == .unknown) {
+                checkedArtifactInvariant("a nominal backing named a declaration outside its reach group", .{});
+            }
+            return sink.reach.slice(index);
+        }
+    };
 };
 
 /// Computes every local procedure template's demand vector: for each
@@ -30333,6 +30540,10 @@ const TemplateDemandPass = struct {
         pub fn noteMention(sink: RaiseSink, var_ty: CheckedTypeId, flags: TypeVarMentionFlags) Allocator.Error!void {
             const slot = sink.pass.slotOf(var_ty) orelse return;
             sink.pass.raiseSlot(slot, if (exactMention(flags)) .full else sink.demand);
+        }
+
+        pub fn nominalReach(sink: RaiseSink, nominal: CheckedNominalType) Allocator.Error!?[]const FormalReach {
+            return sink.pass.mentions.reach.get(nominal);
         }
     };
 
@@ -39508,6 +39719,7 @@ pub fn publishFromTypedModule(
                 .checked_types = checked_types,
                 .memo = collections.DenseMap(CheckedTypeId, artifact_serialize.Span).init(allocator),
                 .found = collections.DenseMap(CheckedTypeId, TypeVarMentionFlags).init(allocator),
+                .reach = .{ .allocator = allocator, .checked_types = checked_types },
             },
         };
         defer demand_pass.deinit();

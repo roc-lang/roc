@@ -16931,7 +16931,15 @@ through any number of templates converges. A direct operand of a call or a
 low-level operation that reads a local materializes nothing; every other
 expression or pattern whose type mentions a variable demands its layout. A
 variable a parameter holds by value rather than as a `List` item or `Box` payload
-demands at least its layout, because it sizes the parameter. A body that is
+demands at least its layout, because it sizes the parameter. A user nominal
+type's argument stands where the declaration's backing places the matching
+formal: an argument the backing extends a row with is a row extension, one the
+backing holds only as a `List` item or `Box` payload (or not at all) is held in
+a container, and one under a function or a representation-deciding builtin is
+an exact mention. Each declaration's reach of its formals is computed once per
+module, the first time a type names it, as the least fixed point over the
+declarations whose backings name one another. Builtin nominals keep their
+fixed argument rules. A body that is
 not a checked Roc body (an intrinsic, an entry wrapper, a hosted procedure, or
 an unimplemented declaration, whose crash body still returns at its declared
 type) demands all of every variable.
