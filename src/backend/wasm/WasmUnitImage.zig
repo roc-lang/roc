@@ -559,11 +559,15 @@ pub const Input = struct {
     imports: []const InputImport,
 };
 
+/// A function signature: parameter and result value types, as the type
+/// section encodes them.
 pub const InputType = struct {
     params: []const u8,
     results: []const u8,
 };
 
+/// One padded field in a body or a segment that the composer fills: what
+/// it names and how it encodes it.
 pub const InputSite = struct {
     offset: u32,
     kind: SiteKind,
@@ -572,12 +576,16 @@ pub const InputSite = struct {
     addend: i32,
 };
 
+/// A call a function makes and the stack depth it starts its callee at,
+/// for the stack-room analysis of platforms with stack checks.
 pub const InputCall = struct {
     target_kind: TargetKind,
     target: u32,
     depth: u32,
 };
 
+/// One function of the unit: its body as the code section stores it, its
+/// signature, its export name, its sites, and its stack frame facts.
 pub const InputFunction = struct {
     body: []const u8,
     type: u32,
@@ -588,6 +596,8 @@ pub const InputFunction = struct {
     checked: bool = false,
 };
 
+/// One data segment of the unit: its bytes or its zero-fill size, its
+/// alignment, and the sites in it.
 pub const InputSegment = struct {
     /// Null for a zero-fill segment of `size` bytes.
     bytes: ?[]const u8,
@@ -596,6 +606,7 @@ pub const InputSegment = struct {
     sites: []const InputSite,
 };
 
+/// A data symbol the unit exports: a range of one of its segments.
 pub const InputDataExport = struct {
     name: []const u8,
     segment: u32,
@@ -603,6 +614,8 @@ pub const InputDataExport = struct {
     size: u32,
 };
 
+/// A symbol the unit imports by module and name: a function with its
+/// signature, a global with its type, a table, or memory.
 pub const InputImport = struct {
     module: []const u8,
     name: []const u8,

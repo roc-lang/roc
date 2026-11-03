@@ -38,6 +38,7 @@ pub const Entry = struct {
     ret_layout: layout.Idx,
 };
 
+/// What a unit's compilation needs beyond its lowered program.
 pub const Options = struct {
     cpu_level: roc_target.CpuLevel,
     /// Whether the platform reserves low memory, so the unit's code checks
@@ -46,6 +47,7 @@ pub const Options = struct {
     executor: ?tasks.Executor = null,
 };
 
+/// Why a unit could not be compiled to an image.
 pub const Error = WasmCodeGen.HostedSymbolError || WasmModule.MergeError || WasmModule.StaticDataError || WasmUnitImage.EncodeError || StackRoom.Error;
 
 /// Compile the unit whose LIR is `store` and encode its image. The caller
