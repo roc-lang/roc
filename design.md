@@ -666,8 +666,9 @@ coordinator builds it once, before any body is lowered, and workers borrow it.
 
 ### Cache storage
 
-Checked modules, canonicalized modules, compile-time values and their checking
-metadata, and Boxy objects use direct content-addressed files. Each cache
+Checked modules (with their evaluation output), platform/app pairings,
+canonicalized modules, inference results, and Boxy objects use direct
+content-addressed files. Each cache
 identity includes compiler compatibility, family, logical group and key.
 Writers stage complete files beside their destination and publish by atomic
 rename. Readers own an open file or mapping; no writer truncates a published
@@ -679,7 +680,7 @@ unless `--keep-temp` was requested.
 
 Specialized compilation does not persist post-check IR, native procedure packs,
 linked objects, executables, glue plugins, or test outcomes. Every invocation
-specializes and emits its requested program from the current checked artifacts.
+specializes and emits its requested program from the current checked modules.
 In-memory sharing within a compilation remains independent of disk caching.
 
 ### Native executable publication
@@ -2230,11 +2231,14 @@ exactly as if it had lowered the root's body. `dbg` observations replay for
 every root, whether this compilation evaluated it or restored its value, so a build reports the same observations with or without a
 cache and whatever an earlier command evaluated.
 
-A checked module cache entry records every requested root it did not evaluate
+The evaluation output is the checked module's own data: compile-time
+evaluation writes it and nothing else does, and it is stored in the module's
+content-hash entry beside the `ModuleEnv` and the inference output. A checked
+module cache entry records every requested root it did not evaluate
 with the explicit `unevaluated` payload; its constant template keeps its
 `eval_template` state and the constant store holds nothing for it. When a
-compilation loads a finalized checked module with unevaluated requests, it
-reopens that module before evaluation: the evaluation columns move into
+compilation loads a checked module whose evaluation output has unevaluated
+requests, evaluation resumes on that module: its evaluation output moves into
 storage the module owns, every unevaluated root returns to `pending`, and the
 module joins finalization with the compilation's other modules. Finalization
 requests only the pending roots of the modules it finalizes, so the reopened
@@ -2261,14 +2265,17 @@ transaction-local ids and ids from another workspace never enter that map.
 This shares immutable type descriptions, not Lambda Solved's mutable row
 occurrences, which continue to follow the Row Joins contract.
 
-A stored named type carries a checked occurrence: `named_type.ty`, an id in
-the type store of `named_type.ty_module`, the module whose checked types the
-occurrence is in, which is explicit and need not be `named_type.module`.
-Static data planning re-enters `ty_module`'s store at `ty`, and the occurrence
-takes part in a Monotype type's full and specialization digests. Monotype
-lowering names only occurrences inside the storing module's import closure
-("Occurrence scope"), so a module's cache entry names only modules its own
-key covers, and a stored type is restored with the occurrences it holds.
+A stored named type carries its canonical type key for identity and
+comparison, and a locator for resolution: `named_type.ty`, a type id of
+`named_type.ty_module`, the module whose checked types the occurrence is in,
+which is explicit and need not be `named_type.module` ("Canonical Type
+Keys"). Static data planning resolves the locator, re-entering
+`ty_module`'s types at `ty`, and the occurrence takes part in a Monotype
+type's full and specialization digests. Monotype lowering names only
+occurrences inside the storing module's import closure ("Occurrence scope"),
+so a module's cache entry names only modules its own key covers, the locator
+is valid for exactly as long as the entry, and a stored type is restored with
+the occurrences it holds.
 
 ## Builtins Build Their Own Tag Unions
 
@@ -4101,20 +4108,31 @@ the env a checked-cache hit installs.
 
 ## Cache Boundary
 
-Reusable modules and exact platform/app compositions are distinct checked cache
-entries. A composition entry is keyed by both immutable module identities and
-the compiler's checked and composition format versions. It contains only the
-pairing's changed metadata columns and completed app-dependent evaluation
-results, never source environments or a live checker continuation.
-Type-bearing body columns carry the app substitution; unchanged body columns
-remain borrowed.
-Unchanged columns borrow the exact platform identified by the key. Only a
-completed composition without new checking or evaluation diagnostics may be
+Every cache entry is keyed by the content hash of its inputs: the module's
+source, the keys of its imports, and its checking context. A miss recomputes
+the entry. There is no previous entry to consult, no value identity, no
+fingerprint of a definition, no reuse of evaluated values across edits, no
+literal-values file and no discovery manifest.
+
+A checked entry holds exactly the live data of the checked module ("The Live
+Checked Module"): the serialized `ModuleEnv` including the sealed solver
+store, the inference output, and the evaluation output. Derived facts (canonical
+type keys, evidence, synthesized templates, demand vectors, layouts) are never
+cached; after a hit, each is recomputed on its first demand through its slot
+("On-Demand Analyses And Write-Once Slots"). An entry is written only when a
+cache is enabled; a `--no-cache` build serializes nothing.
+
+A platform/app pairing entry is keyed by the content hashes of the platform's
+and the app's checked entries. It holds only the pairing's evaluation output:
+the completed app-dependent evaluation results and their recorded debug
+observations. It never holds bodies, types, templates, source environments or a
+live checker continuation, because a pairing rewrites none of those. Only a
+completed pairing without new checking or evaluation diagnostics may be
 cached; already-replayed earlier-stage reports do not prevent caching. A hit
 consumes its stored outcomes and replays its recorded debug observations without
 evaluation.
 The canonicalized module cache is a separate, non-checked boundary; the rules
-below bind the checked module and composition caches.
+below bind the checked module and pairing caches.
 Checked module cache entries are trusted compiler-produced cache entries, not
 adversarial inputs. Cache reads validate only the cache header,
 entry-version hash, key, serialized layout, and ordinary binary decoding. They must
@@ -4128,16 +4146,14 @@ The coordinator captures each module's report count immediately before checked
 cache lookup, after parsing and canonicalization reports have been appended.
 Checking (including the deferred import drain) and evaluation only append to
 that same report list. `BuildEnv` moves those reports into its output sink only
-after finalization or when aborting. Solver-store staging and the final cache write
-share the condition that its count has not changed. Staging serializes the `ModuleEnv`
-while its solver store is live, then releases the store before evaluation;
-the final cache write additionally requires completed evaluation and, for a reopened
-cache entry, newly completed roots. A later report makes a staged part ineligible
-and it is discarded. Failed staging is an ordinary cache-write failure: the
-compilation continues and releases solver types, but cannot write a checked
-entry without the staged environment. The empty replacement store is never
-serialized as a checked result. Pairings retain their separate ownership and
-cache-write rules, and abandoned staged parts are discarded during cleanup.
+after finalization or when aborting. The cache write requires that the count
+has not changed, that evaluation has completed and, for a reopened cache
+entry, that this compilation completed roots the entry lacked. The write
+serializes the live `ModuleEnv` with its sealed solver store, which stays
+alive for every consumer of the module either way; serializing never releases
+or replaces it. A failed write is an ordinary cache-write failure: the
+compilation continues with the live module. Pairings follow their own
+cache-write rule above.
 
 `ModuleEnv` contains `CommonEnv.strings`, a `base.StringLiteral.Store`. That
 store is part of the checked module cache data. A cache hit materializes it as a
@@ -4195,9 +4211,9 @@ bytes.
 ### Checking dependencies and inference reuse
 
 A checking dependency is distinct from a checked module's implementation
-identity. The latter continues to include the complete source and imported
-implementations. It names evaluated constants, procedure templates, lowering
-inputs and test results. Equality of checking dependencies authorizes reuse of
+identity. The latter includes the complete source and imported
+implementations. It names evaluated constants, procedure templates and lowering
+inputs. Equality of checking dependencies authorizes reuse of
 inference only; it never authorizes reuse of those implementation results.
 
 Checking commits its import-facing inputs while the solved source store is
@@ -4297,8 +4313,9 @@ interpret a foreign import index in their own import environment.
 ### Cache Admission Versioning
 
 A serialization root is a `Serialized` type whose bytes are admitted from outside
-the running compiler: `ModuleEnv.Serialized`, the checked module's `Serialized`
-layout, and `PlatformPairing.Serialized`. Each root declares a `root_contract`
+the running compiler: `ModuleEnv.Serialized` (including the sealed solver
+store), the inference output's and the evaluation output's `Serialized`
+layouts, and `PlatformPairing.Serialized`. Each root declares a `root_contract`
 (`collections.serde_validation.RootContract`) naming its owner type and every
 owner field it deliberately does not persist, every serialized field with no
 owner field, and every rename. A root's layout fingerprint
@@ -4313,14 +4330,15 @@ cache entry kind (checked module, platform pairing, canonicalized module) has on
 entry-version hash folding the kind's domain tag, its envelope and record format
 versions, and the fingerprint of every root its bodies hold. Entry headers carry
 that hash, and admission compares it and nothing else, so a fingerprint not folded
-there guards no entry. The builtin blob's trailer is the single fingerprint of
-the checked module's `Serialized` layout, compared directly.
+there guards no entry. The builtin blob's trailer is the single fingerprint
+folding the `Serialized` layouts of the checked module's parts, compared
+directly.
 
 ### Fully Defined Persisted Bytes
 
 This section governs the raw-byte boundaries: the paths that persist a value by
 copying its in-memory representation rather than encoding it field by field, which
-is how the checked module cache, the baked builtin `CheckedModule` blob, and the
+is how the checked module cache, the baked builtin checked module blob, and the
 `SafeList` and `SafeMultiList` tables they hold are written, and how a persisted
 LirImage copies its tables into an executable binary. Other
 serialized forms in the compiler encode explicitly and are not bound by the rules
@@ -4363,10 +4381,11 @@ nothing identifies makes the whole type a compile error, exactly as a fixed layo
 would be. A checked store may keep an ergonomic in-memory shape, but not an
 unrepresentable one.
 
-Checked-module cache writes stream the header and the two relocatable
-bodies to a private staging file, then atomically rename it. They never gather
+Checked-module cache writes stream the header and the relocatable bodies (the
+`ModuleEnv` with its sealed store, the inference output and the evaluation
+output) to a private staging file, then atomically rename it. They never gather
 another full-entry heap buffer. Each body starts at a 16-byte-aligned entry
-offset, so a cache hit relocates both bodies in place inside the entry's
+offset, so a cache hit relocates every body in place inside the entry's
 private mapping, which the installed module's environment storage owns. A failed write or rename removes the staging file
 and records a cache-write failure; partial data never becomes a cache entry.
 
@@ -4406,10 +4425,10 @@ hashes, resolved import ids, platform requirement context, and explicit root
 requests. A reusable platform module has no app relation in this identity.
 Generated code has a separate identity that includes the exact platform/app
 relation; specialization keys use that identity while
-local checked references retain their immutable module owner. Any additional checked tables
-stored in the checked module cache must be deterministic output of those
-checked inputs and the checked modules they name. Such tables are serialized
-data, not new cache-id inputs. A cache miss recomputes the entry from the
+local checked references retain their immutable module owner. The checked
+module cache stores only the live data of the checked module, every part of
+which is a deterministic output of those inputs; nothing in an entry is a
+cache-id input of its own. A cache miss recomputes the entry from the
 module's checked inputs; no other entry is consulted.
 
 `module_identity` includes the module's name. Canonicalization output is not
@@ -4436,21 +4455,10 @@ imports must produce the same reachable `.lss` specializations or `.boxy`
 descriptors, callable representations, layout decisions, ARC statements, and
 backend behavior for the same lowering strategy.
 
-Checked modules store the target-independent lowering visibility selected by
-checking. This includes the complete checked module id set needed by later
-post-check stages for the module's explicit roots, checked type roots, checked
-type schemes, public API dependencies, type-owner dependencies, and
-platform/app relation closures. The set is duplicate-free and stable. It is
-serialized as relocatable sorted POD slices, with binary-search lookup where a
-map is needed; mutable hash maps may be used only while constructing the checked
-module and must not be the persisted representation.
-
-On a cache hit, the coordinator consumes this lowering visibility directly to
-materialize imported checked module views. It must not rebuild the same set by
-walking checked bodies, checked type roots, checked type schemes, public API
-dependency lists, or platform/app relation closure data. Recomputing that
-visibility during post-check lowering is a producer-boundary bug: the checked
-module cache already owns this target-independent checked information.
+Lowering reaches other modules through the build's module graph: every module
+of the build is live, so a type or template another module owns is read from
+that module directly. A checked module stores no set of the modules lowering
+may visit.
 
 The compiler does not cache Monotype IR, Monotype Lifted IR, Lambda Solved IR,
 Lambda Mono decisions, boxy type descriptors, boxy dictionaries, LIR, or any callable/layout representation derived from them as
@@ -4482,7 +4490,7 @@ and host results cannot be compile-time values. If Roc exposes pointer-sized
 values to compile-time evaluation, their checked cache format must be an explicit
 checked rule before such values may be output.
 
-When the checker changes what checked data it emits, how hoisted roots are
+When the checker changes what checked data it records, how hoisted roots are
 selected, or how checked compile-time values are serialized, the checked module
 cache format or the specific checked-data selection version must be bumped. A
 cache hit with a matching key and version is consumed as already-checked output;
@@ -5209,12 +5217,16 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
 - Per-module slots: the key index, interface capabilities, the method registry
   view, and provided exports.
 
-A slot is a state word with three states: empty, claimed and done. A consumer
-that finds the slot empty claims it with one compare-and-swap, computes the
-result, stores the result pointer, marks the slot done and wakes waiters. A
-consumer that finds it claimed waits on the word with `std.Thread.Futex` until
-it is done. A consumer that finds it done reads the pointer with an acquire
-load; that is the whole read path.
+A slot (`collections.OnceSlot`) is a state word with three states: empty,
+claimed and done; a claimed word also records whether a consumer is parked on
+it. A consumer that finds the slot empty claims it with one compare-and-swap,
+computes the result, stores the result pointer, marks the slot done and wakes
+waiters. A consumer that finds it claimed waits on the word with a futex
+(`std.Thread.Futex`) until it is done. A consumer that finds it done reads the
+pointer with an acquire load; that is the whole read path. A claimant whose
+computation fails with a user-facing failure such as allocation failure
+abandons the slot: the word returns to empty, waiters wake, and the next
+consumer claims it.
 
 A slot's result is:
 
@@ -14280,8 +14292,8 @@ parallel.
 #### Caching Under `.boxy`
 
 With `--specialize=no`, every command writes what `roc check` writes, and
-`roc build` adds its remaining module objects. Checked module and composition entries, the canonicalized
-module cache, and the compile-time evaluation results `roc check` produces
+`roc build` adds its remaining module objects. Checked module and pairing entries, the canonicalized
+module cache, and the evaluation output `roc check` produces
 (`ConstStore` constants) are written exactly as `roc check` writes them.
 `roc check` also files the host-target, dev-opt object of every
 module a module with roots left to evaluate imports, which compile-time
@@ -14310,33 +14322,22 @@ and Per-Module Output is the invariant that makes it possible:
 
 - The KEY of a module's lowered output is what that output is a function of,
   extended with the compiler version, the opt level, and the target
-  (`compile.boxy_interface`, `Digests.objectInput`): the module's source
-  inputs, its name in the link, the policy of its checking context, the value
-  of every compile-time root it holds, and its direct imports' interfaces. No
-  import's implementation is an input, so an edit that leaves a module's
-  interface alone rebuilds that module's object and no other. A key names one
-  file.
-- A module's INTERFACE is what lowering its importers reads of it. Its checked
-  half (`Digests.interfaceOf`) is its checking interface (names, schemes and
-  their evidence, nominal backings, method bindings; Checking dependencies and
-  inference reuse), what commit derives from bodies for callers (each exported
-  procedure's and method's worker and hidden parameters, including its literal
-  requirements), its field defaults and nominal declarations, and the
-  compile-time values importers restore, by value. Its export half
-  (`Digests.recordExports`) is the ownership signature its object solved for each
-  worker, which is solved from bodies, so an edit that changes one still
-  rebuilds its importers, as it must, and which is known only once that object
-  exists, so a key is computed after its imports' units finish. Each half folds
-  in the same half of the module's imports: lowering reads through an import to
-  the modules behind it. A compile-time value a module computes by running an
-  import's code is one of the module's own root values, so an edit that changes
-  that value rebuilds the module however its interfaces compare.
+  (`compile.boxy_interface`, `Digests.objectInput`): the content hashes of the
+  checked modules it was built from (the module's own checked entry key, which
+  covers its imports' keys) and its evaluation output, together with its name
+  in the link. It is never a hash of a derived table: evidence, worker
+  signatures, ownership signatures and layouts are functions of those checked
+  modules, so their keys already cover them. A key names one file.
+- An edit to a module changes its checked entry key and therefore the key of
+  every module whose checked entry covers it, so the edited module and its
+  importers rebuild. A compile-time value a module computes by running an
+  import's code is part of the module's own evaluation output, so an edit that
+  changes that value rebuilds the module.
 - NAMES come from the link, not from content. A worker's symbol and a nominal
   type's runtime name digest the module's link name (`Types.ModuleNames`), so
   that one object can name another across an edit to its bodies: a module's
   name digests its module name and checking interface, which such an edit
-  leaves alone, so a unit needs no other module to name its own and can start
-  while checking continues. Every checked module of the compilation is in the
+  leaves alone, so a unit needs no other module to name its own. Every checked module of the compilation is in the
   link. Two different modules can share those, as two versions of a package
   differing only in bodies do, and they stay distinct modules: every module of
   such a set is named by its content identity instead, which only the finished
@@ -14352,10 +14353,11 @@ and Per-Module Output is the invariant that makes it possible:
   expression, which only a function value stored in a constant reaches across
   modules; a stored function value's recipe names its modules by checked key,
   and its digest names them by link name.
-- The root program's key adds the code-generation keys of its platform modules,
-  including their exact app binding environments: the root unit lowers their
-  implementations at the app's types and calls the supplied app workers. The
-  immutable platform's checked key alone does not identify this executable code.
+- The root program's key adds the key of its platform/app pairing, which covers
+  both modules' checked entries and the pairing's evaluation output: the root
+  unit lowers the platform's implementations at the app's types, read through
+  the pairing, and calls the supplied app workers. The platform's checked key
+  alone does not identify this executable code.
 - The FILE is deterministically byte-identical for its key: a cold build and
   a warm build, and two machines, write the same bytes. It holds everything
   lowered for the module, through the object's machine code, and the few
@@ -14372,15 +14374,15 @@ and Per-Module Output is the invariant that makes it possible:
   file under a key that omits the operating system and CPU but keeps the
   pointer width, which Boxy lowering takes as an input to layouts and
   descriptor sizes.
-- A hit replaces lowering the module: `roc build`, `roc run`, and `roc test`
-  with `--specialize=no` re-lower only modules whose key changed, and modules
-  whose keys are known can be lowered independently and in parallel, since
-  the inputs of each are its own and its imports' checked modules and
-  nothing else.
+- A hit stands in for lowering the module: `roc build`, `roc run`, and
+  `roc test` with `--specialize=no` re-lower only modules whose key changed,
+  and modules whose keys are known can be lowered independently and in
+  parallel, since the inputs of each are its own and its imports' checked
+  modules and nothing else.
 
-Compile-time evaluation results, checked modules, and the canonicalized cache
-keep their existing keys and behavior. Specialized builds are unaffected:
-their specializations are inherently cross-module and keep their own caches.
+Specialized builds keep no per-module object cache: their specializations are
+inherently cross-module, and they emit from the current checked modules
+("Cache storage").
 
 #### Unit Pieces And Whole-Program Dead Code
 
