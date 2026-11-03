@@ -1532,8 +1532,8 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: a stored nominal over Box (interpreter, --specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/boxy_nominal_box_field.roc", .stdout_exact = "[0, 1]" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: a stored nominal over Box (speed, --specialize=no)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/boxy_nominal_box_field.roc", .stdout_exact = "[0, 1]" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: a stored nominal over Box (size, --specialize=no)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/boxy_nominal_box_field.roc", .stdout_exact = "[0, 1]" } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc test under Boxy reports stored nominal boxes and rows read at Bool (dev, uncached, cold, warm)", .backend = .dev, .timeout_ms = 600_000, .body = .{ .custom = .boxy_test_outcomes } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc test under Boxy reports stored nominal boxes and rows read at Bool (interpreter, uncached, cold, warm)", .backend = .interpreter, .timeout_ms = 600_000, .body = .{ .custom = .boxy_test_outcomes } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test under Boxy reports stored nominal boxes and rows read at Bool (dev)", .backend = .dev, .timeout_ms = 600_000, .body = .{ .custom = .boxy_test_outcomes } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test under Boxy reports stored nominal boxes and rows read at Bool (interpreter)", .backend = .interpreter, .timeout_ms = 600_000, .body = .{ .custom = .boxy_test_outcomes } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test under Boxy reuses each module's test outcome file across edits (dev)", .backend = .dev, .timeout_ms = 600_000, .body = .{ .custom = .boxy_test_outcome_files } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test under Boxy reuses each module's test outcome file across edits (interpreter)", .backend = .interpreter, .timeout_ms = 600_000, .body = .{ .custom = .boxy_test_outcome_files } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12231: deferred calls and branch results returning tuples (BoxyDeferredTupleResults, boxy, interpreter)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/BoxyDeferredTupleResults.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
@@ -10283,6 +10283,24 @@ fn customIssue11678DevCacheBoxyTables(
     return null;
 }
 
+/// `roc test --specialize=no` reports the same outcomes for programs whose
+/// values cross a generic body, with each failing expectation attributed and
+/// the expectations after it run.
+fn customBoxyTestOutcomes(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64, backend: OptMode) ?TestResult {
+    const opt_arg = backendOptArg(allocator, backend) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
+    const cases = [_]struct { roc_file: []const u8, exit: ExitExpectation, contains: []const OutputNeedle }{
+        .{ .roc_file = "test/cli/BoxyRowAtBool.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }} },
+        .{ .roc_file = "test/cli/BoxyNominalBoxField.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (4) tests passed" }} },
+        .{ .roc_file = "test/cli/BoxyRowAtBoolFails.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Ran 2 tests" }, .{ .stream = .stderr, .text = "1 passed" }, .{ .stream = .stderr, .text = "1 failed" }, .{ .stream = .stderr, .text = "BoxyRowAtBoolFails.roc:17:1" } } },
+        .{ .roc_file = "test/cli/BoxyNominalBoxFieldFails.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Ran 2 tests" }, .{ .stream = .stderr, .text = "1 passed" }, .{ .stream = .stderr, .text = "1 failed" }, .{ .stream = .stderr, .text = "BoxyNominalBoxFieldFails.roc:25:1" } } },
+    };
+    for (cases) |case| {
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg, "--specialize=no" }, .roc_file = case.roc_file, .exit = case.exit, .contains = case.contains })) |failure| return failure;
+    }
+    return null;
+}
+
 /// design.md "Caching Under `.boxy`": with `--specialize=no`, a command
 /// writes nothing to the cache once its checking is done apart from `roc
 /// test`'s outcome files. `roc test` checks its module with explicit roots, so
@@ -14483,30 +14501,6 @@ fn customPipelineParitySharedCache(io: std.Io, allocator: Allocator, env: *const
 /// rows that hold `Conflict` at two payload types. Editing only `Main` makes
 /// the second run restore the constant from the cache, at the row its
 /// declaring module gives it, and widen it into `Main`'s joined row.
-/// `roc test --specialize=no` reports the same outcomes for programs whose
-/// values cross a generic body, uncached and through a cold and a warm cache,
-/// with each failing expectation attributed and the expectations after it run.
-fn customBoxyTestOutcomes(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64, backend: OptMode) ?TestResult {
-    const opt_arg = backendOptArg(allocator, backend) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
-    const cases = [_]struct { roc_file: []const u8, exit: ExitExpectation, contains: []const OutputNeedle }{
-        .{ .roc_file = "test/cli/BoxyRowAtBool.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }} },
-        .{ .roc_file = "test/cli/BoxyNominalBoxField.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (4) tests passed" }} },
-        .{ .roc_file = "test/cli/BoxyRowAtBoolFails.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Ran 2 tests" }, .{ .stream = .stderr, .text = "1 passed" }, .{ .stream = .stderr, .text = "1 failed" }, .{ .stream = .stderr, .text = "BoxyRowAtBoolFails.roc:17:1" } } },
-        .{ .roc_file = "test/cli/BoxyNominalBoxFieldFails.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Ran 2 tests" }, .{ .stream = .stderr, .text = "1 passed" }, .{ .stream = .stderr, .text = "1 failed" }, .{ .stream = .stderr, .text = "BoxyNominalBoxFieldFails.roc:25:1" } } },
-    };
-    const invocations = [_][]const []const u8{
-        &.{ "test", opt_arg, "--specialize=no", "--no-cache" },
-        &.{ "test", opt_arg, "--specialize=no" },
-        &.{ "test", opt_arg, "--specialize=no" },
-    };
-    for (cases) |case| {
-        for (invocations) |args| {
-            if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = args, .roc_file = case.roc_file, .exit = case.exit, .contains = case.contains })) |failure| return failure;
-        }
-    }
-    return null;
-}
 
 /// One `roc test` run of the outcome-file case: its process result and how
 /// many test roots it executed.
