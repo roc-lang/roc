@@ -5640,6 +5640,10 @@ fn addBuiltinsObject(
     });
     addBuiltinsImports(b, roc_modules, obj.root_module);
     obj.bundle_compiler_rt = bundle_compiler_rt;
+    // One section per function and datum, so a program's link keeps only
+    // the builtins it reaches.
+    obj.link_function_sections = true;
+    obj.link_data_sections = true;
     configureBackend(obj, target);
     return obj;
 }
@@ -5689,6 +5693,10 @@ fn addBoxyRuntimeObject(
     // object, which supplies compiler-rt; nothing there defines the stack
     // protector's symbols.
     obj.root_module.stack_protector = false;
+    // One section per function and datum, so a program's link keeps only
+    // the runtime it reaches.
+    obj.link_function_sections = true;
+    obj.link_data_sections = true;
     configureBackend(obj, target);
     return obj;
 }
@@ -6265,6 +6273,8 @@ fn addMainExe(
             default_platform_runtime_obj.root_module.stack_check = false;
             default_platform_runtime_obj.root_module.link_libc = false;
             default_platform_runtime_obj.bundle_compiler_rt = false;
+            default_platform_runtime_obj.link_function_sections = true;
+            default_platform_runtime_obj.link_data_sections = true;
             configureBackend(default_platform_runtime_obj, cross_resolved_target);
 
             const copy_default_platform_runtime = embedded_assets;
@@ -6338,6 +6348,8 @@ fn addMainExe(
             default_platform_executable_obj.root_module.stack_check = false;
             default_platform_executable_obj.root_module.link_libc = false;
             default_platform_executable_obj.bundle_compiler_rt = false;
+            default_platform_executable_obj.link_function_sections = true;
+            default_platform_executable_obj.link_data_sections = true;
             configureBackend(default_platform_executable_obj, cross_resolved_target);
 
             const copy_default_platform_executable = embedded_assets;
