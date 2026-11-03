@@ -24484,9 +24484,15 @@ writes its addend once every compiler-owned object is composed and before the
 object is sealed. The analysis follows stack-pointer-derived values through
 structured control flow to the frames each function reserves and the stack
 pointer each call starts at; a function that reads the stack pointer without
-lowering it uses LLVM's red zone of at most 128 bytes. A cycle of unchecked
-functions with a frame, or a stack pointer set to a value not derived from it,
-is a compiler invariant violation. Code the host provides is the host's own
+lowering it uses LLVM's red zone of at most 128 bytes. A dev procedure's
+dynamic frame region lowers the stack pointer by an amount only known at
+runtime, so the dev backend checks the bounds again right after reserving it;
+the analysis measures what follows from the new stack pointer, and that check
+gets the room every check of the function gets, which covers the deepest the
+function reaches below any of its stack pointers. A cycle of unchecked
+functions with a frame, a stack pointer set to a constant, or a dynamic
+region with anything but its check between the reservation and the next call
+or stack pointer change, is a compiler invariant violation. Code the host provides is the host's own
 business and needs no room.
 
 Compiler-owned code compiled ahead of time follows the same rule. Builtins
