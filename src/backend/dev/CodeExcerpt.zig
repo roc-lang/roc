@@ -2066,6 +2066,8 @@ fn canonicalBefore(set: *const Set, a: u32, b: u32) bool {
     };
 }
 
+/// Where a kind of excerpt sorts in canonical order, ahead of any tie-break
+/// within the kind.
 pub fn canonicalRank(kind: Kind) u8 {
     return switch (kind) {
         .proc => 0,

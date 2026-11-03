@@ -48,6 +48,7 @@ pub const Roots = struct {
     entrypoints: bool = true,
 };
 
+/// How one composition starts its resolution and where it runs that work.
 pub const Options = struct {
     /// Per unit, parallel to the sets: the procedures the checked program
     /// reaches in it, which the parallel resolution starts from. Empty for
@@ -102,7 +103,7 @@ pub fn compose(
     var reach = try Reach.init(allocator, units);
     defer reach.deinit();
     try reach.walk(work.items);
-    return try merge(allocator, sets, units, &reach, host_visible, &index);
+    return try merge(allocator, sets, &reach, host_visible, &index);
 }
 
 /// Where every procedure and helper of the program is defined: in the first
@@ -402,7 +403,6 @@ const dropped: u32 = std.math.maxInt(u32);
 fn merge(
     allocator: Allocator,
     sets: []const *const Set,
-    units: []Unit,
     reach: *const Reach,
     host_visible: []const DataItem,
     index: *const Index,
@@ -523,7 +523,6 @@ fn merge(
         }
         out.loc = CodeExcerpt.rebindLoc(source.loc, map);
     }
-    _ = units;
 
     // Every constant the kept code names, once per name.
     var all_items = std.ArrayList(DataItem).empty;
