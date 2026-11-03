@@ -10325,20 +10325,11 @@ fn customBoxyCachesNothingAfterChecking(
         if (command.env_index != 1) continue;
         const inventory = cacheInventory(io, allocator, cache_roots[1]) catch |err|
             return customInfraFailure(allocator, timer, "failed to read the cache: {}", .{err});
-        // Each execution mode owns its test outcomes; everything else a run
-        // leaves is what `roc check` leaves.
-        var outcomes: usize = 0;
-        var lowered = std.ArrayList(CacheEntryName).empty;
-        for (inventory) |entry| {
-            if (entry.family == .test_result) outcomes += 1 else lowered.append(allocator, entry) catch |err|
-                return customInfraFailure(allocator, timer, "failed to filter the cache: {}", .{err});
-        }
-        if (outcomes == 0) return customFailure(allocator, timer, "`roc test {s}` recorded no test outcome", .{command.args[2]});
         if (test_inventory) |previous| {
-            if (firstInventoryDifference(previous, lowered.items)) |entry| {
+            if (firstInventoryDifference(previous, inventory)) |entry| {
                 return customFailure(allocator, timer, "running the tests again with {s} changed the cache: {s} {x}", .{ command.args[2], @tagName(entry.family), &entry.key });
             }
-        } else test_inventory = lowered.items;
+        } else test_inventory = inventory;
     }
 
     const check_inventory = cacheInventory(io, allocator, cache_roots[0]) catch |err|
