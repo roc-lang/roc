@@ -15717,7 +15717,10 @@ parallel.
 #### Caching Under `.boxy`
 
 With `--specialize=no`, every command writes what `roc check` writes, and
-`roc build` adds its remaining module objects. Checked module and composition entries, the canonicalized
+`roc build` adds its remaining module objects, as does a dev run whose run
+image is composed from unit images (Hot Loading For Default Dev-Shim Runs),
+which also files its root unit and the host executable it launches.
+Checked module and composition entries, the canonicalized
 module cache, and the compile-time evaluation results `roc check` produces
 (`ConstStore` constants, and the compile-time object cache the Solved
 evaluator uses for the roots it still evaluates) are written exactly as `roc
@@ -15728,8 +15731,9 @@ command. `roc check` also files the host-target, dev-opt object of every
 module a module with roots left to evaluate imports, which compile-time
 evaluation runs against (Compile-Time Evaluation Strategy). `roc check` and
 `roc run` with `--specialize=no` therefore leave identical cache contents for
-the same sources, and `roc build` adds exactly the module objects still
-missing (`compile.boxy_object_cache`, the `boxy_object` family).
+the same sources when the run lowers its whole program, and `roc build`
+adds exactly the module objects still missing (`compile.boxy_object_cache`,
+the `boxy_object` family).
 `roc test` checks its root for explicit test roots
 (`Validation.explicit_roots`), which is its own check under either strategy,
 and with `--specialize=no` it leaves exactly what that check leaves. `roc
@@ -26229,6 +26233,36 @@ a function pointer names its own image's code and is never reused; an image
 with such an entry records that its static data references code, and the shim
 holds a reference to it for the rest of the session once it accepts it, which
 keeps that image's code, data, and Boxy runtime alive.
+
+A `--specialize=no` dev run with a cache on a Linux x86_64 host composes
+its `RunImage` from unit images (Fast Dev Link) instead of lowering and
+compiling the whole program, for the first generation and every rebuild
+alike (`unitImageRunApplies`; every other run lowers the whole program).
+Library units are restored from the per-module cache or built and filed
+there as `roc build` builds them; the root unit, the app with the platform
+modules paired with it, is compiled with entrypoint wrappers in the shim's
+`(ret_ptr, args_ptr)` convention and filed under a key of its own, with
+each entrypoint's host boundary digest, so a run that restores it computes
+the checked host identity without lowering. The image places the atoms the
+entrypoint wrappers reach of the support image and the units, at offsets
+that are a function of the images' content digests, and resolves every
+reference whose distance it decides. What is left to the shim is what only
+the mapping decides: each host import (a hosted symbol, the runtime set,
+or one of the builtins through which code tracks its image, which the shim
+defines in place of the support image's), resolved once by name and then
+filled at each of its sites, and each 64-bit address into the image, which
+the shim rebases by the image's address. Every composed image carries its
+own builtins and Boxy runtime, so the runtime state a program composes
+(its descriptor interning, keyed by addresses in that program) is never
+shared between generations. Its constants live in its code blocks at a
+fixed distance from the code that reads them, so a composed image's static
+data cannot outlive its code separately: the image records that its static
+data must live as long as its code, has no static pool chunk, and an
+accepted one stays loaded for the rest of the session, as an image whose
+static data names its code does. Because the host executable of such a run
+links no compiler-owned code, it is cached by the checked host identity and
+the link inputs, and the root program is lowered for it only when that
+cache misses.
 
 The compiler parent process is the sole owner of committing candidate descriptor offsets
 and shared-memory image-byte reclamation. It keeps unbounded process-local lists of descriptor offsets,

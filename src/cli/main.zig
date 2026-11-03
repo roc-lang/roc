@@ -7582,6 +7582,11 @@ fn writeComposedRunImage(
             .{ .name = "Layout", .ns = timing.layout_ns },
             .{ .name = "Write", .ns = timing.write_ns },
         });
+        if (dev_diagnostics.get(.dump_run_image)) |path| if (hot_reload_allocation == null or hot_reload_allocation.?.generation == 1) {
+            std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = path, .data = shm.base_ptr[image_offset..image_bound] }) catch |err| {
+                std.log.warn("writing the run image to {s} failed: {}", .{ path, err });
+            };
+        };
         reporter.recordCounters("Run image", &.{
             .{ .name = "Images placed", .count = timing.images_placed },
             .{ .name = "Bytes written", .count = timing.bytes_written },
@@ -15985,8 +15990,9 @@ fn currentRuntimeSpecializationStrategy(
 /// Whether a command under `strategy` reads and writes the caches of work
 /// done after checking: lowered output, dev and object packs, linked
 /// executables and shim libraries, recorded program outputs, and test
-/// results. Under `.boxy` a command leaves the cache exactly as `roc check`
-/// leaves it (design.md "Caching Under `.boxy`").
+/// results. Under `.boxy` a command leaves the cache as `roc check` leaves
+/// it, plus the module objects `roc build` and a composed dev run file
+/// (design.md "Caching Under `.boxy`").
 /// The publisher of a command's compile-time packs. A command whose
 /// post-check work writes no cache writes the compile-time packs `roc check`
 /// writes (design.md "Caching Under `.boxy`").
