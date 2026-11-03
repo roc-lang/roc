@@ -1360,10 +1360,14 @@ fn addRcHelperFunctionSymbol(
     );
 }
 
+/// A procedure's symbol, named by its identity. A procedure the unit
+/// defines for other units of the link (`LIR.LirProcSpec.exported`) is
+/// global; every other is local.
 fn addLirProcFunctionSymbol(
     self: *Self,
     defined: index_types.DefinedFunction,
     identity: LIR.ProcIdentity,
+    exported: bool,
 ) Allocator.Error!SymbolIndex {
     const name = identity.symbolName(self.allocator) catch return error.OutOfMemory;
     errdefer self.allocator.free(name);
@@ -1371,7 +1375,7 @@ fn addLirProcFunctionSymbol(
     return try self.addTrackedDefinedFunctionSymbol(
         defined,
         name,
-        WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN,
+        if (exported) 0 else WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN,
     );
 }
 
@@ -1671,9 +1675,14 @@ fn prependStackChecks(self: *Self, symbols: StackCheckSymbols, locals: []const L
         if (position(self.localFunctionIndexFromGlobal(func_idx), first, count)) |pos| needs_check[pos] = true;
     }
     for (symbols.static_data_callees) |name| {
-        const symbol = self.module.findDefinedFunctionSymbolExact(name) catch |err|
-            wasmInvariantFmt("WASM/codegen invariant violated: static data names function {s} ({s})", .{ name, @errorName(err) });
-        const func_idx = self.module.linking.symbol_table.items[symbol.raw()].index;
+        const symbol = self.module.linking.findSymbolByName(name, self.module.imports.items, self.module.global_imports.items, self.module.table_imports.items) orelse
+            wasmInvariantFmt("WASM/codegen invariant violated: static data names function {s}, which the module neither defines nor imports", .{name});
+        const sym = self.module.linking.symbol_table.items[symbol];
+        if (sym.kind != .function) wasmInvariantFmt("WASM/codegen invariant violated: static data names {s} as a function", .{name});
+        // A procedure another unit defines is in that unit's table, so its
+        // own unit checks it.
+        if (sym.isUndefined()) continue;
+        const func_idx = sym.index;
         if (position(self.localFunctionIndexFromGlobal(func_idx), first, count)) |pos| needs_check[pos] = true;
     }
 
@@ -6095,6 +6104,12 @@ pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocat
     // are already known and can be called without triggering recursive compilation.
     for (proc_specs, 0..) |proc, i| {
         if (proc.is_static_initializer) continue;
+        // Another unit defines a linked procedure; `registerUnitImports`
+        // imported it.
+        if (proc.linked) {
+            std.debug.assert(self.registered_procs.get(@intCast(i)) != null);
+            continue;
+        }
         try self.registerProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(i)))), proc);
     }
     try self.buildProcArgCountsTable(proc_specs);
@@ -6184,7 +6199,7 @@ fn compileProcBodies(self: *Self, proc_specs: []const LirProcSpec) Allocator.Err
         var count: usize = 0;
         defer deinitJobArtifacts(jobs[0..count]);
         while (cursor < proc_specs.len and count < body_wave_capacity) : (cursor += 1) {
-            if (proc_specs[cursor].is_static_initializer) continue;
+            if (proc_specs[cursor].is_static_initializer or proc_specs[cursor].linked) continue;
             jobs[count] = .{ .owner = self, .unit = .{ .proc = @fromBackingInt(@intCast(@as(u32, @intCast(cursor)))) } };
             count += 1;
         }
@@ -6791,19 +6806,23 @@ fn buildProcArgCountsTable(self: *Self, proc_specs: []const LirProcSpec) Allocat
 /// Does NOT compile the body—that's done by compileProcSpecBody.
 fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
     const key: u32 = @backingInt(proc_id);
+    const type_idx = try self.procFuncType(proc);
+    const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
+    const func_idx = defined.function.raw();
+    _ = try self.addLirProcFunctionSymbol(defined, proc.identity, proc.exported);
+    const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
 
+    self.registered_procs.put(key, func_idx) catch return error.OutOfMemory;
+    self.proc_table_indices.put(key, table_idx) catch return error.OutOfMemory;
+}
+
+/// The wasm type of a procedure under its ABI: the erased ABI's, or the Roc
+/// convention's for its arguments, hidden parameters and result.
+fn procFuncType(self: *Self, proc: LirProcSpec) Allocator.Error!u32 {
     if (proc.abi == .erased_callable or proc.abi == .erased_record) {
         // Matches `builtins.erased_callable.ErasedCallableFn`: pointers for
         // ops, ret, args, capture, reuse, and out_desc.
-        const type_idx = try self.internFuncType(&.{ .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
-        const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
-        const func_idx = defined.function.raw();
-        _ = try self.addLirProcFunctionSymbol(defined, proc.identity);
-        const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
-
-        self.registered_procs.put(key, func_idx) catch return error.OutOfMemory;
-        self.proc_table_indices.put(key, table_idx) catch return error.OutOfMemory;
-        return;
+        return try self.internFuncType(&.{ .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     }
 
     const args = self.store.getLocalSpan(proc.args);
@@ -6824,14 +6843,7 @@ fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) 
     if (hidden.carry) param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
     if (hidden.pending) param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
     const ret_vt = try self.resolveValType(proc.ret_layout);
-    const type_idx = try self.internFuncType(param_types.items, &.{ret_vt});
-    const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
-    const func_idx = defined.function.raw();
-    _ = try self.addLirProcFunctionSymbol(defined, proc.identity);
-    const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
-
-    self.registered_procs.put(key, func_idx) catch return error.OutOfMemory;
-    self.proc_table_indices.put(key, table_idx) catch return error.OutOfMemory;
+    return try self.internFuncType(param_types.items, &.{ret_vt});
 }
 
 /// Compile a proc body. The proc must already be registered via registerProcSpec.
@@ -7281,6 +7293,50 @@ fn resolveSymbolTarget(self: *Self, symbol_text: []const u8, params: []const Val
 
 fn emitNullPtr(self: *Self) Allocator.Error!void {
     try self.emitI32Const(0);
+}
+
+/// Import, for a unit compiled alone (`UnitCompile`), every function its
+/// code calls but does not define: each builtin wrapper and, for a program
+/// with the `.boxy` runtime contract, each Boxy runtime entry point, under
+/// the signatures `builtin_signatures` and `boxy_runtime_signatures` read
+/// off their definitions; the runtime set and the platform's hosted
+/// functions (`registerHostedSymbolTargets`); and every procedure another
+/// unit defines (`LIR.LirProcSpec.linked`), under its identity's symbol
+/// and the Roc convention its defining unit declares it with. Runs before
+/// any defined function exists.
+pub fn registerUnitImports(self: *Self, proc_specs: []const LIR.LirProcSpec, with_boxy_runtime: bool) HostedSymbolError!void {
+    std.debug.assert(self.module.function_offsets.items.len == 0 and self.module.func_type_indices.items.len == 0);
+    var builtin_symbols = BuiltinSignatures.SymbolTable.initUndefined();
+    inline for (comptime std.enums.values(BuiltinKind)) |kind| {
+        const sig = BuiltinSignatures.sigOf(kind);
+        const imported = try self.module.addFunctionImportWithSymbol("env", sig.name, try self.internFuncType(sig.wasm_params, sig.wasm_results));
+        builtin_symbols.set(kind, imported.symbol);
+    }
+    self.configureBuiltinRelocs(builtin_symbols);
+    if (with_boxy_runtime) {
+        var runtime_symbols = BoxyRuntimeSignatures.SymbolTable.initUndefined();
+        inline for (comptime std.enums.values(BoxyRuntimeSignatures.Entry)) |entry| {
+            const sig = BoxyRuntimeSignatures.sigOf(entry);
+            const imported = try self.module.addFunctionImportWithSymbol("env", sig.name, try self.internFuncType(sig.params, sig.results));
+            runtime_symbols.set(entry, imported.symbol);
+        }
+        self.configureBoxyRuntimeRelocs(runtime_symbols);
+    }
+    try self.registerHostedSymbolTargets(proc_specs);
+    for (proc_specs, 0..) |proc, i| {
+        if (!proc.linked) continue;
+        const name = proc.identity.symbolName(self.allocator) catch return error.OutOfMemory;
+        {
+            errdefer self.allocator.free(name);
+            try self.function_symbol_names.append(self.allocator, name);
+        }
+        const imported = try self.module.addFunctionImportWithSymbol("env", name, try self.procFuncType(proc));
+        const func_idx = imported.function.raw();
+        try self.recordFunctionSymbol(func_idx, imported.symbol);
+        const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
+        try self.registered_procs.put(@intCast(i), func_idx);
+        try self.proc_table_indices.put(@intCast(i), table_idx);
+    }
 }
 
 /// Resolve every hosted proc's linker symbol before proc compilation.

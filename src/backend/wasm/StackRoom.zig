@@ -83,6 +83,35 @@ pub fn fillCheckRooms(gpa: Allocator, object_bytes: []const u8) Error!?[]u8 {
     return try rewriteCodeRelocAddends(gpa, object_bytes, &addends);
 }
 
+/// What one function of a unit's module does with the stack, for its
+/// unit image (`WasmUnitImage`): the composer of a program fills each
+/// check's room from these once it knows the program's call graph.
+pub const UnitFrame = struct {
+    /// How far below its entry stack pointer its own frame reaches.
+    own_depth: u64,
+    calls: []const Call,
+    /// Whether a check runs before anything else can.
+    checked: bool,
+};
+
+/// The frame facts of every function `module` defines, a unit's module as
+/// its code generation left it, in local function order.
+pub fn unitFrames(arena: Allocator, module: *const WasmModule) Error![]UnitFrame {
+    const symbols = Symbols.find(module);
+    const signatures = try arena.alloc(Signature, module.func_types.items.len);
+    for (signatures, module.func_types.items, module.func_type_results.items) |*signature, func_type, result| {
+        signature.* = .{ .params = @intCast(func_type.params.len), .results = @intFromBool(result != null) };
+    }
+    const relocs = module.reloc_code.entries.items;
+    if (std.debug.runtime_safety) for (relocs[0..relocs.len -| 1], relocs[@min(1, relocs.len)..]) |a, b| std.debug.assert(a.getOffset() < b.getOffset());
+    const frames = try arena.alloc(UnitFrame, module.function_offsets.items.len);
+    for (frames, 0..) |*frame, local| {
+        const facts = try analyzeFunction(arena, module, signatures, symbols, relocs, @intCast(local));
+        frame.* = .{ .own_depth = facts.own_depth, .calls = facts.calls, .checked = facts.checked };
+    }
+    return frames;
+}
+
 /// The symbols the analysis recognizes: symbol table indices, and the local
 /// indices of the functions that work on the stack pointer itself
 /// (`StackSupport`).
@@ -154,15 +183,17 @@ fn parseSignatures(arena: Allocator, bytes: []const u8) Error![]Signature {
 }
 
 /// Who a call reaches.
-const Callee = union(enum) {
+pub const Callee = union(enum) {
     /// A function defined in the object, by local index.
     defined: u32,
+    /// A function the object imports, by symbol index.
+    import_symbol: u32,
     /// Any table function of this type.
     indirect: u32,
 };
 
 /// One call and the stack depth below the caller's entry its callee starts at.
-const Call = struct {
+pub const Call = struct {
     callee: Callee,
     depth: u64,
 };
@@ -643,8 +674,11 @@ const Walker = struct {
                 const signature = self.functionSignature(sym.index);
                 self.left_straight_line = true;
                 self.popN(signature.params);
-                // A function the host provides is the host's own business.
-                if (!sym.isUndefined()) try self.recordCall(.{ .defined = sym.index - self.module.import_fn_count });
+                if (sym.isUndefined()) {
+                    try self.recordCall(.{ .import_symbol = self.relocs[self.requireRelocAt(operand)].getSymbolIndex() });
+                } else {
+                    try self.recordCall(.{ .defined = sym.index - self.module.import_fn_count });
+                }
                 if (op == 0x12) self.markUnreachable() else try self.pushUnknown(signature.results);
             },
             0x11, 0x13 => { // call_indirect, return_call_indirect
@@ -906,6 +940,9 @@ fn computeRooms(
                     try succs.append(arena, callee);
                     try edge_depths.append(arena, call.depth);
                 },
+                // In a composed object, a function the host provides is the
+                // host's own business.
+                .import_symbol => {},
                 .indirect => |type_index| if (table_by_type.get(type_index)) |targets| {
                     for (targets.items) |callee| if (!facts[callee].checked) {
                         try succs.append(arena, callee);
