@@ -11453,12 +11453,40 @@ const BoxyLibraryObjects = struct {
     /// The checked keys of the platform modules the root unit lowers, whose
     /// implementations its object holds.
     paired_platforms: []const [32]u8,
+    /// Every library unit's checked module key, in unit order.
+    module_keys: []const [32]u8,
+    /// The checked keys of the modules the root unit lowers: the root, and
+    /// every module with platform requirements.
+    root_modules: []const [32]u8,
+    /// The template workers the checked program reaches, by module.
+    reach: compile.boxy_reach.Reach,
 
     fn deinit(self: BoxyLibraryObjects, gpa: Allocator) void {
         for (self.owned_pieces) |pieces| {
             pieces.deinit();
             gpa.destroy(pieces);
         }
+        var reach = self.reach;
+        reach.deinit();
+    }
+};
+
+/// The checked program's reachability (`compile.boxy_reach`), run as a
+/// post-check task beside the library units.
+const BoxyReachTask = struct {
+    gpa: Allocator,
+    root: *const check.CheckedArtifact.CheckedModuleArtifact,
+    modules: compile.boxy_reach.Modules,
+    outcome: union(enum) { pending, failed: Allocator.Error, done: compile.boxy_reach.Reach } = .pending,
+
+    fn compute(self: *BoxyReachTask) void {
+        self.outcome = if (compile.boxy_reach.compute(self.gpa, self.root, self.modules)) |reach| .{ .done = reach } else |err| .{ .failed = err };
+    }
+
+    fn run(context: *anyopaque, _: base.post_check_task_executor.Worker) ?*anyopaque {
+        const self: *BoxyReachTask = @ptrCast(@alignCast(context));
+        self.compute();
+        return null;
     }
 };
 
@@ -11508,6 +11536,31 @@ fn buildBoxyLibraryObjects(
         }
     }
     const platform = try boxyPlatformView(ctx, build_env, root_artifact, visible);
+    // The checked program's reachability runs beside the units: the
+    // composition resolves the procedures it names in parallel first
+    // (design.md "Unit Pieces And Whole-Program Dead Code").
+    const link_modules = try ctx.arena.alloc(*const Artifact, digests.artifacts.count());
+    const link_names = try ctx.arena.alloc([32]u8, link_modules.len);
+    {
+        var linked = digests.artifacts.valueIterator();
+        var i: usize = 0;
+        while (linked.next()) |artifact| : (i += 1) {
+            link_modules[i] = artifact.*;
+            link_names[i] = digests.module_names.get(artifact.*.key.bytes) orelse base.invariant("roc build invariant violated: a module of the link has no link name", .{});
+        }
+    }
+    var reach_task: BoxyReachTask = .{ .gpa = ctx.gpa, .root = root_artifact, .modules = .{ .artifacts = link_modules, .link_names = link_names } };
+    var reach_session: ?base.post_check_task_executor.Session = if (build_env.postCheckExecutor()) |executor| try executor.begin() else null;
+    defer if (reach_session) |*open| {
+        while (open.outstanding != 0) _ = open.receive();
+        open.end();
+    };
+    var reach_taken = false;
+    defer if (!reach_taken) switch (reach_task.outcome) {
+        .done => |*reach| reach.deinit(),
+        .pending, .failed => {},
+    };
+    if (reach_session) |*open| try open.submit(.{ .id = 0, .context = &reach_task, .run = BoxyReachTask.run }) else reach_task.compute();
     if (dev_diagnostics.isSet(.trace_boxy_work)) {
         std.debug.print("boxy-work: root {s} key {s} codegen {s} identity {s}\n", .{ root_artifact.canonical_names.moduleNameText(root_artifact.module_identity.module_name), &std.fmt.bytesToHex(root_artifact.key.bytes[0..8], .lower), &std.fmt.bytesToHex(root_artifact.codeGenerationKey().bytes[0..8], .lower), &std.fmt.bytesToHex(root_artifact.module_identity.stable_hash[0..8], .lower) });
         for (units.items) |artifact| std.debug.print("boxy-work: unit {s} key {s} codegen {s} identity {s}\n", .{ artifact.canonical_names.moduleNameText(artifact.module_identity.module_name), &std.fmt.bytesToHex(artifact.key.bytes[0..8], .lower), &std.fmt.bytesToHex(artifact.codeGenerationKey().bytes[0..8], .lower), &std.fmt.bytesToHex(artifact.module_identity.stable_hash[0..8], .lower) });
@@ -11667,7 +11720,15 @@ fn buildBoxyLibraryObjects(
             },
         }
     }
+    if (reach_session) |*open| _ = open.receive();
     if (first_error) |err| return err;
+    const reach = switch (reach_task.outcome) {
+        .done => |reach| reach,
+        .failed => |err| return err,
+        .pending => base.invariant("roc build invariant violated: the checked reachability task completed without an outcome", .{}),
+    };
+    reach_taken = true;
+    if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: the checked program reaches {d} template workers in {d} modules\n", .{ reach.identities.len, reach.modules.count() });
     // The summary counts cache work; a build without a cache does none.
     if (!args.no_cache) build_env.recordBoxyObjects(restored, built);
     reporter.end();
@@ -11675,11 +11736,30 @@ fn buildBoxyLibraryObjects(
     const ordered = try ctx.arena.alloc(*const backend.dev.UnitPieces.Pieces, units.items.len);
     for (objects, ordered) |object, *slot| slot.* = object orelse base.invariant("roc build invariant violated: a .boxy unit completed without an object", .{});
     var paired_platforms: std.ArrayList([32]u8) = .empty;
-    if (platform) |view| try paired_platforms.append(ctx.arena, (view.code_generation_key orelse view.key).bytes);
-    for (visible) |artifact| {
-        if (artifact.platform_type_inputs.requirements.len != 0) try paired_platforms.append(ctx.arena, artifact.codeGenerationKey().bytes);
+    var root_modules: std.ArrayList([32]u8) = .empty;
+    try root_modules.append(ctx.arena, root_artifact.key.bytes);
+    if (platform) |view| {
+        try paired_platforms.append(ctx.arena, (view.code_generation_key orelse view.key).bytes);
+        try root_modules.append(ctx.arena, view.key.bytes);
     }
-    return .{ .pieces = ordered, .keys = keys, .owned_pieces = owned_pieces.items, .hosted_symbols = hosted_symbols.items, .platform = platform, .paired_platforms = paired_platforms.items };
+    for (visible) |artifact| {
+        if (artifact.platform_type_inputs.requirements.len == 0) continue;
+        try paired_platforms.append(ctx.arena, artifact.codeGenerationKey().bytes);
+        try root_modules.append(ctx.arena, artifact.key.bytes);
+    }
+    const module_keys = try ctx.arena.alloc([32]u8, units.items.len);
+    for (units.items, module_keys) |artifact, *key| key.* = artifact.key.bytes;
+    return .{
+        .pieces = ordered,
+        .keys = keys,
+        .owned_pieces = owned_pieces.items,
+        .hosted_symbols = hosted_symbols.items,
+        .platform = platform,
+        .paired_platforms = paired_platforms.items,
+        .module_keys = module_keys,
+        .root_modules = root_modules.items,
+        .reach = reach,
+    };
 }
 
 /// Compose the program's pieces into the one object its link takes: every
@@ -11698,6 +11778,7 @@ fn composeBoxyProgramObject(
     library: BoxyLibraryObjects,
     target: RocTarget,
     synthetic_default_platform: bool,
+    executor: ?base.post_check_task_executor.Executor,
 ) CliMainError![]const u8 {
     const program_key: ?[32]u8 = if (root_key) |key| key: {
         var hasher = base.Sha256.init(.{});
@@ -11727,12 +11808,23 @@ fn composeBoxyProgramObject(
     const inputs = try ctx.arena.alloc(*const backend.dev.UnitPieces.Pieces, library.pieces.len + 1);
     inputs[0] = root;
     @memcpy(inputs[1..], library.pieces);
+    // The procedures the checked program reaches in each unit, resolved in
+    // parallel before the walk that decides what the object keeps.
+    const seeds = try ctx.arena.alloc([]const lir.ProcIdentity, inputs.len);
+    {
+        var root_seeds: std.ArrayList(lir.ProcIdentity) = .empty;
+        for (library.root_modules) |key| try root_seeds.appendSlice(ctx.arena, library.reach.of(key));
+        seeds[0] = root_seeds.items;
+        for (library.module_keys, seeds[1..]) |key, *unit_seeds| unit_seeds.* = library.reach.of(key);
+    }
     var compiler = backend.ObjectFileCompiler.init(ctx.gpa);
+    compiler.post_check_executor = executor;
     var timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
     compiler.timing = &timing;
     var composed = compiler.composeObject(inputs, target, .{
         .enable_default_platform_runtime = synthetic_default_platform,
         .roots = &.{},
+        .seeds = seeds,
     }) catch |err| {
         reporter.fail();
         std.log.err("Composing the program's object failed: {}", .{err});
@@ -12433,7 +12525,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             error.MalformedPieces, error.UnsupportedPiecesVersion => base.invariant("the cached pieces of the root unit were admitted but do not decode: {s}", .{@errorName(err)}),
         };
         defer root_pieces.deinit();
-        const obj_path = try composeBoxyProgramObject(ctx, &reporter, &link_objects, boxy_cache_manager, boxy_root_key.?.bytes, &root_pieces, library, target, args.synthetic_default_platform);
+        const obj_path = try composeBoxyProgramObject(ctx, &reporter, &link_objects, boxy_cache_manager, boxy_root_key.?.bytes, &root_pieces, library, target, args.synthetic_default_platform, build_env.postCheckExecutor());
         reporter.begin("Preparing Link Inputs");
         const root_hosted = try ctx.arena.alloc([]const u8, entry.hosted_symbols.len);
         for (entry.hosted_symbols, root_hosted) |symbol, *owned| owned.* = try ctx.arena.dupe(u8, symbol);
@@ -12517,7 +12609,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         defer root_pieces.deinit();
         reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
         reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(backend_timing.snapshot().native_emission));
-        const obj_path = try composeBoxyProgramObject(ctx, &reporter, &link_objects, boxy_cache_manager, if (boxy_root_key) |key| key.bytes else null, &root_pieces, library, target, args.synthetic_default_platform);
+        const obj_path = try composeBoxyProgramObject(ctx, &reporter, &link_objects, boxy_cache_manager, if (boxy_root_key) |key| key.bytes else null, &root_pieces, library, target, args.synthetic_default_platform, build_env.postCheckExecutor());
         const root_hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
         const link_facts: ProgramOutput.LinkFacts = .{
             .hosted_symbols = try unionSymbols(ctx.arena, root_hosted_symbols, library.hosted_symbols),
