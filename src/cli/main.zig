@@ -8651,7 +8651,9 @@ fn writeSealedWasmObject(
     public_definitions: []const []const u8,
     allowed_undefined_functions: []const []const u8,
     stack_checks: bool,
+    timing: ?*WasmBuildTiming,
 ) CliMainError![]const u8 {
+    var encode_started = WasmBuildTiming.now(ctx);
     const unsealed_bytes = try module.encodeRelocatable(ctx.gpa);
     defer ctx.gpa.free(unsealed_bytes);
     const unsealed_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_app_unsealed_wasm32.o" });
@@ -8680,9 +8682,11 @@ fn writeSealedWasmObject(
         sealed_public_definitions = try std.mem.concat(ctx.arena, []const u8, &.{ public_definitions, &accessor_names });
     }
     const composed_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_app_composed_wasm32.o" });
+    if (timing) |phases| phases.encode_ns += WasmBuildTiming.since(ctx, &encode_started);
     linker.linkWasmObjectsRelocatable(ctx, composed_path, compiler_inputs.items) catch |err| {
         return failLink(ctx, err, "wasm32");
     };
+    if (timing) |phases| phases.compose_ns += WasmBuildTiming.since(ctx, &encode_started);
 
     var composed_bytes = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, composed_path, ctx.gpa, .unlimited);
     defer ctx.gpa.free(composed_bytes);
@@ -8704,6 +8708,7 @@ fn writeSealedWasmObject(
     try sealed_module.patchRelocatableSymbolFlags(composed_bytes);
     const output_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, output_filename });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, output_path, composed_bytes) catch return error.WasmOutputWriteFailed;
+    if (timing) |phases| phases.seal_ns += WasmBuildTiming.since(ctx, &encode_started);
     return output_path;
 }
 
@@ -8988,10 +8993,12 @@ fn writeDevWasmObject(
     target: RocTarget,
     executor: ?base.post_check_task_executor.Executor,
     stack_checks: bool,
+    timing: *WasmBuildTiming,
 ) CliMainError![]const u8 {
     if (entrypoints.len == 0) {
         base.invariant("wasm object invariant violated: no exported platform entrypoints", .{});
     }
+    var started = WasmBuildTiming.now(ctx);
 
     var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
     // Ownership of the module moves into the codegen at initWithModule below;
@@ -9021,6 +9028,7 @@ fn writeDevWasmObject(
     // defined function index.
     if (stack_checks) try codegen.configureStackChecks(try staticDataFunctionPointerTargets(ctx, static_data_exports));
     try codegen.registerHostedSymbolTargets(lowered.lir_result.store.getProcSpecs());
+    timing.codegen_ns += WasmBuildTiming.since(ctx, &started);
 
     const target_objects = EmbeddedTargetObjects.forTarget(target);
     const builtins_bytes = if (stack_checks) target_objects.builtins_extern_stack_checked.? else target_objects.builtins_extern;
@@ -9062,6 +9070,7 @@ fn writeDevWasmObject(
             return err;
         });
     }
+    timing.merge_ns += WasmBuildTiming.since(ctx, &started);
 
     const static_rc_helpers = try backend.collectRequiredRcHelpers(ctx.gpa, static_data_exports);
     defer ctx.gpa.free(static_rc_helpers);
@@ -9083,8 +9092,10 @@ fn writeDevWasmObject(
     for (entrypoints) |entry| {
         _ = try codegen.module.findDefinedFunctionSymbolExact(entry.symbol_name);
     }
+    timing.codegen_ns += WasmBuildTiming.since(ctx, &started);
     try mergeStaticDataWasmModule(ctx, &codegen.module, static_data_exports, .relocatable_object);
     try pack_imports.appendSlice(ctx.arena, try wasmRocHostRequirements(ctx.arena, &lowered.lir_result.store));
+    timing.merge_ns += WasmBuildTiming.since(ctx, &started);
     return writeSealedWasmObject(
         ctx,
         target,
@@ -9094,6 +9105,7 @@ fn writeDevWasmObject(
         try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
         pack_imports.items,
         stack_checks,
+        timing,
     );
 }
 
@@ -9241,6 +9253,7 @@ fn rocBuildWasm(
     entrypoints: []const backend.Entrypoint,
     static_data_exports: []const backend.StaticDataExport,
     executor: ?base.post_check_task_executor.Executor,
+    timing: *WasmBuildTiming,
 ) CliMainError!void {
     if (entrypoints.len == 0) {
         base.invariant("wasm build invariant violated: no exported platform entrypoints", .{});
@@ -9260,7 +9273,7 @@ fn rocBuildWasm(
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const obj_path = try writeDevWasmObject(ctx, scratch_dir, lowered, entrypoints, static_data_exports, target, executor, stack_checks);
+        const obj_path = try writeDevWasmObject(ctx, scratch_dir, lowered, entrypoints, static_data_exports, target, executor, stack_checks, timing);
         try writeArchiveOutput(ctx, .wasm32, final_output_path, link_inputs, &.{obj_path});
         return;
     }
@@ -9282,10 +9295,53 @@ fn rocBuildWasm(
         target,
         executor,
         stack_checks,
+        timing,
     );
 
+    var link_started = WasmBuildTiming.now(ctx);
     try linkWasmOutput(ctx, args, target, link_inputs, final_output_path, obj_path, scratch_dir);
+    timing.link_ns += WasmBuildTiming.since(ctx, &link_started);
 }
+
+/// Where a dev wasm build's code generation phase spends its time, for
+/// `--timings`.
+const WasmBuildTiming = struct {
+    /// Generating the program's bodies and entry wrappers.
+    codegen_ns: u64 = 0,
+    /// Merging the builtins, the Boxy runtime and the static data into the
+    /// program's module.
+    merge_ns: u64 = 0,
+    /// Encoding the relocatable object and writing it and its support objects.
+    encode_ns: u64 = 0,
+    /// Composing them with `wasm-ld -r`.
+    compose_ns: u64 = 0,
+    /// Reading the composed object back, filling its stack rooms and sealing it.
+    seal_ns: u64 = 0,
+    /// Linking the sealed object with the platform's host.
+    link_ns: u64 = 0,
+
+    fn now(ctx: *CliCtx) i96 {
+        return std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
+    }
+
+    /// The nanoseconds since `started`, which moves to now.
+    fn since(ctx: *CliCtx, started: *i96) u64 {
+        const at = now(ctx);
+        defer started.* = at;
+        return @intCast(@max(0, at - started.*));
+    }
+
+    fn breakdown(self: WasmBuildTiming) [6]progress.SubTiming {
+        return .{
+            .{ .name = "Codegen", .ns = self.codegen_ns },
+            .{ .name = "Builtins + Runtime Merge", .ns = self.merge_ns },
+            .{ .name = "Object Encoding", .ns = self.encode_ns },
+            .{ .name = "wasm-ld -r", .ns = self.compose_ns },
+            .{ .name = "Seal", .ns = self.seal_ns },
+            .{ .name = "Final Link", .ns = self.link_ns },
+        };
+    }
+};
 
 const LlvmObjectPaths = struct {
     artifact_dir: []const u8,
@@ -9871,6 +9927,7 @@ fn writeCombinedLlvmWasmObject(
         try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
         try wasmRocHostRequirements(ctx.arena, &lir_result.store),
         stack_checks,
+        null,
     );
 }
 
@@ -11464,6 +11521,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
 
     if (target_arch == .wasm32) {
         reporter.begin(code_generation_phase_name);
+        var wasm_timing: WasmBuildTiming = .{};
         try rocBuildWasm(
             ctx,
             args,
@@ -11476,8 +11534,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             entrypoints,
             static_data_exports,
             build_env.postCheckExecutor(),
+            &wasm_timing,
         );
-        reporter.end();
+        reporter.endWithBreakdown(&wasm_timing.breakdown());
 
         return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
     }
