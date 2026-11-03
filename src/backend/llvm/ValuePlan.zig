@@ -1165,10 +1165,10 @@ const TestOps = struct {
 };
 
 /// Join point ids a fixture mints in order, like a lowerer's per-proc counter.
-const JoinPointIds = struct {
+pub const JoinPointIds = struct {
     next: u32 = 0,
 
-    fn fresh(self: *JoinPointIds) lir.LIR.JoinPointId {
+    pub fn fresh(self: *JoinPointIds) lir.LIR.JoinPointId {
         const id: lir.LIR.JoinPointId = @fromBackingInt(self.next);
         self.next += 1;
         return id;
@@ -1425,7 +1425,8 @@ test "issue 12819 single-definition join views are refreshed on each loop iterat
     const joined = try store.addLocal(.{ .layout_idx = .str });
     const alias = try store.addLocal(.{ .layout_idx = .str });
     const chained = try store.addLocal(.{ .layout_idx = .str });
-    const join_id: lir.LIR.JoinPointId = @fromBackingInt(0);
+    var join_points = JoinPointIds{};
+    const join_id = join_points.fresh();
     const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const initialize = try store.addCFStmt(.{ .set_local = .{ .target = joined, .value = input, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
     const ret = try store.addCFStmt(.{ .ret = .{ .value = chained } }, .test_fixture);

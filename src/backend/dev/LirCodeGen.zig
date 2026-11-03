@@ -24541,7 +24541,8 @@ test "issue 12819: dev reads a single-definition join parameter in place" {
         const source = try addLocal(&store, .u64);
         const joined = try addLocal(&store, .u64);
         const alias = try addLocal(&store, .u64);
-        const join_id: LIR.JoinPointId = @fromBackingInt(0);
+        var next_join_point: u32 = 0;
+        const join_id = freshTestJoinPointId(&next_join_point);
         const ret = try store.addCFStmt(.{ .ret = .{ .value = alias } }, .test_fixture);
         const read = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .local(joined), .next = ret } }, .test_fixture);
         const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);

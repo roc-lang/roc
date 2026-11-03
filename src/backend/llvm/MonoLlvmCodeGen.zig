@@ -4529,7 +4529,7 @@ pub const MonoLlvmCodeGen = struct {
                     return;
                 },
                 .assign_call => {},
-                else => return,
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .dyn, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return,
             }
             const call = stmt.assign_call;
             if (codegen.store.stmtRowOrDefault(call.extra).replaces_frame) return;
@@ -15283,7 +15283,8 @@ test "issue 12819: large join parameter reads share storage" {
             }, .test_fixture);
             if (shape == .tag_payload_struct) body = try store.addCFStmt(.{ .assign_ref = .{ .target = payload, .op = lir.LIR.RefOp.tagPayloadStruct(alias, 1, 1), .next = body } }, .test_fixture);
             body = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = lir.LIR.RefOp.local(joined), .next = body } }, .test_fixture);
-            const join_id: lir.LIR.JoinPointId = @fromBackingInt(0);
+            var join_points = ValuePlan.JoinPointIds{};
+            const join_id = join_points.fresh();
             const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
             const initialize = try store.addCFStmt(.{ .set_local = .{
                 .target = joined,
