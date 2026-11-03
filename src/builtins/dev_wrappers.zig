@@ -282,9 +282,10 @@ pub fn roc_builtins_str_to_utf8(out: *RocList, str_bytes: ?[*]u8, str_len: usize
 pub fn roc_builtins_str_concat(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, update_mode: utils.UpdateMode) callconv(.c) void {
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    // Two small strings into a small one: in whole words, and small enough
-    // here to inline where this bitcode is merged into the app's module, so
-    // a chain of them stays in registers. Everything else out of line.
+    // Two small strings into a small one first, in whole words. The rest is
+    // left for LLVM to inline as before: walled off with `noinline`, every
+    // big result paid a real call and lost what inlining gave it (direct
+    // allocator calls, copies specialized to the call site).
     if (a.isSmallStr() and b.isSmallStr()) {
         const combined_length = a.len() + b.len();
         if (combined_length < @sizeOf(RocStr)) {
@@ -292,10 +293,10 @@ pub fn roc_builtins_str_concat(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_ca
             return;
         }
     }
-    strConcatOutOfLine(out, a, b, update_mode);
+    strConcatRest(out, a, b, update_mode);
 }
 
-noinline fn strConcatOutOfLine(out: *RocStr, a: RocStr, b: RocStr, update_mode: utils.UpdateMode) void {
+fn strConcatRest(out: *RocStr, a: RocStr, b: RocStr, update_mode: utils.UpdateMode) void {
     const roc_ops = in_process_host.ops();
     // A big string always carries a heap pointer; a null one means codegen
     // passed the string's fields wrongly.
