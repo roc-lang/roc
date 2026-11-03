@@ -19748,7 +19748,7 @@ fn runI128Narrow(allocator: Allocator, op: LIR.LowLevel, source_layout: layout.I
         2 => std.mem.readInt(i16, memory[result_ptr..][0..2], .little),
         4 => std.mem.readInt(i32, memory[result_ptr..][0..4], .little),
         8 => std.mem.readInt(i64, memory[result_ptr..][0..8], .little),
-        else => unreachable,
+        else => unreachable, // every narrowing case targets an 8- to 64-bit integer
     };
     return .{ .ok = ok, .payload = payload };
 }
