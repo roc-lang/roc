@@ -1948,7 +1948,8 @@ const ConcreteRootScan = struct {
                 try items.add(.{ .ty = .{ .walk = walk, .id = alias.backing } });
             },
             .record => |record| {
-                for (record.fields) |field| {
+                for (0..record.fields.len()) |field_index| {
+                    const field = record.fields.get(field_index);
                     if (field.kind.tag == .undetermined) {
                         try items.add(.{ .decided = false });
                         break;
@@ -2001,7 +2002,10 @@ const ConcreteRootScan = struct {
                 try items.add(.{ .ty = .{ .walk = walk, .id = function.ret } });
             },
             .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| try addSpan(items, walk, tag.argsSlice(checked_types));
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
+                    try addSpan(items, walk, tag.args);
+                }
                 try items.add(.{ .ty = .{ .walk = walk, .id = tag_union.ext } });
             },
         }
@@ -2082,13 +2086,17 @@ const CheckedTypeErrorScan = struct {
             .pending => checkedArtifactInvariant("checked error-type scan reached pending payload", .{}),
             .field_kind, .err => return true,
             .empty_record, .empty_tag_union => return false,
-            .flex, .rigid => |variable| for (variable.constraints) |constraint| try children.add(constraint.fn_ty),
+            .flex, .rigid => |variable| for (0..variable.constraints.len()) |constraint_index| {
+                const constraint = variable.constraints.get(constraint_index);
+                try children.add(constraint.fn_ty);
+            },
             .alias => |alias| {
                 try children.add(alias.backing);
                 try children.addSlice(alias.args);
             },
             .record => |record| {
-                for (record.fields) |field| {
+                for (0..record.fields.len()) |field_index| {
+                    const field = record.fields.get(field_index);
                     if (field.kind.undeterminedVariable()) |variable| try children.add(variable);
                     try children.add(field.ty);
                 }
@@ -2104,7 +2112,10 @@ const CheckedTypeErrorScan = struct {
                 try children.add(function.ret);
             },
             .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| try children.addSlice(tag.argsSlice(self.checked_types));
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
+                    try children.addSlice(tag.args);
+                }
                 try children.add(tag_union.ext);
             },
         }
@@ -2715,26 +2726,60 @@ pub const RowDefault = enum {
     empty_tag_union,
 };
 
-/// Public `CheckedTypeVariable` declaration.
-pub const CheckedTypeVariable = struct {
-    name: ?[]const u8 = null,
-    constraints: []const CheckedStaticDispatchConstraint = &.{},
-    numeric_default_phase: ?NumericDefaultPhase = null,
-    row_default: ?RowDefault = null,
-    /// A variable whose every constraint is an `is_eq` or `to_hash`: the
-    /// obligations deriving those methods over an open row give its tail.
-    /// Closing the row satisfies them, so a flex tail still seals to its row
-    /// default (design.md "Derived Equality And Hashing Over Open Rows"), and
-    /// a result row ending in the variable may still be determined by its
-    /// request (design.md "Closed Result Rows At Template Boundaries").
-    row_default_discharges_constraints: bool = false,
-    /// An implicitly opened row of an annotated definition that the
-    /// annotation bounds (design.md "Polarity"): the definition's body can
-    /// never add a tag to the row, only an instantiation of the definition
-    /// can. `.boxy` seals such a scheme variable to the empty row (design.md
-    /// "Sealed Result Rows").
-    bounded_row_ext: bool = false,
-};
+/// Public `CheckedTypeVariable` declaration (read form).
+pub const CheckedTypeVariable = CheckedTypeVariableOf(CheckedConstraints);
+
+/// The build form of `CheckedTypeVariable`, whose constraints are a slice it
+/// owns.
+pub const CheckedTypeVariableBuild = CheckedTypeVariableOf([]const CheckedStaticDispatchConstraint);
+
+fn CheckedTypeVariableOf(comptime Constraints: type) type {
+    return struct {
+        const Self = @This();
+
+        name: ?[]const u8 = null,
+        constraints: Constraints = if (Constraints == CheckedConstraints) .empty else &.{},
+        numeric_default_phase: ?NumericDefaultPhase = null,
+        row_default: ?RowDefault = null,
+        /// A variable whose every constraint is an `is_eq` or `to_hash`: the
+        /// obligations deriving those methods over an open row give its tail.
+        /// Closing the row satisfies them, so a flex tail still seals to its row
+        /// default (design.md "Derived Equality And Hashing Over Open Rows"), and
+        /// a result row ending in the variable may still be determined by its
+        /// request (design.md "Closed Result Rows At Template Boundaries").
+        row_default_discharges_constraints: bool = false,
+        /// An implicitly opened row of an annotated definition that the
+        /// annotation bounds (design.md "Polarity"): the definition's body can
+        /// never add a tag to the row, only an instantiation of the definition
+        /// can. `.boxy` seals such a scheme variable to the empty row (design.md
+        /// "Sealed Result Rows").
+        bounded_row_ext: bool = false,
+
+        /// A build form owning a copy of this read form's constraints.
+        pub fn toBuild(self: Self, allocator: Allocator) Allocator.Error!CheckedTypeVariableBuild {
+            return .{
+                .name = if (self.name) |name| try allocator.dupe(u8, name) else null,
+                .constraints = try self.constraints.dupe(allocator),
+                .numeric_default_phase = self.numeric_default_phase,
+                .row_default = self.row_default,
+                .row_default_discharges_constraints = self.row_default_discharges_constraints,
+                .bounded_row_ext = self.bounded_row_ext,
+            };
+        }
+
+        /// A read form over this build form's constraints.
+        pub fn asRead(self: Self) CheckedTypeVariable {
+            return .{
+                .name = self.name,
+                .constraints = .fromSlice(self.constraints),
+                .numeric_default_phase = self.numeric_default_phase,
+                .row_default = self.row_default,
+                .row_default_discharges_constraints = self.row_default_discharges_constraints,
+                .bounded_row_ext = self.bounded_row_ext,
+            };
+        }
+    };
+}
 
 /// Artifact-stable identity of a `??` default in its declaring module; see
 /// design.md "Defaulted Fields".
@@ -2839,44 +2884,175 @@ pub const CheckedNominalRecordField = union(enum) {
     padding: CheckedTypeId,
 };
 
-/// Public `CheckedRecordType` declaration.
+/// Public `CheckedRecordType` declaration (read form).
 pub const CheckedRecordType = struct {
-    fields: []const CheckedRecordField,
+    fields: CheckedRecordFields,
     ext: CheckedTypeId,
-};
 
-/// Public `CheckedTag` declaration (read form).
-///
-/// `args_start`/`args_len` are a range into `CheckedTypeStore.type_id_pool`
-/// (POD). Use `argsSlice` to obtain the backing slice.
-pub const CheckedTag = struct {
-    name: canonical.TagLabelId,
-    args_start: u32 = 0,
-    args_len: u32 = 0,
-
-    /// The tag's argument type ids within its store's `type_id_pool`.
-    pub fn argsSlice(self: CheckedTag, pool_owner: anytype) []const CheckedTypeId {
-        return storePool(pool_owner, CheckedTypeId)[self.args_start .. self.args_start + self.args_len];
+    /// A build form owning a copy of this read form's fields.
+    pub fn toBuild(self: CheckedRecordType, allocator: Allocator) Allocator.Error!CheckedRecordTypeBuild {
+        return .{ .fields = try self.fields.dupe(allocator), .ext = self.ext };
     }
 };
 
-/// Build form of a `CheckedTag`: carries its own argument slice. Used while a
-/// payload is being constructed, before it is committed into the store's pools.
-pub const CheckedTagBuild = struct {
+/// Build form of `CheckedRecordType`: the fields are a slice it owns.
+pub const CheckedRecordTypeBuild = struct {
+    fields: []const CheckedRecordField,
+    ext: CheckedTypeId,
+
+    /// A read form over this build form's fields.
+    pub fn asRead(self: CheckedRecordTypeBuild) CheckedRecordType {
+        return .{ .fields = .fromSlice(self.fields), .ext = self.ext };
+    }
+};
+
+/// Public `CheckedTag` declaration (read form).
+pub const CheckedTag = struct {
     name: canonical.TagLabelId,
     args: []const CheckedTypeId = &.{},
 };
 
-/// Public `CheckedTagUnionType` declaration (read form). `tags` aliases the
-/// store's `tag_pool`; each tag's args alias `type_id_pool`.
+/// Stored form of a `CheckedTag`: `args` is a range into the store's
+/// `type_id_pool`.
+pub const StoredTag = struct {
+    name: canonical.TagLabelId,
+    args: CheckedTypeRange = .{},
+};
+
+/// The parts of one checked type that are read one at a time: the fields of
+/// a record row, the tags of a tag union row, or the static-dispatch
+/// constraints of a type variable. `Rows` holds them and reads part `index`
+/// with `get`.
+fn CheckedTypeParts(comptime Part: type, comptime Rows: type) type {
+    return struct {
+        const Self = @This();
+
+        synthesized: Rows = .{},
+
+        pub const empty: Self = .{};
+
+        pub fn len(self: Self) usize {
+            return self.synthesized.len();
+        }
+
+        /// The parts a slice holds as themselves.
+        pub fn fromSlice(rows: []const Part) Self {
+            return .{ .synthesized = .{ .rows = rows } };
+        }
+
+        pub fn get(self: Self, index: usize) Part {
+            return self.synthesized.get(index);
+        }
+
+        pub fn iterator(self: Self) Iterator {
+            return .{ .parts = self };
+        }
+
+        pub const Iterator = struct {
+            parts: Self,
+            index: usize = 0,
+
+            pub fn next(self: *Iterator) ?Part {
+                if (self.index >= self.parts.len()) return null;
+                defer self.index += 1;
+                return self.parts.get(self.index);
+            }
+        };
+
+        /// Append every part to `out`.
+        pub fn appendTo(self: Self, allocator: Allocator, out: *std.ArrayList(Part)) Allocator.Error!void {
+            try out.ensureUnusedCapacity(allocator, self.len());
+            for (0..self.len()) |index| out.appendAssumeCapacity(self.get(index));
+        }
+
+        /// An owned copy of the parts, each copied as `dupeOwned` copies
+        /// it. Release it with `freeOwned`.
+        pub fn dupe(self: Self, allocator: Allocator) Allocator.Error![]const Part {
+            if (self.len() == 0) return &.{};
+            const out = try allocator.alloc(Part, self.len());
+            var copied: usize = 0;
+            errdefer {
+                for (out[0..copied]) |part| freeOwned(allocator, part);
+                allocator.free(out);
+            }
+            for (out, 0..) |*part, index| {
+                part.* = try dupeOwned(allocator, self.get(index));
+                copied += 1;
+            }
+            return out;
+        }
+
+        /// The parts a stored range of `pool_owner` holds.
+        pub fn fromPool(pool_owner: anytype, range: CheckedTypeRange) Self {
+            return .{ .synthesized = Rows.fromPool(pool_owner, range) };
+        }
+    };
+}
+
+/// A slice of parts stored as themselves.
+fn CheckedPartSlice(comptime Part: type) type {
+    return struct {
+        const Self = @This();
+
+        rows: []const Part = &.{},
+
+        fn len(self: Self) usize {
+            return self.rows.len;
+        }
+
+        fn get(self: Self, index: usize) Part {
+            return self.rows[index];
+        }
+
+        fn fromPool(pool_owner: anytype, range: CheckedTypeRange) Self {
+            return .{ .rows = storePool(pool_owner, Part)[range.start .. range.start + range.len] };
+        }
+    };
+}
+
+/// Stored tags, whose arguments are ranges into `type_ids`.
+const CheckedTagRows = struct {
+    rows: []const StoredTag = &.{},
+    type_ids: []const CheckedTypeId = &.{},
+
+    fn len(self: CheckedTagRows) usize {
+        return self.rows.len;
+    }
+
+    fn get(self: CheckedTagRows, index: usize) CheckedTag {
+        const row = self.rows[index];
+        return .{ .name = row.name, .args = self.type_ids[row.args.start .. row.args.start + row.args.len] };
+    }
+
+    fn fromPool(pool_owner: anytype, range: CheckedTypeRange) CheckedTagRows {
+        return .{
+            .rows = storePool(pool_owner, StoredTag)[range.start .. range.start + range.len],
+            .type_ids = storePool(pool_owner, CheckedTypeId),
+        };
+    }
+};
+
+/// The fields of a checked record row.
+pub const CheckedRecordFields = CheckedTypeParts(CheckedRecordField, CheckedPartSlice(CheckedRecordField));
+/// The tags of a checked tag union row.
+pub const CheckedTags = CheckedTypeParts(CheckedTag, CheckedTagRows);
+/// The static-dispatch constraints of a checked type variable.
+pub const CheckedConstraints = CheckedTypeParts(CheckedStaticDispatchConstraint, CheckedPartSlice(CheckedStaticDispatchConstraint));
+
+/// Public `CheckedTagUnionType` declaration (read form).
 pub const CheckedTagUnionType = struct {
-    tags: []const CheckedTag,
+    tags: CheckedTags,
     ext: CheckedTypeId,
+
+    /// A build form owning a copy of this read form's tags.
+    pub fn toBuild(self: CheckedTagUnionType, allocator: Allocator) Allocator.Error!CheckedTagUnionTypeBuild {
+        return .{ .tags = try self.tags.dupe(allocator), .ext = self.ext };
+    }
 };
 
 /// Build form of `CheckedTagUnionType`: tags carry their own arg slices.
 pub const CheckedTagUnionTypeBuild = struct {
-    tags: []const CheckedTagBuild,
+    tags: []const CheckedTag,
     ext: CheckedTypeId,
 };
 
@@ -3297,7 +3473,7 @@ pub const CheckedTypePayload = union(enum) {
     /// classification's own question. Ask only at `.flex` or `.rigid`.
     pub fn variableSealsToRowDefault(self: CheckedTypePayload) bool {
         return switch (self) {
-            .flex => |variable| (variable.constraints.len == 0 or variable.row_default_discharges_constraints) and
+            .flex => |variable| (variable.constraints.len() == 0 or variable.row_default_discharges_constraints) and
                 variable.numeric_default_phase == null and
                 variable.row_default != null,
             .rigid => false,
@@ -3323,10 +3499,10 @@ pub const CheckedTypePayload = union(enum) {
 pub const CheckedTypePayloadBuild = union(enum) {
     pending,
     err,
-    flex: CheckedTypeVariable,
-    rigid: CheckedTypeVariable,
+    flex: CheckedTypeVariableBuild,
+    rigid: CheckedTypeVariableBuild,
     alias: CheckedAliasTypeBuild,
-    record: CheckedRecordType,
+    record: CheckedRecordTypeBuild,
     tuple: []const CheckedTypeId,
     nominal: CheckedNominalTypeBuild,
     function: CheckedFunctionType,
@@ -3443,6 +3619,8 @@ fn reconstructTypeData(comptime Live: type, pool_owner: anytype, stored: anytype
     } else if (comptime info == .pointer and info.pointer.size == .one and info.pointer.child == Stored) {
         // A read form aliases the stored value rather than copying it.
         return stored;
+    } else if (comptime Stored == CheckedTypeRange and info == .@"struct") {
+        return Live.fromPool(pool_owner, stored.*);
     } else if (comptime Stored == CheckedTypeRange) {
         return storePool(pool_owner, info.pointer.child)[stored.start .. stored.start + stored.len];
     } else if (comptime Stored == OptionalVarNameId) {
@@ -3472,7 +3650,7 @@ fn reconstructTypeData(comptime Live: type, pool_owner: anytype, stored: anytype
 ///
 /// Immutable read interface over a `CheckedTypeStore`'s flat data, carrying the
 /// side pools so reconstructed payloads (`payload`) and range accessors
-/// (`CheckedTag.argsSlice`, `CheckedTypeScheme.generalizedVars`,
+/// (`CheckedTag.args`, `CheckedTypeScheme.generalizedVars`,
 /// `CheckedNominalDeclaration.formalArgs`) resolve without the owning store.
 /// Default empty interner for a default-initialized (`.{}`) view, so the
 /// non-optional `var_names` pointer always points at a valid (empty) interner.
@@ -3538,7 +3716,7 @@ pub const CheckedTypeStoreView = struct {
     declared_field_pool: []const CheckedDeclaredField = &.{},
     nominal_record_field_pool: []const CheckedNominalRecordField = &.{},
     constraint_pool: []const CheckedStaticDispatchConstraint = &.{},
-    tag_pool: []const CheckedTag = &.{},
+    tag_pool: []const StoredTag = &.{},
     var_names: *const canonical.NameInterner = &empty_view_var_names,
 
     /// Text of a stored variable name id, or null when absent.
@@ -3704,8 +3882,11 @@ pub const CheckedTypeStoreView = struct {
             .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
             .flex, .rigid => std.hash.autoHash(&hasher, root),
             .record => |record| {
-                std.hash.autoHash(&hasher, record.fields.len);
-                for (record.fields) |field| std.hash.autoHash(&hasher, field.name);
+                std.hash.autoHash(&hasher, record.fields.len());
+                for (0..record.fields.len()) |field_index| {
+                    const field = record.fields.get(field_index);
+                    std.hash.autoHash(&hasher, field.name);
+                }
             },
             .tuple => |items| std.hash.autoHash(&hasher, items.len),
             .nominal => |nominal| {
@@ -3719,10 +3900,11 @@ pub const CheckedTypeStoreView = struct {
                 std.hash.autoHash(&hasher, function.args.len);
             },
             .tag_union => |tag_union| {
-                std.hash.autoHash(&hasher, tag_union.tags.len);
-                for (tag_union.tags) |tag| {
+                std.hash.autoHash(&hasher, tag_union.tags.len());
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
                     std.hash.autoHash(&hasher, tag.name);
-                    std.hash.autoHash(&hasher, tag.args_len);
+                    std.hash.autoHash(&hasher, tag.args.len);
                 }
             },
         }
@@ -4011,8 +4193,10 @@ fn checkedTypePairEqlStep(
         },
         .record => |left_record| {
             const right_record = right_payload.record;
-            if (left_record.fields.len != right_record.fields.len) return false;
-            for (left_record.fields, right_record.fields) |left_field, right_field| {
+            if (left_record.fields.len() != right_record.fields.len()) return false;
+            for (0..left_record.fields.len()) |field_index| {
+                const left_field = left_record.fields.get(field_index);
+                const right_field = right_record.fields.get(field_index);
                 if (left_field.name != right_field.name) return false;
                 switch (mode) {
                     .exact => if (!std.meta.eql(left_field.kind, right_field.kind)) return false,
@@ -4059,10 +4243,12 @@ fn checkedTypePairEqlStep(
         },
         .tag_union => |left_union| {
             const right_union = right_payload.tag_union;
-            if (left_union.tags.len != right_union.tags.len) return false;
-            for (left_union.tags, right_union.tags) |left_tag, right_tag| {
+            if (left_union.tags.len() != right_union.tags.len()) return false;
+            for (0..left_union.tags.len()) |tag_index| {
+                const left_tag = left_union.tags.get(tag_index);
+                const right_tag = right_union.tags.get(tag_index);
                 if (left_tag.name != right_tag.name or
-                    !try appendCheckedTypePairs(allocator, pending, left_tag.argsSlice(view), right_tag.argsSlice(view)))
+                    !try appendCheckedTypePairs(allocator, pending, left_tag.args, right_tag.args))
                 {
                     return false;
                 }
@@ -4090,11 +4276,13 @@ fn checkedTypeVariableAlphaStep(
     if (left.numeric_default_phase != right.numeric_default_phase or
         left.row_default != right.row_default or
         left.bounded_row_ext != right.bounded_row_ext or
-        left.constraints.len != right.constraints.len)
+        left.constraints.len() != right.constraints.len())
     {
         return false;
     }
-    for (left.constraints, right.constraints) |left_constraint, right_constraint| {
+    for (0..left.constraints.len()) |constraint_index| {
+        const left_constraint = left.constraints.get(constraint_index);
+        const right_constraint = right.constraints.get(constraint_index);
         if (left_constraint.fn_name != right_constraint.fn_name or
             !std.meta.eql(left_constraint.origin, right_constraint.origin) or
             !std.meta.eql(left_constraint.numeral, right_constraint.numeral))
@@ -4379,7 +4567,7 @@ pub const CheckedTypeStore = struct {
     /// Flat pool of static-dispatch constraints backing flex/rigid variables.
     constraint_pool: std.ArrayList(CheckedStaticDispatchConstraint) = .empty,
     /// Flat pool of (range-form) tags backing tag_union payloads.
-    tag_pool: std.ArrayList(CheckedTag) = .empty,
+    tag_pool: std.ArrayList(StoredTag) = .empty,
     /// Interner backing variable names.
     var_names: canonical.NameInterner = .{},
     /// True for a store reconstructed from a serialized buffer (pools point into
@@ -4463,7 +4651,7 @@ pub const CheckedTypeStore = struct {
         // Pools only grow during construction. A frozen (deserialized) store's pools
         // alias buffer memory and must never be appended to—this catches such a bug,
         // and is the boundary where build-time aliasing slices could be invalidated
-        // (see the `argsSlice`/`payload`/`formalArgs` aliasing-invariant docs).
+        // (see the `payload`/`formalArgs` aliasing-invariant docs).
         std.debug.assert(!self.serialized);
         const field = comptime poolField(CheckedTypeStore, T);
         if (items.len != 0) try self.ownColumn(allocator, @field(BorrowedColumn, field));
@@ -4492,11 +4680,7 @@ pub const CheckedTypeStore = struct {
                 try self.tag_pool.ensureUnusedCapacity(allocator, tu.tags.len);
                 for (tu.tags) |tag| {
                     const args = try self.appendPool(allocator, CheckedTypeId, tag.args);
-                    self.tag_pool.appendAssumeCapacity(.{
-                        .name = tag.name,
-                        .args_start = args.start,
-                        .args_len = args.len,
-                    });
+                    self.tag_pool.appendAssumeCapacity(.{ .name = tag.name, .args = args });
                 }
                 break :blk .{ .tag_union = .{
                     .tags = .{ .start = tags_start, .len = @intCast(tu.tags.len) },
@@ -4744,7 +4928,8 @@ pub const CheckedTypeStore = struct {
     ) Allocator.Error!void {
         switch (self.payload(root)) {
             .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
-            .flex, .rigid => |variable| for (variable.constraints) |constraint| {
+            .flex, .rigid => |variable| for (0..variable.constraints.len()) |constraint_index| {
+                const constraint = variable.constraints.get(constraint_index);
                 try out.append(allocator, constraint.fn_ty);
             },
             .alias => |alias| {
@@ -4752,7 +4937,8 @@ pub const CheckedTypeStore = struct {
                 try out.appendSlice(allocator, alias.args);
             },
             .record => |record| {
-                for (record.fields) |field| {
+                for (0..record.fields.len()) |field_index| {
+                    const field = record.fields.get(field_index);
                     try out.append(allocator, field.ty);
                     if (field.kind.undeterminedVariable()) |variable| try out.append(allocator, variable);
                 }
@@ -4768,7 +4954,10 @@ pub const CheckedTypeStore = struct {
                 try out.append(allocator, function.ret);
             },
             .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| try out.appendSlice(allocator, tag.argsSlice(self));
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
+                    try out.appendSlice(allocator, tag.args);
+                }
                 try out.append(allocator, tag_union.ext);
             },
         }
@@ -4849,7 +5038,7 @@ pub const CheckedTypeStore = struct {
         while (entry_plus_one != 0) {
             const entry = self.structural_root_entries.items[entry_plus_one - 1];
             if (entry.domain == domain and
-                checkedTypePayloadBuildEqlStored(build_payload, self.payload(entry.root), self)) return entry.root;
+                checkedTypePayloadBuildEqlStored(build_payload, self.payload(entry.root))) return entry.root;
             entry_plus_one = entry.next_plus_one;
         }
         return null;
@@ -5357,7 +5546,7 @@ pub const CheckedTypeStore = struct {
         declared_field_pool: SerializedSlice(CheckedDeclaredField) = .{},
         nominal_record_field_pool: SerializedSlice(CheckedNominalRecordField) = .{},
         constraint_pool: SerializedSlice(CheckedStaticDispatchConstraint) = .{},
-        tag_pool: SerializedSlice(CheckedTag) = .{},
+        tag_pool: SerializedSlice(StoredTag) = .{},
         var_names: canonical.NameInterner.Serialized,
 
         comptime {
@@ -5542,31 +5731,7 @@ pub const CheckedTypeStore = struct {
         allocator: Allocator,
         stored: StoredCheckedTypePayload,
     ) Allocator.Error!CheckedTypePayloadBuild {
-        const read = reconstructTypeData(CheckedTypePayload, self, &stored);
-        const tu = switch (read) {
-            .tag_union => |tu| tu,
-            // Read forms alias their owner module id; the build form owns it.
-            .alias => |a| return .{ .alias = try dupeOwned(allocator, a.toBuild()) },
-            .nominal => |n| return .{ .nominal = try dupeOwned(allocator, n.toBuild()) },
-            inline .pending,
-            .field_kind,
-            .err,
-            .flex,
-            .rigid,
-            .record,
-            .tuple,
-            .function,
-            .empty_record,
-            .empty_tag_union,
-            => |value, tag| return @unionInit(CheckedTypePayloadBuild, @tagName(tag), try dupeOwned(allocator, value)),
-        };
-        const tags = try allocator.alloc(CheckedTagBuild, tu.tags.len);
-        for (tags) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
-        errdefer freeOwned(allocator, tags);
-        for (tu.tags, 0..) |tag, i| {
-            tags[i] = .{ .name = tag.name, .args = try allocator.dupe(CheckedTypeId, tag.argsSlice(self)) };
-        }
-        return .{ .tag_union = .{ .tags = tags, .ext = tu.ext } };
+        return try checkedTypePayloadToBuild(allocator, reconstructTypeData(CheckedTypePayload, self, &stored));
     }
 
     fn checkedTypeSliceContainsIdentityVariables(
@@ -5599,6 +5764,29 @@ pub const CheckedTypeStore = struct {
         );
     }
 };
+
+/// A build payload owning a copy of every slice `read` references, one level
+/// deep (child type ids stay references). Free it with
+/// `deinitCheckedTypePayloadBuild`.
+fn checkedTypePayloadToBuild(allocator: Allocator, read: CheckedTypePayload) Allocator.Error!CheckedTypePayloadBuild {
+    return switch (read) {
+        // Read forms alias their owner module id; the build form owns it.
+        .alias => |alias| .{ .alias = try dupeOwned(allocator, alias.toBuild()) },
+        .nominal => |nominal| .{ .nominal = try dupeOwned(allocator, nominal.toBuild()) },
+        .flex => |variable| .{ .flex = try variable.toBuild(allocator) },
+        .rigid => |variable| .{ .rigid = try variable.toBuild(allocator) },
+        .record => |record| .{ .record = try record.toBuild(allocator) },
+        .tag_union => |tag_union| .{ .tag_union = try tag_union.toBuild(allocator) },
+        inline .pending,
+        .field_kind,
+        .err,
+        .tuple,
+        .function,
+        .empty_record,
+        .empty_tag_union,
+        => |value, tag| @unionInit(CheckedTypePayloadBuild, @tagName(tag), try dupeOwned(allocator, value)),
+    };
+}
 
 /// The child type ids of a build payload, in the order a clone relates them.
 fn appendCheckedTypeBuildChildren(
@@ -5709,8 +5897,8 @@ fn cloneCheckedTypeBuildPayload(
             } };
         },
         .tag_union => |tag_union| blk: {
-            const tags: []const CheckedTagBuild = if (tag_union.tags.len == 0) &.{} else tags_blk: {
-                const out = try allocator.alloc(CheckedTagBuild, tag_union.tags.len);
+            const tags: []const CheckedTag = if (tag_union.tags.len == 0) &.{} else tags_blk: {
+                const out = try allocator.alloc(CheckedTag, tag_union.tags.len);
                 for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
                 errdefer freeOwned(allocator, out);
                 for (tag_union.tags, out) |tag, *slot| {
@@ -5726,9 +5914,9 @@ fn cloneCheckedTypeBuildPayload(
 
 fn cloneCheckedTypeBuildVariable(
     allocator: Allocator,
-    variable: CheckedTypeVariable,
+    variable: CheckedTypeVariableBuild,
     cloned: *CheckedTypeProjectResults,
-) Allocator.Error!CheckedTypeVariable {
+) Allocator.Error!CheckedTypeVariableBuild {
     const name = if (variable.name) |name_text| try allocator.dupe(u8, name_text) else null;
     errdefer if (name) |owned| allocator.free(owned);
     const constraints: []const CheckedStaticDispatchConstraint = if (variable.constraints.len == 0) &.{} else blk: {
@@ -5768,7 +5956,6 @@ const CheckedTypeIdentityScan = struct {
         return try checked_traverse.checkedTypePayloadIdentityVariableChildren(
             .forbid,
             children,
-            self.store,
             root,
             self.store.payload(root),
             self,
@@ -6130,7 +6317,7 @@ fn checkedRecordFieldLabelLessThan(names: *const canonical.CanonicalNameStore, l
     return names.recordFieldLabelTextLessThan(lhs.name, rhs.name);
 }
 
-fn checkedTagBuildLabelLessThan(names: *const canonical.CanonicalNameStore, lhs: CheckedTagBuild, rhs: CheckedTagBuild) bool {
+fn checkedTagBuildLabelLessThan(names: *const canonical.CanonicalNameStore, lhs: CheckedTag, rhs: CheckedTag) bool {
     return names.tagLabelTextLessThan(lhs.name, rhs.name);
 }
 
@@ -6463,8 +6650,8 @@ const DeclarationAnnoWalk = struct {
         switch (module_env.store.getTypeAnno(frame.anno)) {
             .tag_union => |tag_union| {
                 const tag_annos = module_env.store.sliceTypeAnnos(tag_union.tags);
-                const tags: []const CheckedTagBuild = if (tag_annos.len == 0) &.{} else blk: {
-                    const out = try gpa.alloc(CheckedTagBuild, tag_annos.len);
+                const tags: []const CheckedTag = if (tag_annos.len == 0) &.{} else blk: {
+                    const out = try gpa.alloc(CheckedTag, tag_annos.len);
                     for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
                     errdefer freeOwned(gpa, out);
                     for (tag_annos, out) |tag_anno_idx, *slot| {
@@ -6475,7 +6662,7 @@ const DeclarationAnnoWalk = struct {
                     // A checked row is in lexicographic label order (design.md
                     // "Row, Nominal, Alias, And Opaque Authority"); the
                     // annotation lists its tags in source order.
-                    std.sort.pdq(CheckedTagBuild, out, @as(*const canonical.CanonicalNameStore, self.names), checkedTagBuildLabelLessThan);
+                    std.sort.pdq(CheckedTag, out, @as(*const canonical.CanonicalNameStore, self.names), checkedTagBuildLabelLessThan);
                     break :blk out;
                 };
                 // The payload owns `tags` and releases it on failure.
@@ -7247,35 +7434,25 @@ fn checkedTypePayloadBuildContainsIdentityVariables(
     };
 }
 
-fn checkedRecordFieldSliceEql(a: []const CheckedRecordField, b: []const CheckedRecordField) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |left, right| {
+fn checkedRecordFieldSliceEql(a: []const CheckedRecordField, b: CheckedRecordFields) bool {
+    if (a.len != b.len()) return false;
+    for (a, 0..) |left, index| {
+        const right = b.get(index);
         if (left.name != right.name or left.ty != right.ty or !std.meta.eql(left.kind, right.kind)) return false;
     }
     return true;
 }
 
-fn checkedTagBuildSliceEqlStored(
-    build_tags: []const CheckedTagBuild,
-    stored_tags: []const CheckedTag,
-    store: *const CheckedTypeStore,
-) bool {
-    if (build_tags.len != stored_tags.len) return false;
-    for (build_tags, stored_tags) |build_tag, stored_tag| {
-        if (build_tag.name != stored_tag.name or
-            !checkedTypeIdSliceEql(build_tag.args, stored_tag.argsSlice(store)))
-        {
-            return false;
-        }
+fn checkedTagBuildSliceEqlStored(build_tags: []const CheckedTag, stored_tags: CheckedTags) bool {
+    if (build_tags.len != stored_tags.len()) return false;
+    for (build_tags, 0..) |build_tag, index| {
+        const stored_tag = stored_tags.get(index);
+        if (build_tag.name != stored_tag.name or !checkedTypeIdSliceEql(build_tag.args, stored_tag.args)) return false;
     }
     return true;
 }
 
-fn checkedTypePayloadBuildEqlStored(
-    build: CheckedTypePayloadBuild,
-    stored: CheckedTypePayload,
-    store: *const CheckedTypeStore,
-) bool {
+fn checkedTypePayloadBuildEqlStored(build: CheckedTypePayloadBuild, stored: CheckedTypePayload) bool {
     return switch (build) {
         .pending => stored == .pending,
         .err => stored == .err,
@@ -7330,7 +7507,7 @@ fn checkedTypePayloadBuildEqlStored(
             if (stored != .tag_union) break :blk false;
             const right = stored.tag_union;
             break :blk left.ext == right.ext and
-                checkedTagBuildSliceEqlStored(left.tags, right.tags, store);
+                checkedTagBuildSliceEqlStored(left.tags, right.tags);
         },
     };
 }
@@ -7782,7 +7959,7 @@ const CheckedTypeKeyAdapter = struct {
             => checkedArtifactInvariant("checked type key reached identity payload without root identity", .{}),
             .record => |record| {
                 self.fields.clearRetainingCapacity();
-                try self.appendRecordFields(record.fields);
+                try self.appendRecordFields(.fromSlice(record.fields));
                 try self.describeRecord(sink, null, record.ext);
             },
             .tag_union => |tag_union| {
@@ -7880,9 +8057,10 @@ const CheckedTypeKeyAdapter = struct {
         try tag(sink, key_tag);
         try sink.boolean(variable.name != null);
         if (variable.name) |text| try sink.text(text);
-        try sink.varint(@intCast(variable.constraints.len));
-        sink.constraint_count = @intCast(variable.constraints.len);
-        for (variable.constraints) |constraint| {
+        try sink.varint(@intCast(variable.constraints.len()));
+        sink.constraint_count = @intCast(variable.constraints.len());
+        var constraints = variable.constraints.iterator();
+        while (constraints.next()) |constraint| {
             try sink.text(self.names.methodNameText(constraint.fn_name));
             try self.child(sink, constraint.fn_ty);
             try sink.text(@tagName(constraint.origin));
@@ -7894,15 +8072,17 @@ const CheckedTypeKeyAdapter = struct {
         return .identity;
     }
 
-    fn appendRecordFields(self: *CheckedTypeKeyAdapter, source: []const CheckedRecordField) Allocator.Error!void {
-        for (source) |field| {
+    fn appendRecordFields(self: *CheckedTypeKeyAdapter, source: CheckedRecordFields) Allocator.Error!void {
+        var fields = source.iterator();
+        while (fields.next()) |field| {
             try self.fields.append(self.allocator, .{ .name = field.name, .ty = field.ty, .kind = field.kind });
         }
     }
 
-    fn appendTags(self: *CheckedTypeKeyAdapter, source: []const CheckedTag) Allocator.Error!void {
-        for (source) |source_tag| {
-            try self.tags.append(self.allocator, .{ .name = source_tag.name, .args = source_tag.argsSlice(self.store) });
+    fn appendTags(self: *CheckedTypeKeyAdapter, source: CheckedTags) Allocator.Error!void {
+        var tags = source.iterator();
+        while (tags.next()) |source_tag| {
+            try self.tags.append(self.allocator, .{ .name = source_tag.name, .args = source_tag.args });
         }
     }
 
@@ -8491,7 +8671,7 @@ const CheckedTypePublisher = struct {
         id: CheckedTypeId,
         ids: []const CheckedTypeId,
         fields: []const CheckedRecordField,
-        tags: []const CheckedTagBuild,
+        tags: []const CheckedTag,
         constraints: []const CheckedStaticDispatchConstraint,
         payload,
 
@@ -9057,7 +9237,7 @@ const CheckedTypePublisher = struct {
 
     const TagsTask = struct {
         range: types.Tag.SafeMultiList.Range,
-        out: []CheckedTagBuild = &.{},
+        out: []CheckedTag = &.{},
     };
 
     fn stepTags(self: *CheckedTypePublisher, frame: *Frame, task: *TagsTask, input: ?Result) Allocator.Error!Step {
@@ -9067,7 +9247,7 @@ const CheckedTypePublisher = struct {
         const tag_args = tags.items(.args);
         if (frame.cursor == 0) {
             if (tag_names.len == 0) return .{ .ret = .{ .tags = &.{} } };
-            task.out = try self.allocator.alloc(CheckedTagBuild, tag_names.len);
+            task.out = try self.allocator.alloc(CheckedTag, tag_names.len);
             for (task.out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
             frame.cursor = 1;
         } else {
@@ -10044,9 +10224,9 @@ test "optional record fields publish through solver-side record copy" {
         .record => |record| record.fields,
         .pending, .field_kind, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
     };
-    try testing.expectEqual(@as(usize, 1), fields.len);
-    try testing.expectEqualStrings("world", names.recordFieldLabelText(fields[0].name));
-    try testing.expectEqual(CheckedFieldKind.Tag.optional, fields[0].kind.tag);
+    try testing.expectEqual(@as(usize, 1), fields.len());
+    try testing.expectEqualStrings("world", names.recordFieldLabelText(fields.get(0).name));
+    try testing.expectEqual(CheckedFieldKind.Tag.optional, fields.get(0).kind.tag);
 
     // Cross-representation agreement on a genuinely-checked type: the
     // published checked root keys byte-for-byte as the solver keys the var.
@@ -10182,8 +10362,8 @@ test "poisoned record field presence preserves its value type and canonical key"
         .record => |record| record.fields,
         .pending, .field_kind, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
     };
-    try testing.expectEqual(@as(usize, 1), fields.len);
-    try testing.expectEqual(checked_value, fields[0].ty);
+    try testing.expectEqual(@as(usize, 1), fields.len());
+    try testing.expectEqual(checked_value, fields.get(0).ty);
 
     const source_key = try canonical_type_keys.fromVar(allocator, module.typeStoreConst(), module.moduleEnvConst(), record_var);
     const checked_key_info = try substitutedCheckedTypeKeyInfo(allocator, &names, &store, checked_record, &.{}, &.{});
@@ -10308,11 +10488,11 @@ test "optional record fields publish through the declaration annotation path" {
     const fields = store.payload(record_root).record.fields;
 
     // The published row is in lexicographic label order, not source order.
-    try testing.expectEqual(@as(usize, 2), fields.len);
-    try testing.expectEqualStrings("req", names.recordFieldLabelText(fields[0].name));
-    try testing.expectEqual(CheckedFieldKind.Tag.required, fields[0].kind.tag);
-    try testing.expectEqualStrings("world", names.recordFieldLabelText(fields[1].name));
-    try testing.expectEqual(CheckedFieldKind.Tag.optional, fields[1].kind.tag);
+    try testing.expectEqual(@as(usize, 2), fields.len());
+    try testing.expectEqualStrings("req", names.recordFieldLabelText(fields.get(0).name));
+    try testing.expectEqual(CheckedFieldKind.Tag.required, fields.get(0).kind.tag);
+    try testing.expectEqualStrings("world", names.recordFieldLabelText(fields.get(1).name));
+    try testing.expectEqual(CheckedFieldKind.Tag.optional, fields.get(1).kind.tag);
 }
 
 /// A nominal declaration backing published by declaration output, with the
@@ -10399,11 +10579,11 @@ test "nominal declaration backing row is in label order regardless of source ord
         fn check(published: PublishedNominalBacking) PublishedNominalBackingCheckError!void {
             const testing = std.testing;
             const fields = published.store.payload(published.root).record.fields;
-            try testing.expectEqual(@as(usize, 2), fields.len);
-            try testing.expectEqualStrings("m", published.names.recordFieldLabelText(fields[0].name));
-            try testing.expectEqual(CheckedFieldKind.Tag.optional, fields[0].kind.tag);
-            try testing.expectEqualStrings("n", published.names.recordFieldLabelText(fields[1].name));
-            try testing.expectEqual(CheckedFieldKind.Tag.required, fields[1].kind.tag);
+            try testing.expectEqual(@as(usize, 2), fields.len());
+            try testing.expectEqualStrings("m", published.names.recordFieldLabelText(fields.get(0).name));
+            try testing.expectEqual(CheckedFieldKind.Tag.optional, fields.get(0).kind.tag);
+            try testing.expectEqualStrings("n", published.names.recordFieldLabelText(fields.get(1).name));
+            try testing.expectEqual(CheckedFieldKind.Tag.required, fields.get(1).kind.tag);
         }
     }.check);
 }
@@ -10415,11 +10595,11 @@ test "nominal declaration backing tag row is in label order regardless of source
         fn check(published: PublishedNominalBacking) PublishedNominalBackingCheckError!void {
             const testing = std.testing;
             const tags = published.store.payload(published.root).tag_union.tags;
-            try testing.expectEqual(@as(usize, 3), tags.len);
-            try testing.expectEqualStrings("Down", published.names.tagLabelText(tags[0].name));
-            try testing.expectEqualStrings("Left", published.names.tagLabelText(tags[1].name));
-            try testing.expectEqual(@as(u32, 1), tags[1].args_len);
-            try testing.expectEqualStrings("Up", published.names.tagLabelText(tags[2].name));
+            try testing.expectEqual(@as(usize, 3), tags.len());
+            try testing.expectEqualStrings("Down", published.names.tagLabelText(tags.get(0).name));
+            try testing.expectEqualStrings("Left", published.names.tagLabelText(tags.get(1).name));
+            try testing.expectEqual(@as(usize, 1), tags.get(1).args.len);
+            try testing.expectEqualStrings("Up", published.names.tagLabelText(tags.get(2).name));
         }
     }.check);
 }
@@ -10441,14 +10621,14 @@ test "nominal declaration backing closes a referenced alias's tag union row" {
             const testing = std.testing;
             const store = published.store;
             const fields = store.payload(published.root).record.fields;
-            try testing.expectEqual(@as(usize, 1), fields.len);
-            try testing.expectEqualStrings("method", published.names.recordFieldLabelText(fields[0].name));
+            try testing.expectEqual(@as(usize, 1), fields.len());
+            try testing.expectEqualStrings("method", published.names.recordFieldLabelText(fields.get(0).name));
 
-            const method = store.payload(fields[0].ty);
+            const method = store.payload(fields.get(0).ty);
             try testing.expect(method == .alias);
             const row = store.payload(method.alias.backing);
             try testing.expect(row == .tag_union);
-            try testing.expectEqual(@as(usize, 1), row.tag_union.tags.len);
+            try testing.expectEqual(@as(usize, 1), row.tag_union.tags.len());
             try testing.expectEqual(std.meta.Tag(CheckedTypePayload).empty_tag_union, std.meta.activeTag(store.payload(row.tag_union.ext)));
         }
     }.check);
@@ -10472,8 +10652,8 @@ test "nominal declaration backing publishes each alias expansion once" {
             const store = published.store;
             try testing.expectEqual(@as(u32, 5), published.active.scratch.?.alias_expansions.count());
             const fields = store.payload(published.root).record.fields;
-            try testing.expectEqual(fields[0].ty, fields[1].ty);
-            var current = store.payload(fields[0].ty);
+            try testing.expectEqual(fields.get(0).ty, fields.get(1).ty);
+            var current = store.payload(fields.get(0).ty);
             var depth: usize = 4;
             while (depth > 0) : (depth -= 1) {
                 try testing.expect(current == .alias);
@@ -23266,21 +23446,21 @@ test "hosted Try adapter capability recognizes only closed structural error rows
     try testFillSyntheticVariableRoot(allocator, &store, defaulted_tail, .{ .flex = .{ .row_default = .empty_tag_union } });
 
     const error_tag = try names.internTagLabel("HostErr");
-    const closed_tags = try allocator.alloc(CheckedTagBuild, 1);
+    const closed_tags = try allocator.alloc(CheckedTag, 1);
     closed_tags[0] = .{ .name = error_tag };
     const closed_row = try store.appendSyntheticPayloadRoot(allocator, &names, .{ .tag_union = .{
         .tags = closed_tags,
         .ext = empty_row,
     } });
 
-    const open_tags = try allocator.alloc(CheckedTagBuild, 1);
+    const open_tags = try allocator.alloc(CheckedTag, 1);
     open_tags[0] = .{ .name = error_tag };
     const open_row = try store.appendSyntheticPayloadRoot(allocator, &names, .{ .tag_union = .{
         .tags = open_tags,
         .ext = open_tail,
     } });
 
-    const defaulted_tags = try allocator.alloc(CheckedTagBuild, 1);
+    const defaulted_tags = try allocator.alloc(CheckedTag, 1);
     defaulted_tags[0] = .{ .name = error_tag };
     const defaulted_row = try store.appendSyntheticPayloadRoot(allocator, &names, .{ .tag_union = .{
         .tags = defaulted_tags,
@@ -25896,7 +26076,8 @@ fn callableIdentityIsSpecializationIndependent(
                 try pending.append(allocator, alias.backing);
             },
             .record => |record| {
-                for (record.fields) |field| {
+                for (0..record.fields.len()) |field_index| {
+                    const field = record.fields.get(field_index);
                     try pending.append(allocator, field.ty);
                     if (field.kind.undeterminedVariable()) |variable| try pending.append(allocator, variable);
                 }
@@ -25912,7 +26093,10 @@ fn callableIdentityIsSpecializationIndependent(
                 try pending.append(allocator, function.ret);
             },
             .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| try pending.appendSlice(allocator, tag.argsSlice(store));
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
+                    try pending.appendSlice(allocator, tag.args);
+                }
                 try pending.append(allocator, tag_union.ext);
             },
         }
@@ -27434,12 +27618,18 @@ fn checkedTypeHoldsFunction(
                 for (alias.args) |arg| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = arg });
             },
             .record => |record| {
-                for (record.fields) |field| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = field.ty });
+                for (0..record.fields.len()) |field_index| {
+                    const field = record.fields.get(field_index);
+                    try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = field.ty });
+                }
                 try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = record.ext });
             },
             .tuple => |items| for (items) |elem| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = elem }),
             .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| for (tag.argsSlice(item.types)) |arg| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = arg });
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
+                    for (tag.args) |arg| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = arg });
+                }
                 try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = tag_union.ext });
             },
             .nominal => |nominal| {
@@ -27969,8 +28159,8 @@ fn dispatchSubstitutionStep(
 
             for (target_row.tags) |target_tag| {
                 const plan_tag = findTag(names, plan_row.tags, target_tag.name) orelse continue;
-                const target_args = target_tag.argsSlice(store);
-                const plan_args = plan_tag.argsSlice(store);
+                const target_args = target_tag.args;
+                const plan_args = plan_tag.args;
                 if (target_args.len != plan_args.len) continue;
                 try appendDispatchSubstitutionPairs(allocator, pending, target_args, plan_args);
             }
@@ -28765,12 +28955,12 @@ const FlattenedPlatformRequirementRecordRow = struct {
 fn flattenPlatformRequirementRecordRow(
     allocator: Allocator,
     store: *const CheckedTypeStore,
-    head: []const CheckedRecordField,
+    head: CheckedRecordFields,
     ext: ?CheckedTypeId,
 ) Allocator.Error!FlattenedPlatformRequirementRecordRow {
     var fields = std.ArrayList(CheckedRecordField).empty;
     errdefer fields.deinit(allocator);
-    try fields.appendSlice(allocator, head);
+    try head.appendTo(allocator, &fields);
     var tail = ext;
     var seen = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer seen.deinit();
@@ -28786,7 +28976,7 @@ fn flattenPlatformRequirementRecordRow(
                 break;
             },
             .record => |record| {
-                try fields.appendSlice(allocator, record.fields);
+                try record.fields.appendTo(allocator, &fields);
                 tail = record.ext;
             },
             .alias => |alias| tail = alias.backing,
@@ -28818,12 +29008,12 @@ const FlattenedPlatformRequirementTagRow = struct {
 fn flattenPlatformRequirementTagRow(
     allocator: Allocator,
     store: *const CheckedTypeStore,
-    head: []const CheckedTag,
+    head: CheckedTags,
     ext: ?CheckedTypeId,
 ) Allocator.Error!FlattenedPlatformRequirementTagRow {
     var tags = std.ArrayList(CheckedTag).empty;
     errdefer tags.deinit(allocator);
-    try tags.appendSlice(allocator, head);
+    try head.appendTo(allocator, &tags);
     var tail = ext;
     var seen = collections.DenseMap(CheckedTypeId, void).init(allocator);
     defer seen.deinit();
@@ -28839,7 +29029,7 @@ fn flattenPlatformRequirementTagRow(
                 break;
             },
             .tag_union => |tag_union| {
-                try tags.appendSlice(allocator, tag_union.tags);
+                try tag_union.tags.appendTo(allocator, &tags);
                 tail = tag_union.ext;
             },
             .alias => |alias| tail = alias.backing,
@@ -28868,14 +29058,14 @@ fn platformRequirementPayload(store: *const CheckedTypeStore, root: CheckedTypeI
 }
 
 const RelationTagUnionParts = struct {
-    tags: []const CheckedTag,
+    tags: CheckedTags,
     ext: ?CheckedTypeId,
 };
 
 fn tagUnionParts(payload: CheckedTypePayload) ?RelationTagUnionParts {
     return switch (payload) {
         .tag_union => |tag_union| .{ .tags = tag_union.tags, .ext = tag_union.ext },
-        .empty_tag_union => .{ .tags = &.{}, .ext = null },
+        .empty_tag_union => .{ .tags = .empty, .ext = null },
         .pending,
         .field_kind,
         .err,
@@ -28904,14 +29094,14 @@ fn checkedTypePayloadIsIdentity(payload: CheckedTypePayload) bool {
 }
 
 const RelationRecordParts = struct {
-    fields: []const CheckedRecordField,
+    fields: CheckedRecordFields,
     ext: ?CheckedTypeId,
 };
 
 fn recordParts(payload: CheckedTypePayload) ?RelationRecordParts {
     return switch (payload) {
         .record => |record| .{ .fields = record.fields, .ext = record.ext },
-        .empty_record => .{ .fields = &.{}, .ext = null },
+        .empty_record => .{ .fields = .empty, .ext = null },
         .pending,
         .field_kind,
         .err,
@@ -29575,12 +29765,18 @@ fn checkedTypeHasNoReachableCallableSlots(
                 }
             },
             .record => |record| {
-                for (record.fields) |field| try pending.append(allocator, field.ty);
+                for (0..record.fields.len()) |field_index| {
+                    const field = record.fields.get(field_index);
+                    try pending.append(allocator, field.ty);
+                }
                 try pending.append(allocator, record.ext);
             },
             .tuple => |items| try pending.appendSlice(allocator, items),
             .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| try pending.appendSlice(allocator, tag.argsSlice(checked_types));
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
+                    try pending.appendSlice(allocator, tag.args);
+                }
                 try pending.append(allocator, tag_union.ext);
             },
         }
@@ -30345,7 +30541,10 @@ const TypeVarMentions = struct {
             .flex, .rigid => try sink.noteMention(step.ty, step.flags),
             .alias => |alias| try sink.push(alias.backing, step.flags),
             .record => |record| {
-                for (record.fields) |field| try sink.push(field.ty, step.flags);
+                for (0..record.fields.len()) |field_index| {
+                    const field = record.fields.get(field_index);
+                    try sink.push(field.ty, step.flags);
+                }
                 try expandRowExtension(checked_types, record.ext, step.flags, sink);
             },
             .tuple => |elems| for (elems) |elem| try sink.push(elem, step.flags),
@@ -30366,8 +30565,9 @@ const TypeVarMentions = struct {
                 try sink.push(function.ret, inner);
             },
             .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| {
-                    for (tag.argsSlice(checked_types)) |arg| try sink.push(arg, step.flags);
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
+                    for (tag.args) |arg| try sink.push(arg, step.flags);
                 }
                 try expandRowExtension(checked_types, tag_union.ext, step.flags, sink);
             },
@@ -30551,7 +30751,7 @@ const TemplateDemandPass = struct {
         for (self.current_vars, self.current_demands) |var_ty, *demand| {
             switch (self.checked_types.payload(var_ty)) {
                 .flex, .rigid => |variable| {
-                    if (variable.constraints.len != 0 or variable.numeric_default_phase != null) demand.* = .full;
+                    if (variable.constraints.len() != 0 or variable.numeric_default_phase != null) demand.* = .full;
                 },
                 .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => demand.* = .full,
             }
@@ -33309,7 +33509,8 @@ fn appendPublicApiTypeDependencies(
         switch (checked_types.payload(@fromBackingInt(@intCast(index)))) {
             .pending => checkedArtifactInvariant("public API dependency scan reached pending checked type payload", .{}),
             .field_kind, .err, .empty_record, .empty_tag_union => {},
-            .flex, .rigid => |variable| for (variable.constraints) |constraint| {
+            .flex, .rigid => |variable| for (0..variable.constraints.len()) |constraint_index| {
+                const constraint = variable.constraints.get(constraint_index);
                 try pending.append(allocator, constraint.fn_ty);
             },
             .alias => |alias| {
@@ -33341,7 +33542,10 @@ fn appendPublicApiTypeDependencies(
                 try pending.appendSlice(allocator, nominal.args);
             },
             .record => |record| {
-                for (record.fields) |field| try pending.append(allocator, field.ty);
+                for (0..record.fields.len()) |field_index| {
+                    const field = record.fields.get(field_index);
+                    try pending.append(allocator, field.ty);
+                }
                 try pending.append(allocator, record.ext);
             },
             .tuple => |items| try pending.appendSlice(allocator, items),
@@ -33350,7 +33554,10 @@ fn appendPublicApiTypeDependencies(
                 try pending.append(allocator, function.ret);
             },
             .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| try pending.appendSlice(allocator, tag.argsSlice(checked_types));
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
+                    try pending.appendSlice(allocator, tag.args);
+                }
                 try pending.append(allocator, tag_union.ext);
             },
         }
@@ -33856,7 +34063,10 @@ const LoweringVisibilityBuilder = struct {
         switch (store.payload(root)) {
             .pending => checkedArtifactInvariant("lowering visibility type traversal reached pending payload", .{}),
             .field_kind, .err, .empty_record, .empty_tag_union => {},
-            .flex, .rigid => |variable| for (variable.constraints) |constraint| try pending.append(gpa, constraint.fn_ty),
+            .flex, .rigid => |variable| for (0..variable.constraints.len()) |constraint_index| {
+                const constraint = variable.constraints.get(constraint_index);
+                try pending.append(gpa, constraint.fn_ty);
+            },
             .alias => |alias| {
                 try self.appendKey(alias.owner_module.*);
                 try pending.append(gpa, alias.backing);
@@ -33871,7 +34081,8 @@ const LoweringVisibilityBuilder = struct {
                 try pending.appendSlice(gpa, nominal.padding_field_types);
             },
             .record => |record| {
-                for (record.fields) |field| {
+                for (0..record.fields.len()) |field_index| {
+                    const field = record.fields.get(field_index);
                     if (field.kind.undeterminedVariable()) |variable| try pending.append(gpa, variable);
                     try pending.append(gpa, field.ty);
                 }
@@ -33883,7 +34094,10 @@ const LoweringVisibilityBuilder = struct {
                 try pending.append(gpa, function.ret);
             },
             .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| try pending.appendSlice(gpa, tag.argsSlice(store));
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
+                    try pending.appendSlice(gpa, tag.args);
+                }
                 try pending.append(gpa, tag_union.ext);
             },
         }
@@ -36177,7 +36391,8 @@ pub const CheckedModuleArtifact = struct {
             switch (checkedPayloadOrNull(view, current) orelse return null) {
                 .alias => |alias| current = alias.backing,
                 .record => |record| {
-                    for (record.fields) |field| {
+                    for (0..record.fields.len()) |field_index| {
+                        const field = record.fields.get(field_index);
                         if (names.recordFieldLabelTextEql(field.name, label)) return field.ty;
                     }
                     current = record.ext;
@@ -36214,9 +36429,10 @@ pub const CheckedModuleArtifact = struct {
             switch (checkedPayloadOrNull(view, current) orelse return null) {
                 .alias => |alias| current = alias.backing,
                 .tag_union => |tag_union| {
-                    for (tag_union.tags) |tag| {
+                    for (0..tag_union.tags.len()) |tag_index| {
+                        const tag = tag_union.tags.get(tag_index);
                         if (!names.tagLabelTextEql(tag.name, label)) continue;
-                        const payloads = tag.argsSlice(view);
+                        const payloads = tag.args;
                         if (payload_index >= payloads.len) return null;
                         return payloads[payload_index];
                     }
@@ -38045,7 +38261,8 @@ const CheckedTypeStoreImportProjector = struct {
         switch (payload) {
             .pending => checkedArtifactInvariant("platform for-clause projection reached pending app checked type payload", .{}),
             .field_kind, .err, .empty_record, .empty_tag_union => {},
-            .flex, .rigid => |variable| for (variable.constraints) |constraint| {
+            .flex, .rigid => |variable| for (0..variable.constraints.len()) |constraint_index| {
+                const constraint = variable.constraints.get(constraint_index);
                 try ops.append(gpa, .{ .method_name = constraint.fn_name });
                 try ops.append(gpa, .{ .child = constraint.fn_ty });
             },
@@ -38056,7 +38273,8 @@ const CheckedTypeStoreImportProjector = struct {
                 for (alias.args) |arg| try ops.append(gpa, .{ .child = arg });
             },
             .record => |record| {
-                for (record.fields) |field| {
+                for (0..record.fields.len()) |field_index| {
+                    const field = record.fields.get(field_index);
                     try ops.append(gpa, .{ .record_field = field.name });
                     try ops.append(gpa, .{ .child = field.ty });
                     // Default identities remap across name stores; an
@@ -38105,9 +38323,10 @@ const CheckedTypeStoreImportProjector = struct {
                 try ops.append(gpa, .{ .child = function.ret });
             },
             .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| {
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
                     try ops.append(gpa, .{ .tag = tag.name });
-                    for (tag.argsSlice(self.imported.checked_types)) |arg| try ops.append(gpa, .{ .child = arg });
+                    for (tag.args) |arg| try ops.append(gpa, .{ .child = arg });
                 }
                 try ops.append(gpa, .{ .child = tag_union.ext });
             },
@@ -38239,13 +38458,13 @@ const CheckedTypeStoreImportProjector = struct {
                 } };
             },
             .tag_union => |tag_union| blk: {
-                const tags: []const CheckedTagBuild = if (tag_union.tags.len == 0) &.{} else tags_blk: {
-                    const out = try gpa.alloc(CheckedTagBuild, tag_union.tags.len);
+                const tags: []const CheckedTag = if (tag_union.tags.len() == 0) &.{} else tags_blk: {
+                    const out = try gpa.alloc(CheckedTag, tag_union.tags.len());
                     for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
                     errdefer freeOwned(gpa, out);
-                    for (tag_union.tags, out) |tag, *slot| {
+                    for (out, 0..) |*slot, tag_index| {
                         slot.name = @fromBackingInt(@intCast(results.take()));
-                        slot.args = try results.typeIds(gpa, tag.args_len);
+                        slot.args = try results.typeIds(gpa, tag_union.tags.get(tag_index).args.len);
                     }
                     break :tags_blk out;
                 };
@@ -38258,16 +38477,17 @@ const CheckedTypeStoreImportProjector = struct {
         self: *CheckedTypeStoreImportProjector,
         variable: CheckedTypeVariable,
         results: *CheckedTypeProjectResults,
-    ) Allocator.Error!CheckedTypeVariable {
+    ) Allocator.Error!CheckedTypeVariableBuild {
         const name = if (variable.name) |name_text|
             try self.allocator.dupe(u8, name_text)
         else
             null;
         errdefer if (name) |owned| self.allocator.free(owned);
 
-        const constraints: []const CheckedStaticDispatchConstraint = if (variable.constraints.len == 0) &.{} else blk: {
-            const out = try self.allocator.alloc(CheckedStaticDispatchConstraint, variable.constraints.len);
-            for (variable.constraints, out) |constraint, *slot| {
+        const constraints: []const CheckedStaticDispatchConstraint = if (variable.constraints.len() == 0) &.{} else blk: {
+            const out = try self.allocator.alloc(CheckedStaticDispatchConstraint, variable.constraints.len());
+            for (out, 0..) |*slot, constraint_index| {
+                const constraint = variable.constraints.get(constraint_index);
                 slot.* = .{
                     .fn_name = @fromBackingInt(@intCast(results.take())),
                     .fn_ty = results.typeId(),
@@ -38290,12 +38510,13 @@ const CheckedTypeStoreImportProjector = struct {
 
     fn buildRecordFields(
         self: *CheckedTypeStoreImportProjector,
-        fields: []const CheckedRecordField,
+        fields: CheckedRecordFields,
         results: *CheckedTypeProjectResults,
     ) Allocator.Error![]const CheckedRecordField {
-        if (fields.len == 0) return &.{};
-        const out = try self.allocator.alloc(CheckedRecordField, fields.len);
-        for (fields, out) |field, *slot| {
+        if (fields.len() == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedRecordField, fields.len());
+        for (out, 0..) |*slot, field_index| {
+            const field = fields.get(field_index);
             const name: canonical.RecordFieldLabelId = @fromBackingInt(@intCast(results.take()));
             const ty = results.typeId();
             slot.* = .{
@@ -40455,7 +40676,7 @@ test "relation projection preserves anonymous row identity and provenance" {
     try testFillSyntheticVariableRoot(allocator, &source_store, source_tail, .{ .flex = .{ .row_default = .empty_tag_union } });
 
     const source_union = try source_store.reserveDistinctSyntheticTypeRoot(allocator, testCanonicalTypeKey(71), true);
-    const tags = try allocator.alloc(CheckedTagBuild, 1);
+    const tags = try allocator.alloc(CheckedTag, 1);
     tags[0] = .{ .name = baz_name, .args = &.{} };
     try source_store.fillSyntheticTypeRoot(allocator, source_union, .{ .tag_union = .{
         .tags = tags,
@@ -40608,7 +40829,7 @@ test "checked type identity scan finds identity beside recursive tag cycle" {
     node_args[0] = root;
     const leaf_args = try allocator.alloc(CheckedTypeId, 1);
     leaf_args[0] = identity;
-    const tags = try allocator.alloc(CheckedTagBuild, 2);
+    const tags = try allocator.alloc(CheckedTag, 2);
     tags[0] = .{ .name = tag_node, .args = node_args };
     tags[1] = .{ .name = tag_leaf, .args = leaf_args };
     try store.fillSyntheticTypeRoot(allocator, root, .{ .tag_union = .{
@@ -41108,7 +41329,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
 
     // 1: a tag_union with one tag carrying args [a].
     const tag_args = try gpa.dupe(CheckedTypeId, &.{a});
-    const tags = try gpa.alloc(CheckedTagBuild, 1);
+    const tags = try gpa.alloc(CheckedTag, 1);
     tags[0] = .{ .name = @fromBackingInt(@intCast(3)), .args = tag_args };
     const tu_stored = try store.commitPayload(gpa, .{ .tag_union = .{ .tags = tags, .ext = a } });
     try store.roots.append(gpa, .{ .id = b, .key = .{ .bytes = @as([32]u8, @splat(2)) } });
@@ -41221,14 +41442,14 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     // Flex name + constraint survive.
     const flex = loaded.payload(a).flex;
     try std.testing.expectEqualStrings("elem", flex.name.?);
-    try std.testing.expectEqual(@as(usize, 1), flex.constraints.len);
-    try std.testing.expectEqual(a, flex.constraints[0].fn_ty);
+    try std.testing.expectEqual(@as(usize, 1), flex.constraints.len());
+    try std.testing.expectEqual(a, flex.constraints.get(0).fn_ty);
     try std.testing.expectEqual(NumericDefaultPhase.mono_specialization, flex.numeric_default_phase.?);
 
-    // Tag union: tag args resolve via argsSlice.
+    // Tag union: tag args resolve through the tag handle.
     const tu = loaded.payload(b).tag_union;
-    try std.testing.expectEqual(@as(usize, 1), tu.tags.len);
-    try std.testing.expectEqualSlices(CheckedTypeId, &.{a}, tu.tags[0].argsSlice(&loaded));
+    try std.testing.expectEqual(@as(usize, 1), tu.tags.len());
+    try std.testing.expectEqualSlices(CheckedTypeId, &.{a}, tu.tags.get(0).args);
     try std.testing.expectEqual(a, tu.ext);
 
     // Alias and nominal owners survive independently from source-origin ids.
@@ -41247,14 +41468,14 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     // Record fields keep their published kind axis through the round-trip:
     // required, optional, and defaulted (with its default identity).
     const record = loaded.payload(e).record;
-    try std.testing.expectEqual(@as(usize, 3), record.fields.len);
+    try std.testing.expectEqual(@as(usize, 3), record.fields.len());
     try std.testing.expectEqual(a, record.ext);
-    try std.testing.expectEqual(CheckedFieldKind.Tag.required, record.fields[0].kind.tag);
-    try std.testing.expectEqual(CheckedFieldKind.Tag.optional, record.fields[1].kind.tag);
-    try std.testing.expectEqual(a, record.fields[1].ty);
-    try std.testing.expectEqual(CheckedFieldKind.Tag.defaulted, record.fields[2].kind.tag);
-    try std.testing.expectEqual(@as(canonical.ModuleIdentityId, @fromBackingInt(@intCast(12))), record.fields[2].kind.default.origin().?);
-    try std.testing.expectEqual(@as(u32, 77), record.fields[2].kind.default.expr_node);
+    try std.testing.expectEqual(CheckedFieldKind.Tag.required, record.fields.get(0).kind.tag);
+    try std.testing.expectEqual(CheckedFieldKind.Tag.optional, record.fields.get(1).kind.tag);
+    try std.testing.expectEqual(a, record.fields.get(1).ty);
+    try std.testing.expectEqual(CheckedFieldKind.Tag.defaulted, record.fields.get(2).kind.tag);
+    try std.testing.expectEqual(@as(canonical.ModuleIdentityId, @fromBackingInt(@intCast(12))), record.fields.get(2).kind.default.origin().?);
+    try std.testing.expectEqual(@as(u32, 77), record.fields.get(2).kind.default.expr_node);
 
     // Scheme generalized vars + decl formal args.
     try std.testing.expectEqualSlices(CheckedTypeId, &.{ a, b }, loaded.schemes.items[0].generalizedVars(&loaded));
@@ -41269,7 +41490,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
 
     // The view exposes the same data.
     const v = loaded.view();
-    try std.testing.expectEqualSlices(CheckedTypeId, &.{a}, v.payload(b).tag_union.tags[0].argsSlice(v));
+    try std.testing.expectEqualSlices(CheckedTypeId, &.{a}, v.payload(b).tag_union.tags.get(0).args);
     try std.testing.expectEqualSlices(u8, &alias_owner.bytes, &v.payload(c).alias.owner_module.bytes);
     try std.testing.expectEqualSlices(u8, &nominal_owner.bytes, &v.payload(d).nominal.owner_module.bytes);
     try std.testing.expectEqual(@as(usize, 2), v.nominalDeclarationById(loaded.nominal_declarations.items[0].id).declaredRecordFields(v).len);
@@ -42018,8 +42239,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x55, 0x18, 0xF1, 0x84, 0x1F, 0xA7, 0xD9, 0x81, 0x8D, 0x16, 0x70, 0x7D, 0x6B, 0x9D, 0xD6, 0x35,
-        0xF0, 0x5B, 0x70, 0x39, 0xB2, 0x96, 0xE9, 0x26, 0x44, 0x99, 0xAF, 0xC0, 0x70, 0x6E, 0xB1, 0xE6,
+        0xD9, 0x49, 0x17, 0xE9, 0xAF, 0x2F, 0xB5, 0xDB, 0xB1, 0xA6, 0x97, 0x66, 0xEB, 0xE1, 0x88, 0xC4,
+        0xD2, 0xD3, 0x2D, 0xAB, 0x96, 0xA9, 0xEB, 0x6B, 0x9E, 0xB8, 0x5D, 0xBC, 0xF6, 0x2F, 0x8B, 0x2F,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -42365,7 +42586,7 @@ fn testCallableWithRowTail(
     if (!builtin.is_test) unreachable; // test scaffolding: only test blocks call this
 
     const unit = try store.appendSyntheticPayloadRoot(allocator, names, .empty_record);
-    const tags = try allocator.alloc(CheckedTagBuild, 1);
+    const tags = try allocator.alloc(CheckedTag, 1);
     tags[0] = .{ .name = try names.internTagLabel("Unavailable") };
     const row = try store.appendSyntheticPayloadRoot(allocator, names, .{ .tag_union = .{
         .tags = tags,

@@ -520,8 +520,9 @@ const Extractor = struct {
                 const display_name = if (variable.name) |name| try alloc.dupe(u8, name) else null;
                 const api_id = try self.api.addType(.{ .variable = .{ .display_name = display_name } });
                 try memo.put(self.gpa, id, api_id);
-                const constraints = try alloc.alloc(PackageApi.Constraint, variable.constraints.len);
-                for (variable.constraints, 0..) |constraint, i| {
+                const constraints = try alloc.alloc(PackageApi.Constraint, variable.constraints.len());
+                for (0..variable.constraints.len()) |i| {
+                    const constraint = variable.constraints.get(i);
                     constraints[i] = .{
                         .method = try alloc.dupe(u8, names.methodNameText(constraint.fn_name)),
                         .fn_ty = try self.convertType(view, names, constraint.fn_ty, memo),
@@ -563,8 +564,9 @@ const Extractor = struct {
                 return api_id;
             },
             .record => |record| {
-                const fields = try alloc.alloc(PackageApi.Field, record.fields.len);
-                for (record.fields, 0..) |field, i| {
+                const fields = try alloc.alloc(PackageApi.Field, record.fields.len());
+                for (0..record.fields.len()) |i| {
+                    const field = record.fields.get(i);
                     fields[i] = .{
                         .name = try alloc.dupe(u8, names.recordFieldLabelText(field.name)),
                         .ty = try self.convertType(view, names, field.ty, memo),
@@ -600,9 +602,10 @@ const Extractor = struct {
                 return api_id;
             },
             .tag_union => |tag_union| {
-                const tags = try alloc.alloc(PackageApi.Tag, tag_union.tags.len);
-                for (tag_union.tags, 0..) |tag, i| {
-                    const tag_args = tag.argsSlice(view);
+                const tags = try alloc.alloc(PackageApi.Tag, tag_union.tags.len());
+                for (0..tag_union.tags.len()) |i| {
+                    const tag = tag_union.tags.get(i);
+                    const tag_args = tag.args;
                     const api_args = try alloc.alloc(PackageApi.TypeId, tag_args.len);
                     for (tag_args, 0..) |arg, j| {
                         api_args[j] = try self.convertType(view, names, arg, memo);

@@ -232,7 +232,10 @@ fn contractEnv(program: *Program, module: ModuleIndex, constructor_ty: checked.C
             .flex, .rigid => if (shape_done and !store.payload(ty).variableSealsToRowDefault()) try vars.append(allocator, ty),
             .alias => |alias| try pending.append(allocator, alias.backing),
             .record => |record| {
-                for (record.fields) |field| try pending.append(allocator, field.ty);
+                for (0..record.fields.len()) |field_index| {
+                    const field = record.fields.get(field_index);
+                    try pending.append(allocator, field.ty);
+                }
                 try pending.append(allocator, record.ext);
             },
             .tuple => |items| try pending.appendSlice(allocator, items),
@@ -242,7 +245,10 @@ fn contractEnv(program: *Program, module: ModuleIndex, constructor_ty: checked.C
                 try pending.append(allocator, function.ret);
             },
             .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| try pending.appendSlice(allocator, tag.argsSlice(store));
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
+                    try pending.appendSlice(allocator, tag.args);
+                }
                 try pending.append(allocator, tag_union.ext);
             },
             .empty_record, .empty_tag_union => {},

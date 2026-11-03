@@ -1900,12 +1900,16 @@ fn valuePositionMask(
             },
             .tuple => |items| for (items) |item| try pending.append(arena, .{ .ty = item, .value_position = visit.value_position }),
             .record => |record| {
-                for (record.fields) |field| try pending.append(arena, .{ .ty = field.ty, .value_position = visit.value_position });
+                for (0..record.fields.len()) |field_index| {
+                    const field = record.fields.get(field_index);
+                    try pending.append(arena, .{ .ty = field.ty, .value_position = visit.value_position });
+                }
                 try pending.append(arena, .{ .ty = record.ext, .value_position = false });
             },
             .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| {
-                    for (tag.argsSlice(view.types)) |arg| try pending.append(arena, .{ .ty = arg, .value_position = visit.value_position });
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
+                    for (tag.args) |arg| try pending.append(arena, .{ .ty = arg, .value_position = visit.value_position });
                 }
                 try pending.append(arena, .{ .ty = tag_union.ext, .value_position = false });
             },
@@ -2882,11 +2886,14 @@ fn requestDeterminedResultRowVariable(
                 current = nominal.args[1];
             },
             .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| try others.appendSlice(allocator, tag.argsSlice(view.types));
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
+                    try others.appendSlice(allocator, tag.args);
+                }
                 current = tag_union.ext;
             },
             .flex, .rigid => |row_variable| {
-                if (row_variable.constraints.len != 0 and !row_variable.row_default_discharges_constraints) return null;
+                if (row_variable.constraints.len() != 0 and !row_variable.row_default_discharges_constraints) return null;
                 break current;
             },
             .pending, .field_kind, .err, .record, .tuple, .function, .empty_record, .empty_tag_union => return null,
@@ -2907,13 +2914,19 @@ fn requestDeterminedResultRowVariable(
         switch (checkedPayload(view, ty)) {
             .pending => Common.invariant("pending checked type reached Monotype result row scan"),
             .field_kind, .err, .empty_record, .empty_tag_union => {},
-            .flex, .rigid => |other_variable| for (other_variable.constraints) |constraint| try others.append(allocator, constraint.fn_ty),
+            .flex, .rigid => |other_variable| for (0..other_variable.constraints.len()) |constraint_index| {
+                const constraint = other_variable.constraints.get(constraint_index);
+                try others.append(allocator, constraint.fn_ty);
+            },
             .alias => |alias| {
                 try others.appendSlice(allocator, alias.args);
                 try others.append(allocator, alias.backing);
             },
             .record => |record| {
-                for (record.fields) |field| try others.append(allocator, field.ty);
+                for (0..record.fields.len()) |field_index| {
+                    const field = record.fields.get(field_index);
+                    try others.append(allocator, field.ty);
+                }
                 try others.append(allocator, record.ext);
             },
             .tuple => |items| try others.appendSlice(allocator, items),
@@ -2926,7 +2939,10 @@ fn requestDeterminedResultRowVariable(
                 try others.append(allocator, inner.ret);
             },
             .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| try others.appendSlice(allocator, tag.argsSlice(view.types));
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
+                    try others.appendSlice(allocator, tag.args);
+                }
                 try others.append(allocator, tag_union.ext);
             },
         }
@@ -6545,12 +6561,18 @@ const Builder = struct {
                 // arguments, so the arguments carry every variable a use can fill.
                 .nominal => |nominal| try pending.appendSlice(self.allocator, nominal.args),
                 .record => |record| {
-                    for (record.fields) |field| try pending.append(self.allocator, field.ty);
+                    for (0..record.fields.len()) |field_index| {
+                        const field = record.fields.get(field_index);
+                        try pending.append(self.allocator, field.ty);
+                    }
                     try pending.append(self.allocator, record.ext);
                 },
                 .tuple => |items| try pending.appendSlice(self.allocator, items),
                 .tag_union => |tag_union| {
-                    for (tag_union.tags) |tag| try pending.appendSlice(self.allocator, tag.argsSlice(view.types));
+                    for (0..tag_union.tags.len()) |tag_index| {
+                        const tag = tag_union.tags.get(tag_index);
+                        try pending.appendSlice(self.allocator, tag.args);
+                    }
                     try pending.append(self.allocator, tag_union.ext);
                 },
                 .function => |fn_ty| {
@@ -7917,7 +7939,10 @@ const Builder = struct {
                     try pending.appendSlice(self.allocator, alias.args);
                 },
                 .record => |record| {
-                    for (record.fields) |field| try pending.append(self.allocator, field.ty);
+                    for (0..record.fields.len()) |field_index| {
+                        const field = record.fields.get(field_index);
+                        try pending.append(self.allocator, field.ty);
+                    }
                     try pending.append(self.allocator, record.ext);
                 },
                 .tuple => |elems| try pending.appendSlice(self.allocator, elems),
@@ -7930,7 +7955,10 @@ const Builder = struct {
                     try pending.append(self.allocator, function.ret);
                 },
                 .tag_union => |tag_union| {
-                    for (tag_union.tags) |tag| try pending.appendSlice(self.allocator, tag.argsSlice(view.types));
+                    for (0..tag_union.tags.len()) |tag_index| {
+                        const tag = tag_union.tags.get(tag_index);
+                        try pending.appendSlice(self.allocator, tag.args);
+                    }
                     try pending.append(self.allocator, tag_union.ext);
                 },
             }
@@ -10939,7 +10967,7 @@ const Builder = struct {
                         });
                     },
                     .tag => |tag| {
-                        const arg_count = tag.argsSlice(frame.view.types).len;
+                        const arg_count = tag.args.len;
                         const payloads = type_run.results.items[type_run.results.items.len - arg_count ..];
                         const tag_name = try tagName(self.activeNameStore(), frame.view, tag.name);
                         const span = try self.activeTypeStore().addSpan(payloads);
@@ -11026,11 +11054,12 @@ const Builder = struct {
                 var seen = collections.DenseMap(checked.CheckedTypeId, void).init(gpa);
                 defer seen.deinit();
                 while (true) {
-                    for (current_fields) |field| {
+                    for (0..current_fields.len()) |field_index| {
+                        const field = current_fields.get(field_index);
                         try type_run.ops.append(gpa, .{ .child = field.ty });
                         try type_run.ops.append(gpa, .{ .field = field });
                     }
-                    current_fields = &.{};
+                    current_fields = .empty;
                     if (seen.contains(current)) break;
                     try seen.put(current, {});
                     switch (checkedPayload(view, current)) {
@@ -11055,11 +11084,12 @@ const Builder = struct {
                 var seen = collections.DenseMap(checked.CheckedTypeId, void).init(gpa);
                 defer seen.deinit();
                 while (true) {
-                    for (current_tags) |tag| {
-                        for (tag.argsSlice(view.types)) |arg| try type_run.ops.append(gpa, .{ .child = arg });
+                    for (0..current_tags.len()) |tag_index| {
+                        const tag = current_tags.get(tag_index);
+                        for (tag.args) |arg| try type_run.ops.append(gpa, .{ .child = arg });
                         try type_run.ops.append(gpa, .{ .tag = tag });
                     }
-                    current_tags = &.{};
+                    current_tags = .empty;
                     if (seen.contains(current)) break;
                     try seen.put(current, {});
                     switch (checkedPayload(view, current)) {
@@ -25893,7 +25923,10 @@ const BodyContext = struct {
                     try pending.appendSlice(self.allocator, alias.args);
                 },
                 .record => |record| {
-                    for (record.fields) |field| try pending.append(self.allocator, field.ty);
+                    for (0..record.fields.len()) |field_index| {
+                        const field = record.fields.get(field_index);
+                        try pending.append(self.allocator, field.ty);
+                    }
                     try pending.append(self.allocator, record.ext);
                 },
                 .tuple => |items| try pending.appendSlice(self.allocator, items),
@@ -25906,7 +25939,10 @@ const BodyContext = struct {
                     try pending.append(self.allocator, function.ret);
                 },
                 .tag_union => |tag_union| {
-                    for (tag_union.tags) |tag| try pending.appendSlice(self.allocator, tag.argsSlice(self.view.types));
+                    for (0..tag_union.tags.len()) |tag_index| {
+                        const tag = tag_union.tags.get(tag_index);
+                        try pending.appendSlice(self.allocator, tag.args);
+                    }
                     try pending.append(self.allocator, tag_union.ext);
                 },
             }
@@ -26556,19 +26592,19 @@ const BodyContext = struct {
     }
 
     const InstFieldsTask = struct {
-        fields: []const checked.CheckedRecordField,
+        fields: checked.CheckedRecordFields,
         out: []InstField = &.{},
     };
 
     fn stepInstFields(self: *BodyContext, frame: *InstFrame, task: *InstFieldsTask, input: ?InstResult) Allocator.Error!InstStep {
         if (frame.cursor == 0) {
-            task.out = try self.graph.arena().alloc(InstField, task.fields.len);
+            task.out = try self.graph.arena().alloc(InstField, task.fields.len());
             frame.cursor = 1;
         } else {
-            task.out[frame.index] = try self.instField(task.fields[frame.index], input.?.get(.node));
+            task.out[frame.index] = try self.instField(task.fields.get(frame.index), input.?.get(.node));
             frame.index += 1;
         }
-        if (frame.index < task.fields.len) return instNodeStep(task.fields[frame.index].ty);
+        if (frame.index < task.fields.len()) return instNodeStep(task.fields.get(frame.index).ty);
         return .{ .ret = .{ .fields = task.out } };
     }
 
@@ -26625,26 +26661,26 @@ const BodyContext = struct {
     }
 
     const InstTagsTask = struct {
-        tags: []const checked.CheckedTag,
+        tags: checked.CheckedTags,
         out: []InstTag = &.{},
     };
 
     fn stepInstTags(self: *BodyContext, frame: *InstFrame, task: *InstTagsTask, input: ?InstResult) Allocator.Error!InstStep {
         if (frame.cursor == 0) {
-            task.out = try self.graph.arena().alloc(InstTag, task.tags.len);
+            task.out = try self.graph.arena().alloc(InstTag, task.tags.len());
             frame.cursor = 1;
         } else {
             task.out[frame.index].payloads = input.?.get(.nodes);
             frame.index += 1;
         }
-        if (frame.index < task.tags.len) {
-            const tag = task.tags[frame.index];
+        if (frame.index < task.tags.len()) {
+            const tag = task.tags.get(frame.index);
             task.out[frame.index] = .{
                 .name = try tagName(self.nameStoreMut(), self.view, tag.name),
                 .checked_name = try tagName(self.nameStoreMut(), self.view, tag.name),
                 .payloads = undefined,
             };
-            return instSliceStep(tag.argsSlice(self.view.types));
+            return instSliceStep(tag.args);
         }
         return .{ .ret = .{ .tags = task.out } };
     }
@@ -45788,7 +45824,8 @@ const BodyContext = struct {
                     try pending.append(self.allocator, alias.backing);
                 },
                 .record => |record| {
-                    for (record.fields) |field| {
+                    for (0..record.fields.len()) |field_index| {
+                        const field = record.fields.get(field_index);
                         try pending.append(self.allocator, field.ty);
                         if (field.kind.undeterminedVariable()) |variable| try pending.append(self.allocator, variable);
                     }
@@ -45804,7 +45841,10 @@ const BodyContext = struct {
                     try pending.append(self.allocator, function.ret);
                 },
                 .tag_union => |tag_union| {
-                    for (tag_union.tags) |tag| try pending.appendSlice(self.allocator, tag.argsSlice(self.view.types));
+                    for (0..tag_union.tags.len()) |tag_index| {
+                        const tag = tag_union.tags.get(tag_index);
+                        try pending.appendSlice(self.allocator, tag.args);
+                    }
                     try pending.append(self.allocator, tag_union.ext);
                 },
             }
@@ -49152,7 +49192,8 @@ const BodyContext = struct {
             switch (checkedPayload(view, current)) {
                 .alias => |alias| current = alias.backing,
                 .record => |record| {
-                    for (record.fields) |checked_field| {
+                    for (0..record.fields.len()) |checked_field_index| {
+                        const checked_field = record.fields.get(checked_field_index);
                         const lowered_name = try recordFieldName(self.nameStoreMut(), view, checked_field.name);
                         if (lowered_name == field_name) return .{ .found = checked_field };
                     }

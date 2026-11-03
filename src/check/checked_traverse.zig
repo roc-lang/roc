@@ -177,7 +177,6 @@ pub fn checkedTypeSliceContainsIdentityVariables(
 pub fn checkedTypePayloadIdentityVariableChildren(
     comptime pending_policy: PendingPolicy,
     children: anytype,
-    pool_owner: anytype,
     root: anytype,
     payload: anytype,
     context: anytype,
@@ -199,7 +198,10 @@ pub fn checkedTypePayloadIdentityVariableChildren(
             try children.addSlice(alias.args);
         },
         .record => |record| {
-            for (record.fields) |field| try children.add(field.ty);
+            for (0..record.fields.len()) |field_index| {
+                const field = record.fields.get(field_index);
+                try children.add(field.ty);
+            }
             try children.add(record.ext);
         },
         .tuple => |items| try children.addSlice(items),
@@ -209,7 +211,10 @@ pub fn checkedTypePayloadIdentityVariableChildren(
             try children.add(function.ret);
         },
         .tag_union => |tag_union| {
-            for (tag_union.tags) |tag| try children.addSlice(tag.argsSlice(pool_owner));
+            for (0..tag_union.tags.len()) |tag_index| {
+                const tag = tag_union.tags.get(tag_index);
+                try children.addSlice(tag.args);
+            }
             try children.add(tag_union.ext);
         },
     }

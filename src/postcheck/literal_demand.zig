@@ -195,7 +195,10 @@ pub const LiteralDemand = struct {
                     try pending.appendSlice(allocator, alias.args);
                 },
                 .record => |record| {
-                    for (record.fields) |field| try pending.append(allocator, field.ty);
+                    for (0..record.fields.len()) |field_index| {
+                        const field = record.fields.get(field_index);
+                        try pending.append(allocator, field.ty);
+                    }
                     try pending.append(allocator, record.ext);
                 },
                 .tuple => |elems| try pending.appendSlice(allocator, elems),
@@ -210,7 +213,10 @@ pub const LiteralDemand = struct {
                     try pending.append(allocator, function.ret);
                 },
                 .tag_union => |tag_union| {
-                    for (tag_union.tags) |tag| try pending.appendSlice(allocator, tag.argsSlice(types));
+                    for (0..tag_union.tags.len()) |tag_index| {
+                        const tag = tag_union.tags.get(tag_index);
+                        try pending.appendSlice(allocator, tag.args);
+                    }
                     try pending.append(allocator, tag_union.ext);
                 },
             }
@@ -346,7 +352,10 @@ const Builder = struct {
                     for (alias.args) |arg| try self.addTypeEdge(item.node, view, arg);
                 },
                 .record => |record| {
-                    for (record.fields) |field| try self.addTypeEdge(item.node, view, field.ty);
+                    for (0..record.fields.len()) |field_index| {
+                        const field = record.fields.get(field_index);
+                        try self.addTypeEdge(item.node, view, field.ty);
+                    }
                     try self.addTypeEdge(item.node, view, record.ext);
                 },
                 .tuple => |elems| for (elems) |elem| try self.addTypeEdge(item.node, view, elem),
@@ -365,7 +374,10 @@ const Builder = struct {
                     try self.addTypeEdge(item.node, view, function.ret);
                 },
                 .tag_union => |tag_union| {
-                    for (tag_union.tags) |tag| for (tag.argsSlice(types)) |arg| try self.addTypeEdge(item.node, view, arg);
+                    for (0..tag_union.tags.len()) |tag_index| {
+                        const tag = tag_union.tags.get(tag_index);
+                        for (tag.args) |arg| try self.addTypeEdge(item.node, view, arg);
+                    }
                     try self.addTypeEdge(item.node, view, tag_union.ext);
                 },
             }

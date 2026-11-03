@@ -481,12 +481,18 @@ pub fn rootHoldsFunction(
                 for (alias.args) |arg| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = arg });
             },
             .record => |record| {
-                for (record.fields) |field| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = field.ty });
+                for (0..record.fields.len()) |field_index| {
+                    const field = record.fields.get(field_index);
+                    try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = field.ty });
+                }
                 try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = record.ext });
             },
             .tuple => |items| for (items) |elem| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = elem }),
             .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| for (tag.argsSlice(item.types)) |arg| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = arg });
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
+                    for (tag.args) |arg| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = arg });
+                }
                 try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = tag_union.ext });
             },
             .nominal => |nominal| {

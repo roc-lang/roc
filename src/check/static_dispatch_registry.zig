@@ -3045,7 +3045,7 @@ fn isInspectOverrideCallable(checked_types: anytype, owner: MethodOwner, callabl
             .empty_tag_union,
             => return false,
         };
-        if (variable.constraints.len != 0 or variable.numeric_default_phase != null) return false;
+        if (variable.constraints.len() != 0 or variable.numeric_default_phase != null) return false;
         for (type_args[0..index]) |earlier| {
             if (earlier == type_arg) return false;
         }

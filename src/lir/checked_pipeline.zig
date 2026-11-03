@@ -2497,7 +2497,10 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                     try stack.appendSlice(allocator, alias.args);
                 },
                 .record => |record| {
-                    for (record.fields) |field| try stack.append(allocator, field.ty);
+                    for (0..record.fields.len()) |field_index| {
+                        const field = record.fields.get(field_index);
+                        try stack.append(allocator, field.ty);
+                    }
                     try stack.append(allocator, record.ext);
                 },
                 .tuple => |elems| try stack.appendSlice(allocator, elems),
@@ -2507,7 +2510,10 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                     try stack.append(allocator, func.ret);
                 },
                 .tag_union => |tag_union| {
-                    for (tag_union.tags) |tag| try stack.appendSlice(allocator, tag.argsSlice(types));
+                    for (0..tag_union.tags.len()) |tag_index| {
+                        const tag = tag_union.tags.get(tag_index);
+                        try stack.appendSlice(allocator, tag.args);
+                    }
                     try stack.append(allocator, tag_union.ext);
                 },
             }

@@ -816,7 +816,7 @@ const Gate = struct {
 
         var published_row = published;
         const published_tail = while (true) {
-            try published_fields.appendSlice(gpa, published_row.fields);
+            try published_row.fields.appendTo(gpa, &published_fields);
             switch (self.publication.payload(published_row.ext)) {
                 .record => |next| published_row = next,
                 .pending,
@@ -896,7 +896,7 @@ const Gate = struct {
 
         var published_row = published;
         const published_tail = while (true) {
-            try published_tags.appendSlice(gpa, published_row.tags);
+            try published_row.tags.appendTo(gpa, &published_tags);
             switch (self.publication.payload(published_row.ext)) {
                 .tag_union => |next| published_row = next,
                 .pending,
@@ -939,7 +939,7 @@ const Gate = struct {
         std.mem.sort(SealedTag, sealed_tags.items, {}, sealedTagLessThan);
         for (published_tags.items, sealed_tags.items) |published_tag, other| {
             expect(published_tag.name == other.name, "tag label", pair);
-            try self.children(published_tag.argsSlice(self.publication), other.args, "tag argument", pair);
+            try self.children(published_tag.args, other.args, "tag argument", pair);
         }
         try self.child(published_tail, sealed_tail);
     }
@@ -957,8 +957,9 @@ const Gate = struct {
             const other = sealed.name orelse mismatch("variable name", pair);
             expect(std.mem.eql(u8, name, other), "variable name", pair);
         } else expect(sealed.name == null, "variable name", pair);
-        expect(published.constraints.len == sealed.constraints.len, "constraint count", pair);
-        for (published.constraints, sealed.constraints) |published_constraint, source| {
+        expect(published.constraints.len() == sealed.constraints.len, "constraint count", pair);
+        for (sealed.constraints, 0..) |source, constraint_index| {
+            const published_constraint = published.constraints.get(constraint_index);
             const other = try self.view.constraint(source);
             expect(published_constraint.fn_name == other.fn_name, "constraint method name", pair);
             expect(std.meta.eql(published_constraint.origin, other.origin), "constraint origin", pair);
