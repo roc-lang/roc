@@ -19202,6 +19202,9 @@ const ListWindowLengthError = Allocator.Error ||
     @import("bytebox").TrapError ||
     error{TestExpectedEqual};
 
+/// Every way building, running and checking a split or copy fixture can fail.
+const WasmFixtureError = ListWindowLengthError || error{TestUnexpectedResult};
+
 fn expectSublistWindowLength(element: layout.Idx, start: u64, len: u64, expected: i32) ListWindowLengthError!void {
     try expectListWindowLength(element, start, len, expected, .sublist);
 }
@@ -19278,20 +19281,20 @@ const BodyMeasure = struct { bytes: usize, locals: u32 };
 
 fn measureBody(entry: []const u8, param_count: u32) BodyMeasure {
     var cursor: usize = 0;
-    const size = WasmModule.readU32(entry, &cursor) catch unreachable;
+    const size = WasmModule.readU32(entry, &cursor) catch unreachable; // every code section entry starts with the body size the encoder wrote
     const body = entry[cursor .. cursor + size];
     var body_cursor: usize = 0;
-    const groups = WasmModule.readU32(body, &body_cursor) catch unreachable;
+    const groups = WasmModule.readU32(body, &body_cursor) catch unreachable; // every body starts with the local group count the encoder wrote
     var locals: u32 = param_count;
     for (0..groups) |_| {
-        locals += WasmModule.readU32(body, &body_cursor) catch unreachable;
+        locals += WasmModule.readU32(body, &body_cursor) catch unreachable; // the encoder wrote one count per local group
         body_cursor += 1;
     }
     return .{ .bytes = size, .locals = locals };
 }
 
 /// Instantiate an encoded module whose stack starts at the top of memory.
-fn instantiateForTest(allocator: Allocator, arena: Allocator, bytes: []const u8) !*@import("bytebox").ModuleInstance {
+fn instantiateForTest(allocator: Allocator, arena: Allocator, bytes: []const u8) WasmFixtureError!*@import("bytebox").ModuleInstance {
     const bytebox = @import("bytebox");
     var definition = try bytebox.createModuleDefinition(arena, .{});
     try definition.decode(bytes);
@@ -19306,7 +19309,7 @@ fn instantiateForTest(allocator: Allocator, arena: Allocator, bytes: []const u8)
 /// a switch on the counter inside it: a chain whose statements, once split
 /// one per fragment, return from, jump out of, and fall through fragments
 /// nested in other fragments.
-fn addSplitFixtureProc(store: *LirStore) !void {
+fn addSplitFixtureProc(store: *LirStore) Allocator.Error!void {
     const a = try store.addLocal(.{ .layout_idx = .u64 });
     const b = try store.addLocal(.{ .layout_idx = .u64 });
     const acc = try store.addLocal(.{ .layout_idx = .u64 });
@@ -19375,7 +19378,7 @@ const SplitFixtureRun = struct {
 
 const split_fixture_inputs = [3][2]i64{ .{ 1, 0 }, .{ 5, 3 }, .{ 100, 10 } };
 
-fn runSplitFixture(allocator: Allocator, limits: FunctionLimits) !SplitFixtureRun {
+fn runSplitFixture(allocator: Allocator, limits: FunctionLimits) WasmFixtureError!SplitFixtureRun {
     var store = LirStore.init(allocator);
     defer store.deinit();
     var layouts = try layout.Store.init(allocator, .u32);
@@ -19458,10 +19461,10 @@ test "a procedure within the limits is emitted once, directly" {
 /// The opcode of the first instruction of an encoded code section entry.
 fn firstInstruction(entry: []const u8) u8 {
     var cursor: usize = 0;
-    _ = WasmModule.readU32(entry, &cursor) catch unreachable;
-    const groups = WasmModule.readU32(entry, &cursor) catch unreachable;
+    _ = WasmModule.readU32(entry, &cursor) catch unreachable; // every code section entry starts with the body size the encoder wrote
+    const groups = WasmModule.readU32(entry, &cursor) catch unreachable; // every body starts with the local group count the encoder wrote
     for (0..groups) |_| {
-        _ = WasmModule.readU32(entry, &cursor) catch unreachable;
+        _ = WasmModule.readU32(entry, &cursor) catch unreachable; // the encoder wrote one count per local group
         cursor += 1;
     }
     return entry[cursor];
@@ -19473,7 +19476,7 @@ const CopyFixtureKind = enum { copy, fill };
 /// from its first argument's address to its second's, or zeroes that many
 /// bytes at its first argument's address, and return its encoded bytes and
 /// the function's code size.
-fn buildCopyFixture(allocator: Allocator, cpu_level: CpuLevel, kind: CopyFixtureKind, byte_count: u32) !struct { bytes: []u8, code_bytes: usize } {
+fn buildCopyFixture(allocator: Allocator, cpu_level: CpuLevel, kind: CopyFixtureKind, byte_count: u32) WasmModule.EncodeError!struct { bytes: []u8, code_bytes: usize } {
     var store = LirStore.init(allocator);
     defer store.deinit();
     var layouts = try layout.Store.init(allocator, .u32);
@@ -19504,7 +19507,7 @@ fn buildCopyFixture(allocator: Allocator, cpu_level: CpuLevel, kind: CopyFixture
     return .{ .bytes = try codegen.module.encode(allocator), .code_bytes = code_bytes };
 }
 
-fn expectCopyFixture(cpu_level: CpuLevel, byte_count: u32) !void {
+fn expectCopyFixture(cpu_level: CpuLevel, byte_count: u32) WasmFixtureError!void {
     const allocator = std.testing.allocator;
     const src: u32 = 4096;
     const dst: u32 = 65536 + 8;
