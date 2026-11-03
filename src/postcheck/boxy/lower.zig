@@ -370,6 +370,18 @@ pub const Worker = struct {
     }
 };
 
+/// The content identity of the template worker of module `link_name`'s
+/// template `template` (`Program.workerIdentity`), a function of the checked
+/// module alone: what names the worker in every object of the link.
+pub fn templateWorkerIdentity(link_name: [32]u8, template: checked_names.CheckedProcedureTemplateId) LIR.ProcIdentity {
+    var hasher = base.TypeDigestHasher.init();
+    hasher.update("roc.boxy.worker.v1");
+    hasher.update("template");
+    hasher.update(&link_name);
+    hasher.update(std.mem.asBytes(&@as(u32, @backingInt(template))));
+    return .{ .bytes = hasher.finalResult() };
+}
+
 /// The kind variables of a scheme (design.md "Field Kinds"): the value type of
 /// each variable's field, null for a variable that is no kind, and the kind
 /// variables, each after those its value type mentions.
@@ -584,11 +596,7 @@ pub const Program = struct {
         var hasher = base.TypeDigestHasher.init();
         hasher.update("roc.boxy.worker.v1");
         switch (key) {
-            .template => |template| {
-                hasher.update("template");
-                hasher.update(&self.modules.linkName(template.module));
-                hasher.update(std.mem.asBytes(&@as(u32, @backingInt(template.template))));
-            },
+            .template => |template| return templateWorkerIdentity(self.modules.linkName(template.module), template.template),
             .lambda => |lambda| {
                 hasher.update("lambda");
                 hasher.update(&self.modules.linkName(lambda.module));

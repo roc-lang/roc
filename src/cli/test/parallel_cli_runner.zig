@@ -10069,6 +10069,9 @@ const PackStoreFiles = struct {
         defer allocator.free(entries);
         for (entries) |entry| {
             if (entry.state != .published) continue;
+            // A physical container's key is random; the slices it holds are
+            // the records this inventory compares.
+            if (entry.storage == .container) continue;
             switch (entry.family) {
                 .local_pack, .package_pack, .optimized_pack => {},
                 .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .local_discovery, .package_discovery, .program_output, .scratch, .boxy_object => continue,

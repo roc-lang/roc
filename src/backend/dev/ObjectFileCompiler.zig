@@ -38,6 +38,7 @@ const SymbolTable = @import("SymbolTable.zig");
 const IndexedRelocation = @import("Relocation.zig").IndexedRelocation;
 const StaticStringData = @import("StaticStringData.zig");
 const UnitPieces = @import("UnitPieces.zig");
+const Composition = @import("Composition.zig");
 const TargetUsize = @import("base").target.TargetUsize;
 
 /// Information about an entrypoint to compile
@@ -78,8 +79,13 @@ pub const CompilationResult = struct {
 pub const ComposeOptions = struct {
     enable_default_platform_runtime: bool = false,
     /// The procedures the composition starts its walk from, beside every
-    /// entrypoint wrapper and host-visible constant. Null keeps every piece.
+    /// entrypoint wrapper and host-visible constant. Null makes every
+    /// procedure a root.
     roots: ?[]const lir.ProcIdentity = null,
+    /// Per unit, parallel to the inputs: the procedures the checked program
+    /// reaches in it, which the composition resolves in parallel first
+    /// (`Composition.Options.seeds`).
+    seeds: []const []const lir.ProcIdentity = &.{},
     /// Give every procedure a global symbol, as an image the compiler loads
     /// into its own process looks procedures up by name.
     global_procs: bool = false,
@@ -273,7 +279,7 @@ pub const ObjectFileCompiler = struct {
             if (comptime comptime_target.defaultCpuTarget() != comptime_target) continue;
             if (default_target == comptime_target) {
                 if (comptime isaOfOrNull(comptime_target) != null) {
-                    return composeWithCodeGen(LirCodeGenMod.LirCodeGen(comptime_target), self.allocator, inputs, target, options, self.timing);
+                    return composeWithCodeGen(LirCodeGenMod.LirCodeGen(comptime_target), self.allocator, inputs, target, options, self.timing, self.post_check_executor);
                 } else {
                     return CompilationError.UnsupportedTarget;
                 }
@@ -1312,8 +1318,13 @@ fn compilePiecesWithCodeGen(
             error.DanglingReference => invariant("a host-visible constant names a constant the program does not define", .{}),
         };
     }
+    // The closure is named by content, as the code's constants are, so a
+    // host-visible constant and the code's copy of it are one constant when
+    // the units compose.
+    var exported_names = CodeExcerpt.ContentNames.initItems(allocator, host_visible.items) catch return CompilationError.OutOfMemory;
+    defer exported_names.deinit();
     const exported_data = a.alloc(CodeExcerpt.DataItem, host_visible.items.len) catch return CompilationError.OutOfMemory;
-    for (host_visible.items, exported_data) |item, *owned| owned.* = ownDataItem(a, item) catch return CompilationError.OutOfMemory;
+    for (host_visible.items, exported_data) |item, *owned| owned.* = CodeExcerpt.renamedData(a, item, &exported_names) catch return CompilationError.OutOfMemory;
     const helper_aliases = a.alloc(UnitPieces.HelperAlias, static_rc_helpers.len) catch return CompilationError.OutOfMemory;
     for (static_rc_helpers, helper_aliases) |helper_key, *alias| {
         alias.* = .{
@@ -1341,24 +1352,6 @@ fn compilePiecesWithCodeGen(
     };
 }
 
-/// A copy of `item` and its relocations, owned by `a`.
-fn ownDataItem(a: Allocator, item: CodeExcerpt.DataItem) Allocator.Error!CodeExcerpt.DataItem {
-    const relocations = try a.alloc(CodeExcerpt.DataRelocation, item.relocations.len);
-    for (item.relocations, relocations) |relocation, *out| {
-        out.* = relocation;
-        out.name = try a.dupe(u8, relocation.name);
-    }
-    return .{
-        .name = try a.dupe(u8, item.name),
-        .bytes = try a.dupe(u8, item.bytes),
-        .alignment = item.alignment,
-        .symbol_offset = item.symbol_offset,
-        .relocations = relocations,
-        .program_local_name = item.program_local_name,
-        .is_mutable = item.is_mutable,
-    };
-}
-
 fn composeWithCodeGen(
     comptime CodeGen: type,
     allocator: Allocator,
@@ -1366,6 +1359,7 @@ fn composeWithCodeGen(
     target: RocTarget,
     options: ComposeOptions,
     timing: ?*ObjectFileCompiler.Timing,
+    executor: ?Executor,
 ) CompilationError!CompilationResult {
     const symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;
     // The object is a function of the units, not of the order they arrive
@@ -1421,29 +1415,21 @@ fn composeWithCodeGen(
         helper_aliases.put(alias.alias, alias.helper) catch return CompilationError.OutOfMemory;
         alias_of_helper.put(alias.helper, alias.alias) catch return CompilationError.OutOfMemory;
     };
-    var root_procs = std.ArrayList(lir.ProcIdentity).empty;
-    defer root_procs.deinit(allocator);
-    if (options.roots) |roots| {
-        root_procs.appendSlice(allocator, roots) catch return CompilationError.OutOfMemory;
-    } else for (sets) |set| for (set.excerpts) |excerpt| switch (excerpt.kind) {
-        .proc => |identity| root_procs.append(allocator, identity) catch return CompilationError.OutOfMemory,
-        .rc_helper, .entrypoint, .message_pool_run, .branch_island => {},
-    };
     var root_data = std.ArrayList([]const u8).empty;
     defer root_data.deinit(allocator);
     for (host_visible.items) |item| root_data.append(allocator, item.name) catch return CompilationError.OutOfMemory;
-    var reachable = CodeExcerpt.reachableAcross(allocator, sets, host_visible.items, .{
-        .procs = root_procs.items,
+    var canonical = Composition.compose(allocator, sets, host_visible.items, &helper_aliases, .{
+        .every_proc = options.roots == null,
+        .procs = options.roots orelse &.{},
         .data = root_data.items,
-        .helper_aliases = &helper_aliases,
         .entrypoints = true,
-    }) catch return CompilationError.OutOfMemory;
-    defer reachable.deinit();
-    // The source-file table of the reached code, named from the units that
+    }, .{ .seeds = options.seeds, .executor = executor }) catch return CompilationError.OutOfMemory;
+    defer canonical.deinit();
+    // The source-file table of the kept code, named from the units that
     // index it.
-    const files = allocator.alloc(@import("base").SourceFileEntry, reachable.source_files.len) catch return CompilationError.OutOfMemory;
+    const files = allocator.alloc(@import("base").SourceFileEntry, canonical.set.source_files.len) catch return CompilationError.OutOfMemory;
     defer allocator.free(files);
-    for (reachable.source_files, files) |identity, *file| {
+    for (canonical.set.source_files, files) |identity, *file| {
         file.* = named: {
             for (inputs) |pieces| for (pieces.source_files) |source| {
                 if (std.mem.eql(u8, &source.identity, &identity)) break :named .{ .name = source.name, .qualified_name = source.qualified_name, .module_identity = identity };
@@ -1451,8 +1437,6 @@ fn composeWithCodeGen(
             invariant("a composed source file belongs to no unit", .{});
         };
     }
-    var canonical = CodeExcerpt.arrange(allocator, &reachable, host_visible.items) catch return CompilationError.OutOfMemory;
-    defer canonical.deinit();
     var store = LirStore.init(allocator);
     defer store.deinit();
     store.setSourceFiles(files) catch return CompilationError.OutOfMemory;

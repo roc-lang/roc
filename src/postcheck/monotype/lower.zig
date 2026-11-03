@@ -6561,12 +6561,10 @@ const Builder = struct {
         // Checking already supplies the complete relation of a closed
         // interface, so no callee relation program exists for it.
         if (templateInterfaceIsClosed(callee, &template)) return null;
-        const scope_context = callee.compile_time_root_identities.valueContext() orelse return null;
         const program_context = (try self.programValueContext(false)) orelse return null;
         var hash = base.Sha256.init(.{});
         hash.update("roc.interface-provider.v3");
         hash.update(&(callee.code_generation_key orelse callee.key).bytes);
-        hash.update(&scope_context);
         hash.update(&program_context);
         hash.update(&((try self.interfaceCalleeContext(callee)) orelse return null));
         var ordinals: [8]u8 = undefined;
@@ -6575,7 +6573,7 @@ const Builder = struct {
         hash.update(@tagName(self.inline_expects));
         hash.update(&.{ @intFromBool(self.static_data_literals), @intFromBool(self.comptime_value_reads), @intFromBool(self.literal_roots) });
         const family = hash.finalResult();
-        if (base.dev_diagnostics.isSet(.pack_trace)) std.debug.print("interface family module={s} proc={d} template={d} code={x} scope={x} program={x} family={x}\n", .{ callee.module_env.module_name, address.family.proc_base, address.family.template, (callee.code_generation_key orelse callee.key).bytes, scope_context, program_context, family });
+        if (base.dev_diagnostics.isSet(.pack_trace)) std.debug.print("interface family module={s} proc={d} template={d} code={x} program={x} family={x}\n", .{ callee.module_env.module_name, address.family.proc_base, address.family.template, (callee.code_generation_key orelse callee.key).bytes, program_context, family });
         return .{ .provider = family, .procedure = ordinals };
     }
 
@@ -10672,14 +10670,12 @@ const Builder = struct {
         demand: Demand,
     ) Allocator.Error!?CompletedBodyAddress {
         if (self.interface_cache == null) return null;
-        const scope_context = view.compile_time_root_identities.valueContext() orelse return null;
         const program_context = (try self.programValueContext(false)) orelse return null;
         const callee_context = (try self.interfaceCalleeContext(view)) orelse return null;
         var family = TypeDigestHasher.init();
         family.update("roc.completed-body-family.v6");
         family.update(&view.key.bytes);
         family.update(&(view.code_generation_key orelse view.key).bytes);
-        family.update(&scope_context);
         family.update(&program_context);
         family.update(&callee_context);
         family.update(@tagName(self.inline_expects));
