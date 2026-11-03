@@ -35527,7 +35527,22 @@ const BodyContext = struct {
                 frame.cursor = 1;
                 return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = DraftTypeCell.fromGraphNode(expr_node) } });
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+            // A coercion's row can be open with nothing in this body to
+            // close it, as when every use matches its error with `Err(_)`. It
+            // is lowered at a graph cell of its own checked type, so a row no
+            // use relates to seals by the specialization's row defaults, as at
+            // every other coercion site, instead of being read as a settled
+            // type here.
+            .row_coerce => {
+                frame.cursor = 1;
+                return requestLowerTask(self, .{ .at_type_cell = .{
+                    .expr = expr_id,
+                    .cell = DraftTypeCell.fromGraphNode(expr_node),
+                    .demand = .runtime_value,
+                    .diverges = false,
+                } });
+            },
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
         const expr_ty = try self.lowerExprType(expr_id);
         if (try self.restoredHoistedExprAtType(expr_id, expr_ty)) |restored| return self.exprInnerDone(task, restored);
