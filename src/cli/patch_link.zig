@@ -153,7 +153,14 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     const host = inputs.host;
     const host_size = host.host().len;
     const provide_count = host.provideCount();
-    const app_offset = std.mem.alignForward(u64, host_size, page_size);
+    const host_symtab: ?host_prelink.SectionHeader = if (host.header.symtab_index != 0) host.section(host.header.symtab_index) else null;
+    const host_strtab: ?host_prelink.SectionHeader = if (host.header.symtab_index != 0) host.section(host.header.strtab_index) else null;
+    // A host with a symbol table ends with its string table, and the app's
+    // names follow it in place; the app's segments come after them.
+    var app_strings: u64 = 0;
+    for (order.items) |index| app_strings += images.items[index].view.strings().len;
+    if (host_strtab) |strtab| std.debug.assert(strtab.offset + strtab.size == host_size);
+    const app_offset = std.mem.alignForward(u64, host_size + (if (host_strtab != null) app_strings else 0), page_size);
     const places = try gpa.alloc(Place, images.items.len);
     defer gpa.free(places);
     @memset(places, .{});
@@ -201,8 +208,6 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         debug_sizes[slot] = size;
         tail_at += size;
     }
-    const host_symtab: ?host_prelink.SectionHeader = if (host.header.symtab_index != 0) host.section(host.header.symtab_index) else null;
-    const host_strtab: ?host_prelink.SectionHeader = if (host.header.symtab_index != 0) host.section(host.header.strtab_index) else null;
     var app_symbol_count: u64 = 0;
     var strtab_size: u64 = if (host_strtab) |strtab| strtab.size else 1;
     for (order.items) |index| {
@@ -217,8 +222,8 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     tail_at = std.mem.alignForward(u64, tail_at, 8);
     const symtab_offset = tail_at;
     tail_at += symtab_count * sym_size;
-    const strtab_offset = tail_at;
-    tail_at += strtab_size;
+    const strtab_offset = if (host_strtab) |strtab| strtab.offset else tail_at;
+    if (host_strtab == null) tail_at += strtab_size;
 
     // Section headers: the host's, then the app's, then any the host lacks.
     const host_names = host.section(host.header.shstrndx);
@@ -358,7 +363,6 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         try addRanges(gpa, &patches, &context, .sites, index, view.sites().len);
     }
     if (host_symtab) |symtab| try addCopies(gpa, &copies, &context, hostBytes(host, symtab.offset + sym_size, symtab.size -| sym_size), symtab_offset + (1 + app_symbol_count) * sym_size);
-    if (host_strtab) |strtab| try addCopies(gpa, &copies, &context, hostBytes(host, strtab.offset, strtab.size), strtab_offset);
     for (debug_host_index, 0..) |host_index, slot| {
         if (host_index != 0) try addCopies(gpa, &copies, &context, hostBytes(host, host.section(host_index).offset, host.section(host_index).size), debug_offsets[slot]);
     }

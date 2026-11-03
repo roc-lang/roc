@@ -217,7 +217,9 @@ const Header = extern struct {
     build_id_offset: u64,
     build_id_size: u32,
     shnum: u32,
-    shoff: u64,
+    /// The record offset of the host's section header table, kept beside
+    /// the host's bytes rather than in them.
+    sht_offset: u64,
     shstrndx: u32,
     /// Section indices; 0 when the host has none.
     symtab_index: u32,
@@ -384,8 +386,34 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
         try strings.append(allocator, 0);
     }
 
-    var end: u64 = host_offset + exe.len;
+    // The host's bytes end with its string table, so a link appends the
+    // app's names to it in place; the section header table moves to the
+    // record, since every link writes its own.
+    if (shoff + @as(u64, shnum) * 64 != exe.len) return error.UnexpectedHostLayout;
+    const sht = try allocator.dupe(u8, exe[@intCast(shoff)..][0 .. @as(usize, shnum) * 64]);
+    defer allocator.free(sht);
+    for (0..shnum) |index| {
+        const at = index * 64;
+        if (readU32(sht, at + 4) == SHT_NOBITS) continue;
+        if (readU64(sht, at + 24) + readU64(sht, at + 32) > shoff) return error.UnexpectedHostLayout;
+    }
+    var host_len: u64 = shoff;
+    var moved_strtab: ?[]const u8 = null;
+    if (symtab_index != 0) {
+        const at = @as(usize, strtab_index) * 64;
+        const offset = readU64(sht, at + 24);
+        const size = readU64(sht, at + 32);
+        if (offset + size != shoff) {
+            moved_strtab = exe[@intCast(offset)..][0..@intCast(size)];
+            std.mem.writeInt(u64, sht[at + 24 ..][0..8], shoff, .little);
+            host_len = shoff + size;
+        }
+    }
+
+    var end: u64 = host_offset + host_len;
     end = std.mem.alignForward(u64, end, 8);
+    const sht_offset = end;
+    end += sht.len;
     const symbols_offset = end;
     end += symbols.items.len * @sizeOf(HostSymbol);
     const provides_offset = end;
@@ -401,7 +429,7 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
         .magic = magic,
         .version = format_version,
         .host_offset = host_offset,
-        .host_size = exe.len,
+        .host_size = host_len,
         .host_end_vaddr = host_end,
         .phdr_offset = table_offset,
         .phnum = new_phnum,
@@ -409,7 +437,7 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
         .build_id_offset = build_id_offset,
         .build_id_size = build_id_size,
         .shnum = shnum,
-        .shoff = shoff,
+        .sht_offset = sht_offset,
         .shstrndx = shstrndx,
         .symtab_index = symtab_index,
         .strtab_index = strtab_index,
@@ -425,7 +453,9 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
         .total_size = total,
     };
     @memcpy(out[0..@sizeOf(Header)], std.mem.asBytes(&header));
-    @memcpy(out[host_offset..][0..exe.len], exe);
+    @memcpy(out[host_offset..][0..@intCast(shoff)], exe[0..@intCast(shoff)]);
+    if (moved_strtab) |strtab| @memcpy(out[host_offset + shoff ..][0..strtab.len], strtab);
+    @memcpy(out[@intCast(sht_offset)..][0..sht.len], sht);
     @memcpy(out[@intCast(symbols_offset)..][0 .. symbols.items.len * @sizeOf(HostSymbol)], std.mem.sliceAsBytes(symbols.items));
     @memcpy(out[@intCast(provides_offset)..][0 .. provide_names.len * @sizeOf(u32)], std.mem.sliceAsBytes(provide_names));
     @memcpy(out[@intCast(strings_offset)..][0..strings.items.len], strings.items);
@@ -452,13 +482,14 @@ pub const View = struct {
         if (@as(u64, header.strings_offset) + header.strings_size > bytes.len or header.strings_size == 0) return error.InvalidRecord;
         if (bytes[header.strings_offset + header.strings_size - 1] != 0) return error.InvalidRecord;
         if (header.phdr_offset + @as(u64, header.phnum) * phdr_size > header.host_size) return error.InvalidRecord;
-        if (header.shoff + @as(u64, header.shnum) * 64 > header.host_size) return error.InvalidRecord;
+        if (header.sht_offset % 8 != 0 or header.sht_offset + @as(u64, header.shnum) * 64 > bytes.len) return error.InvalidRecord;
         if (header.build_id_offset + header.build_id_size > header.host_size) return error.InvalidRecord;
         if (header.host_end_vaddr > app_base) return error.InvalidRecord;
         return .{ .bytes = bytes, .header = header };
     }
 
-    /// The host executable's bytes.
+    /// The host executable's bytes, ending with its string table when it
+    /// has a symbol table; its section header table is in `section`.
     pub fn host(self: View) []const u8 {
         return self.bytes[host_offset..][0..@intCast(self.header.host_size)];
     }
@@ -495,8 +526,8 @@ pub const View = struct {
     }
     /// The host's section header `index`.
     pub fn section(self: View, index: u32) SectionHeader {
-        const at: usize = @intCast(self.header.shoff + @as(u64, index) * 64);
-        const bytes = self.host();
+        const at: usize = @intCast(self.header.sht_offset + @as(u64, index) * 64);
+        const bytes: []const u8 = self.bytes;
         return .{
             .name = readU32(bytes, at),
             .type = readU32(bytes, at + 4),
@@ -577,6 +608,7 @@ const EM_X86_64 = 62;
 const SHT_PROGBITS = 1;
 const SHT_SYMTAB = 2;
 const SHT_STRTAB = 3;
+const SHT_NOBITS = 8;
 const SHF_ALLOC = 0x2;
 const SHF_GNU_RETAIN = 0x200000;
 const SHN_ABS = 0xfff1;

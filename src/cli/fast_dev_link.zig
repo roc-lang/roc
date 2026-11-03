@@ -98,21 +98,25 @@ pub const HostJob = struct {
         }
     }
 
+    fn fail(self: *HostJob, err: patch_link.OutputFile.Error) void {
+        self.outcome = .{ .failed = err };
+    }
+
     fn run(self: *HostJob) void {
         const hash_started = now(self.std_io);
         var digests: std.ArrayList([32]u8) = .empty;
         defer digests.deinit(self.gpa);
         if (self.spec.bundle_hash == null) {
-            for ([_][]const []const u8{ self.spec.platform_files_pre, self.spec.platform_files_post }) |paths| for (paths) |path| {
-                const digest = contentDigest(self.std_io, path) orelse {
-                    self.outcome = .{ .unreadable_input = path };
-                    return;
-                };
-                digests.append(self.gpa, digest) catch {
-                    self.outcome = .{ .failed = error.OutOfMemory };
-                    return;
-                };
-            };
+            var paths: std.ArrayList([]const u8) = .empty;
+            defer paths.deinit(self.gpa);
+            paths.appendSlice(self.gpa, self.spec.platform_files_pre) catch return self.fail(error.OutOfMemory);
+            paths.appendSlice(self.gpa, self.spec.platform_files_post) catch return self.fail(error.OutOfMemory);
+            digests.resize(self.gpa, paths.items.len) catch return self.fail(error.OutOfMemory);
+            const hashed = contentDigests(self.gpa, self.std_io, paths.items, digests.items) catch return self.fail(error.OutOfMemory);
+            if (hashed) |unreadable| {
+                self.outcome = .{ .unreadable_input = paths.items[unreadable] };
+                return;
+            }
         }
         self.key = host_prelink.key(.{
             .target = @tagName(self.spec.target),
@@ -164,21 +168,76 @@ pub const HostJob = struct {
     }
 };
 
-/// The BLAKE3 digest of the file at `path`, or null when it cannot be read.
-fn contentDigest(std_io: std.Io, path: []const u8) ?[32]u8 {
-    var file = std.Io.Dir.cwd().openFile(std_io, path, .{}) catch return null;
-    defer file.close(std_io);
-    const stat = file.stat(std_io) catch return null;
-    const size = std.math.cast(usize, stat.size) orelse return null;
-    var digest: [32]u8 = undefined;
-    if (size == 0) {
-        std.crypto.hash.Blake3.hash(&.{}, &digest, .{});
-        return digest;
+/// The bytes hashed as one piece of a host input; the pieces of all inputs
+/// are hashed in parallel.
+const hash_chunk: usize = 4 * 1024 * 1024;
+
+/// Fill `digests` with the content digest of each file in `paths`: the
+/// BLAKE3 hash of its length and of the BLAKE3 hashes of its
+/// `hash_chunk`-sized pieces, in order. Returns the index of a file that
+/// cannot be read, if any.
+fn contentDigests(gpa: Allocator, std_io: std.Io, paths: []const []const u8, digests: [][32]u8) Allocator.Error!?usize {
+    const Input = struct { file: ?std.Io.File = null, bytes: []align(std.heap.page_size_min) const u8 = &.{}, first_chunk: usize = 0 };
+    const inputs = try gpa.alloc(Input, paths.len);
+    defer gpa.free(inputs);
+    @memset(inputs, .{});
+    defer for (inputs) |input| {
+        if (input.bytes.len != 0) std.posix.munmap(input.bytes);
+        if (input.file) |file| file.close(std_io);
+    };
+    var chunk_count: usize = 0;
+    for (paths, inputs, 0..) |path, *input, index| {
+        const file = std.Io.Dir.cwd().openFile(std_io, path, .{}) catch return index;
+        input.file = file;
+        const stat = file.stat(std_io) catch return index;
+        const size = std.math.cast(usize, stat.size) orelse return index;
+        if (size != 0) input.bytes = std.posix.mmap(null, size, .{ .READ = true }, .{ .TYPE = .PRIVATE }, file.handle, 0) catch return index;
+        input.first_chunk = chunk_count;
+        chunk_count += std.math.divCeil(usize, size, hash_chunk) catch unreachable; // hash_chunk is nonzero
     }
-    const mapping = std.posix.mmap(null, size, .{ .READ = true }, .{ .TYPE = .PRIVATE }, file.handle, 0) catch return null;
-    defer std.posix.munmap(mapping);
-    std.crypto.hash.Blake3.hash(mapping, &digest, .{});
-    return digest;
+    const Chunk = struct { bytes: []const u8 };
+    const chunks = try gpa.alloc(Chunk, chunk_count);
+    defer gpa.free(chunks);
+    for (inputs) |input| {
+        var at: usize = 0;
+        var slot = input.first_chunk;
+        while (at < input.bytes.len) : ({
+            at += hash_chunk;
+            slot += 1;
+        }) chunks[slot] = .{ .bytes = input.bytes[at..@min(input.bytes.len, at + hash_chunk)] };
+    }
+    const chunk_digests = try gpa.alloc([32]u8, chunk_count);
+    defer gpa.free(chunk_digests);
+    const Hasher = struct {
+        fn run(all: []const Chunk, out: [][32]u8, next: *std.atomic.Value(usize)) void {
+            while (true) {
+                const index = next.fetchAdd(1, .monotonic);
+                if (index >= all.len) return;
+                std.crypto.hash.Blake3.hash(all[index].bytes, &out[index], .{});
+            }
+        }
+    };
+    var next = std.atomic.Value(usize).init(0);
+    var threads: [8]std.Thread = undefined;
+    const wanted = @min(threads.len, chunk_count, std.Thread.getCpuCount() catch 1);
+    var started: usize = 0;
+    // A thread that cannot start leaves its share to the others and to
+    // this one; the digests do not depend on how many threads ran.
+    while (started < wanted) : (started += 1) {
+        threads[started] = std.Thread.spawn(.{}, Hasher.run, .{ chunks, chunk_digests, &next }) catch break;
+    }
+    Hasher.run(chunks, chunk_digests, &next);
+    for (threads[0..started]) |thread| thread.join();
+    for (inputs, digests, 0..) |input, *digest, index| {
+        const end = if (index + 1 < inputs.len) inputs[index + 1].first_chunk else chunk_count;
+        var hasher = std.crypto.hash.Blake3.init(.{});
+        var size_bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, &size_bytes, input.bytes.len, .little);
+        hasher.update(&size_bytes);
+        for (chunk_digests[input.first_chunk..end]) |chunk_digest| hasher.update(&chunk_digest);
+        hasher.final(digest);
+    }
+    return null;
 }
 
 /// Link the platform's host with LLD into a host record (cold path), filing
