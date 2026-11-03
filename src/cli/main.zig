@@ -2354,15 +2354,21 @@ const RunShimHost = struct {
     platform_link: RunPlatformLink,
     temp_dir_path: []const u8,
     exe_path: []const u8,
-    /// The cache key of the linked executable: the checked host interface
-    /// and the link inputs.
+    /// The executable's key in the `run_host` cache family: the checked
+    /// host interface and the link inputs.
     cache_key: [32]u8,
+    /// The cache the executable is filed in and restored from; null for a
+    /// run without one.
+    cache: ?*CacheManager,
     enable_debug: bool,
+
+    const cache_scope = "run-host";
 
     fn init(
         ctx: *CliCtx,
         shim_kind: ShimLibraryKind,
         platform_link: RunPlatformLink,
+        cache: ?*CacheManager,
         temp_dir_path: []const u8,
         exe_path: []const u8,
         entrypoint_names: []const []const u8,
@@ -2392,39 +2398,24 @@ const RunShimHost = struct {
                 .checked_host_identity = checked_host_identity,
                 .link_inputs_identity = link_inputs_identity,
             }),
+            .cache = cache,
             .enable_debug = enable_debug,
         };
     }
 
-    fn cacheIdentity(self: *const RunShimHost) compile.artifacts.Identity {
-        return .{ .namespace = compile.artifacts.hashBytes(build_options.compiler_compatibility_id), .family = .run_host, .key = self.cache_key };
-    }
-
-    fn cacheStore(ctx: *CliCtx) ?compile.artifacts.Store {
-        const cfg = CacheConfig{ .roc_ctx = ctx.coreCtx() };
-        const root = cfg.getEffectiveCacheDir(ctx.gpa) catch return null;
-        defer ctx.gpa.free(root);
-        return compile.artifacts.Store.init(ctx.gpa, ctx.io.std_io, root) catch null;
-    }
-
     /// Copy the cached executable to `exe_path`; false when there is none.
     fn restore(self: *const RunShimHost, ctx: *CliCtx) bool {
-        var store = cacheStore(ctx) orelse return false;
-        defer store.deinit();
-        var artifact = (store.acquire(self.cacheIdentity()) catch return false) orelse return false;
+        const cache = self.cache orelse return false;
+        var artifact = cache.acquireFamily(.run_host, self.cache_key, cache_scope) orelse return false;
         defer artifact.deinit();
-        std.Io.Dir.cwd().copyFile(artifact.path, std.Io.Dir.cwd(), self.exe_path, ctx.io.std_io, .{}) catch return false;
+        std.Io.Dir.cwd().copyFile(artifact.path, std.Io.Dir.cwd(), self.exe_path, ctx.io.std_io, .{ .permissions = .executable_file }) catch return false;
         return true;
     }
 
     /// File the executable this run linked in the cache.
-    fn publish(self: *const RunShimHost, ctx: *CliCtx) void {
-        var store = cacheStore(ctx) orelse return;
-        defer store.deinit();
-        var stage = store.reserve(self.cacheIdentity()) catch return;
-        defer stage.deinit();
-        std.Io.Dir.cwd().copyFile(self.exe_path, std.Io.Dir.cwd(), stage.path, ctx.io.std_io, .{}) catch return;
-        stage.publish() catch return;
+    fn publish(self: *const RunShimHost) void {
+        const cache = self.cache orelse return;
+        cache.storeFamilyFile(.run_host, self.cache_key, cache_scope, self.exe_path, "run host");
     }
 
     /// Link the executable at `exe_path`. `referenced_hosted_symbols` are
@@ -2620,6 +2611,15 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         return rocRunBuildAndExec(ctx, args, arg0);
     }
 
+    // The cache the run's host executable is filed in and restored from.
+    const cache_config = CacheConfig{
+        .enabled = !args.no_cache,
+        .verbose = false,
+        .roc_ctx = ctx.coreCtx(),
+    };
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
+    defer cache_manager.deinit();
+
     // The final executable name seen in `ps` is the roc filename (e.g., "app.roc")
     const exe_display_name = std.fs.path.basename(args.path);
 
@@ -2709,7 +2709,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 // The host executable may need the root program lowered, which
                 // needs the build environment.
                 const link = try RunPlatformLink.init(ctx.arena, platform, selected.link_spec, build_env.getPlatformBundleHash());
-                try prepareComposedRunHost(ctx, &reporter, &build_env, tables, units, link, temp_dir_path, exe_path);
+                try prepareComposedRunHost(ctx, &reporter, &build_env, tables, units, link, if (args.no_cache) null else &cache_manager, temp_dir_path, exe_path);
                 reporter.finish();
                 break :blk link;
             } else {
@@ -2772,8 +2772,10 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             .interpreter => .lir,
             .size, .speed => unreachable, // rocRun sends .size and .speed to rocRunBuildAndExec
         };
-        const shim_host = try RunShimHost.init(ctx, shim_kind, platform_link, temp_dir_path, exe_path, entrypoint_names, checked_host_identity);
-        {
+        const shim_host = try RunShimHost.init(ctx, shim_kind, platform_link, if (args.no_cache) null else &cache_manager, temp_dir_path, exe_path, entrypoint_names, checked_host_identity);
+        if (shim_host.restore(ctx)) {
+            std.log.debug("Using the cached host executable", .{});
+        } else {
             switch (args.opt) {
                 .dev => {
                     const result = if (lowered_result) |*value| value else unreachable; // the .dev lowering in platform_link assigned it
@@ -2792,6 +2794,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 },
                 .size, .speed => unreachable, // rocRun sends .size and .speed to rocRunBuildAndExec
             }
+            shim_host.publish();
         }
 
         if (args.opt == .dev) {
@@ -7067,10 +7070,11 @@ fn prepareComposedRunHost(
     tables: *RunUnitTables,
     units: *RunUnits,
     platform_link: RunPlatformLink,
+    cache: ?*CacheManager,
     temp_dir_path: []const u8,
     exe_path: []const u8,
 ) CliMainError!void {
-    const shim_host = try RunShimHost.init(ctx, .machine_code, platform_link, temp_dir_path, exe_path, units.entrypoint_names, units.checked_host_identity);
+    const shim_host = try RunShimHost.init(ctx, .machine_code, platform_link, cache, temp_dir_path, exe_path, units.entrypoint_names, units.checked_host_identity);
     reporter.begin("Host Executable Restore");
     const restored = shim_host.restore(ctx);
     reporter.end();
@@ -7084,7 +7088,7 @@ fn prepareComposedRunHost(
     }
     reporter.begin("Host Executable Link");
     try shim_host.link(ctx, units.entrypoint_names, units.hosted_symbols, .{ .lir = &units.root.? }, units.referenced_hosted_symbols, .{});
-    shim_host.publish(ctx);
+    shim_host.publish();
     reporter.end();
 }
 
