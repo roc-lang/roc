@@ -1,5 +1,7 @@
 //! Resumable cache maintenance. One owner and one fixed-size checkpoint cover
-//! all shards and compiler compatibility identities in a shared store.
+//! all shards and compiler compatibility identities in a shared store. The
+//! owner is a maintenance helper process (`cache_cleanup.zig`); no compiler
+//! command performs maintenance in its own process.
 
 const std = @import("std");
 const artifacts = @import("artifact_store.zig");
@@ -21,17 +23,17 @@ pub const Stats = struct {
     io: catalog.Counters = .{},
 };
 
-/// Shared cadence and operation-count budgets for maintenance grants.
+/// Shared cadence and operation-count budgets for maintenance.
 pub const Policy = struct {
+    /// A completed pass makes the next one due this much later.
     pub const interval: i64 = 5 * artifacts.minute_ns;
-    pub const overdue: i64 = artifacts.minute_ns;
+    /// At most one maintenance helper starts per root in this interval.
     pub const grant_interval: i64 = std.time.ns_per_s;
-    pub const ordinary_units: usize = 1;
-    pub const pressure_units: usize = 8;
+    /// The units one helper runs before it exits, finishing a pass over a
+    /// store of up to this many records; a larger store's pass continues in
+    /// the next helper from the saved checkpoint.
+    pub const helper_units: usize = 1 << 16;
 };
-
-/// Capacity offered by the caller, subject to the shared-root grant policy.
-pub const Admission = enum { optional, compulsory };
 const Phase = enum(u8) { boundaries, age, candidates, evict };
 const state_size = 2048;
 
@@ -121,10 +123,33 @@ pub const Checkpoint = struct {
     }
 };
 
-/// The admission caller provides explicit capacity. This function never polls
-/// a compiler queue or guesses whether the machine is idle. A compulsory grant
-/// is global to the root, not independently renewed by every parallel build.
-pub fn run(store: *const artifacts.Store, limits: Limits, now: i64, admission: Admission, stats: *Stats) void {
+/// Whether a maintenance helper should start for this root now: a pass is due
+/// or the store is over its size limit, no other owner holds the root, and no
+/// helper started within the last grant interval. This only reads: it creates,
+/// writes and locks nothing a later read could observe, so a command can ask
+/// it without itself performing maintenance.
+pub fn wanted(store: *const artifacts.Store, limits: Limits, now: i64) bool {
+    var root = store.openRoot(false) catch return false;
+    defer root.close(store.io);
+    // An owner holds the lock for its whole run, so a busy lock means the
+    // root already has its helper. A missing lock file means no helper has
+    // run yet.
+    if (root.openFile(store.io, "maintenance.lock", .{ .lock = .exclusive, .lock_nonblocking = true })) |owner| {
+        owner.close(store.io);
+    } else |err| switch (err) {
+        error.FileNotFound => {},
+        else => return false,
+    }
+    var checkpoint = Checkpoint.load(root, store.io) catch return false;
+    if (checkpoint.due > now +| Policy.interval or checkpoint.next_grant > now +| Policy.grant_interval) checkpoint = .{};
+    if (now < checkpoint.next_grant) return false;
+    return checkpoint.oversized(limits.max_size_bytes) or now >= checkpoint.due;
+}
+
+/// Run up to `budget` units of a due pass, or of eviction while the store is
+/// over its size limit, as the root's one maintenance owner. This function
+/// never polls a compiler queue or guesses whether the machine is idle.
+pub fn run(store: *const artifacts.Store, limits: Limits, now: i64, budget: usize, stats: *Stats) void {
     var root = store.openRoot(false) catch return;
     defer root.close(store.io);
     const owner = root.createFile(store.io, "maintenance.lock", .{
@@ -142,15 +167,9 @@ pub fn run(store: *const artifacts.Store, limits: Limits, now: i64, admission: A
     // valid future deadlines are one interval/grant ahead of the last writer.
     // Reset traversal hints; artifact metadata still decides eligibility.
     if (checkpoint.due > now +| Policy.interval or checkpoint.next_grant > now +| Policy.grant_interval) checkpoint = .{};
-    const pressure = checkpoint.oversized(limits.max_size_bytes);
-    if (!pressure and now < checkpoint.due) return;
-    if (admission == .compulsory) {
-        if (now < checkpoint.next_grant) return;
-        if (!pressure and checkpoint.due != 0 and @as(i128, now) - checkpoint.due < Policy.overdue) return;
-        checkpoint.next_grant = now +| Policy.grant_interval;
-    }
-    const allowance = if (admission == .optional) 1 else if (pressure) Policy.pressure_units else Policy.ordinary_units;
-    for (0..allowance) |_| {
+    if (!checkpoint.oversized(limits.max_size_bytes) and now < checkpoint.due) return;
+    checkpoint.next_grant = now +| Policy.grant_interval;
+    for (0..budget) |_| {
         step(store, limits, now, &checkpoint, stats) catch {
             stats.errors += 1;
             // Do not retry a failing filesystem operation in this invocation.
@@ -379,7 +398,7 @@ test "short saturated invocations checkpoint bounded units and reach the end of 
     var removed: usize = 0;
     for (0..350) |_| {
         var stats = Stats{};
-        run(&fixture.store, .{ .max_size_bytes = std.math.maxInt(u64), .object_pack_format_version = 1 }, now, .compulsory, &stats);
+        run(&fixture.store, .{ .max_size_bytes = std.math.maxInt(u64), .object_pack_format_version = 1 }, now, 1, &stats);
         try std.testing.expect(stats.units <= 1);
         try std.testing.expect(stats.records <= 1);
         try std.testing.expect(stats.metadata <= 1);
@@ -392,7 +411,7 @@ test "short saturated invocations checkpoint bounded units and reach the end of 
     try std.testing.expectEqual(@as(usize, 150), removed);
 }
 
-test "not due does no catalog I/O and pressure increases the root allowance" {
+test "not due does no catalog I/O and pressure runs the whole budget" {
     var fixture = try Fixture.init();
     defer fixture.deinit();
     for (0..20) |i| try fixture.store.write(Fixture.identity(@intCast(i * artifacts.shard_count)), "data", 1);
@@ -401,7 +420,7 @@ test "not due does no catalog I/O and pressure increases the root allowance" {
     var checkpoint: Checkpoint = .{ .due = Policy.interval };
     try checkpoint.save(root, std.testing.io);
     var stats = Stats{};
-    run(&fixture.store, .{ .max_size_bytes = 1, .object_pack_format_version = 1 }, 10, .compulsory, &stats);
+    run(&fixture.store, .{ .max_size_bytes = 1, .object_pack_format_version = 1 }, 10, 1, &stats);
     try std.testing.expectEqual(@as(usize, 0), stats.units);
     try std.testing.expectEqual(@as(usize, 0), stats.io.reads);
     checkpoint.due = 0;
@@ -410,8 +429,8 @@ test "not due does no catalog I/O and pressure increases the root allowance" {
     var removed: usize = 0;
     for (0..60) |i| {
         stats = .{};
-        run(&fixture.store, .{ .max_size_bytes = 4, .object_pack_format_version = 1 }, @intCast(i * Policy.grant_interval), .compulsory, &stats);
-        if (i == 0) try std.testing.expectEqual(Policy.pressure_units, stats.units);
+        run(&fixture.store, .{ .max_size_bytes = 4, .object_pack_format_version = 1 }, @intCast(i * Policy.grant_interval), 8, &stats);
+        if (i == 0) try std.testing.expectEqual(@as(usize, 8), stats.units);
         try std.testing.expectEqual(@as(usize, 0), stats.errors);
         removed += stats.deletions;
         if (removed == 19) break;
@@ -430,7 +449,7 @@ test "corrupt checkpoint cannot authorize deleting live staging" {
     try root.writeFile(std.testing.io, .{ .sub_path = "maintenance", .data = "truncated cursor" });
     for (0..100) |i| {
         var stats = Stats{};
-        run(&fixture.store, .{ .max_size_bytes = 1, .object_pack_format_version = 1 }, 31 * artifacts.day_ns + @as(i64, @intCast(i)) * Policy.grant_interval, .compulsory, &stats);
+        run(&fixture.store, .{ .max_size_bytes = 1, .object_pack_format_version = 1 }, 31 * artifacts.day_ns + @as(i64, @intCast(i)) * Policy.grant_interval, 1, &stats);
         try std.testing.expectEqual(@as(usize, 0), stats.deletions);
     }
     try Dir.cwd().access(std.testing.io, staging.path, .{});
@@ -503,7 +522,7 @@ test "missing payload reconciliation and obsolete namespaces use the same bounde
     var removed: usize = 0;
     for (0..100) |i| {
         var stats = Stats{};
-        run(&fixture.store, .{ .max_size_bytes = std.math.maxInt(u64), .object_pack_format_version = 2 }, 101 * artifacts.day_ns + @as(i64, @intCast(i)) * Policy.grant_interval, .compulsory, &stats);
+        run(&fixture.store, .{ .max_size_bytes = std.math.maxInt(u64), .object_pack_format_version = 2 }, 101 * artifacts.day_ns + @as(i64, @intCast(i)) * Policy.grant_interval, 1, &stats);
         try std.testing.expect(stats.records <= 1);
         try std.testing.expect(stats.metadata <= 1);
         try std.testing.expect(stats.deletions <= 1);
@@ -571,13 +590,13 @@ test "maintenance ownership is shared across processes and released after abrupt
     try std.testing.expectEqual(@as(isize, 1), C.read(pipe[0], &ready, 1));
     var stats = Stats{};
     const limits: Limits = .{ .max_size_bytes = 1000, .object_pack_format_version = 1 };
-    run(&fixture.store, limits, 1, .compulsory, &stats);
+    run(&fixture.store, limits, 1, 1, &stats);
     try std.testing.expectEqual(@as(usize, 0), stats.units);
     _ = C.kill(pid, @intCast(@backingInt(std.posix.SIG.KILL)));
     var status: c_int = 0;
     try std.testing.expectEqual(pid, C.waitpid(pid, &status, 0));
     waited = true;
-    run(&fixture.store, limits, 1, .compulsory, &stats);
+    run(&fixture.store, limits, 1, 1, &stats);
     try std.testing.expectEqual(@as(usize, 1), stats.units);
 }
 
@@ -594,13 +613,13 @@ test "a deletion whose checkpoint fails is safe to repeat" {
     try root.createDir(std.testing.io, "maintenance.tmp", .default_dir);
     const limits: Limits = .{ .max_size_bytes = 100, .object_pack_format_version = 1 };
     var stats = Stats{};
-    run(&fixture.store, limits, 31 * artifacts.day_ns, .compulsory, &stats);
+    run(&fixture.store, limits, 31 * artifacts.day_ns, 1, &stats);
     try std.testing.expectEqual(@as(usize, 1), stats.deletions);
     try std.testing.expectEqual(@as(usize, 1), stats.errors);
     try std.testing.expectEqual(@as(usize, 0), stats.units);
     try root.deleteDir(std.testing.io, "maintenance.tmp");
     stats = .{};
-    run(&fixture.store, limits, 31 * artifacts.day_ns, .compulsory, &stats);
+    run(&fixture.store, limits, 31 * artifacts.day_ns, 1, &stats);
     try std.testing.expectEqual(@as(usize, 0), stats.deletions);
     try std.testing.expectEqual(@as(usize, 0), stats.errors);
     try std.testing.expectEqual(@as(usize, 1), stats.units);
@@ -614,7 +633,7 @@ test "allocation boundaries terminate passes and later passes cover concurrent i
     const limits: Limits = .{ .max_size_bytes = 1000, .object_pack_format_version = 1 };
     for (0..artifacts.shard_count) |_| {
         var stats = Stats{};
-        run(&fixture.store, limits, now, .optional, &stats);
+        run(&fixture.store, limits, now, 1, &stats);
         try std.testing.expectEqual(@as(usize, 1), stats.units);
     }
     try fixture.store.write(Fixture.identity(0), "fresh replacement", now);
@@ -622,7 +641,7 @@ test "allocation boundaries terminate passes and later passes cover concurrent i
     var removed: usize = 0;
     for (0..200) |i| {
         var stats = Stats{};
-        run(&fixture.store, limits, now + @as(i64, @intCast(i)) * artifacts.minute_ns, .compulsory, &stats);
+        run(&fixture.store, limits, now + @as(i64, @intCast(i)) * artifacts.minute_ns, 1, &stats);
         removed += stats.deletions;
     }
     try std.testing.expectEqual(@as(usize, 2), removed);

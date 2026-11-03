@@ -930,24 +930,36 @@ cursor has a platform-path-length bound; every ancestor is opened without
 following symlinks. Restarting after a lost cursor is safe because all remaining
 leaves of an unowned scratch directory are eligible.
 
-Optional maintenance runs as one synchronous task immediately before a
-coordinator waits for a result, only when its declared queued-plus-executing
-worker demand is below its configured budget and that budget exceeds one.
-The maintenance task occupies the otherwise waiting coordinator's slot. Serial
-coordination and linking do not grant optional capacity. No compiler scheduling
-lock spans filesystem work. Returning foreground demand stops subsequent
-admissions, not a unit already executing. There is no detached worker and no
-owner waiting for capacity while holding maintenance ownership.
+Maintenance runs in a helper process, never in a compiler command's own
+process. A command asks, at startup and then at most once per second at
+coordinator safe points, whether its root wants maintenance
+(`maintenance.wanted`): a pass is due or the store is over its limit, no owner
+holds the root's lock, and no helper started within the last second. The
+question only reads: it creates, writes and holds nothing. When the answer is
+yes the command starts a detached helper (`roc __roc_cache_maintenance <root>
+<max bytes>`, `cache_cleanup.zig`) with no standard streams, in its own process
+group, and goes on without waiting for it; it collects helpers that have exited
+without waiting for any. The helper takes the root's lock, runs up to a pass's
+units under it (`Policy.helper_units`), checkpointing after each, and exits.
+
+A command never performs maintenance itself because a single filesystem
+operation can block for a long time: on a journaling filesystem a rename,
+delete or metadata write waits while the kernel commits other processes'
+writes, and five-second waits on the checkpoint's rename are routine under
+build load (one-minute waits have been observed). Run in the command's
+process, such a wait held up a command whose result was already finished. A
+thread would not avoid it, because a process whose thread is blocked in such
+an operation cannot exit until the operation returns, so neither the
+command's exit nor a reader of its output could proceed. The helper's
+operations run on its own schedule and are interruption-safe like every other
+store operation: a killed helper leaves a checkpoint the next one resumes.
 
 A completed pass sets its next due time five minutes ahead. An unfinished pass
-keeps its due time. Once a pass is one minute overdue, every successful grant
-completes and checkpoints one compulsory unit synchronously at command startup,
-completed-task safe points, or command shutdown. Missing state starts overdue.
-The checkpoint permits at most one compulsory grant per second per shared root,
-so parallel invocations share that allowance. A one-worker build receives the
-same compulsory allowance. Individual invocations inside that one-second
-window need not do work; continued invocations spanning subsequent windows
-advance a finite pass. Persisted pressure raises each grant to eight units.
+keeps its due time, and the next helper resumes it. Missing state starts
+overdue. Each helper's run records the next grant one second ahead, so
+parallel invocations start at most one helper per second per shared root, and
+a running helper's lock makes others start none. Persisted pressure keeps the
+root wanting maintenance until eviction brings it under the limit.
 
 Retention keeps the five-minute abandoned-scratch, one-day local-pack/program,
 and thirty-day persistent/package-pack windows. Entry family and eligibility
@@ -964,14 +976,12 @@ maintenance indefinitely, and pinned files, metadata, scratch, external changes,
 and delayed reclamation also consume storage. Optional cache commit skips
 busy shards instead of waiting; required scratch reservation waits for its short
 metadata transaction. OS failures stop the current attempt rather than create
-retry loops. Continued successful invocations and filesystem operations
-guarantee progress through a finite workload; process termination and absence
-of future invocations do not.
+retry loops. Continued successful invocations, each able to start a helper, and filesystem
+operations guarantee progress through a finite workload; process termination
+and absence of future invocations do not.
 
 These are operation-count guarantees, not wall-clock deadlines. A single OS
-operation may block. Spare capacity in participating builds also does not prove
-that unrelated applications have left the machine idle. Compulsory maintenance
-intentionally consumes a bounded amount of foreground capacity.
+operation may block, which delays only the helper performing it.
 
 Native dev tests consume this domain through the same heap-owned lookup and
 splice provider as CTFE. They emit object-mode procedures, link symbolic

@@ -3784,7 +3784,7 @@ pub const Coordinator = struct {
             // cannot return the error itself, so it recorded the OOM here.
             if (self.worker_oom.load(.acquire)) return error.OutOfMemory;
             try self.checkCancelRequest();
-            if (comptime !threading.is_freestanding) @import("cache_cleanup.zig").safePoint(.serial);
+            if (comptime !threading.is_freestanding) @import("cache_cleanup.zig").safePoint();
 
             var made_progress = false;
 
@@ -3799,13 +3799,7 @@ pub const Coordinator = struct {
             } else {
                 // Multi-threaded: receive from workers via channel
                 // Use blocking recv with timeout to avoid busy spinning
-                const next_result = self.result_channel.tryRecv() orelse blk: {
-                    if (comptime !threading.is_freestanding) @import("cache_cleanup.zig").safePoint(.{ .waiting = .{
-                        .budget = self.max_threads,
-                        .tasks = self.inflight.load(.acquire),
-                    } });
-                    break :blk self.result_channel.recvTimeout(10_000_000);
-                };
+                const next_result = self.result_channel.tryRecv() orelse self.result_channel.recvTimeout(10_000_000);
                 if (next_result) |result| {
                     _ = self.inflight.fetchSub(1, .monotonic);
                     try self.handleResult(result);

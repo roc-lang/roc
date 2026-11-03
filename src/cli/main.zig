@@ -1249,13 +1249,26 @@ fn parsedArgsUseCache(args: cli_args.CliArgs) bool {
     };
 }
 
-fn initCacheMaintenance(gpa: Allocator, arena: Allocator, std_io: std.Io) ?compile.CacheCleanup.Session {
+fn initCacheMaintenance(gpa: Allocator, arena: Allocator, std_io: std.Io, exe: []const u8) ?compile.CacheCleanup.Session {
     const cfg = cache_config_mod.CacheConfig{ .roc_ctx = CoreCtx.default(gpa, arena, std_io) };
     const root = cfg.getEffectiveCacheDir(arena) catch return null;
-    return compile.CacheCleanup.Session.init(gpa, std_io, root, .{
+    return compile.CacheCleanup.Session.init(gpa, std_io, root, exe, .{
         .object_pack_format_version = backend.dev.PackFile.format_version,
         .max_size_bytes = @as(u64, cfg.max_size_mb) * 1024 * 1024,
     }) catch null;
+}
+
+/// The cache maintenance helper a command starts (`compile.CacheCleanup`):
+/// `<compiler> __roc_cache_maintenance <cache root> <max size bytes>`. It
+/// prints nothing and reports nothing: maintenance failures stop the attempt,
+/// and a later helper retries.
+fn rocInternalCacheMaintenance(gpa: Allocator, std_io: std.Io, args: []const []const u8) void {
+    if (args.len != 2) return;
+    const max_size_bytes = std.fmt.parseInt(u64, args[1], 10) catch return;
+    compile.CacheCleanup.runHelper(gpa, std_io, args[0], .{
+        .object_pack_format_version = backend.dev.PackFile.format_version,
+        .max_size_bytes = max_size_bytes,
+    }) catch {};
 }
 
 fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: std.Io) CliMainError!void {
@@ -1274,9 +1287,13 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         return rocInternalHotReloadDev(&ctx, args[2..]);
     }
 
+    if (args.len >= 2 and std.mem.eql(u8, args[1], compile.CacheCleanup.helper_command)) {
+        return rocInternalCacheMaintenance(gpa, std_io, args[2..]);
+    }
+
     const parsed = try cli_args.parseWithGlobalOptions(arena, std_io, args[1..]);
     const parsed_args = parsed.command;
-    var maintenance = if (parsedArgsUseCache(parsed_args)) initCacheMaintenance(gpa, arena, std_io) else null;
+    var maintenance = if (parsedArgsUseCache(parsed_args)) initCacheMaintenance(gpa, arena, std_io, args[0]) else null;
     if (maintenance) |*session| session.start();
     defer if (maintenance) |*session| session.deinit();
 

@@ -878,7 +878,7 @@ test "indexed pack families share retention and preserve accepted bytes" {
     var now = store.native.now() + 2 * compile.artifacts.day_ns;
     for (0..180) |_| {
         var stats = compile.maintenance.Stats{};
-        compile.maintenance.run(&store.native, .{ .object_pack_format_version = PackFile.format_version, .max_size_bytes = std.math.maxInt(u64) }, now, .compulsory, &stats);
+        compile.maintenance.run(&store.native, .{ .object_pack_format_version = PackFile.format_version, .max_size_bytes = std.math.maxInt(u64) }, now, 1, &stats);
         now += std.time.ns_per_s;
     }
     try std.testing.expect(!try store.has(.local, module, key));
