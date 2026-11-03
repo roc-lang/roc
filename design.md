@@ -3480,7 +3480,7 @@ values of that type.
 ## Type Alias Invariant
 
 Source type aliases are transparent views of their backing type. An alias root
-in the checked type store records source spelling and alias arguments. It is not
+in the solver type store records source spelling and alias arguments. It is not
 a nominal type identity, and it is not the authoritative solved representative
 for a concrete structure.
 
@@ -14748,7 +14748,8 @@ Type-store ownership is explicit at each stage boundary:
   change types.
 - Lambda Solved IR owns a new type store with lambda-set variables.
 - Lambda Mono owns a new type store with no function types.
-- Boxy lowering consumes the checked type store and owns boxy descriptor and
+- Boxy lowering reads checked types through the type reader (sealed solver
+  stores and synthesized-type stores) and owns boxy descriptor and
   dictionary stores. It does not allocate a Monotype or Lambda Solved type
   store.
 - LIR owns committed layouts, not post-check type ids.
@@ -14962,7 +14963,7 @@ per-specialization residue of generalized literals.
 A generalized local callable alias (`alias = callable`) owns a checked
 instantiation scope, not a runtime monomorphic value cell or a new function
 body. Checking's binding-scheme classification and the declaration's explicit
-lookup edge authorize this plan; CheckedModule construction records it on the
+lookup edge authorize this plan; the checker records it on the
 binder and its resolved procedure uses. Calls and other value-producing computations are not
 alias declarations and retain their original evaluation site.
 
@@ -14972,8 +14973,8 @@ binding type. Body lowering installs that substitution in a fresh type-only
 scope and forwards the referenced callable, preserving its identity and
 captures. It does not clone runtime binder tables or create an alias closure,
 wrapper procedure, or specialization family. Monomorphic variables present in
-the substitution retain their existing cells. CheckedModule construction
-compresses alias identity edges to their final callable lookup in linear work without composing
+the substitution retain their existing cells. The alias's call-edge evidence
+analysis compresses alias identity edges to their final callable lookup in linear work without composing
 type graphs. Boxy consumes that target when lowering each typed callable use.
 
 Monotype lowering is a specialization-time instantiation of checked type graphs.
@@ -15227,8 +15228,8 @@ must depend only on the current live index: the history of earlier root
 migrations must not lengthen future probe paths.
 
 A context-free callee body never joins the caller group's graph. Instead
-CheckedModule stores a complete specialization-interface relation table for
-every procedure template. Its records explicitly name checked equalities,
+each procedure template has a complete specialization-interface relation
+table, a per-root on-demand analysis of the template. Its records explicitly name checked equalities,
 procedure/result relations, ordinary call interfaces and direct targets, and
 generalized local-procedure uses. A generalized scope also records its exact
 checked scheme root, so evidence paths are replayed against the same callable
@@ -15242,7 +15243,8 @@ type. Reading the source-value cell neither commits the field kind nor relates
 the value to its storage slot; ordinary interface relations and relation freeze
 retain ownership of those decisions.
 
-The `CheckedBodyStore.contains_diagnostic_error` column excludes rejected
+The per-expression `contains_diagnostic_error` fact ("Per-Expression Checking
+Facts") excludes rejected
 expression sites from this relation table; an error-containing checked type is
 not a valid specialization constraint and never reaches Monotype instantiation.
 Monotype consumes both relation sources before applying defaults or sealing a
@@ -15534,7 +15536,7 @@ inference after checking. They are the Monotype-stage representation of checked
 data that are already present in the checked module. If a required relation is
 missing from checked output, the producer is incomplete and must be fixed.
 
-Nominal instantiation relies on a stronger CheckedModule invariant than
+Nominal instantiation relies on a stronger checked-module invariant than
 "the same source name appears twice." A checked nominal declaration owns an
 explicit declaration template:
 
@@ -15547,25 +15549,25 @@ This root identity is the long-term ideal because it makes nominal
 instantiation dataflow explicit. `Codec(input, value)` does not require
 Monotype, layout lowering, or a backend to rediscover that the `input` in
 `run : input -> ...` is the first nominal parameter by reading source text or
-matching display names. CheckedModule data stores that relation once, as
-checked root identity. Monotype then constrains declaration formal roots to the
+matching display names. The declaration's synthesized template states that
+relation once, as checked root identity. Monotype then constrains declaration formal roots to the
 concrete named arguments for the current specialization and lowers the
 declaration backing through those cells. The result is a backing type in which
 every formal occurrence has the same monomorphic meaning as the named type
 argument that instantiated it.
 
-When declaration output expands an alias containing a local nominal
-application, it must build that application from the arguments translated in
-the current declaration's formal scope. Reusing the original annotation's
-nominal instance would retain the alias declaration's independent parameters
-inside an otherwise correctly substituted outer backing template.
+When a declaration's synthesized template expands an alias containing a local
+nominal application, it must build that application from the arguments
+translated in the current declaration's formal scope. Reusing the original
+annotation's nominal instance would retain the alias declaration's independent
+parameters inside an otherwise correctly substituted outer backing template.
 
-Declaration output expands every local alias reference, applied or bare, by
-walking the alias body syntax; a bare reference is an application with no
-arguments, since checking rejects one that leaves formals unapplied (Type
-Declaration Template Validity). An expansion depends only on the alias and the
-roots bound to its formals, so a module outputs it once and every later
-reference shares that root. A nominal backing has no use-site polarity, so
+A declaration's synthesized template expands every local alias reference,
+applied or bare, by walking the alias body syntax; a bare reference is an
+application with no arguments, since checking rejects one that leaves formals
+unapplied (Type Declaration Template Validity). An expansion depends only on
+the alias and the roots bound to its formals, so the module's synthesized-type
+store holds it once and every later reference shares that entry. A nominal backing has no use-site polarity, so
 every extensionless tag union it reaches closes as written, exactly as the
 checker closes it. The alias declaration's own root is never the backing's
 content: it keeps its output rows' polarity markers deferred for the alias's
@@ -15577,22 +15579,21 @@ declarations. For local declarations, the `backing` root on a nominal-use
 payload is not the authority for declaration-template instantiation; the
 declaration template is authoritative because it carries the formal roots that
 connect header parameters to backing occurrences. For imported nominal
-declarations, the current CheckedModule must contain the `backing` root that
-`CheckedTypeProjector` writes on the nominal-use payload, so Monotype can
-consume that root directly without reaching into the source module's
-declaration template. Box payload capabilities remain separate explicit
-representation authorities; their backing roots come from the capability entry
-in checked module data instead of from declaration template lookup.
+declarations, Monotype reads the declaration's synthesized template from the
+owning module's slot, so every module instantiates one template per
+declaration and no importer holds a copy of it. Box payload capabilities
+remain separate explicit representation authorities; their backing roots come
+from the capability entry in checked module data instead of from declaration
+template lookup.
 
 Named type ownership is already decided before Monotype lowering starts. A
-checked alias or nominal payload names its owner checked module id explicitly,
-and the lowering input includes every checked module id recorded in checked
-lowering visibility. Monotype may build a stage-local lookup table from those
-ids to module views for speed, but that lookup is only an address table over
-explicit checked data. The source-origin identity remains part of the lowered
-type definition identity; the owner checked module id is the module address used
-to find checked declarations, representation authorities, method owners, and
-type-store entries.
+checked alias or nominal type names its owner module explicitly, and every
+module of the build is live, so the owner is always available. Monotype may
+build a stage-local lookup table from owner ids to modules for speed, but that
+lookup is only an address table over explicit checked data. The source-origin
+identity remains part of the lowered type definition identity; the owner
+module id is the module address used to find checked declarations,
+representation authorities, method owners, and type entries.
 
 This solves two classes of bugs:
 
@@ -16105,8 +16106,9 @@ encoding, or incidental map iteration.
 Checked nominal records preserve their declared field order as separate
 explicit data so source-level unnamed fields are not lost when the backing row
 is sorted lexicographically (see Nominal Record Field Order). The lexicographic
-row order remains the identity used for field-name resolution. In CheckedModule
-data the source order is a flat `CheckedDeclaredField` pool. A named entry stores
+row order remains the identity used for field-name resolution. In a
+declaration's synthesized template the source order is a flat
+`CheckedDeclaredField` pool. A named entry stores
 the record-field label that matches the lexicographic backing row; a padding
 entry stores the ordinal of the corresponding checked padding type in
 `padding_field_types`. The padding type itself is not duplicated in the
@@ -16735,10 +16737,12 @@ The demand of a variable is one of three values, the same scale
   `FieldName`, `ParseTagUnionSpec`, `Iter`, `Stream`), a variable used as a row
   extension, and a variable the scheme's root type does not mention.
 
-Checking computes the demand vector of every template once, when the checked
-module data is written (`TemplateDemandPass`), and stores it beside the
-template's `scheme_vars` (`CheckedProcedureTemplateTable.templateDemands`), so a
-cached CheckedModule carries it and no later stage recomputes it. Each body is
+A template's demand vector is a per-component on-demand analysis
+(`TemplateDemandPass`): the first consumer that needs one claims the strongly
+connected component of the module's call graph that holds the template,
+computes the vector of every template in it, and publishes them together.
+Every later consumer reads the done slot, and no cache entry stores a demand
+vector; a cache hit recomputes it on first demand. Each body is
 walked once into a base vector and a set of edges: a direct call or a
 dispatch that checking resolved to one procedure template relates each
 caller variable that the callee slot's checked substitution mentions to that
@@ -16827,7 +16831,7 @@ nothing behind it.
 
 A shaped specialization's procedure identity renders its holes as holes,
 and the specialization set stays a function of the source tree: the demand
-vector comes from the CheckedModule and the substitution from the request.
+vector comes from the template's demand slot and the substitution from the request.
 
 ### Procedure Aliases
 
@@ -17105,12 +17109,12 @@ otherwise change, and the producer-consumer shape that later passes see
 (a call whose result is directly a constructor field) is kept everywhere
 else. Boxy lowers record literals from their source field order directly.
 
-After total plan resolution, `CheckedBodyStore` computes and stores expression
-and statement divergence through its exact operand and body dependencies. When
+The checker records expression and statement divergence through exact
+operand and body dependencies as a per-expression checking fact. When
 an `evidence_dependent(depth, k)` call becomes `checked_error` or
 `unreachable_value` only for
 one specialization, Monotype supplies those exact dispatch expression ids to
-the same checked-body divergence computation before it replays type relations
+the same divergence rule, in its own workspace, before it replays type relations
 or lowers the body. Callable, dispatcher, operand, and result types may be
 instantiated only after this callable-or-crash gate. The crash branch uses the
 contextual result cell solely to represent the non-returning expression; it
@@ -17164,8 +17168,8 @@ lowers an exact low-level target directly and creates no procedure
 specialization. An ordinary procedure target requests one specialization under
 the identity `(target template, target-instantiated checked callable,
 nested-evidence identity)`. Closed checked callable and evidence
-identities are interned in CheckedModule, so the first request creates or loads
-the specialization and every repeated call is an O(1) hit before durable type
+identities are interned in the caller's call-edge evidence slot, so the first
+request creates or loads the specialization and every repeated call is an O(1) hit before durable type
 or evidence digests are rebuilt. That identity is complete only for a
 specialization independent of the caller's local context. A caller-owned
 specialization (structural evidence lowered inside a local procedure context,
@@ -17520,7 +17524,7 @@ boundary, instantiates the selected owner's method scheme, and
 unifies every independent callable relation exactly. The default owner is
 selected once per receiver; creation-site constraints retain their source and
 copied scheme constraints retain their exact per-edge callable and use-site
-identity, including detached requirements. `CheckedModule` construction
+identity, including detached requirements. Call-edge evidence analysis
 consumes each `dispatch_target` evidence slot or `rejected_static_dispatches`
 entry and never repeats the compatibility decision.
 
@@ -17653,7 +17657,7 @@ Each checked evidence param also carries the label-addressed PATH from its
 scheme's callable to the dispatcher's first occurrence (argument positions,
 type arguments, row labels—labels rather than positions, because Monotype
 sorts rows). Boxy lowering projects dispatcher components over
-concrete callables through these paths, and the CheckedModule boundary
+concrete callables through these paths, and call-edge evidence analysis
 validates them.
 
 Paths are stored as nodes, each one step linked to the node of the step
@@ -17678,9 +17682,10 @@ still names the structure the scheme wrote. A static-dispatch requirement on
 an open-row remainder is pathless because closure erases that remainder as a
 standalone component; ordinary checked edges can still supply it, while a
 compiler-generated edge cannot synthesize it from the closed callable. The
-CheckedModule boundary validates both the path grammar and that every nonempty
-path resolves over its template's checked callable type before Monotype may
-consume it.
+call-edge evidence analysis validates both the path grammar and that every
+nonempty path resolves over its template's checked callable type before it
+publishes the evidence that Monotype consumes; each check is a debug
+assertion in debug builds and `unreachable` in release builds.
 
 Exact registry lookups—`(MethodOwner, MethodNameId)`—happen during
 checking, and during requirement derivation for compiler-generated edges. The
@@ -18503,8 +18508,8 @@ contain checked data that are absent from Lambda Solved IR, the explicit inline
 plan, the builder's logical Lambda Mono decisions, or the LIR result.
 
 The `.boxy` builder owns corresponding memos such as
-`CheckedTypeId -> layout.Idx`, `CheckedTypeId -> static descriptor`,
-`CheckedExprId -> LirLocalId`, and `CheckedRootOrder -> LirProcSpecId` while
+`TypeId -> layout.Idx`, `TypeId -> static descriptor`,
+`CIR.Expr.Idx -> LirLocalId`, and `CheckedRootOrder -> LirProcSpecId` while
 lowering one worker. These maps are caches of explicit checked data. They
 must not recover missing data from source syntax, type display strings,
 backend symbols, or runtime bytes.
@@ -18774,7 +18779,7 @@ and Monotype instantiation) because field-name resolution and digests depend on
 a single fixed order, so the declared order is not recoverable from the lowered
 record itself. Canonicalization preserves it—a nominal declaration's record
 annotation keeps its fields in source order—and checking records it as
-explicit CheckedModule data distinct from the (lexicographic) backing row,
+explicit checked data distinct from the (lexicographic) backing row,
 so later stages never rescan declarations. Monotype lowering preserves this
 metadata for `.lss`, and `.boxy` reads it from the checked declaration. LSS and
 boxy use the presence of explicit checked padding types to select the
@@ -23300,7 +23305,7 @@ A stored function value keeps checked identity only:
 ```zig
 const ConstFn = struct {
     fn_def: FnDef,
-    source_fn_ty: CheckedTypeId,
+    source_fn_ty: TypeId,
     captures: Span(ConstCapture),
 };
 
@@ -23391,7 +23396,7 @@ const ErasedFn = struct {
 
 const FnTemplate = struct {
     fn_def: FnDef,
-    source_fn_ty: CheckedTypeId,
+    source_fn_ty: TypeId,
 };
 
 const CaptureSlot = struct {
@@ -23558,10 +23563,6 @@ a constant (static data named by content, a short string as its literal, a
 construction as its parts), and no runtime program declares a slot, a
 failure record, or a guard for a compile-time root that completed.
 
-A completed-compilation record retains only entries generated after this
-normalization. Reusing those final entries preserves the same rule without
-reconstructing either specialization or the values they consumed.
-
 The point at which this holds for a live compilation is explicit: the end of the
 program's evaluation (`finalizeProgram`). The specialization evaluation made declared
 each pending root's read as a slot read, because the value did not exist
@@ -23570,8 +23571,7 @@ demands, its Solved program is not the one a runtime consumer continues.
 The program is specialized again from the checked modules, now holding
 every demanded value stored, exactly as a compilation that found them all
 in the cache specializes it (`ProgramSession.RuntimeStages.respecialized`).
-Discovery-only test roots have already completed their requirements and do not
-join this second specialization. Runtime roots still register every conversion
+Runtime roots still register every conversion
 their own code uses. That specialization demands no compile-time root; it registers the
 runtime program's literal roots again and evaluates them, and their outcomes, which
 the first evaluation already reported, report nowhere. A literal root is
@@ -24427,10 +24427,10 @@ dispatch order for that table is the `hosted` section's declaration order.
 Canonicalization resolves every `hosted` mapping once to an exact imported
 definition. Checking validates that definition is a hosted declaration, and a
 successfully checked platform module stores the header-ordered binding table in
-its `CheckedModule`, indexed by `(target CheckedModule digest, target CIR
+its `ModuleEnv`, indexed by `(target checked module key, target CIR
 definition)`. `HostedCompiler.replaceAnnoOnlyWithHosted` records the exact
-rewritten definition span in `ModuleEnv`; `CheckedModule` construction consumes
-it directly. CLI and post-check consumers join hosted procedures to the binding
+rewritten definition span in `ModuleEnv`, and every reader consumes it
+directly. CLI and post-check consumers join hosted procedures to the binding
 table by those identities in linear time; they must not reconstruct or match
 qualified source names.
 
@@ -24694,7 +24694,7 @@ solving, adapted for Roc's checked module boundary and existing LIR.
 
 | Cor LSS stage | Roc stage |
 | --- | --- |
-| solved source IR | checked CIR plus checked type store |
+| solved source IR | checked CIR plus sealed solver type store |
 | `monotype` | Monotype IR |
 | `monotype_lifted` | Monotype Lifted IR |
 | `lambdasolved` | Lambda Solved IR |
@@ -24713,7 +24713,7 @@ solving, adapted for Roc's checked module boundary and existing LIR.
 
 Cor's LSS checker represents quantification explicitly on binding schemes:
 lookup instantiates a scheme, while a monotype is reused, and a call always
-produces a fresh monomorphic result. Roc's checked type store retains rank-based
+produces a fresh monomorphic result. Roc's sealed solver store retains rank-based
 quantified variables for its richer solver, but its explicit binding-scheme
 classification preserves that same rank-1 behavior. In both designs the decision
 to instantiate comes from the binding, never from treating a function nested
@@ -24734,7 +24734,7 @@ lowering consumes those classifications and only instantiates the explicit
 parametric/evidence relations before replacing dispatch with direct calls; a
 closed direct call performs no method lookup or dispatch-graph construction.
 
-Lambda sets are not stored in the checked type store or checked cache.
+Lambda sets are not stored in the sealed solver store or checked cache.
 They are introduced after Monotype Lifted IR, during Lambda Solved IR, exactly
 where callable value flow is being solved for the current whole-program root.
 
@@ -24861,8 +24861,8 @@ Minimum boundary checks:
   layouts.
 - Checked compile-time stores contain only `ConstStore` data.
 - LIR lowering receives only the selected strategy's explicit inputs: Lambda
-  Solved lifted syntax plus Lambda Mono decisions for `.lss`, or checked
-CheckedModule data for `.boxy`.
+  Solved lifted syntax plus Lambda Mono decisions for `.lss`, or the live
+  checked modules for `.boxy`.
 - ARC insertion receives LIR containing no RC statements.
 - ARC insertion sees a dynamic local only through its explicit descriptor
   local.
@@ -24942,13 +24942,6 @@ and installation phases under the same diagnostic.
 The specialization, evaluation, runtime LIR, ARC, static-data and native test
 execution producers increment their own counters. A complete result hit leaves
 every counter zero. This variable uses the same developer-only gate.
-
-`ROC_VERIFY_SEALED_TYPE_VIEW` builds each published module's sealed type view
-(`src/check/sealed_type_view.zig`, which reads checked types directly from the
-sealed solver store) and asserts, before anything rewrites the publication,
-that it renders every published source root exactly as checked type
-publication does. The snapshot tool, eval test runner and strategy
-differential runner set it in their build steps.
 
 
 ## Integer SIMD Builtins
