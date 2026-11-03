@@ -2243,15 +2243,15 @@ const LinkFileContent = union(enum) {
     digest: [32]u8,
 };
 
+/// Hash one link file by its declared name and its content, never by where
+/// it was read from: two checkouts of a platform share one host.
 fn updateInterpreterExeFileLinkInput(
     hasher: *base.Sha256,
     declared_path: []const u8,
-    resolved_path: []const u8,
     content: LinkFileContent,
 ) void {
     updateHashBytes(hasher, "file");
     updateHashBytes(hasher, declared_path);
-    updateHashBytes(hasher, resolved_path);
     switch (content) {
         .bundle_hash => |hash| {
             updateHashBytes(hasher, "bundle");
@@ -2305,7 +2305,7 @@ fn interpreterExeLinkInputsIdentity(
     debug: bool,
 ) (Allocator.Error || CliError)![32]u8 {
     var hasher = base.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-run-link-inputs-v4");
+    updateHashBytes(&hasher, "roc-run-link-inputs-v5");
     updateHashBytes(&hasher, @tagName(target));
 
     const target_name = @tagName(target);
@@ -2317,7 +2317,7 @@ fn interpreterExeLinkInputsIdentity(
                     .{ .bundle_hash = hash }
                 else
                     .{ .digest = try fileContentsDigest(ctx, full_path) };
-                updateInterpreterExeFileLinkInput(&hasher, file_name, full_path, content);
+                updateInterpreterExeFileLinkInput(&hasher, file_name, content);
             },
             .app => updateInterpreterExeAppLinkInput(&hasher, shim_kind, target, entrypoint_names, debug),
             .win_gui => updateHashBytes(&hasher, "win_gui"),
