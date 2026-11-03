@@ -14495,13 +14495,6 @@ fn customPipelineParitySharedCache(io: std.Io, allocator: Allocator, env: *const
     return null;
 }
 
-/// Damage only this case's isolated cache. Command records and referenced
-/// module payloads must both be admitted before any observation is replayed.
-/// `SharedVal`'s constant is evaluated while `Main` reads it at two joined
-/// rows that hold `Conflict` at two payload types. Editing only `Main` makes
-/// the second run restore the constant from the cache, at the row its
-/// declaring module gives it, and widen it into `Main`'s joined row.
-
 /// One `roc test` run of the outcome-file case: its process result and how
 /// many test roots it executed.
 const OutcomeRun = struct {
@@ -14773,6 +14766,12 @@ fn customBoxyTestOutcomeFiles(io: std.Io, allocator: Allocator, env: *const Case
     return null;
 }
 
+/// Damage only this case's isolated cache. Command records and referenced
+/// module payloads must both be admitted before any observation is replayed.
+/// `SharedVal`'s constant is evaluated while `Main` reads it at two joined
+/// rows that hold `Conflict` at two payload types. Editing only `Main` makes
+/// the second run restore the constant from the cache, at the row its
+/// declaring module gives it, and widen it into `Main`'s joined row.
 fn customStoredRootDeclaredRow(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64, backend: OptMode) ?TestResult {
     const opt_arg = backendOptArg(allocator, backend) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
