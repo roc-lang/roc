@@ -1883,7 +1883,7 @@ const BoxyObjects = struct {
         const unit = &prepared.unit;
         try self.addToDigests(&self.coordinator.builtin_modules.checked_artifact);
         try self.addToDigests(unit.artifact);
-        unit.key = try boxy_unit.objectKey(self.coordinator.gpa, &self.digests, unit.artifact, unit.platform, self.lowering.opt, self.lowering.inline_expects, self.lowering.target, &.{});
+        unit.key = try boxy_unit.objectKey(self.coordinator.gpa, &self.digests, unit.artifact, unit.platform, self.lowering.opt, self.lowering.inline_expects, self.lowering.target, &.{}, false);
     }
 
     /// Give the digests `artifact` and its import closure, which checking

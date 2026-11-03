@@ -240,6 +240,17 @@ pub const BuiltinFn = enum {
         break :blk result;
     };
 
+    /// The builtins through which generated code tracks the loaded image it
+    /// runs in during a hot-reload session. Their behavior belongs to the
+    /// process the code runs in: the machine-code shim defines them to track
+    /// its images, and everywhere else they return at once.
+    pub const image_tracking = [_]BuiltinFn{
+        .hot_reload_enter,
+        .hot_reload_leave,
+        .hot_reload_retain_current,
+        .hot_reload_erased_callable_drop,
+    };
+
     /// The linker symbol this builtin is exported and resolved under.
     pub fn symbolName(self: BuiltinFn) [:0]const u8 {
         return symbol_names[@backingInt(self)];

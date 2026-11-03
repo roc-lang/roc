@@ -21,7 +21,7 @@ const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 8;
+pub const format_version: u32 = 9;
 
 const magic = "RBXO";
 
@@ -53,6 +53,11 @@ pub const KeyInput = struct {
     opt: []const u8,
     /// Whether inline expects are compiled in (`roc test`) or dropped.
     inline_expects: bool,
+    /// Whether the object is the root unit of a dev run image: its
+    /// entrypoint wrappers take the `(ret_ptr, args_ptr)` convention the
+    /// machine-code shim calls, and it materializes no provided data, which
+    /// the shim's host does not take from the image.
+    run_image: bool = false,
 };
 
 /// The key of a module's object for `input` under this compiler.
@@ -71,6 +76,7 @@ pub fn key(input: KeyInput) Key {
     hashLengthPrefixed(&hasher, input.target);
     hashLengthPrefixed(&hasher, input.opt);
     hasher.update(&[_]u8{@intFromBool(input.inline_expects)});
+    hasher.update(&[_]u8{@intFromBool(input.run_image)});
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -121,6 +127,10 @@ pub const Entry = struct {
     /// keeps, and the symbols a shared library exports.
     link_root_symbols: []const []const u8 = &.{},
     app_export_symbols: []const []const u8 = &.{},
+    /// For the root unit of a dev run image: each platform entrypoint's host
+    /// boundary digest (`layout.host_boundary_digest`), in entrypoint
+    /// order, which the run's checked host identity covers.
+    host_boundary_digests: []const [32]u8 = &.{},
     /// The module's code in pieces, encoded (`UnitPieces.encode`).
     pieces: []const u8,
     /// Where the unit image's code came from (`CodeLocations`, over offsets
@@ -162,6 +172,8 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
             try bytes.appendSlice(allocator, symbol);
         }
     }
+    try appendU32(&bytes, allocator, @intCast(entry.host_boundary_digests.len));
+    for (entry.host_boundary_digests) |*digest| try bytes.appendSlice(allocator, digest);
     try appendU64(&bytes, allocator, entry.pieces.len);
     try bytes.appendSlice(allocator, entry.pieces);
     try appendU64(&bytes, allocator, entry.code_locations.len);
@@ -243,6 +255,11 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     errdefer freeSymbols(allocator, link_root_symbols);
     const app_export_symbols = try decodeSymbols(allocator, &reader);
     errdefer freeSymbols(allocator, app_export_symbols);
+    const digest_count = try reader.word32();
+    if (digest_count > (bytes.len - reader.at) / 32) return error.InvalidEntry;
+    const host_boundary_digests = try allocator.alloc([32]u8, digest_count);
+    errdefer allocator.free(host_boundary_digests);
+    for (host_boundary_digests) |*digest| digest.* = (try reader.take(32))[0..32].*;
     const pieces_len = try reader.word64();
     if (pieces_len > std.math.maxInt(usize)) return error.InvalidEntry;
     const pieces = try reader.take(@intCast(pieces_len));
@@ -259,6 +276,7 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
         .hosted_symbols = hosted_symbols,
         .link_root_symbols = link_root_symbols,
         .app_export_symbols = app_export_symbols,
+        .host_boundary_digests = host_boundary_digests,
         .pieces = pieces,
         .code_locations = code_locations,
         .image = image,
@@ -301,6 +319,7 @@ pub fn deinitEntryView(allocator: Allocator, entry: Entry) void {
     freeSymbols(allocator, entry.hosted_symbols);
     freeSymbols(allocator, entry.link_root_symbols);
     freeSymbols(allocator, entry.app_export_symbols);
+    allocator.free(entry.host_boundary_digests);
 }
 
 const Reader = struct {
@@ -389,6 +408,10 @@ test "a Boxy object key is a function of exactly its declared inputs" {
     changed_expects.inline_expects = true;
     try std.testing.expect(!std.mem.eql(u8, &baseline.bytes, &key(changed_expects).bytes));
 
+    var run_root = testInput();
+    run_root.run_image = true;
+    try std.testing.expect(!std.mem.eql(u8, &baseline.bytes, &key(run_root).bytes));
+
     // A length prefix keeps one field's tail from reading as the next's head.
     var moved_boundary = testInput();
     moved_boundary.target = "x64glibcde";
@@ -407,6 +430,7 @@ test "a Boxy object entry round-trips through its bytes" {
         .hosted_symbols = &.{ "roc_fx_stdout_line", "roc_fx_stdin_line" },
         .link_root_symbols = &.{"roc__d3"},
         .app_export_symbols = &.{ "roc__main_for_host", "roc__d3" },
+        .host_boundary_digests = &.{ @splat(7), @splat(8) },
         .pieces = "not really pieces",
         .code_locations = "where the code came from",
         .image = "an image",
@@ -419,6 +443,7 @@ test "a Boxy object entry round-trips through its bytes" {
     try std.testing.expectEqualDeep(entry.hosted_symbols, decoded.hosted_symbols);
     try std.testing.expectEqualDeep(entry.link_root_symbols, decoded.link_root_symbols);
     try std.testing.expectEqualDeep(entry.app_export_symbols, decoded.app_export_symbols);
+    try std.testing.expectEqualDeep(entry.host_boundary_digests, decoded.host_boundary_digests);
     try std.testing.expectEqualStrings(entry.pieces, decoded.pieces);
     try std.testing.expectEqualStrings(entry.code_locations, decoded.code_locations);
     try std.testing.expectEqualStrings(entry.image, decoded.image);

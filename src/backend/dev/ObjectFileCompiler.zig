@@ -148,6 +148,10 @@ pub const ObjectFileCompiler = struct {
     /// as excerpts leaves this off, and its result's `object_bytes` is
     /// empty.
     emit_object: bool = true,
+    /// Compile entrypoint wrappers to the `(ret_ptr, args_ptr)` convention
+    /// the machine-code shim calls, for the root unit of a dev run image,
+    /// rather than to the natural C ABI an executable's host calls.
+    internal_entrypoints: bool = false,
 
     pub const TimingSnapshot = struct {
         backend_setup_ns: u64 = 0,
@@ -267,6 +271,7 @@ pub const ObjectFileCompiler = struct {
                         self.erased_capture_prefix,
                         self.timing,
                         self.post_check_executor,
+                        self.internal_entrypoints,
                     );
                 } else {
                     return CompilationError.UnsupportedTarget;
@@ -1318,6 +1323,7 @@ fn compilePiecesWithCodeGen(
     erased_capture_prefix: u32,
     timing: ?*ObjectFileCompiler.Timing,
     executor: ?Executor,
+    internal_entrypoints: bool,
 ) CompilationError!UnitPieces.Pieces {
     const backend_setup_started_ns = if (timing) |timings| timings.start() else 0;
     var static_strings = StaticStringData.build(allocator, lir_store, target) catch return CompilationError.OutOfMemory;
@@ -1358,9 +1364,11 @@ fn compilePiecesWithCodeGen(
     // Entrypoint wrappers join the unit's image here, so they are lifted
     // out as pieces named by their symbols.
     const entrypoint_instructions_started_ns = if (timing) |timings| timings.start() else 0;
+    if (internal_entrypoints) codegen.generation_mode = .shim_execution;
     for (entrypoints) |entrypoint| {
         _ = codegen.generateEntrypointWrapper(entrypoint.symbol_name, entrypoint.proc, entrypoint.arg_layouts, entrypoint.ret_layout) catch return CompilationError.OutOfMemory;
     }
+    codegen.generation_mode = .object_file;
     if (timing) |timings| timings.finish(entrypoint_instructions_started_ns, .entrypoint_instructions);
     const extraction_started_ns = if (timing) |timings| timings.start() else 0;
     codegen.finishImage() catch return CompilationError.OutOfMemory;

@@ -195,6 +195,7 @@ const linker = @import("linker.zig");
 const fast_dev_link = @import("fast_dev_link.zig");
 const host_prelink = @import("host_prelink.zig");
 const patch_link = @import("patch_link.zig");
+const run_image_link = @import("run_image_link.zig");
 const pack_store = @import("pack_store.zig");
 const builder = @import("builder.zig");
 const llvm_codegen = @import("llvm_codegen");
@@ -2642,230 +2643,108 @@ const RunPlatformLink = struct {
     }
 };
 
-fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
+/// What a shared-memory run's platform shim takes its entrypoint ABI from.
+const PlatformShimSource = union(enum) {
+    /// The program's LIR, for a dev run.
+    lir: *const lir.CheckedPipeline.LoweredProgram,
+    /// The LIR image the interpreter shim embeds.
+    lir_image: []const u8,
+};
 
-    // Check whether this is a default app—a headerless file with main!, or an
-    // app header naming no platform—before linking the platform host shim.
-    if (try stageDefaultApp(ctx, args.path, .running)) |staged| {
-        var owned_staged = staged;
-        // Default apps never hot reload; they just run once. The shared-memory
-        // shim is the run mechanism where the default platform runtime exists (Linux native,
-        // or any cross-target run); elsewhere we use the plain run-once path.
-        if (useDefaultAppSharedMemoryShim(args)) {
-            return rocRunDefaultAppSharedMemoryShim(ctx, args, &owned_staged);
-        }
-        return rocRunDefaultApp(ctx, args, &owned_staged);
-    }
+/// The host executable a shared-memory run launches: the platform's host
+/// linked with the shim library and a generated platform shim, cached by
+/// the checked host interface and the link inputs.
+const RunShimHost = struct {
+    shim_kind: ShimLibraryKind,
+    platform_link: RunPlatformLink,
+    temp_dir_path: []const u8,
+    exe_path: []const u8,
+    exe_cache_path: []const u8,
+    enable_debug: bool,
 
-    if (args.opt == .dev and args.no_cache and !args.watch) {
-        return rocRunBuildAndExec(ctx, args, arg0);
-    }
+    fn init(
+        ctx: *CliCtx,
+        shim_kind: ShimLibraryKind,
+        platform_link: RunPlatformLink,
+        exe_cache_dir: []const u8,
+        temp_dir_path: []const u8,
+        exe_path: []const u8,
+        entrypoint_names: []const []const u8,
+        checked_host_identity: [32]u8,
+    ) CliMainError!RunShimHost {
+        const enable_debug = builtin.mode == .debug;
+        const link_inputs_identity = try interpreterExeLinkInputsIdentity(
+            ctx,
+            shim_kind,
+            platform_link.items,
+            platform_link.platform_dir,
+            platform_link.files_dir,
+            platform_link.bundle_hash,
+            platform_link.target,
+            entrypoint_names,
+            enable_debug,
+        );
 
-    // Initialize cache - used to store our shim, and linked interpreter executables in cache
-    const cache_config = CacheConfig{
-        .enabled = !args.no_cache,
-        .verbose = false,
-        .roc_ctx = ctx.coreCtx(),
-    };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
-    defer cache_manager.deinit();
-
-    // The linked executable is post-check work, so the executable cache is
-    // read and written only under a strategy that caches it.
-    const caches_executable = cachesPostCheckWork(currentRuntimeSpecializationStrategy(args.specialization_strategy));
-
-    // Create cache directory for linked interpreter executables
-    const exe_cache_dir = cache_manager.config.getExeCacheDir(ctx.arena) catch |err| {
-        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-    };
-
-    // The final executable name seen in `ps` is the roc filename (e.g., "app.roc")
-    const exe_display_name = std.fs.path.basename(args.path);
-
-    // Display name for temp directory (what shows in ps)
-    const exe_display_name_with_ext = if (builtin.target.os.tag == .windows)
-        std.fmt.allocPrint(ctx.arena, "{s}.exe", .{exe_display_name}) catch |err| {
-            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-        }
-    else
-        ctx.arena.dupe(u8, exe_display_name) catch |err| {
-            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-        };
-
-    // Create unique temp directory for this build (uses PID for uniqueness)
-    const temp_dir_path = createUniqueTempDir(ctx) catch |err| {
-        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
-    };
-
-    // The executable is built directly in the temp dir with the display name
-    const exe_path = std.fs.path.join(ctx.arena, &.{ temp_dir_path, exe_display_name_with_ext }) catch |err| {
-        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-    };
-
-    var reporter = makeReporter(ctx, "roc", args.timings);
-    defer reporter.deinit();
-    reporter.start();
-
-    var lowered_result: ?LoweredCoordinatorResult = null;
-    defer if (lowered_result) |*result| result.deinit();
-
-    var shm_handle_opt: ?SharedMemoryHandle = null;
-    defer if (shm_handle_opt) |handle| closeSharedMemoryHandle(handle);
-
-    var entrypoint_names: []const []const u8 = &.{};
-    var hosted_symbols: []const []const u8 = &.{};
-    var checked_host_identity: [32]u8 = undefined;
-    var diagnostics = CheckDiagnosticCounts{};
-
-    // A dev run reads the object cache: its image splices the dev packs'
-    // entries, and its host executable links its URL packages' objects.
-    const run_object_cache: ?*RunObjectCache = if (args.opt == .dev and !args.no_cache) try RunObjectCache.create(ctx, false, currentRuntimeSpecializationStrategy(args.specialization_strategy)) else null;
-    defer if (run_object_cache) |cache| cache.destroy(ctx.gpa);
-    var run_package_objects: RunPackageObjects = .{};
-
-    // The platform is the one package resolution selected, after applying
-    // `--replace-dep`, so the host linked below belongs to the platform the
-    // app was checked against. Lowering precedes linking so the host shim uses
-    // checked entrypoint metadata.
-    const platform_link = blk: {
-        var build_env = try initRunBuildEnv(ctx, .{
-            .source_dir_override = null,
-            .synthetic_default_app = null,
-            .max_threads = args.max_threads,
-            .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
-            .enable_checked_cache = !args.no_cache,
-            .reporter = &reporter,
-            .specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy),
+        const exe_cache_name = try shimHostExeCacheName(ctx, .{
+            .shim_kind = shim_kind,
+            .target = platform_link.target,
+            .debug = enable_debug,
+            .checked_host_identity = checked_host_identity,
+            .link_inputs_identity = link_inputs_identity,
         });
-        defer build_env.deinit();
-        try discoverRunDependencies(ctx, &build_env, args.path, args.path, &reporter);
+        const exe_cache_name_with_ext = if (builtin.target.os.tag == .windows)
+            std.fmt.allocPrint(ctx.arena, "{s}.exe", .{exe_cache_name}) catch |err| {
+                return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+            }
+        else
+            ctx.arena.dupe(u8, exe_cache_name) catch |err| {
+                return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+            };
 
-        const platform = try requirePlatformTargets(ctx, &build_env, args.path);
-        const selected = try selectRunPlatformTarget(ctx, platform.config, platform.root_file, args.target);
-        build_env.setTarget(selected.target);
-        build_env.setValidateTargetFilesForSelectedTarget(true);
-
-        const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
-        switch (args.opt) {
-            .dev => {
-                lowered_result = try lowerDiscoveredLir(
-                    ctx,
-                    &build_env,
-                    ctx.gpa,
-                    .{ .dev_run_image = .{ .target = selected.target, .hot_reload = args.watch } },
-                    args.path,
-                    args.opt,
-                    specialization_strategy,
-                    &reporter,
-                    run_object_cache,
-                );
-                const result = if (lowered_result) |*value| value else unreachable; // lowerDiscoveredLir assigned it on the line above
-                if (run_object_cache) |cache| {
-                    run_package_objects = try RunPackageObjects.collect(ctx.arena, cache);
-                    // Cache statistics are diagnostic output, printed only on request.
-                    if (dev_diagnostics.isSet(.pack_stats)) {
-                        var external_procs: usize = 0;
-                        var linked_procs: usize = 0;
-                        for (result.lowered.lir_result.store.getProcSpecs()) |proc| {
-                            if (proc.external) external_procs += 1;
-                            if (proc.c_abi_entry) linked_procs += 1;
-                        }
-                        std.debug.print("pack hits: {d} external procs: {d} linked procs: {d} linked objects: {d}\n", .{ cache.packs.hits, external_procs, linked_procs, run_package_objects.objects.len });
-                    }
-                }
-                if (result.lowered.lir_result.store.runtime_contract == .boxy) {
-                    const object = EmbeddedTargetObjects.forTarget(selected.target).boxy_runtime orelse return error.UnsupportedTarget;
-                    run_package_objects = try run_package_objects.withBoxyRuntime(ctx.arena, object);
-                }
-                entrypoint_names = result.entrypoint_names;
-                hosted_symbols = result.hosted_symbols;
-                checked_host_identity = result.checked_host_identity;
-                diagnostics = result.counts;
-            },
-            .interpreter => {
-                var lowered = try lowerDiscoveredLir(
-                    ctx,
-                    &build_env,
-                    ctx.gpa,
-                    .lir_image,
-                    args.path,
-                    args.opt,
-                    specialization_strategy,
-                    &reporter,
-                    null,
-                );
-                defer lowered.deinit();
-                const shm_result = try publishLirImage(ctx, &lowered);
-                shm_handle_opt = shm_result.handle;
-                entrypoint_names = shm_result.entrypoint_names;
-                hosted_symbols = shm_result.hosted_symbols;
-                checked_host_identity = shm_result.checked_host_identity;
-                diagnostics = shm_result.diagnostics;
-            },
-            .size, .speed => unreachable, // rocRun sends .size and .speed to rocRunBuildAndExec
-        }
-
-        break :blk try RunPlatformLink.init(ctx.arena, platform, selected.link_spec, build_env.getPlatformBundleHash());
-    };
-
-    reporter.finish();
-
-    if (entrypoint_names.len == 0) {
-        base.invariant("default roc command invariant violated: no platform entrypoints in checked LIR root metadata", .{});
-    }
-
-    const selected_target = platform_link.target;
-    const enable_debug = builtin.mode == .debug;
-    const shim_kind: ShimLibraryKind = switch (args.opt) {
-        .dev => .machine_code,
-        .interpreter => .lir,
-        .size, .speed => unreachable, // rocRun sends .size and .speed to rocRunBuildAndExec
-    };
-
-    const platform_dir = platform_link.platform_dir;
-    const files_dir = platform_link.files_dir;
-    const target_name = @tagName(selected_target);
-
-    const link_inputs_identity = try interpreterExeLinkInputsIdentity(
-        ctx,
-        shim_kind,
-        platform_link.items,
-        platform_dir,
-        files_dir,
-        platform_link.bundle_hash,
-        selected_target,
-        entrypoint_names,
-        enable_debug,
-    );
-
-    const exe_cache_name = try shimHostExeCacheName(ctx, .{
-        .shim_kind = shim_kind,
-        .target = selected_target,
-        .debug = enable_debug,
-        .checked_host_identity = checked_host_identity,
-        .link_inputs_identity = link_inputs_identity,
-    });
-    const exe_cache_name_with_ext = if (builtin.target.os.tag == .windows)
-        std.fmt.allocPrint(ctx.arena, "{s}.exe", .{exe_cache_name}) catch |err| {
-            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-        }
-    else
-        ctx.arena.dupe(u8, exe_cache_name) catch |err| {
+        const exe_cache_path = std.fs.path.join(ctx.arena, &.{ exe_cache_dir, exe_cache_name_with_ext }) catch |err| {
             return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
         };
+        return .{
+            .shim_kind = shim_kind,
+            .platform_link = platform_link,
+            .temp_dir_path = temp_dir_path,
+            .exe_path = exe_path,
+            .exe_cache_path = exe_cache_path,
+            .enable_debug = enable_debug,
+        };
+    }
 
-    const exe_cache_path = std.fs.path.join(ctx.arena, &.{ exe_cache_dir, exe_cache_name_with_ext }) catch |err| {
-        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-    };
+    /// Copy the cached executable to `exe_path`; false when there is none.
+    fn restore(self: *const RunShimHost, ctx: *CliCtx) bool {
+        return restoreCachedFile(ctx, .executable, self.exe_cache_path, self.exe_path);
+    }
 
-    if (!args.no_cache and caches_executable and restoreCachedFile(ctx, .executable, exe_cache_path, exe_path)) {
-        std.log.debug("Using cached executable: {s}", .{exe_cache_path});
-    } else {
+    /// File the executable this run linked in the cache.
+    fn publish(self: *const RunShimHost, ctx: *CliCtx) void {
+        publishCachedFile(ctx, .executable, self.exe_cache_path, self.exe_path);
+    }
 
+    /// Link the executable at `exe_path`. `referenced_hosted_symbols` are
+    /// the hosted symbols the program calls, which the host inputs must
+    /// define.
+    fn link(
+        self: *const RunShimHost,
+        ctx: *CliCtx,
+        entrypoint_names: []const []const u8,
+        hosted_symbols: []const []const u8,
+        platform_shim_source: PlatformShimSource,
+        referenced_hosted_symbols: []const []const u8,
+        run_package_objects: RunPackageObjects,
+    ) CliMainError!void {
+        const platform_link = self.platform_link;
+        const selected_target = platform_link.target;
+        const platform_dir = platform_link.platform_dir;
+        const files_dir = platform_link.files_dir;
+        const target_name = @tagName(selected_target);
+        const temp_dir_path = self.temp_dir_path;
+        const enable_debug = self.enable_debug;
         // Extract shim library to temp dir to avoid race conditions
-        const shim_filename = switch (shim_kind) {
+        const shim_filename = switch (self.shim_kind) {
             .lir => if (builtin.target.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a",
             .machine_code => if (builtin.target.os.tag == .windows) "roc_machine_code_shim.lib" else "libroc_machine_code_shim.a",
         };
@@ -2875,17 +2754,15 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
         // Always extract to temp dir (unique per process, no race condition)
         // Use the selected target's shim (which may differ from native if falling back to a compatible target)
-        extractShimLibrary(ctx, shim_kind, shim_path, selected_target) catch |err| {
+        extractShimLibrary(ctx, self.shim_kind, shim_path, selected_target) catch |err| {
             return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
         };
 
         // Generate platform host shim using the published checked-artifact entrypoints
         // Use temp dir to avoid race conditions when multiple processes run in parallel
         // Auto-enable debug when roc is built in debug mode (no explicit --debug flag for the default `roc` command)
-        const platform_shim_path = switch (args.opt) {
-            .dev => blk: {
-                const result = if (lowered_result) |*value| value else unreachable; // the .dev lowering in platform_link assigned it
-                const lowered = &result.lowered;
+        const platform_shim_path = switch (platform_shim_source) {
+            .lir => |lowered| blk: {
                 const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
                 defer ctx.gpa.free(platform_entrypoints);
                 break :blk try generatePlatformHostShimFromLirData(
@@ -2904,24 +2781,17 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                     enable_debug,
                 );
             },
-            .interpreter => blk: {
-                const shm_handle = shm_handle_opt orelse {
-                    base.invariant("interpreter run invariant violated: missing LIR shared-memory handle", .{});
-                };
-                const shm_image_bytes = @as([*]const u8, @ptrCast(shm_handle.ptr))[0..shm_handle.size];
-                break :blk try generatePlatformHostShim(
-                    ctx,
-                    temp_dir_path,
-                    entrypoint_names,
-                    hosted_symbols,
-                    selected_target,
-                    shm_image_bytes,
-                    false,
-                    false,
-                    enable_debug,
-                );
-            },
-            .size, .speed => unreachable, // rocRun sends .size and .speed to rocRunBuildAndExec
+            .lir_image => |shm_image_bytes| try generatePlatformHostShim(
+                ctx,
+                temp_dir_path,
+                entrypoint_names,
+                hosted_symbols,
+                selected_target,
+                shm_image_bytes,
+                false,
+                false,
+                enable_debug,
+            ),
         };
 
         // Link the host.a with our shim to create the interpreter executable using our linker
@@ -2999,35 +2869,17 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         // The interpreter executable's shim references the same hosted and
         // runtime symbols compiled output would; the host inputs must define
         // them all.
-        {
-            const referenced_hosted_symbols = switch (args.opt) {
-                .dev => blk: {
-                    const result = if (lowered_result) |*value| value else unreachable; // the .dev lowering in platform_link assigned it
-                    const lowered = &result.lowered;
-                    break :blk try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
-                },
-                .interpreter => blk: {
-                    const shm_handle = shm_handle_opt orelse {
-                        base.invariant("interpreter run invariant violated: missing LIR shared-memory handle", .{});
-                    };
-                    var view = try viewLirImageFromHandle(shm_handle, base.target.TargetUsize.native, ctx.arena);
-                    defer view.deinit();
-                    break :blk try hostedSymbolsFromLir(ctx.arena, &view.store);
-                },
-                .size, .speed => unreachable, // rocRun sends .size and .speed to rocRunBuildAndExec
-            };
-            try verifyHostInputSymbols(
-                ctx,
-                host_input_paths.items,
-                referenced_hosted_symbols,
-                target_name,
-                false,
-            );
-        }
+        try verifyHostInputSymbols(
+            ctx,
+            host_input_paths.items,
+            referenced_hosted_symbols,
+            target_name,
+            false,
+        );
 
         const link_config = linker.LinkConfig{
             .target_abi = target_abi,
-            .output_path = exe_path,
+            .output_path = self.exe_path,
             .object_files = object_files.items,
             .platform_files_pre = empty_files,
             .platform_files_post = empty_files,
@@ -3041,16 +2893,256 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         linker.link(ctx, link_config) catch |err| {
             return failLink(ctx, err, @tagName(platform_link.target));
         };
+    }
+};
 
-        if (!args.no_cache and caches_executable) publishCachedFile(ctx, .executable, exe_cache_path, exe_path);
+fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // Check whether this is a default app—a headerless file with main!, or an
+    // app header naming no platform—before linking the platform host shim.
+    if (try stageDefaultApp(ctx, args.path, .running)) |staged| {
+        var owned_staged = staged;
+        // Default apps never hot reload; they just run once. The shared-memory
+        // shim is the run mechanism where the default platform runtime exists (Linux native,
+        // or any cross-target run); elsewhere we use the plain run-once path.
+        if (useDefaultAppSharedMemoryShim(args)) {
+            return rocRunDefaultAppSharedMemoryShim(ctx, args, &owned_staged);
+        }
+        return rocRunDefaultApp(ctx, args, &owned_staged);
     }
 
-    if (args.opt == .dev) {
-        const result = if (lowered_result) |*value| value else unreachable; // the .dev lowering in platform_link assigned it
-        const lowered = &result.lowered;
-        const internal_static_data = successfulInternalStaticData(result, "default roc command");
-        shm_handle_opt = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, internal_static_data, if (run_object_cache) |cache| cache.packs.spliceSource() else null, args.watch);
+    if (args.opt == .dev and args.no_cache and !args.watch) {
+        return rocRunBuildAndExec(ctx, args, arg0);
     }
+
+    // Initialize cache - used to store our shim, and linked interpreter executables in cache
+    const cache_config = CacheConfig{
+        .enabled = !args.no_cache,
+        .verbose = false,
+        .roc_ctx = ctx.coreCtx(),
+    };
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
+    defer cache_manager.deinit();
+
+    // The linked executable is post-check work, so the executable cache is
+    // read and written only under a strategy that caches it.
+    const caches_executable = cachesPostCheckWork(currentRuntimeSpecializationStrategy(args.specialization_strategy));
+
+    // Create cache directory for linked interpreter executables
+    const exe_cache_dir = cache_manager.config.getExeCacheDir(ctx.arena) catch |err| {
+        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+    };
+
+    // The final executable name seen in `ps` is the roc filename (e.g., "app.roc")
+    const exe_display_name = std.fs.path.basename(args.path);
+
+    // Display name for temp directory (what shows in ps)
+    const exe_display_name_with_ext = if (builtin.target.os.tag == .windows)
+        std.fmt.allocPrint(ctx.arena, "{s}.exe", .{exe_display_name}) catch |err| {
+            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+        }
+    else
+        ctx.arena.dupe(u8, exe_display_name) catch |err| {
+            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+        };
+
+    // Create unique temp directory for this build (uses PID for uniqueness)
+    const temp_dir_path = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+
+    // The executable is built directly in the temp dir with the display name
+    const exe_path = std.fs.path.join(ctx.arena, &.{ temp_dir_path, exe_display_name_with_ext }) catch |err| {
+        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+    };
+
+    var reporter = makeReporter(ctx, "roc", args.timings);
+    defer reporter.deinit();
+    reporter.start();
+
+    var lowered_result: ?LoweredCoordinatorResult = null;
+    defer if (lowered_result) |*result| result.deinit();
+    // A run composed from unit images: what its units lower against, which
+    // outlives the build environment, and the units themselves.
+    var run_tables: ?RunUnitTables = null;
+    defer if (run_tables) |*tables| tables.deinit();
+    var run_units: ?RunUnits = null;
+    defer if (run_units) |*units| units.deinit(ctx.gpa);
+
+    var shm_handle_opt: ?SharedMemoryHandle = null;
+    defer if (shm_handle_opt) |handle| closeSharedMemoryHandle(handle);
+
+    var entrypoint_names: []const []const u8 = &.{};
+    var hosted_symbols: []const []const u8 = &.{};
+    var checked_host_identity: [32]u8 = undefined;
+    var diagnostics = CheckDiagnosticCounts{};
+
+    // A dev run reads the object cache: its image splices the dev packs'
+    // entries, and its host executable links its URL packages' objects.
+    const run_object_cache: ?*RunObjectCache = if (args.opt == .dev and !args.no_cache) try RunObjectCache.create(ctx, false, currentRuntimeSpecializationStrategy(args.specialization_strategy)) else null;
+    defer if (run_object_cache) |cache| cache.destroy(ctx.gpa);
+    var run_package_objects: RunPackageObjects = .{};
+
+    // The platform is the one package resolution selected, after applying
+    // `--replace-dep`, so the host linked below belongs to the platform the
+    // app was checked against. Lowering precedes linking so the host shim uses
+    // checked entrypoint metadata.
+    const platform_link = blk: {
+        var build_env = try initRunBuildEnv(ctx, .{
+            .source_dir_override = null,
+            .synthetic_default_app = null,
+            .max_threads = args.max_threads,
+            .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
+            .enable_checked_cache = !args.no_cache,
+            .reporter = &reporter,
+            .specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy),
+        });
+        defer build_env.deinit();
+        try discoverRunDependencies(ctx, &build_env, args.path, args.path, &reporter);
+
+        const platform = try requirePlatformTargets(ctx, &build_env, args.path);
+        const selected = try selectRunPlatformTarget(ctx, platform.config, platform.root_file, args.target);
+        build_env.setTarget(selected.target);
+        build_env.setValidateTargetFilesForSelectedTarget(true);
+
+        const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+        switch (args.opt) {
+            .dev => if (unitImageRunApplies(args.opt, args.no_cache, specialization_strategy, selected.target)) {
+                run_tables = RunUnitTables.init(ctx);
+                const tables = &run_tables.?;
+                run_units = try lowerRunUnits(ctx, &build_env, tables, selected.target, args.path, &reporter, args.watch);
+                const units = &run_units.?;
+                shm_handle_opt = try publishDevRunImage(ctx, selected.target, .{ .composed = .{ .units = units, .reporter = &reporter } }, args.watch);
+                // The library units' images belong to the build environment.
+                units.releaseCode(ctx.gpa);
+                entrypoint_names = units.entrypoint_names;
+                hosted_symbols = units.hosted_symbols;
+                checked_host_identity = units.checked_host_identity;
+                diagnostics = units.counts;
+                if (entrypoint_names.len == 0) {
+                    base.invariant("default roc command invariant violated: no platform entrypoints in checked root requests", .{});
+                }
+                // The host executable may need the root program lowered, which
+                // needs the build environment.
+                const link = try RunPlatformLink.init(ctx.arena, platform, selected.link_spec, build_env.getPlatformBundleHash());
+                try prepareComposedRunHost(ctx, &reporter, &build_env, tables, units, link, exe_cache_dir, temp_dir_path, exe_path);
+                reporter.finish();
+                break :blk link;
+            } else {
+                lowered_result = try lowerDiscoveredLir(
+                    ctx,
+                    &build_env,
+                    ctx.gpa,
+                    .{ .dev_run_image = .{ .target = selected.target, .hot_reload = args.watch } },
+                    args.path,
+                    args.opt,
+                    specialization_strategy,
+                    &reporter,
+                    run_object_cache,
+                );
+                const result = if (lowered_result) |*value| value else unreachable; // lowerDiscoveredLir assigned it on the line above
+                if (run_object_cache) |cache| {
+                    run_package_objects = try RunPackageObjects.collect(ctx.arena, cache);
+                    // Cache statistics are diagnostic output, printed only on request.
+                    if (dev_diagnostics.isSet(.pack_stats)) {
+                        var external_procs: usize = 0;
+                        var linked_procs: usize = 0;
+                        for (result.lowered.lir_result.store.getProcSpecs()) |proc| {
+                            if (proc.external) external_procs += 1;
+                            if (proc.c_abi_entry) linked_procs += 1;
+                        }
+                        std.debug.print("pack hits: {d} external procs: {d} linked procs: {d} linked objects: {d}\n", .{ cache.packs.hits, external_procs, linked_procs, run_package_objects.objects.len });
+                    }
+                }
+                if (result.lowered.lir_result.store.runtime_contract == .boxy) {
+                    const object = EmbeddedTargetObjects.forTarget(selected.target).boxy_runtime orelse return error.UnsupportedTarget;
+                    run_package_objects = try run_package_objects.withBoxyRuntime(ctx.arena, object);
+                }
+                entrypoint_names = result.entrypoint_names;
+                hosted_symbols = result.hosted_symbols;
+                checked_host_identity = result.checked_host_identity;
+                diagnostics = result.counts;
+            },
+            .interpreter => {
+                var lowered = try lowerDiscoveredLir(
+                    ctx,
+                    &build_env,
+                    ctx.gpa,
+                    .lir_image,
+                    args.path,
+                    args.opt,
+                    specialization_strategy,
+                    &reporter,
+                    null,
+                );
+                defer lowered.deinit();
+                const shm_result = try publishLirImage(ctx, &lowered);
+                shm_handle_opt = shm_result.handle;
+                entrypoint_names = shm_result.entrypoint_names;
+                hosted_symbols = shm_result.hosted_symbols;
+                checked_host_identity = shm_result.checked_host_identity;
+                diagnostics = shm_result.diagnostics;
+            },
+            .size, .speed => unreachable, // rocRun sends .size and .speed to rocRunBuildAndExec
+        }
+
+        break :blk try RunPlatformLink.init(ctx.arena, platform, selected.link_spec, build_env.getPlatformBundleHash());
+    };
+
+    // A composed run linked or restored its host executable while its build
+    // environment was open, and published its image there.
+    if (run_units == null) {
+        reporter.finish();
+
+        if (entrypoint_names.len == 0) {
+            base.invariant("default roc command invariant violated: no platform entrypoints in checked LIR root metadata", .{});
+        }
+
+        const shim_kind: ShimLibraryKind = switch (args.opt) {
+            .dev => .machine_code,
+            .interpreter => .lir,
+            .size, .speed => unreachable, // rocRun sends .size and .speed to rocRunBuildAndExec
+        };
+        const shim_host = try RunShimHost.init(ctx, shim_kind, platform_link, exe_cache_dir, temp_dir_path, exe_path, entrypoint_names, checked_host_identity);
+        if (!args.no_cache and caches_executable and shim_host.restore(ctx)) {
+            std.log.debug("Using cached executable: {s}", .{shim_host.exe_cache_path});
+        } else {
+            switch (args.opt) {
+                .dev => {
+                    const result = if (lowered_result) |*value| value else unreachable; // the .dev lowering in platform_link assigned it
+                    const lowered = &result.lowered;
+                    try shim_host.link(ctx, entrypoint_names, hosted_symbols, .{ .lir = lowered }, try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store), run_package_objects);
+                },
+                .interpreter => {
+                    const shm_handle = shm_handle_opt orelse {
+                        base.invariant("interpreter run invariant violated: missing LIR shared-memory handle", .{});
+                    };
+                    var view = try viewLirImageFromHandle(shm_handle, base.target.TargetUsize.native, ctx.arena);
+                    defer view.deinit();
+                    const referenced_hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &view.store);
+                    const shm_image_bytes = @as([*]const u8, @ptrCast(shm_handle.ptr))[0..shm_handle.size];
+                    try shim_host.link(ctx, entrypoint_names, hosted_symbols, .{ .lir_image = shm_image_bytes }, referenced_hosted_symbols, run_package_objects);
+                },
+                .size, .speed => unreachable, // rocRun sends .size and .speed to rocRunBuildAndExec
+            }
+            if (!args.no_cache and caches_executable) shim_host.publish(ctx);
+        }
+
+        if (args.opt == .dev) {
+            const result = if (lowered_result) |*value| value else unreachable; // the .dev lowering in platform_link assigned it
+            const lowered = &result.lowered;
+            const internal_static_data = successfulInternalStaticData(result, "default roc command");
+            shm_handle_opt = try publishDevRunImage(ctx, platform_link.target, .{ .lowered = .{
+                .entrypoint_names = entrypoint_names,
+                .lowered = lowered,
+                .internal_static_data = internal_static_data,
+                .splice_source = if (run_object_cache) |cache| cache.packs.spliceSource() else null,
+            } }, args.watch);
+        }
+    }
+    const selected_target = platform_link.target;
 
     const shm_handle = shm_handle_opt orelse {
         base.invariant("default roc command invariant violated: missing shared-memory handle before launching shim", .{});
@@ -3058,7 +3150,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
     std.log.debug("Launching shim executable: {s}", .{exe_path});
     if (args.watch) {
-        const result = if (lowered_result) |*value| value else {
+        const watch_inputs = if (run_units) |*units| units.watch_inputs else if (lowered_result) |*result| result.watch_inputs else {
             base.invariant("hot reload invariant violated: missing lowered result for dev shim watch run", .{});
         };
         try runHotReloadDevShim(
@@ -3069,7 +3161,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             args,
             selected_target,
             checked_host_identity,
-            result.watch_inputs,
+            watch_inputs,
             null,
             diagnostics,
         );
@@ -3647,7 +3739,12 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
     // Default apps never hot reload—they compile through throwaway synthetic
     // source files, so there is nothing stable to reload. They just run once.
     const internal_static_data = successfulInternalStaticData(&lowered_result, "default app run");
-    const shm_handle = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, internal_static_data, null, false);
+    const shm_handle = try publishDevRunImage(ctx, selected_target, .{ .lowered = .{
+        .entrypoint_names = entrypoint_names,
+        .lowered = lowered,
+        .internal_static_data = internal_static_data,
+        .splice_source = null,
+    } }, false);
     defer closeSharedMemoryHandle(shm_handle);
 
     const termination = if (comptime is_windows)
@@ -6072,6 +6169,10 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         break :blk null;
     };
 
+    if (source_rewrite == null and unitImageRunApplies(.dev, args.no_cache, currentRuntimeSpecializationStrategy(args.specialization_strategy), selected_target)) {
+        return rebuildComposedRunImage(ctx, args, &shm, selected_target);
+    }
+
     // The running host links the same object packs the first generation's
     // did; a rebuild needing others changes the host identity below.
     const run_object_cache: ?*RunObjectCache = if (source_rewrite == null and !args.no_cache) try RunObjectCache.create(ctx, false, currentRuntimeSpecializationStrategy(args.specialization_strategy)) else null;
@@ -6126,6 +6227,66 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
             .preserve_descriptor_refs = args.preserve_descriptor_refs,
         },
     ) catch |err| switch (err) {
+        // Reported where they were raised.
+        error.UnsupportedTarget, error.WriteFailed => return err,
+        else => {
+            try ctx.io.stderr().print(
+                "Error: hot reload could not write the rebuilt program into shared memory ({s}); the previous version stays active.\n",
+                .{@errorName(err)},
+            );
+            return err;
+        },
+    };
+    shm.updateHeader();
+}
+
+/// A hot-reload rebuild of a run composed from unit images: check the
+/// program, build its changed units, and compose the next generation into
+/// the allocation the parent chose.
+fn rebuildComposedRunImage(ctx: *CliCtx, args: HotReloadDevWorkerArgs, shm: *SharedMemoryAllocator, target: RocTarget) CliMainError!void {
+    var tables = RunUnitTables.init(ctx);
+    defer tables.deinit();
+    // A rebuild's output is captured; it reports no progress.
+    var reporter = progress.Reporter.init(.{
+        .std_io = ctx.io.std_io,
+        .writer = ctx.io.stderr(),
+        .op_label = "roc",
+        .timings_flag = false,
+        .is_tty = false,
+    });
+    defer reporter.deinit();
+    var build_env = try initRunBuildEnv(ctx, .{
+        .source_dir_override = null,
+        .synthetic_default_app = null,
+        .max_threads = args.max_threads,
+        .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
+        .enable_checked_cache = true,
+        .reporter = null,
+        .specialization_strategy = .boxy,
+    });
+    defer build_env.deinit();
+    try discoverRunDependencies(ctx, &build_env, args.path, args.path, null);
+    var units = try lowerRunUnits(ctx, &build_env, &tables, target, args.path, &reporter, true);
+    defer units.deinit(ctx.gpa);
+
+    try writeHotReloadWatchPathsFile(ctx, args.watch_inputs_file, units.watch_inputs, null);
+    // As for a rebuild of the whole program: keep the last accepted
+    // generation active until a diagnostic-free replacement is ready.
+    if (units.counts.errors != 0) return error.TypeCheckingFailed;
+    if (!std.mem.eql(u8, &units.checked_host_identity, &args.expected_host_identity)) {
+        try ctx.io.stderr().writeAll("Error: hot reload changed the platform host interface; restart `roc --watch`.\n");
+        return error.TypeCheckingFailed;
+    }
+
+    _ = writeComposedRunImage(ctx, &reporter, shm, &units, .{
+        .generation = args.generation,
+        .descriptor_offset = args.descriptor_offset,
+        .image_limit = args.image_limit,
+        .region_start = args.region_start,
+        .region_end = args.region_end,
+        .append_offset = args.append_offset,
+        .preserve_descriptor_refs = args.preserve_descriptor_refs,
+    }) catch |err| switch (err) {
         // Reported where they were raised.
         error.UnsupportedTarget, error.WriteFailed => return err,
         else => {
@@ -6429,13 +6590,39 @@ fn writeDevRunImageToSharedMemory(
     }
 }
 
+/// What a dev run image is written from.
+const DevRunImageSource = union(enum) {
+    /// The whole program's LIR, compiled into the image.
+    lowered: struct {
+        entrypoint_names: []const []const u8,
+        lowered: *const lir.CheckedPipeline.LoweredProgram,
+        internal_static_data: []const backend.StaticDataExport,
+        splice_source: ?backend.dev.SpliceSource,
+    },
+    /// The program's unit images, composed into the image.
+    composed: struct {
+        units: *const RunUnits,
+        reporter: *progress.Reporter,
+    },
+};
+
+fn writeDevRunImageFromSource(
+    ctx: *CliCtx,
+    shm: *SharedMemoryAllocator,
+    selected_target: RocTarget,
+    source: DevRunImageSource,
+    hot_reload_allocation: ?HotReloadImageAllocation,
+) CliMainError!DevRunImagePublication {
+    return switch (source) {
+        .lowered => |program| writeDevRunImageToSharedMemory(ctx, shm, selected_target, program.entrypoint_names, program.lowered, program.internal_static_data, program.splice_source, hot_reload_allocation),
+        .composed => |composed| writeComposedRunImage(ctx, composed.reporter, shm, composed.units, hot_reload_allocation),
+    };
+}
+
 fn publishDevRunImage(
     ctx: *CliCtx,
     selected_target: RocTarget,
-    entrypoint_names: []const []const u8,
-    lowered: *const lir.CheckedPipeline.LoweredProgram,
-    internal_static_data: []const backend.StaticDataExport,
-    splice_source: ?backend.dev.SpliceSource,
+    source: DevRunImageSource,
     enable_hot_reload: bool,
 ) CliMainError!SharedMemoryHandle {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
@@ -6459,16 +6646,7 @@ fn publishDevRunImage(
             .append_offset = @sizeOf(SharedMemoryAllocator.Header),
         };
     } else null;
-    const publication = try writeDevRunImageToSharedMemory(
-        ctx,
-        &shm,
-        selected_target,
-        entrypoint_names,
-        lowered,
-        internal_static_data,
-        splice_source,
-        hot_reload_allocation,
-    );
+    const publication = try writeDevRunImageFromSource(ctx, &shm, selected_target, source, hot_reload_allocation);
     if (enable_hot_reload) {
         ipc.hot_reload.init(
             ipc.hot_reload.controlFromBase(shm.base_ptr),
@@ -6969,6 +7147,485 @@ fn lowerDiscoveredLir(
         .watch_inputs_allocator = ctx.gpa,
         .counts = counts,
     };
+}
+
+/// Whether a dev run composes its run image from unit images
+/// (`run_image_link.zig`), restored from the per-module cache or built and
+/// filed there as `roc build` does, rather than lowering and compiling the
+/// whole program: a `.boxy` dev run with a cache, of a target whose units
+/// carry unit images and whose support image the compiler embeds, on a Linux
+/// x86_64 host, which runs the image in place. Every other run lowers and
+/// compiles the whole program.
+fn unitImageRunApplies(opt: cli_args.OptLevel, no_cache: bool, strategy: base.SpecializationStrategy, target: RocTarget) bool {
+    if (opt != .dev or strategy != .boxy) return false;
+    // A run without a cache neither reads nor files unit images.
+    if (no_cache) return false;
+    if (comptime !(builtin.target.os.tag == .linux and builtin.target.cpu.arch == .x86_64)) return false;
+    return unitImageTarget(target);
+}
+
+/// Whether `target`'s programs can be built from unit images: a Linux
+/// x86_64 target whose support image the compiler embeds.
+fn unitImageTarget(target: RocTarget) bool {
+    return switch (target) {
+        .x64musl, .x64glibc => true,
+        .x64mac, .x64win, .x64mingw, .x64freebsd, .x64openbsd, .x64netbsd, .x64linux, .x64elf => false,
+        .x64v1mac, .x64v1win, .x64v1mingw, .x64v1freebsd, .x64v1openbsd, .x64v1netbsd, .x64v1musl, .x64v1glibc, .x64v1linux, .x64v1elf => false,
+        .arm64mac, .arm64win, .arm64mingw, .arm64linux, .arm64musl, .arm64glibc, .arm64v1win, .arm64v1mingw, .arm64v1linux, .arm64v1musl, .arm64v1glibc => false,
+        .arm32linux, .arm32musl, .wasm32, .wasm32v1 => false,
+    };
+}
+
+/// What a dev run composed from unit images lowers against: the export
+/// interfaces its units record and the names its root unit reads. It
+/// outlives the run's build environment, whose compile-time evaluation
+/// records into it.
+const RunUnitTables = struct {
+    interfaces: postcheck.Boxy.Lower.ExportInterfaces,
+    digests: compile.boxy_interface.Digests,
+
+    fn init(ctx: *CliCtx) RunUnitTables {
+        return .{
+            .interfaces = postcheck.Boxy.Lower.ExportInterfaces.init(ctx.gpa, ctx.io.std_io),
+            .digests = .{ .gpa = ctx.gpa, .names = .{} },
+        };
+    }
+
+    fn deinit(self: *RunUnitTables) void {
+        self.digests.deinit();
+        self.interfaces.deinit();
+    }
+
+    fn rootUnit(self: *RunUnitTables) postcheck.Boxy.Lower.ModuleUnit {
+        return .{ .imports = &self.interfaces, .root = true, .names = &self.digests.names };
+    }
+};
+
+/// A dev run's program as unit images, ready to compose into its run image.
+const RunUnits = struct {
+    target: RocTarget,
+    hot_reload: bool,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    /// The platform entrypoint symbols, by ordinal; the root image exports a
+    /// wrapper under each. Allocated from the CLI arena.
+    entrypoint_names: []const []const u8,
+    /// The platform's hosted symbols, by dispatch index. Arena-allocated.
+    hosted_symbols: []const []const u8,
+    /// The hosted symbols the program's code calls. Arena-allocated.
+    referenced_hosted_symbols: []const []const u8,
+    checked_host_identity: [32]u8,
+    watch_inputs: []const compile.watch_inputs.Input,
+    counts: CheckDiagnosticCounts,
+    /// Every library unit's image. Restored images belong to the run's build
+    /// environment, so `releaseCode` runs before it goes away.
+    library: ?BoxyLibraryObjects,
+    /// The root unit's image, owned.
+    root_image: ?[]align(backend.dev.UnitImage.alignment.toByteUnits()) u8,
+    /// The root program's LIR, when this run lowered it.
+    root: ?lir.CheckedPipeline.LoweredProgram,
+
+    /// Release the images, once the run image holds their code.
+    fn releaseCode(self: *RunUnits, gpa: Allocator) void {
+        if (self.library) |library| library.deinit(gpa);
+        self.library = null;
+        if (self.root_image) |image| gpa.free(image);
+        self.root_image = null;
+    }
+
+    fn deinit(self: *RunUnits, gpa: Allocator) void {
+        self.releaseCode(gpa);
+        if (self.root) |*program| program.deinit();
+        self.root = null;
+        compile.watch_inputs.deinit(gpa, self.watch_inputs);
+        self.watch_inputs = &.{};
+    }
+};
+
+/// Check a discovered dev run and build its units: every library unit
+/// restored from the per-module cache or lowered and filed there, as `roc
+/// build` does (design.md "Caching Under `.boxy`"), and the root unit (the
+/// app with the platform modules paired with it) restored from the cache or
+/// lowered and compiled with entrypoint wrappers the machine-code shim
+/// calls.
+fn lowerRunUnits(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    tables: *RunUnitTables,
+    target: RocTarget,
+    display_path: []const u8,
+    reporter: *progress.Reporter,
+    hot_reload: bool,
+) CliMainError!RunUnits {
+    var runtime_lowering = checkedRuntimeLoweringConfig(.{ .platform_entrypoints = .{ .dev_run_image = .{ .target = target, .hot_reload = hot_reload } } }, .dev, .boxy, target, false);
+    // The checked host identity covers each entrypoint's host boundary digest.
+    runtime_lowering.target.host_boundary_digests = true;
+    runtime_lowering.target.boxy_unit = tables.rootUnit();
+    build_env.setRuntimeLowering(runtime_lowering);
+    // The run image places every unit, so compile-time evaluation builds the
+    // units as their modules are checked, against the run's interfaces.
+    if (build_env.boxy_object_lowering) |*lowering| if (lowering.target == target) {
+        lowering.interfaces = &tables.interfaces;
+        lowering.links = true;
+        lowering.link_reads_pieces = false;
+    };
+
+    reporter.begin("Type Checking");
+    build_env.compileDiscovered() catch |err| {
+        reporter.fail();
+        _ = try renderDrainedBuildEnvReports(ctx, build_env, display_path);
+        return err;
+    };
+    const counts = try renderDrainedBuildEnvReports(ctx, build_env, display_path);
+    const watch_inputs = try build_env.collectWatchInputStates();
+    errdefer compile.watch_inputs.deinit(ctx.gpa, watch_inputs);
+    // An app root that never finished checking has no program; its
+    // diagnostics have already been rendered.
+    if (!build_env.executable_artifacts_finalized) {
+        reporter.fail();
+        return error.TypeCheckingFailed;
+    }
+    try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), reporter, build_env.getTimingInfo());
+
+    const root_artifact = build_env.executableRootCheckedArtifact();
+    const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(imported_artifacts);
+    const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(relation_artifacts);
+    // A run files what `roc check` files, and the units it builds.
+    if (counts.errors == 0) try publishCompileTimeResults(ctx, build_env, root_artifact);
+
+    tables.digests = try build_env.boxyLinkDigests();
+    const policy: BoxyUnitPolicy = .{ .opt = .dev, .no_cache = false, .synthetic_default_platform = false };
+    var library: ?BoxyLibraryObjects = try buildBoxyLibraryObjects(ctx, policy, build_env, reporter, root_artifact, target, &tables.interfaces, &tables.digests, true);
+    errdefer if (library) |owned| owned.deinit(ctx.gpa);
+    const cache_manager = build_env.cache_manager orelse base.invariant("roc run invariant violated: a run composed from unit images has no cache manager", .{});
+    const root_key = try boxyObjectKey(ctx.gpa, &tables.digests, root_artifact, boxyUnitPlatform(root_artifact, library.?.platform), policy, target, library.?.paired_platforms, true);
+
+    const selected_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(ctx.gpa, root_artifact.root_requests.runtime_requests);
+    defer ctx.gpa.free(selected_roots);
+    const entrypoint_names = try ctx.arena.alloc([]const u8, selected_roots.len);
+    for (selected_roots, entrypoint_names) |root, *name| name.* = try ctx.arena.dupe(u8, nativeEntrypointSymbolName(root_artifact, root));
+
+    var root_program: ?lir.CheckedPipeline.LoweredProgram = null;
+    errdefer if (root_program) |*program| program.deinit();
+    var root_image: ?[]align(backend.dev.UnitImage.alignment.toByteUnits()) u8 = null;
+    errdefer if (root_image) |image| ctx.gpa.free(image);
+    const host_boundary_digests = try ctx.arena.alloc([32]u8, selected_roots.len);
+    var root_hosted: []const []const u8 = &.{};
+    if (try compile.boxy_unit.restore(ctx.gpa, cache_manager, root_key, &tables.interfaces)) |entry| {
+        defer compile.boxy_object_cache.deinitEntry(ctx.gpa, entry);
+        if (entry.host_boundary_digests.len != selected_roots.len) base.invariant("roc run invariant violated: the root unit's cache entry covers {d} of {d} entrypoints", .{ entry.host_boundary_digests.len, selected_roots.len });
+        @memcpy(host_boundary_digests, entry.host_boundary_digests);
+        const image = try ctx.gpa.alignedAlloc(u8, backend.dev.UnitImage.alignment, entry.image.len);
+        @memcpy(image, entry.image);
+        root_image = image;
+        const hosted = try ctx.arena.alloc([]const u8, entry.hosted_symbols.len);
+        for (entry.hosted_symbols, hosted) |symbol, *owned| owned.* = try ctx.arena.dupe(u8, symbol);
+        root_hosted = hosted;
+        build_env.recordBoxyObjects(1, 0);
+    } else {
+        root_program = try lowerRunRoot(ctx, build_env, tables, target, reporter, root_artifact, imported_artifacts, relation_artifacts, hot_reload);
+        const lowered = &root_program.?;
+        for (lowered.lir_result.root_metadata.items, host_boundary_digests) |metadata, *digest| {
+            digest.* = metadata.host_boundary_digest orelse base.invariant("platform entrypoint was lowered without its host boundary digest", .{});
+        }
+        root_hosted = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
+        root_image = try buildRunRootImage(ctx, reporter, build_env, lowered, root_artifact, imported_artifacts, relation_artifacts, target);
+        const records = try compile.boxy_unit.exportRecords(ctx.gpa, lowered, &tables.interfaces);
+        defer ctx.gpa.free(records);
+        try compile.boxy_unit.store(ctx.gpa, cache_manager, root_key, .{
+            .exports = records,
+            .hosted_symbols = root_hosted,
+            .host_boundary_digests = host_boundary_digests,
+            // No link composes the root unit of a run image.
+            .pieces = &.{},
+            .image = root_image.?,
+        });
+        build_env.recordBoxyObjects(0, 1);
+    }
+
+    const hosted_table = try checkedHostedTable(ctx.arena, root_artifact, imported_artifacts, relation_artifacts);
+    const root_metadata = try ctx.gpa.alloc(lir.RootMetadata.RootMetadata, selected_roots.len);
+    defer ctx.gpa.free(root_metadata);
+    for (selected_roots, host_boundary_digests, root_metadata) |root, digest, *metadata| {
+        metadata.* = lir.RootMetadata.RootMetadata.fromCheckedRoot(root);
+        metadata.host_boundary_digest = digest;
+    }
+    const interface_identity = checkedInterpreterHostIdentity(
+        root_artifact,
+        root_metadata,
+        entrypoint_names,
+        base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
+        hosted_table,
+    );
+    // The host executable links only the platform's host and the shim: the
+    // run image carries the builtins and the Boxy runtime.
+    var identity = base.Sha256.init(.{});
+    updateHashBytes(&identity, "roc-run-unit-images-v1");
+    identity.update(&interface_identity);
+
+    const owned_library = library.?;
+    library = null;
+    return .{
+        .target = target,
+        .hot_reload = hot_reload,
+        .root_artifact = root_artifact,
+        .entrypoint_names = entrypoint_names,
+        .hosted_symbols = hosted_table.symbols,
+        .referenced_hosted_symbols = try unionSymbols(ctx.arena, root_hosted, owned_library.hosted_symbols),
+        .checked_host_identity = identity.finalResult(),
+        .watch_inputs = watch_inputs,
+        .counts = counts,
+        .library = owned_library,
+        .root_image = root_image,
+        .root = root_program,
+    };
+}
+
+/// Lower a composed run's root program: the app and the platform modules
+/// paired with it, against the units' export interfaces.
+fn lowerRunRoot(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    tables: *RunUnitTables,
+    target: RocTarget,
+    reporter: *progress.Reporter,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imported_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    hot_reload: bool,
+) CliMainError!lir.CheckedPipeline.LoweredProgram {
+    reporter.begin(loweringProgressLabel(.boxy));
+    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (reporter.always) spec_timing.enableDetailedMonotypeBody();
+    const lowered = try lowerCheckedSourceToLir(
+        ctx.gpa,
+        ctx.gpa,
+        root_artifact,
+        imported_artifacts,
+        relation_artifacts,
+        .{ .platform_entrypoints = .{ .dev_run_image = .{ .target = target, .hot_reload = hot_reload } } },
+        .dev,
+        .boxy,
+        target,
+        false,
+        true,
+        build_env.postCheckExecutor(),
+        &spec_timing,
+        build_env.runtimeProgramSession(),
+        null,
+        .source_bodies,
+        tables.rootUnit(),
+    );
+    finishPostCheckLowering(reporter, &spec_timing, .boxy);
+    return lowered;
+}
+
+/// Compile a composed run's root program into its unit image: its
+/// procedures, its constants, and an entrypoint wrapper per `provides`
+/// procedure in the convention the machine-code shim calls.
+fn buildRunRootImage(
+    ctx: *CliCtx,
+    reporter: *progress.Reporter,
+    build_env: *BuildEnv,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imported_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    target: RocTarget,
+) CliMainError![]align(backend.dev.UnitImage.alignment.toByteUnits()) u8 {
+    const static_data = try compile.static_data_exports.buildStaticData(
+        ctx.gpa,
+        .{ .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts), .imports = imported_artifacts },
+        lowered,
+        target,
+        .{},
+    );
+    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
+    const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, lowered);
+    defer ctx.gpa.free(entrypoints);
+
+    reporter.begin(devBackendPhaseName(target));
+    var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
+    var backend_timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
+    object_compiler.timing = &backend_timing;
+    object_compiler.post_check_executor = build_env.postCheckExecutor();
+    object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
+    object_compiler.internal_entrypoints = true;
+    var pieces = object_compiler.compileToPieces(
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        entrypoints,
+        static_data,
+        lowered.lir_result.store.getProcSpecs(),
+        target,
+    ) catch |err| {
+        reporter.fail();
+        std.log.err("Native compilation failed: {}", .{err});
+        return error.NativeCompilationFailed;
+    };
+    defer pieces.deinit();
+    reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
+    reporter.begin("Unit Image");
+    const image = object_compiler.buildUnitImage(&pieces, target, .entrypoints, null) catch |err| {
+        reporter.fail();
+        std.log.err("Building the root unit's image failed: {}", .{err});
+        return error.NativeCompilationFailed;
+    };
+    reporter.end();
+    return image;
+}
+
+/// Compose `units` into a run image in `shm`: into the allocation a
+/// hot-reload rebuild was given, or after the mapping's header.
+fn writeComposedRunImage(
+    ctx: *CliCtx,
+    reporter: *progress.Reporter,
+    shm: *SharedMemoryAllocator,
+    units: *const RunUnits,
+    hot_reload_allocation: ?HotReloadImageAllocation,
+) CliMainError!DevRunImagePublication {
+    if (comptime !backend.host_lir_codegen_available) {
+        unreachable; // `unitImageRunApplies` selects composed runs only on Linux x86_64 hosts
+    } else {
+        if (!devShimTargetCompatible(units.target, backend.HostLirCodeGen.roc_target)) {
+            return rejectRunTargetNotExecutable(ctx, units.target);
+        }
+        reporter.begin("Run Image");
+        const support_bytes = EmbeddedTargetObjects.forTarget(units.target).support_image orelse base.invariant("roc run invariant violated: a run composed from unit images has no support image", .{});
+        const support = try ctx.gpa.alignedAlloc(u8, backend.dev.UnitImage.alignment, support_bytes.len);
+        defer ctx.gpa.free(support);
+        @memcpy(support, support_bytes);
+        const library = units.library.?;
+        const inputs = try ctx.gpa.alloc(run_image_link.ImageInput, library.images.len + 1);
+        defer ctx.gpa.free(inputs);
+        for (library.images, inputs[0..library.images.len]) |image, *input| {
+            input.* = .{ .view = backend.dev.UnitImage.View.init(image) catch base.invariant("roc run invariant violated: a unit image does not read", .{}) };
+        }
+        inputs[library.images.len] = .{ .view = backend.dev.UnitImage.View.init(units.root_image.?) catch base.invariant("roc run invariant violated: the root unit image does not read", .{}) };
+        var shim_builtins: [shim_builtin_count][]const u8 = undefined;
+        for (builtins_registry.BuiltinFn.image_tracking, &shim_builtins) |builtin_fn, *name| name.* = builtin_fn.symbolName();
+        const sorted_shim_builtins = try fast_dev_link.sortedUnion(ctx.arena, &.{&shim_builtins});
+        const link_inputs: run_image_link.Inputs = .{
+            .support = .{ .view = backend.dev.UnitImage.View.init(support) catch base.invariant("roc run invariant violated: the embedded support image does not read", .{}) },
+            .units = inputs,
+            .root = library.images.len,
+            .entrypoints = units.entrypoint_names,
+            .host_symbols = try fast_dev_link.sortedUnion(ctx.arena, &.{ units.hosted_symbols, &host_symbols.runtime_symbols, sorted_shim_builtins }),
+            .shim_builtins = sorted_shim_builtins,
+        };
+        var plan = run_image_link.plan(ctx.gpa, ctx.io.std_io, link_inputs) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.ProgramTooLarge => {
+                reporter.fail();
+                return ctx.fail(.{ .dev_program_too_large = .{ .target = @tagName(units.target) } });
+            },
+        };
+        defer plan.deinit();
+
+        var empty_region_buffer: [0]u8 = .{};
+        var fixed_region_buffer = std.heap.FixedBufferAllocator.init(&empty_region_buffer);
+        var image_allocator = shm.allocator();
+        var descriptor: ?*ipc.hot_reload.ImageDescriptor = null;
+        var descriptor_offset: usize = ipc.hot_reload.invalid_descriptor_offset;
+        var allocation_start: usize = 0;
+        var reset_descriptor_refs = true;
+        const original_total_size = shm.total_size;
+        defer shm.total_size = original_total_size;
+        if (hot_reload_allocation) |allocation| {
+            const reusable_capacity = if (allocation.region_end > allocation.region_start)
+                allocation.region_end - allocation.region_start
+            else
+                0;
+            const required_capacity = try backend.RunImage.composedCapacityFromOffset(shm.page_size, allocation.region_start, plan.layout) - allocation.region_start;
+            descriptor = try hotReloadDescriptorForWrite(shm, allocation.descriptor_offset);
+            descriptor_offset = allocation.descriptor_offset;
+            reset_descriptor_refs = !allocation.preserve_descriptor_refs;
+            if (reusable_capacity >= required_capacity) {
+                fixed_region_buffer = std.heap.FixedBufferAllocator.init(shm.base_ptr[allocation.region_start..allocation.region_end]);
+                image_allocator = fixed_region_buffer.allocator();
+                allocation_start = allocation.region_start;
+            } else {
+                if (allocation.image_limit <= allocation.append_offset) return error.OutOfMemory;
+                try shm.resetToUsedSize(allocation.append_offset);
+                shm.total_size = allocation.image_limit;
+                allocation_start = allocation.append_offset;
+            }
+        }
+        const composed = try backend.RunImage.allocComposed(image_allocator, shm.base_ptr, shm.page_size, plan.layout);
+        var timing: run_image_link.Timing = .{};
+        run_image_link.write(&plan, ctx.io.std_io, link_inputs, composed, &timing) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.ClearFailed => {
+                reporter.fail();
+                return error.InvalidSharedMemory;
+            },
+        };
+        const header = composed.header;
+        const image_offset = @intFromPtr(header) - @intFromPtr(shm.base_ptr);
+        const image_bound: usize = @intCast(header.image_size);
+        if (hot_reload_allocation) |allocation| {
+            ipc.hot_reload.prepareDescriptor(
+                descriptor.?,
+                allocation.generation,
+                image_offset,
+                image_bound,
+                allocation_start,
+                image_bound,
+                0,
+                0,
+                reset_descriptor_refs,
+            );
+            try shm.resetToUsedSize(@max(allocation.append_offset, image_bound));
+        }
+        reporter.endWithBreakdown(&.{
+            .{ .name = "Layout", .ns = timing.layout_ns },
+            .{ .name = "Write", .ns = timing.write_ns },
+        });
+        reporter.recordCounters("Run image", &.{
+            .{ .name = "Images placed", .count = timing.images_placed },
+            .{ .name = "Bytes written", .count = timing.bytes_written },
+            .{ .name = "Sites filled", .count = timing.sites_patched },
+            .{ .name = "Host sites", .count = timing.host_sites },
+            .{ .name = "Rebased words", .count = timing.rebases },
+        });
+        return .{ .descriptor = descriptor, .descriptor_offset = descriptor_offset };
+    }
+}
+
+const builtins_registry = @import("builtins").builtin_registry;
+const shim_builtin_count = builtins_registry.BuiltinFn.image_tracking.len;
+
+/// The host executable a composed run launches, restored from the cache or
+/// linked now, with its platform shim built from the root program's LIR,
+/// which a run that restored the root unit lowers for it.
+fn prepareComposedRunHost(
+    ctx: *CliCtx,
+    reporter: *progress.Reporter,
+    build_env: *BuildEnv,
+    tables: *RunUnitTables,
+    units: *RunUnits,
+    platform_link: RunPlatformLink,
+    exe_cache_dir: []const u8,
+    temp_dir_path: []const u8,
+    exe_path: []const u8,
+) CliMainError!void {
+    const shim_host = try RunShimHost.init(ctx, .machine_code, platform_link, exe_cache_dir, temp_dir_path, exe_path, units.entrypoint_names, units.checked_host_identity);
+    reporter.begin("Host Executable Restore");
+    const restored = shim_host.restore(ctx);
+    reporter.end();
+    if (restored) return;
+    if (units.root == null) {
+        const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, units.root_artifact);
+        defer ctx.gpa.free(imported_artifacts);
+        const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, units.root_artifact);
+        defer ctx.gpa.free(relation_artifacts);
+        units.root = try lowerRunRoot(ctx, build_env, tables, units.target, reporter, units.root_artifact, imported_artifacts, relation_artifacts, units.hot_reload);
+    }
+    reporter.begin("Host Executable Link");
+    try shim_host.link(ctx, units.entrypoint_names, units.hosted_symbols, .{ .lir = &units.root.? }, units.referenced_hosted_symbols, .{});
+    shim_host.publish(ctx);
+    reporter.end();
 }
 
 /// Build shared memory containing a viewable ARC-inserted LIR image.
@@ -11491,7 +12148,7 @@ const BoxyLibraryObjects = struct {
 /// of its own: the root unit lowers its workers at the app's types.
 fn buildBoxyLibraryObjects(
     ctx: *CliCtx,
-    args: cli_args.BuildArgs,
+    policy: BoxyUnitPolicy,
     build_env: *BuildEnv,
     reporter: *progress.Reporter,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
@@ -11568,14 +12225,14 @@ fn buildBoxyLibraryObjects(
         task.* = .{
             .gpa = ctx.gpa,
             .io = ctx.io.std_io,
-            .args = args,
+            .policy = policy,
             .artifact = artifact,
             .platform = boxyUnitPlatform(artifact, platform),
             .views = try build_env.collectImportedArtifactViews(ctx.gpa, artifact),
             .target = target,
             .interfaces = interfaces,
             .names = &digests.names,
-            .cache_manager = if (args.no_cache) null else build_env.cache_manager,
+            .cache_manager = if (policy.no_cache) null else build_env.cache_manager,
             .timing = &unit_timing,
             .want_pieces = !want_images,
         };
@@ -11585,7 +12242,7 @@ fn buildBoxyLibraryObjects(
     const Prepare = struct {
         fn run(unit_tasks: []BoxyUnitTask, unit_digests: *compile.boxy_interface.Digests, index: u32) Allocator.Error!void {
             const task = &unit_tasks[index];
-            task.key = try boxyObjectKey(task.gpa, unit_digests, task.artifact, task.platform, task.args, task.target, &.{});
+            task.key = try boxyObjectKey(task.gpa, unit_digests, task.artifact, task.platform, task.policy, task.target, &.{}, false);
         }
     };
 
@@ -11709,7 +12366,7 @@ fn buildBoxyLibraryObjects(
     }
     if (first_error) |err| return err;
     // The summary counts cache work; a build without a cache does none.
-    if (!args.no_cache) build_env.recordBoxyObjects(restored, built);
+    if (!policy.no_cache) build_env.recordBoxyObjects(restored, built);
     reporter.end();
     recordPostCheckLowering(reporter, &unit_timing, .boxy);
     const ordered = try ctx.arena.alloc(*const backend.dev.UnitPieces.Pieces, if (want_images) 0 else units.items.len);
@@ -11819,9 +12476,21 @@ fn boxyPlatformView(
     return platform;
 }
 
-/// The key of `artifact`'s object under this build's target and policy.
-fn boxyObjectKey(gpa: Allocator, digests: *compile.boxy_interface.Digests, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, platform: ?check.CheckedArtifact.ImportedModuleView, args: cli_args.BuildArgs, target: RocTarget, paired_platforms: []const [32]u8) Allocator.Error!compile.boxy_object_cache.Key {
-    return compile.boxy_unit.objectKey(gpa, digests, artifact, platform, @tagName(args.opt), inlineExpectModeForOpt(args.opt) == .run, target, paired_platforms);
+/// What of the command building them a `.boxy` build's units depend on.
+const BoxyUnitPolicy = struct {
+    opt: cli_args.OptLevel,
+    no_cache: bool,
+    synthetic_default_platform: bool,
+
+    fn ofBuild(args: cli_args.BuildArgs) BoxyUnitPolicy {
+        return .{ .opt = args.opt, .no_cache = args.no_cache, .synthetic_default_platform = args.synthetic_default_platform };
+    }
+};
+
+/// The key of `artifact`'s object under this build's target and policy;
+/// `run_image` marks the root unit of a dev run image.
+fn boxyObjectKey(gpa: Allocator, digests: *compile.boxy_interface.Digests, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, platform: ?check.CheckedArtifact.ImportedModuleView, policy: BoxyUnitPolicy, target: RocTarget, paired_platforms: []const [32]u8, run_image: bool) Allocator.Error!compile.boxy_object_cache.Key {
+    return compile.boxy_unit.objectKey(gpa, digests, artifact, platform, @tagName(policy.opt), inlineExpectModeForOpt(policy.opt) == .run, target, paired_platforms, run_image);
 }
 
 /// The platform module a unit of `artifact` needs in view: the one whose
@@ -11838,7 +12507,7 @@ fn boxyUnitPlatform(artifact: *const check.CheckedArtifact.CheckedModuleArtifact
 const BoxyUnitTask = struct {
     gpa: Allocator,
     io: std.Io,
-    args: cli_args.BuildArgs,
+    policy: BoxyUnitPolicy,
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     platform: ?check.CheckedArtifact.ImportedModuleView,
     views: []check.CheckedArtifact.ImportedModuleView,
@@ -11866,7 +12535,7 @@ const BoxyUnitTask = struct {
     }
 
     fn build(self: *BoxyUnitTask) CliMainError!compile.boxy_unit.Built {
-        var config = checkedRuntimeLoweringConfig(.linked_output, self.args.opt, .boxy, self.target, self.args.synthetic_default_platform);
+        var config = checkedRuntimeLoweringConfig(.linked_output, self.policy.opt, .boxy, self.target, self.policy.synthetic_default_platform);
         config.target.boxy_unit = .{ .imports = self.interfaces, .root = false, .names = self.names };
         config.target.timing = self.timing;
         return try compile.boxy_unit.restoreOrBuild(.{
@@ -12705,12 +13374,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // calls against their export interfaces.
     if (boxy_interfaces != null) boxy_digests = try build_env.boxyLinkDigests();
     const boxy_library: ?BoxyLibraryObjects = if (boxy_interfaces) |*interfaces|
-        try buildBoxyLibraryObjects(ctx, args, &build_env, &reporter, root_artifact, target, interfaces, &boxy_digests, fast_link != null)
+        try buildBoxyLibraryObjects(ctx, BoxyUnitPolicy.ofBuild(args), &build_env, &reporter, root_artifact, target, interfaces, &boxy_digests, fast_link != null)
     else
         null;
     defer if (boxy_library) |library| library.deinit(ctx.gpa);
     const boxy_cache_manager: ?*CacheManager = if (args.no_cache) null else build_env.cache_manager;
-    const boxy_root_key: ?compile.boxy_object_cache.Key = if (boxy_library) |library| try boxyObjectKey(ctx.gpa, &boxy_digests, root_artifact, boxyUnitPlatform(root_artifact, library.platform), args, target, library.paired_platforms) else null;
+    const boxy_root_key: ?compile.boxy_object_cache.Key = if (boxy_library) |library| try boxyObjectKey(ctx.gpa, &boxy_digests, root_artifact, boxyUnitPlatform(root_artifact, library.platform), BoxyUnitPolicy.ofBuild(args), target, library.paired_platforms, false) else null;
     if (dev_diagnostics.isSet(.trace_boxy_work)) if (boxy_library) |library| std.debug.print("boxy-work: library units {d}, root key {s}\n", .{ library.pieces.len, &std.fmt.bytesToHex(boxy_root_key.?.bytes[0..8], .lower) });
     // The root program's object is cached under its own key too: a build
     // whose every module is cached lowers nothing.

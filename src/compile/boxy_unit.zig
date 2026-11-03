@@ -116,7 +116,9 @@ pub const Built = struct {
 /// their implementations at the app's types and calls its supplied workers.
 /// A library module's object is a function of the module and its imports'
 /// interfaces alone, whatever program pairs it.
-pub fn objectKey(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *const Artifact, platform: ?ImportedView, opt: []const u8, inline_expects: bool, target: roc_target.RocTarget, paired_platforms: []const [32]u8) Allocator.Error!object_cache.Key {
+/// `run_image` marks the root unit of a dev run image
+/// (`object_cache.KeyInput.run_image`).
+pub fn objectKey(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *const Artifact, platform: ?ImportedView, opt: []const u8, inline_expects: bool, target: roc_target.RocTarget, paired_platforms: []const [32]u8, run_image: bool) Allocator.Error!object_cache.Key {
     const hosted_bindings: ?[32]u8 = if (platform) |platform_view| blk: {
         const inputs = try gpa.alloc(object_cache.HostedBindingInput, platform_view.hosted_bindings.bindings.len);
         defer gpa.free(inputs);
@@ -136,6 +138,7 @@ pub fn objectKey(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *co
         .target = @tagName(target),
         .opt = opt,
         .inline_expects = inline_expects,
+        .run_image = run_image,
     });
 }
 
