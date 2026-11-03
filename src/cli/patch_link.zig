@@ -324,7 +324,9 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     defer output.unmap(mapped);
     timing.layout_ns = elapsed(std_io, layout_started);
 
-    // Fan-out: one task per placed image, and one per host tail copy.
+    // Fan-out, in two waves of bounded tasks: first every byte copy and
+    // every symbol entry, then every patch site, which writes into bytes
+    // the first wave copied.
     const fan_out_started = now(std_io);
     const context: Context = .{
         .out = mapped,
@@ -339,20 +341,31 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         .strtab_offset = strtab_offset,
         .section_index = .{ text_index, data_index, bss_index },
     };
-    const tasks = try gpa.alloc(Task, order.items.len + 5);
-    defer gpa.free(tasks);
-    for (order.items, tasks[0..order.items.len]) |index, *task| task.* = .{ .context = &context, .work = .{ .image = index } };
-    const tail_tasks = tasks[order.items.len..];
-    tail_tasks[0] = .{ .context = &context, .work = .{ .copy = .{ .from = if (host_symtab) |symtab| hostBytes(host, symtab.offset + sym_size, symtab.size -| sym_size) else &.{}, .to = symtab_offset + (1 + app_symbol_count) * sym_size } } };
-    tail_tasks[1] = .{ .context = &context, .work = .{ .copy = .{ .from = if (host_strtab) |strtab| hostBytes(host, strtab.offset, strtab.size) else &.{}, .to = strtab_offset } } };
+    var copies: std.ArrayList(Task) = .empty;
+    defer copies.deinit(gpa);
+    var patches: std.ArrayList(Task) = .empty;
+    defer patches.deinit(gpa);
+    for (order.items) |index| {
+        const view = images.items[index].view;
+        const place = places[index];
+        try addCopies(gpa, &copies, &context, view.block(), context.fileOffsetOf(place.block));
+        if (view.data().len != 0) try addCopies(gpa, &copies, &context, view.data(), context.fileOffsetOf(place.data));
+        for ([_]UnitImage.Region{ .debug_abbrev, .debug_info, .debug_line }, 0..) |region, slot| {
+            try addCopies(gpa, &copies, &context, view.regionBytes(region), debug_offsets[slot] + place.debug[slot]);
+        }
+        try addCopies(gpa, &copies, &context, view.strings(), strtab_offset + place.strings);
+        try addRanges(gpa, &copies, &context, .symbols, index, view.symbols().len);
+        try addRanges(gpa, &patches, &context, .sites, index, view.sites().len);
+    }
+    if (host_symtab) |symtab| try addCopies(gpa, &copies, &context, hostBytes(host, symtab.offset + sym_size, symtab.size -| sym_size), symtab_offset + (1 + app_symbol_count) * sym_size);
+    if (host_strtab) |strtab| try addCopies(gpa, &copies, &context, hostBytes(host, strtab.offset, strtab.size), strtab_offset);
     for (debug_host_index, 0..) |host_index, slot| {
-        tail_tasks[2 + slot] = .{ .context = &context, .work = .{ .copy = .{ .from = if (host_index != 0) hostBytes(host, host.section(host_index).offset, host.section(host_index).size) else &.{}, .to = debug_offsets[slot] } } };
+        if (host_index != 0) try addCopies(gpa, &copies, &context, hostBytes(host, host.section(host_index).offset, host.section(host_index).size), debug_offsets[slot]);
     }
-    try runTasks(gpa, executor, tasks);
-    for (tasks) |task| {
-        timing.sites_patched += task.sites;
-        timing.bytes_written += task.bytes;
-    }
+    try runTasks(gpa, executor, copies.items);
+    try runTasks(gpa, executor, patches.items);
+    for (copies.items) |task| timing.bytes_written += task.bytes;
+    for (patches.items) |task| timing.sites_patched += task.sites;
     timing.fan_out_ns = elapsed(std_io, fan_out_started);
 
     // The coordinator's writes: windows, program headers, build id, ELF
@@ -459,11 +472,38 @@ const Context = struct {
     }
 };
 
+/// The most bytes one copy task moves.
+const copy_chunk: usize = 256 * 1024;
+/// The most sites or symbols one task handles.
+const entry_chunk: u32 = 8192;
+
+fn addCopies(gpa: Allocator, tasks: *std.ArrayList(Task), context: *const Context, from: []const u8, to: u64) Allocator.Error!void {
+    var at: usize = 0;
+    while (at < from.len) : (at += copy_chunk) {
+        const len = @min(copy_chunk, from.len - at);
+        try tasks.append(gpa, .{ .context = context, .work = .{ .copy = .{ .from = from[at..][0..len], .to = to + at } } });
+    }
+}
+
+fn addRanges(gpa: Allocator, tasks: *std.ArrayList(Task), context: *const Context, comptime kind: enum { symbols, sites }, image: u32, count: usize) Allocator.Error!void {
+    var first: u32 = 0;
+    while (first < count) : (first += entry_chunk) {
+        const range: Range = .{ .image = image, .first = first, .count = @min(entry_chunk, @as(u32, @intCast(count)) - first) };
+        try tasks.append(gpa, .{ .context = context, .work = switch (kind) {
+            .symbols => .{ .symbols = range },
+            .sites => .{ .sites = range },
+        } });
+    }
+}
+
+const Range = struct { image: u32, first: u32, count: u32 };
+
 const Task = struct {
     context: *const Context,
     work: union(enum) {
-        image: u32,
         copy: struct { from: []const u8, to: u64 },
+        symbols: Range,
+        sites: Range,
     },
     sites: u64 = 0,
     bytes: u64 = 0,
@@ -471,40 +511,27 @@ const Task = struct {
     fn run(opaque_task: *anyopaque, _: base.post_check_task_executor.Worker) ?*anyopaque {
         const self: *Task = @ptrCast(@alignCast(opaque_task));
         switch (self.work) {
-            .image => |index| self.placeImage(index),
             .copy => |copy| {
-                @memcpy(self.context.out[@intCast(copy.to)..][0..copy.from.len], copy.from);
+                const out = self.context.out[@intCast(copy.to)..][0..copy.from.len];
+                populate(out, madv_populate_write);
+                populate(@constCast(copy.from), madv_populate_read);
+                @memcpy(out, copy.from);
                 self.bytes = copy.from.len;
             },
+            .symbols => |range| self.writeSymbols(range),
+            .sites => |range| self.applySites(range),
         }
         return opaque_task;
     }
 
-    fn placeImage(self: *Task, index: u32) void {
+    fn writeSymbols(self: *Task, range: Range) void {
         const context = self.context;
-        const view = context.images[index].view;
-        const place = context.places[index];
-        const block_out = context.regionOut(place, view, .block);
-        populate(block_out);
-        @memcpy(block_out, view.block());
-        @memcpy(context.regionOut(place, view, .data), view.data());
-        inline for (.{ UnitImage.Region.debug_abbrev, UnitImage.Region.debug_info, UnitImage.Region.debug_line }) |region| {
-            @memcpy(context.regionOut(place, view, region), view.regionBytes(region));
-        }
-        self.bytes = view.block().len + view.data().len + view.debugAbbrev().len + view.debugInfo().len + view.debugLine().len;
-
-        const addresses = context.resolved[index];
-        for (view.imports(), addresses) |import, address| {
-            for (view.importSites(import)) |site| self.apply(place, view, site, address);
-        }
-        for (view.localSites()) |site| {
-            self.apply(place, view, site, place.base(@fromBackingInt(site.target_region)));
-        }
-        self.sites = view.sites().len;
-
-        const symbols_out = context.out[@intCast(context.symtab_offset + place.first_symbol * sym_size)..][0 .. view.symbols().len * sym_size];
-        for (view.symbols(), 0..) |symbol, at| {
-            const entry = symbols_out[at * sym_size ..][0..sym_size];
+        const view = context.images[range.image].view;
+        const place = context.places[range.image];
+        const symbols = view.symbols()[range.first..][0..range.count];
+        const out = context.out[@intCast(context.symtab_offset + (place.first_symbol + range.first) * sym_size)..][0 .. symbols.len * sym_size];
+        for (symbols, 0..) |symbol, at| {
+            const entry = out[at * sym_size ..][0..sym_size];
             const region: UnitImage.Region = @fromBackingInt(symbol.region);
             const elf_type: u8 = switch (@as(UnitImage.SymbolType, @fromBackingInt(symbol.type))) {
                 .notype => 0,
@@ -525,21 +552,28 @@ const Task = struct {
             std.mem.writeInt(u64, entry[8..16], place.base(region) + symbol.value, .little);
             std.mem.writeInt(u64, entry[16..24], symbol.size, .little);
         }
-        @memcpy(context.out[@intCast(context.strtab_offset + place.strings)..][0..view.strings().len], view.strings());
-        self.bytes += symbols_out.len + view.strings().len;
+        self.bytes = out.len;
     }
 
-    fn apply(self: *Task, place: Place, view: UnitImage.View, site: UnitImage.Site, target: u64) void {
-        const region: UnitImage.Region = @fromBackingInt(site.region);
-        const kind: UnitImage.SiteKind = @fromBackingInt(site.kind);
-        const out = self.context.regionOut(place, view, region);
-        const field = out[site.offset..][0..@intCast(UnitImage.kindWidth(kind))];
-        const value = @as(i64, @intCast(target)) + site.addend;
-        // The layout keeps the app region within 32-bit reach of the host
-        // and of itself, and debug sections within 32-bit offsets.
-        if (!UnitImage.applySite(field, kind, value, place.base(region) + site.offset)) {
-            base.invariant("fast dev link invariant violated: a patch site's value does not fit its field", .{});
+    fn applySites(self: *Task, range: Range) void {
+        const context = self.context;
+        const view = context.images[range.image].view;
+        const place = context.places[range.image];
+        const addresses = context.resolved[range.image];
+        for (view.sites()[range.first..][0..range.count]) |site| {
+            const target = if (site.target_region == UnitImage.import_target) addresses[site.target] else place.base(@fromBackingInt(site.target_region));
+            const region: UnitImage.Region = @fromBackingInt(site.region);
+            const kind: UnitImage.SiteKind = @fromBackingInt(site.kind);
+            const out = context.regionOut(place, view, region);
+            const field = out[site.offset..][0..@intCast(UnitImage.kindWidth(kind))];
+            const value = @as(i64, @intCast(target)) + site.addend;
+            // The layout keeps the app region within 32-bit reach of the
+            // host and of itself, and debug sections within 32-bit offsets.
+            if (!UnitImage.applySite(field, kind, value, place.base(region) + site.offset)) {
+                base.invariant("fast dev link invariant violated: a patch site's value does not fit its field", .{});
+            }
         }
+        self.sites = range.count;
     }
 };
 
@@ -556,14 +590,16 @@ fn runTasks(gpa: Allocator, executor: ?Executor, tasks: []Task) Allocator.Error!
     try pool.run(work, completions);
 }
 
-/// Fault in the pages of `bytes` for writing in one call; a hint whose
-/// failure changes nothing but speed.
-fn populate(bytes: []u8) void {
+const madv_populate_read = 22;
+const madv_populate_write = 23;
+
+/// Fault in the pages of `bytes` in one call (`MADV_POPULATE_READ` or
+/// `MADV_POPULATE_WRITE`); a hint whose failure changes nothing but speed.
+fn populate(bytes: []u8, advice: u32) void {
     if (bytes.len == 0) return;
     const start = std.mem.alignBackward(usize, @intFromPtr(bytes.ptr), page_size);
     const end = std.mem.alignForward(usize, @intFromPtr(bytes.ptr) + bytes.len, page_size);
-    const madv_populate_write = 23;
-    _ = linux.madvise(@ptrFromInt(start), end - start, madv_populate_write);
+    _ = linux.madvise(@ptrFromInt(start), end - start, advice);
 }
 
 fn writeLoad(entry: *[56]u8, offset: u64, vaddr: u64, filesz: u64, memsz: u64, flags: u32) void {

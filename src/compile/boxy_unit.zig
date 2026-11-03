@@ -269,28 +269,16 @@ pub const BuildError = eval.CompileTimeFinalization.RuntimeMaterializationError 
 pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     const gpa = unit.gpa;
     const module_name = unit.artifact.canonical_names.moduleNameText(unit.artifact.module_identity.module_name);
-    if (!unit.want_pieces) if (try restoreMapped(gpa, unit.cache_manager, unit.key, unit.interfaces)) |restored| {
+    if (try restoreMapped(gpa, unit.cache_manager, unit.key, unit.interfaces)) |restored| {
         defer object_cache.deinitEntryView(gpa, restored.entry);
-        errdefer restored.data.deinit(gpa);
+        // The mapping stays alive as the image's owner; otherwise it is
+        // released once the pieces are decoded.
+        const keeps_mapping = producesImage(unit.target);
+        defer if (!keeps_mapping) restored.data.deinit(gpa);
+        errdefer if (keeps_mapping) restored.data.deinit(gpa);
+        const entry = restored.entry;
         if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache hit for {s} key {s}\n", .{ module_name, &std.fmt.bytesToHex(unit.key.bytes[0..8], .lower) });
-        std.debug.assert(restored.entry.image.len != 0 or !producesImage(unit.target));
-        const hosted_symbols = try dupeSymbols(gpa, restored.entry.hosted_symbols);
-        errdefer freeSymbols(gpa, hosted_symbols);
-        const exports = try dupeRecords(gpa, restored.entry.exports);
-        return .{
-            .restored = true,
-            .pieces = null,
-            .image = if (producesImage(unit.target)) .{ .bytes = @alignCast(restored.entry.image), .owner = .{ .mapped = restored.data } } else image: {
-                restored.data.deinit(gpa);
-                break :image null;
-            },
-            .hosted_symbols = hosted_symbols,
-            .exports = exports,
-        };
-    };
-    if (unit.want_pieces) if (try restore(gpa, unit.cache_manager, unit.key, unit.interfaces)) |entry| {
-        defer object_cache.deinitEntry(gpa, entry);
-        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache hit for {s} key {s}\n", .{ module_name, &std.fmt.bytesToHex(unit.key.bytes[0..8], .lower) });
+        std.debug.assert(entry.image.len != 0 or !keeps_mapping);
         if (dev_diagnostics.isSet(.verify_boxy_object_reuse)) {
             const fresh = try build(unit, module_name);
             defer fresh.deinit(gpa);
@@ -303,27 +291,30 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
                 base.invariant("the cached image of module {s} differs from a fresh build of it: its key misses an input", .{module_name});
             };
         }
-        const pieces = try gpa.create(backend.dev.UnitPieces.Pieces);
-        errdefer gpa.destroy(pieces);
-        pieces.* = backend.dev.UnitPieces.decode(gpa, entry.pieces) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.MalformedPieces, error.UnsupportedPiecesVersion => base.invariant("the cached pieces of module {s} were admitted but do not decode: {s}", .{ module_name, @errorName(err) }),
-        };
-        errdefer pieces.deinit();
-        const image: ?Image = if (producesImage(unit.target)) image: {
-            const bytes = try gpa.alignedAlloc(u8, backend.dev.UnitImage.alignment, entry.image.len);
-            @memcpy(bytes, entry.image);
-            break :image .{ .bytes = bytes, .owner = .owned };
+        const pieces: ?*backend.dev.UnitPieces.Pieces = if (unit.want_pieces) pieces: {
+            const decoded = try gpa.create(backend.dev.UnitPieces.Pieces);
+            errdefer gpa.destroy(decoded);
+            decoded.* = backend.dev.UnitPieces.decode(gpa, entry.pieces) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.MalformedPieces, error.UnsupportedPiecesVersion => base.invariant("the cached pieces of module {s} were admitted but do not decode: {s}", .{ module_name, @errorName(err) }),
+            };
+            break :pieces decoded;
         } else null;
-        errdefer if (image) |owned| owned.deinit(gpa);
+        errdefer if (pieces) |decoded| {
+            decoded.deinit();
+            gpa.destroy(decoded);
+        };
+        const hosted_symbols = try dupeSymbols(gpa, entry.hosted_symbols);
+        errdefer freeSymbols(gpa, hosted_symbols);
+        const exports = try dupeRecords(gpa, entry.exports);
         return .{
             .restored = true,
             .pieces = pieces,
-            .image = image,
-            .hosted_symbols = try dupeSymbols(gpa, entry.hosted_symbols),
-            .exports = try dupeRecords(gpa, entry.exports),
+            .image = if (keeps_mapping) .{ .bytes = @alignCast(entry.image), .owner = .{ .mapped = restored.data } } else null,
+            .hosted_symbols = hosted_symbols,
+            .exports = exports,
         };
-    };
+    }
     if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache miss for {s} key {s}\n", .{ module_name, &std.fmt.bytesToHex(unit.key.bytes[0..8], .lower) });
     const built = try build(unit, module_name);
     errdefer built.deinit(gpa);
