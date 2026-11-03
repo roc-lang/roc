@@ -8641,22 +8641,16 @@ const ReuseRun = struct {
     identities: [][32]u8,
     /// The app module's stored `I64` constants, by name.
     values: []?i64,
-    /// The checked occurrence of every named type in each root's stored
-    /// value and type, by name, in walk order.
-    occurrences: [][]NamedOccurrence,
     /// The app module's checked key, whose version-specific checked types
     /// no stored closed occurrence of an imported type names.
     module_key: [32]u8,
     hoisted: []HoistedIdentity,
 
     const HoistedIdentity = struct { text: []u8, value: [32]u8 };
-    const NamedOccurrence = struct { ty_module: [32]u8, ty: u32 };
 
     fn deinit(self: *ReuseRun, allocator: Allocator) void {
         for (self.hoisted) |entry| allocator.free(entry.text);
         allocator.free(self.hoisted);
-        for (self.occurrences) |list| allocator.free(list);
-        allocator.free(self.occurrences);
         for (self.names) |name| allocator.free(name);
         allocator.free(self.names);
         allocator.free(self.identities);
@@ -8683,10 +8677,6 @@ const ReuseRun = struct {
 
     fn value(self: *const ReuseRun, name: []const u8) ?i64 {
         return self.values[self.index(name)];
-    }
-
-    fn namedOccurrences(self: *const ReuseRun, name: []const u8) []const NamedOccurrence {
-        return self.occurrences[self.index(name)];
     }
 };
 
@@ -8745,11 +8735,6 @@ fn compileForReuseWithStrategy(allocator: Allocator, cache_dir: []const u8, app_
     errdefer identities.deinit(allocator);
     var values = std.ArrayList(?i64).empty;
     errdefer values.deinit(allocator);
-    var occurrences = std.ArrayList([]ReuseRun.NamedOccurrence).empty;
-    errdefer {
-        for (occurrences.items) |list| allocator.free(list);
-        occurrences.deinit(allocator);
-    }
     var hoisted = std.ArrayList(ReuseRun.HoistedIdentity).empty;
     errdefer {
         for (hoisted.items) |entry| allocator.free(entry.text);
@@ -8780,7 +8765,6 @@ fn compileForReuseWithStrategy(allocator: Allocator, cache_dir: []const u8, app_
             if (node == .scalar and node.scalar == .i64) stored = node.scalar.i64;
         }
         try values.append(allocator, stored);
-        try occurrences.append(allocator, try storedNamedOccurrences(allocator, &coord, app, root));
     }
     const stderr = try stderr_capture.bytes.toOwnedSlice(allocator);
     errdefer allocator.free(stderr);
@@ -8789,89 +8773,9 @@ fn compileForReuseWithStrategy(allocator: Allocator, cache_dir: []const u8, app_
         .names = try names.toOwnedSlice(allocator),
         .identities = try identities.toOwnedSlice(allocator),
         .values = try values.toOwnedSlice(allocator),
-        .occurrences = try occurrences.toOwnedSlice(allocator),
         .module_key = app.key.bytes,
         .hoisted = try hoisted.toOwnedSlice(allocator),
     };
-}
-
-/// The checked occurrences of the named types in a root's stored value and
-/// type, each checked to re-enter, in this compilation's checked modules, the
-/// nominal type it stands for.
-fn storedNamedOccurrences(
-    allocator: Allocator,
-    coord: *Coordinator,
-    app: *const CheckedArtifact.CheckedModuleArtifact,
-    root: CheckedArtifact.CompileTimeRoot,
-) (Allocator.Error || error{TestUnexpectedResult})![]ReuseRun.NamedOccurrence {
-    var found = std.ArrayList(ReuseRun.NamedOccurrence).empty;
-    errdefer found.deinit(allocator);
-    var named_types = std.ArrayList(check.ConstStore.NamedType).empty;
-    defer named_types.deinit(allocator);
-    const node = switch (root.payload) {
-        .const_node => |node| node,
-        .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => return found.toOwnedSlice(allocator),
-    };
-    var nodes = std.ArrayList(check.ConstStore.ConstNodeId).empty;
-    defer nodes.deinit(allocator);
-    try nodes.append(allocator, node);
-    while (nodes.pop()) |current| switch (app.const_store.get(current)) {
-        .nominal => |nominal| {
-            try named_types.append(allocator, nominal.named_type);
-            try nodes.append(allocator, nominal.backing);
-        },
-        .box => |payload| try nodes.append(allocator, payload),
-        .list => |list| switch (list) {
-            .nodes => |items| try nodes.appendSlice(allocator, items),
-            .packed_bytes, .empty => {},
-        },
-        .tuple, .record => |items| try nodes.appendSlice(allocator, items),
-        .tag => |tag| try nodes.appendSlice(allocator, tag.payloads),
-        .pending, .zst, .scalar, .str, .crash, .checked_error, .fn_value, .boxy_fn => {},
-    };
-    const def = switch (root.source) {
-        .def => |def| def,
-        .expr, .statement, .required_binding, .hoisted => null,
-    };
-    if (def) |def_idx| if (app.top_level_values.lookupByDef(def_idx)) |top| switch (top.value) {
-        .const_ref => |ref| switch (app.const_templates.get(ref).state) {
-            .stored_const => |stored| {
-                var types = std.ArrayList(check.ConstStore.ConstTypeId).empty;
-                defer types.deinit(allocator);
-                var seen = collections.DenseMap(check.ConstStore.ConstTypeId, void).init(allocator);
-                defer seen.deinit();
-                try types.append(allocator, stored.root_type);
-                while (types.pop()) |ty| {
-                    if ((try seen.getOrPut(ty)).found_existing) continue;
-                    const store = &app.const_store.type_store;
-                    switch (store.get(ty)) {
-                        .named => |named| {
-                            try named_types.append(allocator, named.named_type);
-                            try types.appendSlice(allocator, store.typeSpan(named.args));
-                        },
-                        .list, .box => |elem| try types.append(allocator, elem),
-                        .tuple => |span| try types.appendSlice(allocator, store.typeSpan(span)),
-                        .record => |span| for (store.fieldSpan(span)) |field| try types.append(allocator, field.ty),
-                        .tag_union => |span| for (store.tagSpan(span)) |tag| try types.appendSlice(allocator, store.typeSpan(tag.payloads)),
-                        .primitive, .zst, .erased, .func => {},
-                    }
-                }
-            },
-            .reserved, .eval_template, .unimplemented => {},
-        },
-        .procedure_binding => {},
-    };
-    for (named_types.items) |named_type| {
-        const owner = coord.checkedArtifactByKey(.{ .bytes = named_type.ty_module.bytes }) orelse return error.TestUnexpectedResult;
-        const types = owner.checked_types.view();
-        if (@backingInt(named_type.ty) >= types.payloadCount()) return error.TestUnexpectedResult;
-        switch (types.payload(named_type.ty)) {
-            .nominal => |nominal| if (!std.mem.eql(u8, &nominal.owner_module.bytes, &named_type.module.bytes)) return error.TestUnexpectedResult,
-            .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
-        }
-        try found.append(allocator, .{ .ty_module = named_type.ty_module.bytes, .ty = @backingInt(named_type.ty) });
-    }
-    return found.toOwnedSlice(allocator);
 }
 
 const reuse_platform =
@@ -13519,7 +13423,7 @@ test "Boxy checked constants share across checkouts and survive unrelated applic
     }
     const Run = struct {
         const Result = struct { key: [32]u8, cached: bool, stored_before_evaluation: bool, value: i64 };
-        fn run(allocator: Allocator, directory: []const u8, path: []const u8) !Result {
+        fn run(allocator: Allocator, directory: []const u8, path: []const u8) (CoordinatorError || eval.BuiltinModules.InitError || Allocator.Error || std.Thread.SpawnError || Coordinator.AppDiscoveryError || error{TestUnexpectedResult})!Result {
             const core = CoreCtx.os(allocator, allocator, std.testing.io);
             var manager = CacheManager.init(allocator, .{ .enabled = true, .cache_dir = directory }, core);
             defer manager.deinit();

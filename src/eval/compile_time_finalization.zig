@@ -7370,7 +7370,7 @@ test "compile-time finalization declarations are referenced" {
 /// A whole image with a callable, mutable zero-fill and, optionally, a data
 /// pointer to another image's callable. No executable instruction references
 /// that import: demand must follow the data relocation.
-fn ctfeSelectionTestImage(allocator: Allocator, name: []const u8, pointer: []const u8, imported: ?[]const u8, weak: bool) ![]align(16) u8 {
+fn ctfeSelectionTestImage(allocator: Allocator, name: []const u8, pointer: []const u8, imported: ?[]const u8, weak: bool) backend.dev.UnitImage.BuildError![]align(16) u8 {
     const Image = backend.dev.UnitImage;
     const symbols = [_]Image.TestObject.TestSymbol{
         .{ .name = name, .section = 1, .size = 6, .global = true, .func = true },
@@ -7387,7 +7387,7 @@ fn ctfeSelectionTestImage(allocator: Allocator, name: []const u8, pointer: []con
     return Image.build(allocator, &.{object}, .{ .keep_debug = false, .atoms = .whole });
 }
 
-fn ctfeSelectionTest(allocator: Allocator) !void {
+fn ctfeSelectionTest(allocator: Allocator) (FinalizeError || backend.dev.UnitImage.BuildError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const leaf = try ctfeSelectionTestImage(allocator, "leaf", "leaf_pointer", null, false);
     defer allocator.free(leaf);
     const middle = try ctfeSelectionTestImage(allocator, "middle", "callback", "leaf", false);

@@ -531,6 +531,21 @@ test "CTFE external references include carried data and frozen callbacks but exc
     defer store.deinit();
     var layouts = try @import("layout").Store.init(allocator, @import("base").target.TargetUsize.native);
     defer layouts.deinit();
+    // The frozen value's callback names a procedure the image never compiles.
+    const result = try store.addLocal(.{ .layout_idx = .i64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = result,
+        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .i64 } },
+        .next = ret,
+    } }, .test_fixture);
+    const uncompiled = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = lir.ProcIdentity.forTest(1),
+        .args = lir.LIR.LocalSpan.empty(),
+        .body = body,
+        .ret_layout = .i64,
+    }, .none);
     var codegen = try HostLirCodeGen.init(allocator, &store, &layouts, .{}, .default);
     defer codegen.deinit();
     var splice = HostSplice.init(allocator);
@@ -558,7 +573,7 @@ test "CTFE external references include carried data and frozen callbacks but exc
             .target_symbol_name = "frozen_callback",
             .kind = .function_pointer,
             .callable_capture_offset = 8,
-            .procedure = @fromBackingInt(0),
+            .procedure = uncompiled,
         }},
     }};
     var layout = try StaticDataImage.Layout.plan(allocator, &frozen, .{});
