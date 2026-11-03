@@ -576,6 +576,7 @@ const CustomCase = enum {
     absolute_platform_path_check_build_reject,
     watch_completed_run_refresh_reruns,
     hot_reload_dev_shim,
+    hot_reload_dev_shim_boxy_unit_images,
     hot_reload_model_boundary,
     hot_reload_retired_static_str,
     hot_reload_retired_static_data,
@@ -583,6 +584,8 @@ const CustomCase = enum {
     issue_12633_hot_reload_erased_callable_same_state,
     issue_12633_hot_reload_erased_callable_state_boxy,
     issue_12633_hot_reload_erased_callable_same_state_boxy,
+    issue_12633_hot_reload_erased_callable_state_boxy_unit_images,
+    issue_12633_hot_reload_erased_callable_same_state_boxy_unit_images,
     hot_reload_default_app,
     platform_requires_checker_diagnostics,
     generated_graph_1_1,
@@ -2704,6 +2707,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11714: check and build reject an absolute platform path", .body = .{ .custom = .absolute_platform_path_check_build_reject } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check --watch reruns when completed child snapshot is stale", .skip = .{ .windows = "watch refresh race test uses a POSIX wrapper script" }, .body = .{ .custom = .watch_completed_run_refresh_reruns } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch hot reloads dev shim code", .skip = .{ .windows = "generated hot-reload test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_dev_shim } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy roc --watch with a cache hot reloads dev shim code composed from unit images", .skip = .{ .windows = "generated hot-reload test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_dev_shim_boxy_unit_images } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch hot reloads app-provided Model through Box", .skip = .{ .windows = "generated hot-reload model test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_model_boundary } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch keeps retired image static Str alive for a live value", .skip = .{ .windows = "generated hot-reload static-string test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_retired_static_str } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch keeps retired image static lists and boxed closures alive and reuses unchanged static data", .skip = .{ .windows = "generated hot-reload static-data test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_retired_static_data } },
@@ -2711,6 +2715,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12633: roc --watch reloads an unchanged State the host reaches only through an erased callable", .skip = .{ .windows = "generated hot-reload erased-callable test platform uses POSIX host code" }, .body = .{ .custom = .issue_12633_hot_reload_erased_callable_same_state } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12633: boxy roc --watch rejects a State layout change the host reaches only through an erased callable", .skip = .{ .windows = "generated hot-reload erased-callable test platform uses POSIX host code" }, .body = .{ .custom = .issue_12633_hot_reload_erased_callable_state_boxy } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12633: boxy roc --watch reloads an unchanged State the host reaches only through an erased callable", .skip = .{ .windows = "generated hot-reload erased-callable test platform uses POSIX host code" }, .body = .{ .custom = .issue_12633_hot_reload_erased_callable_same_state_boxy } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12633: boxy roc --watch with a cache rejects a State layout change the host reaches only through an erased callable", .skip = .{ .windows = "generated hot-reload erased-callable test platform uses POSIX host code" }, .body = .{ .custom = .issue_12633_hot_reload_erased_callable_state_boxy_unit_images } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12633: boxy roc --watch with a cache reloads an unchanged State the host reaches only through an erased callable", .skip = .{ .windows = "generated hot-reload erased-callable test platform uses POSIX host code" }, .body = .{ .custom = .issue_12633_hot_reload_erased_callable_same_state_boxy_unit_images } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch runs headerless default app", .body = .{ .custom = .hot_reload_default_app } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10307: direct dev run passes source path as argv0", .backend = .dev, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/fx-open/argv0.roc", .app_args = &.{ "first", "second" }, .file_path_mode = .relative, .stdout_exact = "test/fx-open/argv0.roc|first|second\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10307: explicit run passes source path as argv0", .backend = .dev, .body = .{ .command = .{ .args = &.{ "run", "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/argv0.roc", .app_args = &.{ "first", "second" }, .file_path_mode = .relative, .stdout_exact = "test/fx-open/argv0.roc|first|second\n" } } },
@@ -6028,14 +6034,18 @@ fn runCustomCase(
         .watch_inputs_reject_absolute_import => customWatchInputsRejectAbsoluteImport(io, allocator, &env, &timer, timeout_ms),
         .absolute_platform_path_check_build_reject => customAbsolutePlatformPathCheckBuildReject(io, allocator, &env, &timer, timeout_ms),
         .watch_completed_run_refresh_reruns => customWatchCompletedRunRefreshReruns(io, allocator, &env, &timer, timeout_ms),
-        .hot_reload_dev_shim => customHotReloadDevShim(io, allocator, &env, &timer, timeout_ms),
+        .hot_reload_dev_shim => customHotReloadDevShim(io, allocator, &env, &timer, timeout_ms, .lss_no_cache),
+        .hot_reload_dev_shim_boxy_unit_images => customHotReloadDevShim(io, allocator, &env, &timer, timeout_ms, .boxy_cache),
         .hot_reload_model_boundary => customHotReloadModelBoundary(io, allocator, &env, &timer, timeout_ms),
         .hot_reload_retired_static_str => customHotReloadRetiredStaticStr(io, allocator, &env, &timer, timeout_ms),
         .hot_reload_retired_static_data => customHotReloadRetiredStaticData(io, allocator, &env, &timer, timeout_ms),
-        .issue_12633_hot_reload_erased_callable_state => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .larger_state, "--specialize=yes"),
-        .issue_12633_hot_reload_erased_callable_same_state => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .same_state, "--specialize=yes"),
-        .issue_12633_hot_reload_erased_callable_state_boxy => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .larger_state, "--specialize=no"),
-        .issue_12633_hot_reload_erased_callable_same_state_boxy => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .same_state, "--specialize=no"),
+        .issue_12633_hot_reload_erased_callable_state => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .larger_state, "--specialize=yes", .no_cache),
+        .issue_12633_hot_reload_erased_callable_same_state => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .same_state, "--specialize=yes", .no_cache),
+        .issue_12633_hot_reload_erased_callable_state_boxy => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .larger_state, "--specialize=no", .no_cache),
+        .issue_12633_hot_reload_erased_callable_same_state_boxy => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .same_state, "--specialize=no", .no_cache),
+        // With the case's cache, a `.boxy` run composes its images from unit images.
+        .issue_12633_hot_reload_erased_callable_state_boxy_unit_images => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .larger_state, "--specialize=no", .cache),
+        .issue_12633_hot_reload_erased_callable_same_state_boxy_unit_images => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .same_state, "--specialize=no", .cache),
         .hot_reload_default_app => customHotReloadDefaultApp(io, allocator, &env, &timer, timeout_ms),
         .platform_requires_checker_diagnostics => customPlatformRequiresCheckerDiagnostics(io, allocator, &env, &timer, timeout_ms),
         .generated_graph_1_1 => customGeneratedModuleGraph(io, allocator, &env, &timer, timeout_ms, .{ .roc_file_count = 1, .symbols_per_file = 1 }),
@@ -7363,6 +7373,9 @@ fn customHotReloadDevShim(
     env: *const CaseEnv,
     timer: *harness.Timer,
     timeout_ms: u64,
+    /// `.boxy_cache` runs `--specialize=no` with the case's cache, which
+    /// composes every generation from unit images.
+    mode: enum { lss_no_cache, boxy_cache },
 ) ?TestResult {
     const target = nativeMuslTarget() orelse {
         return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "hot-reload dev-shim integration runs only on native Linux x64/arm64 hosts" };
@@ -7463,18 +7476,11 @@ fn customHotReloadDevShim(
 
     const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
         return timeoutFailure(allocator, timer, .run, "case timeout exhausted before roc --watch started");
-    const result = runRawInEnv(io, allocator, env, &.{
-        roc_binary_path,
-        "--watch",
-        "--opt=dev",
-        "--no-cache",
-        target_arg,
-        app_path,
-        app_path,
-        data_path,
-        extra_path,
-        platform_path,
-        slow_path,
+    const lss_argv = [_][]const u8{ roc_binary_path, "--watch", "--opt=dev", "--no-cache", target_arg, app_path, app_path, data_path, extra_path, platform_path, slow_path };
+    const boxy_argv = [_][]const u8{ roc_binary_path, "--watch", "--opt=dev", "--specialize=no", target_arg, app_path, app_path, data_path, extra_path, platform_path, slow_path };
+    const result = runRawInEnv(io, allocator, env, switch (mode) {
+        .lss_no_cache => &lss_argv,
+        .boxy_cache => &boxy_argv,
     }, project_root_path, null, child_timeout_ms) catch |err|
         return customInfraFailure(allocator, timer, "roc --watch spawn error: {}", .{err});
 
@@ -8654,6 +8660,7 @@ fn customIssue12633HotReloadErasedCallableState(
     timeout_ms: u64,
     edit: Issue12633Edit,
     specialize_arg: []const u8,
+    cache: enum { no_cache, cache },
 ) ?TestResult {
     const target = nativeMuslTarget() orelse {
         return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "hot-reload erased-callable integration runs only on native Linux x64/arm64 hosts" };
@@ -8719,16 +8726,11 @@ fn customIssue12633HotReloadErasedCallableState(
 
     const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
         return timeoutFailure(allocator, timer, .run, "case timeout exhausted before roc --watch started");
-    const result = runRawInEnv(io, allocator, env, &.{
-        roc_binary_path,
-        "--watch",
-        "--opt=dev",
-        "--no-cache",
-        specialize_arg,
-        target_arg,
-        app_path,
-        app_path,
-        edited_app_path,
+    const no_cache_argv = [_][]const u8{ roc_binary_path, "--watch", "--opt=dev", "--no-cache", specialize_arg, target_arg, app_path, app_path, edited_app_path };
+    const cache_argv = [_][]const u8{ roc_binary_path, "--watch", "--opt=dev", specialize_arg, target_arg, app_path, app_path, edited_app_path };
+    const result = runRawInEnv(io, allocator, env, switch (cache) {
+        .no_cache => &no_cache_argv,
+        .cache => &cache_argv,
     }, project_root_path, null, child_timeout_ms) catch |err|
         return customInfraFailure(allocator, timer, "roc --watch spawn error: {}", .{err});
 
