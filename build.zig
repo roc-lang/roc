@@ -6221,8 +6221,6 @@ fn addMainExe(
                 convert.addFileArg(cross_builtins_extern_obj.getEmittedBin());
                 convert.addFileArg(cross_boxy_runtime_obj.getEmittedBin());
                 _ = embedded_assets.addCopyFile(image, b.pathJoin(&.{ "targets", cross_target.name, "roc_support.rbxu" }));
-                embedded_digests.addArg(b.fmt("support_image_{s}", .{cross_target.name}));
-                embedded_digests.addFileArg(image);
             }
         }
         const copy_cross_builtins_extern = embedded_assets;

@@ -188,7 +188,7 @@ fn hashList(hasher: *std.crypto.hash.sha2.Sha256, list: []const []const u8) void
 }
 
 /// The record format; bumped whenever `finish`'s output changes.
-pub const format_version: u32 = 2;
+pub const format_version: u32 = 3;
 const magic = "RHST".*;
 /// The offset of the host's bytes in a record, so they can be copied by
 /// file range from a page boundary.
@@ -234,6 +234,9 @@ const Header = extern struct {
     strings_offset: u32,
     strings_size: u32,
     total_size: u64,
+    /// BLAKE3 of the host's bytes: what identifies the host in a link's
+    /// build id, whatever compiler or key produced it.
+    host_digest: [32]u8,
 };
 
 /// Why a linked host cannot be made into a record. Each is reported to the
@@ -451,11 +454,15 @@ pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, kee
         .strings_offset = @intCast(strings_offset),
         .strings_size = @intCast(strings.items.len),
         .total_size = total,
+        .host_digest = @splat(0),
     };
     @memcpy(out[0..@sizeOf(Header)], std.mem.asBytes(&header));
     @memcpy(out[host_offset..][0..@intCast(shoff)], exe[0..@intCast(shoff)]);
     if (moved_strtab) |strtab| @memcpy(out[host_offset + shoff ..][0..strtab.len], strtab);
     @memcpy(out[@intCast(sht_offset)..][0..sht.len], sht);
+    var host_digest: [32]u8 = undefined;
+    std.crypto.hash.Blake3.hash(out[host_offset..][0..@intCast(host_len)], &host_digest, .{});
+    @memcpy(out[@offsetOf(Header, "host_digest")..][0..32], &host_digest);
     @memcpy(out[@intCast(symbols_offset)..][0 .. symbols.items.len * @sizeOf(HostSymbol)], std.mem.sliceAsBytes(symbols.items));
     @memcpy(out[@intCast(provides_offset)..][0 .. provide_names.len * @sizeOf(u32)], std.mem.sliceAsBytes(provide_names));
     @memcpy(out[@intCast(strings_offset)..][0..strings.items.len], strings.items);

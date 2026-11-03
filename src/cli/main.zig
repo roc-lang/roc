@@ -721,7 +721,6 @@ const EmbeddedTargetObjects = struct {
     /// (`backend.dev.UnitImage`, converted by src/build/support_image.zig),
     /// for the targets a fast dev link serves.
     support_image: ?[]const u8 = null,
-    support_image_digest: ?[32]u8 = null,
 
     const DefaultPlatform = enum { none, runtime, runtime_and_compiler_rt };
 
@@ -748,7 +747,6 @@ const EmbeddedTargetObjects = struct {
         objects.boxy_runtime_digest = embeddedBlake3("boxy_runtime_" ++ name);
         if (target.toOsTag() == .linux and target.toCpuArch() == .x86_64) {
             objects.support_image = embedded(dir ++ "roc_support.rbxu");
-            objects.support_image_digest = embeddedBlake3("support_image_" ++ name);
         }
         if (target.toCpuArch() == .wasm32) {
             objects.builtins_extern_stack_checked = embedded(dir ++ "roc_builtins_extern_stack_checked.o");
@@ -784,7 +782,6 @@ const EmbeddedTargetObjects = struct {
         objects.boxy_runtime_digest = native.boxy_runtime_digest;
         // The glibc twin's support image holds its own builtins, not these.
         objects.support_image = null;
-        objects.support_image_digest = null;
         return objects;
     }
 
@@ -12252,7 +12249,6 @@ const FastDevLink = struct {
     job: fast_dev_link.HostJob,
     /// The embedded support image, copied to memory `UnitImage.View` reads.
     support: []align(backend.dev.UnitImage.alignment.toByteUnits()) u8,
-    support_digest: [32]u8,
     no_cache: bool,
     published: bool = false,
 
@@ -12307,7 +12303,6 @@ const FastDevLink = struct {
             },
             .job = undefined,
             .support = support,
-            .support_digest = embedded.support_image_digest.?,
             .no_cache = args.no_cache,
         };
         self.job = .{
@@ -12341,7 +12336,6 @@ const FastDevLink = struct {
         reporter: *progress.Reporter,
         build_env: *BuildEnv,
         root_image: []align(backend.dev.UnitImage.alignment.toByteUnits()) const u8,
-        root_key: [32]u8,
         library: BoxyLibraryObjects,
         scratch_dir: []const u8,
     ) CliMainError!void {
@@ -12397,18 +12391,17 @@ const FastDevLink = struct {
 
         const units = try ctx.gpa.alloc(patch_link.ImageInput, library.images.len + 1);
         defer ctx.gpa.free(units);
-        for (library.images, library.keys, units[0..library.images.len]) |image, key, *unit| {
-            unit.* = .{ .view = backend.dev.UnitImage.View.init(image) catch base.invariant("roc build invariant violated: a unit image does not read", .{}), .key = key };
+        for (library.images, units[0..library.images.len]) |image, *unit| {
+            unit.* = .{ .view = backend.dev.UnitImage.View.init(image) catch base.invariant("roc build invariant violated: a unit image does not read", .{}) };
         }
-        units[library.images.len] = .{ .view = backend.dev.UnitImage.View.init(root_image) catch base.invariant("roc build invariant violated: the root unit image does not read", .{}), .key = root_key };
+        units[library.images.len] = .{ .view = backend.dev.UnitImage.View.init(root_image) catch base.invariant("roc build invariant violated: the root unit image does not read", .{}) };
         const support_view = backend.dev.UnitImage.View.init(self.support) catch
             unreachable; // `start` read this image
         var timing: patch_link.Timing = .{};
         var outcome: patch_link.Outcome = .{};
         patch_link.link(ctx.gpa, ctx.arena, ctx.io.std_io, .{
             .host = host_view,
-            .host_key = self.job.key,
-            .support = .{ .view = support_view, .key = self.support_digest },
+            .support = .{ .view = support_view },
             .units = units,
             .root = library.images.len,
             .host_required = self.spec.host_required,
@@ -12714,7 +12707,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         defer compile.boxy_object_cache.deinitEntry(ctx.gpa, entry);
         build_env.recordBoxyObjects(1, 0);
         if (fast_link) |fast| {
-            try fast.link(ctx, &reporter, &build_env, @alignCast(entry.image), boxy_root_key.?.bytes, library, build_scratch_dir);
+            try fast.link(ctx, &reporter, &build_env, @alignCast(entry.image), library, build_scratch_dir);
             return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
         }
         var root_pieces = backend.dev.UnitPieces.decode(ctx.gpa, entry.pieces) catch |err| switch (err) {
@@ -12818,8 +12811,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         } else null;
         defer if (root_image) |image| ctx.gpa.free(image);
         if (fast_link) |fast| {
-            const root_key = boxy_root_key.?.bytes;
-            try fast.link(ctx, &reporter, &build_env, root_image.?, root_key, library, build_scratch_dir);
+            try fast.link(ctx, &reporter, &build_env, root_image.?, library, build_scratch_dir);
             if (!args.no_cache) {
                 const records = try compile.boxy_unit.exportRecords(ctx.gpa, &lowered, &boxy_interfaces.?);
                 defer ctx.gpa.free(records);

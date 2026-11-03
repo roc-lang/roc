@@ -25,7 +25,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RBXU".*;
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 2;
+pub const format_version: u32 = 3;
 /// Alignment of the code block inside an image, and of every region the
 /// linker places.
 pub const page_size: u32 = 4096;
@@ -174,6 +174,10 @@ const Header = extern struct {
     root_count: u32,
     total_size: u32,
     reserved: u32 = 0,
+    /// BLAKE3 of the image's bytes with this field zeroed: what places the
+    /// image in a link and identifies its content, whatever compiler or key
+    /// produced it.
+    digest: [32]u8,
 };
 
 /// The alignment an image's bytes need in memory for `View`.
@@ -218,6 +222,10 @@ pub const View = struct {
 
     pub fn block(self: View) []const u8 {
         return self.bytes[self.header.block_offset..][0..self.header.block_size];
+    }
+    /// The image's content digest.
+    pub fn digest(self: View) [32]u8 {
+        return self.header.digest;
     }
     pub fn blockAlign(self: View) u32 {
         return self.header.block_align;
@@ -803,6 +811,7 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
         .roots_offset = roots_offset,
         .root_count = @intCast(root_atoms.items.len),
         .total_size = @intCast(total),
+        .digest = @splat(0),
     };
     @memcpy(out[0..@sizeOf(Header)], std.mem.asBytes(&header));
     @memcpy(out[block_offset..][0..block_bytes.len], block_bytes);
@@ -820,6 +829,9 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
     @memcpy(out[edge_starts_offset..][0 .. edge_starts.len * @sizeOf(u32)], std.mem.sliceAsBytes(edge_starts));
     @memcpy(out[edges_offset..][0 .. edge_targets.items.len * @sizeOf(u32)], std.mem.sliceAsBytes(edge_targets.items));
     @memcpy(out[roots_offset..][0 .. root_atoms.items.len * @sizeOf(u32)], std.mem.sliceAsBytes(root_atoms.items));
+    var content_digest: [32]u8 = undefined;
+    std.crypto.hash.Blake3.hash(out, &content_digest, .{});
+    @memcpy(out[@offsetOf(Header, "digest")..][0..32], &content_digest);
     return out;
 }
 

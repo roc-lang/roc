@@ -43,16 +43,14 @@ const SHF_ALLOC = 0x2;
 const SHF_EXECINSTR = 0x4;
 const STB_LOCAL = 0;
 
-/// One image to place, with the key that orders it.
+/// One image to place.
 pub const ImageInput = struct {
     view: UnitImage.View,
-    key: [32]u8,
 };
 
 /// Everything a patch link reads.
 pub const Inputs = struct {
     host: host_prelink.View,
-    host_key: [32]u8,
     /// The builtins and the Boxy runtime.
     support: ImageInput,
     /// Every unit of the program; `root` indexes the root unit.
@@ -107,7 +105,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     // identity, which is a function of its content, so two units can each
     // define the same one (a conversion worker each memoizes for itself);
     // the name resolves to the definition in the image with the smallest
-    // key, whatever order the images arrive in.
+    // content digest, whatever order the images arrive in.
     var exports: std.StringHashMapUnmanaged(SymbolRef) = .empty;
     defer exports.deinit(gpa);
     var export_total: u32 = 0;
@@ -117,7 +115,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         const symbols = image.view.symbols();
         for (image.view.exports()) |symbol_index| {
             const gop = exports.getOrPutAssumeCapacity(image.view.name(symbols[symbol_index].name));
-            if (gop.found_existing and std.mem.order(u8, &images.items[gop.value_ptr.image].key, &image.key) != .gt) continue;
+            if (gop.found_existing and std.mem.order(u8, &images.items[gop.value_ptr.image].view.header.digest, &image.view.header.digest) != .gt) continue;
             gop.value_ptr.* = .{ .image = @intCast(image_index), .symbol = symbol_index };
         }
     }
@@ -145,14 +143,14 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     defer gpa.free(reached);
     for (walk.states, reached) |state, *placed| placed.* = state != null;
 
-    // Placement order: the support image, then the units by key.
+    // Placement order: the support image, then the units by content digest.
     var order: std.ArrayList(u32) = .empty;
     defer order.deinit(gpa);
     if (reached[0]) try order.append(gpa, 0);
     for (1..images.items.len) |index| if (reached[index]) try order.append(gpa, @intCast(index));
     std.mem.sort(u32, order.items[@intFromBool(reached[0])..], images.items, struct {
         fn lessThan(all: []const ImageInput, a: u32, b: u32) bool {
-            return std.mem.order(u8, &all[a].key, &all[b].key) == .lt;
+            return std.mem.order(u8, &all[a].view.header.digest, &all[b].view.header.digest) == .lt;
         }
     }.lessThan);
     timing.images_placed = order.items.len;
@@ -426,8 +424,8 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     if (rw_mem_size != 0) writeLoad(phdrs[(host.header.first_spare + 1) * 56 ..][0..56], rw_offset, rw_base, rw_file_size, rw_mem_size, PF_R | PF_W);
     var build_id = std.crypto.hash.sha2.Sha256.init(.{});
     build_id.update("roc-fast-dev-link-build-id-v1");
-    build_id.update(&inputs.host_key);
-    for (order.items) |index| build_id.update(&images.items[index].key);
+    build_id.update(&host.header.host_digest);
+    for (order.items) |index| build_id.update(&images.items[index].view.header.digest);
     const digest = build_id.finalResult();
     const id_bytes = mapped[@intCast(host.header.build_id_offset)..][0..host.header.build_id_size];
     for (id_bytes, 0..) |*byte, at| byte.* = digest[at % digest.len];
