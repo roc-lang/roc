@@ -83,19 +83,24 @@ pub fn fillCheckRooms(gpa: Allocator, object_bytes: []const u8) Error!?[]u8 {
     return try rewriteCodeRelocAddends(gpa, object_bytes, &addends);
 }
 
-/// What one function of a unit's module does with the stack, for its
-/// unit image (`WasmUnitImage`): the composer of a program fills each
-/// check's room from these once it knows the program's call graph.
+/// What one function of a module does with the stack, for the module's
+/// image (`WasmUnitImage`): the composer of a program fills each check's
+/// room from these once it knows the program's call graph.
 pub const UnitFrame = struct {
     /// How far below its entry stack pointer its own frame reaches.
     own_depth: u64,
     calls: []const Call,
     /// Whether a check runs before anything else can.
     checked: bool,
+    /// Indices into `reloc.CODE` of its stack-bound checks.
+    check_relocs: []const u32,
 };
 
-/// The frame facts of every function `module` defines, a unit's module as
-/// its code generation left it, in local function order.
+/// The frame facts of every function `module` defines, in local function
+/// order: a unit's module as its code generation left it, or a preloaded
+/// object of the compiler's stack-checked support code. The overflow
+/// function and the stack pointer accessors (`StackSupport`) start no
+/// call chain a check must cover.
 pub fn unitFrames(arena: Allocator, module: *const WasmModule) Error![]UnitFrame {
     const symbols = Symbols.find(module);
     const signatures = try arena.alloc(Signature, module.func_types.items.len);
@@ -106,8 +111,14 @@ pub fn unitFrames(arena: Allocator, module: *const WasmModule) Error![]UnitFrame
     if (std.debug.runtime_safety) for (relocs[0..relocs.len -| 1], relocs[@min(1, relocs.len)..]) |a, b| std.debug.assert(a.getOffset() < b.getOffset());
     const frames = try arena.alloc(UnitFrame, module.function_offsets.items.len);
     for (frames, 0..) |*frame, local| {
-        const facts = try analyzeFunction(arena, module, signatures, symbols, relocs, @intCast(local));
-        frame.* = .{ .own_depth = facts.own_depth, .calls = facts.calls, .checked = facts.checked };
+        const index: u32 = @intCast(local);
+        if (symbols.overflow_local == index or symbols.accessor_locals[0] == index or symbols.accessor_locals[1] == index) {
+            frame.* = .{ .own_depth = 0, .calls = &.{}, .checked = true, .check_relocs = &.{} };
+            continue;
+        }
+        const facts = try analyzeFunction(arena, module, signatures, symbols, relocs, index);
+        std.mem.sort(u32, facts.check_relocs, {}, std.sort.asc(u32));
+        frame.* = .{ .own_depth = facts.own_depth, .calls = facts.calls, .checked = facts.checked, .check_relocs = facts.check_relocs };
     }
     return frames;
 }
@@ -969,9 +980,57 @@ fn computeRooms(
         }
     }
     succ_starts[function_count] = @intCast(succs.items.len);
+    const own_depths = try arena.alloc(u64, function_count);
+    for (own_depths, facts) |*depth, function_facts| depth.* = function_facts.own_depth;
+    return roomsOfGraph(arena, own_depths, succ_starts, succs.items, edge_depths.items, import_count);
+}
 
-    const preds = try collections.csr.transpose(arena, succ_starts, succs.items);
-    const components = try collections.scc.compute(arena, succ_starts, succs.items, preds.starts, preds.targets);
+/// One function of a composed program's call graph, for `programRooms`.
+pub const ProgramFunction = struct {
+    own_depth: u64,
+    checked: bool,
+    /// Its callees' edges in `ProgramGraph.edges`.
+    first_edge: u32,
+    edge_count: u32,
+};
+
+/// A call from a function of a composed program into another.
+pub const ProgramEdge = struct {
+    callee: u32,
+    depth: u64,
+};
+
+/// The room each function of a composed program needs before its checks:
+/// the deepest its own frame and every chain of unchecked callees reach
+/// below its entry stack pointer (see `computeRooms`). `edges` holds every
+/// call whose callee the program defines, indirect calls already expanded
+/// to every table function of their type; calls into checked functions
+/// are dropped here.
+pub fn programRooms(arena: Allocator, functions: []const ProgramFunction, edges: []const ProgramEdge) Allocator.Error![]u64 {
+    const function_count = functions.len;
+    var succ_starts = try arena.alloc(u32, function_count + 1);
+    var succs = std.ArrayList(u32).empty;
+    var edge_depths = std.ArrayList(u64).empty;
+    for (functions, 0..) |function, index| {
+        succ_starts[index] = @intCast(succs.items.len);
+        for (edges[function.first_edge..][0..function.edge_count]) |edge| {
+            if (functions[edge.callee].checked) continue;
+            try succs.append(arena, edge.callee);
+            try edge_depths.append(arena, edge.depth);
+        }
+    }
+    succ_starts[function_count] = @intCast(succs.items.len);
+    const own_depths = try arena.alloc(u64, function_count);
+    for (own_depths, functions) |*depth, function| depth.* = function.own_depth;
+    return roomsOfGraph(arena, own_depths, succ_starts, succs.items, edge_depths.items, 0);
+}
+
+/// The rooms of a call graph between unchecked edges, in compressed rows.
+/// `index_base` only numbers functions in invariant messages.
+fn roomsOfGraph(arena: Allocator, own_depths: []const u64, succ_starts: []const u32, succs: []const u32, edge_depths: []const u64, index_base: u32) Allocator.Error![]u64 {
+    const function_count = own_depths.len;
+    const preds = try collections.csr.transpose(arena, succ_starts, succs);
+    const components = try collections.scc.compute(arena, succ_starts, succs, preds.starts, preds.targets);
 
     // Components are numbered so no edge leads into a lower-numbered one, so
     // the highest-numbered come first: every callee's room is known before
@@ -983,19 +1042,18 @@ fn computeRooms(
         const members = components.membersOf(component);
         var recursive = members.len > 1;
         for (members) |member| {
-            for (succs.items[succ_starts[member]..succ_starts[member + 1]]) |callee| {
+            for (succs[succ_starts[member]..succ_starts[member + 1]]) |callee| {
                 if (callee == member) recursive = true;
             }
         }
 
         var room: u64 = 0;
         for (members) |member| {
-            const function_facts = facts[member];
-            if (recursive and (function_facts.own_depth != 0 or hasFramedEdge(succs.items, edge_depths.items, succ_starts, member, components.component_of, component))) {
-                base.invariant("wasm stack room invariant violated: function {d} grows the stack on a call cycle without a check", .{member + import_count});
+            if (recursive and (own_depths[member] != 0 or hasFramedEdge(succs, edge_depths, succ_starts, member, components.component_of, component))) {
+                base.invariant("wasm stack room invariant violated: function {d} grows the stack on a call cycle without a check", .{member + index_base});
             }
-            room = @max(room, function_facts.own_depth);
-            for (succs.items[succ_starts[member]..succ_starts[member + 1]], edge_depths.items[succ_starts[member]..succ_starts[member + 1]]) |callee, depth| {
+            room = @max(room, own_depths[member]);
+            for (succs[succ_starts[member]..succ_starts[member + 1]], edge_depths[succ_starts[member]..succ_starts[member + 1]]) |callee, depth| {
                 if (components.component_of[callee] == component) continue;
                 room = @max(room, depth + rooms[callee]);
             }

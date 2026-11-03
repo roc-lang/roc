@@ -142,7 +142,7 @@ pub fn imageOfModule(gpa: Allocator, module: *const WasmModule, stack_checks: bo
     }.lessThan);
     const function_count = module.function_offsets.items.len;
     const functions = try arena.alloc(WasmUnitImage.InputFunction, function_count);
-    var requested = try arena.alloc(bool, function_count);
+    const requested = try arena.alloc(bool, function_count);
     @memset(requested, false);
     var next_reloc: usize = 0;
     for (functions, 0..) |*function, local| {
@@ -157,7 +157,7 @@ pub fn imageOfModule(gpa: Allocator, module: *const WasmModule, stack_checks: bo
             std.debug.assert(entry.getOffset() >= body_start);
             const site = try siteOf(entry, entry.getOffset() - body_start, false, symbols, import_count, &types, &imports, stack_low);
             zeroField(body, site);
-            if (site.target_kind == .function and isTableKind(site.kind)) requested[site.target] = true;
+            markTableSite(site, requested, imports.list.items);
             try sites.append(arena, site);
         }
         function.* = .{
@@ -197,7 +197,7 @@ pub fn imageOfModule(gpa: Allocator, module: *const WasmModule, stack_checks: bo
             if (segment_index != index) break;
             const site = try siteOf(entry, entry.getOffset(), true, symbols, import_count, &types, &imports, stack_low);
             zeroField(bytes, site);
-            if (site.target_kind == .function and isTableKind(site.kind)) requested[site.target] = true;
+            markTableSite(site, requested, imports.list.items);
             try sites.append(arena, site);
         }
         if (source.zero_fill and sites.items.len != 0) base.invariant("wasm unit invariant violated: a zero-fill segment holds relocations", .{});
@@ -277,6 +277,17 @@ pub fn imageOfModule(gpa: Allocator, module: *const WasmModule, stack_checks: bo
 
 fn depth32(depth: u64) error{ImageTooLarge}!u32 {
     return std.math.cast(u32, depth) orelse error.ImageTooLarge;
+}
+
+/// Record the table slot a table site takes: a local function's request,
+/// or an import's mark that its function needs a slot.
+fn markTableSite(site: WasmUnitImage.InputSite, requested: []bool, imports: []Imports.Import) void {
+    if (!isTableKind(site.kind)) return;
+    switch (site.target_kind) {
+        .function => requested[site.target] = true,
+        .import => imports[site.target].input.address_taken = true,
+        .data, .type, .global => unreachable, // `siteOf` names a function or an import for every table relocation
+    }
 }
 
 fn isTableKind(kind: WasmUnitImage.SiteKind) bool {

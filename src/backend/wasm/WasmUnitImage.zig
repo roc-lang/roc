@@ -20,6 +20,13 @@
 //! reaches, the stack depth each of its calls starts its callee at, and
 //! whether it runs a check before anything else.
 //!
+//! The same format holds the code a program is linked with beside its
+//! units: the compiler's support objects and a platform's host, each
+//! converted once from a relocatable object (`ObjectImage`). Those images
+//! may also define globals with their initial values, name constructors
+//! the program runs at start, mark definitions weak, and import functions
+//! under a module and field other than their symbol name.
+//!
 //! The encoding is a pure function of its input: fixed-width
 //! little-endian tables in input order, exports sorted by name, and a
 //! BLAKE3 digest of the bytes. Nothing in an image names a path.
@@ -30,7 +37,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RBWU".*;
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 1;
+pub const format_version: u32 = 2;
 
 /// The alignment an image's bytes need in memory for `View`.
 pub const alignment: std.mem.Alignment = .@"16";
@@ -89,6 +96,8 @@ pub const TargetKind = enum(u8) {
     type = 2,
     /// An import of the unit, by index.
     import = 3,
+    /// A global the image defines, by index.
+    global = 4,
 };
 
 /// What an import names.
@@ -102,6 +111,15 @@ pub const ImportKind = enum(u8) {
 /// `Function.flags` bit: the function runs a stack check before anything
 /// else, so the check covers every call chain it starts.
 pub const function_checked: u32 = 1;
+/// `FunctionExport.flags`, `DataExport.flags` and `Global.flags` bit: the
+/// definition is weak, so a strong definition of the same name wins.
+pub const definition_weak: u32 = 2;
+/// `FunctionExport.flags` bit: the object the image was converted from
+/// marks the function exported, so a finished module exports it.
+pub const export_object_exported: u32 = 4;
+/// `Import.flags` bit: a table site names the import, so the function it
+/// resolves to needs a table slot.
+pub const import_address_taken: u8 = 1;
 /// `Segment.flags` bit: the segment is zero-filled memory with no bytes.
 pub const segment_zero_fill: u32 = 1;
 /// `Header.flags` bit: the unit's code checks stack bounds, and every
@@ -126,8 +144,8 @@ pub const Function = extern struct {
     body_offset: u32,
     body_size: u32,
     type: u32,
-    /// Offset of its exported name in the string table; 0 when the
-    /// function is not exported.
+    /// Offset of a name for it in the string table, for a module's name
+    /// section; 0 when it has none.
     name: u32,
     first_site: u32,
     site_count: u32,
@@ -174,26 +192,62 @@ pub const Call = extern struct {
     reserved: [3]u8 = .{ 0, 0, 0 },
 };
 
+/// One exported function symbol: a function can be exported under more
+/// than one name.
+pub const FunctionExport = extern struct {
+    name: u32,
+    function: u32,
+    /// `definition_weak`, `export_object_exported`.
+    flags: u32,
+};
+
 /// One exported data symbol.
 pub const DataExport = extern struct {
     name: u32,
     segment: u32,
     offset: u32,
     size: u32,
+    /// `definition_weak`.
+    flags: u32,
+};
+
+/// One global the image defines, with the constant it starts as.
+pub const Global = extern struct {
+    /// The initial value's bits: an `i32` sign-extended, an `i64`, or a
+    /// float's bits.
+    init: u64,
+    /// Offset of its exported name in the string table; 0 when the global
+    /// is not exported.
+    name: u32,
+    valtype: u8,
+    mutable: u8,
+    /// `definition_weak`.
+    flags: u8,
+    reserved: u8 = 0,
+};
+
+/// One constructor the program runs at start, in priority order.
+pub const InitFunc = extern struct {
+    priority: u32,
+    function: u32,
 };
 
 /// One name the unit references and no unit symbol defines.
 pub const Import = extern struct {
-    /// Offsets of the import's module and field names in the string table.
+    /// Offsets of the import's module name, symbol name and field name in
+    /// the string table. A link resolves the import by its symbol name;
+    /// an import left for the embedder keeps its module and field.
     module: u32,
     name: u32,
+    field: u32,
     /// For a function: its signature, or `no_type`.
     type: u32,
     kind: u8,
     /// For a global: its value type and whether it is mutable.
     valtype: u8,
     mutable: u8,
-    reserved: u8 = 0,
+    /// `import_address_taken`.
+    flags: u8,
 };
 
 const Header = extern struct {
@@ -216,7 +270,7 @@ const Header = extern struct {
     site_count: u32,
     calls_offset: u32,
     call_count: u32,
-    /// Indices of the exported functions, in name order.
+    /// The exported function symbols, in name order.
     exports_offset: u32,
     export_count: u32,
     /// The exported data symbols, in name order.
@@ -227,6 +281,15 @@ const Header = extern struct {
     table_request_count: u32,
     imports_offset: u32,
     import_count: u32,
+    globals_offset: u32,
+    global_count: u32,
+    /// The constructors, in the order they run.
+    init_funcs_offset: u32,
+    init_func_count: u32,
+    /// Atoms a link keeps whether or not anything reaches them: functions
+    /// by index, then segments numbered after the functions. Ascending.
+    roots_offset: u32,
+    root_count: u32,
     strings_offset: u32,
     strings_size: u32,
     total_size: u32,
@@ -265,10 +328,13 @@ pub const View = struct {
         try checkRange(bytes.len, header.data_offset, header.data_size, 1);
         try checkTable(bytes.len, header.sites_offset, header.site_count, @sizeOf(Site));
         try checkTable(bytes.len, header.calls_offset, header.call_count, @sizeOf(Call));
-        try checkTable(bytes.len, header.exports_offset, header.export_count, @sizeOf(u32));
+        try checkTable(bytes.len, header.exports_offset, header.export_count, @sizeOf(FunctionExport));
         try checkTable(bytes.len, header.data_exports_offset, header.data_export_count, @sizeOf(DataExport));
         try checkTable(bytes.len, header.table_requests_offset, header.table_request_count, @sizeOf(u32));
         try checkTable(bytes.len, header.imports_offset, header.import_count, @sizeOf(Import));
+        try checkTable(bytes.len, header.globals_offset, header.global_count, @sizeOf(Global));
+        try checkTable(bytes.len, header.init_funcs_offset, header.init_func_count, @sizeOf(InitFunc));
+        try checkTable(bytes.len, header.roots_offset, header.root_count, @sizeOf(u32));
         try checkRange(bytes.len, header.strings_offset, header.strings_size, 1);
         if (header.strings_size == 0 or bytes[header.strings_offset] != 0 or bytes[header.strings_offset + header.strings_size - 1] != 0) return error.InvalidImage;
         const view: View = .{ .bytes = bytes, .header = header };
@@ -301,14 +367,14 @@ pub const View = struct {
             if (function.first_call != next_call) return error.InvalidImage;
             try checkRange(all_calls.len, function.first_call, function.call_count, 1);
             next_call += function.call_count;
-            if (self.header.flags & image_stack_checks == 0 and (function.call_count != 0 or function.frame_depth != 0 or function.flags != 0)) return error.InvalidImage;
+            if (self.header.flags & image_stack_checks == 0 and (function.call_count != 0 or function.frame_depth != 0 or function.flags & function_checked != 0)) return error.InvalidImage;
             for (all_calls[function.first_call..][0..function.call_count]) |call| {
                 const kind = std.enums.fromInt(TargetKind, call.target_kind) orelse return error.InvalidImage;
                 try self.checkTarget(kind, call.target);
                 switch (kind) {
                     .function, .type => {},
                     .import => if (self.imports()[call.target].kind != @backingInt(ImportKind.function)) return error.InvalidImage,
-                    .data => return error.InvalidImage,
+                    .data, .global => return error.InvalidImage,
                 }
             }
         }
@@ -329,11 +395,12 @@ pub const View = struct {
         if (next_site != all_sites.len) return error.InvalidImage;
         const functions_ = self.functions();
         var previous_name: ?[]const u8 = null;
-        for (self.exports()) |function_index| {
-            if (function_index >= functions_.len) return error.InvalidImage;
-            const name_offset = functions_[function_index].name;
-            if (name_offset == 0) return error.InvalidImage;
-            const export_name = self.name(name_offset);
+        for (self.exports()) |function_export| {
+            if (function_export.function >= functions_.len) return error.InvalidImage;
+            if (function_export.flags & ~(definition_weak | export_object_exported) != 0) return error.InvalidImage;
+            try self.checkName(function_export.name);
+            if (function_export.name == 0) return error.InvalidImage;
+            const export_name = self.name(function_export.name);
             if (previous_name) |previous| if (std.mem.order(u8, previous, export_name) != .lt) return error.InvalidImage;
             previous_name = export_name;
         }
@@ -341,6 +408,7 @@ pub const View = struct {
         for (self.dataExports()) |data_export| {
             try self.checkName(data_export.name);
             if (data_export.name == 0 or data_export.segment >= self.header.segment_count) return error.InvalidImage;
+            if (data_export.flags & ~definition_weak != 0) return error.InvalidImage;
             const segment = self.segments()[data_export.segment];
             const end = std.math.add(u32, data_export.offset, data_export.size) catch return error.InvalidImage;
             if (end > segment.size) return error.InvalidImage;
@@ -354,10 +422,27 @@ pub const View = struct {
             if (previous_request) |previous| if (previous >= function_index) return error.InvalidImage;
             previous_request = function_index;
         }
+        for (self.globals()) |global| {
+            try self.checkName(global.name);
+            if (!validValType(global.valtype) or global.mutable > 1 or global.flags & ~definition_weak != 0) return error.InvalidImage;
+        }
+        var previous_root: ?u32 = null;
+        for (self.roots()) |atom| {
+            if (atom >= self.header.function_count + self.header.segment_count) return error.InvalidImage;
+            if (previous_root) |previous| if (previous >= atom) return error.InvalidImage;
+            previous_root = atom;
+        }
+        var previous_priority: u32 = 0;
+        for (self.initFuncs()) |init_func| {
+            if (init_func.function >= functions_.len or init_func.priority < previous_priority) return error.InvalidImage;
+            previous_priority = init_func.priority;
+        }
         for (self.imports()) |import| {
             try self.checkName(import.module);
             try self.checkName(import.name);
-            if (import.name == 0) return error.InvalidImage;
+            try self.checkName(import.field);
+            if (import.name == 0 or import.field == 0) return error.InvalidImage;
+            if (import.flags & ~import_address_taken != 0) return error.InvalidImage;
             const kind = std.enums.fromInt(ImportKind, import.kind) orelse return error.InvalidImage;
             switch (kind) {
                 .function => if (import.type != no_type and import.type >= self.header.type_count) return error.InvalidImage,
@@ -377,6 +462,7 @@ pub const View = struct {
             .data => self.header.segment_count,
             .type => self.header.type_count,
             .import => self.header.import_count,
+            .global => self.header.global_count,
         };
         if (target >= count) return error.InvalidImage;
     }
@@ -397,7 +483,7 @@ pub const View = struct {
             .function_index_leb, .table_index_sleb, .table_index_rel_sleb, .table_index_i32 => target_kind == .function or import_kind == .function,
             .type_index_leb => target_kind == .type,
             .memory_addr_leb, .memory_addr_sleb, .memory_addr_rel_sleb, .memory_addr_i32 => target_kind == .data or import_kind == .data,
-            .global_index_leb => import_kind == .global,
+            .global_index_leb => target_kind == .global or import_kind == .global,
             .table_number_leb => import_kind == .table,
             .stack_room_sleb => import_kind == .data,
         };
@@ -463,9 +549,13 @@ pub const View = struct {
     pub fn functionCalls(self: View, function: Function) []const Call {
         return self.calls()[function.first_call..][0..function.call_count];
     }
-    /// Indices of the exported functions, in name order.
-    pub fn exports(self: View) []const u32 {
-        return table(u32, self.bytes, self.header.exports_offset, self.header.export_count);
+    /// The exported function symbols, in name order.
+    pub fn exports(self: View) []const FunctionExport {
+        return table(FunctionExport, self.bytes, self.header.exports_offset, self.header.export_count);
+    }
+    /// The atoms a link keeps whether or not anything reaches them.
+    pub fn roots(self: View) []const u32 {
+        return table(u32, self.bytes, self.header.roots_offset, self.header.root_count);
     }
     /// The exported data symbols, in name order.
     pub fn dataExports(self: View) []const DataExport {
@@ -478,6 +568,14 @@ pub const View = struct {
     pub fn imports(self: View) []const Import {
         return table(Import, self.bytes, self.header.imports_offset, self.header.import_count);
     }
+    /// The globals the image defines.
+    pub fn globals(self: View) []const Global {
+        return table(Global, self.bytes, self.header.globals_offset, self.header.global_count);
+    }
+    /// The constructors, in the order they run.
+    pub fn initFuncs(self: View) []const InitFunc {
+        return table(InitFunc, self.bytes, self.header.init_funcs_offset, self.header.init_func_count);
+    }
     /// The string table: NUL-terminated names, starting with an empty one.
     pub fn strings(self: View) []const u8 {
         return self.bytes[self.header.strings_offset..][0..self.header.strings_size];
@@ -488,17 +586,24 @@ pub const View = struct {
 
     /// The index of the exported function named `wanted`, if any.
     pub fn findExport(self: View, wanted: []const u8) ?u32 {
-        const all = self.functions();
         const order = self.exports();
         var low: usize = 0;
         var high: usize = order.len;
         while (low < high) {
             const mid = low + (high - low) / 2;
-            switch (std.mem.order(u8, self.name(all[order[mid]].name), wanted)) {
+            switch (std.mem.order(u8, self.name(order[mid].name), wanted)) {
                 .lt => low = mid + 1,
                 .gt => high = mid,
-                .eq => return order[mid],
+                .eq => return order[mid].function,
             }
+        }
+        return null;
+    }
+
+    /// The index of the global exported as `wanted`, if any.
+    pub fn findGlobalExport(self: View, wanted: []const u8) ?u32 {
+        for (self.globals(), 0..) |global, index| {
+            if (global.name != 0 and std.mem.eql(u8, self.name(global.name), wanted)) return @intCast(index);
         }
         return null;
     }
@@ -557,6 +662,32 @@ pub const Input = struct {
     /// Ascending, without repeats.
     table_requests: []const u32,
     imports: []const InputImport,
+    globals: []const InputGlobal = &.{},
+    /// In the order they run: priorities ascending.
+    init_funcs: []const InitFunc = &.{},
+    /// Function exports beyond each function's `export_name`.
+    aliases: []const InputFunctionExport = &.{},
+    /// Ascending, without repeats: functions by index, then segments
+    /// numbered after the functions.
+    roots: []const u32 = &.{},
+};
+
+/// A name a function is exported under.
+pub const InputFunctionExport = struct {
+    name: []const u8,
+    function: u32,
+    weak: bool = false,
+    object_exported: bool = false,
+};
+
+/// A global the image defines, its initial value's bits, and its exported
+/// name if it has one.
+pub const InputGlobal = struct {
+    valtype: u8,
+    mutable: bool,
+    init: u64,
+    export_name: ?[]const u8,
+    weak: bool = false,
 };
 
 /// A function signature: parameter and result value types, as the type
@@ -589,8 +720,11 @@ pub const InputCall = struct {
 pub const InputFunction = struct {
     body: []const u8,
     type: u32,
+    /// The name it is exported under, if any.
     export_name: ?[]const u8,
     sites: []const InputSite,
+    /// A name for a module's name section when it is not exported.
+    name: ?[]const u8 = null,
     frame_depth: u32 = 0,
     calls: []const InputCall = &.{},
     checked: bool = false,
@@ -612,6 +746,7 @@ pub const InputDataExport = struct {
     segment: u32,
     offset: u32,
     size: u32,
+    weak: bool = false,
 };
 
 /// A symbol the unit imports by module and name: a function with its
@@ -619,12 +754,15 @@ pub const InputDataExport = struct {
 pub const InputImport = struct {
     module: []const u8,
     name: []const u8,
+    /// The field an embedder import keeps; null when it is the symbol name.
+    field: ?[]const u8 = null,
     kind: ImportKind,
     /// For a function: its signature, or `no_type`.
     type: u32 = no_type,
     /// For a global.
     valtype: u8 = 0,
     mutable: bool = false,
+    address_taken: bool = false,
 };
 
 /// Why an input could not be encoded.
@@ -651,13 +789,14 @@ pub fn encode(allocator: Allocator, input: Input) EncodeError![]align(alignment.
     var sites_out: std.ArrayList(Site) = .empty;
     var calls_out: std.ArrayList(Call) = .empty;
     const functions_out = try arena.alloc(Function, input.functions.len);
-    var exports_out: std.ArrayList(u32) = .empty;
+    var exports_out: std.ArrayList(FunctionExport) = .empty;
+    var export_names: std.ArrayList([]const u8) = .empty;
     for (input.functions, functions_out, 0..) |function, *out, index| {
         out.* = .{
             .body_offset = try count32(code_out.items.len),
             .body_size = try count32(function.body.len),
             .type = function.type,
-            .name = if (function.export_name) |export_name| try strings.add(export_name) else 0,
+            .name = if (function.export_name orelse function.name) |name_text| try strings.add(name_text) else 0,
             .first_site = try count32(sites_out.items.len),
             .site_count = try count32(function.sites.len),
             .frame_depth = function.frame_depth,
@@ -668,15 +807,30 @@ pub fn encode(allocator: Allocator, input: Input) EncodeError![]align(alignment.
         try code_out.appendSlice(arena, function.body);
         for (function.sites) |site| try sites_out.append(arena, siteRecord(site));
         for (function.calls) |call| try calls_out.append(arena, .{ .target = call.target, .depth = call.depth, .target_kind = @backingInt(call.target_kind) });
-        if (function.export_name != null) try exports_out.append(arena, @intCast(index));
+        if (function.export_name) |export_name| {
+            try exports_out.append(arena, .{ .name = try strings.add(export_name), .function = @intCast(index), .flags = 0 });
+            try export_names.append(arena, export_name);
+        }
     }
+    for (input.aliases) |alias| {
+        try exports_out.append(arena, .{
+            .name = try strings.add(alias.name),
+            .function = alias.function,
+            .flags = (if (alias.weak) definition_weak else 0) | (if (alias.object_exported) export_object_exported else 0),
+        });
+        try export_names.append(arena, alias.name);
+    }
+    const export_order = try arena.alloc(u32, exports_out.items.len);
+    for (export_order, 0..) |*slot, index| slot.* = @intCast(index);
     const ByName = struct {
-        names: []const InputFunction,
+        names: []const []const u8,
         fn lessThan(context: @This(), a: u32, b: u32) bool {
-            return std.mem.order(u8, context.names[a].export_name.?, context.names[b].export_name.?) == .lt;
+            return std.mem.order(u8, context.names[a], context.names[b]) == .lt;
         }
     };
-    std.mem.sort(u32, exports_out.items, ByName{ .names = input.functions }, ByName.lessThan);
+    std.mem.sort(u32, export_order, ByName{ .names = export_names.items }, ByName.lessThan);
+    const exports_sorted = try arena.alloc(FunctionExport, exports_out.items.len);
+    for (export_order, exports_sorted) |index, *out| out.* = exports_out.items[index];
 
     var data_out: std.ArrayList(u8) = .empty;
     const segments_out = try arena.alloc(Segment, input.segments.len);
@@ -708,17 +862,28 @@ pub fn encode(allocator: Allocator, input: Input) EncodeError![]align(alignment.
     std.mem.sort(u32, data_export_order, DataByName{ .names = input.data_exports }, DataByName.lessThan);
     for (data_export_order, data_exports_out) |index, *out| {
         const data_export = input.data_exports[index];
-        out.* = .{ .name = try strings.add(data_export.name), .segment = data_export.segment, .offset = data_export.offset, .size = data_export.size };
+        out.* = .{ .name = try strings.add(data_export.name), .segment = data_export.segment, .offset = data_export.offset, .size = data_export.size, .flags = if (data_export.weak) definition_weak else 0 };
     }
 
     const imports_out = try arena.alloc(Import, input.imports.len);
     for (input.imports, imports_out) |import, *out| out.* = .{
         .module = try strings.add(import.module),
         .name = try strings.add(import.name),
+        .field = try strings.add(import.field orelse import.name),
         .type = import.type,
         .kind = @backingInt(import.kind),
         .valtype = import.valtype,
         .mutable = @intFromBool(import.mutable),
+        .flags = if (import.address_taken) import_address_taken else 0,
+    };
+
+    const globals_out = try arena.alloc(Global, input.globals.len);
+    for (input.globals, globals_out) |global, *out| out.* = .{
+        .init = global.init,
+        .name = if (global.export_name) |export_name| try strings.add(export_name) else 0,
+        .valtype = global.valtype,
+        .mutable = @intFromBool(global.mutable),
+        .flags = if (global.weak) @intCast(definition_weak) else 0,
     };
 
     // Tables first, each 8-aligned, then the blobs.
@@ -728,10 +893,13 @@ pub fn encode(allocator: Allocator, input: Input) EncodeError![]align(alignment.
     const segments_offset = place(&size, segments_out.len * @sizeOf(Segment));
     const sites_offset = place(&size, sites_out.items.len * @sizeOf(Site));
     const calls_offset = place(&size, calls_out.items.len * @sizeOf(Call));
-    const exports_offset = place(&size, exports_out.items.len * @sizeOf(u32));
+    const exports_offset = place(&size, exports_sorted.len * @sizeOf(FunctionExport));
     const data_exports_offset = place(&size, data_exports_out.len * @sizeOf(DataExport));
     const table_requests_offset = place(&size, input.table_requests.len * @sizeOf(u32));
     const imports_offset = place(&size, imports_out.len * @sizeOf(Import));
+    const globals_offset = place(&size, globals_out.len * @sizeOf(Global));
+    const init_funcs_offset = place(&size, input.init_funcs.len * @sizeOf(InitFunc));
+    const roots_offset = place(&size, input.roots.len * @sizeOf(u32));
     const valtypes_offset = place(&size, valtypes_out.items.len);
     const code_offset = place(&size, code_out.items.len);
     const data_offset = place(&size, data_out.items.len);
@@ -762,13 +930,19 @@ pub fn encode(allocator: Allocator, input: Input) EncodeError![]align(alignment.
         .calls_offset = calls_offset,
         .call_count = try count32(calls_out.items.len),
         .exports_offset = exports_offset,
-        .export_count = try count32(exports_out.items.len),
+        .export_count = try count32(exports_sorted.len),
         .data_exports_offset = data_exports_offset,
         .data_export_count = try count32(data_exports_out.len),
         .table_requests_offset = table_requests_offset,
         .table_request_count = try count32(input.table_requests.len),
         .imports_offset = imports_offset,
         .import_count = try count32(imports_out.len),
+        .globals_offset = globals_offset,
+        .global_count = try count32(globals_out.len),
+        .init_funcs_offset = init_funcs_offset,
+        .init_func_count = try count32(input.init_funcs.len),
+        .roots_offset = roots_offset,
+        .root_count = try count32(input.roots.len),
         .strings_offset = strings_offset,
         .strings_size = try count32(strings.bytes.items.len),
         .total_size = @intCast(size),
@@ -780,10 +954,13 @@ pub fn encode(allocator: Allocator, input: Input) EncodeError![]align(alignment.
     @memcpy(out[segments_offset..][0 .. segments_out.len * @sizeOf(Segment)], std.mem.sliceAsBytes(segments_out));
     @memcpy(out[sites_offset..][0 .. sites_out.items.len * @sizeOf(Site)], std.mem.sliceAsBytes(sites_out.items));
     @memcpy(out[calls_offset..][0 .. calls_out.items.len * @sizeOf(Call)], std.mem.sliceAsBytes(calls_out.items));
-    @memcpy(out[exports_offset..][0 .. exports_out.items.len * @sizeOf(u32)], std.mem.sliceAsBytes(exports_out.items));
+    @memcpy(out[exports_offset..][0 .. exports_sorted.len * @sizeOf(FunctionExport)], std.mem.sliceAsBytes(exports_sorted));
     @memcpy(out[data_exports_offset..][0 .. data_exports_out.len * @sizeOf(DataExport)], std.mem.sliceAsBytes(data_exports_out));
     @memcpy(out[table_requests_offset..][0 .. input.table_requests.len * @sizeOf(u32)], std.mem.sliceAsBytes(input.table_requests));
     @memcpy(out[imports_offset..][0 .. imports_out.len * @sizeOf(Import)], std.mem.sliceAsBytes(imports_out));
+    @memcpy(out[globals_offset..][0 .. globals_out.len * @sizeOf(Global)], std.mem.sliceAsBytes(globals_out));
+    @memcpy(out[init_funcs_offset..][0 .. input.init_funcs.len * @sizeOf(InitFunc)], std.mem.sliceAsBytes(input.init_funcs));
+    @memcpy(out[roots_offset..][0 .. input.roots.len * @sizeOf(u32)], std.mem.sliceAsBytes(input.roots));
     @memcpy(out[valtypes_offset..][0..valtypes_out.items.len], valtypes_out.items);
     @memcpy(out[code_offset..][0..code_out.items.len], code_out.items);
     @memcpy(out[data_offset..][0..data_out.items.len], data_out.items);

@@ -19,3 +19,4 @@ pub const StackSupport = @import("StackSupport.zig");
 pub const StackRoom = @import("StackRoom.zig");
 pub const WasmUnitImage = @import("WasmUnitImage.zig");
 pub const UnitCompile = @import("UnitCompile.zig");
+pub const ObjectImage = @import("ObjectImage.zig");
