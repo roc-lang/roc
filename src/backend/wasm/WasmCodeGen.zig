@@ -19557,15 +19557,15 @@ test "copies and zero fills of every width write exactly their bytes with bounde
 /// zero when it has no prologue.
 fn prologueFrameBytes(entry: []const u8) u32 {
     var cursor: usize = 0;
-    _ = WasmModule.readU32(entry, &cursor) catch unreachable;
-    const groups = WasmModule.readU32(entry, &cursor) catch unreachable;
+    _ = WasmModule.readU32(entry, &cursor) catch unreachable; // every code section entry starts with the body size the encoder wrote
+    const groups = WasmModule.readU32(entry, &cursor) catch unreachable; // every body starts with the local group count the encoder wrote
     for (0..groups) |_| {
-        _ = WasmModule.readU32(entry, &cursor) catch unreachable;
+        _ = WasmModule.readU32(entry, &cursor) catch unreachable; // the encoder wrote one count per local group
         cursor += 1;
     }
     if (entry[cursor] != Op.global_get) return 0;
     cursor += 1;
-    _ = WasmModule.readU32(entry, &cursor) catch unreachable;
+    _ = WasmModule.readU32(entry, &cursor) catch unreachable; // a prologue's global.get names the stack pointer global
     std.debug.assert(entry[cursor] == Op.i32_const);
     cursor += 1;
     var result: i64 = 0;
@@ -19581,7 +19581,7 @@ fn prologueFrameBytes(entry: []const u8) u32 {
 
 /// A procedure `(a: u64, b: u64) -> u64` that reads a field of a two-field
 /// record through `alias_count` separate `ref.local` copies of it.
-fn addRecordAliasChainProc(store: *LirStore, layouts: *layout.Store, alias_count: usize) !void {
+fn addRecordAliasChainProc(store: *LirStore, layouts: *layout.Store, alias_count: usize) Allocator.Error!void {
     const record = try layouts.putStructFields(&.{ .{ .index = 0, .layout = .u64 }, .{ .index = 1, .layout = .u64 } });
     const a = try store.addLocal(.{ .layout_idx = .u64 });
     const b = try store.addLocal(.{ .layout_idx = .u64 });
@@ -19615,7 +19615,7 @@ fn addRecordAliasChainProc(store: *LirStore, layouts: *layout.Store, alias_count
     }, .none);
 }
 
-fn runRecordAliasChain(allocator: Allocator, alias_count: usize) !struct { result: i64, frame_bytes: u32 } {
+fn runRecordAliasChain(allocator: Allocator, alias_count: usize) WasmFixtureError!struct { result: i64, frame_bytes: u32 } {
     var store = LirStore.init(allocator);
     defer store.deinit();
     var layouts = try layout.Store.init(allocator, .u32);
@@ -19701,7 +19701,7 @@ test "a ref.local of a record that is written again is a copy of the bytes it sa
 
 /// Run `op` on a 128-bit source holding `value` and return the Try result's
 /// discriminant and, when Ok, its payload, read through the result layout.
-fn runI128Narrow(allocator: Allocator, op: LIR.LowLevel, source_layout: layout.Idx, target_layout: layout.Idx, value: i128) !struct { ok: bool, payload: i64 } {
+fn runI128Narrow(allocator: Allocator, op: LIR.LowLevel, source_layout: layout.Idx, target_layout: layout.Idx, value: i128) (WasmFixtureError || WasmLayout.Error)!struct { ok: bool, payload: i64 } {
     var store = LirStore.init(allocator);
     defer store.deinit();
     var layouts = try layout.Store.init(allocator, .u32);
