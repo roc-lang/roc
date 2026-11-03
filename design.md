@@ -782,9 +782,9 @@ existing batched, atomic family store. Counters distinguish misses, serializatio
 failures, records and bytes, replay, invalid records and actual relation expansion.
 
 The provider key includes the exact checked callee code-generation key,
-the method scope's checked value context, the program method context, the callee's explicit import
-closure, and lowering
-policy. These use the identities already produced for literal value reuse:
+the program method context, the callee's explicit import closure, and lowering
+policy. Methods belong only to their declaring type, so there is no
+caller-specific method lookup scope in the provider identity. These use the identities already produced for literal value reuse:
 top modules contribute their checked type/method world and imports; other
 modules contribute exact checked keys. Platform requirements reached from
 methods contribute their exported definition identities. The callee's transitive
@@ -5783,8 +5783,8 @@ classification, declaration and method bindings, complete copied schemes
 templates, declaration annotations and their argument-position meaning,
 generated-method and hosted-declaration classifications, invoking-callable
 results, diagnostic hosted origins, and the results that govern stored-constant
-eligibility. The ordered import, type-owner and method-lookup scope is part of
-the dependency. An implementation edit can change one of these results without
+eligibility. The ordered imports and type-owner bindings are part of
+the dependency; methods come from the type owner's declaring module alone. An implementation edit can change one of these results without
 changing a printed type signature.
 
 Module ownership is a parameter of reusable inference. A checking dependency
@@ -5818,7 +5818,7 @@ An inference capsule carries the old dependency reference tables and their owner
 parameters. Admission establishes equal interfaces and owner equality partitions
 before translating each retained foreign reference through old node -> committed
 slot -> current node. Translation covers CIR value, associated, nominal, pattern
-and annotation references, suffix and hosted targets, method-owner keys, nominal
+and annotation references, suffix and hosted targets, nominal
 and alias source declarations, record defaults, and their type-store indices.
 Dispatch evidence's type variables and relations are local to the stored solved
 graph and are preserved; only their foreign declaration locators change. A
@@ -27369,8 +27369,9 @@ and a completed immutable worker shard. Its record retains explicit frontier
 requests, compile-time reads, type/name ownership, and source/module ownership.
 The existing coordinator still accepts the result and resolves the frontier.
 A hit does not bypass demand discovery or the observations of a consumed root.
-Input identity covers source, incoming type/evidence/substitution, ordered
-method context, lowering policy, and compile-time dependencies. Each recorded
+Input identity covers source, incoming type/evidence/substitution, declaring
+method dependencies, lowering policy, and compile-time dependencies. It does
+not include a caller-specific method lookup scope. Each recorded
 root read must retain its current value identity and representation state.
 All persisted references must be validated and rebound to current owners
 before a shard reaches compiler invariants. Unsupported optional record
@@ -27420,3 +27421,49 @@ and callable-contract evidence. ConstStore's function-value evidence encoding
 alone is insufficient: it omits edge-local substitutions still consumed when
 a deferred target specializes. The body record validates and restores these
 inputs, with storage that outlives the shard when global requests retain it.
+
+
+### Immutable native record containers
+
+Native component payloads and metadata are streamed directly into private,
+registered containers by their publication producer. A container belongs to one
+artifact group and retention family. Logical records retain their exact content
+identities and individual checked catalog entries; each entry supplies an explicit
+container slot, generation, byte offset and length. Native decoding and content
+hash validation still apply to the requested record. No directory scan, source
+reconstruction or eager loading of unrequested records establishes a hit.
+
+A container is sealed before publishing its slices. Slice publication uses the
+existing bounded redo transactions; concurrent publishers preserve unrelated
+keys. Incomplete containers cannot serve readers. Replacement never mutates
+published bytes. The reader validates the container generation and range while
+holding shard ownership, then shares one open file and lease across its slices.
+Each session keeps its container-reader map per shard under that shard’s
+thread mutex; distinct shards may acquire containers concurrently without
+mutating a shared map. Captured code retains that lease independently of the
+reader session. Bulk I/O
+and native decoding run outside shard ownership.
+
+Only containers account physical payload bytes; slice records account zero.
+Every streaming extension registers its exact reserved size before writing.
+Abandoned writers remain ordinary registered staging generations. Maintenance
+can independently retire slice indexes and whole containers. A missing or
+recycled container makes a slice unavailable. A live reader prevents container
+retirement even when a logical record is replaced or retired. Whole-container
+retention deliberately keeps unused ranges while other ranges remain hot; no
+foreground compaction or history scan is introduced. Future relocation must
+publish a new immutable container and compare the old slice generation before
+repointing it, never overwrite a newer publisher's placement.
+
+The artifacts-v3 namespace separates this physical format from standalone-only
+stores. Existing source, ABI, provider precedence, eligibility and dependency
+validation contracts are unchanged.
+
+Native dev links produce their executable in an invocation-private sibling
+of the output directory, preserving the basename and filesystem. After link
+completion and host-input validation, one atomic rename replaces the public
+name. Concurrent builds, including identical working directories and output
+paths, never truncate or delete each other's completed executable. A failed
+build leaves the last completed publication intact and reports failure. No
+cache or build-wide lock is held through linking. Scratch object and native
+container ownership remains independent of the public executable name.

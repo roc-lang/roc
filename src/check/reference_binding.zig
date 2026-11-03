@@ -291,6 +291,8 @@ pub fn source(env: *ModuleEnv, mapper: anytype) @TypeOf(mapper.*).Error!void {
             }
         }
     }
+    // Method owners are local declarations; foreign-reference rebinding leaves
+    // their producer-owned keys and ordering unchanged.
     for (env.numeric_suffix_targets.items.items) |*suffix| {
         switch (suffix.target()) {
             .external => |target| suffix.data2 = try mapper.importNode(env, @backingInt(target.import_idx), target.target_node_idx),
