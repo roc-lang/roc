@@ -26,11 +26,6 @@ pub const CompletedScalarValues = postcheck.ComptimeScalarValues.CompletedScalar
 pub const CompletedErasedMembers = postcheck.CompletedErasedMembers;
 /// Which runtime specializations compile-time evaluation must lower.
 pub const LiteralDemand = postcheck.LiteralDemand;
-/// See `postcheck.Common.LiteralValueLookup`.
-pub const LiteralValueLookup = postcheck.Common.LiteralValueLookup;
-pub const LiteralValueHit = postcheck.Common.LiteralValueHit;
-pub const LiteralValueRead = postcheck.Common.LiteralValueRead;
-pub const LiteralRootReuse = postcheck.Common.LiteralRootReuse;
 const TagReachability = @import("tag_reachability.zig");
 const ReachableProcs = @import("reachable_procs.zig");
 const DebugPrint = @import("debug_print.zig");
@@ -182,9 +177,8 @@ pub const TargetConfig = struct {
     /// compile-time roots it demands (design.md "Demand-Driven Compile-Time
     /// Evaluation").
     demand_driven_comptime_roots: bool = false,
-    /// A test/check command still validates every initializer. A prior silent
-    /// successful validation permits deferring its value until a reader needs it.
-    validated_comptime_roots: ?*const std.AutoHashMapUnmanaged(ComptimeDemandRoot, void) = null,
+    /// Validate every compile-time root, as an explicit test run does.
+    validate_every_comptime_root: bool = false,
     /// For `.boxy`: the module whose object this lowering emits, with every
     /// other module's worker an imported symbol (design.md "Per-Module
     /// Output"); null lowers everything the roots reach as one program.
@@ -200,13 +194,6 @@ pub const TargetConfig = struct {
     boxy_composition_sites: bool = true,
     /// The compilation session evaluates the program's literal roots.
     literal_roots: bool = false,
-    /// With `literal_roots`, the literal values an earlier compilation of the
-    /// program stored, which literal roots restore instead of converting
-    /// (design.md "Compile-Time Value Reuse Across Edits").
-    literal_values: ?postcheck.Common.LiteralValueLookup = null,
-    /// With `literal_values`, keep each restored literal root's conversion as
-    /// a literal root that evaluation runs to verify the stored value.
-    verify_literal_values: bool = false,
     inline_mode: InlineMode = .none,
     /// Optional ARC mode specialization belongs to the consumer's optimization
     /// policy, independently of whether source wrappers are inlined.
@@ -1384,8 +1371,6 @@ pub const ComptimeDemand = postcheck.Monotype.Lower.ComptimeDemand;
 pub const ComptimeRootGraph = postcheck.ComptimeRootGraph;
 /// See `postcheck.Common.ComptimeRootRead`.
 pub const ComptimeRootRead = postcheck.Common.ComptimeRootRead;
-/// A checked compile-time root named in a `ComptimeDemand`.
-pub const ComptimeDemandRoot = postcheck.Monotype.Solve.EntryRoot;
 /// A root of a prepared Monotype program.
 pub const MonotypeRoot = postcheck.Monotype.Ast.Root;
 /// Source identity of a literal demand, before the producer is released.
@@ -1468,11 +1453,9 @@ pub fn prepareCheckedModulesMonotype(
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
                 .demand_driven_comptime_roots = target.demand_driven_comptime_roots,
-                .validated_comptime_roots = target.validated_comptime_roots,
+                .validate_every_comptime_root = target.validate_every_comptime_root,
                 .comptime_demand_out = if (target.comptime_value_reads) &comptime_demand else null,
                 .literal_roots = target.literal_roots,
-                .literal_values = target.literal_values,
-                .verify_literal_values = target.verify_literal_values,
                 .replay_interface_summaries = target.replay_interface_summaries,
                 .target_usize = target.target_usize,
                 .inline_expects = if (target.comptime_value_reads) .shared else switch (target.inline_expects) {
@@ -1499,14 +1482,10 @@ pub fn prepareCheckedModulesMonotype(
         const omitted: u32 = @intCast(roots.requests.len - root_count);
         for (test_plan_metadata) |*metadata| metadata.request_index -= omitted;
     }
-    // The validation set is borrowed only by Monotype production, never by
-    // its retained consumers after the coordinator's finalization returns.
-    var retained_target = target;
-    retained_target.validated_comptime_roots = null;
     return .{
         .allocator = allocator,
         .program = mono,
-        .target = retained_target,
+        .target = target,
         .root_count = root_count,
         .test_plan_metadata = test_plan_metadata,
         .comptime_demand = if (target.comptime_value_reads) comptime_demand else null,

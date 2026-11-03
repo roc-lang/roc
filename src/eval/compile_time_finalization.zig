@@ -25,7 +25,6 @@ const BoxyInProcessState = @import("boxy_runtime").compiled.InProcessState;
 const FrozenRootTranscode = @import("frozen_root_transcode.zig");
 const CompileTimeHost = @import("compile_time_host.zig");
 const checked_root_graph = @import("checked_root_graph.zig");
-const LiteralValues = @import("literal_values.zig").LiteralValues;
 const Value = @import("value.zig").Value;
 const interpreter_mod = @import("interpreter.zig");
 const interpreter_static_data = @import("interpreter_static_data.zig");
@@ -73,9 +72,10 @@ pub const Options = struct {
     /// Runtime outcomes already supplied by the caller. Only their literal
     /// conversion obligations may specialize; these roots never execute.
     discovery_roots: lir.CheckedPipeline.RootRequestSet = .{},
-    /// Prior successful, silent validation; not a stored value. Every root
-    /// absent from this set is still demanded for validation in test/check.
-    validated_comptime_roots: ?*const std.AutoHashMapUnmanaged(lir.CheckedPipeline.ComptimeDemandRoot, void) = null,
+    /// Validate every compile-time root, as an explicit test run does. Such a
+    /// program lowers its compile-time roots on demand (design.md
+    /// "Demand-Driven Compile-Time Evaluation").
+    validate_every_comptime_root: bool = false,
     max_threads: usize = 0,
     /// Borrow the coordinator's workers after all frontend tasks have finished.
     /// Standalone finalizers without a coordinator lower on their calling thread.
@@ -126,17 +126,6 @@ pub const Options = struct {
     /// evaluation failed by reading a member not yet evaluated is neither
     /// reported nor completed, so the group can run it again.
     retry: ?*const CycleRetry = null,
-    /// The literal values of the program's root module (design.md
-    /// "Compile-Time Value Reuse Across Edits"): those an earlier compilation
-    /// stored, which literal roots restore instead of converting, and those
-    /// this compilation stores.
-    literal_values: ?*LiteralValues = null,
-    /// With `literal_values`, evaluate the conversion of every restored
-    /// literal root and assert its outcome equals the stored value.
-    verify_literal_values: bool = false,
-    /// Where evaluation records the values of literal roots that have value
-    /// identities. Set by `finalizeProgram`.
-    literal_capture: ?*LiteralCapture = null,
     /// Set by an embedder that abandons the compilation. Finalization reads
     /// it between its phases and between evaluation levels, and fails with
     /// `error.Canceled` once it is set.
@@ -147,208 +136,6 @@ pub const Options = struct {
         if (request.load(.acquire)) return error.Canceled;
     }
 };
-
-/// The values and outcomes of the literal roots one finalization evaluates
-/// that have value identities, by literal root id.
-const LiteralCapture = struct {
-    allocator: Allocator,
-    store: check.ConstStore.ConstStore,
-    wanted: []bool,
-    nodes: []?check.ConstStore.ConstNodeId,
-    /// The evaluation made a `dbg` or `expect` observation, or failed.
-    unstorable: []bool,
-
-    fn init(allocator: Allocator, demand: *const lir.CheckedPipeline.ComptimeDemand) Allocator.Error!LiteralCapture {
-        const count = demand.literals.len;
-        const wanted = try allocator.alloc(bool, count);
-        errdefer allocator.free(wanted);
-        const nodes = try allocator.alloc(?check.ConstStore.ConstNodeId, count);
-        errdefer allocator.free(nodes);
-        const unstorable = try allocator.alloc(bool, count);
-        for (demand.literals, wanted) |literal, *want| want.* = literal.identity != null and literal.reuse != .restored;
-        @memset(nodes, null);
-        @memset(unstorable, false);
-        return .{ .allocator = allocator, .store = check.ConstStore.ConstStore.init(allocator), .wanted = wanted, .nodes = nodes, .unstorable = unstorable };
-    }
-
-    fn deinit(self: *LiteralCapture) void {
-        self.store.deinit();
-        self.allocator.free(self.wanted);
-        self.allocator.free(self.nodes);
-        self.allocator.free(self.unstorable);
-    }
-
-    /// Record a literal root's completed value.
-    fn value(self: *LiteralCapture, lowered: *const lir.CheckedPipeline.LoweredProgram, plan: LirProgram.LiteralRootPlan, completed: Value) ConstStoreWriter.Error!void {
-        const index = @backingInt(plan.id);
-        if (!self.wanted[index]) return;
-        var writer = ConstStoreWriter.Writer.initStore(self.allocator, &self.store, null, &lowered.lir_result);
-        defer writer.deinit();
-        self.nodes[index] = try writer.storeLiteral(plan.plan, plan.ret_layout, completed);
-    }
-
-    /// Record that a literal root's evaluation failed or made an observation
-    /// a stored value would have to replay.
-    fn observed(self: *LiteralCapture, plan: LirProgram.LiteralRootPlan) void {
-        self.unstorable[@backingInt(plan.id)] = true;
-    }
-};
-
-/// Fill the program root module's literal values with this finalization's:
-/// every converted literal root whose value is storable, and every restored
-/// one, whose stored entry carries over. A literal root whose conversion
-/// failed, made an observation, holds a value naming a type the root module
-/// declares, or read a root no edit-stable name covers is not stored; its
-/// next compilation converts it again. With `verify_literal_values`, each
-/// restored root's verifier must have completed with the stored value and
-/// read exactly the roots the stored value read.
-fn finishLiteralValues(
-    allocator: Allocator,
-    values: *LiteralValues,
-    capture: *const LiteralCapture,
-    demand: *const lir.CheckedPipeline.ComptimeDemand,
-    literal_roots: anytype,
-    lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
-) Allocator.Error!void {
-    if (literal_roots.len != demand.literals.len) finalizationInvariant("the evaluated program's literal roots differ from its demand");
-    var top = try literalTopModules(allocator, lowering_modules);
-    defer top.deinit(allocator);
-    const verifiers = try allocator.alloc(?usize, demand.literals.len);
-    defer allocator.free(verifiers);
-    @memset(verifiers, null);
-    for (demand.literals, 0..) |literal, index| switch (literal.reuse) {
-        .verifies => |restored| verifiers[@backingInt(restored)] = index,
-        .converted, .restored => {},
-    };
-    var reads = std.ArrayList(lir.CheckedPipeline.LiteralValueRead).empty;
-    defer reads.deinit(allocator);
-    for (demand.literals, literal_roots, 0..) |literal, root, index| {
-        const id: lir.LIR.LiteralRootId = @fromBackingInt(@intCast(index));
-        var record: @import("literal_values.zig").Record = .{
-            .identity = literal.identity,
-            .outcome = if (literal.identity == null) .unnamed else .converted,
-            .stored = false,
-            .verified = false,
-            .text = &.{},
-        };
-        switch (literal.reuse) {
-            .verifies => continue,
-            .restored => {
-                const identity = literal.identity orelse finalizationInvariant("a restored literal root had no value identity");
-                if (verifiers[index]) |verifier| {
-                    try verifyRestoredLiteral(allocator, values, capture, demand, id, @fromBackingInt(@intCast(verifier)), identity);
-                    record.verified = true;
-                }
-                try values.keep(identity);
-                record.outcome = .restored;
-                record.stored = true;
-            },
-            .converted => if (literal.identity) |identity| store: {
-                const node = capture.nodes[index] orelse break :store;
-                if (capture.unstorable[index]) break :store;
-                for (top.keys()) |key| {
-                    if (!try capture.store.valuePortable(node, .{ .bytes = key })) break :store;
-                }
-                reads.clearRetainingCapacity();
-                for (demand.literalReads(id)) |read| {
-                    try reads.append(allocator, literalValueRead(lowering_modules, &top, read) orelse break :store);
-                }
-                try values.store(identity, &capture.store, node, reads.items);
-                record.stored = true;
-            },
-        }
-        record.text = try literalSourceText(allocator, lowering_modules, root);
-        values.addRecord(record) catch |err| {
-            allocator.free(record.text);
-            return err;
-        };
-    }
-}
-
-fn verifyRestoredLiteral(
-    allocator: Allocator,
-    values: *const LiteralValues,
-    capture: *const LiteralCapture,
-    demand: *const lir.CheckedPipeline.ComptimeDemand,
-    restored: lir.LIR.LiteralRootId,
-    verifier: lir.LIR.LiteralRootId,
-    identity: [32]u8,
-) Allocator.Error!void {
-    const index = @backingInt(verifier);
-    const node = capture.nodes[index] orelse finalizationInvariant("a restored literal value's conversion did not complete");
-    if (capture.unstorable[index]) finalizationInvariant("a restored literal value's conversion failed or made an observation its stored value does not replay");
-    const stored = values.previousEntry(identity) orelse finalizationInvariant("a restored literal value had no stored entry");
-    if (!try capture.store.graphEql(node, stored.store, stored.root)) finalizationInvariant("a restored literal value differs from the value its conversion computes");
-    const Key = struct { module: [32]u8, root: u32 };
-    var expected = std.AutoHashMap(Key, void).init(allocator);
-    defer expected.deinit();
-    for (demand.literalReads(restored)) |read| try expected.put(.{ .module = read.module.bytes, .root = @backingInt(read.root) }, {});
-    var actual = std.AutoHashMap(Key, void).init(allocator);
-    defer actual.deinit();
-    for (demand.literalReads(verifier)) |read| {
-        const key: Key = .{ .module = read.module.bytes, .root = @backingInt(read.root) };
-        if (!expected.contains(key)) finalizationInvariant("a restored literal value's conversion read a root the stored value did not");
-        try actual.put(key, {});
-    }
-    if (actual.count() != expected.count()) finalizationInvariant("a restored literal value read a root its conversion does not");
-}
-
-/// The modules of a lowering no other module of it imports, by key, each
-/// with its value context (design.md "Compile-Time Value Reuse Across
-/// Edits"). A module with no value context is left out; Monotype gives no
-/// literal root of such a program a value identity.
-pub fn literalTopModules(allocator: Allocator, lowering_modules: lir.CheckedPipeline.CheckedModuleSet) Allocator.Error!std.AutoArrayHashMapUnmanaged([32]u8, [32]u8) {
-    const root = checked.importedView(lowering_modules.root.module);
-    var imported = std.AutoHashMapUnmanaged([32]u8, void).empty;
-    defer imported.deinit(allocator);
-    for ([_][]const checked.ImportedModuleView{ &.{root}, lowering_modules.imports, lowering_modules.root.relation_modules }) |views| {
-        for (views) |view| for (view.direct_import_module_keys) |key| try imported.put(allocator, key.bytes, {});
-    }
-    var top = std.AutoArrayHashMapUnmanaged([32]u8, [32]u8).empty;
-    errdefer top.deinit(allocator);
-    for ([_][]const checked.ImportedModuleView{ &.{root}, lowering_modules.imports, lowering_modules.root.relation_modules }) |views| {
-        for (views) |view| {
-            if (imported.contains(view.key.bytes)) continue;
-            const context = view.compile_time_root_identities.valueContext() orelse continue;
-            try top.put(allocator, view.key.bytes, context);
-        }
-    }
-    return top;
-}
-
-/// The edit-stable name of a root a literal root read, or null when no
-/// value identity names everything the root depends on: its module
-/// publishes none, or it is a platform module, whose roots can read the
-/// definitions an app provides for its requirements, or a composition of one
-/// with an app.
-fn literalValueRead(
-    lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
-    top: *const std.AutoArrayHashMapUnmanaged([32]u8, [32]u8),
-    read: lir.CheckedPipeline.ComptimeDemandRoot,
-) ?lir.CheckedPipeline.LiteralValueRead {
-    const view = loweringModuleView(lowering_modules, read.module) orelse finalizationInvariant("a literal root read a root of a module outside its lowering");
-    if (view.code_generation_key != null or view.module_env.requires_types.items.items.len != 0) return null;
-    const rows = view.compile_time_root_identities.rows;
-    if (@backingInt(read.root) >= rows.len) return null;
-    const identity = rows[@backingInt(read.root)];
-    const context = top.get(read.module.bytes);
-    return .{ .in_top_module = context != null, .module = context orelse read.module.bytes, .site = identity.site, .value = identity.value };
-}
-
-fn loweringModuleView(lowering_modules: lir.CheckedPipeline.CheckedModuleSet, key: checked.ModuleId) ?checked.ImportedModuleView {
-    if (moduleKeyBytesEqual(key.bytes, lowering_modules.root.module.key.bytes)) return checked.importedView(lowering_modules.root.module);
-    for (lowering_modules.imports) |view| if (moduleKeyBytesEqual(view.key.bytes, key.bytes)) return view;
-    for (lowering_modules.root.relation_modules) |view| if (moduleKeyBytesEqual(view.key.bytes, key.bytes)) return view;
-    return null;
-}
-
-/// A literal root's source, at most 96 bytes of it. Owned.
-fn literalSourceText(allocator: Allocator, lowering_modules: lir.CheckedPipeline.CheckedModuleSet, root: anytype) Allocator.Error![]u8 {
-    const view = loweringModuleView(lowering_modules, root.module) orelse finalizationInvariant("a literal root belonged to a module outside its lowering");
-    const region = view.checked_bodies.expr(@fromBackingInt(root.site.checked_expr)).source_region;
-    const text = view.module_env.getSourceAll()[region.start.offset..region.end.offset];
-    return allocator.dupe(u8, text[0..@min(text.len, 96)]);
-}
 
 /// The members of a group of compile-time roots that read each other
 /// (design.md "Dependency-Ordered Compile-Time Evaluation").
@@ -395,9 +182,6 @@ const DebugEvents = struct {
     };
     allocator: Allocator,
     events: std.ArrayList(Event) = .empty,
-    /// Literal-root messages are emitted directly, without a checked root
-    /// to attach a stored event to. They still prevent silent discovery reuse.
-    emitted: bool = false,
 
     fn deinit(self: *DebugEvents) void {
         for (self.events.items) |event| self.allocator.free(event.message);
@@ -584,9 +368,6 @@ pub const ProgramSession = struct {
     /// The position of each runtime request in the specialized program's root
     /// plan.
     runtime_positions: []u32,
-    /// All compile-time observations, including replayed observations, were
-    /// empty. Together with the caller's error check this certifies discovery.
-    discovery_silent: bool = false,
 
     /// Where a runtime consumer reads completed values from.
     pub const RuntimeStages = union(enum) {
@@ -1149,7 +930,7 @@ pub fn finalizeProgram(
     defer debug_events.deinit();
 
     const lss_runtime = if (runtime_target) |target| target.specialization_strategy == .lss else false;
-    const demand_driven = options.validated_comptime_roots != null;
+    const demand_driven = options.validate_every_comptime_root;
     const owned_imports = try allocator.dupe(checked.ImportedModuleView, lowering_modules.imports);
     errdefer allocator.free(owned_imports);
     const owned_relations = try allocator.dupe(checked.ImportedModuleView, lowering_modules.root.relation_modules);
@@ -1157,7 +938,7 @@ pub fn finalizeProgram(
     const owned_runtime_roots = try cloneRootRequests(allocator, runtime_roots);
     errdefer deinitRootRequests(allocator, owned_runtime_roots);
 
-    var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, runtime_target, options, &debug_events, true, lss_runtime, demand_driven, null);
+    var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, runtime_target, options, &debug_events, lss_runtime, demand_driven, null);
     errdefer specialized.deinit();
     var runtime_stages: ProgramSession.RuntimeStages = .evaluation;
     errdefer switch (runtime_stages) {
@@ -1195,8 +976,6 @@ pub fn finalizeProgram(
         // only the runtime program's own literal roots belong in this pass.
         quiet_options.discovery_roots = .{};
         quiet_options.unfinalized_reports = if (options.unfinalized_reports != null) quiet_unfinalized.reports() else null;
-        // The evaluation already verified the restored literal values.
-        quiet_options.verify_literal_values = false;
         var quiet_events = DebugEvents{ .allocator = allocator };
         defer quiet_events.deinit();
         if (options.timing) |timing| timing.respecialization_passes.add(1);
@@ -1209,7 +988,6 @@ pub fn finalizeProgram(
             runtime_target,
             quiet_options,
             &quiet_events,
-            false,
             lss_runtime,
             demand_driven,
             null,
@@ -1246,7 +1024,6 @@ pub fn finalizeProgram(
         .runtime_stages = runtime_stages,
         .runtime_prepared = runtime_prepared,
         .runtime_positions = runtime_positions,
-        .discovery_silent = debug_events.events.items.len == 0 and !debug_events.emitted,
     };
 }
 
@@ -1287,11 +1064,7 @@ const SpecializedProgram = struct {
 
 /// Specialize the modules' pending compile-time roots together with the
 /// program roots, and evaluate those roots and every literal root the
-/// specialization registers (see `finalizeProgram`). With
-/// `records_literal_values`, the values and outcomes of the literal roots
-/// that have value identities go into `Options.literal_values`; a
-/// specialization whose literal roots an earlier evaluation of the same
-/// program recorded restores from those values but records nothing.
+/// specialization registers (see `finalizeProgram`).
 fn specializeAndEvaluate(
     allocator: Allocator,
     modules: []const ProgramModule,
@@ -1300,7 +1073,6 @@ fn specializeAndEvaluate(
     runtime_target: ?lir.CheckedPipeline.TargetConfig,
     options: Options,
     debug_events: *DebugEvents,
-    records_literal_values: bool,
     lss_runtime: bool,
     demand_driven: bool,
     /// The pending roots to specialize, or null for every pending root: the
@@ -1313,7 +1085,6 @@ fn specializeAndEvaluate(
     var source_modules = std.ArrayList(checked.ModuleId).empty;
     defer source_modules.deinit(allocator);
     for (modules) |entry| {
-        const module_start = requests.items.len;
         for (entry.module.root_requests.compile_time_requests) |request| {
             // A reopened artifact's roots that an earlier compilation
             // evaluated are read from its store like any other module's.
@@ -1326,7 +1097,6 @@ fn specializeAndEvaluate(
             try requests.append(allocator, request);
             try source_modules.append(allocator, entry.module.key.digest());
         }
-        if (base.dev_diagnostics.isSet(.ctfe_reuse_trace)) std.debug.print("ctfe-reuse pending {s}: {d} roots\n", .{ entry.module.moduleEnvConst().module_name, requests.items.len - module_start });
     }
     const requested_root_count = requests.items.len;
 
@@ -1427,11 +1197,7 @@ fn specializeAndEvaluate(
     const solved_policy = if (lss_runtime) lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime_target.?) else check_solved_policy;
     var host_target = compileTimeTarget(options, solved_policy);
     host_target.demand_driven_comptime_roots = demand_driven;
-    host_target.validated_comptime_roots = options.validated_comptime_roots;
-    if (options.literal_values) |values| {
-        host_target.literal_values = values.lookup();
-        host_target.verify_literal_values = options.verify_literal_values;
-    }
+    host_target.validate_every_comptime_root = options.validate_every_comptime_root;
     const host_lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(host_target);
     if (runtime_target) |target| {
         host_target.work_metrics = target.work_metrics;
@@ -1470,9 +1236,6 @@ fn specializeAndEvaluate(
         // the program roots; its literal roots join it.
         var evaluation_options = options;
         evaluation_options.debug_events = debug_events;
-        var literal_capture: ?LiteralCapture = if (records_literal_values and options.literal_values != null) try LiteralCapture.init(allocator, &demand.?) else null;
-        defer if (literal_capture) |*capture| capture.deinit();
-        if (literal_capture) |*capture| evaluation_options.literal_capture = capture;
         result.completed = try evaluateStaged(allocator, modules, &published, lowering_modules, &prepared, .{
             .target_usize = host_target.target_usize,
             .erased_capture_prefix = host_target.erased_capture_prefix,
@@ -1480,7 +1243,6 @@ fn specializeAndEvaluate(
             .observers = lir.CheckedPipeline.Observers.fromTarget(host_target),
             .lir_policy = host_lir_policy,
         }, compile_time_root_count, evaluation_options);
-        if (literal_capture) |*capture| try finishLiteralValues(allocator, options.literal_values.?, capture, &demand.?, prepared.program.lifted.literalRootsView(), lowering_modules);
     } else {
         for (modules) |entry| {
             if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
@@ -1763,7 +1525,6 @@ fn finalizeProgramBoxy(
             }
             try roots.append(allocator, .{ .module = @intCast(index), .root = root_id, .request = request });
         }
-        if (base.dev_diagnostics.isSet(.ctfe_reuse_trace)) std.debug.print("ctfe-reuse pending {s}: {d} roots\n", .{ entry.module.moduleEnvConst().module_name, roots.items.len });
     }
 
     try evaluateRootsBoxy(allocator, modules, lowering_modules, roots.items, options, &debug_events);
@@ -1794,7 +1555,6 @@ fn finalizeProgramBoxy(
         .runtime_stages = .evaluation,
         .runtime_prepared = null,
         .runtime_positions = runtime_positions,
-        .discovery_silent = debug_events.events.items.len == 0 and !debug_events.emitted,
     };
 }
 
@@ -4664,18 +4424,11 @@ fn evalInterpreterLiteralRoot(
         };
         defer interpreter.dropValue(result.value, plan.ret_layout);
         if (options.publish_shared_slots) try program.publishRoot(lowered, plan.site.owner, producer, plan.shape(), result.value);
-        if (options.literal_capture) |capture| capture.value(lowered, plan, result.value) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.RuntimeError => finalizationInvariant("a literal root's value held an unresolvable callable"),
-        };
         break :evaluated null;
     };
     // A failure that read a member of its group not yet evaluated
     // (`Options.retry`) leaves the root for the group to run again.
     if (failure) |failed| if (options.retry) |retry| if (retry.holds(failed.meaning)) return false;
-    if (options.literal_capture) |capture| {
-        if (failure != null or program.host.debugMessages().len != 0 or interpreter.getExpectFailures().len != 0) capture.observed(plan);
-    }
     for (program.host.debugMessages()) |message| try emitDebugMessage(allocator, options, false, message);
     for (interpreter.getExpectFailures()) |expect_failure| {
         try reportLiteralRootExpectFailure(owners, lowered, plan, expect_failure.message, expect_failure.region, expect_failure.loc);
@@ -4735,12 +4488,6 @@ fn evalDevLiteralRoot(
     // A failure that read a member of its group not yet evaluated
     // (`Options.retry`) leaves the root for the group to run again.
     if (failure) |failed| if (options.retry) |retry| if (retry.holds(failed.meaning)) return false;
-    if (options.literal_capture) |capture| {
-        if (failure != null or host.events.items.len != 0) capture.observed(plan) else capture.value(lowered, plan, .{ .ptr = ret_buf.ptr }) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.RuntimeError => finalizationInvariant("a literal root's value held an unresolvable callable"),
-        };
-    }
     for (host.events.items) |event| switch (event) {
         .dbg => |message| try emitDebugMessage(allocator, options, false, message),
         .expect_failed => |expect_failure| {
@@ -6521,7 +6268,6 @@ fn reportDebugMessage(allocator: Allocator, options: Options, module: checked.Mo
 }
 
 fn emitDebugMessage(allocator: Allocator, options: Options, is_repl: bool, message: []const u8) Allocator.Error!void {
-    if (options.debug_events) |events| events.emitted = true;
     if (options.debug_observer) |observer| try observer.observe(observer.context, message);
     if (is_repl) {
         if (options.event_callback) |callback| callback.notify(callback.context, .{ .dbg = message });

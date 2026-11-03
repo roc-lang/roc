@@ -15,10 +15,7 @@ pub const format_directory = "files-v1";
 pub const Family = enum {
     checked,
     canonicalized,
-    placement,
-    literals,
     pairing,
-    local_discovery,
     boxy_object,
 };
 
