@@ -2261,9 +2261,13 @@ root, package directory, or workspace-qualified display name as identity or as
 an index selecting previous results. Hashing such a path does not make the
 identity content-addressed. Source-authored import names remain semantic inputs;
 filesystem paths remain available for discovery and current-workspace reporting.
-Test outcome files and cached expect-site tables name source modules by content
-or explicit content-derived unit-link identities. Replay binds those identities
-to the current compilation's source environments and paths.
+Test outcome files name reporting modules by the checked producer's test
+context; cached unit expect-site tables use explicit content-derived unit-link
+identities. Neither uses filesystem placement. Distinct modules sharing a
+reporting context are disambiguated by full content identity. Replay binds
+these identities to the current compilation's source environments and paths.
+A unit link interface is not a test reporting context: changing the former
+must not invalidate an observation whose checked test identity is unchanged.
 
 A checked module's cache entry stores its checking output and finalized
 compile-time constants together. Its identity covers the module's source and

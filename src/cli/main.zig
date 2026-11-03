@@ -12002,8 +12002,8 @@ const CliTestSourceModule = struct {
     name: []const u8 = "",
     /// Content identity; never a checkout path or a package display name.
     identity: [32]u8,
-    /// Content-derived reporting name. Body edits leave the interface name
-    /// stable; coexisting distinct modules with that name use content names.
+    /// Checked test-context identity, independent of unrelated body edits.
+    /// Coexisting distinct modules with that context use full content names.
     report_identity: [32]u8,
     /// The module's checked report sites, in both directions.
     reports: CliTestReportMap = .{},
@@ -12343,6 +12343,15 @@ fn cliTestOutcomeFileKey(artifact: *const check.CheckedArtifact.CheckedModuleArt
     return inputs.key();
 }
 
+/// Reporting uses the checked test context, whose producer excludes unrelated
+/// implementation edits. Unit link names use a different interface contract;
+/// changing that interface must not by itself discard a reusable observation.
+fn cliTestReportModuleIdentity(artifact: *const check.CheckedArtifact.CheckedModuleArtifact) [32]u8 {
+    const contexts = artifact.compile_time_root_identities.test_context;
+    if (contexts.len != 1) base.invariant("checked test source has no test dependency context", .{});
+    return contexts[0];
+}
+
 test "test outcome file identity ignores checkout and local package display paths" {
     const allocator = std.testing.allocator;
     var env = try ModuleEnv.init(allocator, "module []\nexpect True\n");
@@ -12353,10 +12362,19 @@ test "test outcome file identity ignores checkout and local package display path
     artifact.module_env = .{ .checked_source = &env };
     artifact.source_hash = compile.watch_inputs.hashBytes(env.getSourceAll());
     artifact.checking_context_identity.platform_app_relation = null;
+    artifact.compile_time_root_identities.test_context = &.{@splat(8)};
+    const report_identity = cliTestReportModuleIdentity(&artifact);
     env.qualified_module_name = "/checkout-one/local-package.Main";
     const first = cliTestOutcomeFileKey(&artifact, .boxy, .dev);
     env.qualified_module_name = "/elsewhere/checkout-two/local-package.Main";
     try std.testing.expectEqualSlices(u8, &first, &cliTestOutcomeFileKey(&artifact, .boxy, .dev));
+    // A checking-interface change is not a changed reporting dependency:
+    // the checked test producer owns that distinction.
+    env.checking_dependency.digest = @splat(9);
+    artifact.module_identity.stable_hash = @splat(10);
+    try std.testing.expectEqualSlices(u8, &report_identity, &cliTestReportModuleIdentity(&artifact));
+    artifact.compile_time_root_identities.test_context = &.{@splat(11)};
+    try std.testing.expect(!std.mem.eql(u8, &report_identity, &cliTestReportModuleIdentity(&artifact)));
     artifact.source_hash = compile.watch_inputs.hashBytes("module []\nexpect False\n");
     try std.testing.expect(!std.mem.eql(u8, &first, &cliTestOutcomeFileKey(&artifact, .boxy, .dev)));
 }
@@ -16423,17 +16441,20 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
             base.invariant("compiled module plan contains duplicate source module {s}", .{qualified_name});
         }
         const identity = artifact.module_identity.stable_hash;
-        const report_identity = lir.CheckedPipeline.BoxyModuleNames.stableName(check.CheckedArtifact.importedView(artifact));
+        const report_identity = cliTestReportModuleIdentity(artifact);
+        const link_identity = lir.CheckedPipeline.BoxyModuleNames.stableName(check.CheckedArtifact.importedView(artifact));
         entry.value_ptr.* = .{ .env = module.semantic.env, .common = &module.semantic.env.common, .path = module.path, .name = qualified_name, .identity = identity, .report_identity = report_identity };
         try source_modules.bind(ctx.gpa, identity, workspace);
+        try source_modules.bind(ctx.gpa, link_identity, workspace);
         try source_modules.bind(ctx.gpa, report_identity, workspace);
         const sites = artifact.compile_time_root_identities.test_report_sites;
         entry.value_ptr.reports = (try CliTestReportMap.init(ctx.gpa, sites, module.semantic.env.getSourceAll().len)) orelse
             base.invariant("checked producer published invalid report sites", .{});
     }
 
-    // As with unit link names, distinct modules sharing an interface name
-    // are disambiguated by content. This decision precedes all cache access.
+    // Distinct modules sharing a checked test context are disambiguated by
+    // full content, just as colliding unit link names are. This decision
+    // precedes all cache access.
     var reporting_sources = source_modules.modules.valueIterator();
     while (reporting_sources.next()) |source| {
         if (source_modules.identities.get(source.report_identity).? == null) source.report_identity = source.identity;
