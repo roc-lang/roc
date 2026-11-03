@@ -660,7 +660,7 @@ A closed checked occurrence (a root without identity variables) has no
 instantiation identity, so lowering chooses one representative for each
 closed named type inside each lowering's occurrence scope
 (`Builder.canonicalNamedOccurrence`, "Occurrence scope"). The candidates come
-from an index of every module view's closed named roots by checked type key
+from an index of every module's closed named roots by canonical type key
 (`ClosedOccurrenceIndex`), each key's holders sorted by module key. The
 coordinator builds it once, before any body is lowered, and workers borrow it.
 
@@ -5232,7 +5232,7 @@ A slot's result is:
 
 - allocated from a thread-safe allocator;
 - self-contained, with no pointer into any worker's workspace;
-- published only when complete;
+- visible to other consumers only when complete;
 - deterministic: a function of the sealed data alone, independent of which
   thread computed it or when;
 - freed with the module.
@@ -12708,9 +12708,9 @@ restores reached during body lowering (`restoreConstParserRuntimeFn[AtNode]`
 Phase B like every other codec body; the two Builder-level restores that run
 in a private graph (`restoreConstParserRuntimeFnExpr` and its encoder twin)
 still take eager resolved views inside that graph and are the last eager
-codec consumers. No leading-batch root ordering exists anymore—the former
-`pending_field_defaults` machinery existed only to finalize archived
-constants before parsers could restore them.
+codec consumers. There is no leading-batch root ordering: no root has to
+finish before a parser can restore a default, because defaults are
+materialized at each construction site rather than stored.
 
 Optional-field lowering is COMPLETE (see Field Kinds above): an omitted
 optional field constructs the `#Missing` tag in the same
@@ -15970,8 +15970,8 @@ therefore pays only for the parts of its imported types that it reads, not
 for their whole depth.
 
 Every context-free procedure-template request defers until the requesting
-graph is final, when its specialization key is stable. Constraints formerly
-owned only by an unresolved callee body are present in the checked interface
+graph is final, when its specialization key is stable. Constraints that only
+an unresolved callee body would otherwise own are present in the checked interface
 program and have already participated in the request's relation closure.
 Lexically context-dependent local procedures still lower in their owning graph
 because that lexical context is an explicit input rather than a context-free
@@ -16502,7 +16502,7 @@ memos by it. It does not name the resulting specialization, because two call
 sites can instantiate one callable from checked types that differ at the
 checked level and seal to the same closed Monotype request. The confirmed case
 is a transparent alias: with `Count : U64`, a call site under `Count -> Count`
-and one under `U64 -> U64` carry different checked type keys—that key
+and one under `U64 -> U64` carry different canonical type keys—that key
 retains alias provenance deliberately—and both requests seal to one Monotype
 function type. (Monotype does retain some alias-named types; what is required
 here is the sealed request type, whatever shape it has.)
@@ -16555,7 +16555,7 @@ key can disagree with their identity.
 Checked callable type ids inside dispatch evidence are relation-replay payload,
 not specialization identity: separate generalized scheme uses deliberately
 contain distinct identity-bearing roots. Evidence hashing and exact topology
-equality use each callable root's producer-authored checked type key instead. The
+equality use each callable root's canonical type key, read from its key slot, instead. The
 owning checked module remains part of the identity, and the raw root id remains
 alongside the key solely so Monotype can replay the exact checked relation.
 Thus instantiations with the same checked identity-variable topology
@@ -16737,7 +16737,7 @@ The demand of a variable is one of three values, the same scale
 A template's demand vector is a per-component on-demand analysis
 (`TemplateDemandPass`): the first consumer that needs one claims the strongly
 connected component of the module's call graph that holds the template,
-computes the vector of every template in it, and publishes them together.
+computes the vector of every template in it, and stores them together.
 Every later consumer reads the done slot, and no cache entry stores a demand
 vector; a cache hit recomputes it on first demand. Each body is
 walked once into a base vector and a set of edges: a direct call or a
@@ -17214,12 +17214,12 @@ The `.lss` strategy consumes these plans while producing Monotype IR. The
 plans while lowering checked CIR directly to LIR, choosing dictionary calls
 or concrete structural operations from the explicit checked data.
 
-Totality is enforced at the boundary: `validateDispatchEvidence`, run by the
-checked module's `verifyComplete`, asserts that every dispatch-bearing
-checked expression names a plan and that every plan and evidence reference
-lands inside the checked module data's evidence tables. In debug builds—
-where the boundary verifiers run—a missing or corrupt record is a compiler
-bug reported at the boundary, not a lowering panic.
+Totality is enforced where evidence is computed: a definition's call-edge
+evidence analysis asserts (`validateDispatchEvidence`) that every
+dispatch-bearing expression of the definition names a plan and that every
+plan and evidence reference lands inside the evidence it stores. A missing or
+corrupt record is a compiler bug: a debug assertion at that analysis in debug
+builds and `unreachable` in release builds, never a lowering panic.
 
 **Target substitutions.** A direct evidence node either carries the checked
 substitution of its target's scheme, carries the substitution of the exact
@@ -17663,7 +17663,7 @@ of one scheme share their common prefixes, both while the producer walks the
 scheme and in the evidence parameter pool, so a scheme nested n levels deep with a
 dispatcher at every level costs O(n) path storage rather than the O(n^2) its
 flat paths would total. Consumers that resolve every path of one scheme over
-one root (the boundary validator, Monotype's callable-derived evidence) resolve
+one root (the evidence path validation, Monotype's callable-derived evidence) resolve
 each node once per root from its parent's result rather than replaying each
 path from the root.
 
@@ -17681,7 +17681,7 @@ standalone component; ordinary checked edges can still supply it, while a
 compiler-generated edge cannot synthesize it from the closed callable. The
 call-edge evidence analysis validates both the path grammar and that every
 nonempty path resolves over its template's checked callable type before it
-publishes the evidence that Monotype consumes; each check is a debug
+stores the evidence that Monotype consumes; each check is a debug
 assertion in debug builds and `unreachable` in release builds.
 
 Exact registry lookups—`(MethodOwner, MethodNameId)`—happen during
@@ -23552,7 +23552,7 @@ belongs to the individual summary, so evidence shared by two templates appears
 in both summaries. Per-root template visitation still terminates recursive
 calls, and each root's final dependency list is sorted, deduplicated, and excludes
 itself. These summaries cache no transitive closure, live only for this graph
-build, and never enter checked artifacts or cache identities.
+build, and never enter checked modules or cache identities.
 
 
 Each level is lowered as its own consumer of the Solved program once every
