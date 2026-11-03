@@ -12860,11 +12860,11 @@ const PendingRecordDestruct = struct {
 };
 
 /// Type-check every def in the module, including the numeric-literal
-/// defaulting rounds at finalize (see `checkFileInternal`), then seal the
-/// solved type store: every later stage only reads it.
+/// defaulting rounds at finalize (see `checkFileInternal`), then canonicalize
+/// and seal the solved type store: every later stage only reads it.
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     try self.checkFileInternal(false);
-    self.types.seal();
+    try self.types.canonicalizeAndSeal(self.cir.getIdentStoreConst());
 }
 
 /// `checkFile` for a test that drives solver machinery on the checked module

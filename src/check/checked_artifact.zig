@@ -9798,7 +9798,7 @@ test "published closed roots compose three deep and a closed cyclic root does no
     try types_store.setVarContent(cyclic, .{ .structure = .{ .tuple = .{ .elems = try types_store.appendVars(&.{ cyclic, leaf }) } } });
     const holder = try types_store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try types_store.appendVars(&.{ cyclic, inner }) } } });
 
-    test_env.module_env.types.seal();
+    try test_env.module_env.types.canonicalizeAndSeal(test_env.module_env.getIdentStoreConst());
     const source_modules = [_]TypedCIR.Modules.SourceModule{
         .{ .precompiled = test_env.module_env },
     };
@@ -10160,7 +10160,7 @@ test "poisoned record field presence preserves its value type and canonical key"
         .ext = ext_var,
     } } });
 
-    test_env.module_env.types.seal();
+    try test_env.module_env.types.canonicalizeAndSeal(test_env.module_env.getIdentStoreConst());
     const source_modules = [_]TypedCIR.Modules.SourceModule{
         .{ .precompiled = test_env.module_env },
     };
@@ -10219,7 +10219,7 @@ test "checked and source keys agree on recursive types however they are unrolled
     try types_store.setVarContent(rolled, try Build.tagUnion(types_store, nil_name, cons_name, &.{ elem, rolled }));
     const once = try types_store.freshFromContent(try Build.tagUnion(types_store, nil_name, cons_name, &.{ elem, rolled }));
 
-    test_env.module_env.types.seal();
+    try test_env.module_env.types.canonicalizeAndSeal(test_env.module_env.getIdentStoreConst());
     const source_modules = [_]TypedCIR.Modules.SourceModule{
         .{ .precompiled = test_env.module_env },
     };
@@ -10556,7 +10556,7 @@ test "checked output preserves shared defaulted empty-tag identity" {
             const identity = try type_store.fresh();
             try type_store.setVarToEmptyTagUnionDefault(identity);
             const alias = try type_store.freshRedirect(identity);
-            type_store.seal();
+            try type_store.canonicalizeAndSeal(module.identStoreConst());
             var active = try CheckedSourceTypeRoots.init(allocator, module);
             defer active.deinit();
             const first = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, identity);
@@ -10578,7 +10578,7 @@ test "checked output preserves distinct defaulted empty-tag identities" {
             const second_identity = try type_store.fresh();
             try type_store.setVarToEmptyTagUnionDefault(first_identity);
             try type_store.setVarToEmptyTagUnionDefault(second_identity);
-            type_store.seal();
+            try type_store.canonicalizeAndSeal(module.identStoreConst());
             var active = try CheckedSourceTypeRoots.init(allocator, module);
             defer active.deinit();
             const first = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, first_identity);
@@ -10598,7 +10598,7 @@ test "checked output keeps proven closed empty tag union explicit" {
     const allocator = std.testing.allocator;
     try withEmptyTagCheckedOutputForTest(allocator, struct {
         fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, type_store: *types.Store, explicit_empty: Var) EmptyTagCheckedOutputTestError!void {
-            type_store.seal();
+            try type_store.canonicalizeAndSeal(module.identStoreConst());
             var active = try CheckedSourceTypeRoots.init(allocator, module);
             defer active.deinit();
             const root = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, explicit_empty);
@@ -10612,7 +10612,7 @@ test "checked output keeps redirected proven empty tag union explicit" {
     try withEmptyTagCheckedOutputForTest(allocator, struct {
         fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, type_store: *types.Store, explicit_empty: Var) EmptyTagCheckedOutputTestError!void {
             const redirected = try type_store.freshRedirect(explicit_empty);
-            type_store.seal();
+            try type_store.canonicalizeAndSeal(module.identStoreConst());
             var active = try CheckedSourceTypeRoots.init(allocator, module);
             defer active.deinit();
             const root = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, redirected);
@@ -10633,7 +10633,7 @@ test "checked output structurally interns independent closed function graphs" {
             const second_ret = try type_store.freshFromContent(.{ .structure = .empty_tag_union });
             const second_fn = try type_store.freshFromContent(try type_store.mkFuncPure(&.{second_arg}, second_ret));
 
-            type_store.seal();
+            try type_store.canonicalizeAndSeal(module.identStoreConst());
             var active = try CheckedSourceTypeRoots.init(allocator, module);
             defer active.deinit();
             const first = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, first_fn);
@@ -10683,7 +10683,7 @@ test "checked output retains defaulted identity inside parent function digest" {
             try type_store.setVarToEmptyTagUnionDefault(identity);
             const function_content = try type_store.mkFuncPure(&.{identity}, identity);
             const function_var = try type_store.freshFromContent(function_content);
-            type_store.seal();
+            try type_store.canonicalizeAndSeal(module.identStoreConst());
             var active = try CheckedSourceTypeRoots.init(allocator, module);
             defer active.deinit();
             const root = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, function_var);
