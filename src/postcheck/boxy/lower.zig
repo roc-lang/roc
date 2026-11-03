@@ -2719,7 +2719,7 @@ fn seedSourceFiles(program: *Program) Allocator.Error!void {
             // In-process programs keep current workspace names for reporting;
             // cached unit locations rebind through module_identity instead.
             .qualified_name = switch (program.input.unit) {
-                .module => view.view.module_env.module_name,
+                .module => if (program.input.compile_time) view.view.module_env.qualifiedModuleName() else view.view.module_env.module_name,
                 .program => view.view.module_env.qualifiedModuleName(),
             },
             .module_identity = program.modules.linkName(view.index),
