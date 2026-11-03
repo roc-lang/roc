@@ -170,7 +170,7 @@ pub const HostJob = struct {
 
 /// Map `size` bytes of a file read-only. Only a compiler running on Linux
 /// makes a fast dev link (`fastDevLinkApplies`).
-fn mapReadOnly(handle: std.Io.File.Handle, size: usize) error{MapFailed}![]align(std.heap.page_size_min) u8 {
+pub fn mapReadOnly(handle: std.Io.File.Handle, size: usize) error{MapFailed}![]align(std.heap.page_size_min) u8 {
     if (comptime builtin.os.tag != .linux) {
         unreachable; // fastDevLinkApplies selects the fast dev link only on Linux hosts
     } else {
@@ -186,7 +186,7 @@ const hash_chunk: usize = 4 * 1024 * 1024;
 /// BLAKE3 hash of its length and of the BLAKE3 hashes of its
 /// `hash_chunk`-sized pieces, in order. Returns the index of a file that
 /// cannot be read, if any.
-fn contentDigests(gpa: Allocator, std_io: std.Io, paths: []const []const u8, digests: [][32]u8) Allocator.Error!?usize {
+pub fn contentDigests(gpa: Allocator, std_io: std.Io, paths: []const []const u8, digests: [][32]u8) Allocator.Error!?usize {
     const Input = struct { file: ?std.Io.File = null, bytes: []align(std.heap.page_size_min) const u8 = &.{}, first_chunk: usize = 0 };
     const inputs = try gpa.alloc(Input, paths.len);
     defer gpa.free(inputs);

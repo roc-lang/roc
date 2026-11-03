@@ -693,6 +693,7 @@ const CustomCase = enum {
     issue_10733_wasm_boxy_dev_sealed_object,
     issue_12029_wasm_boxy_tail_calls,
     wasm_units_warm,
+    wasm_fast_link_parity,
     issue_12769_wasm_many_parameters_specialized,
     issue_12769_wasm_many_parameters_boxy,
     issue_12769_wasm_parameter_limit_dev_specialized,
@@ -4479,6 +4480,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: dev wasm32 emits a valid sealed Boxy object", .backend = .dev, .body = .{ .custom = .issue_10733_wasm_boxy_dev_sealed_object } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12029: boxy tail calls run in constant stack on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12029_wasm_boxy_tail_calls } },
     .{ .id = 0, .suite = .subcommands, .name = "a warm wasm32 build of test/wasm/boxy_generic_tail_calls_app.roc restores every wasm unit (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .wasm_units_warm } },
+    .{ .id = 0, .suite = .subcommands, .name = "test/wasm apps linked by composing images run as the LLD-linked builds do (dev)", .timeout_ms = 1_800_000, .backend = .dev, .body = .{ .custom = .wasm_fast_link_parity } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 functions take more than 255 parameters (dev, specialized)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_many_parameters_specialized } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 functions take more than 255 parameters (dev, boxy)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_many_parameters_boxy } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 arguments past the parameter limit travel in memory (dev, specialized)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_parameter_limit_dev_specialized } },
@@ -4512,6 +4514,9 @@ const subcommand_cases = [_]CliCase{
     // An explicit empty list remains the intentional way to export no
     // functions; it is distinct from omitting the field by construction.
     .{ .id = 0, .suite = .subcommands, .name = "issue 10951: explicit empty wasm32 exports are accepted", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=dev", "--no-cache" }, .roc_file = "test/wasm/issue_10951_wasm_exports/empty_exports/app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "Missing Wasm Exports" }, .{ .stream = .stderr, .text = "linker failed" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10951: wasm32 target block without exports is reported (dev, composed link)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=dev", "--specialize=no" }, .roc_file = "test/wasm/issue_10951_wasm_exports/missing_exports/app.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "exports" }, .{ .stream = .stdout, .text = "exports" } } }}, .not_contains = &.{ .{ .stream = .stdout, .text = "successfully building" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10951: wasm32 exports naming an unknown symbol is reported (dev, composed link)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=dev", "--specialize=no" }, .roc_file = "test/wasm/issue_10951_wasm_exports/unknown_export/app.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "undefined wasm exports" }, .{ .stream = .stderr, .text = "this_symbol_does_not_exist" } }, .not_contains = &.{ .{ .stream = .stdout, .text = "successfully building" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10951: explicit empty wasm32 exports are accepted (dev, composed link)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=dev", "--specialize=no" }, .roc_file = "test/wasm/issue_10951_wasm_exports/empty_exports/app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "Missing Wasm Exports" }, .{ .stream = .stderr, .text = "linker failed" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build glibc target gives helpful error on non-Linux", .body = .{ .custom = .build_glibc_target_non_linux_error } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build Shared output links a Windows DLL", .body = .{ .custom = .build_windows_shared_library } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12503: a cached constant read at joined rows with a repeated label is restored at its declared row (interpreter)", .backend = .interpreter, .body = .{ .custom = .stored_root_declared_row } },
@@ -6126,6 +6131,7 @@ fn runCustomCase(
         .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
         .issue_12029_wasm_boxy_tail_calls => customIssue12029WasmBoxyTailCalls(io, allocator, &env, &timer, timeout_ms),
         .wasm_units_warm => customWasmUnitsWarm(io, allocator, &env, &timer, timeout_ms),
+        .wasm_fast_link_parity => customWasmFastLinkParity(io, allocator, &env, &timer, timeout_ms),
         .issue_12769_wasm_many_parameters_specialized => customIssue12769WasmManyParameters(io, allocator, &env, &timer, timeout_ms, "--specialize=yes"),
         .issue_12769_wasm_many_parameters_boxy => customIssue12769WasmManyParameters(io, allocator, &env, &timer, timeout_ms, "--specialize=no"),
         .issue_12769_wasm_parameter_limit_dev_specialized => customIssue12769WasmParameterLimit(io, allocator, &env, &timer, timeout_ms, "--opt=dev", "--specialize=yes"),
@@ -12369,6 +12375,134 @@ fn customWasmUnitsWarm(
     return null;
 }
 
+/// One `test/wasm` app the composed-link parity case builds both ways.
+const WasmParityApp = struct {
+    app: []const u8,
+    target: []const u8 = "--target=wasm32",
+};
+
+/// Every `test/wasm` app on a platform the runner stages, for `wasm32` and
+/// the WebAssembly 1.0 target, including a platform whose code checks its
+/// stack bounds (`issue_12554_reserved_low_memory`). The apps on
+/// `reserved-low-memory-platform` are built and run by the static-library
+/// carts (`zig build run-test-wasm-static-lib`), which stage it.
+const wasm_parity_apps = [_]WasmParityApp{
+    .{ .app = "test/wasm/app.roc" },
+    .{ .app = "test/wasm/boxed_closure_app.roc" },
+    .{ .app = "test/wasm/boxed_model_update_static_lib_app.roc" },
+    .{ .app = "test/wasm/boxy_generic_tail_calls_app.roc" },
+    .{ .app = "test/wasm/boxy_padded_records_app.roc" },
+    .{ .app = "test/wasm/boxy_recursive_method_dispatch_app.roc" },
+    .{ .app = "test/wasm/box_zst_static_lib_app.roc" },
+    .{ .app = "test/wasm/builtin_routing_static_lib_app.roc" },
+    .{ .app = "test/wasm/builtin_routing_static_lib_app.roc", .target = "--target=wasm32v1" },
+    .{ .app = "test/wasm/erased_callable_on_drop_static_lib_app.roc" },
+    .{ .app = "test/wasm/hosted_try_widen_static_lib_app.roc" },
+    .{ .app = "test/wasm/issue_10836_boxed_low_alignment_static_lib_app.roc" },
+    .{ .app = "test/wasm/issue_10957_json_camel_long_field_static_lib_app.roc" },
+    .{ .app = "test/wasm/issue_11419_static_record_reloc_order_static_lib_app.roc" },
+    .{ .app = "test/wasm/issue_11454_concat_rc_callback_static_lib_app.roc" },
+    .{ .app = "test/wasm/issue_11455_boxed_zst_nominal_payload_static_lib_app.roc" },
+    .{ .app = "test/wasm/issue_11529_top_level_boxed_function_static_lib_app.roc" },
+    .{ .app = "test/wasm/issue_12560_boxed_bool_not_static_lib_app.roc" },
+    .{ .app = "test/wasm/issue_12569_specialized_callables.roc" },
+    .{ .app = "test/wasm/issue_12741_generic_tail_calls_app.roc" },
+    .{ .app = "test/wasm/issue_12769_many_wasm_parameters_app.roc" },
+    .{ .app = "test/wasm/issue_12778_wide_record_static_lib_app.roc" },
+    .{ .app = "test/wasm/issue_12782_i128_narrow_static_lib_app.roc" },
+    .{ .app = "test/wasm/issue_12785_big_record_match_static_lib_app.roc" },
+    .{ .app = "test/wasm/issue_12787_derived_parser_static_lib_app.roc" },
+    .{ .app = "test/wasm/iter_for_noiter_static_lib_app.roc" },
+    .{ .app = "test/wasm/iter_for_static_lib_app.roc" },
+    .{ .app = "test/wasm/iter_list_hoist_static_lib_app.roc" },
+    .{ .app = "test/wasm/iter_recursive_concat_static_lib_app.roc" },
+    .{ .app = "test/wasm/list_builtin_static_lib_app.roc" },
+    .{ .app = "test/wasm/mutual_tail_calls_static_lib_app.roc" },
+    .{ .app = "test/wasm/rc_cleanup_model_list_static_lib_app.roc" },
+    .{ .app = "test/wasm/rc_cleanup_static_lib_app.roc" },
+    .{ .app = "test/wasm/single_variant_hosted_static_lib_app.roc" },
+    .{ .app = "test/wasm/spec_constr_return_target_app.roc" },
+    .{ .app = "test/wasm/stack_overflow_traps_static_lib_app.roc" },
+    .{ .app = "test/wasm/str_concat_join_static_lib_app.roc" },
+    .{ .app = "test/wasm/str_concat_unique_reuse_static_lib_app.roc" },
+    .{ .app = "test/wasm/str_interp_leading_literal_static_lib_app.roc" },
+    .{ .app = "test/wasm/wasm32v1_vector_app.roc", .target = "--target=wasm32v1" },
+    .{ .app = "test/wasm/field_default_root_order/app.roc" },
+    .{ .app = "test/wasm/issue_10827_strong_intrinsic_host/app.roc" },
+    .{ .app = "test/wasm/issue_12554_reserved_low_memory/app.roc" },
+};
+
+/// What running a built module's `wasm_main` came to.
+const WasmRunOutcome = union(enum) {
+    result: []const u8,
+    /// The module traps or does not instantiate under the runner's host.
+    failed: []const u8,
+};
+
+fn runWasmModuleOutcome(io: std.Io, allocator: Allocator, path: []const u8) WasmRunOutcome {
+    var wasm = setupGlueRuntimeWasm(io, allocator, path) catch |err| return .{ .failed = @errorName(err) };
+    defer wasm.deinit();
+    const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err| return .{ .failed = @errorName(err) };
+    return .{ .result = allocator.dupe(u8, result) catch return .{ .failed = "OutOfMemory" } };
+}
+
+/// Every `test/wasm` app built with `--opt=dev --specialize=no` both ways:
+/// with `--no-cache`, linked by LLD, and with a cache, linked by composing
+/// images. Each composed module validates and runs as the LLD-linked one
+/// does (the same result, or a failure where it fails), and a warm rebuild
+/// of each writes the same bytes. All apps share one cache, as a user's
+/// builds do.
+fn customWasmFastLinkParity(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err| return customInfraFailure(allocator, timer, "clone environment: {}", .{err}) };
+    defer isolated.env_map.deinit();
+    const cache_root = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "wasm_parity_cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the cache root: {}", .{err});
+    for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+        isolated.env_map.put(key, cache_root) catch |err| return customInfraFailure(allocator, timer, "failed to set the cache root: {}", .{err});
+    }
+    for (wasm_parity_apps, 0..) |entry, index| {
+        var paths: [3][]const u8 = undefined;
+        for (&paths, [_][]const u8{ "lld", "composed", "warm" }) |*path, name| {
+            path.* = std.fmt.allocPrint(allocator, "{s}/parity-{d}-{s}.wasm", .{ env.dirs.work_dir, index, name }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate wasm output path: {}", .{err});
+        }
+        for (paths, 0..) |path, run_index| {
+            const output_arg = outputArg(allocator, path) catch |err| return customInfraFailure(allocator, timer, "failed to allocate wasm output argument: {}", .{err});
+            const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "wasm parity test timed out");
+            const args: []const []const u8 = if (run_index == 0)
+                &.{ "build", entry.target, "--opt=dev", "--specialize=no", "--no-cache", "--no-color", output_arg }
+            else
+                &.{ "build", entry.target, "--opt=dev", "--specialize=no", "--no-color", output_arg };
+            const run = runRocInEnv(io, allocator, &isolated, args, entry.app, .relative, &.{}, null, remaining) catch |err|
+                return customInfraFailure(allocator, timer, "build {s}: {}", .{ entry.app, err });
+            if (!processSucceeded(run.term)) return failureFromRun(allocator, timer, run, entry.app);
+            if (validateWasmOutput(io, allocator, timer, path)) |failure| return failure;
+        }
+        const composed = std.Io.Dir.cwd().readFileAlloc(io, paths[1], allocator, .limited(256 * 1024 * 1024)) catch |err| return customInfraFailure(allocator, timer, "read wasm module: {}", .{err});
+        const warm = std.Io.Dir.cwd().readFileAlloc(io, paths[2], allocator, .limited(256 * 1024 * 1024)) catch |err| return customInfraFailure(allocator, timer, "read wasm module: {}", .{err});
+        if (!std.mem.eql(u8, composed, warm)) return customFailure(allocator, timer, "{s}: the warm build's composed module differs from the first", .{entry.app});
+        const lld = runWasmModuleOutcome(io, allocator, paths[0]);
+        const ours = runWasmModuleOutcome(io, allocator, paths[1]);
+        switch (lld) {
+            .result => |expected| switch (ours) {
+                .result => |actual| if (!std.mem.eql(u8, expected, actual)) return customFailure(allocator, timer, "{s} {s}: the composed module returned \"{s}\", the LLD-linked one \"{s}\"", .{ entry.app, entry.target, actual, expected }),
+                .failed => |reason| return customFailure(allocator, timer, "{s} {s}: the composed module failed ({s}); the LLD-linked one returned \"{s}\"", .{ entry.app, entry.target, reason, expected }),
+            },
+            .failed => |expected| switch (ours) {
+                .result => |actual| return customFailure(allocator, timer, "{s} {s}: the composed module returned \"{s}\"; the LLD-linked one failed ({s})", .{ entry.app, entry.target, actual, expected }),
+                .failed => |reason| if (!std.mem.eql(u8, expected, reason)) return customFailure(allocator, timer, "{s} {s}: the composed module failed ({s}), the LLD-linked one with {s}", .{ entry.app, entry.target, reason, expected }),
+            },
+        }
+    }
+    return null;
+}
+
 fn customBoxyRecursiveMethodDispatchWasm(
     io: std.Io,
     allocator: Allocator,
@@ -12614,29 +12748,36 @@ fn customIssue12769WasmParameterLimit(
     const output_arg = outputArg(allocator, output_path) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate wasm output argument: {}", .{err});
 
-    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
-        .args = &.{ "build", "--target=wasm32", opt_arg, specialize_arg, "--no-cache", output_arg },
-        .roc_file = app_path,
-        .exit = .success,
-        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
-        .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
-    })) |failure| return failure;
-    if (checkWasmParamLimit(io, allocator, timer, output_path)) |failure| return failure;
+    // Linked by LLD, then, for a `.boxy` dev build with a cache, by
+    // composing images.
+    const cached = std.mem.eql(u8, opt_arg, "--opt=dev") and std.mem.eql(u8, specialize_arg, "--specialize=no");
+    for ([_]bool{ false, true }) |with_cache| {
+        if (with_cache and !cached) continue;
+        const args: []const []const u8 = if (with_cache) &.{ "build", "--target=wasm32", opt_arg, specialize_arg, output_arg } else &.{ "build", "--target=wasm32", opt_arg, specialize_arg, "--no-cache", output_arg };
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = args,
+            .roc_file = app_path,
+            .exit = .success,
+            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+            .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+        })) |failure| return failure;
+        if (checkWasmParamLimit(io, allocator, timer, output_path)) |failure| return failure;
 
-    var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
-        return customFailure(allocator, timer, "failed to load the wide wasm module: {}", .{err});
-    defer wasm.deinit();
-    const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
-        return customFailure(allocator, timer, "wide wasm execution failed: {}", .{err});
-    const common = "1120571021 1120571021 42 {\"favoritesCount\":14} and a string long enough to live on the heap!";
-    const expected: []const u8 = if (literals) common ++ " 605571" else common;
-    if (!std.mem.eql(u8, result, expected)) {
-        return customFailure(allocator, timer, "wide wasm returned \"{s}\"", .{result});
-    }
-    const outstanding = wasmOutstandingAllocations(&wasm) catch |err|
-        return customFailure(allocator, timer, "failed to read the wide module's allocation counts: {}", .{err});
-    if (outstanding != 1) {
-        return customFailure(allocator, timer, "wide wasm left {d} allocations outstanding, not just its result", .{outstanding});
+        var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
+            return customFailure(allocator, timer, "failed to load the wide wasm module: {}", .{err});
+        defer wasm.deinit();
+        const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
+            return customFailure(allocator, timer, "wide wasm execution failed: {}", .{err});
+        const common = "1120571021 1120571021 42 {\"favoritesCount\":14} and a string long enough to live on the heap!";
+        const expected: []const u8 = if (literals) common ++ " 605571" else common;
+        if (!std.mem.eql(u8, result, expected)) {
+            return customFailure(allocator, timer, "wide wasm returned \"{s}\"", .{result});
+        }
+        const outstanding = wasmOutstandingAllocations(&wasm) catch |err|
+            return customFailure(allocator, timer, "failed to read the wide module's allocation counts: {}", .{err});
+        if (outstanding != 1) {
+            return customFailure(allocator, timer, "wide wasm left {d} allocations outstanding, not just its result", .{outstanding});
+        }
     }
     return null;
 }
@@ -12738,6 +12879,15 @@ fn customIssue12769WasmHostParameterLimit(
             .exit = .success,
             .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
         })) |failure| return failure;
+        // A `.boxy` dev build with a cache links by composing images, which
+        // checks the boundary from the images.
+        const boxy_dev = std.mem.eql(u8, opt_arg, "--opt=dev");
+        if (boxy_dev) if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "build", "--target=wasm32", opt_arg, "--specialize=no", accepted_arg },
+            .roc_file = accepted_app,
+            .exit = .success,
+            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        })) |failure| return failure;
 
         const rejected_app = stageWasmBoundaryApp(io, allocator, env, boundary, wasm_engine_param_limit + 1) catch |err|
             return customInfraFailure(allocator, timer, "failed to stage the boundary app: {}", .{err});
@@ -12749,6 +12899,13 @@ fn customIssue12769WasmHostParameterLimit(
             return customInfraFailure(allocator, timer, "failed to allocate expected message: {}", .{err});
         if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
             .args = &.{ "build", "--target=wasm32", opt_arg, "--no-cache", rejected_arg },
+            .roc_file = rejected_app,
+            .exit = .failure,
+            .contains = &.{.{ .stream = .stderr, .text = message }},
+            .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+        })) |failure| return failure;
+        if (boxy_dev) if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "build", "--target=wasm32", opt_arg, "--specialize=no", rejected_arg },
             .roc_file = rejected_app,
             .exit = .failure,
             .contains = &.{.{ .stream = .stderr, .text = message }},

@@ -24939,8 +24939,48 @@ checks, each function also records the frame facts `StackRoom` fills a
 check's room from. Nothing is merged into a unit: what other code defines
 is an import with the signature the call uses. Bodies keep the one
 position-independent form every wasm object Roc emits uses, so one image
-serves every output kind. The wasm output itself is still produced by the
-whole-program pipeline.
+serves every output kind.
+
+**Wasm fast dev link.** Such a build on a Linux host links its output by
+composing images, with no LLD on the module path (`wasm_link.zig`). Two
+images join the units, each converted once from a `wasm-ld -r` composition
+(`backend.wasm.ObjectImage`) and filed under the `prelinked_host` family as
+a wasm record (`wasm_host_image.zig`): the support image (compiler-rt, the
+builtins, the Boxy runtime and the stack support functions for the target
+and stack-check mode, keyed by those and the objects' digests) and, for a
+module, the host image (the platform's link inputs, keyed by the target, the
+link items, the inputs' digests or bundle hash and the platform's declared
+link configuration). Object images may define globals with constant initial
+values, name constructors, mark definitions weak, keep the atoms the object
+retains as roots, and import under a module and field other than the symbol
+name. A background job hashes and looks both up while the program compiles;
+a miss converts after lowering. Names resolve in the two scopes sealing
+gives today's link: a unit's or the support code's import resolves to the
+app's definitions (strong over weak, then the smallest digest), then to a
+symbol the link defines (`__stack_pointer`, `__memory_base` and
+`__table_base` as constant 0, `__indirect_function_table`, `__stack_low`,
+`__stack_high`, `__heap_base`, `__data_end`, `__wasm_call_ctors`, ...), then
+to the host's definitions, else to the embedder; a host import resolves only
+to the names the app gives the host (its provides, exported data and the
+WebAssembly 1.0 stack accessors), then to the link's symbols, else to the
+embedder. An atom walk from the platform's exports, the stack exports, the
+host's retained atoms and the provides decides what is placed. Index spaces
+follow placement order (host, support, units by content digest; within an
+image, its order), memory follows `linker.wasmStackLayout` with initialized
+segments first and zero-filled ones after (emitted as zeros only when memory
+may not start zeroed), as one active data segment, and the table holds every
+reached function a table site names. Every section's size is known before a
+byte is written; bodies and segments are copied and patched in place in
+parallel tasks, and with stack checks `StackRoom.programRooms` fills each
+check's room from the images' frame facts over the composed call graph. A
+name section is written only with `--debug` (no DWARF). Engine limits,
+undefined platform exports, conflicting embedder imports, memory settings
+the program does not fit and parameter counts past the engine limit are CLI
+errors. `output: Shared` produces the same finished module as `exe` (the
+wasm link has no `-shared` mode). `output: Archive` packages a relocatable
+object the same walk composes from the support image and the units: every
+site a relocation, only the app's public names global, undefined symbols for
+what the host provides, and stack rooms filled.
 
 **Pre-linked host.** A platform's host is linked once with the existing LLD
 flags from the platform's link inputs plus one generated object, and filed as

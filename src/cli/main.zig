@@ -186,6 +186,8 @@ comptime {
         std.testing.refAllDecls(@import("builder.zig"));
         std.testing.refAllDecls(@import("host_symbols.zig"));
         std.testing.refAllDecls(host_prelink);
+        std.testing.refAllDecls(wasm_link);
+        std.testing.refAllDecls(wasm_host_image);
         std.testing.refAllDecls(@import("test/platform_config.zig"));
         std.testing.refAllDecls(@import("ReplLine.zig"));
         std.testing.refAllDecls(@import("ReplSession.zig"));
@@ -196,6 +198,8 @@ const linker = @import("linker.zig");
 const fast_dev_link = @import("fast_dev_link.zig");
 const host_prelink = @import("host_prelink.zig");
 const patch_link = @import("patch_link.zig");
+const wasm_link = @import("wasm_link.zig");
+const wasm_host_image = @import("wasm_host_image.zig");
 const run_image_link = @import("run_image_link.zig");
 const builder = @import("builder.zig");
 const llvm_codegen = @import("llvm_codegen");
@@ -8683,7 +8687,7 @@ fn writeSealedWasmObject(
     }
     const composed_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_app_composed_wasm32.o" });
     if (timing) |phases| phases.encode_ns += WasmBuildTiming.since(ctx, &encode_started);
-    linker.linkWasmObjectsRelocatable(ctx, composed_path, compiler_inputs.items) catch |err| {
+    linker.linkWasmObjectsRelocatable(ctx, composed_path, compiler_inputs.items, .{}) catch |err| {
         return failLink(ctx, err, "wasm32");
     };
     if (timing) |phases| phases.compose_ns += WasmBuildTiming.since(ctx, &encode_started);
@@ -11176,12 +11180,358 @@ fn wasmUnitsApply(target: RocTarget, args: cli_args.BuildArgs) bool {
     return compile.boxy_unit.imageKind(target) == .wasm;
 }
 
+/// Every wasm unit of a program: the library units' images and the root
+/// unit's, which this build owns, and the names the root gives the host.
+const WasmUnits = struct {
+    library: BoxyLibraryObjects,
+    root_image: []align(backend.wasm.WasmUnitImage.alignment.toByteUnits()) u8,
+    /// The root's entry wrappers and exported data, from the arena.
+    app_export_symbols: []const []const u8,
+
+    fn deinit(self: WasmUnits, gpa: Allocator) void {
+        self.library.deinit(gpa);
+        gpa.free(self.root_image);
+    }
+};
+
+/// Whether a build links its wasm output by composing images instead of
+/// with LLD (`wasm_link.zig`): a build whose wasm units apply
+/// (`wasmUnitsApply`) on a Linux host, whose system calls the output file
+/// uses, for any output: a module (`exe` or `shared`) or an archive.
+fn wasmFastLinkApplies(target: RocTarget, args: cli_args.BuildArgs) bool {
+    if (comptime builtin.target.os.tag != .linux) return false;
+    if (args.synthetic_default_platform) return false;
+    return wasmUnitsApply(target, args);
+}
+
+/// A wasm fast dev link in progress: the module's output file, created when
+/// the build starts, and the background job finding the support and host
+/// images (`wasm_host_image.ImageJob`). The link configuration comes from
+/// the checked platform, whose compile-time evaluation may settle it.
+const WasmFastLink = struct {
+    spec: wasm_host_image.Spec,
+    job: wasm_host_image.ImageJob,
+    target: RocTarget,
+    link_type: roc_target.OutputKind,
+    platform_dir: []const u8,
+    final_output_path: []const u8,
+    /// For a module output; an archive is written whole at the end.
+    output: ?fast_dev_link.OutputFile,
+    published: bool = false,
+    provides: []const []const u8,
+    hosted: []const []const u8,
+    /// The stack support object the link encoded, when the support code
+    /// needs one.
+    stack_support: ?[]u8 = null,
+
+    fn start(
+        ctx: *CliCtx,
+        build_env: *BuildEnv,
+        platform_dir: []const u8,
+        target: RocTarget,
+        link_type: roc_target.OutputKind,
+        final_output_path: []const u8,
+        no_cache: bool,
+    ) CliMainError!*WasmFastLink {
+        const targets_config = build_env.getPlatformTargetsConfig() orelse base.invariant("roc build invariant violated: a resolved platform has no targets config", .{});
+        const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
+        const module_output = switch (link_type) {
+            .exe, .shared => true,
+            .archive => false,
+        };
+        if (module_output and link_inputs.platform_files_pre.len + link_inputs.platform_files_post.len == 0) {
+            try ctx.io.stderr().writeAll("Error: wasm32 builds require a relocatable wasm platform file or archive.\n");
+            return error.UnsupportedTarget;
+        }
+
+        // The compiler's embedded support objects, in the order today's
+        // link composes them, for each stack-check mode.
+        const embedded = EmbeddedTargetObjects.forTarget(target);
+        var variants: [2][]const wasm_host_image.SupportObject = undefined;
+        for (&variants, [_]bool{ false, true }) |*variant, stack_checks| {
+            const objects = try ctx.arena.alloc(wasm_host_image.SupportObject, 3);
+            objects[0] = .{ .name = "roc_compiler_rt_support.o", .bytes = WasmCompilerRtObject.forTarget(target) };
+            objects[1] = .{ .name = "roc_builtins.o", .bytes = if (stack_checks) embedded.builtins_extern_stack_checked.? else embedded.builtins_extern };
+            objects[2] = .{ .name = "roc_boxy_runtime.o", .bytes = (if (stack_checks) embedded.boxy_runtime_stack_checked else embedded.boxy_runtime) orelse return error.UnsupportedTarget };
+            variant.* = objects;
+        }
+
+        const link_spec = targets_config.getLinkSpec(target) orelse base.invariant("roc build invariant violated: a selected target has no link spec", .{});
+        var link_items: std.ArrayList([]const u8) = .empty;
+        for (link_spec.items) |item| switch (item) {
+            .file_path => |path| try link_items.append(ctx.arena, path),
+            .app => try link_items.append(ctx.arena, "<app>"),
+            .win_gui => {},
+        };
+        const symbols = build_env.getPlatformLinkSymbols() orelse base.invariant("roc build invariant violated: a resolved platform has no header symbols", .{});
+        const provides = try ctx.arena.alloc([]const u8, symbols.provides.len);
+        for (symbols.provides, provides) |entry, *name| name.* = entry.ffi_symbol;
+
+        const self = try ctx.gpa.create(WasmFastLink);
+        errdefer ctx.gpa.destroy(self);
+        self.* = .{
+            .spec = .{
+                .target = target,
+                .support_objects = variants,
+                .platform_files = try hostInputPaths(ctx, link_inputs),
+                .link_items = link_items.items,
+                .bundle_hash = build_env.getPlatformBundleHash(),
+                .needs_host = module_output,
+            },
+            .job = undefined,
+            .target = target,
+            .link_type = link_type,
+            .platform_dir = platform_dir,
+            .final_output_path = final_output_path,
+            .output = if (module_output) fast_dev_link.OutputFile.create(ctx.arena, final_output_path) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => |file_err| return ctx.fail(.{ .file_write_failed = .{ .path = final_output_path, .err = file_err } }),
+            } else null,
+            .provides = provides,
+            .hosted = try fast_dev_link.sortedUnion(ctx.arena, &.{symbols.hosted}),
+        };
+        std.debug.assert(!no_cache); // `wasmFastLinkApplies` requires the cache
+        self.job = .{
+            .gpa = ctx.gpa,
+            .std_io = ctx.io.std_io,
+            .manager = build_env.cache_manager orelse base.invariant("roc build invariant violated: a build with a cache has no cache manager", .{}),
+            .spec = &self.spec,
+        };
+        self.job.start() catch |err| {
+            if (self.output) |*output| output.discard();
+            std.log.err("Starting the wasm fast dev link's image job failed: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+        return self;
+    }
+
+    fn deinit(self: *WasmFastLink, gpa: Allocator) void {
+        self.job.deinit();
+        if (self.output) |*output| if (!self.published) output.discard();
+        if (self.stack_support) |bytes| gpa.free(bytes);
+        gpa.destroy(self);
+    }
+
+    /// The image the job looked up, or converted now on a miss and owned by
+    /// the caller through `owned`.
+    fn image(
+        self: *WasmFastLink,
+        ctx: *CliCtx,
+        comptime kind: enum { support, host },
+        stack_checks: bool,
+        target_name: []const u8,
+        scratch_dir: []const u8,
+        owned: *?[]align(backend.wasm.WasmUnitImage.alignment.toByteUnits()) u8,
+        convert_ns: *u64,
+    ) CliMainError!backend.wasm.WasmUnitImage.View {
+        const lookup = switch (kind) {
+            .support => self.job.support[@intFromBool(stack_checks)],
+            .host => self.job.host,
+        };
+        switch (lookup) {
+            .pending => unreachable, // waiting joined the job, which looks up every image the link needs
+            .hit => |hit| return backend.wasm.WasmUnitImage.View.init(hit.mapping) catch unreachable, // the job admitted the record it reports
+            .miss => {
+                const started = WasmBuildTiming.now(ctx);
+                var unsupported: ?backend.wasm.ObjectImage.Unsupported = null;
+                const manager = self.job.manager;
+                const bytes = (switch (kind) {
+                    .support => support: {
+                        const variant = self.spec.support_objects[@intFromBool(stack_checks)];
+                        const objects = try std.mem.concat(ctx.arena, wasm_host_image.SupportObject, &.{ variant, if (self.stack_support) |bytes| &.{.{ .name = "roc_stack_support.o", .bytes = bytes }} else &.{} });
+                        break :support wasm_host_image.convertSupport(ctx, objects, stack_checks, self.job.support_keys[@intFromBool(stack_checks)], manager, scratch_dir, &unsupported);
+                    },
+                    .host => wasm_host_image.convertHost(ctx, &self.spec, self.job.host_key, manager, scratch_dir, &unsupported),
+                }) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.LinkFailed, error.InvalidArguments, error.LLVMNotAvailable, error.UndefinedCompilerSymbols => |link_err| return failLink(ctx, link_err, target_name),
+                    error.UnsupportedObject => switch (kind) {
+                        .host => return ctx.fail(.{ .wasm_host_unsupported = .{ .reason = unsupported.?.describe(), .target = target_name } }),
+                        .support => base.invariant("wasm fast dev link invariant violated: the compiler's support objects do not convert: {s}", .{unsupported.?.describe()}),
+                    },
+                    error.ReadFailed, error.ImageTooLarge, error.UnexpectedEnd, error.Overflow, error.InvalidMagic, error.InvalidVersion, error.InvalidSection, error.MissingLinkingSection, error.InvalidLinkingVersion, error.HasInternalGlobals => |read_err| {
+                        std.log.err("Preparing the {s} for a wasm dev build failed: {s}", .{ @tagName(kind), @errorName(read_err) });
+                        return failLink(ctx, error.LinkFailed, target_name);
+                    },
+                };
+                owned.* = bytes;
+                convert_ns.* = @intCast(@max(0, WasmBuildTiming.now(ctx) - started));
+                return backend.wasm.WasmUnitImage.View.init(bytes) catch base.invariant("roc build invariant violated: an image this build converted does not read", .{});
+            },
+        }
+    }
+
+    /// Link the program from its units' images, the support image and, for
+    /// a module, the host image. The phase "Fast Dev Link" reports the
+    /// time after the root unit's image is ready.
+    fn link(
+        self: *WasmFastLink,
+        ctx: *CliCtx,
+        args: cli_args.BuildArgs,
+        reporter: *progress.Reporter,
+        build_env: *BuildEnv,
+        targets_config: roc_target.TargetsConfig,
+        units: WasmUnits,
+        scratch_dir: []const u8,
+    ) CliMainError!void {
+        // The link configuration of the checked platform.
+        const link_inputs = try collectPlatformLinkInputs(ctx, self.platform_dir, targets_config, self.target, self.link_type);
+        const module_output = self.output != null;
+        const stack_checks = wasmStackChecks(link_inputs.wasm);
+        const stack_size = configuredWasmStackBytes(args, link_inputs.wasm);
+        const global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null;
+        const maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null;
+        if (module_output) switch (linker.wasmStackLayout(global_base)) {
+            .stack_first => if (maximum_memory) |bytes| {
+                const limit = linker.stackFirstMaximumMemory(stack_size);
+                if (bytes > limit) return ctx.fail(.{ .wasm_maximum_memory_too_large = .{
+                    .target = link_inputs.target_name,
+                    .maximum_memory = bytes,
+                    .limit = limit,
+                    .stack_size = stack_size,
+                } });
+            },
+            .data_first => {},
+        };
+        const config: wasm_link.ModuleConfig = .{
+            .exports = if (module_output) requiredWasmPlatformExports(link_inputs) else &.{},
+            .stack_exports = linker.wasmStackExports(self.target.cpuLevel()),
+            .stack_size = stack_size,
+            .global_base = global_base,
+            .initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
+            .maximum_memory = maximum_memory,
+            .import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
+            .zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
+            .names = args.debug,
+        };
+        const stack_contents = backend.wasm.StackSupport.Contents{ .accessors = self.target.cpuLevel() == .v1, .overflow = stack_checks };
+        if (stack_contents.accessors or stack_contents.overflow) self.stack_support = try backend.wasm.StackSupport.encodeObject(ctx.gpa, stack_contents);
+
+        reporter.begin("Fast Dev Link");
+        const target_name = link_inputs.target_name;
+        const wait_started = WasmBuildTiming.now(ctx);
+        self.job.wait();
+        const wait_ns: u64 = @intCast(@max(0, WasmBuildTiming.now(ctx) - wait_started));
+        if (self.job.failed) |err| {
+            reporter.fail();
+            return err;
+        }
+        if (self.job.unreadable_input) |path| {
+            reporter.fail();
+            std.log.err("Reading the platform link input {s} failed", .{path});
+            return failLink(ctx, error.InvalidArguments, target_name);
+        }
+        var owned_support: ?[]align(backend.wasm.WasmUnitImage.alignment.toByteUnits()) u8 = null;
+        defer if (owned_support) |bytes| ctx.gpa.free(bytes);
+        var owned_host: ?[]align(backend.wasm.WasmUnitImage.alignment.toByteUnits()) u8 = null;
+        defer if (owned_host) |bytes| ctx.gpa.free(bytes);
+        var support_convert_ns: u64 = 0;
+        var host_convert_ns: u64 = 0;
+        const support = self.image(ctx, .support, stack_checks, target_name, scratch_dir, &owned_support, &support_convert_ns) catch |err| {
+            reporter.fail();
+            return err;
+        };
+        const host: ?backend.wasm.WasmUnitImage.View = if (self.spec.needs_host) self.image(ctx, .host, stack_checks, target_name, scratch_dir, &owned_host, &host_convert_ns) catch |err| {
+            reporter.fail();
+            return err;
+        } else null;
+
+        const library = units.library;
+        const unit_views = try ctx.gpa.alloc(backend.wasm.WasmUnitImage.View, library.images.len + 1);
+        defer ctx.gpa.free(unit_views);
+        for (library.images, unit_views[0..library.images.len]) |unit_image, *view| {
+            view.* = backend.wasm.WasmUnitImage.View.init(unit_image) catch base.invariant("roc build invariant violated: a wasm unit image does not read", .{});
+        }
+        unit_views[library.images.len] = backend.wasm.WasmUnitImage.View.init(units.root_image) catch base.invariant("roc build invariant violated: the root wasm unit image does not read", .{});
+        const accessors = [_][]const u8{ shim_symbols.roc_wasm_stack_pointer, shim_symbols.roc_wasm_set_stack_pointer };
+        const app_public = try fast_dev_link.sortedUnion(ctx.arena, &.{ units.app_export_symbols, if (self.target.cpuLevel() == .v1) &accessors else &.{} });
+        const inputs: wasm_link.Inputs = .{
+            .host = host,
+            .support = support,
+            .units = unit_views,
+            .root = library.images.len,
+            .app_public = app_public,
+            .provides = self.provides,
+            .hosted = self.hosted,
+        };
+
+        var timing: wasm_link.Timing = .{};
+        var outcome: wasm_link.Outcome = .{};
+        const executor = build_env.postCheckExecutor();
+        var publish_ns: u64 = 0;
+        if (self.output) |*output| {
+            wasm_link.composeModule(ctx.gpa, ctx.arena, ctx.io.std_io, inputs, config, output, executor, &timing, &outcome) catch |err| {
+                reporter.fail();
+                return self.reportFailure(ctx, err, outcome, target_name);
+            };
+            const publish_started = WasmBuildTiming.now(ctx);
+            output.publish(ctx.arena) catch |err| {
+                reporter.fail();
+                return switch (err) {
+                    error.OutOfMemory => error.OutOfMemory,
+                    else => |file_err| ctx.fail(.{ .file_write_failed = .{ .path = output.dest, .err = file_err } }),
+                };
+            };
+            self.published = true;
+            publish_ns = @intCast(@max(0, WasmBuildTiming.now(ctx) - publish_started));
+        } else {
+            const object = wasm_link.composeObject(ctx.gpa, ctx.arena, ctx.io.std_io, inputs, &timing, &outcome) catch |err| {
+                reporter.fail();
+                return self.reportFailure(ctx, err, outcome, target_name);
+            };
+            defer ctx.gpa.free(object);
+            const publish_started = WasmBuildTiming.now(ctx);
+            const object_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, "roc_app_wasm32.o" });
+            backend.writeFileWindowsAvSafe(ctx.io.std_io, object_path, object) catch return error.WasmOutputWriteFailed;
+            try writeArchiveOutput(ctx, .wasm32, self.final_output_path, link_inputs, &.{object_path});
+            publish_ns = @intCast(@max(0, WasmBuildTiming.now(ctx) - publish_started));
+        }
+        reporter.endWithBreakdown(&.{
+            .{ .name = if (support_convert_ns != 0) "Support Image (convert)" else "Support Image (cache hit)", .ns = support_convert_ns },
+            .{ .name = if (host_convert_ns != 0) "Host Image (convert)" else "Host Image (cache hit)", .ns = host_convert_ns },
+            .{ .name = "Image Hashing", .ns = self.job.hash_ns },
+            .{ .name = "Image Lookup", .ns = self.job.lookup_ns },
+            .{ .name = "Image Wait", .ns = wait_ns },
+            .{ .name = "Walk", .ns = timing.walk_ns },
+            .{ .name = "Layout", .ns = timing.layout_ns },
+            .{ .name = "Write", .ns = timing.write_ns },
+            .{ .name = "Finalize", .ns = timing.finalize_ns + publish_ns },
+        });
+        reporter.recordCounters("Wasm fast dev link", &.{
+            .{ .name = "Images placed", .count = timing.images_placed },
+            .{ .name = "Functions", .count = timing.functions },
+            .{ .name = "Bytes written", .count = timing.bytes_written },
+            .{ .name = "Sites patched", .count = timing.sites_patched },
+        });
+    }
+
+    fn reportFailure(self: *WasmFastLink, ctx: *CliCtx, err: wasm_link.LinkError, outcome: wasm_link.Outcome, target_name: []const u8) CliMainError {
+        switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.MissingHostSymbols => return ctx.fail(.{ .missing_host_symbols = .{ .symbols = outcome.missing, .target = target_name } }),
+            error.UndefinedExports => return ctx.fail(.{ .wasm_exports_undefined = .{ .symbols = outcome.undefined_exports, .target = target_name } }),
+            error.ImportConflict => return ctx.fail(.{ .wasm_import_conflict = .{ .symbol = outcome.conflict.?, .target = target_name } }),
+            error.EngineLimit => return ctx.fail(.{ .wasm_engine_limit = .{ .what = outcome.limit.?.what, .count = outcome.limit.?.count, .limit = outcome.limit.?.limit, .target = target_name } }),
+            error.MemoryLayout => return ctx.fail(.{ .wasm_memory_layout = .{ .what = @tagName(outcome.memory.?.what), .needed = outcome.memory.?.needed, .configured = outcome.memory.?.configured, .target = target_name } }),
+            error.ParameterLimit => {
+                for (outcome.parameters) |problem| try ctx.addProblem(.{ .wasm_host_parameter_limit = .{
+                    .symbol = problem.symbol,
+                    .direction = if (problem.hosted) .hosted else .provided_to_host,
+                    .param_count = problem.param_count,
+                    .limit = layout.abi.wasm_max_function_params,
+                } });
+                return error.CliError;
+            },
+            error.AccessDenied, error.NoSpaceLeft, error.FileNotFound, error.Unexpected => |file_err| return ctx.fail(.{ .file_write_failed = .{ .path = self.final_output_path, .err = file_err } }),
+        }
+    }
+};
+
 /// Restore or build and file every wasm unit of the program: each library
 /// module's, scheduled after checking as a native link's units are
 /// (`buildBoxyLibraryObjects`), then the root unit's, which exports the
 /// platform's provides under the names the host imports. Each is keyed by
 /// the unit key with the wasm target and the platform's stack-check mode.
-/// The build's output still comes from the whole-program pipeline.
 fn buildWasmUnits(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
@@ -11192,7 +11542,7 @@ fn buildWasmUnits(
     relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
     target: RocTarget,
     targets_config: roc_target.TargetsConfig,
-) CliMainError!void {
+) CliMainError!WasmUnits {
     const cache_manager = build_env.cache_manager orelse base.invariant("roc build invariant violated: wasm units are built without a cache", .{});
     var policy = BoxyUnitPolicy.ofBuild(args);
     policy.wasm_stack_checks = wasmStackChecks(if (targets_config.getLinkSpec(target)) |spec| spec.wasm else null);
@@ -11201,7 +11551,8 @@ fn buildWasmUnits(
     var digests = try build_env.boxyLinkDigests();
     defer digests.deinit();
     const library = try buildBoxyLibraryObjects(ctx, policy, build_env, reporter, root_artifact, target, &interfaces, &digests, true, null, "Lowering Modules (wasm)");
-    defer library.deinit(ctx.gpa);
+    var library_owned_here = true;
+    defer if (library_owned_here) library.deinit(ctx.gpa);
     const dump_dir = dev_diagnostics.get(.dump_wasm_unit_images);
     if (dump_dir) |dir| for (library.images, library.keys) |image, key| dumpWasmUnitImage(ctx, dir, key, image);
 
@@ -11211,13 +11562,20 @@ fn buildWasmUnits(
         defer compile.boxy_object_cache.deinitEntry(ctx.gpa, entry);
         build_env.recordWasmUnits(1, 0);
         if (dump_dir) |dir| dumpWasmUnitImage(ctx, dir, root_key.bytes, entry.image);
-        reporter.end();
-        return;
+        const root_image = try ctx.gpa.alignedAlloc(u8, backend.wasm.WasmUnitImage.alignment, entry.image.len);
+        @memcpy(root_image, entry.image);
+        const app_export_symbols = try ctx.arena.alloc([]const u8, entry.app_export_symbols.len);
+        for (entry.app_export_symbols, app_export_symbols) |symbol, *owned| owned.* = try ctx.arena.dupe(u8, symbol);
+        reporter.endWithBreakdown(&.{.{ .name = "Root Unit (cache hit)", .ns = 0 }});
+        library_owned_here = false;
+        return .{ .library = library, .root_image = root_image, .app_export_symbols = app_export_symbols };
     }
     var lowering_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     var lowered = try lowerCheckedSourceToLir(ctx.gpa, ctx.gpa, root_artifact, imported_artifacts, relation_artifacts, .linked_output, args.opt, .boxy, target, args.synthetic_default_platform, false, build_env.postCheckExecutor(), &lowering_timing, null, .{ .imports = &interfaces, .root = true, .names = &digests.names });
     defer lowered.deinit();
-    const lowered_ns = WasmBuildTiming.now(ctx);
+    const lowering_snapshot = lowering_timing.snapshot();
+    reporter.endWithBreakdown(&.{.{ .name = "Lowering", .ns = postCheckLoweringTotalNs(lowering_snapshot) }});
+    reporter.begin("Unit Image");
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
     const static_data_exports = try compile.static_data_exports.buildStaticData(ctx.gpa, .{
@@ -11239,23 +11597,24 @@ fn buildWasmUnits(
             return error.NativeCompilationFailed;
         },
     };
-    defer ctx.gpa.free(image);
+    var image_owned_here = true;
+    defer if (image_owned_here) ctx.gpa.free(image);
     const records = try compile.boxy_unit.exportRecords(ctx.gpa, &lowered, &interfaces);
     defer ctx.gpa.free(records);
+    const app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports);
     try compile.boxy_unit.store(ctx.gpa, cache_manager, root_key, .{
         .exports = records,
         .hosted_symbols = try compile.boxy_unit.hostedSymbols(ctx.arena, &lowered.lir_result.store),
-        .app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
+        .app_export_symbols = app_export_symbols,
         .pieces = &.{},
         .image = image,
     });
     build_env.recordWasmUnits(0, 1);
     if (dump_dir) |dir| dumpWasmUnitImage(ctx, dir, root_key.bytes, image);
-    const lowering_snapshot = lowering_timing.snapshot();
-    reporter.endWithBreakdown(&.{
-        .{ .name = "Lowering", .ns = postCheckLoweringTotalNs(lowering_snapshot) },
-        .{ .name = "Codegen + Image", .ns = @intCast(@max(0, WasmBuildTiming.now(ctx) - lowered_ns)) },
-    });
+    reporter.end();
+    library_owned_here = false;
+    image_owned_here = false;
+    return .{ .library = library, .root_image = image, .app_export_symbols = app_export_symbols };
 }
 
 /// Write a wasm unit image to `dir`, named by its unit key
@@ -11527,6 +11886,13 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     else
         null;
     defer if (fast_link) |fast| fast.deinit(ctx.gpa);
+    // A `.boxy` dev build of a wasm target is linked by composing images,
+    // whose output file and image job start before any compile work too.
+    const wasm_fast_link: ?*WasmFastLink = if (wasmFastLinkApplies(target, args))
+        try WasmFastLink.start(ctx, &build_env, platform_dir, target, link_type, final_output_path, args.no_cache)
+    else
+        null;
+    defer if (wasm_fast_link) |fast| fast.deinit(ctx.gpa);
 
     build_env.setTarget(target);
     const runtime_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
@@ -11580,7 +11946,14 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
 
-    if (wasmUnitsApply(target, args)) try buildWasmUnits(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, target, resolved_targets_config);
+    if (wasmUnitsApply(target, args)) {
+        const units = try buildWasmUnits(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, target, resolved_targets_config);
+        defer units.deinit(ctx.gpa);
+        if (wasm_fast_link) |fast| {
+            try fast.link(ctx, args, &reporter, &build_env, resolved_targets_config, units, build_scratch_dir);
+            return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
+        }
+    }
 
     // Every other module's object comes first: the root unit compiles its
     // calls against their export interfaces.
