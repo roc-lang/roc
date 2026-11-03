@@ -549,18 +549,43 @@ fn merge(
         if ((try collected.getOrPut(item.name)).found_existing) continue;
         try all_items.append(allocator, item);
     }
+    // One datum per name, so ordering by name alone is total. Most names
+    // are content digests, which their leading bytes tell apart, so the
+    // sort moves keys and compares whole names only when those tie.
+    const keys = try allocator.alloc(DataKey, all_items.items.len);
+    defer allocator.free(keys);
+    for (all_items.items, keys, 0..) |item, *key, i| key.* = .{ .leading = leadingBytes(item.name), .index = @intCast(i) };
+    std.mem.sortUnstable(DataKey, keys, all_items.items, DataKey.lessThan);
     const data = try a.alloc(CodeExcerpt.ArrangedDatum, all_items.items.len);
-    for (all_items.items, data) |item, *datum| datum.* = .{ .item = item, .host_visible = visible.contains(item.name) };
-    // One datum per name, so ordering by name alone is total.
-    std.mem.sortUnstable(CodeExcerpt.ArrangedDatum, data, {}, struct {
-        fn lessThan(_: void, lhs: CodeExcerpt.ArrangedDatum, rhs: CodeExcerpt.ArrangedDatum) bool {
-            return std.mem.lessThan(u8, lhs.item.name, rhs.item.name);
-        }
-    }.lessThan);
+    for (keys, data) |key, *datum| {
+        const item = all_items.items[key.index];
+        datum.* = .{ .item = item, .host_visible = visible.contains(item.name) };
+    }
 
     const files = try source_files.toOwnedSlice(a);
     const retained = try Set.retainOwners(a, excerpts);
     return .{ .set = .{ .arena = arena, .excerpts = excerpts, .source_files = files, .owners = retained }, .data = data };
+}
+
+/// A constant's position in name order: its name's leading bytes, then its
+/// whole name where those tie.
+const DataKey = struct {
+    leading: u64,
+    index: u32,
+
+    fn lessThan(items: []const DataItem, lhs: DataKey, rhs: DataKey) bool {
+        if (lhs.leading != rhs.leading) return lhs.leading < rhs.leading;
+        return std.mem.lessThan(u8, items[lhs.index].name, items[rhs.index].name);
+    }
+};
+
+/// The first eight bytes of `name` as a big-endian word, a shorter name
+/// padded with zeros, so that word order agrees with byte order.
+fn leadingBytes(name: []const u8) u64 {
+    var bytes: [8]u8 = @splat(0);
+    const len = @min(name.len, bytes.len);
+    @memcpy(bytes[0..len], name[0..len]);
+    return std.mem.readInt(u64, &bytes, .big);
 }
 
 /// Where a kept excerpt's definition landed in the image.
