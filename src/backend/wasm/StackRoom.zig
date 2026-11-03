@@ -365,6 +365,8 @@ const Walker = struct {
     calls: std.AutoHashMapUnmanaged(Call, void) = .empty,
     checked: bool = false,
     check_relocs: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    /// Set by a dynamic frame allocation until the check that follows it.
+    awaiting_check: bool = false,
 
     const Label = struct {
         kind: enum { block, loop, @"if" },
@@ -572,6 +574,7 @@ const Walker = struct {
 
     fn recordCall(self: *Walker, callee: Callee) Allocator.Error!void {
         if (!self.state.reachable) return;
+        if (self.awaiting_check) base.invariant("wasm stack room invariant violated: a call follows a dynamic frame allocation before its check", .{});
         const depth: u64 = @intCast(-@min(self.state.stack_pointer, 0));
         try self.calls.put(self.arena, .{ .callee = callee, .depth = depth }, {});
     }
@@ -732,12 +735,24 @@ const Walker = struct {
                 _ = try WasmModule.readU32(self.code, cursor);
                 const value = self.pop();
                 if (!self.isStackPointer(operand) or !self.state.reachable) return;
-                const offset = switch (value) {
-                    .derived => |offset| offset,
-                    .unknown, .constant => base.invariant("wasm stack room invariant violated: the stack pointer is set to a value not derived from it at code offset {d}", .{at}),
-                };
-                self.state.stack_pointer = offset;
-                self.lowest_stack_pointer = @min(self.lowest_stack_pointer, offset);
+                if (self.awaiting_check) base.invariant("wasm stack room invariant violated: the stack pointer moves again after a dynamic frame allocation before its check, at code offset {d}", .{at});
+                switch (value) {
+                    .derived => |offset| {
+                        self.state.stack_pointer = offset;
+                        self.lowest_stack_pointer = @min(self.lowest_stack_pointer, offset);
+                    },
+                    // A dynamic frame allocation lowers the stack pointer by
+                    // an amount only known at runtime, and a check follows
+                    // it at once. Depths from here on are measured from the
+                    // new stack pointer: that check gives the code after it
+                    // the room the function's checks get, which covers the
+                    // deepest it reaches below any of its stack pointers.
+                    .unknown => {
+                        self.state.stack_pointer = 0;
+                        self.awaiting_check = true;
+                    },
+                    .constant => base.invariant("wasm stack room invariant violated: the stack pointer is set to a constant at code offset {d}", .{at}),
+                }
             },
             0x25 => { // table.get
                 _ = try WasmModule.readU32(self.code, cursor);
@@ -763,6 +778,7 @@ const Walker = struct {
                 if (self.relocAt(operand)) |reloc_index| {
                     if (self.symbols.stack_low) |stack_low| {
                         if (self.relocs[reloc_index].getSymbolIndex() == stack_low) {
+                            self.awaiting_check = false;
                             try self.check_relocs.put(self.arena, reloc_index, {});
                             if (!self.left_straight_line and self.if_depth == 0) self.checked = true;
                         }
@@ -1277,6 +1293,39 @@ test "a recursive function's check covers its frame and the frame of the uncheck
     const rooms = try filledRooms(bytes);
     defer testing.allocator.free(rooms);
     try testing.expectEqualSlices(i32, &.{48}, rooms);
+}
+
+test "a dynamic frame allocation's check gets the room of the function's checks" {
+    var object = try TestObject.init();
+    defer object.deinit();
+    const overflow = try object.declare(shim_symbols.roc_wasm_stack_overflow);
+    _ = try object.declare("dynamic");
+    const leaf = try object.declare("leaf");
+    try defineOverflow(&object);
+
+    // A 32-byte frame, then a region of a size read from memory, a check,
+    // and a call into a leaf with a 48-byte frame.
+    var dynamic_body = try TestBody.init(&object);
+    try dynamic_body.check(overflow);
+    try dynamic_body.reserve(32);
+    try dynamic_body.stackPointer(Op.global_get);
+    try dynamic_body.bytes(&.{ Op.local_get, 0, Op.i32_load, 2, 0, Op.i32_sub });
+    try dynamic_body.stackPointer(Op.global_set);
+    try dynamic_body.check(overflow);
+    try dynamic_body.call(leaf);
+    try dynamic_body.release(32);
+    try dynamic_body.finish();
+
+    var leaf_body = try TestBody.init(&object);
+    try leaf_body.reserve(48);
+    try leaf_body.release(48);
+    try leaf_body.finish();
+
+    const bytes = try object.encode();
+    defer testing.allocator.free(bytes);
+    const rooms = try filledRooms(bytes);
+    defer testing.allocator.free(rooms);
+    try testing.expectEqualSlices(i32, &.{ 48, 48 }, rooms);
 }
 
 test "a function that uses the space below the stack pointer without lowering it needs that space" {

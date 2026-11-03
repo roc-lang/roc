@@ -692,6 +692,7 @@ const CustomCase = enum {
     issue_11627_static_data_names_cache,
     issue_10733_wasm_boxy_dev_sealed_object,
     issue_12029_wasm_boxy_tail_calls,
+    wasm_units_warm,
     issue_12769_wasm_many_parameters_specialized,
     issue_12769_wasm_many_parameters_boxy,
     issue_12769_wasm_parameter_limit_dev_specialized,
@@ -4477,6 +4478,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12554: wasm32 platform that reserves memory below a global_base smaller than its stack links (LLVM)", .backend = .size, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=size", "--no-cache" }, .roc_file = "test/wasm/issue_12554_reserved_low_memory/app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "linker failed" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: dev wasm32 emits a valid sealed Boxy object", .backend = .dev, .body = .{ .custom = .issue_10733_wasm_boxy_dev_sealed_object } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12029: boxy tail calls run in constant stack on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12029_wasm_boxy_tail_calls } },
+    .{ .id = 0, .suite = .subcommands, .name = "a warm wasm32 build of test/wasm/boxy_generic_tail_calls_app.roc restores every wasm unit (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .wasm_units_warm } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 functions take more than 255 parameters (dev, specialized)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_many_parameters_specialized } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 functions take more than 255 parameters (dev, boxy)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_many_parameters_boxy } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 arguments past the parameter limit travel in memory (dev, specialized)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12769_wasm_parameter_limit_dev_specialized } },
@@ -6123,6 +6125,7 @@ fn runCustomCase(
         .literal_root_rejected_every_build => customLiteralRootRejectedEveryBuild(io, allocator, &env, &timer, timeout_ms),
         .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
         .issue_12029_wasm_boxy_tail_calls => customIssue12029WasmBoxyTailCalls(io, allocator, &env, &timer, timeout_ms),
+        .wasm_units_warm => customWasmUnitsWarm(io, allocator, &env, &timer, timeout_ms),
         .issue_12769_wasm_many_parameters_specialized => customIssue12769WasmManyParameters(io, allocator, &env, &timer, timeout_ms, "--specialize=yes"),
         .issue_12769_wasm_many_parameters_boxy => customIssue12769WasmManyParameters(io, allocator, &env, &timer, timeout_ms, "--specialize=no"),
         .issue_12769_wasm_parameter_limit_dev_specialized => customIssue12769WasmParameterLimit(io, allocator, &env, &timer, timeout_ms, "--opt=dev", "--specialize=yes"),
@@ -12302,6 +12305,66 @@ fn customIssue12029WasmBoxyTailCalls(
     const expected = "a result string long enough to live on the heap!";
     if (!std.mem.eql(u8, result, expected)) {
         return customFailure(allocator, timer, "boxy tail call wasm returned \"{s}\"", .{result});
+    }
+    return null;
+}
+
+/// A `.boxy` dev build of a wasm32 app with a cache files a wasm unit per
+/// module and one for the root, and a second build of the same sources
+/// restores every one of them and writes the same module, which runs.
+fn customWasmUnitsWarm(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err| return customInfraFailure(allocator, timer, "clone environment: {}", .{err}) };
+    defer isolated.env_map.deinit();
+    const cache_root = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "wasm_unit_cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the cache root: {}", .{err});
+    for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+        isolated.env_map.put(key, cache_root) catch |err| return customInfraFailure(allocator, timer, "failed to set the cache root: {}", .{err});
+    }
+    var built_units: ?[]const u8 = null;
+    var first_bytes: ?[]const u8 = null;
+    for ([_][]const u8{ "cold", "warm" }) |name| {
+        const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate wasm output path: {}", .{err});
+        const output_path_wasm = std.fmt.allocPrint(allocator, "{s}.wasm", .{output_path}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate wasm output path: {}", .{err});
+        const output_arg = outputArg(allocator, output_path_wasm) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate wasm output argument: {}", .{err});
+        const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "wasm unit cache test timed out");
+        const run = runRocInEnv(io, allocator, &isolated, &.{ "build", "--target=wasm32", "--opt=dev", "--specialize=no", "--no-color", "--verbose", output_arg }, "test/wasm/boxy_generic_tail_calls_app.roc", .relative, &.{}, null, remaining) catch |err|
+            return customInfraFailure(allocator, timer, "build: {}", .{err});
+        if (!processSucceeded(run.term)) return failureFromRun(allocator, timer, run, "the build failed");
+        const prefix = "Wasm units: ";
+        const at = std.mem.find(u8, run.stdout, prefix) orelse return failureFromRun(allocator, timer, run, "the build reported no wasm units");
+        const line = run.stdout[at + prefix.len ..];
+        const summary = line[0 .. std.mem.findScalar(u8, line, '\n') orelse line.len];
+        if (built_units) |count| {
+            const expected = std.fmt.allocPrint(allocator, "{s} cached, 0 built", .{count}) catch |err|
+                return customInfraFailure(allocator, timer, "summary: {}", .{err});
+            if (!std.mem.eql(u8, summary, expected)) return failureFromRun(allocator, timer, run, "the warm build did not restore every wasm unit the cold build filed");
+        } else {
+            const zero = "0 cached, ";
+            if (!std.mem.startsWith(u8, summary, zero)) return failureFromRun(allocator, timer, run, "the cold build restored wasm units from an empty cache");
+            const count = summary[zero.len .. std.mem.find(u8, summary, " built") orelse return failureFromRun(allocator, timer, run, "the cold build's wasm unit summary does not read")];
+            if (std.mem.eql(u8, count, "0")) return failureFromRun(allocator, timer, run, "the cold build filed no wasm units");
+            built_units = count;
+        }
+        if (validateWasmOutput(io, allocator, timer, output_path_wasm)) |failure| return failure;
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, output_path_wasm, allocator, .limited(64 * 1024 * 1024)) catch |err| return customInfraFailure(allocator, timer, "read wasm module: {}", .{err});
+        if (first_bytes) |expected| {
+            if (!std.mem.eql(u8, expected, bytes)) return customFailure(allocator, timer, "the warm build's wasm module differs from the cold build's", .{});
+        } else first_bytes = bytes;
+        var wasm = setupGlueRuntimeWasm(io, allocator, output_path_wasm) catch |err|
+            return customFailure(allocator, timer, "failed to load the wasm module: {}", .{err});
+        defer wasm.deinit();
+        const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
+            return customFailure(allocator, timer, "wasm execution failed: {}", .{err});
+        if (!std.mem.eql(u8, result, "a result string long enough to live on the heap!")) return customFailure(allocator, timer, "the wasm module returned \"{s}\"", .{result});
     }
     return null;
 }

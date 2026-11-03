@@ -247,6 +247,9 @@ pub const BuildEnv = struct {
     /// See `recordBoxyObjects`.
     boxy_objects_restored: u32 = 0,
     boxy_objects_built: u32 = 0,
+    /// See `recordWasmUnits`.
+    wasm_units_restored: u32 = 0,
+    wasm_units_built: u32 = 0,
     // I/O abstraction for all OS operations (filesystem, stdio, env vars, etc.)
     filesystem: CoreCtx,
     // Explicit working directory for resolving relative paths
@@ -2538,6 +2541,10 @@ pub const BuildEnv = struct {
         /// object cache, and lowered and compiled by this build.
         boxy_objects_restored: u32 = 0,
         boxy_objects_built: u32 = 0,
+        /// Wasm units (a wasm link's own units, beside the native objects
+        /// compile-time evaluation runs) restored and built by this build.
+        wasm_units_restored: u32 = 0,
+        wasm_units_built: u32 = 0,
 
         /// Number of modules that were compiled (not cached)
         modules_compiled: u32 = 0,
@@ -2562,6 +2569,8 @@ pub const BuildEnv = struct {
         var stats: BuildStats = if (self.coordinator) |coord| coord.getBuildStats() else .{};
         stats.boxy_objects_restored = self.boxy_objects_restored;
         stats.boxy_objects_built = self.boxy_objects_built;
+        stats.wasm_units_restored = self.wasm_units_restored;
+        stats.wasm_units_built = self.wasm_units_built;
         return stats;
     }
 
@@ -2600,6 +2609,13 @@ pub const BuildEnv = struct {
     pub fn recordBoxyObjects(self: *BuildEnv, restored: u32, built: u32) void {
         self.boxy_objects_restored += restored;
         self.boxy_objects_built += built;
+    }
+
+    /// Count the wasm units a wasm build restored from and filed in the
+    /// per-module Boxy object cache (`BuildStats`).
+    pub fn recordWasmUnits(self: *BuildEnv, restored: u32, built: u32) void {
+        self.wasm_units_restored += restored;
+        self.wasm_units_built += built;
     }
 
     pub fn freeWatchInputStates(self: *BuildEnv, inputs: []const watch_inputs.Input) void {

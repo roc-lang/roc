@@ -47,6 +47,9 @@ pub const Var = enum {
     /// family of functions of at most this many bytes of code each, so every
     /// program exercises wasm function splitting.
     wasm_split_bytes,
+    /// Write every wasm unit image a wasm build restores or builds into the
+    /// named directory, one file per unit named by its unit key.
+    dump_wasm_unit_images,
 
     /// The variable's name in the environment.
     pub fn envName(comptime self: Var) [:0]const u8 {
@@ -65,6 +68,7 @@ pub const Var = enum {
             .test_command_work => "ROC_TEST_COMMAND_WORK",
             .dump_run_image => "ROC_DUMP_RUN_IMAGE",
             .wasm_split_bytes => "ROC_WASM_SPLIT_BYTES",
+            .dump_wasm_unit_images => "ROC_DUMP_WASM_UNIT_IMAGES",
         };
     }
 };

@@ -6753,7 +6753,7 @@ fn lowerRunUnits(
     // A run files the units it builds.
     tables.digests = try build_env.boxyLinkDigests();
     const policy: BoxyUnitPolicy = .{ .opt = .dev, .no_cache = false, .synthetic_default_platform = false };
-    var library: ?BoxyLibraryObjects = try buildBoxyLibraryObjects(ctx, policy, build_env, reporter, root_artifact, target, &tables.interfaces, &tables.digests, true, null);
+    var library: ?BoxyLibraryObjects = try buildBoxyLibraryObjects(ctx, policy, build_env, reporter, root_artifact, target, &tables.interfaces, &tables.digests, true, null, "Lowering Modules");
     errdefer if (library) |owned| owned.deinit(ctx.gpa);
     const cache_manager = build_env.cache_manager orelse base.invariant("roc run invariant violated: a run composed from unit images has no cache manager", .{});
     const root_key = try boxyObjectKey(ctx.gpa, &tables.digests, root_artifact, boxyUnitPlatform(root_artifact, library.?.platform), policy, target, library.?.paired_platforms, true);
@@ -6768,7 +6768,7 @@ fn lowerRunUnits(
     var root_image: ?[]align(backend.dev.UnitImage.alignment.toByteUnits()) u8 = null;
     errdefer if (root_image) |image| ctx.gpa.free(image);
     const host_boundary_digests = try ctx.arena.alloc([32]u8, selected_roots.len);
-    if (try compile.boxy_unit.restore(ctx.gpa, cache_manager, root_key, &tables.interfaces)) |entry| {
+    if (try compile.boxy_unit.restore(ctx.gpa, cache_manager, root_key, target, &tables.interfaces)) |entry| {
         defer compile.boxy_object_cache.deinitEntry(ctx.gpa, entry);
         if (entry.host_boundary_digests.len != selected_roots.len) base.invariant("roc run invariant violated: the root unit's cache entry covers {d} of {d} entrypoints", .{ entry.host_boundary_digests.len, selected_roots.len });
         @memcpy(host_boundary_digests, entry.host_boundary_digests);
@@ -10323,8 +10323,10 @@ fn buildBoxyLibraryObjects(
     /// which with their imports are the units built, in place of the root's
     /// visible modules.
     test_modules: ?[]const *const check.CheckedArtifact.CheckedModuleArtifact,
+    /// The `--timings` phase the units' work is reported under.
+    phase_name: []const u8,
 ) CliMainError!BoxyLibraryObjects {
-    reporter.begin("Lowering Modules");
+    reporter.begin(phase_name);
     const Artifact = check.CheckedArtifact.CheckedModuleArtifact;
     const visible = try build_env.collectVisibleArtifacts(ctx.gpa, root_artifact);
     defer ctx.gpa.free(visible);
@@ -10580,7 +10582,10 @@ fn buildBoxyLibraryObjects(
     reach_taken = true;
     if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: the checked program reaches {d} template workers in {d} modules\n", .{ reach.identities.len, reach.modules.count() });
     // The summary counts cache work; a build without a cache does none.
-    if (!policy.no_cache) build_env.recordBoxyObjects(restored, built);
+    if (!policy.no_cache) switch (compile.boxy_unit.imageKind(target)) {
+        .native, .none => build_env.recordBoxyObjects(restored, built),
+        .wasm => build_env.recordWasmUnits(restored, built),
+    };
     reporter.end();
     recordPostCheckLowering(reporter, &unit_timing, .boxy);
     const ordered = try ctx.arena.alloc(*const backend.dev.UnitPieces.Pieces, if (want_images) 0 else units.items.len);
@@ -10732,6 +10737,9 @@ const BoxyUnitPolicy = struct {
     synthetic_default_platform: bool,
     /// Whether the units are test units (`roc test` from unit images).
     test_units: bool = false,
+    /// For wasm units: whether the platform reserves low memory, so the
+    /// units' code checks its stack bounds (`wasmStackChecks`).
+    wasm_stack_checks: bool = false,
 
     fn ofBuild(args: cli_args.BuildArgs) BoxyUnitPolicy {
         return .{ .opt = args.opt, .no_cache = args.no_cache, .synthetic_default_platform = args.synthetic_default_platform };
@@ -10741,7 +10749,7 @@ const BoxyUnitPolicy = struct {
 /// The key of `artifact`'s object under this build's target and policy;
 /// `run_image` marks the root unit of a dev run image.
 fn boxyObjectKey(gpa: Allocator, digests: *compile.boxy_interface.Digests, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, platform: ?check.CheckedArtifact.ImportedModuleView, policy: BoxyUnitPolicy, target: RocTarget, paired_platforms: []const [32]u8, run_image: bool) Allocator.Error!compile.boxy_object_cache.Key {
-    return compile.boxy_unit.objectKey(gpa, digests, artifact, platform, @tagName(policy.opt), inlineExpectModeForOpt(policy.opt) == .run, target, paired_platforms, run_image, policy.test_units);
+    return compile.boxy_unit.objectKey(gpa, digests, artifact, platform, @tagName(policy.opt), inlineExpectModeForOpt(policy.opt) == .run, target, paired_platforms, run_image, policy.test_units, policy.wasm_stack_checks);
 }
 
 /// The platform module a unit of `artifact` needs in view: the one whose
@@ -10801,6 +10809,7 @@ const BoxyUnitTask = struct {
             .key = self.key,
             .want_pieces = self.want_pieces,
             .test_unit = self.policy.test_units,
+            .wasm_stack_checks = self.policy.wasm_stack_checks,
         });
     }
 };
@@ -11156,6 +11165,108 @@ fn fastDevLinkApplies(target: RocTarget, link_type: roc_target.OutputKind, args:
     };
 }
 
+/// Whether a build lowers and files per-module wasm units for its wasm
+/// target: a `.boxy` dev build of `wasm32` or `wasm32v1` with a cache.
+/// Compile-time evaluation keeps running native units, so such a build has
+/// two units per module: the native one compile-time evaluation runs and
+/// the wasm one for the link.
+fn wasmUnitsApply(target: RocTarget, args: cli_args.BuildArgs) bool {
+    if (args.opt != .dev or currentRuntimeSpecializationStrategy(args.specialization_strategy) != .boxy) return false;
+    if (args.no_cache) return false;
+    return compile.boxy_unit.imageKind(target) == .wasm;
+}
+
+/// Restore or build and file every wasm unit of the program: each library
+/// module's, scheduled after checking as a native link's units are
+/// (`buildBoxyLibraryObjects`), then the root unit's, which exports the
+/// platform's provides under the names the host imports. Each is keyed by
+/// the unit key with the wasm target and the platform's stack-check mode.
+/// The build's output still comes from the whole-program pipeline.
+fn buildWasmUnits(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    build_env: *BuildEnv,
+    reporter: *progress.Reporter,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imported_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    target: RocTarget,
+    targets_config: roc_target.TargetsConfig,
+) CliMainError!void {
+    const cache_manager = build_env.cache_manager orelse base.invariant("roc build invariant violated: wasm units are built without a cache", .{});
+    var policy = BoxyUnitPolicy.ofBuild(args);
+    policy.wasm_stack_checks = wasmStackChecks(if (targets_config.getLinkSpec(target)) |spec| spec.wasm else null);
+    var interfaces = postcheck.Boxy.Lower.ExportInterfaces.init(ctx.gpa, ctx.io.std_io);
+    defer interfaces.deinit();
+    var digests = try build_env.boxyLinkDigests();
+    defer digests.deinit();
+    const library = try buildBoxyLibraryObjects(ctx, policy, build_env, reporter, root_artifact, target, &interfaces, &digests, true, null, "Lowering Modules (wasm)");
+    defer library.deinit(ctx.gpa);
+    const dump_dir = dev_diagnostics.get(.dump_wasm_unit_images);
+    if (dump_dir) |dir| for (library.images, library.keys) |image, key| dumpWasmUnitImage(ctx, dir, key, image);
+
+    const root_key = try boxyObjectKey(ctx.gpa, &digests, root_artifact, boxyUnitPlatform(root_artifact, library.platform), policy, target, library.paired_platforms, false);
+    reporter.begin("Wasm Root Unit");
+    if (try compile.boxy_unit.restore(ctx.gpa, cache_manager, root_key, target, &interfaces)) |entry| {
+        defer compile.boxy_object_cache.deinitEntry(ctx.gpa, entry);
+        build_env.recordWasmUnits(1, 0);
+        if (dump_dir) |dir| dumpWasmUnitImage(ctx, dir, root_key.bytes, entry.image);
+        reporter.end();
+        return;
+    }
+    var lowering_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    var lowered = try lowerCheckedSourceToLir(ctx.gpa, ctx.gpa, root_artifact, imported_artifacts, relation_artifacts, .linked_output, args.opt, .boxy, target, args.synthetic_default_platform, false, build_env.postCheckExecutor(), &lowering_timing, null, .{ .imports = &interfaces, .root = true, .names = &digests.names });
+    defer lowered.deinit();
+    const lowered_ns = WasmBuildTiming.now(ctx);
+    const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
+    defer ctx.gpa.free(entrypoints);
+    const static_data_exports = try compile.static_data_exports.buildStaticData(ctx.gpa, .{
+        .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+        .imports = imported_artifacts,
+    }, &lowered, target, .{ .include_provided_exports = true });
+    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
+    const entries = try ctx.arena.alloc(backend.wasm.UnitCompile.Entry, entrypoints.len);
+    for (entrypoints, entries) |entry, *out| out.* = .{ .symbol_name = entry.symbol_name, .proc = entry.proc, .arg_layouts = entry.arg_layouts, .ret_layout = entry.ret_layout };
+    const image = backend.wasm.UnitCompile.compileUnitImage(ctx.gpa, &lowered.lir_result.store, &lowered.lir_result.layouts, entries, static_data_exports, .{
+        .cpu_level = target.cpuLevel(),
+        .stack_checks = policy.wasm_stack_checks,
+        .executor = build_env.postCheckExecutor(),
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => {
+            reporter.fail();
+            std.log.err("Wasm compilation of the root unit failed: {}", .{err});
+            return error.NativeCompilationFailed;
+        },
+    };
+    defer ctx.gpa.free(image);
+    const records = try compile.boxy_unit.exportRecords(ctx.gpa, &lowered, &interfaces);
+    defer ctx.gpa.free(records);
+    try compile.boxy_unit.store(ctx.gpa, cache_manager, root_key, .{
+        .exports = records,
+        .hosted_symbols = try compile.boxy_unit.hostedSymbols(ctx.arena, &lowered.lir_result.store),
+        .app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
+        .pieces = &.{},
+        .image = image,
+    });
+    build_env.recordWasmUnits(0, 1);
+    if (dump_dir) |dir| dumpWasmUnitImage(ctx, dir, root_key.bytes, image);
+    const lowering_snapshot = lowering_timing.snapshot();
+    reporter.endWithBreakdown(&.{
+        .{ .name = "Lowering", .ns = postCheckLoweringTotalNs(lowering_snapshot) },
+        .{ .name = "Codegen + Image", .ns = @intCast(@max(0, WasmBuildTiming.now(ctx) - lowered_ns)) },
+    });
+}
+
+/// Write a wasm unit image to `dir`, named by its unit key
+/// (`ROC_DUMP_WASM_UNIT_IMAGES`).
+fn dumpWasmUnitImage(ctx: *CliCtx, dir: []const u8, key: [32]u8, image: []const u8) void {
+    const name = std.fmt.allocPrint(ctx.arena, "{s}.rbwu", .{std.fmt.bytesToHex(key, .lower)}) catch return;
+    const path = std.fs.path.join(ctx.arena, &.{ dir, name }) catch return;
+    std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = path, .data = image }) catch |err|
+        std.log.err("could not write the wasm unit image {s}: {}", .{ path, err });
+}
+
 /// A fast dev link in progress: its output file, created when the build
 /// starts, and the background job finding the platform's pre-linked host.
 const FastDevLink = struct {
@@ -11469,11 +11580,13 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
 
+    if (wasmUnitsApply(target, args)) try buildWasmUnits(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, target, resolved_targets_config);
+
     // Every other module's object comes first: the root unit compiles its
     // calls against their export interfaces.
     if (boxy_interfaces != null) boxy_digests = try build_env.boxyLinkDigests();
     const boxy_library: ?BoxyLibraryObjects = if (boxy_interfaces) |*interfaces|
-        try buildBoxyLibraryObjects(ctx, BoxyUnitPolicy.ofBuild(args), &build_env, &reporter, root_artifact, target, interfaces, &boxy_digests, fast_link != null, null)
+        try buildBoxyLibraryObjects(ctx, BoxyUnitPolicy.ofBuild(args), &build_env, &reporter, root_artifact, target, interfaces, &boxy_digests, fast_link != null, null, "Lowering Modules")
     else
         null;
     defer if (boxy_library) |library| library.deinit(ctx.gpa);
@@ -11482,7 +11595,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     if (dev_diagnostics.isSet(.trace_boxy_work)) if (boxy_library) |library| std.debug.print("boxy-work: library units {d}, root key {s}\n", .{ library.pieces.len, &std.fmt.bytesToHex(boxy_root_key.?.bytes[0..8], .lower) });
     // The root program's object is cached under its own key too: a build
     // whose every module is cached lowers nothing.
-    if (boxy_library) |library| if (try compile.boxy_unit.restore(ctx.gpa, boxy_cache_manager, boxy_root_key.?, &boxy_interfaces.?)) |entry| {
+    if (boxy_library) |library| if (try compile.boxy_unit.restore(ctx.gpa, boxy_cache_manager, boxy_root_key.?, target, &boxy_interfaces.?)) |entry| {
         defer compile.boxy_object_cache.deinitEntry(ctx.gpa, entry);
         build_env.recordBoxyObjects(1, 0);
         if (fast_link) |fast| {
@@ -14873,7 +14986,7 @@ fn prepareUnitImageTests(
     }
 
     const policy: BoxyUnitPolicy = .{ .opt = .dev, .no_cache = false, .synthetic_default_platform = false, .test_units = true };
-    program.library = try buildBoxyLibraryObjects(ctx, policy, build_env, reporter, unit_root, target, &program.tables.interfaces, &program.tables.digests, true, test_modules.items);
+    program.library = try buildBoxyLibraryObjects(ctx, policy, build_env, reporter, unit_root, target, &program.tables.interfaces, &program.tables.digests, true, test_modules.items, "Lowering Modules");
     const library = &program.library.?;
 
     var root_unit: ?UnitTestImage = null;
@@ -14964,7 +15077,7 @@ fn unitTestRootImage(
 ) CliMainError!UnitTestImage {
     const library = &program.library.?;
     const key = try boxyObjectKey(ctx.gpa, &program.tables.digests, root_artifact, boxyUnitPlatform(root_artifact, library.platform), policy, target, library.paired_platforms, false);
-    if (try compile.boxy_unit.restore(ctx.gpa, cache_manager, key, &program.tables.interfaces)) |entry| {
+    if (try compile.boxy_unit.restore(ctx.gpa, cache_manager, key, target, &program.tables.interfaces)) |entry| {
         defer compile.boxy_object_cache.deinitEntry(ctx.gpa, entry);
         const image = try ctx.gpa.alignedAlloc(u8, backend.dev.UnitImage.alignment, entry.image.len);
         @memcpy(image, entry.image);
@@ -18977,6 +19090,12 @@ fn printBuildSuccess(
             try stdout.print("    Boxy objects: {} cached, {} built\n", .{
                 cache_stats.boxy_objects_restored,
                 cache_stats.boxy_objects_built,
+            });
+        }
+        if (cache_stats.wasm_units_restored != 0 or cache_stats.wasm_units_built != 0) {
+            try stdout.print("    Wasm units: {} cached, {} built\n", .{
+                cache_stats.wasm_units_restored,
+                cache_stats.wasm_units_built,
             });
         }
     }

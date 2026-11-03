@@ -14482,7 +14482,8 @@ evaluation runs against (Compile-Time Evaluation Strategy). `roc check` and
 `roc run` with `--specialize=no` therefore leave identical cache contents for
 the same sources when the run lowers its whole program, and `roc build`
 adds exactly the module objects still missing (`compile.boxy_object_cache`,
-the `boxy_object` family).
+the `boxy_object` family); a wasm build adds its target's units beside the
+native ones (Fast Dev Link, "Wasm unit images").
 `roc test` checks its root for explicit test roots
 (`Validation.explicit_roots`), which is its own check under either strategy,
 and with `--specialize=no` it leaves exactly what that check leaves plus one
@@ -24910,6 +24911,30 @@ Evaluation Strategy). The table stays out of the image because it names
 modules by their package-qualified names, which for a local package include
 the package's path, while the image's bytes, and so the link's placement and
 build id, are a function of the code alone.
+
+**Wasm unit images.** Units are lowered and cached per target. A `.boxy`
+dev build of `wasm32` or `wasm32v1` with a cache restores or builds a unit
+per module for its own target after checking (`buildWasmUnits`, the same
+scheduling `roc build` gives a native link's units), plus the root unit,
+while compile-time evaluation keeps running the native units; such a build
+has two entries per module. A wasm unit's entry is keyed by the unit key
+with the wasm target and the platform's stack-check mode
+(`boxy_object_cache.KeyInput.wasm_stack_checks`), holds no pieces, and
+carries a wasm unit image (`backend.wasm.WasmUnitImage`) that `WasmCodeGen`
+writes while compiling the unit alone (`backend.wasm.UnitCompile`): the
+unit's signatures, its function bodies exactly as a code section stores
+them, its data segments, its exports and table-slot requests, the imports
+its code names (builtins, the Boxy runtime, the runtime set, hosted
+functions, other units' exports, the position-independent base globals),
+and every index or address in a body or segment as a site over a padded
+field that holds zero, so placing a body never changes its length. Each
+function and segment is an atom whose sites are its edges; with stack
+checks, each function also records the frame facts `StackRoom` fills a
+check's room from. Nothing is merged into a unit: what other code defines
+is an import with the signature the call uses. Bodies keep the one
+position-independent form every wasm object Roc emits uses, so one image
+serves every output kind. The wasm output itself is still produced by the
+whole-program pipeline.
 
 **Pre-linked host.** A platform's host is linked once with the existing LLD
 flags from the platform's link inputs plus one generated object, and filed as

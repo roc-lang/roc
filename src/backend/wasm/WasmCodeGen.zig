@@ -1732,6 +1732,17 @@ fn prependStackChecks(self: *Self, symbols: StackCheckSymbols, locals: []const L
 
 /// Prepend `if (__stack_pointer < __stack_low + room) roc_wasm_stack_overflow()`.
 fn prependStackCheck(self: *Self, body: *CodeBuilder, symbols: StackCheckSymbols) Allocator.Error!void {
+    try self.insertStackCheck(body, symbols, .prepend);
+}
+
+/// Emit a stack-bound check at the end of `body`'s code, as a dynamic frame
+/// allocation must at once: its room is filled like every other check's
+/// (`StackRoom`).
+fn appendStackCheck(self: *Self, body: *CodeBuilder, symbols: StackCheckSymbols) Allocator.Error!void {
+    try self.insertStackCheck(body, symbols, .append);
+}
+
+fn insertStackCheck(self: *Self, body: *CodeBuilder, symbols: StackCheckSymbols, where: enum { prepend, append }) Allocator.Error!void {
     var check = std.ArrayList(u8).empty;
     defer check.deinit(self.allocator);
     var relocs: [3]CodeBuilder.Relocation = undefined;
@@ -1744,13 +1755,20 @@ fn prependStackCheck(self: *Self, body: *CodeBuilder, symbols: StackCheckSymbols
     try WasmModule.appendPaddedI32(self.allocator, &check, 0);
     try check.appendSlice(self.allocator, &.{ Op.i32_lt_u, Op.@"if", 0x40, Op.call });
     relocs[2] = .{ .index = .{ .type_id = .function_index_leb, .code_pos = @intCast(check.items.len), .symbol_index = symbols.overflow } };
-    try WasmModule.appendPaddedU32(self.allocator, &check, self.module.linking.symbol_table.items[symbols.overflow.raw()].index);
+    try WasmModule.appendPaddedU32(self.allocator, &check, self.tables().module.linking.symbol_table.items[symbols.overflow.raw()].index);
     try check.append(self.allocator, Op.end);
 
-    try body.prependToCode(self.allocator, check.items);
+    const base_pos: u32 = switch (where) {
+        .prepend => 0,
+        .append => @intCast(body.code.items.len),
+    };
+    switch (where) {
+        .prepend => try body.prependToCode(self.allocator, check.items),
+        .append => try body.code.appendSlice(self.allocator, check.items),
+    }
     for (relocs) |reloc| switch (reloc) {
-        .index => |idx| try body.addIndexRelocation(self.allocator, idx.type_id, idx.code_pos, idx.symbol_index),
-        .offset => |off| try body.addOffsetRelocation(self.allocator, off.type_id, off.code_pos, off.symbol_index, off.addend),
+        .index => |idx| try body.addIndexRelocation(self.allocator, idx.type_id, base_pos + idx.code_pos, idx.symbol_index),
+        .offset => |off| try body.addOffsetRelocation(self.allocator, off.type_id, base_pos + off.code_pos, off.symbol_index, off.addend),
     };
 }
 
@@ -6351,6 +6369,7 @@ fn bodyWorker(self: *const Self, allocator: Allocator, recorder: *BodyArtifact.R
     worker.proc_arg_counts_offset = self.proc_arg_counts_offset;
     worker.tail_area = self.tail_area;
     worker.stack_pointer_symbol = self.stack_pointer_symbol;
+    worker.stack_checks = self.stack_checks;
     worker.indirect_table_symbol = self.indirect_table_symbol;
     worker.relocatable_object = self.relocatable_object;
     worker.track_static_data_addresses = self.track_static_data_addresses;
@@ -9356,6 +9375,9 @@ fn generateDynFrameAlloc(self: *Self) Allocator.Error!void {
     self.currentCode().append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), total) catch return error.OutOfMemory;
     try self.emitStackPointerGlobal(Op.global_set);
+    // The region's size is only known at runtime, so the stack bounds are
+    // checked again below it.
+    if (self.stack_checks) |symbols| try self.appendStackCheck(self.currentBody(), symbols);
 
     // Each local's offset becomes its address in the region.
     for (0..locals.len) |i| {

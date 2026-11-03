@@ -75,9 +75,10 @@ pub fn compileUnitImage(
 
     const procs = store.getProcSpecs();
     try codegen.registerUnitImports(procs, store.runtime_contract == .boxy);
+    // The codegen reads the callees until its bodies are flushed.
+    var callees: std.ArrayList([]const u8) = .empty;
+    defer callees.deinit(gpa);
     if (options.stack_checks) {
-        var callees: std.ArrayList([]const u8) = .empty;
-        defer callees.deinit(gpa);
         for (static_data) |data_export| for (data_export.relocations) |relocation| {
             if (relocation.kind == .function_pointer) try callees.append(gpa, relocation.target_symbol_name);
         };
@@ -530,7 +531,7 @@ test "a unit compiled alone imports what it calls and names its data through sit
     for (view.functionSites(function)) |site| {
         const field = view.body(function)[site.offset..][0..5];
         try std.testing.expectEqualSlices(u8, &.{ 0x80, 0x80, 0x80, 0x80, 0x00 }, field);
-        switch (@as(WasmUnitImage.SiteKind, @enumFromInt(site.kind))) {
+        switch (@as(WasmUnitImage.SiteKind, @fromBackingInt(@intCast(site.kind)))) {
             .function_index_leb => if (site.target_kind == @backingInt(WasmUnitImage.TargetKind.import) and site.target == linked_import.?) {
                 calls_import = true;
             },
