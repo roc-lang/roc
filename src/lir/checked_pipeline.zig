@@ -1377,8 +1377,6 @@ pub const PreparedMonotype = struct {
 pub const ComptimeDemand = postcheck.Monotype.Lower.ComptimeDemand;
 /// See `PreparedSolved.producerGraph`.
 pub const ComptimeRootGraph = postcheck.ComptimeRootGraph;
-/// See `postcheck.Monotype.Lower.SpecComptimeReads`.
-pub const SpecComptimeReads = postcheck.Monotype.Lower.SpecComptimeReads;
 /// See `postcheck.Common.ComptimeRootRead`.
 pub const ComptimeRootRead = postcheck.Common.ComptimeRootRead;
 /// A checked compile-time root named in a `ComptimeDemand`.

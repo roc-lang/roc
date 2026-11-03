@@ -251,6 +251,7 @@ pub const CacheManager = struct {
     }
 
     pub fn discardStagedPart(self: *Self, part: StagedPart) void {
+        if (comptime threading.is_freestanding) return;
         self.roc_ctx.deleteFile(part.stage.path) catch {};
         var stage = part.stage;
         stage.deinit();

@@ -740,7 +740,7 @@ fn nameDataByContent(a: Allocator, excerpt: *Excerpt, names: *const ContentNames
 
 /// Copy a set whose lines index a source-file table it does not carry
 /// (`extractPrepared`), keeping its file indices.
-fn copySet(allocator: Allocator, set: *const Set) Allocator.Error!Set {
+pub fn copySet(allocator: Allocator, set: *const Set) Allocator.Error!Set {
     std.debug.assert(set.source_files.len == 0);
     var arena = collections.SingleThreadArena.init(allocator);
     errdefer arena.deinit();

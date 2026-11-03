@@ -1760,8 +1760,11 @@ test "ObjectFileCompiler runtime static-root excerpts own only reachable canonic
         result.deinit();
         try std.testing.expectEqual(@as(usize, 1), owned.excerpts.len);
         const excerpt = owned.excerpts[0];
-        try std.testing.expectEqual(@as(usize, 2), excerpt.data.len);
-        for (excerpt.data) |item| {
+        var collector = CodeExcerpt.DataCollector{ .allocator = allocator };
+        defer collector.deinit();
+        try collector.add(excerpt);
+        try std.testing.expectEqual(@as(usize, 2), collector.items.items.len);
+        for (collector.items.items) |item| {
             try std.testing.expect(std.mem.startsWith(u8, item.name, CodeExcerpt.content_data_prefix));
             try std.testing.expect(!std.mem.eql(u8, item.name, "roc__d7"));
             try std.testing.expect(!std.mem.eql(u8, item.name, "roc__d7_1"));
