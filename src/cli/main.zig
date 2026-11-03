@@ -14632,7 +14632,7 @@ fn collectTestRootRequests(
     errdefer roots.deinit(allocator);
 
     for (artifact.root_requests.requests) |root| {
-        if (root.kind != .test_expect) continue;
+        if (root.kind != .test_expect or root.requires_pairing) continue;
         try roots.append(allocator, root);
     }
 
@@ -14684,6 +14684,17 @@ fn buildCliTestPlan(
                 .order = @backingInt(root.id),
                 .region = testRootRegion(module.semantic.env, root.source),
                 .failure_detail = null,
+            });
+        }
+        // `roc test` pairs no platform with an app, so an expect that reads a
+        // value the platform `requires` has nothing to read and cannot run.
+        for (artifact.root_requests.requests) |root| {
+            if (root.kind != .test_expect or !root.requires_pairing) continue;
+            try checking_results.append(ctx.gpa, .{
+                .result = .compiler_error,
+                .order = root.order,
+                .region = testRootRegion(module.semantic.env, root.source),
+                .failure_detail = try ctx.gpa.dupe(u8, "This expect reads a value the platform requires from its app, and `roc test` runs platform expects without an app."),
             });
         }
         if (test_roots.len != 0 or checking_results.items.len != 0) modules_with_tests += 1;

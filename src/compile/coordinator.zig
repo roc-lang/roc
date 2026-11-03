@@ -4082,7 +4082,9 @@ pub const Coordinator = struct {
                 const artifact = self.checkedArtifactByKey(key.digest()) orelse
                     coordinatorInvariant("program test module has no checked module data", .{});
                 for (artifact.root_requests.requests) |request| {
-                    if (request.kind != .test_expect) continue;
+                    // An expect reading a platform requirement runs only once
+                    // the platform has its app; until then it demands nothing.
+                    if (request.kind != .test_expect or request.requires_pairing) continue;
                     try discovery_requests.append(self.gpa, request);
                     try discovery_sources.append(self.gpa, key.digest());
                 }
