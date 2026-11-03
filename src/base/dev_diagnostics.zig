@@ -57,8 +57,8 @@ pub const Var = enum {
     test_llvm_object_compile_count_file,
     /// Print deterministic work counters for one test command.
     test_command_work,
-    /// Write the bytes of a dev run's first run image composed from unit
-    /// images, as published and before the shim loads it, to the named file.
+    /// Write the bytes of a dev run's first run image, as published and
+    /// before the shim loads it, to the named file.
     dump_run_image,
 
     /// The variable's name in the environment.

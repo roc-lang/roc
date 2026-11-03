@@ -6567,6 +6567,11 @@ fn writeDevRunImageToSharedMemory(
         );
         const image_offset = @intFromPtr(header) - @intFromPtr(shm.base_ptr);
         const image_bound: usize = @intCast(header.image_size);
+        if (dev_diagnostics.get(.dump_run_image)) |path| if (hot_reload_allocation == null or hot_reload_allocation.?.generation == 1) {
+            std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = path, .data = shm.base_ptr[image_offset..image_bound] }) catch |err| {
+                std.log.warn("writing the run image to {s} failed: {}", .{ path, err });
+            };
+        };
         if (hot_reload_allocation) |allocation| {
             allocation_end = image_bound;
             const static_pool_start: usize = @intCast(header.static_pool.offset);
@@ -6601,7 +6606,7 @@ const DevRunImageSource = union(enum) {
     },
     /// The program's unit images, composed into the image.
     composed: struct {
-        units: *const RunUnits,
+        units: *RunUnits,
         reporter: *progress.Reporter,
     },
 };
@@ -7211,8 +7216,9 @@ const RunUnits = struct {
     entrypoint_names: []const []const u8,
     /// The platform's hosted symbols, by dispatch index. Arena-allocated.
     hosted_symbols: []const []const u8,
-    /// The hosted symbols the program's code calls. Arena-allocated.
-    referenced_hosted_symbols: []const []const u8,
+    /// The hosted symbols the composed run image imports, which the host
+    /// inputs must define; set when the image is composed. Arena-allocated.
+    referenced_hosted_symbols: []const []const u8 = &.{},
     checked_host_identity: [32]u8,
     watch_inputs: []const compile.watch_inputs.Input,
     counts: CheckDiagnosticCounts,
@@ -7311,7 +7317,6 @@ fn lowerRunUnits(
     var root_image: ?[]align(backend.dev.UnitImage.alignment.toByteUnits()) u8 = null;
     errdefer if (root_image) |image| ctx.gpa.free(image);
     const host_boundary_digests = try ctx.arena.alloc([32]u8, selected_roots.len);
-    var root_hosted: []const []const u8 = &.{};
     if (try compile.boxy_unit.restore(ctx.gpa, cache_manager, root_key, &tables.interfaces)) |entry| {
         defer compile.boxy_object_cache.deinitEntry(ctx.gpa, entry);
         if (entry.host_boundary_digests.len != selected_roots.len) base.invariant("roc run invariant violated: the root unit's cache entry covers {d} of {d} entrypoints", .{ entry.host_boundary_digests.len, selected_roots.len });
@@ -7319,9 +7324,6 @@ fn lowerRunUnits(
         const image = try ctx.gpa.alignedAlloc(u8, backend.dev.UnitImage.alignment, entry.image.len);
         @memcpy(image, entry.image);
         root_image = image;
-        const hosted = try ctx.arena.alloc([]const u8, entry.hosted_symbols.len);
-        for (entry.hosted_symbols, hosted) |symbol, *owned| owned.* = try ctx.arena.dupe(u8, symbol);
-        root_hosted = hosted;
         build_env.recordBoxyObjects(1, 0);
     } else {
         root_program = try lowerRunRoot(ctx, build_env, tables, target, reporter, root_artifact, imported_artifacts, relation_artifacts, hot_reload);
@@ -7329,13 +7331,12 @@ fn lowerRunUnits(
         for (lowered.lir_result.root_metadata.items, host_boundary_digests) |metadata, *digest| {
             digest.* = metadata.host_boundary_digest orelse base.invariant("platform entrypoint was lowered without its host boundary digest", .{});
         }
-        root_hosted = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
         root_image = try buildRunRootImage(ctx, reporter, build_env, lowered, root_artifact, imported_artifacts, relation_artifacts, target);
         const records = try compile.boxy_unit.exportRecords(ctx.gpa, lowered, &tables.interfaces);
         defer ctx.gpa.free(records);
         try compile.boxy_unit.store(ctx.gpa, cache_manager, root_key, .{
             .exports = records,
-            .hosted_symbols = root_hosted,
+            .hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store),
             .host_boundary_digests = host_boundary_digests,
             // No link composes the root unit of a run image.
             .pieces = &.{},
@@ -7372,7 +7373,6 @@ fn lowerRunUnits(
         .root_artifact = root_artifact,
         .entrypoint_names = entrypoint_names,
         .hosted_symbols = hosted_table.symbols,
-        .referenced_hosted_symbols = try unionSymbols(ctx.arena, root_hosted, owned_library.hosted_symbols),
         .checked_host_identity = identity.finalResult(),
         .watch_inputs = watch_inputs,
         .counts = counts,
@@ -7482,7 +7482,7 @@ fn writeComposedRunImage(
     ctx: *CliCtx,
     reporter: *progress.Reporter,
     shm: *SharedMemoryAllocator,
-    units: *const RunUnits,
+    units: *RunUnits,
     hot_reload_allocation: ?HotReloadImageAllocation,
 ) CliMainError!DevRunImagePublication {
     if (comptime !backend.host_lir_codegen_available) {
@@ -7522,6 +7522,18 @@ fn writeComposedRunImage(
             },
         };
         defer plan.deinit();
+        // The hosted symbols the image imports, which the host must define.
+        var referenced_hosted: std.ArrayList([]const u8) = .empty;
+        for (plan.slot_symbols) |symbol| {
+            const name = link_inputs.host_symbols[symbol];
+            for (units.hosted_symbols) |hosted| {
+                if (std.mem.eql(u8, hosted, name)) {
+                    try referenced_hosted.append(ctx.arena, name);
+                    break;
+                }
+            }
+        }
+        units.referenced_hosted_symbols = referenced_hosted.items;
 
         var empty_region_buffer: [0]u8 = .{};
         var fixed_region_buffer = std.heap.FixedBufferAllocator.init(&empty_region_buffer);
