@@ -242,7 +242,7 @@ fn emit(
 
 fn object(lowered: *const lir.CheckedPipeline.LoweredProgram, executor: ?tasks.Executor, metrics: *Native.Metrics) backend.CompilationError!backend.CompilationResult {
     const program = &lowered.lir_result;
-    var compiler = backend.ObjectFileCompiler.initForPack(allocator);
+    var compiler = backend.ObjectFileCompiler.initForExcerpts(allocator);
     var timing = backend.ObjectFileCompiler.Timing.init(std.testing.io);
     compiler.timing = &timing;
     compiler.post_check_executor = executor;

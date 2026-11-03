@@ -49,19 +49,11 @@ pub const CodeLocations = @import("CodeLocations.zig");
 /// Per-region machine-code excerpts and their reassembly.
 pub const CodeExcerpt = @import("CodeExcerpt.zig");
 /// Declared compatibility of relocatable native dev procedures.
-pub const NativeProcDomain = @import("NativeProcDomain.zig");
 /// Shared native procedure task driver and same-program retained excerpts.
 pub const NativeProcCompiler = @import("NativeProcCompiler.zig");
-/// An excerpt located in a loaded pack.
-pub const LocatedExcerpt = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").LocatedExcerpt;
-/// Where the object compiler splices object-cache procedures from.
-pub const SpliceSource = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").SpliceSource;
-/// Place object-cache entries into an open code generator.
-pub const spliceExternalProcs = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").spliceExternalProcs;
-/// Links object-cache entries spliced into the compile-time evaluator's image.
+/// Links native code and data in the compile-time evaluator's image.
 pub const HostSplice = if (builtin.os.tag == .freestanding) void else @import("HostSplice.zig").HostSplice;
 /// On-disk form of one module's pack of excerpts.
-pub const PackFile = @import("PackFile.zig");
 pub const UnitPieces = @import("UnitPieces.zig");
 pub const Composition = @import("Composition.zig");
 pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").Entrypoint;
