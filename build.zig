@@ -1678,6 +1678,11 @@ const WasmStaticLibCart = struct {
     target: []const u8 = "wasm32",
     /// Runner arguments, or null for a cart that is only built.
     run_args: ?[]const []const u8,
+    /// `ROC_WASM_SPLIT_BYTES` for the build: every procedure with more code
+    /// than this is emitted as a family of functions of at most this many
+    /// bytes each (design.md, "Wasm Function Limits"). The compiler reads it
+    /// in Debug builds, which CI's is.
+    split_bytes: ?[]const u8 = null,
 };
 
 const wasm_static_lib_carts = [_]WasmStaticLibCart{
@@ -1773,6 +1778,22 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
     .{ .app = "reserved_low_memory_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no" }, .output = "reserved_low_memory_boxy_static_lib_app.wasm", .run_args = &.{ "--expected", "20203" } },
     .{ .app = "reserved_low_memory_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "reserved_low_memory_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "20203" } },
     .{ .app = "issue_11529_top_level_boxed_function_static_lib_app.roc", .options = &.{ "--opt=dev", "--no-cache" }, .output = "issue_11529_top_level_boxed_function_static_lib_app.wasm", .run_args = &.{ "--expected", "x" } },
+    // A 64 KiB record through ten match arms stays within the engine's
+    // function limits under every strategy and level, with bulk copies and
+    // with WebAssembly 1.0's copy loops (#12785). The runner checks every
+    // function of every cart against the limits.
+    .{ .app = "issue_12785_big_record_match_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12785_big_record_match_static_lib_app.wasm", .run_args = &.{ "--expected", "1.0 4.0 9.0 21" } },
+    .{ .app = "issue_12785_big_record_match_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no" }, .output = "issue_12785_big_record_match_boxy_static_lib_app.wasm", .run_args = &.{ "--expected", "1.0 4.0 9.0 21" } },
+    .{ .app = "issue_12785_big_record_match_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12785_big_record_match_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "1.0 4.0 9.0 21" } },
+    .{ .app = "issue_12785_big_record_match_static_lib_app.roc", .options = &.{"--opt=size"}, .output = "issue_12785_big_record_match_size_static_lib_app.wasm", .run_args = &.{ "--expected", "1.0 4.0 9.0 21" } },
+    // The same programs with every procedure split into fragments of a few
+    // bytes: a split procedure computes what its direct emission computes.
+    .{ .app = "issue_12785_big_record_match_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12785_big_record_match_split_static_lib_app.wasm", .run_args = &.{ "--expected", "1.0 4.0 9.0 21" }, .split_bytes = "64" },
+    .{ .app = "issue_12785_big_record_match_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no" }, .output = "issue_12785_big_record_match_boxy_split_static_lib_app.wasm", .run_args = &.{ "--expected", "1.0 4.0 9.0 21" }, .split_bytes = "64" },
+    .{ .app = "issue_12785_big_record_match_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12785_big_record_match_v1_split_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "1.0 4.0 9.0 21" }, .split_bytes = "64" },
+    .{ .app = "builtin_routing_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "builtin_routing_split_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced" }, .split_bytes = "64" },
+    .{ .app = "rc_cleanup_model_list_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "rc_cleanup_model_list_split_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--min-allocs", "2" }, .split_bytes = "64" },
+    .{ .app = "iter_recursive_concat_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no" }, .output = "iter_recursive_concat_boxy_split_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced" }, .split_bytes = "64" },
 };
 
 pub fn build(b: *std.Build) void {
@@ -3674,6 +3695,7 @@ pub fn build(b: *std.Build) void {
         var wasm_static_lib_cart_outputs: [wasm_static_lib_carts.len]std.Build.LazyPath = undefined;
         for (wasm_static_lib_carts, &wasm_static_lib_cart_outputs) |cart, *output| {
             const built = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, cart.app, cart.options, cart.output, cart.target);
+            if (cart.split_bytes) |split_bytes| built.run.setEnvironmentVariable("ROC_WASM_SPLIT_BYTES", split_bytes);
             build_test_wasm_static_lib_runner_step.dependOn(&built.run.step);
             output.* = built.output;
         }
