@@ -18901,7 +18901,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.current_dyn_result = saved_current_dyn_result;
                 self.proc_has_dyn_region = saved_proc_has_dyn_region;
                 self.carry_slot = saved_carry_slot;
-            self.pending_cell_slot = saved_pending_cell_slot;
+                self.pending_cell_slot = saved_pending_cell_slot;
                 self.pending_cell_slot = saved_pending_cell_slot;
                 self.tail_exit_patches.shrinkRetainingCapacity(saved_tail_exit_patches_len);
                 self.current_proc_name = saved_current_proc_name;
