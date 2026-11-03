@@ -447,6 +447,16 @@ pub fn roc_builtins_str_join_with(out: *RocStr, list_bytes: ?[*]u8, list_len: us
     out.* = strJoinWithC(l, sep, roc_ops);
 }
 
+/// Wrapper: an interpolated literal's parts, `count` strings at `parts`,
+/// written once: the lengths summed, one small or heap string, each part
+/// copied in and then released (the op consumes every part).
+pub fn roc_builtins_str_from_parts(out: *RocStr, parts: [*]const RocStr, count: usize) callconv(.c) void {
+    const roc_ops = in_process_host.ops();
+    const parts_list = str.RocListStr{ .list_elements = @constCast(parts), .list_length = count, .list_capacity_or_alloc_ptr = count };
+    out.* = str.strJoinWith(parts_list, RocStr.empty(), roc_ops);
+    for (parts[0..count]) |part| part.decref(roc_ops);
+}
+
 /// Wrapper: reserveC(RocStr, u64, UpdateMode, *RocOps) -> RocStr. The update
 /// mode is forwarded to the builtin's uniqueness check; `.InPlace` skips it.
 pub fn roc_builtins_str_reserve(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, spare: u64, update_mode: utils.UpdateMode) callconv(.c) void {

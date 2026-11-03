@@ -5267,6 +5267,19 @@ pub const Interpreter = struct {
                 const result = builtins.str.strJoinWithC(self.valueToRocListForLayout(args[0], arg_layout), valueToRocStr(args[1]), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
+            .str_from_parts => blk: {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                if (crash_boundary.set() != 0) return self.crashError();
+                // The lowering bounds an interpolation to 16 values, so at
+                // most 33 parts.
+                var parts: [33]RocStr = undefined;
+                for (args, 0..) |arg, i| parts[i] = valueToRocStr(arg);
+                const list = builtins.str.RocListStr{ .list_elements = &parts, .list_length = args.len, .list_capacity_or_alloc_ptr = args.len };
+                const result = builtins.str.strJoinWith(list, RocStr.empty(), &self.roc_ops);
+                for (parts[0..args.len]) |part| part.decref(&self.roc_ops);
+                break :blk self.rocStrToValue(result, ll.ret_layout);
+            },
             .str_with_capacity => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();

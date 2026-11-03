@@ -46,6 +46,10 @@ pub const LowLevel = enum(u16) {
     str_from_utf8,
     str_split_on,
     str_join_with,
+    /// An interpolated `Str` literal's parts (segments and values, any
+    /// number) written once: the lengths summed, one string, each part
+    /// copied in and released.
+    str_from_parts,
     str_inspect,
 
     // Numeric to_str operations
@@ -926,6 +930,22 @@ pub const LowLevel = enum(u16) {
         return op_info[@backingInt(self)].rc_effect;
     }
 
+    /// The effect of a call with `arity` arguments: an op taking any number
+    /// of arguments (`str_from_parts`) names every position in its masks,
+    /// which the call narrows to the arguments it has.
+    pub fn rcEffectForArity(self: LowLevel, arity: usize) RcEffect {
+        var effect = self.rcEffect();
+        if (arity >= 64) return effect;
+        const present: u64 = (@as(u64, 1) << @intCast(arity)) - 1;
+        effect.may_runtime_uniqueness_check_args &= present;
+        effect.consume_args &= present;
+        effect.result_aliases_consumed_args &= present;
+        effect.retain_args &= present;
+        effect.result_borrows_args &= present;
+        effect.result_shares_args &= present;
+        return effect;
+    }
+
     /// How much of a type variable a body asks for when a value whose type
     /// mentions that variable reaches one of its operations (design.md
     /// "Specialization By Demand").
@@ -1225,6 +1245,7 @@ pub const LowLevel = enum(u16) {
         .crypto_blake3_hasher_finish = byType(.allocates()),
 
         .str_join_with = byType(.allocatesConsumingArgs(arg_0)),
+        .str_from_parts = byType(.allocatesConsumingArgs(std.math.maxInt(u64))),
 
         .box_box = byLayout(.allocatesRetainingArgs(arg_0)).elements(&.{.layout}),
 

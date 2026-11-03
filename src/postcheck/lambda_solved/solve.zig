@@ -2764,6 +2764,7 @@ const Solver = struct {
             .str_from_utf8,
             .str_split_on,
             .str_join_with,
+            .str_from_parts,
             .str_inspect,
             .u8_to_str,
             .i8_to_str,

@@ -32217,6 +32217,9 @@ const BodyContext = struct {
         assembler_node: NodeId = undefined,
         assembler: DraftExprId = undefined,
         values_ty: Type.TypeId = undefined,
+        /// A `Str` literal written once (`str_from_parts`): its segments
+        /// and values interleaved, lowered as one span, the assembler unused.
+        write_once_operands: ?[]const checked.CheckedExprId = null,
     };
 
     /// A call-site intrinsic whose arguments lower as child tasks, in
@@ -32291,7 +32294,8 @@ const BodyContext = struct {
         /// task produces the string's expression data.
         cell: ?DraftTypeCell = null,
         index: usize = 0,
-        out: DraftExprId = undefined,
+        /// The lowered segments and values, the empty segments left out.
+        parts: std.ArrayList(DraftExprId) = .empty,
     };
 
     /// A field access whose receiver lowers as a child task, so nested
@@ -34987,9 +34991,44 @@ const BodyContext = struct {
                 };
                 task.values_ty = try self.activeTypeFromNode((try self.graph.functionNodes(task.assembler_node)).args[0]);
                 frame.cursor = 2;
+                // A `Str` literal with the builtin assembler: its parts are
+                // written once by `str_from_parts` (a spike; at most 16
+                // values, the interpreter's bound), the empty segments left
+                // out, no values list and no assembler call. The segments
+                // and values lower together, in order.
+                const result_is_str = switch (try self.graph.content(task.value_node)) {
+                    .primitive => |primitive| primitive == .str,
+                    .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => false,
+                };
+                if (result_is_str and interpolation.values.len <= 16) {
+                    var operands: std.ArrayList(checked.CheckedExprId) = .empty;
+                    try appendInterpolationOperands(self.allocator, &operands, interpolation);
+                    task.write_once_operands = try operands.toOwnedSlice(self.allocator);
+                    return requestLowerTask(self, .{ .list_span = .{ .exprs = task.write_once_operands.?, .list_ty = task.values_ty } });
+                }
                 return requestLowerTask(self, .{ .list_span = .{ .exprs = interpolation.values, .list_ty = task.values_ty } });
             },
             else => {
+                if (task.write_once_operands) |operands| {
+                    defer self.allocator.free(operands);
+                    const lowered = self.exprSpan(input.?.spanValue());
+                    var parts: std.ArrayList(DraftExprId) = .empty;
+                    defer parts.deinit(self.allocator);
+                    for (operands, lowered, 0..) |operand, part, index| {
+                        // Even operands are the segments: an empty one
+                        // writes nothing and is left out.
+                        if (index % 2 == 0) {
+                            const text = switch (self.view.bodies.expr(operand).data) {
+                                .str_segment => |literal| self.view.bodies.stringLiteral(literal),
+                                .pending, .numeral, .str_from_quote, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("an interpolation segment is not a string segment"),
+                            };
+                            if (text.len == 0) continue;
+                        }
+                        try parts.append(self.allocator, part);
+                    }
+                    const str_ty = try self.activeTypeFromNode(task.value_node);
+                    return loweredExprStep(try self.lowLevelExpr(.str_from_parts, parts.items, str_ty));
+                }
                 const values = try self.addExpr(.{ .ty = task.values_ty, .data = .{ .list = input.?.spanValue() } });
                 return loweredExprStep(try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(task.value_node), .{ .call_value = .{
                     .callee = task.assembler,
@@ -37393,13 +37432,21 @@ const BodyContext = struct {
         return try PatternUninhabitedScan.Evaluation.runWith(self.allocator, &self.pattern_uninhabited_scratch, &scan, pattern_id);
     }
 
+    /// The most parts `str_from_parts` takes: the interpreter keeps them in
+    /// a stack array of this size (a spike's bound).
+    const str_from_parts_max = 33;
+
     fn stepStr(self: *BodyContext, task: *StrTask, input: ?LowerResult) Allocator.Error!LowerStep {
         const str_ty = try self.primitiveType(.str);
         if (input) |lowered| {
-            task.out = if (task.index == 0)
-                lowered.exprValue()
-            else
-                try self.concatExpr(task.out, lowered.exprValue(), str_ty);
+            // A spike: the segments and values are gathered and written once
+            // by `str_from_parts`, where a chain of `str_concat` was built;
+            // an empty literal segment writes nothing and is left out.
+            const empty_segment = switch (self.view.bodies.expr(task.segments[task.index]).data) {
+                .str_segment => |literal| self.view.bodies.stringLiteral(literal).len == 0,
+                else => false,
+            };
+            if (!empty_segment) try task.parts.append(self.allocator, lowered.exprValue());
             task.index += 1;
         } else if (task.segments.len == 0) {
             return try self.finishStr(task, try self.stringExpr("", str_ty));
@@ -37407,7 +37454,20 @@ const BodyContext = struct {
         if (task.index < task.segments.len) {
             return requestLowerChild(self, task.segments[task.index], .{ .sealed = str_ty });
         }
-        return try self.finishStr(task, task.out);
+        defer task.parts.deinit(self.allocator);
+        const parts = task.parts.items;
+        const value = switch (parts.len) {
+            0 => try self.stringExpr("", str_ty),
+            1 => parts[0],
+            else => if (parts.len <= str_from_parts_max)
+                try self.lowLevelExpr(.str_from_parts, parts, str_ty)
+            else blk: {
+                var out = parts[0];
+                for (parts[1..]) |part| out = try self.concatExpr(out, part, str_ty);
+                break :blk out;
+            },
+        };
+        return try self.finishStr(task, value);
     }
 
     fn finishStr(self: *BodyContext, task: *const StrTask, value: DraftExprId) Allocator.Error!LowerStep {

@@ -9316,7 +9316,7 @@ const Lowerer = struct {
         const current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = lowered_op,
-            .rc_effect = try self.result.store.addRcEffect(lowered_op.rcEffect()),
+            .rc_effect = try self.result.store.addRcEffect(lowered_op.rcEffectForArity(lowered.ids.len)),
             .args = try self.result.store.addLocalSpan(lowered.ids),
             .next = next,
         } }, where.source());
