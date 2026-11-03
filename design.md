@@ -21613,9 +21613,38 @@ callee can return with a call pending, and on each deferred call:
   erased worker, which reads at entry whether the erased-call runtime invoked
   it. A host that calls an
   erased callable directly does not make pending calls, so then the
-  procedure makes them itself. The runtime names the callable it is invoking
-  by its function pointer and the procedure asks with its own, so a value no
-  callee read cannot answer for a different procedure entered later.
+  procedure makes them itself. The runtime marks the invocations it makes
+  (see Pending Cells), so the answer describes exactly this invocation.
+
+#### Pending Cells
+
+A pending call is recorded in a cell in the frame of the waiter that will make
+it, never in process or thread state. Host calls can run on several threads at
+once, and pending calls of different host calls must not meet. Thread-local
+storage cannot separate them: nothing compiled into a platform archive or shim
+touches it, and the builtins an LLVM object links are one target-neutral
+bitcode, which can name no operating system's thread. Each procedure with a
+statement that can leave a call pending (`LirProcSpec.uses_pending_cell`) has
+one cell, from one of three places:
+
+- A Roc-ABI procedure with `may_leave_pending` takes its caller's cell as a
+  hidden parameter after every other (`LirProcSpec.takesPendingCell`), and
+  passes it to the calls it hands up and to the procedures it replaces its
+  frame with. Only Roc code calls such a procedure, since one anything else can
+  enter makes its own pending calls, so no outside signature changes.
+- An erased-callable procedure the erased-call runtime invoked uses the
+  runtime's cell, which arrives in the erased ABI's last argument: an address
+  in the cell with its low bit set. A host passes an aligned pointer to its own
+  descriptor output, or null, so the bit is what says the runtime made this
+  call. A host's callable may write that output, and the cell keeps room for
+  the write to land without touching the record.
+- Every other procedure reserves a cell in its own frame and initializes it
+  empty at entry. Its `always` statements drive it; a statement that hands a
+  call up leaves it to the caller's cell.
+
+A cell is empty whenever a statement that can fill it starts, because whoever
+fills it returns straight to whoever drives it. One cell therefore serves every
+statement of a procedure.
 
 The pass also commits `LirProcSpec.may_leave_pending`, its exact procedure
 summary, into native cache offers. Reusing a body-less native entry seeds the
