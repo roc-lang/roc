@@ -26,5 +26,5 @@ Numbers := {}.{
 	same = |a, b| Numbers.matching({ count: a }, { count: b })
 
 	encoded : U16 -> Str
-	encoded = |count| Json.to_str([{ count }])
+	encoded = |count| Json.to_str([{ count: count }])
 }

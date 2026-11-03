@@ -365,8 +365,27 @@ const boxy_unit_workers_stdout =
     \\Err(Aborted(2))
     \\(True, False)
     \\(True, False)
-    \\["a string long enough to be on the heap"]
-    \\[38]
+    \\[{"name":"a string long enough to be on the heap"}]
+    \\[{"count":38}]
+    \\
+;
+
+const json_record_field_names_stdout =
+    \\"a string"
+    \\["a string"]
+    \\{"name":"a string"}
+    \\[{"name":"a string"}]
+    \\{"name":"a string"}
+    \\[{"name":"a string"}]
+    \\{"age":7,"name":"a string"}
+    \\[{"age":7,"name":"a string"}]
+    \\{"outer":{"name":"a string"}}
+    \\[{"outer":[{"name":"a string"}]}]
+    \\Ok({ name: "x" })
+    \\Ok({ age: 3, name: "x" })
+    \\Ok({ outer: { name: "x" } })
+    \\Ok([{ name: "x" }, { name: "y" }])
+    \\Err(InvalidJson("Invalid JSON"))
     \\
 ;
 
@@ -1492,6 +1511,14 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: generated workers of two modules stay distinct (interpreter, --specialize=no)", .backend = .interpreter, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/boxy_unit_workers/main.roc", .stdout_exact = boxy_unit_workers_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: generated workers of two modules stay distinct (speed, --specialize=no)", .backend = .speed, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/boxy_unit_workers/main.roc", .stdout_exact = boxy_unit_workers_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: generated workers of two modules stay distinct (dev, --specialize=yes)", .backend = .dev, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/boxy_unit_workers/main.roc", .stdout_exact = boxy_unit_workers_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: Json keeps record field names (interpreter, --specialize=no)", .backend = .interpreter, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/json_record_field_names.roc", .stdout_exact = json_record_field_names_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: Json keeps record field names (interpreter, --specialize=yes)", .backend = .interpreter, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/json_record_field_names.roc", .stdout_exact = json_record_field_names_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: Json keeps record field names (dev, --specialize=no)", .backend = .dev, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/json_record_field_names.roc", .stdout_exact = json_record_field_names_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: Json keeps record field names (dev, --specialize=yes)", .backend = .dev, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/json_record_field_names.roc", .stdout_exact = json_record_field_names_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: Json keeps record field names (speed, --specialize=no)", .backend = .speed, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/json_record_field_names.roc", .stdout_exact = json_record_field_names_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: Json keeps record field names (speed, --specialize=yes)", .backend = .speed, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/json_record_field_names.roc", .stdout_exact = json_record_field_names_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: Json keeps record field names (size, --specialize=no)", .backend = .size, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/json_record_field_names.roc", .stdout_exact = json_record_field_names_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: Json keeps record field names (size, --specialize=yes)", .backend = .size, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=size", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/json_record_field_names.roc", .stdout_exact = json_record_field_names_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: padded nominals share a record row (interpreter, --specialize=no)", .backend = .interpreter, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/padded_nominals_share_a_row/main.roc", .stdout_exact = padded_nominals_share_a_row_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: padded nominals share a record row (interpreter, --specialize=yes)", .backend = .interpreter, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/echo/padded_nominals_share_a_row/main.roc", .stdout_exact = padded_nominals_share_a_row_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: padded nominals share a record row (dev, --specialize=no)", .backend = .dev, .timeout_ms = 300_000, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/echo/padded_nominals_share_a_row/main.roc", .stdout_exact = padded_nominals_share_a_row_stdout } } },

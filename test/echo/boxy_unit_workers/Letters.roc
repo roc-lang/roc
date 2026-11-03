@@ -26,5 +26,5 @@ Letters := {}.{
 	same = |a, b| Letters.matching({ name: a }, { name: b })
 
 	encoded : Str -> Str
-	encoded = |name| Json.to_str([{ name }])
+	encoded = |name| Json.to_str([{ name: name }])
 }
