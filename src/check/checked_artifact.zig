@@ -16363,7 +16363,6 @@ pub const RequiredAppProcedureRef = struct {
 /// Public `ConstUseTemplate` declaration.
 pub const ConstUseTemplate = struct {
     const_ref: ConstRef,
-    requested_source_ty_template: canonical.CanonicalTypeKey,
     requested_source_ty_payload: ?CheckedTypeId = null,
 };
 
@@ -16690,7 +16689,6 @@ pub const ImportedProcedureBindingRef = struct {
 /// Public `ProcedureUseTemplate` declaration.
 pub const ProcedureUseTemplate = struct {
     binding: ProcedureBindingRef,
-    source_fn_ty_template: canonical.CanonicalTypeKey,
     source_fn_ty_payload: ?CheckedTypeId = null,
     /// Producer-recorded intrinsic identity for this exact procedure use.
     /// Post-check consumers must not derive this by walking binding bodies or
@@ -16835,10 +16833,6 @@ pub const ResolvedValueRefTable = struct {
         synthetic_expr_origins: []const SyntheticExprOriginRecord,
     ) Allocator.Error!ResolvedValueRefTable {
         const module = modules.module(module_idx);
-        var key_writer = canonical_type_keys.TypeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst());
-        defer key_writer.deinit();
-        // The store is final here, as it is for publication's own writer.
-        key_writer.retainComposedKeys();
         var records = std.ArrayList(ResolvedValueRefRecord).empty;
         errdefer records.deinit(allocator);
         var callable_aliases = std.ArrayList(ResolvedValueRefId).empty;
@@ -16897,15 +16891,7 @@ pub const ResolvedValueRefTable = struct {
             const checked_ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
                 base.invariant("checked artifact invariant violated: resolved value ref type root was not published", .{});
             };
-            // Publication keys every source root by this same writer.
-            const checked_type_key = try checked_types.store.view().rootKey(checked_ty);
-            if (builtin.mode == .debug) {
-                const written = (try key_writer.fromVar(module.exprType(expr_idx))).key;
-                if (@as(u256, @bitCast(written.bytes)) != @as(u256, @bitCast(checked_type_key.bytes))) {
-                    base.invariant("checked artifact invariant violated: resolved value ref type key differs from its published root", .{});
-                }
-            }
-            try attachUseTypePayload(&resolved_ref, checked_type_key, checked_ty);
+            try attachUseTypePayload(&resolved_ref, checked_ty);
 
             const id: ResolvedValueRefId = @fromBackingInt(@intCast(@as(u32, @intCast(records.items.len))));
             try records.append(allocator, .{
@@ -17262,16 +17248,13 @@ fn categorizeValueRef(
 
 fn attachUseTypePayload(
     ref: *ResolvedValueRef,
-    key: canonical.CanonicalTypeKey,
     checked_ty: CheckedTypeId,
 ) Allocator.Error!void {
     switch (ref.*) {
         inline .top_level_const, .imported_const => |*use| {
-            use.requested_source_ty_template = key;
             use.requested_source_ty_payload = checked_ty;
         },
         .selected_hoisted_const => |*selected| {
-            selected.const_use.requested_source_ty_template = key;
             selected.const_use.requested_source_ty_payload = checked_ty;
         },
         .platform_required_const => |*required| {
@@ -17280,7 +17263,6 @@ fn attachUseTypePayload(
             }
         },
         inline .top_level_proc, .imported_proc, .hosted_proc => |*use| {
-            use.source_fn_ty_template = key;
             use.source_fn_ty_payload = checked_ty;
         },
         .platform_required_proc => |*required| {
@@ -17289,7 +17271,6 @@ fn attachUseTypePayload(
             }
         },
         .promoted_top_level_proc => |*use| {
-            use.source_fn_ty_template = key;
             use.source_fn_ty_payload = checked_ty;
         },
         .local_param,
@@ -17345,7 +17326,6 @@ fn categorizeLocalValueRef(
                 .artifact = artifact_key.digest(),
                 .binding = binding,
             } },
-            .source_fn_ty_template = .{},
             .runtime_result_provenance = null,
         } };
     }
@@ -17356,7 +17336,6 @@ fn categorizeLocalValueRef(
                 .artifact = artifact_key.digest(),
                 .binding = binding,
             } },
-            .source_fn_ty_template = .{},
             .runtime_result_provenance = null,
         } };
     }
@@ -17396,7 +17375,6 @@ fn categorizeTopLevelValueRef(
     return switch (entry.value) {
         .const_ref => |const_ref| .{ .top_level_const = .{
             .const_ref = const_ref,
-            .requested_source_ty_template = .{},
         } },
         .procedure_binding => |binding| if (hostedProcForDef(hosted_procs, entry.def)) |hosted|
             .{ .hosted_proc = .{
@@ -17406,7 +17384,6 @@ fn categorizeTopLevelValueRef(
                     .proc = hosted.proc,
                     .template = hosted.template,
                 } },
-                .source_fn_ty_template = .{},
                 .intrinsic = null,
                 .iterator_procedure = null,
                 .runtime_result_provenance = null,
@@ -17417,7 +17394,6 @@ fn categorizeTopLevelValueRef(
                     .artifact = artifact_key.digest(),
                     .binding = binding,
                 } },
-                .source_fn_ty_template = .{},
                 .intrinsic = intrinsicForProcedureDef(module, entry.def),
                 .iterator_procedure = iteratorProcedureForDef(module, entry.def),
                 .runtime_result_provenance = runtimeResultProvenanceForProcedureDef(module, entry.def),
@@ -17433,7 +17409,6 @@ fn selectedHoistedConstUse(
         .local = local,
         .const_use = .{
             .const_ref = entry.const_ref,
-            .requested_source_ty_template = .{},
         },
     } };
 }
@@ -17461,7 +17436,6 @@ fn categorizeImportedValueRef(
     if (importedProcedureBindingForDef(import_artifact.view, target_def)) |binding| {
         return .{ .imported_proc = .{
             .binding = .{ .imported = binding.binding },
-            .source_fn_ty_template = .{},
             .intrinsic = binding.intrinsic,
             .iterator_procedure = binding.iterator_procedure,
             .runtime_result_provenance = binding.runtime_result_provenance,
@@ -17471,7 +17445,6 @@ fn categorizeImportedValueRef(
     if (importedConstTemplateForDef(import_artifact.view, target_def)) |const_template| {
         return .{ .imported_const = .{
             .const_ref = const_template.const_ref,
-            .requested_source_ty_template = .{},
         } };
     }
 
@@ -17504,7 +17477,6 @@ fn categorizeResolvedAssociatedValueRef(
     if (importedProcedureBindingForDef(target_view, target_def)) |binding| {
         return .{ .imported_proc = .{
             .binding = .{ .imported = binding.binding },
-            .source_fn_ty_template = .{},
             .intrinsic = binding.intrinsic,
             .iterator_procedure = binding.iterator_procedure,
             .runtime_result_provenance = binding.runtime_result_provenance,
@@ -17514,7 +17486,6 @@ fn categorizeResolvedAssociatedValueRef(
     if (importedConstTemplateForDef(target_view, target_def)) |const_template| {
         return .{ .imported_const = .{
             .const_ref = const_template.const_ref,
-            .requested_source_ty_template = .{},
         } };
     }
 
@@ -27615,7 +27586,6 @@ fn platformRequiredValueUseWithRelation(
         .const_value => |const_use| .{ .const_value = .{
             .const_use = .{
                 .const_ref = const_use.const_use.const_ref,
-                .requested_source_ty_template = relation.requested_source_ty,
                 .requested_source_ty_payload = relation.requested_source_ty_payload,
             },
             .relation_template_closure = const_use.relation_template_closure,
@@ -27623,7 +27593,6 @@ fn platformRequiredValueUseWithRelation(
         .procedure_value => |proc_use| .{ .procedure_value = .{
             .procedure = .{
                 .binding = proc_use.procedure.binding,
-                .source_fn_ty_template = relation.requested_source_ty,
                 .source_fn_ty_payload = relation.requested_source_ty_payload,
                 .intrinsic = proc_use.procedure.intrinsic,
                 .iterator_procedure = proc_use.procedure.iterator_procedure,
@@ -27747,7 +27716,6 @@ fn buildPlatformAppRelationFromDeclarations(
                         app_artifact.key,
                         app_value_ref,
                         procedure_binding,
-                        requested_source_ty,
                         exported_binding,
                     ),
                     .root_evidence = .{
@@ -27766,7 +27734,6 @@ fn buildPlatformAppRelationFromDeclarations(
                 break :blk .{ .const_value = .{
                     .const_use = .{
                         .const_ref = const_ref,
-                        .requested_source_ty_template = requested_source_ty,
                         .requested_source_ty_payload = null,
                     },
                     .relation_template_closure = template_closure,
@@ -28492,7 +28459,6 @@ fn platformRequiredProcedureUse(
     app_artifact: CheckedModuleArtifactKey,
     app_value: TopLevelValueRef,
     procedure_binding: TopLevelProcedureBindingRef,
-    requested_source_ty: canonical.CanonicalTypeKey,
     exported_binding: ImportedProcedureBindingView,
 ) ProcedureUseTemplate {
     if (!exported_binding.binding.artifact.eql(app_artifact.digest()) or
@@ -28506,7 +28472,6 @@ fn platformRequiredProcedureUse(
             .app_value = app_value,
             .procedure_binding = procedure_binding,
         } },
-        .source_fn_ty_template = requested_source_ty,
         .source_fn_ty_payload = null,
         .intrinsic = null,
         .iterator_procedure = exported_binding.iterator_procedure,
@@ -32436,7 +32401,6 @@ test "platform relation procedure use preserves exported runtime result provenan
         app_key,
         app_value_ref,
         procedure_binding,
-        requested_source_ty,
         resolved_export,
     );
 

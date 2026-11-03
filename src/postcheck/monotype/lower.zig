@@ -7427,7 +7427,7 @@ const Builder = struct {
                     EdgeEvidence{ .subst = &.{}, .vector = &.{} };
                 const selected = try ctx.draftFnSlotForProcedureUseAtNode(
                     procedure,
-                    procedure.source_fn_ty_template,
+                    try procedureUseSourceFnKey(view, procedure),
                     root_node,
                     edge,
                     false,
@@ -7452,7 +7452,7 @@ const Builder = struct {
             .symbol = self.symbols.fresh(),
             .fn_def = null,
             .fn_id = null,
-            .identity_seed = .{ .kind = "procedure-use-root", .extra = procedureUseRootIdentity(request, procedure, source_module) },
+            .identity_seed = .{ .kind = "procedure-use-root", .extra = procedureUseRootIdentity(request, try procedureUseSourceFnKey(view, procedure), source_module) },
             .args = try body_draft.addTypedLocalSpan(args),
             .body = .{ .roc = body },
             .ret = ret_cell,
@@ -45835,11 +45835,9 @@ const BodyContext = struct {
             );
         }
         const edge = try self.evidenceForProcedureUseAtNode(proc, site_expr, root_evidence, request_fn_node, .body_lowering);
-        _ = proc.source_fn_ty_payload orelse
-            Common.invariant("checked procedure value reached Monotype without a requested function type");
         const slot = try self.draftFnSlotForProcedureUseAtNode(
             proc,
-            proc.source_fn_ty_template,
+            try procedureUseSourceFnKey(self.view, proc),
             request_fn_node,
             edge,
             recursive_reference,
@@ -68908,7 +68906,15 @@ fn literalRootIdentity(module: checked.ModuleId, expr_id: checked.CheckedExprId)
     return hasher.finalResult();
 }
 
-fn procedureUseRootIdentity(request: checked.RootRequest, procedure: checked.ProcedureUseTemplate, source_module: checked.ModuleId) [32]u8 {
+/// The canonical key of the function type a procedure use requests, read
+/// from `view`, the module that recorded the use.
+fn procedureUseSourceFnKey(view: ModuleView, procedure: checked.ProcedureUseTemplate) Allocator.Error!names.TypeDigest {
+    const payload = procedure.source_fn_ty_payload orelse
+        Common.invariant("checked procedure use reached Monotype without a requested function type");
+    return try view.types.rootKey(payload);
+}
+
+fn procedureUseRootIdentity(request: checked.RootRequest, source_fn_key: names.TypeDigest, source_module: checked.ModuleId) [32]u8 {
     var hasher = TypeDigestHasher.init();
     hasher.update("roc.monotype.procedure-use-root.v1");
     hasher.update(&source_module.bytes);
@@ -68925,7 +68931,7 @@ fn procedureUseRootIdentity(request: checked.RootRequest, procedure: checked.Pro
         hasher.update("compile-time-root");
         hashU32(&hasher, @backingInt(root));
     }
-    hasher.update(&procedure.source_fn_ty_template.bytes);
+    hasher.update(&source_fn_key.bytes);
     return hasher.finalResult();
 }
 

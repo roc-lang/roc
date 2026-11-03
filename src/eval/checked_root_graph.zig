@@ -408,7 +408,7 @@ const Walker = struct {
                 const entry = self.modules[module].top_level_values.lookupByDef(imported.def) orelse return;
                 switch (entry.value) {
                     .procedure_binding => |procedure_binding| try self.topLevelBinding(module, procedure_binding),
-                    .const_ref => |const_ref| try self.constUse(.{ .const_ref = const_ref, .requested_source_ty_template = proc_use.source_fn_ty_template }),
+                    .const_ref => |const_ref| try self.constUse(.{ .const_ref = const_ref, .requested_source_ty_payload = proc_use.source_fn_ty_payload }),
                 }
             },
             .hosted => {},
