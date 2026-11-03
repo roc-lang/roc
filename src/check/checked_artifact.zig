@@ -39,7 +39,6 @@ const CompactWriter = collections.CompactWriter;
 const StringLiteral = base.StringLiteral;
 const output_type_roots = @import("output_type_roots.zig");
 const sealed_type_view = @import("sealed_type_view.zig");
-const value_identity = @import("value_identity.zig");
 
 /// Publishes each visited root into a checked type store.
 const CheckedTypeRootPublisher = struct {
@@ -13021,13 +13020,6 @@ pub const CheckedBodyStore = struct {
     /// here so a *data* field accidentally left out of `Serialized` is a compile
     /// error rather than a silently-dropped field.
     pub const serde_transient_fields = [_][]const u8{ "source_node_map", "literal_pattern_exprs" };
-
-    /// The checked expression of source node `raw_node`, while the store is
-    /// being published from its typed module (`source_node_map` is not
-    /// serialized).
-    pub fn checkedExprAtSourceNode(self: *const CheckedBodyStore, raw_node: u32) ?CheckedExprId {
-        return self.source_node_map.exprAtRawNode(raw_node);
-    }
 
     pub const LiteralPatternExprs = struct {
         raw_node: u32,
@@ -28415,11 +28407,6 @@ pub const PlatformPairing = struct {
                 "interface_capabilities",
                 "top_level_values",
                 "hoisted_constants",
-                // Value reuse metadata: borrowed from the platform. Reuse
-                // moves values between versions of a module's own entry,
-                // never into a composition.
-                "compile_time_root_identities",
-                "compile_time_root_portability",
                 // Runtime ownership and preparation state, not checked data.
                 "evaluation_state",
                 "serialized_backing",
@@ -35055,22 +35042,6 @@ pub const ConstTemplateTable = struct {
         }
     }
 
-    /// Replace a stored constant's template with an equal stored value: a
-    /// compiler with runtime safety installs a transplanted value in place
-    /// of the one evaluation stored (design.md "Compile-Time Value Reuse
-    /// Across Edits").
-    pub fn replaceStoredConst(
-        self: *ConstTemplateTable,
-        ref: ConstRef,
-        template: StoredConstTemplate,
-    ) void {
-        const record = self.recordForRef(ref);
-        switch (record.state) {
-            .stored_const => record.state = .{ .stored_const = template },
-            .reserved, .eval_template, .unimplemented => checkedArtifactInvariant("replaced a constant template that held no stored value", .{}),
-        }
-    }
-
     pub fn get(self: *const ConstTemplateTable, ref: ConstRef) ConstTemplate {
         const idx = @backingInt(ref.template);
         if (idx >= self.templates.items.len) {
@@ -35408,18 +35379,12 @@ pub const CompileTimeRootReadTable = struct {
     pub const Ref = extern struct { module: [32]u8, root: ComptimeRootId };
     pub const Row = extern struct { start: u32 = 0, len: u32 = 0 };
     pub const Input = struct { root: ComptimeRootId, reads: []const Ref };
-    /// A read's placement and producer-authored identity, independent of the
-    /// checked module version and dense root numbering. Builtins and retained
-    /// interface artifacts use their exact key as placement. Published at commit.
-    pub const Identity = extern struct { placement: [32]u8, root: CompileTimeRootIdentity };
-    identities: []const Identity = &.{},
     rows: []const Row = &.{},
     refs: []const Ref = &.{},
 
     pub const Serialized = extern struct {
         rows: SerializedSlice(Row) = .{},
         refs: SerializedSlice(Ref) = .{},
-        identities: SerializedSlice(Identity) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CompileTimeRootReadTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -35468,7 +35433,6 @@ pub const CompileTimeRootReadTable = struct {
     }
 
     pub fn validate(self: CompileTimeRootReadTable, root_count: usize) error{CorruptArtifact}!void {
-        if (self.identities.len != 0 and self.identities.len != self.refs.len) return error.CorruptArtifact;
         if (self.rows.len != 0 and self.rows.len != root_count) return error.CorruptArtifact;
         for (self.rows) |row| {
             if (row.start > self.refs.len or row.len > self.refs.len - row.start) return error.CorruptArtifact;
@@ -35476,149 +35440,10 @@ pub const CompileTimeRootReadTable = struct {
     }
 
     pub fn deinit(self: *CompileTimeRootReadTable, allocator: Allocator) void {
-        allocator.free(self.identities);
         allocator.free(self.rows);
         allocator.free(self.refs);
         self.* = .{};
     }
-};
-
-/// Value identity and site of a compile-time root (design.md "Compile-Time
-/// Value Reuse Across Edits").
-pub const CompileTimeRootIdentity = value_identity.CompileTimeRootIdentity;
-/// A relocatable test observation site and its current source span.
-pub const TestReportSite = value_identity.TestReportSite;
-
-/// Persisted relocation proof for one named occurrence held by a cached value.
-pub const ReuseNominalIdentity = extern struct {
-    module: [32]u8,
-    ty_module: [32]u8,
-    ty: CheckedTypeId,
-    placement: [32]u8,
-    identity: [32]u8,
-};
-
-/// Every compile-time root's value identity and site, dense by root id, and
-/// the module's value context, computed when the module is published.
-pub const CompileTimeRootIdentityTable = struct {
-    /// The module-independent identity of definition `def`
-    /// (`test_definitions`), if the module published one.
-    pub fn definitionIdentity(self: *const CompileTimeRootIdentityTable, def: CIR.Def.Idx) ?[32]u8 {
-        var lo: usize = 0;
-        var hi = self.test_definitions.len;
-        while (lo < hi) {
-            const mid = lo + (hi - lo) / 2;
-            const entry = self.test_definitions[mid];
-            if (@backingInt(entry.def) < @backingInt(def)) {
-                lo = mid + 1;
-            } else if (@backingInt(entry.def) > @backingInt(def)) {
-                hi = mid;
-            } else {
-                return entry.value;
-            }
-        }
-        return null;
-    }
-
-    rows: []const CompileTimeRootIdentity = &.{},
-    /// Root semantic dependencies for outcome reuse, independent of CTFE reuse.
-    test_rows: []const CompileTimeRootIdentity = &.{},
-    /// One context digest covering checking policy, types and visible methods.
-    test_context: []const [32]u8 = &.{},
-    /// Implementation identities sorted by the producer's exact definition id.
-    test_definitions: []const value_identity.DefinitionIdentity = &.{},
-    test_report_sites: []const value_identity.TestReportSite = &.{},
-    test_declarations: []const value_identity.DeclarationIdentity = &.{},
-    reuse_types: []const value_identity.ReuseTypeIdentity = &.{},
-    reuse_nominals: []const ReuseNominalIdentity = &.{},
-    /// The module's value context (`value_identity.ModuleIdentities.context`):
-    /// one digest in every published module, none in a table that was never
-    /// computed.
-    context: []const [32]u8 = &.{},
-    /// The identities of the module's exported definitions, sorted by name.
-    exports: []const value_identity.ExportIdentity = &.{},
-    /// The platform requirements code reachable from its methods looks up,
-    /// by name digest.
-    method_requires: []const [32]u8 = &.{},
-    /// The platform requirements code reachable from its exported
-    /// definitions looks up, by name digest.
-    export_requires: []const [32]u8 = &.{},
-
-    pub const Serialized = extern struct {
-        rows: SerializedSlice(CompileTimeRootIdentity) = .{},
-        test_rows: SerializedSlice(CompileTimeRootIdentity) = .{},
-        test_context: SerializedSlice([32]u8) = .{},
-        test_definitions: SerializedSlice(value_identity.DefinitionIdentity) = .{},
-        test_report_sites: SerializedSlice(value_identity.TestReportSite) = .{},
-        test_declarations: SerializedSlice(value_identity.DeclarationIdentity) = .{},
-        reuse_types: SerializedSlice(value_identity.ReuseTypeIdentity) = .{},
-        reuse_nominals: SerializedSlice(ReuseNominalIdentity) = .{},
-        context: SerializedSlice([32]u8) = .{},
-        exports: SerializedSlice(value_identity.ExportIdentity) = .{},
-        method_requires: SerializedSlice([32]u8) = .{},
-        export_requires: SerializedSlice([32]u8) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(CompileTimeRootIdentityTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
-
-    pub fn validate(self: CompileTimeRootIdentityTable, root_count: usize) error{CorruptArtifact}!void {
-        if (self.rows.len != 0 and self.rows.len != root_count) return error.CorruptArtifact;
-        if (self.context.len > 1) return error.CorruptArtifact;
-        if (self.test_rows.len != 0 and self.test_rows.len != root_count) return error.CorruptArtifact;
-        if (self.test_context.len > 1) return error.CorruptArtifact;
-        for (self.test_report_sites) |site| if (site.start > site.end) return error.CorruptArtifact;
-        for (self.reuse_types, 0..) |row, i| {
-            if (i > 0 and @backingInt(self.reuse_types[i - 1].ty) >= @backingInt(row.ty)) return error.CorruptArtifact;
-        }
-        for (self.test_declarations, 0..) |declaration, i| {
-            if (i > 0 and @backingInt(self.test_declarations[i - 1].statement) >= @backingInt(declaration.statement)) return error.CorruptArtifact;
-        }
-    }
-
-    pub fn validateTypes(self: CompileTimeRootIdentityTable, payloads: []const StoredCheckedTypePayload) error{CorruptArtifact}!void {
-        for (self.reuse_types) |row| {
-            if (@backingInt(row.ty) >= payloads.len) return error.CorruptArtifact;
-            switch (payloads[@backingInt(row.ty)]) {
-                .nominal, .alias => {},
-                .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return error.CorruptArtifact,
-            }
-        }
-    }
-
-    /// The module's value context, when it was computed.
-    pub fn valueContext(self: CompileTimeRootIdentityTable) ?[32]u8 {
-        return if (self.context.len == 1) self.context[0] else null;
-    }
-
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
-};
-
-/// Whether each completed compile-time root's stored data can move into a
-/// later version of its module (design.md "Compile-Time Value Reuse Across
-/// Edits"), dense by root id: one byte per root, 1 when portable. Recomputed
-/// after each finalization of the module; empty before its first.
-pub const CompileTimeRootPortability = struct {
-    portable: []const u8 = &.{},
-
-    pub const Serialized = extern struct {
-        portable: SerializedSlice(u8) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(CompileTimeRootPortability, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
-
-    pub fn isPortable(self: CompileTimeRootPortability, root: ComptimeRootId) bool {
-        if (self.portable.len == 0) return false;
-        return self.portable[@backingInt(root)] == 1;
-    }
-
-    pub fn validate(self: CompileTimeRootPortability, root_count: usize) error{CorruptArtifact}!void {
-        if (self.portable.len != 0 and self.portable.len != root_count) return error.CorruptArtifact;
-        for (self.portable) |flag| if (flag > 1) return error.CorruptArtifact;
-    }
-
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Checked module publication, including typed stores and compile-time observations.
@@ -35670,8 +35495,6 @@ pub const CheckedModuleArtifact = struct {
     const_store: ConstStore,
     compile_time_debug: CompileTimeDebugStore = .{},
     compile_time_root_reads: CompileTimeRootReadTable = .{},
-    compile_time_root_identities: CompileTimeRootIdentityTable = .{},
-    compile_time_root_portability: CompileTimeRootPortability = .{},
     /// Process-local publication state; cache entries always contain finalized output.
     evaluation_state: enum { prepared, finalized } = .finalized,
     /// Owns the evaluation columns of a finalized artifact that a compilation
@@ -35910,8 +35733,6 @@ pub const CheckedModuleArtifact = struct {
         const_store: ConstStore.Serialized,
         compile_time_debug: CompileTimeDebugStore.Serialized,
         compile_time_root_reads: CompileTimeRootReadTable.Serialized,
-        compile_time_root_identities: CompileTimeRootIdentityTable.Serialized,
-        compile_time_root_portability: CompileTimeRootPortability.Serialized,
 
         pub const root_contract: collections.serde_validation.RootContract = .{
             .Owner = CheckedModuleArtifact,
@@ -35938,15 +35759,11 @@ pub const CheckedModuleArtifact = struct {
             // plans add one, and state merge plans one more. Promoted local
             // procedure templates and callable contract types add one each,
             // and the single-source-call template list one more. Nested procedure runtime captures add one. The
-            // compile-time root read table adds its rows, refs and read identities, the root
-            // identity table its rows, value context, exports and method and
-            // export requirements, and the portability column one more. Stored
+            // compile-time root read table adds its rows and refs. Stored
             // function evidence keeps its target and structural payloads in
-            // two pools of their own. Template demand vectors add one. Test outcome
-            // identities add roots, context, definition summaries, report sites and declaration identities.
+            // two pools of their own. Template demand vectors add one.
             // Literal arguments add the literal requirement pool, the demand pool, and the root lookup table.
-            // Nominal relocation adds checked type fingerprints and committed occurrence identities.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 258);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 244);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -36007,9 +35824,6 @@ pub const CheckedModuleArtifact = struct {
             const roots = self.compile_time_roots.deserialize(base_addr);
             try observations.validate(roots.roots.len);
             try self.compile_time_root_reads.deserialize(base_addr).validate(roots.roots.len);
-            try self.compile_time_root_identities.deserialize(base_addr).validate(roots.roots.len);
-            try self.compile_time_root_identities.deserialize(base_addr).validateTypes(self.checked_types.payloads.deserialize(base_addr));
-            try self.compile_time_root_portability.deserialize(base_addr).validate(roots.roots.len);
         }
 
         pub fn deserialize(
@@ -37929,7 +37743,6 @@ pub const ImportedModuleView = struct {
     interface_capabilities: *const ModuleInterfaceCapabilities,
     const_store: *const ConstStore,
     compile_time_root_reads: *const CompileTimeRootReadTable = &no_compile_time_root_reads,
-    compile_time_root_identities: *const CompileTimeRootIdentityTable = &no_compile_time_root_identities,
 
     /// The keys of the modules this module imports directly.
     pub fn directImportKeys(self: ImportedModuleView) []const CheckedModuleArtifactKey {
@@ -37938,7 +37751,6 @@ pub const ImportedModuleView = struct {
 };
 
 const no_compile_time_root_reads: CompileTimeRootReadTable = .{};
-const no_compile_time_root_identities: CompileTimeRootIdentityTable = .{};
 
 /// Public `LoweringModuleView` declaration.
 pub const LoweringModuleView = struct {
@@ -37991,7 +37803,6 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .interface_capabilities = &artifact.interface_capabilities,
         .const_store = &artifact.const_store,
         .compile_time_root_reads = &artifact.compile_time_root_reads,
-        .compile_time_root_identities = &artifact.compile_time_root_identities,
     };
 }
 
@@ -39672,74 +39483,6 @@ pub fn publishFromTypedModule(
     template_iterator_refs.deinit(allocator);
     plan_build_data.deinit(allocator);
 
-    const module_identities = try value_identity.compute(allocator, .{
-        .own_key = artifact_key,
-        .env = module.moduleEnvConst(),
-        .names = &canonical_names,
-        .types = checked_types.view(),
-        .roots = compile_time_roots.roots,
-        .bodies = checked_bodies,
-        .top_level_values = &top_level_values,
-        .plans = &static_dispatch_plans,
-        .module_idx = module.moduleIndex(),
-        .context = .{
-            .checking_context = hashCheckingContextIdentity(checking_context_identity),
-            .direct_import_keys = hashDirectImportArtifactKeys(direct_import_module_keys),
-        },
-        .own_identity = module_identity.stable_hash,
-        .imports = inputs.imports,
-        .available = inputs.available_artifacts,
-        .relations = inputs.relation_artifacts,
-    });
-    defer allocator.free(module_identities.definitions);
-    defer allocator.free(module_identities.report_sites);
-    defer allocator.free(module_identities.declarations);
-    defer allocator.free(module_identities.reuse_types);
-    var compile_time_root_identities = CompileTimeRootIdentityTable{
-        .rows = module_identities.roots,
-        .exports = module_identities.exports,
-        .method_requires = module_identities.method_requires,
-        .export_requires = module_identities.export_requires,
-    };
-    errdefer compile_time_root_identities.deinit(allocator);
-    compile_time_root_identities.context = try allocator.dupe([32]u8, &.{module_identities.context});
-    // Preserve checking policy and import names, but each imported value's
-    // implementation is supplied by its checked summary, not its module key.
-    const test_import_names = try allocator.dupe(ImportIdentity, checking_context_identity.imports);
-    defer allocator.free(test_import_names);
-    for (test_import_names) |*imported| imported.artifact_key = null;
-    var test_checking_context = checking_context_identity;
-    test_checking_context.imports = test_import_names;
-    const test_identities = try value_identity.compute(allocator, .{
-        .own_key = artifact_key,
-        .env = module.moduleEnvConst(),
-        .names = &canonical_names,
-        .types = checked_types.view(),
-        .roots = compile_time_roots.roots,
-        .bodies = checked_bodies,
-        .top_level_values = &top_level_values,
-        .plans = &static_dispatch_plans,
-        .module_idx = module.moduleIndex(),
-        .context = .{
-            .checking_context = hashCheckingContextIdentity(test_checking_context),
-            .direct_import_keys = undefined, // Test identities consume explicit imported summaries.
-        },
-        .own_identity = module_identity.stable_hash,
-        .test_dependencies = true,
-        .imports = inputs.imports,
-        .available = inputs.available_artifacts,
-        .relations = inputs.relation_artifacts,
-    });
-    compile_time_root_identities.reuse_types = test_identities.reuse_types;
-    compile_time_root_identities.test_declarations = test_identities.declarations;
-    compile_time_root_identities.test_report_sites = test_identities.report_sites;
-    compile_time_root_identities.test_rows = test_identities.roots;
-    compile_time_root_identities.test_definitions = test_identities.definitions;
-    defer allocator.free(test_identities.exports);
-    defer allocator.free(test_identities.method_requires);
-    defer allocator.free(test_identities.export_requires);
-    compile_time_root_identities.test_context = try allocator.dupe([32]u8, &.{test_identities.context});
-
     var provided_exports = try ProvidedExportTable.fromModule(
         allocator,
         module,
@@ -39991,7 +39734,6 @@ pub fn publishFromTypedModule(
         .hoisted_constants = hoisted_constants,
         .const_templates = const_templates,
         .const_store = checked_const_store,
-        .compile_time_root_identities = compile_time_root_identities,
         .evaluation_state = .prepared,
     };
     checked_const_store = ConstStore.init(allocator);
@@ -42276,8 +42018,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x20, 0x0C, 0x43, 0x88, 0xDD, 0x65, 0x8B, 0x52, 0x34, 0xA3, 0x7C, 0x2F, 0x65, 0xDA, 0x84, 0xC8,
-        0x16, 0x37, 0xF1, 0x3D, 0xB2, 0xC7, 0x5D, 0x37, 0x36, 0x7E, 0xF2, 0x8F, 0x58, 0xD9, 0xDC, 0x37,
+        0x55, 0x18, 0xF1, 0x84, 0x1F, 0xA7, 0xD9, 0x81, 0x8D, 0x16, 0x70, 0x7D, 0x6B, 0x9D, 0xD6, 0x35,
+        0xF0, 0x5B, 0x70, 0x39, 0xB2, 0x96, 0xE9, 0x26, 0x44, 0x99, 0xAF, 0xC0, 0x70, 0x6E, 0xB1, 0xE6,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -43054,12 +42796,4 @@ test "checked polarity alias publication erases hidden arguments and preserves b
     const loaded_alias = roundtrip.loaded.payload(root).alias;
     try std.testing.expectEqual(@as(usize, 1), loaded_alias.args.len);
     try std.testing.expectEqual(row.ext, roundtrip.loaded.payload(loaded_alias.backing).tag_union.ext);
-}
-
-test "cached nominal fingerprints reject invalid checked type references" {
-    const payloads = [_]StoredCheckedTypePayload{.empty_record};
-    const out_of_range: CompileTimeRootIdentityTable = .{ .reuse_types = &.{.{ .ty = @fromBackingInt(1), .identity = @splat(0) }} };
-    try std.testing.expectError(error.CorruptArtifact, out_of_range.validateTypes(&payloads));
-    const not_named: CompileTimeRootIdentityTable = .{ .reuse_types = &.{.{ .ty = @fromBackingInt(payloads.len - 1), .identity = @splat(0) }} };
-    try std.testing.expectError(error.CorruptArtifact, not_named.validateTypes(&payloads));
 }
