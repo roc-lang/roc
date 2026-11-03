@@ -26469,6 +26469,13 @@ The specialization, evaluation, runtime LIR, ARC, static-data and native test
 execution producers increment their own counters. A complete result hit leaves
 every counter zero. This variable uses the same developer-only gate.
 
+`ROC_VERIFY_SEALED_TYPE_VIEW` builds each published module's sealed type view
+(`src/check/sealed_type_view.zig`, which reads checked types directly from the
+sealed solver store) and asserts, before anything rewrites the publication,
+that it renders every published source root exactly as checked type
+publication does. The snapshot tool, eval test runner and strategy
+differential runner set it in their build steps.
+
 
 ## Integer SIMD Builtins
 
