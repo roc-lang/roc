@@ -87,6 +87,9 @@ pub const LinkError = Allocator.Error || error{
 /// What a failed patch link reports beyond its error.
 pub const Outcome = struct {
     missing: []const []const u8 = &.{},
+    /// The provided data symbol larger than its window, for
+    /// `ProvidedValueTooLarge`; allocated from the arena.
+    too_large: ?struct { symbol: []const u8, size: u64 } = null,
 };
 
 /// Link `inputs` into `output`, whose first `host.host().len` bytes already
@@ -115,7 +118,16 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         const symbols = image.view.symbols();
         for (image.view.exports()) |symbol_index| {
             const gop = exports.getOrPutAssumeCapacity(image.view.name(symbols[symbol_index].name));
-            if (gop.found_existing and std.mem.order(u8, &images.items[gop.value_ptr.image].view.header.digest, &image.view.header.digest) != .gt) continue;
+            if (gop.found_existing) {
+                // A strong definition wins over a weak one; among equals,
+                // the smallest content digest.
+                const existing = images.items[gop.value_ptr.image].view;
+                const existing_weak = existing.symbols()[gop.value_ptr.symbol].flags & UnitImage.symbol_weak != 0;
+                const candidate_weak = symbols[symbol_index].flags & UnitImage.symbol_weak != 0;
+                if (existing_weak == candidate_weak) {
+                    if (std.mem.order(u8, &existing.header.digest, &image.view.header.digest) != .gt) continue;
+                } else if (candidate_weak) continue;
+            }
             gop.value_ptr.* = .{ .image = @intCast(image_index), .symbol = symbol_index };
         }
     }
@@ -127,8 +139,10 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     var walk: Walk = .{ .gpa = gpa, .images = images.items, .exports = &exports, .host = inputs.host, .host_required = inputs.host_required };
     defer walk.deinit();
     try walk.init();
+    // The checked program defines every `provides` symbol (the checker
+    // rejects an app that lacks one), so each resolves to an export.
     for (0..inputs.host.provideCount()) |index| {
-        const found = exports.get(inputs.host.provideName(index)) orelse continue;
+        const found = exports.get(inputs.host.provideName(index)) orelse base.invariant("fast dev link invariant violated: no unit image defines the provided symbol {s}", .{inputs.host.provideName(index)});
         try walk.reachSymbol(found.image, found.symbol);
     }
     std.debug.assert(walk.states[root_image] != null);
@@ -214,12 +228,35 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         debug_sizes[slot] = size;
         tail_at += size;
     }
+    // Symbols of code the link leaves as a hole get no entry: each placed
+    // image's symbol table index maps to its entry's position among the
+    // image's kept symbols, or `no_symbol`.
+    const reached_atoms = try gpa.alloc([]const bool, images.items.len);
+    defer gpa.free(reached_atoms);
+    for (walk.states, reached_atoms) |state, *atoms| atoms.* = if (state) |placed| placed.atoms else &.{};
+    const symbol_slots = try gpa.alloc([]u32, images.items.len);
+    @memset(symbol_slots, &.{});
+    defer {
+        for (order.items) |index| gpa.free(symbol_slots[index]);
+        gpa.free(symbol_slots);
+    }
     var app_symbol_count: u64 = 0;
     var strtab_size: u64 = if (host_strtab) |strtab| strtab.size else 1;
     for (order.items) |index| {
         const view = images.items[index].view;
+        const slots = try gpa.alloc(u32, view.symbols().len);
+        symbol_slots[index] = slots;
+        var kept: u32 = 0;
+        for (view.symbolAtoms(), slots) |atom, *slot| {
+            if (atom != UnitImage.no_atom and !reached_atoms[index][atom]) {
+                slot.* = no_symbol;
+                continue;
+            }
+            slot.* = kept;
+            kept += 1;
+        }
         places[index].first_symbol = 1 + app_symbol_count;
-        app_symbol_count += view.symbols().len;
+        app_symbol_count += kept;
         places[index].strings = strtab_size;
         strtab_size += view.strings().len;
     }
@@ -282,16 +319,14 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
 
     // Import addresses, now that every image has its place.
     const resolved = try gpa.alloc([]u64, images.items.len);
+    @memset(resolved, &.{});
     defer {
         for (order.items) |index| gpa.free(resolved[index]);
         gpa.free(resolved);
     }
-    for (order.items, 0..) |index, placed| {
+    for (order.items) |index| {
         const targets = walk.states[index].?.targets;
-        resolved[index] = gpa.alloc(u64, targets.len) catch |err| {
-            for (order.items[0..placed]) |earlier| gpa.free(resolved[earlier]);
-            return err;
-        };
+        resolved[index] = try gpa.alloc(u64, targets.len);
         for (targets, resolved[index]) |target, *address| {
             address.* = switch (target) {
                 .app => |found| app: {
@@ -303,19 +338,17 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
             };
         }
     }
-    const reached_atoms = try gpa.alloc([]const bool, images.items.len);
-    defer gpa.free(reached_atoms);
-    for (walk.states, reached_atoms) |state, *atoms| atoms.* = if (state) |placed| placed.atoms else &.{};
-
     // Provided values must fit their windows.
-    const provided = try gpa.alloc(?SymbolRef, provide_count);
+    const provided = try gpa.alloc(SymbolRef, provide_count);
     defer gpa.free(provided);
     for (provided, 0..) |*slot, index| {
         const name = host.provideName(index);
-        slot.* = exports.get(name);
-        const found = slot.* orelse continue;
-        const symbol = images.items[found.image].view.symbols()[found.symbol];
-        if (@as(UnitImage.SymbolType, @fromBackingInt(symbol.type)) != .func and symbol.size > host_prelink.provide_window) return error.ProvidedValueTooLarge;
+        slot.* = exports.get(name) orelse unreachable; // the walk above resolved every provided symbol
+        const symbol = images.items[slot.image].view.symbols()[slot.symbol];
+        if (@as(UnitImage.SymbolType, @fromBackingInt(symbol.type)) != .func and symbol.size > host_prelink.provide_window) {
+            outcome.too_large = .{ .symbol = try arena.dupe(u8, name), .size = symbol.size };
+            return error.ProvidedValueTooLarge;
+        }
     }
 
     try output.resize(file_size);
@@ -341,6 +374,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         .strtab_offset = strtab_offset,
         .section_index = .{ text_index, data_index, bss_index },
         .reached_atoms = reached_atoms,
+        .symbol_slots = symbol_slots,
     };
     var copy_list: std.ArrayList(Copy) = .empty;
     defer copy_list.deinit(gpa);
@@ -397,8 +431,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     // The coordinator's writes: windows, program headers, build id, ELF
     // header, section names and headers.
     const finalize_started = now(std_io);
-    for (provided, 0..) |found_or_null, index| {
-        const found = found_or_null orelse continue;
+    for (provided, 0..) |found, index| {
         const window = host_prelink.provideAddress(index);
         const window_bytes = mapped[@intCast(app_offset + (window - host_prelink.app_base))..][0..@intCast(host_prelink.provide_window)];
         const symbol = images.items[found.image].view.symbols()[found.symbol];
@@ -443,6 +476,9 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
 }
 
 const SymbolRef = struct { image: u32, symbol: u32 };
+
+/// `Context.symbol_slots` entry of a symbol the output's symbol table omits.
+const no_symbol: u32 = std.math.maxInt(u32);
 
 /// What an import resolves to.
 const Target = union(enum) {
@@ -511,6 +547,16 @@ const Walk = struct {
     fn place(self: *Walk, image: u32) Allocator.Error!State {
         if (self.states[image]) |state| return state;
         const view = self.images[image].view;
+        // Once recorded, the state is the walk's to free; recording it
+        // before following the roots lets a cycle of imports find it.
+        const state = try self.resolve(view);
+        self.states[image] = state;
+        for (view.roots()) |entry| try self.follow(image, state, entry);
+        return state;
+    }
+
+    /// A fresh state for an image: nothing reached, every import resolved.
+    fn resolve(self: *Walk, view: UnitImage.View) Allocator.Error!State {
         const atoms = try self.gpa.alloc(bool, view.atoms().len);
         errdefer self.gpa.free(atoms);
         @memset(atoms, false);
@@ -524,16 +570,13 @@ const Walk = struct {
                 .{ .host = vaddr }
             else missing: {
                 if (findSorted(self.host_required, name) == null) {
-                    base.invariant("fast dev link invariant violated: the app imports {s}, which is neither a program symbol, a hosted symbol, a runtime symbol, nor a support import", .{name});
+                    base.invariant("fast dev link invariant violated: the app imports {s}, which is neither a program symbol nor a symbol the host may define", .{name});
                 }
                 try self.missing.put(self.gpa, name, {});
                 break :missing .missing;
             };
         }
-        const state: State = .{ .atoms = atoms, .targets = targets };
-        self.states[image] = state;
-        for (view.roots()) |entry| try self.follow(image, state, entry);
-        return state;
+        return .{ .atoms = atoms, .targets = targets };
     }
 
     fn run(self: *Walk) Allocator.Error!void {
@@ -582,6 +625,9 @@ const Context = struct {
     section_index: [3]u32,
     /// For each placed image, which of its atoms are reached.
     reached_atoms: []const []const bool,
+    /// For each placed image, each symbol's position among the image's
+    /// entries in the output symbol table, or `no_symbol`.
+    symbol_slots: []const []const u32,
 
     /// The file offset of an address in the app region's file-backed bytes.
     fn fileOffsetOf(self: *const Context, address: u64) u64 {
@@ -663,9 +709,13 @@ const Task = struct {
         const view = context.images[range.image].view;
         const place = context.places[range.image];
         const symbols = view.symbols()[range.first..][0..range.count];
-        const out = context.out[@intCast(context.symtab_offset + (place.first_symbol + range.first) * sym_size)..][0 .. symbols.len * sym_size];
-        for (symbols, 0..) |symbol, at| {
-            const entry = out[at * sym_size ..][0..sym_size];
+        const slots = context.symbol_slots[range.image][range.first..][0..range.count];
+        var written: u64 = 0;
+        for (symbols, slots) |symbol, slot| {
+            // A symbol of code the link left as a hole has no entry.
+            if (slot == no_symbol) continue;
+            const entry = context.out[@intCast(context.symtab_offset + (place.first_symbol + slot) * sym_size)..][0..sym_size];
+            written += sym_size;
             const region: UnitImage.Region = @fromBackingInt(symbol.region);
             const elf_type: u8 = switch (@as(UnitImage.SymbolType, @fromBackingInt(symbol.type))) {
                 .notype => 0,
@@ -686,7 +736,7 @@ const Task = struct {
             std.mem.writeInt(u64, entry[8..16], place.base(region) + symbol.value, .little);
             std.mem.writeInt(u64, entry[16..24], symbol.size, .little);
         }
-        self.bytes = out.len;
+        self.bytes = written;
     }
 
     fn applySites(self: *Task, range: Range) void {
@@ -811,34 +861,45 @@ pub const OutputFile = struct {
         return .{ .fd = @intCast(named), .dest = dest, .temp = temp, .named = true };
     }
 
-    /// Copy `len` bytes at `offset` of `source` to the start of the output,
-    /// in the kernel.
-    pub fn copyFrom(self: *OutputFile, source: linux.fd_t, offset: u64, len: u64) Error!void {
+    /// Copy `bytes`, which are `source`'s contents at `offset`, to the start
+    /// of the output. Within one filesystem the kernel copies the file
+    /// range itself (a reflink where the filesystem shares blocks); across
+    /// filesystems, or on one without the operation, the bytes are written
+    /// from `bytes`. The output holds the same bytes either way.
+    pub fn copyFrom(self: *OutputFile, source: linux.fd_t, offset: u64, bytes: []const u8) Error!void {
         var in_offset: i64 = @intCast(offset);
         var out_offset: i64 = 0;
-        var remaining = len;
+        var remaining = bytes.len;
         while (remaining != 0) {
-            const rc = linux.copy_file_range(source, &in_offset, self.fd, &out_offset, @intCast(@min(remaining, 1 << 30)), 0);
+            const rc = linux.copy_file_range(source, &in_offset, self.fd, &out_offset, @min(remaining, 1 << 30), 0);
             const errno = linux.errno(rc);
             if (errno == .INTR) continue;
+            if (errno == .XDEV or errno == .OPNOTSUPP or errno == .INVAL) {
+                const done: usize = @intCast(out_offset);
+                return self.writeAt(bytes[done..], done);
+            }
             if (errno != .SUCCESS) return failure(errno);
             if (rc == 0) return error.Unexpected;
             remaining -= rc;
         }
-        self.size = @max(self.size, len);
+        self.size = @max(self.size, bytes.len);
     }
 
     /// Write `bytes` at the start of the output.
     pub fn writeStart(self: *OutputFile, bytes: []const u8) Error!void {
+        return self.writeAt(bytes, 0);
+    }
+
+    fn writeAt(self: *OutputFile, bytes: []const u8, at: usize) Error!void {
         var written: usize = 0;
         while (written < bytes.len) {
-            const rc = linux.pwrite(self.fd, bytes.ptr + written, bytes.len - written, @intCast(written));
+            const rc = linux.pwrite(self.fd, bytes.ptr + written, bytes.len - written, @intCast(at + written));
             const errno = linux.errno(rc);
             if (errno == .INTR) continue;
             if (errno != .SUCCESS) return failure(errno);
             written += rc;
         }
-        self.size = @max(self.size, bytes.len);
+        self.size = @max(self.size, at + bytes.len);
     }
 
     fn resize(self: *OutputFile, size: u64) Error!void {

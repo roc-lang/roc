@@ -31,8 +31,14 @@ const Allocator = std.mem.Allocator;
 /// app code reaches host code with 32-bit displacements, so the app region
 /// stays within 2 GiB of the host.
 pub const app_base: u64 = 0x4000_0000;
-/// The bytes each `provides` symbol owns at the start of the app region.
-pub const provide_window: u64 = 4096;
+/// The bytes each `provides` symbol owns at the start of the app region: a
+/// procedure's window holds a jump to it, a data symbol's window holds the
+/// value's bytes, so a provided value can be at most this large. The window
+/// is the same for every symbol because the platform header, which the
+/// host's key is a function of, names the symbols without their types; a
+/// window is never written beyond its contents, so unused room costs no
+/// file bytes.
+pub const provide_window: u64 = 64 * 1024;
 /// Program header entries the reserved table holds.
 pub const phdr_capacity: u32 = 32;
 /// Spare program header entries kept for the app's segments; two are used.
@@ -188,7 +194,7 @@ fn hashList(hasher: *std.crypto.hash.sha2.Sha256, list: []const []const u8) void
 }
 
 /// The record format; bumped whenever `finish`'s output changes.
-pub const format_version: u32 = 3;
+pub const format_version: u32 = 4;
 const magic = "RHST".*;
 /// The offset of the host's bytes in a record, so they can be copied by
 /// file range from a page boundary.

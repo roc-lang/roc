@@ -151,8 +151,23 @@ pub fn restore(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.
         },
     };
     errdefer object_cache.deinitEntry(gpa, entry);
+    if (!imageReads(entry)) {
+        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache entry for key {s} holds no image this compiler reads\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
+        object_cache.deinitEntry(gpa, entry);
+        return null;
+    }
     try recordInterfaces(interfaces, entry);
     return entry;
+}
+
+/// Whether `entry`'s image, if it has one, is an image this compiler reads.
+/// An entry whose image does not read is bytes this compiler did not write
+/// (a miss), never a link-time failure.
+fn imageReads(entry: object_cache.Entry) bool {
+    if (entry.image.len == 0) return true;
+    const image: []align(backend.dev.UnitImage.alignment.toByteUnits()) const u8 = @alignCast(entry.image);
+    _ = backend.dev.UnitImage.View.init(image) catch return false;
+    return true;
 }
 
 /// Restore `key`'s entry like `restore`, serving it from a mapping of the
@@ -177,6 +192,12 @@ pub fn restoreMapped(gpa: Allocator, cache_manager: ?*CacheManager, key: object_
     errdefer {
         object_cache.deinitEntryView(gpa, entry);
         data.deinit(gpa);
+    }
+    if (!imageReads(entry)) {
+        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache entry for key {s} holds no image this compiler reads\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
+        object_cache.deinitEntryView(gpa, entry);
+        data.deinit(gpa);
+        return null;
     }
     try recordInterfaces(interfaces, entry);
     return .{ .entry = entry, .data = data };
@@ -378,7 +399,9 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
         return error.NativeCompilationFailed;
     };
     errdefer pieces.deinit();
-    const image: ?Image = if (producesImage(unit.target)) .{
+    // The image goes into the unit's cache entry, which later fast dev links
+    // read; a build without a cache has no use for it.
+    const image: ?Image = if (producesImage(unit.target) and unit.cache_manager != null) .{
         .bytes = object_compiler.buildUnitImage(pieces, unit.target, .every_procedure) catch |err| {
             std.log.err("Building the unit image of module {s} failed: {}", .{ module_name, err });
             return error.NativeCompilationFailed;

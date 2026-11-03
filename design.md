@@ -25956,6 +25956,73 @@ it directly. CLI and post-check consumers join hosted procedures to the binding
 table by those identities in linear time; they must not reconstruct or match
 qualified source names.
 
+## Fast Dev Link
+
+A `roc build --opt=dev --specialize=no` of a Linux x86_64 executable with a
+cache links its executable without composing a program object and without
+LLD. The per-build work after the edited module's code exists is a function
+of that module and of the output's size, never of the program's module count
+or the host's size. Every other target, output kind and `--no-cache` composes
+a program object and links it with LLD; the choice is a switch on target,
+output kind and cache presence (`fastDevLinkApplies`), never a reaction to a
+failure.
+
+**Unit images.** A `.boxy` unit's cache entry (`boxy_object_cache`) carries,
+beside its pieces, a unit image (`backend.dev.UnitImage`): the unit's text
+followed by its read-only data in one block, its writable data and zero-fill
+size, its symbols, its patch sites, its DWARF fragments and its content
+digest. Every reference the unit's own placement decides is resolved when the
+image is built; what remains is a patch site: an import of another image or
+of the host, or a reference whose distance depends on where the linker places
+the image's regions. The image is a pure function of the unit (Per-Module
+Output), so two builds of a unit write identical images. The block divides
+into atoms, one per symbol start, each recording what it references; a link
+writes only the atoms the program reaches and leaves the rest as zero holes.
+The compiler's builtins and Boxy runtime objects are converted once, in Roc's
+own build graph, into a support image of the same format and embedded.
+
+**Pre-linked host.** A platform's host is linked once with the existing LLD
+flags from the platform's link inputs plus one generated object, and filed as
+one cache entry per host (`host_prelink`, family `prelinked_host`). The
+generated object defines every `provides` symbol as an absolute address in a
+fixed window of the app region, so the host's references to the app resolve
+at prelink time to bytes each build fills in: a jump to the entry wrapper for
+a procedure, the value's bytes for a data symbol. A provided value larger than
+its window is a reported build error. The object also reserves room in the
+host's first segment for a program header table with spare entries, which
+the post-processing fills. The host link keeps (`-u`) exactly the symbols the
+app region may import: the platform's hosted symbols, the fixed runtime set
+and the support image's imports. The host's key is a function of contents
+only (compiler compatibility, target, link ABI, the provides and kept symbol
+lists, the link item names, and the bundle hash or per-file content digests
+of the inputs); it never contains a path, so checkouts at different paths
+share the entry. Reserved room in the host holds only what the platform or
+target fixes the count of; anything whose size depends on the app is
+appended after the host.
+
+**Sealed boundary.** Compiler-owned code (generated procedures, builtins,
+Boxy runtime, helpers) is part of the app region and local in the output;
+nothing compiler-owned enters the host link. After app-internal resolution,
+every remaining import must be a hosted symbol or a member of the runtime
+set: a host that lacks one is the user's missing-host-symbols error, any
+other unresolved name is a compiler invariant.
+
+**The link.** The output is created as an anonymous file in the destination
+directory when the build starts, and a background job hashes the host inputs,
+looks the host up and copies it into the output while the program compiles;
+on a miss the link step prelinks the host. The link then walks atoms from
+the `provides` symbols, places the reached images after the host at
+addresses that are a function of their content digests, resolves imports
+(app region first, then host), fills the output through a shared mapping on
+the compilation's worker threads, writes the provide windows, program
+headers, build id (a hash of the host's and the images' content digests),
+symbol table, debug fragments and section headers, and gives the file its
+name. A fixup writes into the referring site, never into the referent, and
+every region an image owns is disjoint from every other image's, so the
+workers never write the same bytes. Output bytes are a function of the host's
+content, the images' content and nothing else: not of cache state, worker
+count, checkout path or the compiler's build mode.
+
 ## Watch Mode For Check And Test
 
 `roc check --watch` and `roc test --watch` are long-running compiler commands.

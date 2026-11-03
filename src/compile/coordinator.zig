@@ -1876,15 +1876,23 @@ const BoxyObjects = struct {
         const gpa = self.coordinator.gpa;
         const arena = self.arena.allocator();
         try self.owned_pieces.ensureUnusedCapacity(gpa, 1);
-        if (built.image) |image| {
-            errdefer image.deinit(gpa);
-            try self.images.put(gpa, artifact.key.bytes, image);
+        const pieces = built.pieces orelse Coordinator.coordinatorInvariant("a compile-time evaluation unit was built without its pieces", .{});
+        // The image and the pieces become the compilation's once stored;
+        // until then a failure releases them with the rest of `built`.
+        var image_stored = false;
+        errdefer if (!image_stored) if (built.image) |image| image.deinit(gpa);
+        errdefer {
+            pieces.deinit();
+            gpa.destroy(pieces);
         }
         defer built.deinitKeepingCode(gpa);
+        if (built.image) |image| {
+            try self.images.put(gpa, artifact.key.bytes, image);
+            image_stored = true;
+        }
         try self.digests.recordExports(artifact, built.exports);
         const symbols = try arena.alloc([]const u8, built.hosted_symbols.len);
         for (built.hosted_symbols, symbols) |symbol, *copy| copy.* = try arena.dupe(u8, symbol);
-        const pieces = built.pieces orelse Coordinator.coordinatorInvariant("a compile-time evaluation unit was built without its pieces", .{});
         self.owned_pieces.appendAssumeCapacity(pieces);
         return .{ .module = artifact.key.bytes, .pieces = pieces, .hosted_symbols = symbols };
     }

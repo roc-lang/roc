@@ -12224,6 +12224,10 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
 /// Every other combination composes a program object and links it with LLD.
 fn fastDevLinkApplies(target: RocTarget, link_type: roc_target.OutputKind, args: cli_args.BuildArgs) bool {
     if (args.opt != .dev or currentRuntimeSpecializationStrategy(args.specialization_strategy) != .boxy) return false;
+    // The fast dev link reads unit images and the pre-linked host from the
+    // cache; without one, a build composes and links with LLD as before
+    // rather than prelinking the host for a single use.
+    if (args.no_cache) return false;
     // The synthetic default platform's host is the compiler's own startup
     // object, which the fast dev link does not prelink.
     if (args.synthetic_default_platform) return false;
@@ -12249,7 +12253,6 @@ const FastDevLink = struct {
     job: fast_dev_link.HostJob,
     /// The embedded support image, copied to memory `UnitImage.View` reads.
     support: []align(backend.dev.UnitImage.alignment.toByteUnits()) u8,
-    no_cache: bool,
     published: bool = false,
 
     fn start(
@@ -12295,7 +12298,7 @@ const FastDevLink = struct {
                 .bundle_hash = build_env.getPlatformBundleHash(),
                 .provides = try fast_dev_link.sortedUnion(ctx.arena, &.{provides}),
                 .keep = try fast_dev_link.sortedUnion(ctx.arena, &.{ symbols.hosted, &host_symbols.runtime_symbols, support_imports }),
-                .host_required = try fast_dev_link.sortedUnion(ctx.arena, &.{ symbols.hosted, &host_symbols.runtime_symbols }),
+                .host_required = try fast_dev_link.sortedUnion(ctx.arena, &.{ symbols.hosted, &host_symbols.runtime_symbols, support_imports }),
             },
             .output = fast_dev_link.OutputFile.create(ctx.arena, final_output_path) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
@@ -12303,12 +12306,12 @@ const FastDevLink = struct {
             },
             .job = undefined,
             .support = support,
-            .no_cache = args.no_cache,
         };
+        std.debug.assert(!args.no_cache); // `fastDevLinkApplies` requires the cache
         self.job = .{
             .gpa = ctx.gpa,
             .std_io = ctx.io.std_io,
-            .manager = if (args.no_cache) null else build_env.cache_manager,
+            .manager = build_env.cache_manager orelse base.invariant("roc build invariant violated: a build with a cache has no cache manager", .{}),
             .spec = &self.spec,
             .output = &self.output,
         };
@@ -12364,7 +12367,7 @@ const FastDevLink = struct {
             .hit => |hit| host_prelink.View.init(hit.mapping) catch unreachable, // the job admitted the record it reports
             .miss => miss: {
                 const started = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
-                const record = fast_dev_link.prelink(ctx, &self.spec, self.job.key, if (self.no_cache) null else build_env.cache_manager, scratch_dir) catch |err| {
+                const record = fast_dev_link.prelink(ctx, &self.spec, self.job.key, self.job.manager, scratch_dir) catch |err| {
                     reporter.fail();
                     return switch (err) {
                         error.OutOfMemory => error.OutOfMemory,
@@ -12410,10 +12413,13 @@ const FastDevLink = struct {
             return switch (err) {
                 error.OutOfMemory => error.OutOfMemory,
                 error.MissingHostSymbols => ctx.fail(.{ .missing_host_symbols = .{ .symbols = outcome.missing, .target = target_name } }),
-                error.ProvidedValueTooLarge, error.ProgramTooLarge => |limit| failed: {
-                    std.log.err("The dev build of this program exceeds a dev executable limit: {s}", .{@errorName(limit)});
-                    break :failed failLink(ctx, error.LinkFailed, target_name);
-                },
+                error.ProvidedValueTooLarge => ctx.fail(.{ .provided_value_too_large = .{
+                    .symbol = outcome.too_large.?.symbol,
+                    .size = outcome.too_large.?.size,
+                    .limit = host_prelink.provide_window,
+                    .target = target_name,
+                } }),
+                error.ProgramTooLarge => ctx.fail(.{ .dev_program_too_large = .{ .target = target_name } }),
                 error.AccessDenied, error.NoSpaceLeft, error.FileNotFound, error.Unexpected => |file_err| ctx.fail(.{ .file_write_failed = .{ .path = self.output.dest, .err = file_err } }),
             };
         };
@@ -12799,7 +12805,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         defer root_pieces.deinit();
         reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
         reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(backend_timing.snapshot().native_emission));
-        const root_image: ?[]align(backend.dev.UnitImage.alignment.toByteUnits()) u8 = if (compile.boxy_unit.producesImage(target)) image: {
+        // The root unit's image goes into its cache entry for later fast
+        // dev links, and into this build's own when it links that way.
+        const root_image: ?[]align(backend.dev.UnitImage.alignment.toByteUnits()) u8 = if (compile.boxy_unit.producesImage(target) and !args.no_cache) image: {
             reporter.begin("Unit Image");
             const image = object_compiler.buildUnitImage(&root_pieces, target, .entrypoints) catch |err| {
                 reporter.fail();

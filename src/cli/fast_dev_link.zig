@@ -42,8 +42,9 @@ pub const HostSpec = struct {
     /// The symbols the app region may import from the host, sorted and
     /// distinct: the hosted symbols, the runtime set, the support imports.
     keep: []const []const u8,
-    /// The symbols a missing host definition of is the user's error: the
-    /// hosted symbols and the runtime set. Sorted and distinct.
+    /// The symbols a missing host definition of is the user's error, rather
+    /// than a compiler invariant: every symbol in `keep`. Sorted and
+    /// distinct.
     host_required: []const []const u8,
 };
 
@@ -51,7 +52,7 @@ pub const HostSpec = struct {
 pub const HostJob = struct {
     gpa: Allocator,
     std_io: std.Io,
-    manager: ?*CacheManager,
+    manager: *CacheManager,
     spec: *const HostSpec,
     output: *OutputFile,
     thread: ?std.Thread = null,
@@ -130,11 +131,7 @@ pub const HostJob = struct {
         self.hash_ns = elapsed(self.std_io, hash_started);
 
         const lookup_started = now(self.std_io);
-        const manager = self.manager orelse {
-            self.outcome = .miss;
-            return;
-        };
-        var artifact = manager.acquireFamily(.prelinked_host, self.key, host_scope) orelse {
+        var artifact = self.manager.acquireFamily(.prelinked_host, self.key, host_scope) orelse {
             self.outcome = .miss;
             return;
         };
@@ -157,7 +154,7 @@ pub const HostJob = struct {
         };
         self.lookup_ns = elapsed(self.std_io, lookup_started);
         const copy_started = now(self.std_io);
-        self.output.copyFrom(artifact.file.handle, host_prelink.host_offset, view.header.host_size) catch |err| {
+        self.output.copyFrom(artifact.file.handle, host_prelink.host_offset, view.host()) catch |err| {
             std.posix.munmap(mapping);
             artifact.deinit();
             self.outcome = .{ .failed = err };
@@ -240,9 +237,9 @@ fn contentDigests(gpa: Allocator, std_io: std.Io, paths: []const []const u8, dig
     return null;
 }
 
-/// Link the platform's host with LLD into a host record (cold path), filing
-/// it in the cache when there is one. The caller owns the record.
-pub fn prelink(ctx: *CliCtx, spec: *const HostSpec, key: [32]u8, manager: ?*CacheManager, scratch_dir: []const u8) (linker.LinkError || host_prelink.FinishError || error{ReadFailed})![]align(16) u8 {
+/// Link the platform's host with LLD into a host record (cold path) and
+/// file it in the cache. The caller owns the record.
+pub fn prelink(ctx: *CliCtx, spec: *const HostSpec, key: [32]u8, manager: *CacheManager, scratch_dir: []const u8) (linker.LinkError || host_prelink.FinishError || error{ReadFailed})![]align(16) u8 {
     const object = try host_prelink.linkObject(ctx.gpa, spec.provides);
     defer ctx.gpa.free(object);
     const object_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, "roc_fast_dev_host.o" });
@@ -266,7 +263,7 @@ pub fn prelink(ctx: *CliCtx, spec: *const HostSpec, key: [32]u8, manager: ?*Cach
     const exe = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, exe_path, ctx.gpa, .unlimited) catch return error.ReadFailed;
     defer ctx.gpa.free(exe);
     const record = try host_prelink.finish(ctx.gpa, exe, spec.provides, spec.keep);
-    if (manager) |cache| cache.storeFamilyBytes(.prelinked_host, key, record, host_scope, "prelinked host");
+    manager.storeFamilyBytes(.prelinked_host, key, record, host_scope, "prelinked host");
     return record;
 }
 
