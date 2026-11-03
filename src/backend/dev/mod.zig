@@ -19,6 +19,7 @@ const relocation_mod = @import("Relocation.zig");
 pub const Relocation = relocation_mod.Relocation;
 pub const applyRelocations = relocation_mod.applyRelocations;
 pub const applyRelocationsWithContext = relocation_mod.applyRelocationsWithContext;
+pub const expect_site_base_symbol = relocation_mod.expect_site_base_symbol;
 pub const SymbolResolver = relocation_mod.SymbolResolver;
 pub const SymbolResolverContext = relocation_mod.SymbolResolverContext;
 pub const ValueStorage = @import("ValueStorage.zig");

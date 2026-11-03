@@ -152,6 +152,9 @@ pub const ObjectFileCompiler = struct {
     /// the machine-code shim calls, for the root unit of a dev run image,
     /// rather than to the natural C ABI an executable's host calls.
     internal_entrypoints: bool = false,
+    /// Emit each expect site's id relative to `expect_site_base_symbol`,
+    /// for a test unit (`LirCodeGen.relocatable_expect_sites`).
+    relocatable_expect_sites: bool = false,
 
     pub const TimingSnapshot = struct {
         backend_setup_ns: u64 = 0,
@@ -272,6 +275,7 @@ pub const ObjectFileCompiler = struct {
                         self.timing,
                         self.post_check_executor,
                         self.internal_entrypoints,
+                        self.relocatable_expect_sites,
                     );
                 } else {
                     return CompilationError.UnsupportedTarget;
@@ -1324,6 +1328,7 @@ fn compilePiecesWithCodeGen(
     timing: ?*ObjectFileCompiler.Timing,
     executor: ?Executor,
     internal_entrypoints: bool,
+    relocatable_expect_sites: bool,
 ) CompilationError!UnitPieces.Pieces {
     const backend_setup_started_ns = if (timing) |timings| timings.start() else 0;
     var static_strings = StaticStringData.build(allocator, lir_store, target) catch return CompilationError.OutOfMemory;
@@ -1340,6 +1345,7 @@ fn compilePiecesWithCodeGen(
     codegen.generation_mode = .object_file;
     codegen.setStaticDataSymbols(static_data_exports) catch return CompilationError.OutOfMemory;
     codegen.enable_default_platform_runtime = enable_default_platform_runtime;
+    codegen.relocatable_expect_sites = relocatable_expect_sites;
     const static_rc_helpers = static_data_export.collectRequiredRcHelpers(allocator, static_data_exports) catch return CompilationError.OutOfMemory;
     defer allocator.free(static_rc_helpers);
     if (timing) |timings| timings.finish(backend_setup_started_ns, .backend_setup);

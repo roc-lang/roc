@@ -65,6 +65,7 @@ const ELF = struct {
     const R_X86_64_PC32 = 2;
     const R_X86_64_PLT32 = 4;
     const R_X86_64_32 = 10;
+    const R_X86_64_32S = 11;
 
     // aarch64 relocation types
     const R_AARCH64_ABS64 = 257;
@@ -339,6 +340,14 @@ pub const ElfWriter = struct {
                     .aarch64 => ELF.R_AARCH64_ADD_ABS_LO12_NC,
                 },
                 .addend = @as(i64, 0),
+            },
+            // The field's own bytes hold the addend.
+            .abs32s => .{
+                .kind = switch (self.arch) {
+                    .x86_64 => ELF.R_X86_64_32S,
+                    .aarch64 => invariant("ELF invariant violated: abs32s data relocation in aarch64 code, which only a Linux x86_64 test unit emits", .{}),
+                },
+                .addend = std.mem.readInt(i32, self.text[@intCast(offset)..][0..4], .little),
             },
         };
 

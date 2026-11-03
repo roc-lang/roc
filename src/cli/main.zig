@@ -7302,7 +7302,7 @@ fn lowerRunUnits(
 
     tables.digests = try build_env.boxyLinkDigests();
     const policy: BoxyUnitPolicy = .{ .opt = .dev, .no_cache = false, .synthetic_default_platform = false };
-    var library: ?BoxyLibraryObjects = try buildBoxyLibraryObjects(ctx, policy, build_env, reporter, root_artifact, target, &tables.interfaces, &tables.digests, true);
+    var library: ?BoxyLibraryObjects = try buildBoxyLibraryObjects(ctx, policy, build_env, reporter, root_artifact, target, &tables.interfaces, &tables.digests, true, null);
     errdefer if (library) |owned| owned.deinit(ctx.gpa);
     const cache_manager = build_env.cache_manager orelse base.invariant("roc run invariant violated: a run composed from unit images has no cache manager", .{});
     const root_key = try boxyObjectKey(ctx.gpa, &tables.digests, root_artifact, boxyUnitPlatform(root_artifact, library.?.platform), policy, target, library.?.paired_platforms, true);
@@ -12145,6 +12145,11 @@ const BoxyLibraryObjects = struct {
     /// The checked keys of the platform modules the root unit lowers, whose
     /// implementations its object holds.
     paired_platforms: []const [32]u8,
+    /// Every library unit's module, in unit order.
+    artifacts: []const *const check.CheckedArtifact.CheckedModuleArtifact = &.{},
+    /// For test units, every unit's tables and image code locations, in
+    /// unit order. Arena-allocated, or borrowed from `owned_images`.
+    tests: []const BoxyUnitTests = &.{},
 
     fn deinit(self: BoxyLibraryObjects, gpa: Allocator) void {
         for (self.owned_pieces) |pieces| {
@@ -12153,6 +12158,13 @@ const BoxyLibraryObjects = struct {
         }
         for (self.owned_images) |image| image.deinit(gpa);
     }
+};
+
+/// What a test unit adds to its image (`compile.boxy_unit.Built`).
+const BoxyUnitTests = struct {
+    expect_sites: []const compile.boxy_object_cache.ExpectSiteRecord,
+    test_roots: []const compile.boxy_object_cache.TestRootRecord,
+    code_locations: []const u8,
 };
 
 /// Lower every module of the program other than the root as its own unit,
@@ -12174,15 +12186,20 @@ fn buildBoxyLibraryObjects(
     digests: *compile.boxy_interface.Digests,
     /// Collect each unit's image for a fast dev link, rather than its pieces.
     want_images: bool,
+    /// For test units: the modules whose units the test program needs,
+    /// which with their imports are the units built, in place of the root's
+    /// visible modules.
+    test_modules: ?[]const *const check.CheckedArtifact.CheckedModuleArtifact,
 ) CliMainError!BoxyLibraryObjects {
     reporter.begin("Lowering Modules");
     const Artifact = check.CheckedArtifact.CheckedModuleArtifact;
     const visible = try build_env.collectVisibleArtifacts(ctx.gpa, root_artifact);
     defer ctx.gpa.free(visible);
+    std.debug.assert(policy.test_units == (test_modules != null));
     var units: std.ArrayList(*const Artifact) = .empty;
     defer units.deinit(ctx.gpa);
     try units.append(ctx.gpa, &build_env.builtin_modules.checked_artifact);
-    for (visible) |artifact| {
+    for (test_modules orelse visible) |artifact| {
         if (artifact.platform_type_inputs.requirements.len != 0) continue;
         try units.append(ctx.gpa, artifact);
     }
@@ -12191,7 +12208,13 @@ fn buildBoxyLibraryObjects(
     // link drops the code nothing reaches.
     var seen_units = std.AutoHashMap([32]u8, void).init(ctx.gpa);
     defer seen_units.deinit();
-    for (units.items) |artifact| try seen_units.put(artifact.key.bytes, {});
+    var distinct: usize = 0;
+    for (units.items) |artifact| {
+        if ((try seen_units.getOrPut(artifact.key.bytes)).found_existing) continue;
+        units.items[distinct] = artifact;
+        distinct += 1;
+    }
+    units.shrinkRetainingCapacity(distinct);
     var next_unit: usize = 0;
     while (next_unit < units.items.len) : (next_unit += 1) {
         const importer = units.items[next_unit];
@@ -12272,6 +12295,7 @@ fn buildBoxyLibraryObjects(
     var owned_images: std.ArrayList(compile.boxy_unit.Image) = .empty;
     errdefer for (owned_images.items) |image| image.deinit(ctx.gpa);
     const keys = try ctx.arena.alloc([32]u8, units.items.len);
+    const unit_tests = try ctx.arena.alloc(BoxyUnitTests, if (policy.test_units) units.items.len else 0);
     var hosted_symbols: std.ArrayList([]const u8) = .empty;
     var seen_hosted = std.StringHashMap(void).init(ctx.arena);
     var owned_pieces: std.ArrayList(*backend.dev.UnitPieces.Pieces) = .empty;
@@ -12298,6 +12322,8 @@ fn buildBoxyLibraryObjects(
             try ready.append(ctx.gpa, index);
             continue;
         };
+        // Compile-time evaluation never builds a test unit.
+        std.debug.assert(!policy.test_units);
         try build_env.boxyAdoptExports(digests, task.artifact);
         if (known.restored) restored += 1 else built += 1;
         if (want_images) {
@@ -12366,6 +12392,11 @@ fn buildBoxyLibraryObjects(
                     objects[index] = pieces;
                     try owned_pieces.append(ctx.arena, pieces);
                 }
+                if (policy.test_units) unit_tests[index] = .{
+                    .expect_sites = try ctx.arena.dupe(compile.boxy_object_cache.ExpectSiteRecord, result.expect_sites),
+                    .test_roots = try ctx.arena.dupe(compile.boxy_object_cache.TestRootRecord, result.test_roots),
+                    .code_locations = if (result.image) |image| image.code_locations else base.invariant("roc test invariant violated: a test unit has no image", .{}),
+                };
                 if (result.image) |image| {
                     if (want_images) {
                         images[index] = image.bytes;
@@ -12395,7 +12426,7 @@ fn buildBoxyLibraryObjects(
     for (visible) |artifact| {
         if (artifact.platform_type_inputs.requirements.len != 0) try paired_platforms.append(ctx.arena, artifact.codeGenerationKey().bytes);
     }
-    return .{ .pieces = ordered, .images = ordered_images, .owned_images = owned_images.items, .keys = keys, .owned_pieces = owned_pieces.items, .hosted_symbols = hosted_symbols.items, .platform = platform, .paired_platforms = paired_platforms.items };
+    return .{ .pieces = ordered, .images = ordered_images, .owned_images = owned_images.items, .keys = keys, .owned_pieces = owned_pieces.items, .hosted_symbols = hosted_symbols.items, .platform = platform, .paired_platforms = paired_platforms.items, .artifacts = try ctx.arena.dupe(*const Artifact, units.items), .tests = unit_tests };
 }
 
 /// Compose the program's pieces into the one object its link takes: every
@@ -12498,6 +12529,8 @@ const BoxyUnitPolicy = struct {
     opt: cli_args.OptLevel,
     no_cache: bool,
     synthetic_default_platform: bool,
+    /// Whether the units are test units (`roc test` from unit images).
+    test_units: bool = false,
 
     fn ofBuild(args: cli_args.BuildArgs) BoxyUnitPolicy {
         return .{ .opt = args.opt, .no_cache = args.no_cache, .synthetic_default_platform = args.synthetic_default_platform };
@@ -12507,7 +12540,7 @@ const BoxyUnitPolicy = struct {
 /// The key of `artifact`'s object under this build's target and policy;
 /// `run_image` marks the root unit of a dev run image.
 fn boxyObjectKey(gpa: Allocator, digests: *compile.boxy_interface.Digests, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, platform: ?check.CheckedArtifact.ImportedModuleView, policy: BoxyUnitPolicy, target: RocTarget, paired_platforms: []const [32]u8, run_image: bool) Allocator.Error!compile.boxy_object_cache.Key {
-    return compile.boxy_unit.objectKey(gpa, digests, artifact, platform, @tagName(policy.opt), inlineExpectModeForOpt(policy.opt) == .run, target, paired_platforms, run_image);
+    return compile.boxy_unit.objectKey(gpa, digests, artifact, platform, @tagName(policy.opt), inlineExpectModeForOpt(policy.opt) == .run, target, paired_platforms, run_image, policy.test_units);
 }
 
 /// The platform module a unit of `artifact` needs in view: the one whose
@@ -12553,7 +12586,7 @@ const BoxyUnitTask = struct {
 
     fn build(self: *BoxyUnitTask) CliMainError!compile.boxy_unit.Built {
         var config = checkedRuntimeLoweringConfig(.linked_output, self.policy.opt, .boxy, self.target, self.policy.synthetic_default_platform);
-        config.target.boxy_unit = .{ .imports = self.interfaces, .root = false, .names = self.names };
+        config.target.boxy_unit = .{ .imports = self.interfaces, .root = false, .names = self.names, .expect_sites = self.policy.test_units };
         config.target.timing = self.timing;
         return try compile.boxy_unit.restoreOrBuild(.{
             .gpa = self.gpa,
@@ -12566,6 +12599,7 @@ const BoxyUnitTask = struct {
             .cache_manager = self.cache_manager,
             .key = self.key,
             .want_pieces = self.want_pieces,
+            .test_unit = self.policy.test_units,
         });
     }
 };
@@ -13391,7 +13425,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // calls against their export interfaces.
     if (boxy_interfaces != null) boxy_digests = try build_env.boxyLinkDigests();
     const boxy_library: ?BoxyLibraryObjects = if (boxy_interfaces) |*interfaces|
-        try buildBoxyLibraryObjects(ctx, BoxyUnitPolicy.ofBuild(args), &build_env, &reporter, root_artifact, target, interfaces, &boxy_digests, fast_link != null)
+        try buildBoxyLibraryObjects(ctx, BoxyUnitPolicy.ofBuild(args), &build_env, &reporter, root_artifact, target, interfaces, &boxy_digests, fast_link != null, null)
     else
         null;
     defer if (boxy_library) |library| library.deinit(ctx.gpa);
@@ -16371,6 +16405,17 @@ const CliTestRootRun = struct {
     arg_layouts: []const layout.Idx,
     ret_layout: layout.Idx,
     symbol_name: [:0]const u8,
+
+    fn report(self: CliTestRootRun) CliTestRootReport {
+        return .{ .root = self.root, .env = self.env, .region = self.region };
+    }
+};
+
+/// What a test root's outcome is reported against.
+const CliTestRootReport = struct {
+    root: check.CheckedArtifact.RootRequest,
+    env: *const ModuleEnv,
+    region: base.Region,
 };
 
 const CliLoweredTestModule = struct {
@@ -16492,7 +16537,7 @@ fn interpreterTestFailureMessage(
 fn appendFailedCliTestResult(
     ctx: *CliCtx,
     results: *std.ArrayList(CliTestResultItem),
-    run: CliTestRootRun,
+    run: CliTestRootReport,
     result: CliTestResult,
     transcript: []CliTestTranscriptEvent,
     message: []const u8,
@@ -16831,7 +16876,7 @@ fn runInterpreterTestRoots(
                 try appendFailedCliTestResult(
                     ctx,
                     results,
-                    run,
+                    run.report(),
                     .failed,
                     transcript,
                     detail.message,
@@ -16866,52 +16911,99 @@ fn appendInlineExpectResults(
     summary: *CliTestRunSummary,
     source_modules: *const CliTestSourceModuleMap,
 ) Allocator.Error!void {
-    std.debug.assert(sites.len == counts.len);
+    try appendObservedInlineExpectResults(ctx, LirExpectSites{ .store = store, .sites = sites }, counts, results, summary, source_modules);
+}
+
+/// The expect sites of one lowered program, as inline results read them.
+const LirExpectSites = struct {
+    store: *const lir.LirStore,
+    sites: []const lir.LIR.ExpectSite,
+
+    fn len(self: LirExpectSites) usize {
+        return self.sites.len;
+    }
+
+    fn lessThan(self: LirExpectSites, lhs: u32, rhs: u32) bool {
+        const a = self.sites[lhs];
+        const b = self.sites[rhs];
+        if (a.loc.file != b.loc.file) return a.loc.file < b.loc.file;
+        if (a.region.start.offset != b.region.start.offset) return a.region.start.offset < b.region.start.offset;
+        return a.region.end.offset < b.region.end.offset;
+    }
+
+    fn module(self: LirExpectSites, index: u32) [32]u8 {
+        const site = self.sites[index];
+        if (!site.loc.hasLocation()) base.invariant("test expect site has no source location", .{});
+        return completed_test.hash(self.store.sourceFileQualifiedName(site.loc.file));
+    }
+
+    fn region(self: LirExpectSites, index: u32) base.Region {
+        return self.sites[index].region;
+    }
+};
+
+/// The program-wide expect sites of loaded test units, as inline results
+/// read them.
+const UnitExpectSites = struct {
+    records: []const compile.boxy_object_cache.ExpectSiteRecord,
+
+    fn len(self: UnitExpectSites) usize {
+        return self.records.len;
+    }
+
+    fn lessThan(self: UnitExpectSites, lhs: u32, rhs: u32) bool {
+        const a = self.records[lhs];
+        const b = self.records[rhs];
+        const modules = std.mem.order(u8, &a.module, &b.module);
+        if (modules != .eq) return modules == .lt;
+        if (a.region_start != b.region_start) return a.region_start < b.region_start;
+        return a.region_end < b.region_end;
+    }
+
+    fn module(self: UnitExpectSites, index: u32) [32]u8 {
+        return self.records[index].module;
+    }
+
+    fn region(self: UnitExpectSites, index: u32) base.Region {
+        const record = self.records[index];
+        return base.Region.from_raw_offsets(record.region_start, record.region_end);
+    }
+};
+
+/// Append a result for every site of `sites` (`LirExpectSites` or
+/// `UnitExpectSites`) that `counts` observed.
+fn appendObservedInlineExpectResults(
+    ctx: *CliCtx,
+    sites: anytype,
+    counts: []const eval.Inspected.ExpectCounts,
+    results: *std.ArrayList(CliTestResultItem),
+    summary: *CliTestRunSummary,
+    source_modules: *const CliTestSourceModuleMap,
+) Allocator.Error!void {
+    std.debug.assert(sites.len() == counts.len);
     var observed = std.ArrayList(u32).empty;
     defer observed.deinit(ctx.gpa);
     for (counts, 0..) |count, site_index| {
         if (count.passed +| count.failed != 0) try observed.append(ctx.gpa, @intCast(site_index));
     }
-    const SortContext = struct {
-        sites: []const lir.LIR.ExpectSite,
-
-        fn lessThan(sort: @This(), lhs: u32, rhs: u32) bool {
-            const a = sort.sites[lhs];
-            const b = sort.sites[rhs];
-            if (a.loc.file != b.loc.file) return a.loc.file < b.loc.file;
-            if (a.region.start.offset != b.region.start.offset) return a.region.start.offset < b.region.start.offset;
-            return a.region.end.offset < b.region.end.offset;
-        }
-    };
-    std.mem.sort(u32, observed.items, SortContext{ .sites = sites }, SortContext.lessThan);
+    std.mem.sort(u32, observed.items, sites, @TypeOf(sites).lessThan);
 
     for (observed.items, 0..) |site_index, observed_index| {
-        const site = sites[site_index];
         const count = counts[site_index];
         const result: CliTestResult = if (count.failed == 0) .passed else .failed;
-        var source_env: ?*const ModuleEnv = null;
-        var source_path: ?[]const u8 = null;
-        var source_name: []const u8 = "";
-        if (!site.loc.hasLocation()) base.invariant("test expect site has no source location", .{});
-        const qualified_name = store.sourceFileQualifiedName(site.loc.file);
-        if (source_modules.get(completed_test.hash(qualified_name))) |source_module| {
-            source_env = source_module.env;
-            source_path = source_module.path;
-            source_name = source_module.name;
-        }
-        if (source_env == null) {
-            base.invariant("test expect source module {s} was absent from the checked module plan", .{qualified_name});
-        }
+        const source_module = source_modules.get(sites.module(site_index)) orelse
+            base.invariant("test expect source module was absent from the checked module plan", .{});
+        if (source_module.env == null) base.invariant("test expect source module {s} has no module environment", .{source_module.name});
         try results.append(ctx.gpa, .{
             .result = result,
             .order = std.math.maxInt(u32) - @as(u32, @intCast(observed.items.len - observed_index)),
-            .region = site.region,
+            .region = sites.region(site_index),
             .inline_expect = true,
             .inline_passed = count.passed,
             .inline_failed = count.failed,
-            .source_env = source_env,
-            .source_path = source_path,
-            .source_name = source_name,
+            .source_env = source_module.env,
+            .source_path = source_module.path,
+            .source_name = source_module.name,
             .failure_detail = null,
             .failure_detail_visibility = .always,
         });
@@ -16927,19 +17019,28 @@ fn appendCompilerErrorsForRuns(
     results: *std.ArrayList(CliTestResultItem),
     summary: *CliTestRunSummary,
 ) Allocator.Error!void {
-    for (root_runs) |run| {
-        summary.compiler_errors += 1;
-        try appendFailedCliTestResult(
-            ctx,
-            results,
-            run,
-            .compiler_error,
-            &.{},
-            try std.fmt.allocPrint(ctx.gpa, "{s} test backend failed: {s}", .{ mode.displayName(), @errorName(err) }),
-            .always,
-        );
-        results.items[results.items.len - 1].cacheable = false;
-    }
+    for (root_runs) |run| try appendCompilerErrorForRoot(ctx, mode, err, run.report(), results, summary);
+}
+
+fn appendCompilerErrorForRoot(
+    ctx: *CliCtx,
+    mode: CliTestExecutionMode,
+    err: CliMainError,
+    run: CliTestRootReport,
+    results: *std.ArrayList(CliTestResultItem),
+    summary: *CliTestRunSummary,
+) Allocator.Error!void {
+    summary.compiler_errors += 1;
+    try appendFailedCliTestResult(
+        ctx,
+        results,
+        run,
+        .compiler_error,
+        &.{},
+        try std.fmt.allocPrint(ctx.gpa, "{s} test backend failed: {s}", .{ mode.displayName(), @errorName(err) }),
+        .always,
+    );
+    results.items[results.items.len - 1].cacheable = false;
 }
 
 fn addCliTestResultToSummary(summary: *CliTestRunSummary, result: CliTestResult) void {
@@ -16952,7 +17053,7 @@ fn addCliTestResultToSummary(summary: *CliTestRunSummary, result: CliTestResult)
 
 fn cliTestResultItemFromEval(
     ctx: *CliCtx,
-    run: CliTestRootRun,
+    run: CliTestRootReport,
     eval_result: eval.Inspected.BoolRootEvalResult,
 ) Allocator.Error!CliTestResultItem {
     var transcript: []const CliTestTranscriptEvent = try copyCliTestTranscriptEventsFromEval(ctx.gpa, eval_result.events);
@@ -17014,7 +17115,7 @@ fn cliTestResultItemFromEval(
 
 fn appendEvalResultForRun(
     ctx: *CliCtx,
-    run: CliTestRootRun,
+    run: CliTestRootReport,
     eval_result: eval.Inspected.BoolRootEvalResult,
     results: *std.ArrayList(CliTestResultItem),
     summary: *CliTestRunSummary,
@@ -17094,7 +17195,7 @@ fn runCompiledTestRoots(
     defer eval_batch.deinit(ctx.gpa);
 
     for (root_runs, eval_batch.results) |run, eval_result| {
-        try appendEvalResultForRun(ctx, run, eval_result, results, summary);
+        try appendEvalResultForRun(ctx, run.report(), eval_result, results, summary);
         try appendRootInlineExpectResults(ctx, lowered, eval_result, run.root.order, results, summary, source_modules);
     }
 }
@@ -17326,7 +17427,7 @@ fn runCompiledLoweredTestModulesOnce(
         for (lowered_module.root_runs) |run| {
             try appendEvalResultForRun(
                 ctx,
-                run,
+                run.report(),
                 eval_batch.results[eval_index],
                 &results,
                 &summaries[lowered_module.planned_index],
@@ -17547,6 +17648,553 @@ fn runCompiledTestPlan(
         try storeCliRootOutcomes(ctx, cache_manager, planned, specialization_strategy, opt, fresh_results[lowered_module.planned_index].?, source_modules);
     }
 
+    for (test_plan.modules, 0..) |*planned, planned_index| {
+        const cached = planned.uncachedCount() == 0;
+        const fresh = fresh_results[planned_index] orelse &.{};
+        const results = try mergeCliRootOutcomes(ctx.gpa, planned, fresh);
+        if (fresh_results[planned_index]) |items| ctx.gpa.free(items);
+        fresh_results[planned_index] = null;
+        try appendPlannedModuleResult(ctx, module_results, planned, results, cached);
+        var summary = summarizeTestResults(results);
+        summary.cached_modules = @intFromBool(cached);
+        total.passed += summary.passed;
+        total.failed += summary.failed;
+        total.compiler_errors += summary.compiler_errors;
+        total.modules_with_tests += summary.modules_with_tests;
+        total.cached_modules += summary.cached_modules;
+    }
+}
+
+/// Whether `roc test` runs its roots from test units' images loaded into
+/// its own process, rather than from one program lowered for the execution
+/// subset: a dev test under `.boxy` with a cache on a Linux x86_64
+/// compiler, whose own target's units carry images (design.md "Unit-Image
+/// Test Execution"). Callers guard with `unit_image_tests_supported` too.
+/// A default app keeps the shared program, as it does in a dev run: the
+/// hosted functions its code calls belong to its synthetic platform, which
+/// no unit of the app has in view.
+fn unitImageTestApplies(opt: cli_args.OptLevel, no_cache: bool, strategy: base.SpecializationStrategy, root: *const check.CheckedArtifact.CheckedModuleArtifact) bool {
+    if (root.module_identity.kind == .default_app) return false;
+    return unitImageRunApplies(opt, no_cache, strategy, RocTarget.detectNative());
+}
+
+/// Whether this compiler can load test units' images into its own process.
+const unit_image_tests_supported = builtin.target.os.tag == .linux and builtin.target.cpu.arch == .x86_64;
+
+/// A test root's wrapper in a test unit, by its module and its index among
+/// the module's test roots.
+const UnitTestRootKey = struct {
+    module: [32]u8,
+    root_index: u32,
+};
+
+/// One test unit's image, with what its cache entry files beside it.
+const UnitTestImage = struct {
+    bytes: []align(backend.dev.UnitImage.alignment.toByteUnits()) const u8,
+    tests: BoxyUnitTests,
+    /// Hosted symbols its code calls.
+    hosted_symbols: []const []const u8,
+};
+
+/// A `roc test` program as test units: built or restored, then loaded into
+/// the compiler's own process, where their wrappers run the test roots.
+const UnitImageTestProgram = struct {
+    gpa: Allocator,
+    tables: RunUnitTables,
+    library: ?BoxyLibraryObjects = null,
+    /// The root unit's image, when the root pairs with a platform. Owned.
+    root_image: ?[]align(backend.dev.UnitImage.alignment.toByteUnits()) u8 = null,
+    loaded: std.ArrayList(backend.dev.UnitImageLoader.Loaded) = .empty,
+    /// What the loaded images export, by name: a procedure two units define
+    /// binds to the first image loaded.
+    exports: std.StringHashMapUnmanaged(backend.dev.UnitImageLoader.Binding) = .empty,
+    /// Each hosted symbol the units call, bound to a stub that crashes as
+    /// a hosted call in an in-process test does.
+    hosted: std.StringHashMapUnmanaged(usize) = .empty,
+    hosted_stubs: ?backend.dev.ExecutableMemory = null,
+    /// Every loaded image's expect sites, in load order: the program-wide
+    /// site table.
+    sites: std.ArrayList(compile.boxy_object_cache.ExpectSiteRecord) = .empty,
+    wrappers: std.AutoHashMapUnmanaged(UnitTestRootKey, eval.Inspected.UnitImageBoolRootEntryFn) = .empty,
+
+    fn deinit(self: *UnitImageTestProgram) void {
+        for (self.loaded.items) |*image| image.unload();
+        self.loaded.deinit(self.gpa);
+        self.exports.deinit(self.gpa);
+        self.hosted.deinit(self.gpa);
+        if (self.hosted_stubs) |*stubs| stubs.deinit();
+        self.sites.deinit(self.gpa);
+        self.wrappers.deinit(self.gpa);
+        if (self.library) |library| library.deinit(self.gpa);
+        if (self.root_image) |image| self.gpa.free(image);
+        self.tables.deinit();
+    }
+
+    /// Binds one image's imports while it loads.
+    const LoadContext = struct {
+        program: *UnitImageTestProgram,
+        site_base: u32,
+
+        fn resolve(context: *anyopaque, name: []const u8) ?backend.dev.UnitImageLoader.Binding {
+            const self: *LoadContext = @ptrCast(@alignCast(context));
+            if (std.mem.eql(u8, name, backend.dev.expect_site_base_symbol)) return .{ .address = self.site_base, .function = false };
+            // A builtin binds to its implementation, as in-process test
+            // code calls it.
+            if (builtins_registry.BuiltinFn.fromSymbolName(name)) |builtin_fn| return .{ .address = builtin_fn.wrapperAddress(), .function = true };
+            if (backend.dev.HostSplice.hostFunction(name)) |address| return .{ .address = address, .function = true };
+            if (self.program.exports.get(name)) |binding| return binding;
+            if (self.program.hosted.get(name)) |address| return .{ .address = address, .function = true };
+            return null;
+        }
+    };
+
+    /// Load `image`, whose sites start at the next program-wide site id.
+    fn load(self: *UnitImageTestProgram, image: UnitTestImage) CliMainError!void {
+        const view = backend.dev.UnitImage.View.init(image.bytes) catch |err| base.invariant("roc test invariant violated: an admitted test unit image does not read: {s}", .{@errorName(err)});
+        var context: LoadContext = .{ .program = self, .site_base = @intCast(self.sites.items.len) };
+        var diagnostic: backend.dev.UnitImageLoader.Diagnostic = .{};
+        try self.loaded.ensureUnusedCapacity(self.gpa, 1);
+        var loaded = backend.dev.UnitImageLoader.load(self.gpa, view, .{ .context = &context, .resolve = LoadContext.resolve }, &diagnostic) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.UndefinedImport => base.invariant("roc test invariant violated: a test unit's image imports {s}, which nothing loaded defines", .{diagnostic.name}),
+            error.SiteOutOfRange => base.invariant("roc test invariant violated: a test unit's image has a reference to '{s}' out of its field's reach", .{diagnostic.name}),
+        };
+        errdefer loaded.unload();
+        const symbols = view.symbols();
+        try self.exports.ensureUnusedCapacity(self.gpa, @intCast(view.exports().len));
+        for (view.exports()) |index| {
+            const symbol = symbols[index];
+            const entry = self.exports.getOrPutAssumeCapacity(view.name(symbol.name));
+            if (entry.found_existing) continue;
+            entry.value_ptr.* = .{ .address = loaded.symbolAddress(symbol), .function = symbol.type == @backingInt(backend.dev.UnitImage.SymbolType.func) };
+        }
+        try self.wrappers.ensureUnusedCapacity(self.gpa, @intCast(image.tests.test_roots.len));
+        for (image.tests.test_roots) |root| {
+            if (root.symbol >= symbols.len) base.invariant("roc test invariant violated: a test unit's wrapper names symbol {d} of {d}", .{ root.symbol, symbols.len });
+            self.wrappers.putAssumeCapacity(.{ .module = root.module, .root_index = root.root_index }, @ptrFromInt(loaded.symbolAddress(symbols[root.symbol])));
+        }
+        try self.sites.appendSlice(self.gpa, image.tests.expect_sites);
+        self.loaded.appendAssumeCapacity(loaded);
+    }
+
+    /// Bind every one of `names` the units call to a stub that reports the
+    /// call as a crash, as a hosted call in an in-process test does.
+    fn bindHostedStubs(self: *UnitImageTestProgram, arena: Allocator, names: []const []const u8) CliMainError!void {
+        if (names.len == 0) return;
+        // sub rsp, 8; mov rdi, message; mov rsi, length; mov rax, crashed;
+        // call rax; ud2
+        const stub_size = 4 + 10 + 10 + 10 + 2 + 2;
+        const code = try arena.alloc(u8, names.len * stub_size);
+        for (names, 0..) |name, index| {
+            const message = try std.fmt.allocPrint(arena, "hosted function `{s}` is not available while evaluating at compile time", .{name});
+            const stub = code[index * stub_size ..][0..stub_size];
+            stub[0..4].* = .{ 0x48, 0x83, 0xec, 0x08 };
+            stub[4..6].* = .{ 0x48, 0xbf };
+            std.mem.writeInt(u64, stub[6..14], @intFromPtr(message.ptr), .little);
+            stub[14..16].* = .{ 0x48, 0xbe };
+            std.mem.writeInt(u64, stub[16..24], message.len, .little);
+            stub[24..26].* = .{ 0x48, 0xb8 };
+            std.mem.writeInt(u64, stub[26..34], @import("builtins").in_process_host.Symbol.roc_crashed.address(), .little);
+            stub[34..36].* = .{ 0xff, 0xd0 };
+            stub[36..38].* = .{ 0x0f, 0x0b };
+        }
+        self.hosted_stubs = backend.dev.ExecutableMemory.init(code) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.OutOfMemory,
+        };
+        const start = @intFromPtr(self.hosted_stubs.?.codePtr());
+        try self.hosted.ensureUnusedCapacity(self.gpa, @intCast(names.len));
+        for (names, 0..) |name, index| self.hosted.putAssumeCapacity(name, start + index * stub_size);
+    }
+};
+
+/// Build or restore `roc test`'s test units and load them: a test unit
+/// per module the planned roots need (design.md "Unit-Image Test
+/// Execution"), each restored from the per-module cache or lowered and
+/// filed there, and, for a root that pairs with a platform, a root unit of
+/// the root and its paired platform modules.
+fn prepareUnitImageTests(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    reporter: *progress.Reporter,
+    test_plan: *const CliTestPlan,
+) CliMainError!UnitImageTestProgram {
+    if (comptime !unit_image_tests_supported) unreachable; // unitImageTestApplies holds only on a Linux x86_64 compiler
+    const Artifact = check.CheckedArtifact.CheckedModuleArtifact;
+    const target = RocTarget.detectNative();
+    var program: UnitImageTestProgram = .{ .gpa = ctx.gpa, .tables = RunUnitTables.init(ctx) };
+    errdefer program.deinit();
+    program.tables.digests = try build_env.boxyLinkDigests();
+    const cache_manager = build_env.cache_manager orelse base.invariant("roc test invariant violated: a test run from unit images has no cache manager", .{});
+    const root_artifact = build_env.rootModuleCheckedArtifact() orelse base.invariant("roc test invariant violated: a planned test program has no root module", .{});
+
+    // As in a composed run, a program with a platform is rooted at its
+    // executable root, the platform module paired with the app, whose
+    // hosted section binds every hosted function; the app and every other
+    // module without platform requirements is a library unit, and the
+    // modules with platform requirements lower together in a root unit.
+    const unit_root = switch (root_artifact.module_identity.kind) {
+        .app => build_env.executableRootCheckedArtifact(),
+        .default_app => unreachable, // unitImageTestApplies keeps a default app on the shared program
+        .type_module, .package, .platform, .hosted, .module, .malformed => root_artifact,
+    };
+    const visible = try build_env.collectVisibleArtifacts(ctx.gpa, unit_root);
+    defer ctx.gpa.free(visible);
+    var paired: std.ArrayList(*const Artifact) = .empty;
+    defer paired.deinit(ctx.gpa);
+    if (unit_root.platform_type_inputs.requirements.len != 0) try paired.append(ctx.gpa, unit_root);
+    for (visible) |artifact| if (artifact.platform_type_inputs.requirements.len != 0) try paired.append(ctx.gpa, artifact);
+    var test_modules: std.ArrayList(*const Artifact) = .empty;
+    defer test_modules.deinit(ctx.gpa);
+    // A root unit exists only to export the paired modules' wrappers.
+    var paired_roots = false;
+    for (test_plan.modules) |planned| {
+        if (planned.artifact.platform_type_inputs.requirements.len != 0) {
+            const is_paired = for (paired.items) |artifact| {
+                if (artifact == planned.artifact) break true;
+            } else false;
+            if (!is_paired) base.invariant("roc test invariant violated: a planned module with platform requirements pairs with no root", .{});
+            paired_roots = true;
+            continue;
+        }
+        try test_modules.append(ctx.gpa, planned.artifact);
+    }
+    // The root unit calls into its modules' imports and the app.
+    if (paired_roots) {
+        for (paired.items) |artifact| for (artifact.direct_import_module_keys) |key| {
+            const imported = program.tables.digests.artifacts.get(key.bytes) orelse continue;
+            try test_modules.append(ctx.gpa, imported);
+        };
+        if (unit_root != root_artifact) try test_modules.append(ctx.gpa, root_artifact);
+    }
+
+    const policy: BoxyUnitPolicy = .{ .opt = .dev, .no_cache = false, .synthetic_default_platform = false, .test_units = true };
+    program.library = try buildBoxyLibraryObjects(ctx, policy, build_env, reporter, unit_root, target, &program.tables.interfaces, &program.tables.digests, true, test_modules.items);
+    const library = &program.library.?;
+
+    var root_unit: ?UnitTestImage = null;
+    if (paired_roots) root_unit = try unitTestRootImage(ctx, build_env, reporter, &program, cache_manager, unit_root, paired.items, policy, target);
+
+    reporter.begin("Unit Image Load");
+    var hosted_names: std.ArrayList([]const u8) = .empty;
+    var seen_hosted = std.StringHashMap(void).init(ctx.arena);
+    for (library.hosted_symbols) |name| if (!(try seen_hosted.getOrPut(name)).found_existing) try hosted_names.append(ctx.arena, name);
+    if (root_unit) |unit| for (unit.hosted_symbols) |name| if (!(try seen_hosted.getOrPut(name)).found_existing) try hosted_names.append(ctx.arena, name);
+    try program.bindHostedStubs(ctx.arena, hosted_names.items);
+    // Every unit's imports are loaded before it: the builtins, then the
+    // rest after everything they import, then the root unit.
+    const order = try unitLoadOrder(ctx.gpa, library.artifacts);
+    defer ctx.gpa.free(order);
+    for (order) |index| try program.load(.{ .bytes = library.images[index], .tests = library.tests[index], .hosted_symbols = &.{} });
+    if (root_unit) |unit| try program.load(unit);
+    reporter.end();
+    reporter.recordCounters("Test units", &.{
+        .{ .name = "Images loaded", .count = program.loaded.items.len },
+        .{ .name = "Expect sites", .count = program.sites.items.len },
+        .{ .name = "Test root wrappers", .count = program.wrappers.count() },
+    });
+    return program;
+}
+
+/// The order to load `artifacts`' units in: the first (the builtins), then
+/// each other one after every one of `artifacts` it imports.
+fn unitLoadOrder(gpa: Allocator, artifacts: []const *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error![]u32 {
+    var index_by_key = std.AutoHashMap([32]u8, u32).init(gpa);
+    defer index_by_key.deinit();
+    for (artifacts, 0..) |artifact, index| try index_by_key.put(artifact.key.bytes, @intCast(index));
+    const order = try gpa.alloc(u32, artifacts.len);
+    errdefer gpa.free(order);
+    const placed = try gpa.alloc(bool, artifacts.len);
+    defer gpa.free(placed);
+    @memset(placed, false);
+    var count: usize = 0;
+    // The builtins come first: every unit calls into them.
+    order[0] = 0;
+    placed[0] = true;
+    count = 1;
+    const Frame = struct { index: u32, next_import: usize };
+    var stack: std.ArrayList(Frame) = .empty;
+    defer stack.deinit(gpa);
+    for (1..artifacts.len) |start| {
+        if (placed[start]) continue;
+        try stack.append(gpa, .{ .index = @intCast(start), .next_import = 0 });
+        while (stack.items.len != 0) {
+            const frame = &stack.items[stack.items.len - 1];
+            const imports = artifacts[frame.index].direct_import_module_keys;
+            if (frame.next_import < imports.len) {
+                const key = imports[frame.next_import];
+                frame.next_import += 1;
+                const imported = index_by_key.get(key.bytes) orelse continue;
+                if (placed[imported]) continue;
+                // Module imports are acyclic, so an import on the stack is
+                // never met again before it is placed.
+                try stack.append(gpa, .{ .index = imported, .next_import = 0 });
+                continue;
+            }
+            if (!placed[frame.index]) {
+                placed[frame.index] = true;
+                order[count] = frame.index;
+                count += 1;
+            }
+            _ = stack.pop();
+        }
+    }
+    std.debug.assert(count == artifacts.len);
+    return order;
+}
+
+/// The root unit of a test program whose root pairs with a platform: the
+/// root and `paired`, its platform modules with requirements, lowered
+/// together with their top-level expects as roots, restored from the
+/// per-module cache or lowered, compiled and filed there.
+fn unitTestRootImage(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    reporter: *progress.Reporter,
+    program: *UnitImageTestProgram,
+    cache_manager: *CacheManager,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    paired: []const *const check.CheckedArtifact.CheckedModuleArtifact,
+    policy: BoxyUnitPolicy,
+    target: RocTarget,
+) CliMainError!UnitTestImage {
+    const library = &program.library.?;
+    const key = try boxyObjectKey(ctx.gpa, &program.tables.digests, root_artifact, boxyUnitPlatform(root_artifact, library.platform), policy, target, library.paired_platforms, false);
+    if (try compile.boxy_unit.restore(ctx.gpa, cache_manager, key, &program.tables.interfaces)) |entry| {
+        defer compile.boxy_object_cache.deinitEntry(ctx.gpa, entry);
+        const image = try ctx.gpa.alignedAlloc(u8, backend.dev.UnitImage.alignment, entry.image.len);
+        @memcpy(image, entry.image);
+        program.root_image = image;
+        const hosted = try ctx.arena.alloc([]const u8, entry.hosted_symbols.len);
+        for (entry.hosted_symbols, hosted) |symbol, *owned| owned.* = try ctx.arena.dupe(u8, symbol);
+        build_env.recordBoxyObjects(1, 0);
+        return .{
+            .bytes = image,
+            .tests = .{
+                .expect_sites = try ctx.arena.dupe(compile.boxy_object_cache.ExpectSiteRecord, entry.expect_sites),
+                .test_roots = try ctx.arena.dupe(compile.boxy_object_cache.TestRootRecord, entry.test_roots),
+                .code_locations = try ctx.arena.dupe(u8, entry.code_locations),
+            },
+            .hosted_symbols = hosted,
+        };
+    }
+
+    reporter.begin(loweringProgressLabel(.boxy));
+    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (reporter.always) spec_timing.enableDetailedMonotypeBody();
+    var requests: std.ArrayList(check.CheckedArtifact.RootRequest) = .empty;
+    defer requests.deinit(ctx.gpa);
+    var source_modules: std.ArrayList(check.CheckedArtifact.ModuleId) = .empty;
+    defer source_modules.deinit(ctx.gpa);
+    var module_digests: std.ArrayList([32]u8) = .empty;
+    defer module_digests.deinit(ctx.gpa);
+    var root_indices: std.ArrayList(u32) = .empty;
+    defer root_indices.deinit(ctx.gpa);
+    for (paired) |artifact| {
+        const roots = try compile.boxy_unit.testRootRequests(ctx.gpa, artifact);
+        defer ctx.gpa.free(roots);
+        const digest = compile.boxy_unit.moduleDigest(artifact);
+        for (roots, 0..) |root, index| {
+            try requests.append(ctx.gpa, root);
+            try source_modules.append(ctx.gpa, artifact.key.digest());
+            try module_digests.append(ctx.gpa, digest);
+            try root_indices.append(ctx.gpa, @intCast(index));
+        }
+    }
+    const metadata = try compile.boxy_unit.testPlanMetadata(ctx.gpa, requests.items);
+    defer ctx.gpa.free(metadata);
+    const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(imported_artifacts);
+    const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(relation_artifacts);
+    const modules: lir.CheckedPipeline.CheckedModuleSet = .{
+        .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+        .imports = imported_artifacts,
+    };
+    var config = checkedRuntimeLoweringConfig(.linked_output, .dev, .boxy, target, false).target;
+    config.boxy_unit = .{ .imports = &program.tables.interfaces, .root = true, .names = &program.tables.digests.names, .expect_sites = true };
+    config.post_check_executor = build_env.postCheckExecutor();
+    config.timing = &spec_timing;
+    var lowered = try eval.CompileTimeFinalization.lowerBoxyRuntime(ctx.gpa, modules, .{
+        .requests = requests.items,
+        .source_modules = source_modules.items,
+        .test_plan_metadata = metadata,
+    }, config);
+    defer lowered.deinit();
+    finishPostCheckLowering(reporter, &spec_timing, .boxy);
+
+    const static_data = try compile.static_data_exports.buildStaticData(ctx.gpa, .{ .root = modules.root, .imports = imported_artifacts }, &lowered, target, .{});
+    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
+    var wrappers = try compile.boxy_unit.testEntrypoints(ctx.gpa, &lowered, module_digests.items, root_indices.items);
+    defer wrappers.deinit(ctx.gpa);
+    reporter.begin(devBackendPhaseName(target));
+    var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
+    var backend_timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
+    object_compiler.timing = &backend_timing;
+    object_compiler.post_check_executor = build_env.postCheckExecutor();
+    object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
+    object_compiler.internal_entrypoints = true;
+    object_compiler.relocatable_expect_sites = true;
+    var pieces = object_compiler.compileToPieces(
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        wrappers.entrypoints,
+        static_data,
+        lowered.lir_result.store.getProcSpecs(),
+        target,
+    ) catch |err| {
+        reporter.fail();
+        std.log.err("Native compilation failed: {}", .{err});
+        return error.NativeCompilationFailed;
+    };
+    defer pieces.deinit();
+    reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
+    reporter.begin("Unit Image");
+    var code_locations: []const u8 = &.{};
+    const image = object_compiler.buildUnitImage(&pieces, target, .entrypoints, &code_locations) catch |err| {
+        reporter.fail();
+        std.log.err("Building the root unit's image failed: {}", .{err});
+        return error.NativeCompilationFailed;
+    };
+    program.root_image = image;
+    defer ctx.gpa.free(code_locations);
+    reporter.end();
+
+    const expect_sites = try compile.boxy_unit.expectSiteRecords(ctx.gpa, &lowered);
+    defer ctx.gpa.free(expect_sites);
+    const test_roots = try compile.boxy_unit.testRootRecords(ctx.gpa, image, module_digests.items, root_indices.items);
+    defer ctx.gpa.free(test_roots);
+    const hosted = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
+    const records = try compile.boxy_unit.exportRecords(ctx.gpa, &lowered, &program.tables.interfaces);
+    defer ctx.gpa.free(records);
+    try compile.boxy_unit.store(ctx.gpa, cache_manager, key, .{
+        .exports = records,
+        .hosted_symbols = hosted,
+        // No link composes a test program's root unit.
+        .pieces = &.{},
+        .code_locations = code_locations,
+        .image = image,
+        .expect_sites = expect_sites,
+        .test_roots = test_roots,
+    });
+    build_env.recordBoxyObjects(0, 1);
+    return .{
+        .bytes = image,
+        .tests = .{
+            .expect_sites = try ctx.arena.dupe(compile.boxy_object_cache.ExpectSiteRecord, expect_sites),
+            .test_roots = try ctx.arena.dupe(compile.boxy_object_cache.TestRootRecord, test_roots),
+            .code_locations = try ctx.arena.dupe(u8, code_locations),
+        },
+        .hosted_symbols = hosted,
+    };
+}
+
+/// Run the planned roots no cached outcome covers from `program`'s loaded
+/// test units, then merge and report every planned module's outcomes as
+/// `runCompiledTestPlan` does.
+fn runUnitImageTestPlan(
+    ctx: *CliCtx,
+    program: *const UnitImageTestProgram,
+    test_plan: *CliTestPlan,
+    opt: cli_args.OptLevel,
+    specialization_strategy: base.SpecializationStrategy,
+    dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
+    max_workers: ?usize,
+    cache_manager: ?*CacheManager,
+    module_results: *std.ArrayList(CliModuleTestResult),
+    total: *CliTestRunSummary,
+    source_modules: *const CliTestSourceModuleMap,
+) (ReportRenderError || error{NoHomeDirectory})!void {
+    const mode = cliTestExecutionMode(opt);
+    std.debug.assert(mode == .dev);
+    const summaries = try ctx.gpa.alloc(CliTestRunSummary, test_plan.modules.len);
+    defer ctx.gpa.free(summaries);
+    @memset(summaries, .{});
+    const fresh_results = try ctx.gpa.alloc(?[]CliTestResultItem, test_plan.modules.len);
+    defer deinitFreshResultSlots(ctx.gpa, fresh_results);
+    @memset(fresh_results, null);
+
+    // The roots each module runs, in plan order, and what each reports.
+    var partitions: std.ArrayList(eval.Inspected.UnitImageBoolRootModule) = .empty;
+    defer {
+        for (partitions.items) |partition| ctx.gpa.free(partition.roots);
+        partitions.deinit(ctx.gpa);
+    }
+    var partition_modules: std.ArrayList(usize) = .empty;
+    defer partition_modules.deinit(ctx.gpa);
+    var reports: std.ArrayList(CliTestRootReport) = .empty;
+    defer reports.deinit(ctx.gpa);
+    for (test_plan.modules, 0..) |*planned, planned_index| {
+        if (planned.uncachedCount() == 0) continue;
+        const module = compile.boxy_unit.moduleDigest(planned.artifact);
+        const roots = try ctx.gpa.alloc(eval.Inspected.UnitImageBoolRoot, planned.uncachedCount());
+        errdefer ctx.gpa.free(roots);
+        var cursor: usize = 0;
+        for (planned.test_roots, 0..) |root, root_index| {
+            if (planned.cached_roots[root_index] != null) continue;
+            const entry = program.wrappers.get(.{ .module = module, .root_index = @intCast(root_index) }) orelse
+                base.invariant("roc test invariant violated: no loaded test unit exports the wrapper of root {d} of module {s}", .{ root_index, planned.module.semantic.env.qualifiedModuleName() });
+            roots[cursor] = .{ .entry = entry };
+            cursor += 1;
+            try reports.append(ctx.gpa, .{ .root = root, .env = planned.module.semantic.env, .region = testRootRegion(planned.module.semantic.env, root.source) });
+        }
+        try partitions.append(ctx.gpa, .{ .roots = roots });
+        try partition_modules.append(ctx.gpa, planned_index);
+    }
+
+    const site_count = program.sites.items.len;
+    if (partitions.items.len != 0) {
+        var batch_result = eval.Inspected.runUnitImageBoolRootModules(ctx.gpa, partitions.items, site_count, dev_timing, max_workers);
+        if (batch_result) |*batch| {
+            defer batch.deinit(ctx.gpa);
+            const counts = try ctx.gpa.alloc(eval.Inspected.ExpectCounts, site_count);
+            defer ctx.gpa.free(counts);
+            var report_index: usize = 0;
+            for (partitions.items, partition_modules.items) |partition, planned_index| {
+                var results = std.ArrayList(CliTestResultItem).empty;
+                errdefer {
+                    deinitCliTestResultItemPayloads(ctx.gpa, results.items);
+                    results.deinit(ctx.gpa);
+                }
+                for (partition.roots) |_| {
+                    const report = reports.items[report_index];
+                    const eval_result = batch.results[report_index];
+                    report_index += 1;
+                    try appendEvalResultForRun(ctx, report, eval_result, &results, &summaries[planned_index]);
+                    if (eval_result.expect_observations.len == 0) continue;
+                    @memset(counts, .{});
+                    for (eval_result.expect_observations) |observation| counts[observation.site] = observation.counts;
+                    const start = results.items.len;
+                    try appendObservedInlineExpectResults(ctx, UnitExpectSites{ .records = program.sites.items }, counts, &results, &summaries[planned_index], source_modules);
+                    for (results.items[start..]) |*item| item.owner_order = report.root.order;
+                }
+                summaries[planned_index].modules_with_tests = 1;
+                fresh_results[planned_index] = try results.toOwnedSlice(ctx.gpa);
+            }
+        } else |err| switch (ReplSession.programFailureKind(err)) {
+            .out_of_memory => return error.OutOfMemory,
+            .type_check, .parse, .operational => {
+                var report_index: usize = 0;
+                for (partitions.items, partition_modules.items) |partition, planned_index| {
+                    var results = std.ArrayList(CliTestResultItem).empty;
+                    errdefer {
+                        deinitCliTestResultItemPayloads(ctx.gpa, results.items);
+                        results.deinit(ctx.gpa);
+                    }
+                    for (partition.roots) |_| {
+                        try appendCompilerErrorForRoot(ctx, mode, err, reports.items[report_index], &results, &summaries[planned_index]);
+                        report_index += 1;
+                    }
+                    summaries[planned_index].modules_with_tests = 1;
+                    fresh_results[planned_index] = try results.toOwnedSlice(ctx.gpa);
+                }
+            },
+        }
+    }
+
+    for (partition_modules.items) |planned_index| {
+        try storeCliRootOutcomes(ctx, cache_manager, &test_plan.modules[planned_index], specialization_strategy, opt, fresh_results[planned_index].?, source_modules);
+    }
     for (test_plan.modules, 0..) |*planned, planned_index| {
         const cached = planned.uncachedCount() == 0;
         const fresh = fresh_results[planned_index] orelse &.{};
@@ -18652,7 +19300,7 @@ fn printCliTestWork(ctx: *CliCtx) void {
     }
 }
 
-fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestError!void {
+fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainError!void {
     defer printCliTestWork(ctx);
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -18949,7 +19597,17 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     runtime_config.target.timing = &spec_timing;
     var shared_test_program: ?lir.CheckedPipeline.LoweredProgram = null;
     defer if (shared_test_program) |*program| program.deinit();
-    if (runtime_requests.items.len != 0) {
+    // A dev test under `.boxy` with a cache runs its roots from test units'
+    // images, not from one program lowered for them.
+    const unit_image_tests = if (comptime unit_image_tests_supported)
+        (if (build_env.rootModuleCheckedArtifact()) |root| unitImageTestApplies(args.opt, args.no_cache, specialization_strategy, root) else false)
+    else
+        false;
+    var unit_test_program: if (unit_image_tests_supported) ?UnitImageTestProgram else ?void = null;
+    defer if (comptime unit_image_tests_supported) if (unit_test_program) |*program| program.deinit();
+    if (runtime_requests.items.len != 0 and unit_image_tests) {
+        if (comptime unit_image_tests_supported) unit_test_program = try prepareUnitImageTests(ctx, &build_env, &reporter, &test_plan);
+    } else if (runtime_requests.items.len != 0) {
         shared_test_program = try build_env.runtimeProgramSession().?.takeRuntime(ctx.gpa, runtime_roots, runtime_config.target);
         const session_modules = build_env.runtimeProgramSession().?.modules;
         const test_static_data = compile.static_data_exports.buildStaticData(
@@ -19048,7 +19706,22 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     // execution. The completed timing rows recorded below split out the
     // expensive subsets without pretending their durations are extra work.
     reporter.begin("Compile + Run Tests (wall)");
-    if (shared_test_program) |*program| switch (test_mode) {
+    const unit_program: if (unit_image_tests_supported) ?*UnitImageTestProgram else ?*void = if (unit_test_program) |*program| program else null;
+    if (unit_program) |program| {
+        if (comptime unit_image_tests_supported) try runUnitImageTestPlan(
+            ctx,
+            program,
+            &test_plan,
+            args.opt,
+            specialization_strategy,
+            &dev_timing,
+            args.max_threads,
+            test_result_cache,
+            &module_results,
+            &total,
+            &source_modules,
+        );
+    } else if (shared_test_program) |*program| switch (test_mode) {
         .llvm_size, .llvm_speed, .dev => try runCompiledTestPlan(
             ctx,
             program,
@@ -19652,7 +20325,7 @@ const CliOptimizedLiveTestOutput = struct {
             base.invariant("CLI optimized live output received out-of-range call index {d} for {d} roots", .{ call_index, self.runs.len });
         }
         const run = self.runs[call_index];
-        const result = cliTestResultItemFromEval(self.ctx, run, eval_result) catch |err| {
+        const result = cliTestResultItemFromEval(self.ctx, run.report(), eval_result) catch |err| {
             self.lock();
             self.err = err;
             self.unlock();

@@ -21,7 +21,7 @@ const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 9;
+pub const format_version: u32 = 10;
 
 const magic = "RBXO";
 
@@ -58,6 +58,10 @@ pub const KeyInput = struct {
     /// machine-code shim calls, and it materializes no provided data, which
     /// the shim's host does not take from the image.
     run_image: bool = false,
+    /// Whether the object is a test unit (`roc test`): every inline expect
+    /// it compiles counts into a site of its expect-site table, and it
+    /// exports a wrapper per top-level expect of its modules.
+    expect_sites: bool = false,
 };
 
 /// The key of a module's object for `input` under this compiler.
@@ -77,6 +81,7 @@ pub fn key(input: KeyInput) Key {
     hashLengthPrefixed(&hasher, input.opt);
     hasher.update(&[_]u8{@intFromBool(input.inline_expects)});
     hasher.update(&[_]u8{@intFromBool(input.run_image)});
+    hasher.update(&[_]u8{@intFromBool(input.expect_sites)});
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -118,6 +123,24 @@ pub const ExportRecord = struct {
     rc_ret_conditions: []const u32,
 };
 
+/// One inline `expect` a test unit counts, at the unit-local site id that
+/// is its index in `Entry.expect_sites`. The module is named by its
+/// package-qualified name's digest (`completed_test.hash`), never a path.
+pub const ExpectSiteRecord = struct {
+    module: [32]u8,
+    region_start: u32,
+    region_end: u32,
+};
+
+/// One top-level `expect` a test unit exports a wrapper for: the module's
+/// package-qualified name's digest, the root's index among the module's
+/// test roots, and the image symbol the wrapper is exported under.
+pub const TestRootRecord = struct {
+    module: [32]u8,
+    root_index: u32,
+    symbol: u32,
+};
+
 /// One module's cached object.
 pub const Entry = struct {
     exports: []const ExportRecord,
@@ -131,6 +154,10 @@ pub const Entry = struct {
     /// boundary digest (`layout.host_boundary_digest`), in entrypoint
     /// order, which the run's checked host identity covers.
     host_boundary_digests: []const [32]u8 = &.{},
+    /// For a test unit: the inline expects its code counts, by site id.
+    expect_sites: []const ExpectSiteRecord = &.{},
+    /// For a test unit: the wrapper of each top-level expect it exports.
+    test_roots: []const TestRootRecord = &.{},
     /// The module's code in pieces, encoded (`UnitPieces.encode`).
     pieces: []const u8,
     /// Where the unit image's code came from (`CodeLocations`, over offsets
@@ -174,6 +201,18 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
     }
     try appendU32(&bytes, allocator, @intCast(entry.host_boundary_digests.len));
     for (entry.host_boundary_digests) |*digest| try bytes.appendSlice(allocator, digest);
+    try appendU32(&bytes, allocator, @intCast(entry.expect_sites.len));
+    for (entry.expect_sites) |site| {
+        try bytes.appendSlice(allocator, &site.module);
+        try appendU32(&bytes, allocator, site.region_start);
+        try appendU32(&bytes, allocator, site.region_end);
+    }
+    try appendU32(&bytes, allocator, @intCast(entry.test_roots.len));
+    for (entry.test_roots) |root| {
+        try bytes.appendSlice(allocator, &root.module);
+        try appendU32(&bytes, allocator, root.root_index);
+        try appendU32(&bytes, allocator, root.symbol);
+    }
     try appendU64(&bytes, allocator, entry.pieces.len);
     try bytes.appendSlice(allocator, entry.pieces);
     try appendU64(&bytes, allocator, entry.code_locations.len);
@@ -189,6 +228,9 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
 /// The bytes of an export record with no return conditions: its identity,
 /// four 64-bit masks, three flags, and its condition count.
 const min_export_record_size = 32 + 4 * @sizeOf(u64) + 3 + @sizeOf(u32);
+
+/// The bytes of an expect-site or test-root record: a digest and two words.
+const table_record_size = 32 + 2 * @sizeOf(u32);
 
 /// Why cached bytes are not an entry: a file this compiler did not write
 /// (another entry format, or a truncated or altered file). The cache
@@ -260,6 +302,24 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     const host_boundary_digests = try allocator.alloc([32]u8, digest_count);
     errdefer allocator.free(host_boundary_digests);
     for (host_boundary_digests) |*digest| digest.* = (try reader.take(32))[0..32].*;
+    const site_count = try reader.word32();
+    if (site_count > (bytes.len - reader.at) / table_record_size) return error.InvalidEntry;
+    const expect_sites = try allocator.alloc(ExpectSiteRecord, site_count);
+    errdefer allocator.free(expect_sites);
+    for (expect_sites) |*site| site.* = .{
+        .module = (try reader.take(32))[0..32].*,
+        .region_start = try reader.word32(),
+        .region_end = try reader.word32(),
+    };
+    const root_count = try reader.word32();
+    if (root_count > (bytes.len - reader.at) / table_record_size) return error.InvalidEntry;
+    const test_roots = try allocator.alloc(TestRootRecord, root_count);
+    errdefer allocator.free(test_roots);
+    for (test_roots) |*root| root.* = .{
+        .module = (try reader.take(32))[0..32].*,
+        .root_index = try reader.word32(),
+        .symbol = try reader.word32(),
+    };
     const pieces_len = try reader.word64();
     if (pieces_len > std.math.maxInt(usize)) return error.InvalidEntry;
     const pieces = try reader.take(@intCast(pieces_len));
@@ -277,6 +337,8 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
         .link_root_symbols = link_root_symbols,
         .app_export_symbols = app_export_symbols,
         .host_boundary_digests = host_boundary_digests,
+        .expect_sites = expect_sites,
+        .test_roots = test_roots,
         .pieces = pieces,
         .code_locations = code_locations,
         .image = image,
@@ -320,6 +382,8 @@ pub fn deinitEntryView(allocator: Allocator, entry: Entry) void {
     freeSymbols(allocator, entry.link_root_symbols);
     freeSymbols(allocator, entry.app_export_symbols);
     allocator.free(entry.host_boundary_digests);
+    allocator.free(entry.expect_sites);
+    allocator.free(entry.test_roots);
 }
 
 const Reader = struct {
@@ -412,6 +476,10 @@ test "a Boxy object key is a function of exactly its declared inputs" {
     run_root.run_image = true;
     try std.testing.expect(!std.mem.eql(u8, &baseline.bytes, &key(run_root).bytes));
 
+    var test_unit = testInput();
+    test_unit.expect_sites = true;
+    try std.testing.expect(!std.mem.eql(u8, &baseline.bytes, &key(test_unit).bytes));
+
     // A length prefix keeps one field's tail from reading as the next's head.
     var moved_boundary = testInput();
     moved_boundary.target = "x64glibcde";
@@ -431,6 +499,8 @@ test "a Boxy object entry round-trips through its bytes" {
         .link_root_symbols = &.{"roc__d3"},
         .app_export_symbols = &.{ "roc__main_for_host", "roc__d3" },
         .host_boundary_digests = &.{ @splat(7), @splat(8) },
+        .expect_sites = &.{ .{ .module = @splat(4), .region_start = 10, .region_end = 30 }, .{ .module = @splat(5), .region_start = 2, .region_end = 3 } },
+        .test_roots = &.{.{ .module = @splat(4), .root_index = 1, .symbol = 17 }},
         .pieces = "not really pieces",
         .code_locations = "where the code came from",
         .image = "an image",
@@ -444,6 +514,8 @@ test "a Boxy object entry round-trips through its bytes" {
     try std.testing.expectEqualDeep(entry.link_root_symbols, decoded.link_root_symbols);
     try std.testing.expectEqualDeep(entry.app_export_symbols, decoded.app_export_symbols);
     try std.testing.expectEqualDeep(entry.host_boundary_digests, decoded.host_boundary_digests);
+    try std.testing.expectEqualDeep(entry.expect_sites, decoded.expect_sites);
+    try std.testing.expectEqualDeep(entry.test_roots, decoded.test_roots);
     try std.testing.expectEqualStrings(entry.pieces, decoded.pieces);
     try std.testing.expectEqualStrings(entry.code_locations, decoded.code_locations);
     try std.testing.expectEqualStrings(entry.image, decoded.image);

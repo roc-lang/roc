@@ -851,6 +851,7 @@ fn relocationKindForData(kind: DataRelocationKind) RelocationKind {
         .rel32 => .linked_data_rel32,
         .page21 => .linked_data_page21,
         .pageoff12 => .linked_data_pageoff12,
+        .abs32s => base.invariant("run image invariant violated: an abs32s data relocation, which only a test unit emits, and no run image holds a test unit's code", .{}),
     };
 }
 

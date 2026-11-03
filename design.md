@@ -15736,7 +15736,9 @@ adds exactly the module objects still missing (`compile.boxy_object_cache`,
 the `boxy_object` family).
 `roc test` checks its root for explicit test roots
 (`Validation.explicit_roots`), which is its own check under either strategy,
-and with `--specialize=no` it leaves exactly what that check leaves. `roc
+and with `--specialize=no` it leaves exactly what that check leaves, plus,
+when it runs its roots from test units (Unit-Image Test Execution), the
+test units it built. `roc
 check` accepts `--opt` and ignores it; it honors `--specialize`, because the
 strategy selects the compile-time evaluator that completes the module's
 roots. The checked module itself names no strategy: both evaluators store
@@ -24425,6 +24427,57 @@ working directory and are rebound only after validation. Compilation diagnostics
 are replayed from their document items, before test observations; color,
 verbosity and terminal width are current renderer inputs. The command's arena
 owns validated source bytes and lightweight source environments throughout replay.
+
+### Unit-Image Test Execution
+
+A `roc test --opt=dev --specialize=no` with a cache on a Linux x86_64
+compiler runs its execution subset from test units loaded into the
+compiler's own process, not from one program lowered for the subset; the
+choice is the same switch on optimization, strategy, cache presence and host
+as a composed dev run (`unitImageTestApplies`, `unitImageRunApplies`), never
+a reaction to a failure. A default app keeps the shared program, as it
+does in a dev run: the hosted functions its code calls belong to its
+synthetic platform, which no unit of the app has in view. Every other `roc
+test` keeps the shared program too.
+
+A test unit is a module's Boxy unit lowered for `roc test`: every inline
+`expect` it lowers gets a unit-local expect site (dense, in lowering order)
+and counts through `roc_expect_observed`, and it exports a wrapper per
+top-level `expect` of its module, in the `(ret_ptr, args_ptr)` convention,
+under a name made of its module's package-qualified-name digest and the
+root's index among the module's test roots. Both are functions of the
+module's sources alone, never of the execution subset or the reporting
+plan, so a module has at most two cache entries: its build unit and its test
+unit (`boxy_object_cache.KeyInput.expect_sites`). Every unit of a test
+program is a test unit, dependencies included, because the shared program
+counts every inline expect any reached code holds. Beside the image, the
+entry files the unit's expect-site table (each site's module digest and
+source region, by site id) and its test-root table (each wrapper's module
+digest, root index and image symbol). A table that does not read makes the
+entry a miss. Compile-time evaluation and builds never load a test unit.
+
+Each site immediate is a relocatable field (`abs32s`, the field's bytes
+holding the unit-local id as its addend) against one import,
+`roc__expect_site_base`, which the loader binds per image to the first
+program-wide id of that image's sites. The program-wide site table is the
+concatenation of the loaded images' tables in load order; module partitions
+of the counters keep the shared program's convention, one copy of the
+program's sites per module, so the reporting merge is unchanged.
+
+The command builds a test unit for each planned module and everything they
+import, restored from the per-module cache or lowered and filed there. As
+in a composed run, an app's program is rooted at its executable root, the
+platform module paired with the app: the app is a library unit like every
+module without platform requirements, and when a planned module has
+platform requirements, those modules lower together in a root unit keyed as
+a test unit with the paired platforms' keys. It loads the builtins'
+unit, then every other unit after everything it imports, then the root
+unit, binding imports to the in-process host's symbols, the builtins'
+implementations, the compiler's Boxy runtime, the loaded images' exports,
+and, for a hosted symbol, a stub that crashes exactly as a hosted call in an
+in-process test does. It then calls the subset's wrappers, found by module
+and source root index through the test-root tables, with the existing
+bool-root runner, its workers in one `BoxyInProcessState`.
 
 ### Command-level execution
 

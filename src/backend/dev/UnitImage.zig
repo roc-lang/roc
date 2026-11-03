@@ -323,17 +323,21 @@ pub const View = struct {
 
     /// The exported symbol named `wanted`, if the image exports one.
     pub fn findExport(self: View, wanted: []const u8) ?Symbol {
+        return self.symbols()[self.findExportIndex(wanted) orelse return null];
+    }
+
+    /// The index in `symbols` of the export named `wanted`, if any.
+    pub fn findExportIndex(self: View, wanted: []const u8) ?u32 {
         const all = self.symbols();
         const order = self.exports();
         var low: usize = 0;
         var high: usize = order.len;
         while (low < high) {
             const mid = low + (high - low) / 2;
-            const symbol = all[order[mid]];
-            switch (std.mem.order(u8, self.name(symbol.name), wanted)) {
+            switch (std.mem.order(u8, self.name(all[order[mid]].name), wanted)) {
                 .lt => low = mid + 1,
                 .gt => high = mid,
-                .eq => return symbol,
+                .eq => return order[mid],
             }
         }
         return null;

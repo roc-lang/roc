@@ -3629,6 +3629,18 @@ pub const BuildEnv = struct {
         return root.semanticData();
     }
 
+    /// The checked artifact of the module the command names: its root
+    /// package's root module, whatever kind of module it is.
+    pub fn rootModuleCheckedArtifact(self: *BuildEnv) ?*const check.CheckedArtifact.CheckedModuleArtifact {
+        const root_name = self.discovered_pkg_name orelse return null;
+        const coord = self.coordinator orelse return null;
+        const pkg = coord.packages.get(root_name) orelse return null;
+        const root_id = pkg.root_module_id orelse return null;
+        const root = pkg.getModule(root_id) orelse return null;
+        const semantic = root.semanticData() orelse return null;
+        return semantic.checked_artifact;
+    }
+
     /// Get the root semantic data for the platform package (convenience method).
     pub fn getPlatformSemanticData(self: *BuildEnv) ?SemanticModuleData {
         const platform_name = self.selected_platform_package_name orelse return null;
