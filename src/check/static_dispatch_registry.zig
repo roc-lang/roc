@@ -2981,10 +2981,6 @@ fn sourceCallableHasEqualityShape(
 }
 
 fn checkedTypeIsBuiltinBool(checked_types: anytype, ty: CheckedTypeId) bool {
-    const raw = @backingInt(ty);
-    if (raw >= checked_types.store.payloadCount()) {
-        base.invariant("checked static dispatch invariant violated: equality return type root was outside the checked type store", .{});
-    }
     const payload = checked_types.store.payload(ty);
     if (std.meta.activeTag(payload) != .nominal) return false;
     const builtin_owner = payload.nominal.builtin orelse return false;
@@ -3055,7 +3051,7 @@ fn isInspectOverrideCallable(checked_types: anytype, owner: MethodOwner, callabl
 
 fn checkedTypeThroughAliases(checked_types: anytype, ty: CheckedTypeId) CheckedTypeId {
     var current = ty;
-    var remaining = checked_types.store.payloadCount();
+    var remaining = checked_types.store.typeCount();
     while (true) {
         const payload = checked_types.store.payload(current);
         if (std.meta.activeTag(payload) != .alias) return current;

@@ -4924,6 +4924,28 @@ sealed. It consists of exactly these parts:
   payloads and compile-time root reads. Compile-time evaluation writes it and
   nothing else does.
 
+**Sealing.** Checking canonicalizes the solver store in place as its last
+write before sealing it (`types.Store.canonicalizeAndSeal`). Every slot comes
+to name its class's storage root directly; every variable a descriptor, a type
+argument or record field pool, or a nominal declaration holds becomes its
+class's checked representative; and every record and tag union row absorbs the
+rows its extension chain reaches, so a sealed row is flat and its extension is
+never itself a row. A static-dispatch constraint keeps the function variable
+checking recorded for it, because that variable identifies the constraint; a
+reader resolves it with one slot read. The checked type id of a source type is
+its checked representative's bit pattern, so a rendered payload's children
+alias the store's own variable pools and every reader receives
+representatives. Five columns beside the module's synthesized-type store
+complete what a reader needs: the name each identifier the store's types use
+stands for, interned once into the module's name store; the checked identity
+and owning checked module of every module the store's named types come from;
+the checked data of every nominal declaration in the store; per variable,
+whether the module's checked output reaches it and through which row-tail
+positions, which is all a variable's row default depends on; and the box
+payload capability each local nominal type was given. With those columns a
+reader renders a source type (`SealedTypeView`) without allocating, interning
+or resolving anything.
+
 There is no second representation of any of this. No pass copies types,
 bodies, templates, names, plans or roots into another table after checking.
 Lowering, compile-time evaluation, glue, bump and the LSP read the live data
@@ -5090,6 +5112,14 @@ type is created the first time something asks for it, through the module's
 slot for that request ("On-Demand Analyses And Write-Once Slots"), and lives
 as long as the module. A type id names either a solver variable of a module or
 an entry of its synthesized-type store; readers never need to know which.
+
+Ids are not interned across solver classes: two solver variables whose types
+are equal keep two ids. A type that reaches no identity variable is one type
+wherever it occurs, so a consumer that needs one entry per type asks the
+module's view for the one id its key index holds for the type's key
+(`canonicalId`) or compares two ids with `sameType`. A type that
+reaches an identity variable is identified by its id alone, because its key
+names its variables only by position.
 
 ### Platform/App Composition
 

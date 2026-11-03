@@ -92,7 +92,7 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "main.roc", .data = source });
     const app_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", arena);
 
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    var builtin_modules = try eval.BuiltinModules.init(gpa, std.testing.io);
     defer builtin_modules.deinit();
     var coord = try Coordinator.init(
         gpa,

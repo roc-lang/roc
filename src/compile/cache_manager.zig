@@ -212,51 +212,6 @@ pub const CacheManager = struct {
         self.recordStoreFor(kind, size);
     }
 
-    pub const StagedPart = struct {
-        stage: artifacts.Staging,
-        len: usize,
-    };
-
-    pub fn stageCheckedPart(self: *Self, key: [32]u8, stream: CoreCtx.FileStream, size: usize, scope: []const u8, name: []const u8) ?StagedPart {
-        if (comptime threading.is_freestanding) return null;
-        if (!self.config.enabled) return null;
-        const store = self.storeHandle() orelse {
-            self.recordStoreFailure();
-            return null;
-        };
-        var stage = store.reserve(identity(.checked, key, scope)) catch {
-            self.recordStoreFailure();
-            return null;
-        };
-        self.roc_ctx.writeFileStream(stage.path, stream) catch |err| {
-            self.verboseLog(self.allocator, "Failed to stage checked cache part for {s}: {}\n", .{ name, err });
-            stage.deinit();
-            self.recordStoreFailure();
-            return null;
-        };
-        return .{ .stage = stage, .len = size };
-    }
-
-    pub fn readStagedPart(self: *Self, part: StagedPart, allocator: Allocator) ?[]u8 {
-        const bytes = self.roc_ctx.readFile(part.stage.path, allocator) catch {
-            self.recordStoreFailure();
-            return null;
-        };
-        if (bytes.len != part.len) {
-            allocator.free(bytes);
-            self.recordStoreFailure();
-            return null;
-        }
-        return bytes;
-    }
-
-    pub fn discardStagedPart(self: *Self, part: StagedPart) void {
-        if (comptime threading.is_freestanding) return;
-        self.roc_ctx.deleteFile(part.stage.path) catch {};
-        var stage = part.stage;
-        stage.deinit();
-    }
-
     pub fn loadRawBytes(self: *Self, key: [32]u8, scope: []const u8) ?[]const u8 {
         return self.loadFamilyBytes(.checked, key, scope);
     }

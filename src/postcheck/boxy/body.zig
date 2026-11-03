@@ -2947,7 +2947,7 @@ pub const Builder = struct {
     /// reads it instead of computing it: not the root this body computes,
     /// not a root whose evaluation failed (it runs in place), and not a
     /// guarded binding's root, whose declaration keeps its right-hand side.
-    fn storedHoisted(self: *Builder, expr_id: CheckedExprId) ?HoistedRead {
+    fn storedHoisted(self: *Builder, expr_id: CheckedExprId) Allocator.Error!?HoistedRead {
         const entry = self.view.view.hoisted_constants.lookupByExpr(expr_id) orelse return null;
         if (self.own_root) |own| if (own == entry.root) return null;
         const root = self.view.view.compile_time_roots.root(entry.root);
@@ -2959,7 +2959,7 @@ pub const Builder = struct {
             // A value this compile-time program evaluates is read from its
             // slot; a polymorphic hoisted value computes at its instance, as
             // its entry procedure would.
-            .eval_template => if (self.program.readsRootSlot(self.module, entry.root)) .{ .pending = entry.root } else null,
+            .eval_template => if (try self.program.readsRootSlot(self.module, entry.root)) .{ .pending = entry.root } else null,
             // A compile-time evaluator reads a value its own level has not
             // completed only as a member of a group that reads itself.
             .reserved => if (self.program.input.compile_time) .{ .pending = entry.root } else invariant("a hoisted root reached runtime lowering without a stored value or an entry procedure"),
@@ -3028,7 +3028,7 @@ pub const Builder = struct {
         }
         // An expression compile-time evaluation hoisted and stored is read
         // (design.md "Runtime Programs Read Stored Values").
-        if (self.storedHoisted(expr_id)) |read| switch (read) {
+        if (try self.storedHoisted(expr_id)) |read| switch (read) {
             .stored => |stored| return try self.pushStoredRestore(.{ .module = self.module }, stored, try self.exprType(expr_id), if (self.view.view.hoisted_constants.lookupByExpr(expr_id)) |hoisted| hoisted.root else null),
             .pending => |root| return try self.pendingValueRead(self.module, root, try self.exprType(expr_id)),
         };
@@ -4828,7 +4828,7 @@ pub const Builder = struct {
             // not store is its entry procedure's value at the read's
             // instantiation.
             .eval_template => |eval| {
-                if (rootOfConstRef(owner, use.const_ref)) |root| if (self.program.readsRootSlot(owner.index, root)) return try self.pendingValueRead(owner.index, root, ty);
+                if (rootOfConstRef(owner, use.const_ref)) |root| if (try self.program.readsRootSlot(owner.index, root)) return try self.pendingValueRead(owner.index, root, ty);
                 const callee = try self.program.templateRefWorker(eval.entry_template);
                 const read_ty = try self.exprType(expr_id);
                 const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = read_ty, .effectful = false } });

@@ -211,6 +211,8 @@ pub const ArtifactPublicationInputs = struct {
     hoisted_roots: []const check.HoistRoots.SelectedHoistedRoot = &.{},
     promoted_local_procedures: []const check.HoistRoots.PromotedLocalProcedure = &.{},
     problem_store: ?*check.problem.Store = null,
+    /// Waits on the published module's key slots.
+    io: std.Io,
     ctfe_options: eval.CompileTimeFinalization.Options = .{},
     evaluation_phase: @FieldType(CheckedArtifact.PublishInputs, "evaluation_phase") = .immediate,
     /// How this module's compile-time roots were established. Part of the
@@ -500,6 +502,7 @@ pub fn typeCheckModule(
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
     validation: Can.Validation,
     source_pin_validation: [32]u8,
+    io: std.Io,
     ctfe_options: eval.CompileTimeFinalization.Options,
     deferred_imports: can.ImportResolution.Imports,
     missing_public_types: []const []const u8,
@@ -597,6 +600,7 @@ pub fn typeCheckModule(
             .promoted_local_procedures = checker.promotedLocalProcedures(),
             .available_artifacts = available_artifacts,
             .problem_store = &checker.problems,
+            .io = io,
             .ctfe_options = ctfe_options,
             .evaluation_phase = .post_frontend,
             .validation = validation,
@@ -668,6 +672,7 @@ pub fn publishFromPrebuiltModules(
         module_idx,
         .{
             .module_env_storage = module_env_storage,
+            .io = publication.io,
             .imports = imported_artifacts,
             .available_artifacts = publication.available_artifacts,
             .relation_artifacts = publication.relation_artifacts,

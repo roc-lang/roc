@@ -903,7 +903,7 @@ pub const Converter = struct {
             pending.shrinkRetainingCapacity(frame.pending_start);
             // A type with no identity variables converts the same under
             // every environment.
-            if (!frame_scoped and !self.seal_undetermined_kinds and !rootHasIdentityVariables(self.modules.get(frame.module), frame.ty)) {
+            if (!frame_scoped and !self.seal_undetermined_kinds and !try rootHasIdentityVariables(self.modules.get(frame.module), frame.ty)) {
                 try self.store.closed_memo.put(allocator, .{ .module = frame.module, .ty = frame.ty }, built);
             }
             if (frames.items.len == 0) return built;
@@ -922,11 +922,8 @@ pub const Converter = struct {
         return identities.get(.{ .module = module, .ty = ty });
     }
 
-    pub fn rootHasIdentityVariables(view: *const ModuleView, ty: checked.CheckedTypeId) bool {
-        const roots = view.types().rootRows();
-        const index: usize = @backingInt(ty);
-        if (index >= roots.len) return true;
-        return roots[index].contains_identity_variables;
+    pub fn rootHasIdentityVariables(view: *const ModuleView, ty: checked.CheckedTypeId) Allocator.Error!bool {
+        return try view.types().rootHasIdentityVariables(ty);
     }
 
     /// The node for `ty` when it needs no children converted first.
@@ -934,7 +931,7 @@ pub const Converter = struct {
         if (env.lookup(module, ty)) |bound| return bound;
         if (self.platformIdentity(module, ty)) |solved| return solved;
         const view = self.modules.get(module);
-        if (!self.seal_undetermined_kinds and !rootHasIdentityVariables(view, ty)) {
+        if (!self.seal_undetermined_kinds and !try rootHasIdentityVariables(view, ty)) {
             if (self.store.closed_memo.get(.{ .module = module, .ty = ty })) |memo| return memo;
         }
         return switch (view.types().payload(ty)) {

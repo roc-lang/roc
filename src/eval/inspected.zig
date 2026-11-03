@@ -647,6 +647,8 @@ pub const ComptimeProblemReporting = enum {
 
 /// Options for `parseProgram`.
 pub const ParseOptions = struct {
+    /// Waits on the published modules' key slots.
+    io: std.Io,
     roots: ProgramRoots = .eval,
     /// A Builtin artifact the caller already published and keeps owning.
     pre_published_builtin: ?PrePublishedBuiltin = null,
@@ -661,6 +663,7 @@ pub const ParseOptions = struct {
 /// Builtin artifact the caller has already published.
 pub fn parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
@@ -668,6 +671,7 @@ pub fn parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
     roc_ctx: ?CoreCtx,
 ) Error!ParsedResources {
     return parseProgram(allocator, source_kind, source, imports, .{
+        .io = io,
         .roots = .published_only,
         .pre_published_builtin = pre_published_builtin,
         .roc_ctx = roc_ctx,
@@ -830,7 +834,7 @@ pub fn compileProgram(
     imports: []const ModuleSource,
     options: LowerToLirOptions,
 ) Error!CompiledProgram {
-    var resources = try parseProgram(allocator, source_kind, source, imports, .{});
+    var resources = try parseProgram(allocator, source_kind, source, imports, .{ .io = io });
     errdefer cleanupParseAndCanonical(allocator, resources);
 
     const lowered = try lowerParsedProgramToLirWithOptions(allocator, io, &resources, .native, options);
@@ -865,6 +869,7 @@ pub fn compileProgramForTargetWithBuiltin(
     pre_published_builtin: PrePublishedBuiltin,
 ) Error!CompiledTargetProgram {
     return compileForTarget(allocator, io, source_kind, source, imports, target_usize, .{
+        .io = io,
         .pre_published_builtin = pre_published_builtin,
     }, .lss);
 }
@@ -959,6 +964,7 @@ pub fn compileInspectedProgramWithOptions(
     options: InspectedCompileOptions,
 ) Error!CompiledProgram {
     const resources = try parseProgram(allocator, source_kind, source, imports, .{
+        .io = io,
         .roots = .inspected,
         .pre_published_builtin = options.pre_published_builtin,
         .roc_ctx = options.roc_ctx,
@@ -969,17 +975,19 @@ pub fn compileInspectedProgramWithOptions(
 /// Parse, check, and publish an inspect-wrapped program without lowering it.
 pub fn parseAndCanonicalizeInspectedProgram(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
 ) Error!ParsedResources {
-    return parseProgram(allocator, source_kind, source, imports, .{ .roots = .inspected });
+    return parseProgram(allocator, source_kind, source, imports, .{ .io = io, .roots = .inspected });
 }
 
 /// Same as `parseAndCanonicalizeInspectedProgram` but reuses a pre-published
 /// Builtin artifact owned by the caller.
 pub fn parseAndCanonicalizeInspectedProgramWithBuiltin(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
@@ -987,6 +995,7 @@ pub fn parseAndCanonicalizeInspectedProgramWithBuiltin(
     roc_ctx: ?CoreCtx,
 ) Error!ParsedResources {
     return parseProgram(allocator, source_kind, source, imports, .{
+        .io = io,
         .roots = .inspected,
         .pre_published_builtin = pre_published_builtin,
         .roc_ctx = roc_ctx,
@@ -1067,6 +1076,7 @@ pub fn compileInspectedProgramForTargetWithBuiltin(
     specialization_strategy: base.SpecializationStrategy,
 ) Error!CompiledTargetProgram {
     return compileForTarget(allocator, io, source_kind, source, imports, target_usize, .{
+        .io = io,
         .roots = .inspected,
         .pre_published_builtin = pre_published_builtin,
         .roc_ctx = roc_ctx,
@@ -1090,12 +1100,14 @@ pub const ComptimePublishOutcome = enum { no_problems, comptime_problems };
 /// instead.
 pub fn publishProgramForComptimeProblems(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
     pre_published_builtin: ?PrePublishedBuiltin,
 ) Error!ComptimePublishOutcome {
     const resources = try parseProgram(allocator, source_kind, source, imports, .{
+        .io = io,
         .roots = .published_only,
         .pre_published_builtin = pre_published_builtin,
         .problem_reporting = .report_comptime_problems,
@@ -1132,11 +1144,13 @@ pub const TopLevelExpectRun = struct {
 /// reach are observed and counted in `batch.expect_counts`.
 pub fn devEvalTopLevelExpects(
     allocator: Allocator,
+    io: std.Io,
     source: []const u8,
     imports: []const ModuleSource,
     pre_published_builtin: ?PrePublishedBuiltin,
 ) Error!TopLevelExpectRun {
     const resources = try parseProgram(allocator, .module, source, imports, .{
+        .io = io,
         .roots = .published_only,
         .pre_published_builtin = pre_published_builtin,
     });
@@ -1234,6 +1248,7 @@ pub fn devEvalTopLevelExpects(
 /// not publish or lower an executable root.
 pub fn publishProgramKeepingReportedComptimeProblemsWithBuiltinAndContext(
     allocator: Allocator,
+    io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
@@ -1245,6 +1260,7 @@ pub fn publishProgramKeepingReportedComptimeProblemsWithBuiltinAndContext(
         .event_callback = event_callback,
     };
     return parseProgram(allocator, source_kind, source, imports, .{
+        .io = io,
         .roots = .comptime_repl,
         .pre_published_builtin = pre_published_builtin,
         .problem_reporting = .report_comptime_problems,
@@ -1332,6 +1348,7 @@ pub fn parseProgram(
     defer typed_cir_modules.deinit();
     const import_artifacts = try publishImportArtifacts(
         allocator,
+        options.io,
         &typed_cir_modules,
         if (checked.builtin_module) |*lm| lm else null,
         checked.extra_modules,
@@ -1401,6 +1418,7 @@ pub fn parseProgram(
         0,
         .{
             .module_env_storage = .{ .checked_source = main_checked.module_env },
+            .io = options.io,
             .imports = publish_imports,
             .available_artifacts = available_artifacts,
             .explicit_roots = explicit_roots,
@@ -1880,6 +1898,7 @@ fn zeroArgRootBody(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ZeroArgRo
 
 fn publishImportArtifacts(
     allocator: Allocator,
+    io: std.Io,
     typed_cir_modules: *const check.TypedCIR.Modules,
     builtin_module: ?*builtin_static.BuiltinModuleView,
     extra_modules: []CheckedModule,
@@ -1916,6 +1935,7 @@ fn publishImportArtifacts(
             1,
             .{
                 .module_env_storage = .{ .static_builtin = builtin_module.?.env },
+                .io = io,
                 .compile_time_finalizer = CompileTimeFinalization.finalizer(),
             },
         );
@@ -1956,6 +1976,7 @@ fn publishImportArtifacts(
                 module_idx,
                 .{
                     .module_env_storage = .{ .checked_source = extra_modules[extra_i].module_env },
+                    .io = io,
                     .imports = published_keys.items,
                     .available_artifacts = available_artifacts,
                     .promoted_local_procedures = extra_modules[extra_i].checker.promotedLocalProcedures(),

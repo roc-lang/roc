@@ -21,6 +21,7 @@ pub const exhaustive = @import("exhaustive.zig");
 pub const ExhaustivenessContext = @import("exhaustiveness_context.zig");
 pub const TypedCIR = @import("typed_cir.zig");
 pub const CheckedIds = @import("checked_ids.zig");
+pub const CheckedTypeIds = @import("checked_type_ids.zig");
 pub const CanonicalNames = @import("canonical_names.zig");
 /// Checked boundary names exported under the post-check-facing name.
 pub const CheckedNames = CanonicalNames;

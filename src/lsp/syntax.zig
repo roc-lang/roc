@@ -916,7 +916,7 @@ pub const SyntaxChecker = struct {
         const builtin_modules = try self.allocator.create(eval.BuiltinModules);
         errdefer self.allocator.destroy(builtin_modules);
 
-        builtin_modules.* = try eval.BuiltinModules.init(self.allocator);
+        builtin_modules.* = try eval.BuiltinModules.init(self.allocator, self.std_io);
         self.builtin_modules = builtin_modules;
         return builtin_modules;
     }

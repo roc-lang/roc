@@ -292,7 +292,7 @@ const Extractor = struct {
                 module_env,
                 ModuleEnv.varFrom(stmt_idx),
             );
-            const root = view.rootForKey(key) orelse
+            const root = (try view.rootForKey(key)) orelse
                 return self.fail(.unpublished_public_type, "exposed type declaration has no published checked root");
             const payload = view.payload(root);
             if (payload != .alias) continue;
@@ -416,7 +416,7 @@ const Extractor = struct {
                 module_env,
                 decl_var,
             );
-            const root = view.rootForKey(key) orelse
+            const root = (try view.rootForKey(key)) orelse
                 return self.fail(.unpublished_public_type, "exposed type declaration has no published checked root");
 
             const kind = try self.itemKindForTypeDecl(view, names, root);

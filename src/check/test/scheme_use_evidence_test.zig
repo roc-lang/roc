@@ -220,6 +220,7 @@ test "scheme use evidence resolves Builtin Iter min and max through exact raw wh
         gpa,
         .{ .static_builtin = builtin_module.env },
     );
+    try artifact.attachSealedTypes(gpa, std.testing.io);
     artifact_owns_module = true;
     defer artifact.deinit(gpa);
 

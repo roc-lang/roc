@@ -648,7 +648,7 @@ pub fn main(init: std.process.Init) SnapshotError!void {
     const builtin_modules_ptr = try gpa.create(eval_mod.BuiltinModules);
     defer gpa.destroy(builtin_modules_ptr);
 
-    builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa);
+    builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa, app_io);
     defer builtin_modules_ptr.deinit();
 
     const cwd = try currentPathAllocSafe(app_io, gpa);
@@ -706,7 +706,7 @@ fn checkSnapshotExpectations(gpa: Allocator) SnapshotError!bool {
     const builtin_modules_ptr = try gpa.create(eval_mod.BuiltinModules);
     defer gpa.destroy(builtin_modules_ptr);
 
-    builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa);
+    builtin_modules_ptr.* = try eval_mod.BuiltinModules.init(gpa, app_io);
     defer builtin_modules_ptr.deinit();
 
     const cwd = try currentPathAllocSafe(app_io, gpa);
@@ -4397,6 +4397,7 @@ fn compileSnapshotReplInspectedModule(
     var resources = if (config.builtin_modules_ref) |bm|
         try eval_mod.test_helpers.parseAndCanonicalizeInspectedProgramWithBuiltin(
             allocator,
+            app_io,
             .module,
             source,
             &.{},
@@ -4408,7 +4409,7 @@ fn compileSnapshotReplInspectedModule(
             null,
         )
     else
-        try eval_mod.test_helpers.parseAndCanonicalizeInspectedProgram(allocator, .module, source, &.{});
+        try eval_mod.test_helpers.parseAndCanonicalizeInspectedProgram(allocator, app_io, .module, source, &.{});
 
     // Snapshot REPL entries render checker diagnostics instead of evaluating
     // their explicit crash values. The checked module is already complete at
@@ -5134,7 +5135,7 @@ test "a snapshot reports what a build reports for the same module" {
     defer build_env.freeDrainedReports(drained);
 
     // The reports of the same module checked on its own, as a file snapshot is.
-    var builtin_modules = try eval_mod.BuiltinModules.init(gpa);
+    var builtin_modules = try eval_mod.BuiltinModules.init(gpa, app_io);
     defer builtin_modules.deinit();
     var module_env = try single_module.ModuleEnv.init(gpa, source);
     defer module_env.deinit();

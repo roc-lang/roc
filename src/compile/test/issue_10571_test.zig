@@ -61,7 +61,7 @@ test "issue 10571: repeated failed dispatch on the same receiver reports type mi
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    var builtin_modules = try eval.BuiltinModules.init(gpa, std.testing.io);
     defer builtin_modules.deinit();
 
     var coord = try Coordinator.init(

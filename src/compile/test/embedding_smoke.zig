@@ -79,7 +79,7 @@ fn runEmbeddingSequence(
     const arena = arena_impl.allocator();
 
     // 1. Builtins + Coordinator.
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    var builtin_modules = try eval.BuiltinModules.init(gpa, std.testing.io);
     defer builtin_modules.deinit();
 
     var coord = try Coordinator.init(

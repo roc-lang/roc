@@ -31,7 +31,7 @@ test "issue 11199: a call site supplying the field types of a generic record che
     var arena_impl = collections.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    var builtin_modules = try eval.BuiltinModules.init(gpa, std.testing.io);
     defer builtin_modules.deinit();
     var coord = try Coordinator.init(
         gpa,
@@ -202,7 +202,7 @@ test "issue 11199: a concrete unsupported field is rejected during checking" {
     var arena_impl = collections.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    var builtin_modules = try eval.BuiltinModules.init(gpa, std.testing.io);
     defer builtin_modules.deinit();
     var coord = try Coordinator.init(
         gpa,

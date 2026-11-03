@@ -808,7 +808,7 @@ pub fn storedEdge(b: *Builder, source: lower.ConstSource, edge: check.ConstStore
     while (next < pending.items.len) : (next += 1) {
         const module = pending.items[next];
         const view = b.program.module(module);
-        if (edgeIn(view, codec)) |found| return .{ .module = module, .callable_ty = found.callable_ty, .id = found.id };
+        if (try edgeIn(view, codec)) |found| return .{ .module = module, .callable_ty = found.callable_ty, .id = found.id };
         for (view.view.direct_import_module_keys) |imported| {
             if ((try reached.getOrPut(b.allocator, imported.bytes)).found_existing) continue;
             try pending.append(b.allocator, b.program.modules.by_key.get(imported.bytes) orelse continue);
@@ -817,9 +817,9 @@ pub fn storedEdge(b: *Builder, source: lower.ConstSource, edge: check.ConstStore
     invariant("a stored codec edge's contract was not held by its storing module's import closure");
 }
 
-fn edgeIn(view: *const types.ModuleView, codec: check.ConstStore.StoredCodecEdge) ?struct { callable_ty: checked.CheckedTypeId, id: DerivationId } {
-    _ = view.types().rootForKey(codec.dispatcher_key) orelse return null;
-    const callable_ty = view.types().rootForKey(codec.callable_key) orelse return null;
+fn edgeIn(view: *const types.ModuleView, codec: check.ConstStore.StoredCodecEdge) Allocator.Error!?struct { callable_ty: checked.CheckedTypeId, id: DerivationId } {
+    _ = (try view.types().rootForKey(codec.dispatcher_key)) orelse return null;
+    const callable_ty = (try view.types().rootForKey(codec.callable_key)) orelse return null;
     for (view.view.static_dispatch_plans.generated_codec_derivations, 0..) |contract, index| {
         if (std.mem.eql(u8, &contract.content.bytes, &codec.content.bytes)) return .{ .callable_ty = callable_ty, .id = @fromBackingInt(@intCast(index)) };
     }

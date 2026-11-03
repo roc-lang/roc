@@ -2330,10 +2330,10 @@ pub const Program = struct {
     /// compile-time value slot: this program evaluates the root, at one
     /// type. A polymorphic constant computes at each instance it is read
     /// at, as its entry procedure's value.
-    pub fn readsRootSlot(self: *const Program, module_index: ModuleIndex, root: checked.ComptimeRootId) bool {
+    pub fn readsRootSlot(self: *const Program, module_index: ModuleIndex, root: checked.ComptimeRootId) Allocator.Error!bool {
         if (!self.evaluatesRoot(module_index, root)) return false;
         const view = self.module(module_index);
-        return !types.Converter.rootHasIdentityVariables(view, view.view.compile_time_roots.root(root).checked_type);
+        return !try types.Converter.rootHasIdentityVariables(view, view.view.compile_time_roots.root(root).checked_type);
     }
 
     /// The static data slot holding the value of compile-time root `root` of
@@ -2586,7 +2586,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             const plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.result.const_plans.items.len));
             try program.result.const_plans.append(allocator, .layout_only);
             try program.result.requested_layouts.append(allocator, .{
-                .ty = program.module(root_module).types().rootKey(request.checked_type),
+                .ty = try program.module(root_module).types().rootKey(request.checked_type),
                 .checked_type = request.checked_type,
                 .const_locator = request.const_locator,
                 .layout_idx = try program.layouts.layoutOf(worker.ret),

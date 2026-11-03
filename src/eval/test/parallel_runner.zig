@@ -857,7 +857,7 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout
                 };
             },
             .comptime_f32_bits, .comptime_f64_bits, .comptime_f32_list_bits, .comptime_f64_list_bits => blk: {
-                var resources = helpers.parseProgram(allocator, tc.source_kind, tc.source, tc.imports, .{}) catch {
+                var resources = helpers.parseProgram(allocator, tc.source_kind, tc.source, tc.imports, .{ .io = io }) catch {
                     return .{
                         .status = .fail,
                         .message = "INVALID_SYNTAX—skipped compile-time float-bits test has parse/check errors",
@@ -993,7 +993,7 @@ fn runSingleTestInner(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, ti
         .inspect_str => runInspectTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip, tc.specialization_strategy, timeout_ms),
         .allocations_at_most => |expected| runAllocationTest(io, allocator, tc.source_kind, tc.source, tc.imports, expected, tc.skip),
         .comptime_f32_bits, .comptime_f64_bits, .comptime_f32_list_bits, .comptime_f64_list_bits => runComptimeFloatBitsTest(allocator, tc.source_kind, tc.source, tc.imports, tc.expected),
-        .problem => runTestProblem(allocator, tc.source_kind, tc.source, tc.imports),
+        .problem => runTestProblem(io, allocator, tc.source_kind, tc.source, tc.imports),
         .crash => runCrashTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.skip, false, timeout_ms),
         .problem_and_crash => runCrashTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.skip, true, timeout_ms),
     };
@@ -1515,6 +1515,7 @@ fn runInspectTest(
 }
 
 fn runTestProblem(
+    io: std.Io,
     allocator: std.mem.Allocator,
     source_kind: helpers.SourceKind,
     src: []const u8,
@@ -1554,7 +1555,7 @@ fn runTestProblem(
 
     // Checking found nothing; publish so compile-time evaluation can report
     // problems (e.g. a custom from_numeral rejecting a literal).
-    const comptime_outcome = try helpers.publishProgramForComptimeProblems(allocator, source_kind, src, imports, null);
+    const comptime_outcome = try helpers.publishProgramForComptimeProblems(allocator, io, source_kind, src, imports, null);
     if (comptime_outcome == .comptime_problems) {
         return .{
             .status = .pass,

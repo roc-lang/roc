@@ -1796,14 +1796,10 @@ fn templateHasInterfaceRelations(view: ModuleView, template: *const checked.Chec
 /// evidence supplied by its callers, a request is exactly the checked root:
 /// the template's relation table relates only cells private to its own body,
 /// so requesters never replay it.
-fn templateInterfaceIsClosed(view: ModuleView, template: *const checked.CheckedProcedureTemplate) bool {
-    const raw = @backingInt(template.checked_fn_root);
-    if (raw >= view.types.roots.len) {
-        Common.invariant("procedure template interface query referenced a missing checked root");
-    }
+fn templateInterfaceIsClosed(view: ModuleView, template: *const checked.CheckedProcedureTemplate) Allocator.Error!bool {
     return template.scheme_vars.len == 0 and
         template.evidence_params.len == 0 and
-        !view.types.roots[raw].contains_identity_variables;
+        !try view.types.rootHasIdentityVariables(template.checked_fn_root);
 }
 
 /// A Roc template without evidence parameters cannot dispatch on its quantified
@@ -2786,7 +2782,7 @@ const ClosedResultRow = struct {
 /// parametric—the caller supplies the row—and is therefore not closed.
 fn checkedResultRowIsClosed(view: ModuleView, root: checked.CheckedTypeId) bool {
     var current = root;
-    var remaining = view.types.payloadCount();
+    var remaining = view.types.typeCount();
     while (remaining > 0) : (remaining -= 1) {
         const payload = checkedPayload(view, current);
         switch (payload) {
@@ -2865,7 +2861,7 @@ fn requestDeterminedResultRowVariable(
     var current = function.ret;
     var behind_try = false;
     const variable = while (true) {
-        if (chain.items.len >= view.types.payloadCount()) {
+        if (chain.items.len >= view.types.typeCount()) {
             Common.invariant("checked result row chain was cyclic");
         }
         try chain.append(allocator, current);
@@ -3509,14 +3505,14 @@ fn specEvidenceShallowEql(
         .target => |a_target| switch (b) {
             .target => |b_target| blk: {
                 if (!Ast.valueEql(a_target.view.key, b_target.view.key)) break :blk false;
-                if (!specMethodTargetEql(a_target, b_target)) break :blk false;
+                if (!try specMethodTargetEql(a_target, b_target)) break :blk false;
                 if (a_target.local_proc_context != b_target.local_proc_context) break :blk false;
                 if (a_target.instantiation) |a_instantiation| {
                     const b_instantiation = b_target.instantiation orelse break :blk false;
                     if (!Ast.valueEql(a_instantiation.view.key, b_instantiation.view.key)) break :blk false;
                     if (!Ast.valueEql(
-                        a_instantiation.view.types.rootKey(a_instantiation.callable_ty),
-                        b_instantiation.view.types.rootKey(b_instantiation.callable_ty),
+                        try a_instantiation.view.types.rootKey(a_instantiation.callable_ty),
+                        try b_instantiation.view.types.rootKey(b_instantiation.callable_ty),
                     )) break :blk false;
                 } else if (b_target.instantiation != null) {
                     break :blk false;
@@ -3538,7 +3534,7 @@ fn specEvidenceShallowEql(
             .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => false,
         },
         .structural => |a_structural| switch (b) {
-            .structural => |b_structural| specStructuralEvidenceEql(a_structural, b_structural),
+            .structural => |b_structural| try specStructuralEvidenceEql(a_structural, b_structural),
             .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => false,
         },
         .from_callable => |a_use| switch (b) {
@@ -3566,7 +3562,7 @@ fn checkedStructuralOriginEql(left: CheckedSpecStructuralEvidence, right: Checke
     return moduleBytesEqual(left.view.key.bytes, right.view.key.bytes);
 }
 
-fn specStructuralEvidenceEql(left: SpecStructuralEvidence, right: SpecStructuralEvidence) bool {
+fn specStructuralEvidenceEql(left: SpecStructuralEvidence, right: SpecStructuralEvidence) Allocator.Error!bool {
     if (!std.meta.eql(left.derivation, right.derivation)) return false;
     if ((left.checked == null) != (right.checked == null)) return false;
     if (left.checked == null) return true;
@@ -3574,22 +3570,22 @@ fn specStructuralEvidenceEql(left: SpecStructuralEvidence, right: SpecStructural
     const right_checked = right.checked.?;
     return checkedStructuralOriginEql(left_checked, right_checked) and
         std.meta.eql(
-            left_checked.view.types.rootKey(left_checked.evidence.dispatcher_ty),
-            right_checked.view.types.rootKey(right_checked.evidence.dispatcher_ty),
+            try left_checked.view.types.rootKey(left_checked.evidence.dispatcher_ty),
+            try right_checked.view.types.rootKey(right_checked.evidence.dispatcher_ty),
         ) and
         std.meta.eql(
-            left_checked.view.types.rootKey(left_checked.evidence.callable_ty),
-            right_checked.view.types.rootKey(right_checked.evidence.callable_ty),
+            try left_checked.view.types.rootKey(left_checked.evidence.callable_ty),
+            try right_checked.view.types.rootKey(right_checked.evidence.callable_ty),
         );
 }
 
-fn specMethodTargetEql(left: *const SpecEvidenceTarget, right: *const SpecEvidenceTarget) bool {
+fn specMethodTargetEql(left: *const SpecEvidenceTarget, right: *const SpecEvidenceTarget) Allocator.Error!bool {
     return left.target.module_idx == right.target.module_idx and
         left.target.def_idx == right.target.def_idx and
         Ast.valueEql(left.target.kind, right.target.kind) and
         Ast.valueEql(
-            left.view.types.rootKey(left.target.callable_ty),
-            right.view.types.rootKey(right.target.callable_ty),
+            try left.view.types.rootKey(left.target.callable_ty),
+            try right.view.types.rootKey(right.target.callable_ty),
         );
 }
 
@@ -7170,7 +7166,7 @@ const Builder = struct {
         const def = try self.program.addDef(.{
             .symbol = self.symbols.fresh(),
             .fn_def = null,
-            .root_identity = self.staticDataRequestIdentity(type_view, request, ret_ty),
+            .root_identity = try self.staticDataRequestIdentity(type_view, request, ret_ty),
             .args = Ast.Span(Ast.TypedLocal).empty(),
             .body = .{ .roc = body },
             .ret = ret_ty,
@@ -7541,7 +7537,7 @@ const Builder = struct {
                     view,
                     binding.body,
                     source_fn_ty,
-                    view.types.rootKey(source_fn_ty),
+                    try view.types.rootKey(source_fn_ty),
                     fn_ty,
                 );
                 const callee = try self.lowerFnTemplateCallTarget(fn_template, &.{});
@@ -7581,7 +7577,7 @@ const Builder = struct {
 
     /// Identity of a static-data request thunk: the checked constant it
     /// restores and the Monotype type it restores it at.
-    fn staticDataRequestIdentity(self: *Builder, view: ModuleView, request: Common.StaticDataRequest, ret_ty: Type.TypeId) names.TypeDigest {
+    fn staticDataRequestIdentity(self: *Builder, view: ModuleView, request: Common.StaticDataRequest, ret_ty: Type.TypeId) Allocator.Error!names.TypeDigest {
         var hasher = TypeDigestHasher.init();
         hasher.update("roc.monotype.static-data-request.v1");
         hasher.update(&view.key.bytes);
@@ -7604,7 +7600,7 @@ const Builder = struct {
         } else {
             hasher.update("root");
         }
-        hasher.update(&view.types.rootKey(request.checked_type).bytes);
+        hasher.update(&(try view.types.rootKey(request.checked_type)).bytes);
         hasher.update(&self.program.types.specializationDigest(&self.program.names, ret_ty).bytes);
         return .{ .bytes = hasher.finalResult() };
     }
@@ -7634,7 +7630,7 @@ const Builder = struct {
                     view,
                     binding.body,
                     source_fn_ty,
-                    view.types.rootKey(source_fn_ty),
+                    try view.types.rootKey(source_fn_ty),
                     mono_fn_ty,
                 );
                 const fn_id = try self.lowerFnTemplateDef(fn_template, &.{});
@@ -7803,7 +7799,7 @@ const Builder = struct {
             view,
             template_ref,
             source_fn_ty,
-            source_ty_view.types.rootKey(source_fn_ty),
+            try source_ty_view.types.rootKey(source_fn_ty),
             fn_ty,
         );
         const evidence: []const SpecEvidence = if (root_evidence) |evidence_ref| blk: {
@@ -7813,7 +7809,7 @@ const Builder = struct {
         } else &.{};
         return try self.lowerTemplateWithMono(
             template_ref,
-            source_ty_view.types.rootKey(source_fn_ty),
+            try source_ty_view.types.rootKey(source_fn_ty),
             fn_ty,
             evidence,
             null,
@@ -8004,7 +8000,7 @@ const Builder = struct {
                 .target => |target| {
                     // A resolved target's nested bounds are known once its
                     // child vector has been serialized after it.
-                    try nodes.appendTarget(self.allocator, constFnTargetPayload(target, .{ .resolved = .{ .count = 0, .subtree_len = 0 } }));
+                    try nodes.appendTarget(self.allocator, try constFnTargetPayload(target, .{ .resolved = .{ .count = 0, .subtree_len = 0 } }));
                     switch (target.nested) {
                         .synthesize => nodes.targets.items[nodes.targets.items.len - 1].nested = .from_callable,
                         .resolved => |resolved| {
@@ -8018,9 +8014,9 @@ const Builder = struct {
                     .derivation = structural.derivation,
                     .checked = if (structural.checked) |checked_structural| .{ .recorded = .{
                         .view = .{ .bytes = checked_structural.view.key.bytes },
-                        .dispatcher_key = checked_structural.view.types.rootKey(checked_structural.evidence.dispatcher_ty),
+                        .dispatcher_key = try checked_structural.view.types.rootKey(checked_structural.evidence.dispatcher_ty),
                         .dispatcher_ty = checked_structural.evidence.dispatcher_ty,
-                        .callable_key = checked_structural.view.types.rootKey(checked_structural.evidence.callable_ty),
+                        .callable_key = try checked_structural.view.types.rootKey(checked_structural.evidence.callable_ty),
                         .callable_ty = checked_structural.evidence.callable_ty,
                         .generated_codec_derivation = checked_structural.evidence.generated_codec_derivation,
                         .generated_codec_content = codecEvidenceContent(checked_structural),
@@ -8048,14 +8044,14 @@ const Builder = struct {
     fn constFnTargetPayload(
         target: *const SpecEvidenceTarget,
         nested: check.ConstStore.ConstFnNestedEvidence,
-    ) check.ConstStore.ConstFnTargetEvidence {
+    ) Allocator.Error!check.ConstStore.ConstFnTargetEvidence {
         return .{
             .view = .{ .bytes = target.view.key.bytes },
             .method = target.target,
-            .method_callable_key = target.view.types.rootKey(target.target.callable_ty),
+            .method_callable_key = try target.view.types.rootKey(target.target.callable_ty),
             .instantiation = if (target.instantiation) |instantiation| .{
                 .view = .{ .bytes = instantiation.view.key.bytes },
-                .callable_key = instantiation.view.types.rootKey(instantiation.callable_ty),
+                .callable_key = try instantiation.view.types.rootKey(instantiation.callable_ty),
                 .callable_ty = instantiation.callable_ty,
             } else null,
             .nested = nested,
@@ -8562,7 +8558,7 @@ const Builder = struct {
                 // use. `requireHostedExternAtDeclaredAbi` checks every hosted
                 // request against that boundary.
                 const declared_source_fn_ty = template.checked_fn_root;
-                const declared_source_fn_key = view.types.rootKey(declared_source_fn_ty);
+                const declared_source_fn_key = try view.types.rootKey(declared_source_fn_ty);
                 var hosted_fn_template = self.fnDefForTemplate(
                     view,
                     template_ref,
@@ -10346,7 +10342,7 @@ const Builder = struct {
             // open interface needs the template's relations applied here. A
             // codec contract instantiated into this body above is part of
             // those relations' input, so they run in this body.
-            if (!templateInterfaceIsClosed(view, &template) and templateHasInterfaceRelations(view, &template)) {
+            if (!try templateInterfaceIsClosed(view, &template) and templateHasInterfaceRelations(view, &template)) {
                 if (codec_contract == null) {
                     if (try source_ctx.applyTemplateInterfaceRelations(
                         template_ref,
@@ -10912,9 +10908,6 @@ const Builder = struct {
         const address = checkedTypeAddress(view, checked_ty);
         const cache = self.activeCheckedTypeCache();
         if (cache.get(address)) |cached| return cached;
-        const raw = @backingInt(checked_ty);
-        if (raw >= view.types.payloadCount()) Common.invariant("checked type id outside checked type store");
-
         const payload = view.types.payload(checked_ty);
         // Alias spelling belongs to checked data. Share the backing's runtime
         // identity, just as scoped instantiation does, before reserving any
@@ -11534,7 +11527,7 @@ const Builder = struct {
         var next: usize = 0;
         const edge: CheckedSpecStructuralEvidence = while (next < pending.items.len) : (next += 1) {
             const view = pending.items[next];
-            if (codecEdgeIn(view, derivation, codec)) |found| break found;
+            if (try codecEdgeIn(view, derivation, codec)) |found| break found;
             for (view.direct_import_module_keys) |imported| {
                 if ((try reached.getOrPut(self.allocator, imported.bytes)).found_existing) continue;
                 try pending.append(self.allocator, self.moduleForKeyBytes(imported.bytes) orelse continue);
@@ -11544,9 +11537,9 @@ const Builder = struct {
         return edge;
     }
 
-    fn codecEdgeIn(view: ModuleView, derivation: static_dispatch.StructuralDerivation, codec: check.ConstStore.StoredCodecEdge) ?CheckedSpecStructuralEvidence {
-        const dispatcher_ty = view.types.rootForKey(codec.dispatcher_key) orelse return null;
-        const callable_ty = view.types.rootForKey(codec.callable_key) orelse return null;
+    fn codecEdgeIn(view: ModuleView, derivation: static_dispatch.StructuralDerivation, codec: check.ConstStore.StoredCodecEdge) Allocator.Error!?CheckedSpecStructuralEvidence {
+        const dispatcher_ty = (try view.types.rootForKey(codec.dispatcher_key)) orelse return null;
+        const callable_ty = (try view.types.rootForKey(codec.callable_key)) orelse return null;
         for (view.static_dispatch_plans.generated_codec_derivations, 0..) |contract, index| {
             if (!std.mem.eql(u8, &contract.content.bytes, &codec.content.bytes)) continue;
             return .{ .view = view, .evidence = .{
@@ -26048,7 +26041,7 @@ const BodyContext = struct {
     fn releaseInstFrame(self: *BodyContext, frame: *InstFrame) void {
         switch (frame.task) {
             .node => |*task| if (task.reserved) {
-                const removed = self.scopedNodeMap(task.scoped_ty).remove(task.scoped_ty);
+                const removed = task.scoped_map.remove(task.scoped_ty);
                 std.debug.assert(removed);
             },
             inline .decl_backing, .declared_order => |task| self.leaveDeclBackingScopes(task),
@@ -26079,6 +26072,8 @@ const BodyContext = struct {
     const InstNodeTask = struct {
         checked_ty: checked.CheckedTypeId,
         scoped_ty: checked.CheckedTypeId = undefined,
+        /// The node map `scoped_ty` is registered in while `reserved`.
+        scoped_map: *InstantiatingNodeMap = undefined,
         /// Whether `probeInstNode` already looked this type up and missed.
         probed: bool = false,
         /// Whether this frame registered `scoped_ty` as building.
@@ -26123,11 +26118,11 @@ const BodyContext = struct {
         const scope, const mono = switch (self.instantiation.closed_types) {
             .structure => return null,
             .leaves => |scope| blk: {
-                if (!self.checkedTypeIsClosed(checked_ty)) return null;
+                if (!try self.checkedTypeIsClosed(checked_ty)) return null;
                 break :blk .{ scope, try self.closedCheckedMono(checked_ty) };
             },
             .measuring => |scope| blk: {
-                if (!self.checkedTypeIsClosed(checked_ty)) return null;
+                if (!try self.checkedTypeIsClosed(checked_ty)) return null;
                 break :blk .{ scope, self.graph.closedCheckedMono(checkedTypeAddress(self.view, checked_ty)) orelse return null };
             },
         };
@@ -26162,7 +26157,8 @@ const BodyContext = struct {
                 if (try self.probeInstNode(task)) |existing| return .{ .ret = .{ .node = existing } };
             }
             self.builder.countBodyDiagnostic("checked_node_cache_misses");
-            try self.scopedNodeMap(task.scoped_ty).put(task.scoped_ty, .{ .building = null });
+            task.scoped_map = try self.scopedNodeMap(task.scoped_ty);
+            try task.scoped_map.put(task.scoped_ty, .{ .building = null });
             task.reserved = true;
             frame.cursor = 1;
         }
@@ -26274,7 +26270,7 @@ const BodyContext = struct {
                 },
             }
         };
-        const map = self.scopedNodeMap(task.scoped_ty);
+        const map = try self.scopedNodeMap(task.scoped_ty);
         var entry = map.get(task.scoped_ty).?;
         const node = try entry.finish(self.graph, built);
         try map.put(task.scoped_ty, entry);
@@ -26284,7 +26280,7 @@ const BodyContext = struct {
         }
         switch (self.instantiation.closed_types) {
             .structure, .leaves => {},
-            .measuring => if (self.checkedTypeIsClosed(task.scoped_ty)) {
+            .measuring => if (try self.checkedTypeIsClosed(task.scoped_ty)) {
                 try self.instantiation.measured.append(self.allocator, .{ .checked_ty = task.scoped_ty, .node = node });
             },
         }
@@ -26430,7 +26426,7 @@ const BodyContext = struct {
             .undetermined => blk: {
                 const checked_kind = self.scopedCheckedType(field.kind.undeterminedVariable() orelse
                     Common.invariant("undetermined checked field kind carried no presence variable"));
-                if (self.scopedFieldKind(checked_kind)) |existing| {
+                if (try self.scopedFieldKind(checked_kind)) |existing| {
                     try self.graph.unify(existing.value, value_node);
                     break :blk .{
                         .name = name,
@@ -26801,16 +26797,16 @@ const BodyContext = struct {
     /// lookup: the same open checked type mentioned at two nesting levels of
     /// a recursive declaration expansion binds the formals differently, and
     /// an outer answer would collapse those distinct types into one node.
-    fn scopedNodeMap(self: *BodyContext, checked_ty: checked.CheckedTypeId) *InstantiatingNodeMap {
+    fn scopedNodeMap(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!*InstantiatingNodeMap {
         const scopes = self.instantiation.decl_scopes.items;
-        if (scopes.len == 0 or self.checkedTypeIsClosed(checked_ty)) {
+        if (scopes.len == 0 or try self.checkedTypeIsClosed(checked_ty)) {
             return &self.instantiation.node_map;
         }
         return scopes[scopes.len - 1];
     }
 
     fn scopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!?NodeId {
-        const map = self.scopedNodeMap(checked_ty);
+        const map = try self.scopedNodeMap(checked_ty);
         var entry = map.get(checked_ty) orelse return null;
         if (entry == .node) return entry.node;
         const node = try entry.get(self.graph);
@@ -26819,12 +26815,12 @@ const BodyContext = struct {
     }
 
     fn putScopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId, node: NodeId) Allocator.Error!void {
-        try self.scopedNodeMap(checked_ty).put(checked_ty, .{ .node = node });
+        try (try self.scopedNodeMap(checked_ty)).put(checked_ty, .{ .node = node });
         // A leaf read later reaches a closed component through its leaf
         // scope, so the scope names the same node for it.
         switch (self.instantiation.closed_types) {
             .structure, .measuring => {},
-            .leaves => |scope| if (self.checkedTypeIsClosed(checked_ty)) {
+            .leaves => |scope| if (try self.checkedTypeIsClosed(checked_ty)) {
                 try self.graph.bindCheckedLeaf(scope, try self.closedCheckedMono(checked_ty), node);
             },
         }
@@ -26835,9 +26831,9 @@ const BodyContext = struct {
     /// variable is always open, so inside a declaration expansion this
     /// resolves in the innermost scope; the closed branch exists only to
     /// keep the routing rule identical to `scopedNode`'s.
-    fn scopedFieldKind(self: *BodyContext, checked_ty: checked.CheckedTypeId) ?InstantiatedFieldKind {
+    fn scopedFieldKind(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!?InstantiatedFieldKind {
         const scopes = self.instantiation.field_kind_decl_scopes.items;
-        if (scopes.len == 0 or self.checkedTypeIsClosed(checked_ty)) {
+        if (scopes.len == 0 or try self.checkedTypeIsClosed(checked_ty)) {
             return self.instantiation.field_kind_map.get(checked_ty);
         }
         return scopes[scopes.len - 1].get(checked_ty);
@@ -26849,7 +26845,7 @@ const BodyContext = struct {
         field_kind: InstantiatedFieldKind,
     ) Allocator.Error!void {
         const scopes = self.instantiation.field_kind_decl_scopes.items;
-        if (scopes.len == 0 or self.checkedTypeIsClosed(checked_ty)) {
+        if (scopes.len == 0 or try self.checkedTypeIsClosed(checked_ty)) {
             try self.instantiation.field_kind_map.put(checked_ty, field_kind);
             return;
         }
@@ -27724,7 +27720,7 @@ const BodyContext = struct {
             try relateConstructionFunctionRequestInterface(self.graph, root_node, roots[0]);
         }
         try callee_ctx.relateMaterializedEvidenceConstraints(callee_ctx, callee_ctx.evidence.schema.?, edge.vector);
-        if (templateInterfaceIsClosed(callee_view, &template)) {
+        if (try templateInterfaceIsClosed(callee_view, &template)) {
             // A closed interface is complete once the request is related to
             // its checked root; its relation table never enters this graph.
             self.builder.count("interface_closed_expansions");
@@ -29623,7 +29619,7 @@ const BodyContext = struct {
                     expr_id,
                     nested,
                     source_fn_ty,
-                    self.view.types.rootKey(source_fn_ty),
+                    try self.view.types.rootKey(source_fn_ty),
                     request_fn_node,
                     capture_nodes,
                     nested_evidence.chain,
@@ -35663,7 +35659,7 @@ const BodyContext = struct {
             const created = try self.builder.lowerDraftTemplateFromContext(
                 self,
                 procedure.template,
-                lookup.view.types.rootKey(source_fn_ty),
+                try lookup.view.types.rootKey(source_fn_ty),
                 callable_node,
                 edge,
                 .instantiation,
@@ -36132,7 +36128,7 @@ const BodyContext = struct {
                 const args = input.?.spanValue();
                 const target = call.direct_target.?;
                 const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
-                const source_fn_key = self.view.types.rootKey(source_fn_ty);
+                const source_fn_key = try self.view.types.rootKey(source_fn_ty);
                 if (args.len != 1) Common.invariant("Str.inspect call did not have exactly one lowered argument");
                 const callee = try self.fnTemplateForDirectCallAtNode(target, source_fn_ty, source_fn_key, task.fn_node);
                 const captures = try self.directCallCaptureSpan(target);
@@ -37083,7 +37079,7 @@ const BodyContext = struct {
                         self.view,
                         context_id,
                         expr.ty,
-                        self.view.types.rootKey(expr.ty),
+                        try self.view.types.rootKey(expr.ty),
                         request_fn_node,
                         try self.evidenceForUseSiteAtNode(record.expr, request_fn_node),
                         record.recursive_reference,
@@ -37128,7 +37124,7 @@ const BodyContext = struct {
             view,
             wrapper.template,
             wrapper.checked_fn_root,
-            view.types.rootKey(wrapper.checked_fn_root),
+            try view.types.rootKey(wrapper.checked_fn_root),
             wrapper_fn_ty,
         );
 
@@ -37214,7 +37210,7 @@ const BodyContext = struct {
         body_ctx.frozen_type_finals = self.frozen_type_finals;
         body_ctx.frozen_codec_calls = self.frozen_codec_calls;
         body_ctx.frozen_field_defaults = self.frozen_field_defaults;
-        const root_fn_key = view.types.rootKey(wrapper.checked_fn_root);
+        const root_fn_key = try view.types.rootKey(wrapper.checked_fn_root);
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
 
@@ -39100,7 +39096,7 @@ const BodyContext = struct {
             hashU32(&hasher, @backingInt(capture.capture_id));
             hashU32(&hasher, capture.scope_depth);
             const binder = checkedCaptureBinder(self.view, capture.pattern);
-            const checked_type_key = self.view.types.rootKey(checkedBinderType(self.view, binder));
+            const checked_type_key = try self.view.types.rootKey(checkedBinderType(self.view, binder));
             hasher.update(&checked_type_key.bytes);
         }
         return .{ .bytes = hasher.finalResult() };
@@ -44516,7 +44512,7 @@ const BodyContext = struct {
         const callee = try self.fnTemplateForDirectCallAtNode(
             target,
             source_fn_ty,
-            self.view.types.rootKey(source_fn_ty),
+            try self.view.types.rootKey(source_fn_ty),
             fn_node,
         );
         const completed = CompletedDirectCallee{
@@ -44662,7 +44658,7 @@ const BodyContext = struct {
         body_ctx.frozen_type_finals = self.frozen_type_finals;
         body_ctx.frozen_codec_calls = self.frozen_codec_calls;
         body_ctx.frozen_field_defaults = self.frozen_field_defaults;
-        const root_fn_key = view.types.rootKey(wrapper.checked_fn_root);
+        const root_fn_key = try view.types.rootKey(wrapper.checked_fn_root);
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
 
@@ -44687,7 +44683,7 @@ const BodyContext = struct {
         return try self.fnTemplateForDirectCallAtNode(
             target,
             lookup_ty,
-            self.view.types.rootKey(lookup_ty),
+            try self.view.types.rootKey(lookup_ty),
             request_fn_node,
         );
     }
@@ -45390,8 +45386,8 @@ const BodyContext = struct {
                 );
             }
             const local_ty = try self.activeTypeFromCell(local_cell);
-            if (self.checkedTypeIsClosed(binder_ty) and
-                self.checkedTypeIsClosed(checked_ty) and
+            if (try self.checkedTypeIsClosed(binder_ty) and
+                try self.checkedTypeIsClosed(checked_ty) and
                 self.sameType(local_ty, ty))
             {
                 const checked_binder_ty = try self.lowerType(binder_ty);
@@ -45476,7 +45472,7 @@ const BodyContext = struct {
                     self.view,
                     context_id,
                     checked_ty,
-                    self.view.types.rootKey(checked_ty),
+                    try self.view.types.rootKey(checked_ty),
                     request_fn_node,
                     try self.evidenceForUseSiteAtNode(record.expr, request_fn_node),
                     record.recursive_reference,
@@ -45509,12 +45505,8 @@ const BodyContext = struct {
         };
     }
 
-    fn checkedTypeIsClosed(self: *const BodyContext, ty: checked.CheckedTypeId) bool {
-        const raw = @backingInt(ty);
-        if (raw >= self.view.types.roots.len) {
-            Common.invariant("checked type closure query referenced a missing root");
-        }
-        return !self.view.types.roots[raw].contains_identity_variables;
+    fn checkedTypeIsClosed(self: *const BodyContext, ty: checked.CheckedTypeId) Allocator.Error!bool {
+        return !try self.view.types.rootHasIdentityVariables(ty);
     }
 
     /// The scheme alias task a lookup of `maybe_ref` lowers through at
@@ -45606,7 +45598,7 @@ const BodyContext = struct {
         self: *BodyContext,
         ty: checked.CheckedTypeId,
     ) Allocator.Error!bool {
-        if (self.checkedTypeIsClosed(ty)) return true;
+        if (try self.checkedTypeIsClosed(ty)) return true;
         var visited = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
         defer visited.deinit();
         var pending: std.ArrayListUnmanaged(checked.CheckedTypeId) = .empty;
@@ -45724,7 +45716,7 @@ const BodyContext = struct {
                     self.view,
                     context_id,
                     checked_ty,
-                    self.view.types.rootKey(checked_ty),
+                    try self.view.types.rootKey(checked_ty),
                     expected_node,
                     try self.evidenceForUseSiteAtNode(record.expr, expected_node),
                     record.recursive_reference,
@@ -46365,7 +46357,7 @@ const BodyContext = struct {
         // graph node. Nested specializations additionally key their concrete
         // request through the draft graph, so no provisional TypeId digest is
         // needed here.
-        const root_fn_key = store_view.types.rootKey(entry_template.checked_fn_root);
+        const root_fn_key = try store_view.types.rootKey(entry_template.checked_fn_root);
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
 
@@ -49982,7 +49974,7 @@ const BodyContext = struct {
             expr_id,
             nested,
             source_fn_ty,
-            self.view.types.rootKey(source_fn_ty),
+            try self.view.types.rootKey(source_fn_ty),
             request_fn_node,
             capture_entry_guards,
             nested_evidence.chain,
@@ -51494,8 +51486,8 @@ const BodyContext = struct {
                     const restored_checked: ?CheckedSpecStructuralEvidence = if (stored_structural.checked) |stored_checked| switch (stored_checked) {
                         .recorded => |recorded| restored: {
                             const view = self.builder.moduleForDigest(recorded.view);
-                            if (!std.meta.eql(view.types.rootKey(recorded.dispatcher_ty), recorded.dispatcher_key) or
-                                !std.meta.eql(view.types.rootKey(recorded.callable_ty), recorded.callable_key))
+                            if (!std.meta.eql(try view.types.rootKey(recorded.dispatcher_ty), recorded.dispatcher_key) or
+                                !std.meta.eql(try view.types.rootKey(recorded.callable_ty), recorded.callable_key))
                             {
                                 Common.invariant("stored structural evidence checked type identity changed during restoration");
                             }
@@ -52555,7 +52547,7 @@ const BodyContext = struct {
                         break :blk contract;
                     }
                     if (!std.meta.eql(derived_target.view.key, contract_target.view.key) or
-                        !specMethodTargetEql(derived_target, contract_target))
+                        !try specMethodTargetEql(derived_target, contract_target))
                     {
                         Common.invariant("substitution-derived target differed from checked target contract");
                     }
@@ -52808,7 +52800,7 @@ const BodyContext = struct {
                 .module = schema.view.key.bytes,
                 .proc_base = schema.params_start,
                 .template = @intCast(schema.params.len),
-                .source_fn_key = if (schema.root) |root| schema.view.types.rootKey(root).bytes else @splat(0),
+                .source_fn_key = if (schema.root) |root| (try schema.view.types.rootKey(root)).bytes else @splat(0),
             },
             .evidence_digest = evidence.digest.bytes,
             .input_digest = interfaceRequestBucket(request.bytes),
@@ -52929,7 +52921,7 @@ const BodyContext = struct {
                 .local_proc => .local_method_contract,
                 .structural => unreachable, // the owner-template switch above rejects structural targets before this address is built
             },
-            .family = DraftTemplateFamilyAddress.init(owner, root_view.types.rootKey(root_fn_ty)),
+            .family = DraftTemplateFamilyAddress.init(owner, try root_view.types.rootKey(root_fn_ty)),
             .evidence_digest = @splat(0),
             .input_digest = interfaceRequestBucket(request.bytes),
         };
@@ -54351,7 +54343,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftFnSlot {
         const lookup = try self.withLocalProcContext(raw_lookup);
         const source_fn_ty = lookup.target.callable_ty;
-        const source_fn_key = lookup.view.types.rootKey(source_fn_ty);
+        const source_fn_key = try lookup.view.types.rootKey(source_fn_ty);
         // A target reached through an alias takes the substitution and the
         // evidence composed through that alias together, so the context the
         // target's root relates in holds the very cells its evidence names.
@@ -54531,7 +54523,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftFnSlot {
         const lookup = try self.withLocalProcContext(raw_lookup);
         const source_fn_ty = lookup.target.callable_ty;
-        const source_fn_key = lookup.view.types.rootKey(source_fn_ty);
+        const source_fn_key = try lookup.view.types.rootKey(source_fn_ty);
         const alias_edge = try self.directAliasTargetEdge(plan, lookup);
         const subst = if (alias_edge) |edge| edge.subst else (try self.directDispatchTargetSubstitution(plan, lookup, request_fn_node)) orelse
             Common.invariant("direct dispatch target had no checked substitution");
@@ -67847,33 +67839,34 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
 test "specialization evidence equality includes exact target instantiation" {
     var roots: [11]checked.CheckedTypeRoot = undefined;
     for (&roots, 0..) |*root, index| {
-        root.* = .{ .id = @fromBackingInt(@intCast(@as(u32, @intCast(index)))), .key = .{} };
+        root.* = .{ .id = check.CheckedTypeIds.fromSynthesized(index), .key = .{} };
         root.key.bytes[0] = @intCast(index);
     }
     // A fresh checked identity may have a distinct raw id while retaining the
     // same canonical type topology.
     roots[10].key = roots[8].key;
+    const payloads: [roots.len]checked.StoredCheckedTypePayload = @splat(.empty_record);
 
     var target_view_data: ModuleViewData = undefined;
     const target_view = &target_view_data;
     target_view.key = .{};
     target_view.key.bytes[0] = 1;
-    target_view.types = .{ .roots = &roots };
+    target_view.types = .{ .roots = &roots, .stored_payloads = &payloads };
     var other_target_view_data: ModuleViewData = undefined;
     const other_target_view = &other_target_view_data;
     other_target_view.key = .{};
     other_target_view.key.bytes[0] = 2;
-    other_target_view.types = .{ .roots = &roots };
+    other_target_view.types = .{ .roots = &roots, .stored_payloads = &payloads };
     var instantiation_view_data: ModuleViewData = undefined;
     const instantiation_view = &instantiation_view_data;
     instantiation_view.key = .{};
     instantiation_view.key.bytes[0] = 3;
-    instantiation_view.types = .{ .roots = &roots };
+    instantiation_view.types = .{ .roots = &roots, .stored_payloads = &payloads };
     var other_instantiation_view_data: ModuleViewData = undefined;
     const other_instantiation_view = &other_instantiation_view_data;
     other_instantiation_view.key = .{};
     other_instantiation_view.key.bytes[0] = 4;
-    other_instantiation_view.types = .{ .roots = &roots };
+    other_instantiation_view.types = .{ .roots = &roots, .stored_payloads = &payloads };
 
     const method: static_dispatch.MethodTarget = .{
         .module_idx = 5,
@@ -67882,12 +67875,12 @@ test "specialization evidence equality includes exact target instantiation" {
             .proc = .{ .proc_base = @fromBackingInt(@intCast(7)) },
             .template = .{ .proc_base = @fromBackingInt(@intCast(7)), .template = @fromBackingInt(@intCast(8)) },
         } },
-        .callable_ty = @fromBackingInt(@intCast(7)),
+        .callable_ty = check.CheckedTypeIds.fromSynthesized(7),
     };
     const exact: SpecEvidenceTarget = .{
         .view = target_view,
         .target = method,
-        .instantiation = .{ .view = instantiation_view, .callable_ty = @fromBackingInt(@intCast(8)) },
+        .instantiation = .{ .view = instantiation_view, .callable_ty = check.CheckedTypeIds.fromSynthesized(8) },
         .local_proc_context = null,
         .nested = .{ .resolved = &.{.{ .structural = .{ .derivation = .equality } }} },
     };
@@ -67902,11 +67895,11 @@ test "specialization evidence equality includes exact target instantiation" {
     try std.testing.expect(!try specEvidenceEql(std.testing.allocator, .{ .target = &exact }, .{ .target = &different_instantiation_view }));
 
     var different_callable = exact;
-    different_callable.instantiation.?.callable_ty = @fromBackingInt(@intCast(9));
+    different_callable.instantiation.?.callable_ty = check.CheckedTypeIds.fromSynthesized(9);
     try std.testing.expect(!try specEvidenceEql(std.testing.allocator, .{ .target = &exact }, .{ .target = &different_callable }));
 
     var equivalent_fresh_callable = exact;
-    equivalent_fresh_callable.instantiation.?.callable_ty = @fromBackingInt(@intCast(10));
+    equivalent_fresh_callable.instantiation.?.callable_ty = check.CheckedTypeIds.fromSynthesized(10);
     try std.testing.expect(try specEvidenceEql(std.testing.allocator, .{ .target = &exact }, .{ .target = &equivalent_fresh_callable }));
 
     var unresolved_nested = exact;
@@ -67932,7 +67925,7 @@ test "specialization evidence equality includes exact target instantiation" {
             .expr = @fromBackingInt(@intCast(8)),
             .context_anchor = @fromBackingInt(@intCast(9)),
         } },
-        .callable_ty = @fromBackingInt(@intCast(10)),
+        .callable_ty = check.CheckedTypeIds.fromSynthesized(10),
     };
     var first_local = monomorphic;
     first_local.target = local_method;
@@ -68727,8 +68720,6 @@ fn fieldAccessAnySegmentOptional(segments: []const checked.CheckedFieldAccessSeg
 }
 
 fn checkedPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypePayload {
-    const raw = @backingInt(checked_ty);
-    if (raw >= view.types.payloadCount()) Common.invariant("checked type id outside checked type store");
     return view.types.payload(checked_ty);
 }
 
@@ -69178,7 +69169,7 @@ const ResolvedPayload = struct {
 
 fn resolvedPayload(view: ModuleView, ty: checked.CheckedTypeId) ResolvedPayload {
     var current = ty;
-    var remaining = view.types.payloadCount();
+    var remaining = view.types.typeCount();
     while (remaining > 0) : (remaining -= 1) {
         const payload = checkedPayload(view, current);
         switch (payload) {

@@ -1509,7 +1509,7 @@ const TypeTable = struct {
         self: *const TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         checked_type: CheckedArtifact.CheckedTypeId,
-    ) BoundSource {
+    ) Allocator.Error!BoundSource {
         var cur = BoundSource{ .artifact = artifact, .checked_type = checked_type };
         // Follow the binding chain: a nested opening can bind a formal to an
         // outer formal, which is bound in turn to a concrete argument.
@@ -1518,6 +1518,7 @@ const TypeTable = struct {
             const bound = self.template_bindings.get(key) orelse break;
             cur = bound;
         }
+        cur.checked_type = try cur.artifact.checked_types.view().canonicalId(cur.checked_type);
         return cur;
     }
 
@@ -1534,7 +1535,7 @@ const TypeTable = struct {
 
         for (formals, nominal.args, saved, bound_formals) |formal, arg, *slot, *is_bound| {
             const fkey = TypeTableKey{ .artifact_key = lookup.artifact.key, .checked_type = formal };
-            const resolved = self.substituteFormal(artifact, arg);
+            const resolved = try self.substituteFormal(artifact, arg);
             if (checkedArtifactKeysEqual(resolved.artifact.key, fkey.artifact_key) and resolved.checked_type == fkey.checked_type) {
                 is_bound.* = false;
                 continue;
@@ -1686,7 +1687,7 @@ const TypeTable = struct {
         checked_type: CheckedArtifact.CheckedTypeId,
         fields: *std.ArrayList(BoundRecordField),
     ) Allocator.Error!bool {
-        const src = self.substituteFormal(artifact, checked_type);
+        const src = try self.substituteFormal(artifact, checked_type);
         switch (checkedTypePayload(src.artifact, src.checked_type)) {
             .alias => |alias| return try self.collectRecordFieldsForRootBound(src.artifact, alias.backing, fields),
             .nominal => |nominal| {
@@ -1731,7 +1732,7 @@ const TypeTable = struct {
         buf: *std.ArrayList(u8),
         active: *std.AutoHashMap(TypeTableKey, void),
     ) Allocator.Error!void {
-        const src = self.substituteFormal(artifact, checked_type);
+        const src = try self.substituteFormal(artifact, checked_type);
         const key = TypeTableKey{ .artifact_key = src.artifact.key, .checked_type = src.checked_type };
         if (active.contains(key)) {
             try buf.appendSlice(self.gpa, "<cycle>");
@@ -1901,7 +1902,7 @@ const TypeTable = struct {
         const arg_keys = try self.gpa.alloc(TypeTableKey, nominal.args.len);
         errdefer self.gpa.free(arg_keys);
         for (nominal.args, arg_keys) |arg, *arg_key| {
-            const resolved = self.substituteFormal(artifact, arg);
+            const resolved = try self.substituteFormal(artifact, arg);
             arg_key.* = .{ .artifact_key = resolved.artifact.key, .checked_type = resolved.checked_type };
         }
         return .{
@@ -2040,7 +2041,7 @@ const TypeTable = struct {
         artifact_in: *const CheckedArtifact.CheckedModuleArtifact,
         checked_type_in: CheckedArtifact.CheckedTypeId,
     ) TypeTableError!u64 {
-        const src = self.substituteFormal(artifact_in, checked_type_in);
+        const src = try self.substituteFormal(artifact_in, checked_type_in);
         // A root is requested from the compiler by checked type id, which
         // names a declaration-space type when this root sits inside a nominal
         // backing opening. Formal substitution only rewrites a type that IS a
@@ -2133,7 +2134,7 @@ const TypeTable = struct {
         checked_type_in: CheckedArtifact.CheckedTypeId,
         position: ValuePosition,
     ) TypeTableError!u64 {
-        const src = self.substituteFormal(artifact_in, checked_type_in);
+        const src = try self.substituteFormal(artifact_in, checked_type_in);
         const artifact = src.artifact;
         const checked_type = src.checked_type;
 
@@ -3098,7 +3099,7 @@ const TypeTable = struct {
             const resolved_arg_keys = try self.gpa.alloc(TypeTableKey, nominal.args.len);
             defer self.gpa.free(resolved_arg_keys);
             for (nominal.args, resolved_arg_keys) |arg, *arg_key| {
-                const resolved = self.substituteFormal(artifact, arg);
+                const resolved = try self.substituteFormal(artifact, arg);
                 arg_key.* = .{ .artifact_key = resolved.artifact.key, .checked_type = resolved.checked_type };
             }
 
@@ -3111,7 +3112,7 @@ const TypeTable = struct {
                 // A polymorphic application binds a formal to itself (arg == formal,
                 // a bare rigid). Skip it: leaving the formal unbound resolves it as
                 // a rigid in-context and avoids a self-referential binding cycle.
-                const resolved = self.substituteFormal(artifact, arg);
+                const resolved = try self.substituteFormal(artifact, arg);
                 if (std.meta.eql(resolved.artifact.key, fkey.artifact_key) and resolved.checked_type == fkey.checked_type) {
                     is_bound.* = false;
                     continue;
@@ -3139,7 +3140,7 @@ const TypeTable = struct {
 
             // The backing may itself be a formal (`Wrapper(a) := a`), which the
             // bindings just established resolve to the application's argument.
-            const backing = self.substituteFormal(lookup.artifact, decl.backing);
+            const backing = try self.substituteFormal(lookup.artifact, decl.backing);
             break :open_blk try self.convertCheckedType(backing.artifact, backing.checked_type, position);
         } else glueInvariant("nominal glue conversion could not find declaration backing", .{});
 
@@ -4171,10 +4172,6 @@ fn checkedTypePayload(
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     checked_type: CheckedArtifact.CheckedTypeId,
 ) CheckedArtifact.CheckedTypePayload {
-    const idx = @backingInt(checked_type);
-    if (idx >= artifact.checked_types.payloadCount()) {
-        glueInvariant("checked type id {d} out of bounds", .{idx});
-    }
     return artifact.checked_types.payload(checked_type);
 }
 

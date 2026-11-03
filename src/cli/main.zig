@@ -228,10 +228,6 @@ const CliBuildEnvOptions = struct {
     timings: bool = false,
     resolution_config: compile.package_resolution.Config = .{},
     track_watch_inputs: bool = false,
-    /// Release modules' solver type stores once checking finishes. Set by the
-    /// commands that read no solver types after compiling (check, build, run,
-    /// and test); see `BuildEnv.release_checked_solver_types`.
-    release_checked_solver_types: bool = false,
     source_dir_override: ?[]const u8 = null,
     post_check_publication_mode: compile.build.PostCheckPublicationMode = .executable_artifacts,
     runtime_lowering: ?compile.build.RuntimeLoweringConfig = null,
@@ -268,7 +264,6 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     build_env.detailed_monotype_diagnostics = opts.timings;
     build_env.resolution_config = opts.resolution_config;
     build_env.setWatchInputTracking(opts.track_watch_inputs);
-    build_env.release_checked_solver_types = opts.release_checked_solver_types;
     build_env.setPostCheckPublicationMode(opts.post_check_publication_mode);
     build_env.setSpecializationStrategy(opts.specialization_strategy);
     const object_target = roc_target.host_cpu.nativeTarget();
@@ -5994,7 +5989,6 @@ fn initRunBuildEnv(ctx: *CliCtx, opts: RunBuildEnvOptions) CliMainError!BuildEnv
         .timings = if (opts.reporter) |r| r.always else false,
         .resolution_config = opts.resolution_config,
         .track_watch_inputs = true,
-        .release_checked_solver_types = true,
         .source_dir_override = opts.source_dir_override,
         .post_check_publication_mode = .executable_artifacts,
         .specialization_strategy = opts.specialization_strategy,
@@ -9196,7 +9190,6 @@ fn initBuildCommandEnv(ctx: *CliCtx, args: cli_args.BuildArgs) InitCliBuildEnvEr
         .timings = args.timings,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
-        .release_checked_solver_types = true,
         .specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy),
         .source_dir_override = args.source_dir_override,
         .root_source_url = args.root_source_url,
@@ -13919,7 +13912,6 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         .timings = args.timings,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
-        .release_checked_solver_types = true,
         .specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy),
         .root_source_url = args.root_source_url,
         .main_source_url = args.main_source_url,
@@ -16921,7 +16913,6 @@ fn checkFileWithBuildEnv(
         .verbose_cache = cache_config.verbose,
         .timings = timings,
         .resolution_config = resolution_config,
-        .release_checked_solver_types = true,
         .specialization_strategy = specialization_strategy,
         .source_dir_override = source_dir_override,
         .root_source_url = root_source_url,
@@ -18422,7 +18413,7 @@ fn generateDocs(
 /// the exact module, already checked when the compiler was built, that every
 /// program this compiler builds uses.
 fn generateBuiltinDocs(ctx: *CliCtx, base_output_dir: []const u8, with_lang_ref: bool) CliMainError!void {
-    var builtin_modules = try eval.BuiltinModules.init(ctx.gpa);
+    var builtin_modules = try eval.BuiltinModules.init(ctx.gpa, ctx.io.std_io);
     defer builtin_modules.deinit();
 
     const package_docs = package_docs: {

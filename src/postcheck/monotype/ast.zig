@@ -3312,9 +3312,9 @@ test "codec function evidence identity excludes per-use replay addresses" {
         .derivation = .encoder,
         .checked = .{ .recorded = .{
             .view = .{ .bytes = @as([32]u8, @splat(1)) },
-            .dispatcher_key = types.view().rootKey(replay_types[0]),
+            .dispatcher_key = try types.view().rootKey(replay_types[0]),
             .dispatcher_ty = replay_types[0],
-            .callable_key = types.view().rootKey(replay_types[1]),
+            .callable_key = try types.view().rootKey(replay_types[1]),
             .callable_ty = replay_types[1],
             .generated_codec_derivation = derivation_ids[0],
             .generated_codec_content = .{ .bytes = @as([32]u8, @splat(4)) },

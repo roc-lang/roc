@@ -1000,6 +1000,7 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
         1,
         .{
             .module_env_storage = .{ .static_builtin = builtin_module.env },
+            .io = @as(std.Io, undefined),
             .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
         },
     );
@@ -1025,6 +1026,7 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
         0,
         .{
             .module_env_storage = .{ .checked_source = checked_module.module_env },
+            .io = @as(std.Io, undefined),
             .imports = &publish_imports,
             .explicit_roots = &explicit_roots,
             .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
@@ -1797,7 +1799,7 @@ fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError!
         .module,
         data.module_env.common.source,
         &.{},
-        .{ .roots = .published_only },
+        .{ .io = @as(std.Io, undefined), .roots = .published_only },
     );
     defer eval.Inspected.cleanupParseAndCanonical(allocator, resources);
 

@@ -31,16 +31,16 @@ pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: 
         // are package-controlled, but a Wyhash collision just adds a chain
         // step, because a candidate is accepted solely by `comparer.equal`.
         var hash = std.hash.Wyhash.init(@backingInt(derivation.kind));
-        inline for (type_roles) |role| hash.update(&types.rootKey(@field(derivation, role)).bytes);
+        inline for (type_roles) |role| hash.update(&(try types.rootKey(@field(derivation, role))).bytes);
         hash.update(std.mem.asBytes(&derivation.calls.len));
         for (derivation.callsSlice(table)) |call| {
             std.hash.autoHash(&hash, call.method);
             std.hash.autoHash(&hash, call.method_role);
             std.hash.autoHash(&hash, std.meta.activeTag(call.resolution));
-            hash.update(&types.rootKey(call.dispatcher_ty).bytes);
-            hash.update(&types.rootKey(call.callable_ty).bytes);
+            hash.update(&(try types.rootKey(call.dispatcher_ty)).bytes);
+            hash.update(&(try types.rootKey(call.callable_ty)).bytes);
             std.hash.autoHash(&hash, call.subject_ty != null);
-            if (call.subject_ty) |subject| hash.update(&types.rootKey(subject).bytes);
+            if (call.subject_ty) |subject| hash.update(&(try types.rootKey(subject)).bytes);
         }
         const key = hash.final();
         var candidate = buckets.get(key);

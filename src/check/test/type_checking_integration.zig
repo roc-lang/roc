@@ -20,7 +20,7 @@ const MethodRegistryTestCheckedTypes = struct {
     store: Store = .{},
 
     const Store = struct {
-        pub fn payloadCount(_: Store) usize {
+        pub fn typeCount(_: Store) usize {
             @panic("the method registry test source declares no methods, so the registry never queries checked types");
         }
 

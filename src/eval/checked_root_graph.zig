@@ -551,7 +551,7 @@ fn typesOf(modules: []const *const checked.CheckedModuleArtifact, imports: []con
 
 fn expectSharedDependencies(source: []const u8, imports: []const @import("inspected.zig").ModuleSource) (@import("inspected.zig").Error || Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const allocator = std.testing.allocator;
-    var parsed = try @import("inspected.zig").parseProgram(allocator, .module, source, imports, .{ .roots = .published_only });
+    var parsed = try @import("inspected.zig").parseProgram(allocator, .module, source, imports, .{ .io = std.testing.io, .roots = .published_only });
     defer parsed.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 0), parsed.checker.problems.problems.items.len);
     var modules = std.ArrayList(*checked.CheckedModuleArtifact).empty;

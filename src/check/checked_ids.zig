@@ -14,8 +14,18 @@ pub const CheckedStatementId = enum(u32) { _ };
 pub const CheckedExhaustivenessSiteId = enum(u32) { _ };
 /// Public `CheckedStringLiteralId` declaration.
 pub const CheckedStringLiteralId = enum(u32) { _ };
-/// Public `CheckedTypeId` declaration.
-pub const CheckedTypeId = enum(u32) { _ };
+/// A checked type of one module: either a variable of the module's sealed
+/// solver store or an entry of its synthesized type store. Readers treat it
+/// as opaque and read it through the module's type view.
+pub const CheckedTypeId = enum(u32) {
+    _,
+
+    /// The id's position in a dense map: its bits rotated so the module's
+    /// source and synthesized ids interleave into one dense range.
+    pub fn denseIndex(self: CheckedTypeId) usize {
+        return std.math.rotl(u32, @backingInt(self), 1);
+    }
+};
 /// Public `CheckedTypeSchemeId` declaration.
 pub const CheckedTypeSchemeId = enum(u32) { _ };
 /// Public `PatternBinderId` declaration.

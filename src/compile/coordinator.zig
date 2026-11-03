@@ -685,14 +685,6 @@ pub const ModuleState = struct {
     /// earlier compilation demanded: how many requested roots were
     /// unevaluated when it was reopened.
     reopened_unevaluated: ?usize = null,
-    /// Whether this module's solver type store was released once checking
-    /// finished (`Coordinator.release_checked_solver_types`). Its checked cache
-    /// entry can then be published only from `staged_checked_env`.
-    solver_types_released: bool = false,
-    /// The `ModuleEnv` part of this module's checked cache entry, written while
-    /// its solver types were still live. Published with the rest of the entry
-    /// once evaluation completes, or discarded.
-    staged_checked_env: ?CacheManager.StagedPart = null,
     /// Cached AST from parsing (owned, null after canonicalization)
     cached_ast: ?*AST,
     /// Current compilation phase
@@ -2204,11 +2196,6 @@ pub const Coordinator = struct {
     enable_hosted_transform: bool,
     /// Whether to retain exact source byte states for watch-mode refreshes.
     track_watch_inputs: bool,
-    /// Whether every module's solver type store is released once checking
-    /// finishes. Only a command that reads no module's solver types after
-    /// checking sets this: compile-time evaluation, lowering, and evaluation
-    /// reports read checked artifacts, regions, and source, never solver types.
-    release_checked_solver_types: bool = false,
     /// Set by an embedder that abandons builds whose result it no longer
     /// needs (the LSP, when a newer edit arrives). The coordinator reads it
     /// between units of work and returns `error.Canceled` once it is set.
@@ -2364,7 +2351,6 @@ pub const Coordinator = struct {
         // Stop workers
         self.shutdown();
         self.inline_worker_allocs.deinit();
-        self.discardStagedCheckedParts();
 
         if (comptime trace_build) {
             std.debug.print("[COORD DEINIT] shutdown done, freeing packages...\n", .{});
@@ -2466,10 +2452,6 @@ pub const Coordinator = struct {
 
     pub fn setWatchInputTracking(self: *Coordinator, enabled: bool) void {
         self.track_watch_inputs = enabled;
-    }
-
-    pub fn setReleaseCheckedSolverTypes(self: *Coordinator, enabled: bool) void {
-        self.release_checked_solver_types = enabled;
     }
 
     /// Record which registered package is the app's platform. App-root type
@@ -2911,85 +2893,6 @@ pub const Coordinator = struct {
         return false;
     }
 
-    /// Release the solver type store of every module this compilation checked
-    /// from source. Every module has finished checking, so no importer reads
-    /// those stores again, and nothing after checking reads them: evaluation,
-    /// lowering, and evaluation reports work from checked artifacts, regions,
-    /// and source. A module's checked cache entry serializes its `ModuleEnv`,
-    /// solver types included, so that part of the entry is written first.
-    fn releaseCheckedSolverTypes(self: *Coordinator) Allocator.Error!void {
-        var pkg_it = self.packages.iterator();
-        while (pkg_it.next()) |entry| {
-            for (entry.value_ptr.*.modules.items) |*mod| {
-                // Only a module awaiting evaluation publishes a checked entry
-                // after this point.
-                if (mod.pending_evaluation == null) continue;
-                const artifact = mod.checkedArtifact() orelse continue;
-                if (artifact.pairing_arena != null) continue;
-                // A cached env is a view of its entry's bytes, and the builtin
-                // env is static; only an env checked from source owns its store.
-                const env = switch (artifact.module_env) {
-                    .checked_source => |module_env| module_env,
-                    .static_builtin, .cached_entry => continue,
-                };
-                // Evaluation may still add reports; final publication checks
-                // this condition again and discards any ineligible staged part.
-                if (mod.hasOnlyPreCheckReports()) self.stageCheckedModuleEnv(mod, artifact);
-                env.types.deinit();
-                env.types = try @import("types").Store.init(env.gpa);
-                mod.solver_types_released = true;
-            }
-        }
-    }
-
-    /// Write `mod`'s `ModuleEnv` cache part to a staging file.
-    fn stageCheckedModuleEnv(self: *Coordinator, mod: *ModuleState, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) void {
-        const manager = self.cache_manager orelse return;
-        if (!manager.config.enabled) return;
-        const entries_dir = manager.config.getCheckedArtifactCacheDir(manager.allocator) catch {
-            manager.recordStoreFailure();
-            return;
-        };
-        defer manager.allocator.free(entries_dir);
-        var arena = base.SingleThreadArena.init(manager.allocator);
-        defer arena.deinit();
-        var env_writer = CompactWriter.init();
-        serializeForCache(ModuleEnv, artifact.moduleEnvConst(), &env_writer, arena.allocator()) catch {
-            manager.recordStoreFailure();
-            return;
-        };
-        const Part = struct {
-            env: *const CompactWriter,
-
-            fn write(raw: *const anyopaque, destination: *std.Io.Writer) std.Io.Writer.Error!void {
-                const part: *const @This() = @ptrCast(@alignCast(raw));
-                try part.env.writeTo(destination);
-            }
-        };
-        const part = Part{ .env = &env_writer };
-        mod.staged_checked_env = manager.stageCheckedPart(
-            artifact.key.bytes,
-            .{ .context = &part, .write = Part.write },
-            env_writer.total_bytes,
-            entries_dir,
-            artifact.moduleEnvConst().module_name,
-        );
-    }
-
-    /// Delete the staged cache parts of modules whose entries were never
-    /// published, such as when compilation stopped before evaluation finished.
-    fn discardStagedCheckedParts(self: *Coordinator) void {
-        const manager = self.cache_manager orelse return;
-        var pkg_it = self.packages.iterator();
-        while (pkg_it.next()) |entry| {
-            for (entry.value_ptr.*.modules.items) |*mod| {
-                const part = mod.staged_checked_env orelse continue;
-                mod.staged_checked_env = null;
-                manager.discardStagedPart(part);
-            }
-        }
-    }
-
     /// Finish the immutable platform's independent compile-time work, then
     /// compose its checked metadata with the app's recorded requirement solutions.
     /// App evaluation and the pairing's dependent roots share runtime lowering.
@@ -3000,7 +2903,6 @@ pub const Coordinator = struct {
         defer self.program_finalization_ns += readStageTimer(self.roc_ctx.std_io, &finalization_timer);
         if (!self.frontend_complete) coordinatorInvariant("checked program finalization preceded frontend completion", .{});
         try self.checkCancelRequest();
-        if (self.release_checked_solver_types) try self.releaseCheckedSolverTypes();
         self.checked_program = mode == .executable_artifacts and self.appRootChecked();
         if (self.checked_program and self.findRootModule(.platform) != null) {
             const platform_root = self.findRootModule(.platform).?;
@@ -4014,10 +3916,9 @@ pub const Coordinator = struct {
         coordinator: *Coordinator,
         mod: *ModuleState,
         artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        staged_env: ?CacheManager.StagedPart,
         fn run(context: *anyopaque, _: post_check_executor.Worker) ?*anyopaque {
             const self: *PendingStore = @ptrCast(@alignCast(context));
-            self.coordinator.storeCheckedModuleInCache(self.mod, self.artifact, self.staged_env);
+            self.coordinator.storeCheckedModuleInCache(self.mod, self.artifact);
             return null;
         }
     };
@@ -4078,20 +3979,13 @@ pub const Coordinator = struct {
         if (mod.hasOnlyPreCheckReports() and evaluated_more) {
             if (artifact.pairing_arena == null) {
                 if (self.cacheEnabled()) {
-                    const staged_env = mod.staged_checked_env;
-                    mod.staged_checked_env = null;
                     try stores.append(self.gpa, .{
                         .coordinator = self,
                         .mod = mod,
                         .artifact = artifact,
-                        .staged_env = staged_env,
                     });
                 }
             } else self.storePlatformPairingInCache(artifact);
-        }
-        if (mod.staged_checked_env) |part| {
-            mod.staged_checked_env = null;
-            if (self.cache_manager) |manager| manager.discardStagedPart(part);
         }
         state.deinit();
         mod.pending_evaluation = null;
@@ -4792,16 +4686,11 @@ pub const Coordinator = struct {
         return header.install(platform, arena);
     }
 
-    /// Write `artifact`'s checked entry. `staged_env` is the module's staged
-    /// source environment, taken from the module by the caller; this reads
-    /// nothing else of the module's mutable state, so it runs on any thread.
-    fn storeCheckedModuleInCache(self: *Coordinator, mod: *const ModuleState, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, staged_env: ?CacheManager.StagedPart) void {
+    /// Write `artifact`'s checked entry. This reads none of the module's
+    /// mutable state, so it runs on any thread.
+    fn storeCheckedModuleInCache(self: *Coordinator, mod: *const ModuleState, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) void {
         const manager = self.cache_manager orelse return;
         if (!manager.config.enabled) return;
-        defer if (staged_env) |part| manager.discardStagedPart(part);
-        // A released solver type store survives only in its staged part; a
-        // staging failure was already counted when it happened.
-        if (mod.solver_types_released and staged_env == null) return;
 
         const entries_dir = self.cache_entry_dirs.checked orelse {
             manager.recordStoreFailure();
@@ -4816,14 +4705,9 @@ pub const Coordinator = struct {
         const arena_alloc = arena.allocator();
 
         var env_writer = CompactWriter.init();
-        const env_bytes: ?[]const u8 = if (staged_env) |part|
-            manager.readStagedPart(part, arena_alloc) orelse return
-        else bytes: {
-            serializeForCache(ModuleEnv, artifact.moduleEnvConst(), &env_writer, arena_alloc) catch {
-                manager.recordStoreFailure();
-                return;
-            };
-            break :bytes null;
+        serializeForCache(ModuleEnv, artifact.moduleEnvConst(), &env_writer, arena_alloc) catch {
+            manager.recordStoreFailure();
+            return;
         };
 
         var artifact_writer = CompactWriter.init();
@@ -4832,7 +4716,7 @@ pub const Coordinator = struct {
             return;
         };
 
-        const env_len = if (env_bytes) |bytes| bytes.len else env_writer.total_bytes;
+        const env_len = env_writer.total_bytes;
         const artifact_len = artifact_writer.total_bytes;
 
         var header: [checked_module_cache_header_len]u8 = undefined;
@@ -4846,7 +4730,6 @@ pub const Coordinator = struct {
         );
         const Entry = struct {
             header: []const u8,
-            env_bytes: ?[]const u8,
             env: *const CompactWriter,
             env_padding: []const u8,
             artifact: *const CompactWriter,
@@ -4854,13 +4737,13 @@ pub const Coordinator = struct {
             fn write(raw: *const anyopaque, destination: *std.Io.Writer) std.Io.Writer.Error!void {
                 const entry: *const @This() = @ptrCast(@alignCast(raw));
                 try destination.writeAll(entry.header);
-                if (entry.env_bytes) |bytes| try destination.writeAll(bytes) else try entry.env.writeTo(destination);
+                try entry.env.writeTo(destination);
                 try destination.writeAll(entry.env_padding);
                 try entry.artifact.writeTo(destination);
             }
         };
         const env_padding = checked_module_cache_zero_padding[0..checkedModuleCacheEnvPadding(env_len)];
-        const entry = Entry{ .header = &header, .env_bytes = env_bytes, .env = &env_writer, .env_padding = env_padding, .artifact = &artifact_writer };
+        const entry = Entry{ .header = &header, .env = &env_writer, .env_padding = env_padding, .artifact = &artifact_writer };
         manager.storeStream(
             artifact.key.bytes,
             .{ .context = &entry, .write = Entry.write },
@@ -5022,6 +4905,12 @@ pub const Coordinator = struct {
         };
         const semantic = &(mod.semantic orelse
             coordinatorInvariant("checked cache install for module '{s}' without semantic state", .{mod.name}));
+        const sealed_keys = check.CheckedArtifact.SealedTypeKeys.create(module_alloc, self.roc_ctx.std_io, cached_env) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
+        var sealed_keys_owned = true;
+        defer if (sealed_keys_owned) sealed_keys.destroy();
 
         // Transform E: the artifact's sub-stores alias `artifact_buffer` and the
         // freshly relocated env is injected as its storage. Cross-artifact
@@ -5045,6 +4934,8 @@ pub const Coordinator = struct {
                 .source = source,
             } },
         );
+        artifact_ptr.checked_types.attachSealedTypes(cached_env, sealed_keys);
+        sealed_keys_owned = false;
         entry_owned = false;
         source_owned = false;
         cached_env_owned = false;
@@ -7418,6 +7309,7 @@ pub const Coordinator = struct {
             task.explicit_roots,
             task.validation,
             task.source_pin_validation,
+            self.roc_ctx.std_io,
             ctfe_options,
             .{ .explicit = task.deferred_imports },
             task.missing_public_types,
@@ -7652,7 +7544,7 @@ fn sharedBuiltinModules() eval.BuiltinModules.InitError!*eval.BuiltinModules {
     defer shared_test_builtins_mutex.unlock(std.testing.io);
 
     if (shared_test_builtins == null) {
-        shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator);
+        shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator, std.testing.io);
     }
 
     return &shared_test_builtins.?;

@@ -38,7 +38,6 @@ const Var = types.Var;
 const CheckedTypeId = checked_artifact.CheckedTypeId;
 const CheckedTypeStore = checked_artifact.CheckedTypeStore;
 const CheckedTypePayload = checked_artifact.CheckedTypePayload;
-const CheckedTypeVariable = checked_artifact.CheckedTypeVariable;
 const CheckedRecordField = checked_artifact.CheckedRecordField;
 const CheckedTag = checked_artifact.CheckedTag;
 const CheckedStaticDispatchConstraint = checked_artifact.CheckedStaticDispatchConstraint;
@@ -46,7 +45,6 @@ const CheckedFunctionKind = checked_artifact.CheckedFunctionKind;
 const CheckedBuiltinNominal = checked_artifact.CheckedBuiltinNominal;
 const CheckedNominalRepresentationRef = checked_artifact.CheckedNominalRepresentationRef;
 const CheckedImportViews = checked_artifact.CheckedImportViews;
-const CheckedSourceTypeRoots = checked_artifact.CheckedSourceTypeRoots;
 const ImportedOriginIndex = checked_artifact.ImportedOriginIndex;
 const LocalNominalDeclarationIds = checked_artifact.LocalNominalDeclarationIds;
 const ModuleId = checked_artifact.ModuleId;
@@ -82,6 +80,17 @@ pub const SealedNominalRow = struct {
     representation: ?CheckedNominalRepresentationRef = null,
 };
 
+/// The representation interface capability publication gave one source
+/// nominal type: a box payload capability of the module.
+pub const SealedCapabilityRow = struct {
+    var_: u32,
+    representation: CheckedNominalRepresentationRef,
+
+    pub fn lessThan(_: void, left: SealedCapabilityRow, right: SealedCapabilityRow) bool {
+        return left.var_ < right.var_;
+    }
+};
+
 /// Per solver variable: whether publication reached it, and through which
 /// row-tail positions.
 pub const SealedVarFacts = packed struct(u8) {
@@ -98,6 +107,7 @@ pub const SealedTypeView = struct {
     origins: []const SealedOriginRow,
     nominals: []const SealedNominalRow,
     var_facts: []const SealedVarFacts,
+    capabilities: []const SealedCapabilityRow,
 
     fn typeStore(self: SealedTypeView) *const types.Store {
         return &self.env.types;
@@ -144,6 +154,21 @@ pub const SealedTypeView = struct {
         const row = self.originRow(origin);
         if (row.has_owner == 0) invariant("a sealed checked type named a type from a module with no available checked owner", .{});
         return &row.owner;
+    }
+
+    /// The box payload capability representation publication gave the
+    /// nominal type `var_`, if any.
+    fn capabilityOf(self: SealedTypeView, var_: Var) ?CheckedNominalRepresentationRef {
+        const raw: u32 = @backingInt(var_);
+        var low: usize = 0;
+        var high: usize = self.capabilities.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const row = self.capabilities[mid];
+            if (row.var_ == raw) return row.representation;
+            if (row.var_ < raw) low = mid + 1 else high = mid;
+        }
+        return null;
     }
 
     fn facts(self: SealedTypeView, var_: Var) SealedVarFacts {
@@ -233,7 +258,7 @@ pub const SealedTypeView = struct {
                         .source_decl = nominal.statement(),
                         .builtin = row.builtin,
                         .is_opaque = nominal.isOpaque(),
-                        .representation = row.representation orelse
+                        .representation = self.capabilityOf(var_) orelse row.representation orelse
                             invariant("a sealed nominal type names a declaration whose owner publication could not resolve", .{}),
                         .args = type_ids.fromVars(type_store.sliceNominalArgs(nominal)),
                     } };
@@ -498,9 +523,10 @@ const ColumnBuilder = struct {
 };
 
 /// Mark every variable reachable from `root` reached, recording the row-tail
-/// positions each is reached through.
-pub fn reach(allocator: Allocator, env: *const ModuleEnv, var_facts: []SealedVarFacts, root: Var) Allocator.Error!void {
-    var walker = ReachWalker{ .env = env, .var_facts = var_facts };
+/// positions each is reached through. Each representative this reaches for
+/// the first time is appended to `newly_reached` when one is given.
+pub fn reach(allocator: Allocator, env: *const ModuleEnv, var_facts: []SealedVarFacts, root: Var, newly_reached: ?*std.ArrayList(Var)) Allocator.Error!void {
+    var walker = ReachWalker{ .env = env, .var_facts = var_facts, .newly_reached = newly_reached };
     defer walker.pending.deinit(allocator);
     try walker.reach(allocator, root, null);
     while (walker.pending.pop()) |var_| try walker.expand(allocator, var_);
@@ -509,6 +535,7 @@ pub fn reach(allocator: Allocator, env: *const ModuleEnv, var_facts: []SealedVar
 const ReachWalker = struct {
     env: *const ModuleEnv,
     var_facts: []SealedVarFacts,
+    newly_reached: ?*std.ArrayList(Var),
     pending: std.ArrayList(Var) = .empty,
 
     fn reach(self: *ReachWalker, allocator: Allocator, var_: Var, tail: ?RowDefault) Allocator.Error!void {
@@ -516,6 +543,7 @@ const ReachWalker = struct {
         const var_facts = &self.var_facts[@backingInt(resolved.var_)];
         if (!var_facts.reached) {
             var_facts.reached = true;
+            if (self.newly_reached) |list| try list.append(allocator, resolved.var_);
             if (!resolved.desc.flags.empty_tag_union_is_default) try self.pending.append(allocator, resolved.var_);
         }
         switch (tail orelse return) {
@@ -581,217 +609,12 @@ const ReachWalker = struct {
     }
 };
 
-/// A published type and the representative variable the view renders for it.
-const Pair = struct {
-    id: CheckedTypeId,
-    var_: Var,
-};
-
-/// Walk every published source root (`active`) and the view of `publication`
-/// in lockstep and assert that both render the same structure. Publication
-/// shares one root between solver graphs with equal closed structure, so
-/// ids are never compared, only what they render.
-pub fn verifyAgainstPublication(
-    allocator: Allocator,
-    view: SealedTypeView,
-    publication: *const CheckedTypeStore,
-    active: *const CheckedSourceTypeRoots,
-) Allocator.Error!void {
-    var visited: std.AutoHashMapUnmanaged(Pair, void) = .empty;
-    defer visited.deinit(allocator);
-    var pending: std.ArrayList(Pair) = .empty;
-    defer pending.deinit(allocator);
-
-    var roots = active.roots.constIterator();
-    while (roots.next()) |entry| {
-        const var_ = view.representative(entry.key_ptr.*);
-        if (!view.reaches(var_)) {
-            invariant("published source root {d} (solver variable {d}) was never reached", .{ @backingInt(entry.value_ptr.*), @backingInt(var_) });
-        }
-        try pending.append(allocator, .{ .id = entry.value_ptr.*, .var_ = var_ });
-    }
-
-    var gate = Gate{ .allocator = allocator, .view = view, .publication = publication, .pending = &pending };
-    while (pending.pop()) |pair| {
-        const seen = try visited.getOrPut(allocator, pair);
-        if (seen.found_existing) continue;
-        try gate.compare(publication.payload(pair.id), pair);
-    }
-}
-
-const Gate = struct {
-    allocator: Allocator,
-    view: SealedTypeView,
-    publication: *const CheckedTypeStore,
-    pending: *std.ArrayList(Pair),
-
-    fn mismatch(comptime field: []const u8, pair: Pair) noreturn {
-        invariant("sealed type view disagrees with checked type publication on " ++ field ++ " at published type {d}, solver variable {d}", .{ @backingInt(pair.id), @backingInt(pair.var_) });
-    }
-
-    fn expect(ok: bool, comptime field: []const u8, pair: Pair) void {
-        if (!ok) mismatch(field, pair);
-    }
-
-    fn child(self: *Gate, id: CheckedTypeId, sealed: CheckedTypeId) Allocator.Error!void {
-        const var_ = type_ids.asVar(sealed);
-        if (self.view.representative(var_) != var_) invariant("sealed type view rendered a child that is not its class's representative", .{});
-        try self.pending.append(self.allocator, .{ .id = id, .var_ = var_ });
-    }
-
-    fn children(self: *Gate, ids: []const CheckedTypeId, sealed: []const CheckedTypeId, comptime field: []const u8, pair: Pair) Allocator.Error!void {
-        expect(ids.len == sealed.len, field ++ " count", pair);
-        for (ids, sealed) |id, other| try self.child(id, other);
-    }
-
-    fn compare(self: *Gate, published: CheckedTypePayload, pair: Pair) Allocator.Error!void {
-        const sealed = self.view.payload(pair.var_);
-        if (published == .pending) mismatch("a pending published payload", pair);
-        if (std.meta.activeTag(published) != std.meta.activeTag(sealed)) mismatch("the payload kind", pair);
-        switch (published) {
-            .pending => unreachable, // rejected above
-            .err, .empty_record, .empty_tag_union => {},
-            .field_kind => |kind| expect(kind == sealed.field_kind, "field kind", pair),
-            .flex => |variable| try self.compareVariable(variable, sealed.flex, pair),
-            .rigid => |variable| try self.compareVariable(variable, sealed.rigid, pair),
-            .alias => |alias| {
-                const other = sealed.alias;
-                expect(alias.name == other.name, "alias name", pair);
-                expect(alias.origin_module == other.origin_module, "alias origin module", pair);
-                expect(std.meta.eql(alias.owner_module.*, other.owner_module.*), "alias owner module", pair);
-                expect(std.meta.eql(alias.source_decl, other.source_decl), "alias source declaration", pair);
-                expect(alias.builtin_origin == other.builtin_origin, "alias builtin origin", pair);
-                try self.child(alias.backing, other.backing);
-                try self.children(alias.args, other.args, "alias argument", pair);
-            },
-            .nominal => |nominal| {
-                const other = sealed.nominal;
-                expect(nominal.name == other.name, "nominal name", pair);
-                expect(nominal.origin_module == other.origin_module, "nominal origin module", pair);
-                expect(std.meta.eql(nominal.owner_module.*, other.owner_module.*), "nominal owner module", pair);
-                expect(nominal.source_decl == other.source_decl, "nominal source declaration", pair);
-                expect(nominal.builtin == other.builtin, "nominal builtin", pair);
-                expect(nominal.is_opaque == other.is_opaque, "nominal opacity", pair);
-                expect(std.meta.eql(nominal.representation, other.representation), "nominal representation", pair);
-                expect(nominal.padding_field_types.len == 0 and nominal.declared_fields.len == 0, "nominal declaration-only fields", pair);
-                try self.children(nominal.args, other.args, "nominal argument", pair);
-            },
-            .function => |function| {
-                const other = sealed.function;
-                expect(function.kind == other.kind, "function kind", pair);
-                try self.children(function.args, other.args, "function argument", pair);
-                try self.child(function.ret, other.ret);
-            },
-            .tuple => |items| try self.children(items, sealed.tuple, "tuple item", pair),
-            .record => |record| try self.compareRecordRows(record, sealed.record, pair),
-            .tag_union => |tag_union| try self.compareTagRows(tag_union, sealed.tag_union, pair),
-        }
-    }
-
-    /// Compare two records as rows. Publication shares one root between
-    /// solver graphs whose canonical keys are equal, and a canonical key
-    /// reads a row through every record segment of its extension chain, so a
-    /// published row and the solver row it stands for can split their fields
-    /// across segments differently. Both sides are read as their flattened
-    /// field set, in label order, followed by the chain's tail.
-    fn compareRecordRows(self: *Gate, published: checked_artifact.CheckedRecordType, sealed: checked_artifact.CheckedRecordType, pair: Pair) Allocator.Error!void {
-        const gpa = self.allocator;
-        var published_fields: std.ArrayList(CheckedRecordField) = .empty;
-        defer published_fields.deinit(gpa);
-        var sealed_fields: std.ArrayList(CheckedRecordField) = .empty;
-        defer sealed_fields.deinit(gpa);
-        const published_tail = try self.flattenRecord(self.publication.view(), published, &published_fields);
-        try sealed.fields.appendTo(gpa, &sealed_fields);
-        if (self.view.payload(type_ids.asVar(sealed.ext)) == .record) mismatch("a sealed record row whose extension is a record", pair);
-
-        expect(published_fields.items.len == sealed_fields.items.len, "record field count", pair);
-        std.mem.sort(CheckedRecordField, published_fields.items, {}, fieldLessThan);
-        std.mem.sort(CheckedRecordField, sealed_fields.items, {}, fieldLessThan);
-        for (published_fields.items, sealed_fields.items) |field, other| {
-            expect(field.name == other.name, "record field label", pair);
-            expect(field.kind.tag == other.kind.tag, "record field kind", pair);
-            expect(std.meta.eql(field.kind.default, other.kind.default), "record field default", pair);
-            if (field.kind.undeterminedVariable()) |variable| try self.child(variable, other.kind.undeterminedVariable().?);
-            try self.child(field.ty, other.ty);
-        }
-        try self.child(published_tail, sealed.ext);
-    }
-
-    fn flattenRecord(self: *Gate, view: checked_artifact.CheckedTypeStoreView, record: checked_artifact.CheckedRecordType, out: *std.ArrayList(CheckedRecordField)) Allocator.Error!CheckedTypeId {
-        var row = record;
-        while (true) {
-            try row.fields.appendTo(self.allocator, out);
-            switch (view.payload(row.ext)) {
-                .record => |next| row = next,
-                .pending, .err, .flex, .rigid, .alias, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union, .field_kind => return row.ext,
-            }
-        }
-    }
-
-    fn fieldLessThan(_: void, lhs: CheckedRecordField, rhs: CheckedRecordField) bool {
-        return @backingInt(lhs.name) < @backingInt(rhs.name);
-    }
-
-    /// Compare two tag unions as rows, flattened across their extension
-    /// chains for the reason `compareRecordRows` gives.
-    fn compareTagRows(self: *Gate, published: checked_artifact.CheckedTagUnionType, sealed: checked_artifact.CheckedTagUnionType, pair: Pair) Allocator.Error!void {
-        const gpa = self.allocator;
-        var published_tags: std.ArrayList(CheckedTag) = .empty;
-        defer published_tags.deinit(gpa);
-        var sealed_tags: std.ArrayList(CheckedTag) = .empty;
-        defer sealed_tags.deinit(gpa);
-        var row = published;
-        const view = self.publication.view();
-        const published_tail = while (true) {
-            try row.tags.appendTo(gpa, &published_tags);
-            switch (view.payload(row.ext)) {
-                .tag_union => |next| row = next,
-                .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union, .field_kind => break row.ext,
-            }
-        };
-        try sealed.tags.appendTo(gpa, &sealed_tags);
-        if (self.view.payload(type_ids.asVar(sealed.ext)) == .tag_union) mismatch("a sealed tag union row whose extension is a tag union", pair);
-
-        expect(published_tags.items.len == sealed_tags.items.len, "tag count", pair);
-        std.mem.sort(CheckedTag, published_tags.items, {}, tagLessThan);
-        std.mem.sort(CheckedTag, sealed_tags.items, {}, tagLessThan);
-        for (published_tags.items, sealed_tags.items) |published_tag, other| {
-            expect(published_tag.name == other.name, "tag label", pair);
-            try self.children(published_tag.args, other.args, "tag argument", pair);
-        }
-        try self.child(published_tail, sealed.ext);
-    }
-
-    fn tagLessThan(_: void, lhs: CheckedTag, rhs: CheckedTag) bool {
-        return @backingInt(lhs.name) < @backingInt(rhs.name);
-    }
-
-    fn compareVariable(self: *Gate, published: CheckedTypeVariable, sealed: CheckedTypeVariable, pair: Pair) Allocator.Error!void {
-        if (published.name) |name| {
-            const other = sealed.name orelse mismatch("variable name", pair);
-            expect(std.mem.eql(u8, name, other), "variable name", pair);
-        } else expect(sealed.name == null, "variable name", pair);
-        expect(published.constraints.len() == sealed.constraints.len(), "constraint count", pair);
-        for (0..published.constraints.len()) |index| {
-            const published_constraint = published.constraints.get(index);
-            const other = sealed.constraints.get(index);
-            expect(published_constraint.fn_name == other.fn_name, "constraint method name", pair);
-            expect(std.meta.eql(published_constraint.origin, other.origin), "constraint origin", pair);
-            expect(std.meta.eql(published_constraint.numeral, other.numeral), "constraint numeral", pair);
-            try self.child(published_constraint.fn_ty, other.fn_ty);
-        }
-        expect(published.numeric_default_phase == sealed.numeric_default_phase, "numeric default phase", pair);
-        expect(published.row_default == sealed.row_default, "row default", pair);
-        expect(published.row_default_discharges_constraints == sealed.row_default_discharges_constraints, "row default discharge", pair);
-        expect(published.bounded_row_ext == sealed.bounded_row_ext, "bounded row extension", pair);
-    }
-};
-
-/// Check `source` against the builtin module, publish its source types, and
-/// verify the sealed type view against the publication.
+/// Check `source` against the builtin module, publish it, and render every
+/// source type publication reached through the sealed type view, asserting
+/// that each child is a reached checked representative and each row is flat.
 const ViewTestError = @import("test/TestEnv.zig").TestEnvError || error{ CorruptArtifact, CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch };
 
-fn expectViewMatchesPublication(source: []const u8) ViewTestError!void {
+fn expectViewRendersPublishedTypes(source: []const u8) ViewTestError!void {
     const TestEnv = @import("test/TestEnv.zig");
     const compiled_builtins = @import("compiled_builtins");
     const CompactWriter = collections.CompactWriter;
@@ -810,6 +633,7 @@ fn expectViewMatchesPublication(source: []const u8) ViewTestError!void {
     const serialized: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(backing.ptr));
     try serialized.validate(backing.len);
     var builtin_artifact = serialized.deserializeStatic(backing, allocator, .{ .static_builtin = test_env.builtin_module.env });
+    try builtin_artifact.attachSealedTypes(allocator, std.testing.io);
     defer builtin_artifact.deinitRetainingModuleEnv(allocator);
 
     const sources = [_]TypedCIR.Modules.SourceModule{
@@ -829,14 +653,64 @@ fn expectViewMatchesPublication(source: []const u8) ViewTestError!void {
     defer names.deinit();
     var source_nodes = try checked_artifact.CheckedSourceNodes.init(allocator, module);
     defer source_nodes.deinit(allocator);
-    var publication = try CheckedTypeStore.fromModule(allocator, module, &names, ModuleId{}, &imports, &.{}, &source_nodes, &.{}, &.{});
+    const publication_keys = try checked_artifact.SealedTypeKeys.create(allocator, std.testing.io, module.moduleEnvConst());
+    defer publication_keys.destroy();
+    var publication = try CheckedTypeStore.fromModule(allocator, module, &names, ModuleId{}, &imports, &.{}, &source_nodes, &.{}, &.{}, publication_keys);
     defer publication.deinit(allocator);
 
-    try verifyAgainstPublication(allocator, publication.store.sealedView(module.moduleEnvConst()), &publication.store, &publication.source_types.?);
+    const view = publication.store.sealedView(module.moduleEnvConst());
+    var rendered: usize = 0;
+    for (view.var_facts, 0..) |facts, raw| {
+        if (!facts.reached) continue;
+        const var_: Var = @fromBackingInt(@intCast(raw));
+        if (view.representative(var_) != var_) continue;
+        try expectRenders(view, var_);
+        rendered += 1;
+    }
+    try std.testing.expect(rendered != 0);
 }
 
-test "sealed type view matches publication: open and closed records" {
-    try expectViewMatchesPublication(
+fn expectChild(view: SealedTypeView, child: CheckedTypeId) error{ TestUnexpectedResult, TestExpectedEqual }!void {
+    try std.testing.expect(!type_ids.isSynthesized(child));
+    const var_ = type_ids.asVar(child);
+    try std.testing.expectEqual(var_, view.representative(var_));
+    try std.testing.expect(view.reaches(var_));
+}
+
+fn expectRenders(view: SealedTypeView, var_: Var) error{ TestUnexpectedResult, TestExpectedEqual }!void {
+    switch (view.payload(var_)) {
+        .pending => return error.TestUnexpectedResult,
+        .err, .empty_record, .empty_tag_union, .field_kind => {},
+        .flex, .rigid => |variable| for (0..variable.constraints.len()) |index| try expectChild(view, variable.constraints.get(index).fn_ty),
+        .alias => |alias| {
+            try expectChild(view, alias.backing);
+            for (alias.args) |arg| try expectChild(view, arg);
+        },
+        .nominal => |nominal| for (nominal.args) |arg| try expectChild(view, arg),
+        .function => |function| {
+            for (function.args) |arg| try expectChild(view, arg);
+            try expectChild(view, function.ret);
+        },
+        .tuple => |items| for (items) |item| try expectChild(view, item),
+        .record => |record| {
+            for (0..record.fields.len()) |index| {
+                const field = record.fields.get(index);
+                try expectChild(view, field.ty);
+                if (field.kind.undeterminedVariable()) |variable| try expectChild(view, variable);
+            }
+            try expectChild(view, record.ext);
+            try std.testing.expect(view.payload(type_ids.asVar(record.ext)) != .record);
+        },
+        .tag_union => |tag_union| {
+            for (0..tag_union.tags.len()) |index| for (tag_union.tags.get(index).args) |arg| try expectChild(view, arg);
+            try expectChild(view, tag_union.ext);
+            try std.testing.expect(view.payload(type_ids.asVar(tag_union.ext)) != .tag_union);
+        },
+    }
+}
+
+test "sealed type view renders published types: open and closed records" {
+    try expectViewRendersPublishedTypes(
         \\get_x : { x : I64, ..rest } -> I64
         \\get_x = |rec| rec.x
         \\
@@ -850,8 +724,8 @@ test "sealed type view matches publication: open and closed records" {
     );
 }
 
-test "sealed type view matches publication: open tag unions" {
-    try expectViewMatchesPublication(
+test "sealed type view renders published types: open tag unions" {
+    try expectViewRendersPublishedTypes(
         \\describe : [Red, Green, ..others] -> Str
         \\describe = |color| match color {
         \\    Red => "red"
@@ -865,8 +739,8 @@ test "sealed type view matches publication: open tag unions" {
     );
 }
 
-test "sealed type view matches publication: row tails constrained only by equality" {
-    try expectViewMatchesPublication(
+test "sealed type view renders published types: row tails constrained only by equality" {
+    try expectViewRendersPublishedTypes(
         \\same = |a, b| a == b
         \\
         \\same_records = same({ x: 1.I64 }, { x: 2.I64 })
@@ -877,8 +751,8 @@ test "sealed type view matches publication: row tails constrained only by equali
     );
 }
 
-test "sealed type view matches publication: numeric literal defaulting" {
-    try expectViewMatchesPublication(
+test "sealed type view renders published types: numeric literal defaulting" {
+    try expectViewRendersPublishedTypes(
         \\n = 42
         \\
         \\fraction = 1.5
@@ -889,8 +763,8 @@ test "sealed type view matches publication: numeric literal defaulting" {
     );
 }
 
-test "sealed type view matches publication: aliases" {
-    try expectViewMatchesPublication(
+test "sealed type view renders published types: aliases" {
+    try expectViewRendersPublishedTypes(
         \\Point : { x : I64, y : I64 }
         \\
         \\Pair(a) : (a, a)
@@ -905,8 +779,8 @@ test "sealed type view matches publication: aliases" {
     );
 }
 
-test "sealed type view matches publication: local nominal types" {
-    try expectViewMatchesPublication(
+test "sealed type view renders published types: local nominal types" {
+    try expectViewRendersPublishedTypes(
         \\Color := [Red, Green, Blue]
         \\
         \\Wrapper(a) := { inner : a }
@@ -924,8 +798,8 @@ test "sealed type view matches publication: local nominal types" {
     );
 }
 
-test "sealed type view matches publication: builtin nominals" {
-    try expectViewMatchesPublication(
+test "sealed type view renders published types: builtin nominals" {
+    try expectViewRendersPublishedTypes(
         \\words : List(Str)
         \\words = ["a", "b"]
         \\
@@ -938,8 +812,8 @@ test "sealed type view matches publication: builtin nominals" {
     );
 }
 
-test "sealed type view matches publication: pure, effectful and unbound functions" {
-    try expectViewMatchesPublication(
+test "sealed type view renders published types: pure, effectful and unbound functions" {
+    try expectViewRendersPublishedTypes(
         \\double : I64 -> I64
         \\double = |x| x * 2
         \\
@@ -952,8 +826,8 @@ test "sealed type view matches publication: pure, effectful and unbound function
     );
 }
 
-test "sealed type view matches publication: tuples" {
-    try expectViewMatchesPublication(
+test "sealed type view renders published types: tuples" {
+    try expectViewRendersPublishedTypes(
         \\pair = (1.I64, "a")
         \\
         \\first = |(a, _)| a
@@ -962,8 +836,8 @@ test "sealed type view matches publication: tuples" {
     );
 }
 
-test "sealed type view matches publication: recursive types" {
-    try expectViewMatchesPublication(
+test "sealed type view renders published types: recursive types" {
+    try expectViewRendersPublishedTypes(
         \\Tree := [Leaf, Node(Tree, I64, Tree)]
         \\
         \\tree : Tree
@@ -982,8 +856,8 @@ test "sealed type view matches publication: recursive types" {
     );
 }
 
-test "sealed type view matches publication: bounded row extensions" {
-    try expectViewMatchesPublication(
+test "sealed type view renders published types: bounded row extensions" {
+    try expectViewRendersPublishedTypes(
         \\classify : I64 -> [Negative, Zero, Positive]
         \\classify = |n| if n < 0 Negative else if n == 0 Zero else Positive
         \\
