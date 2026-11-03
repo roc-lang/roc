@@ -18320,6 +18320,16 @@ const DraftCodecLexicalContext = struct {
     view: [32]u8,
     binders: []const LexicalBinderEntry,
     local_procs: []const DraftCodecLocalProcContext,
+    /// The restored-function scope of a body that restores a stored function.
+    /// A deferred boundary resolves local procedures that body has not used
+    /// yet against it, exactly as the body itself would.
+    restored: ?RestoredLexicalScope = null,
+};
+
+const RestoredLexicalScope = struct {
+    /// Its entries live in the builder's evidence arena.
+    scope: RestoredLocalProcScope,
+    const_fn: ?RestoredConstFn,
 };
 
 const CodecKind = enum {
@@ -25649,8 +25659,17 @@ const BodyContext = struct {
         const binders = try self.captureLexicalBinderEntries();
         errdefer self.allocator.free(binders);
         const local_procs = try self.allocator.alloc(DraftCodecLocalProcContext, self.local_proc_contexts.count());
+        errdefer self.allocator.free(local_procs);
         self.fillLocalProcContexts(local_procs);
-        return .{ .view = self.view.key.bytes, .binders = binders, .local_procs = local_procs };
+        const restored: ?RestoredLexicalScope = if (self.restored_local_proc_scope) |scope| .{
+            .scope = .{
+                .source_context_digest = scope.source_context_digest,
+                .base_key = scope.base_key,
+                .entries = try self.builder.evidence_arena.allocator().dupe(LexicalBinderEntry, scope.entries),
+            },
+            .const_fn = self.restored_const_fn,
+        } else null;
+        return .{ .view = self.view.key.bytes, .binders = binders, .local_procs = local_procs, .restored = restored };
     }
 
     /// Every visible local procedure context, in declaration order.
@@ -25722,6 +25741,11 @@ const BodyContext = struct {
                 }, @fromBackingInt(@intCast(entry.local))),
                 else => Common.invariant("deferred lexical context had an unknown binder kind"),
             };
+        }
+        if (lexical.restored) |restored| {
+            self.restored_local_proc_scope = restored.scope;
+            self.restored_const_fn = restored.const_fn;
+            self.restored_declaring_evidence = null;
         }
         for (lexical.local_procs) |proc| {
             const context = self.draft.local_proc_contexts.items[@backingInt(proc.context)];
