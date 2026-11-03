@@ -5111,12 +5111,27 @@ as long as the module. A type id names either a solver variable of a module or
 an entry of its synthesized-type store; readers never need to know which.
 
 Ids are not interned across solver classes: two solver variables whose types
-are equal keep two ids. A type that reaches no identity variable is one type
-wherever it occurs, so a consumer that needs one entry per type asks the
-module's view for the one id its key index holds for the type's key
-(`canonicalId`) or compares two ids with `sameType`. A type that
-reaches an identity variable is identified by its id alone, because its key
-names its variables only by position.
+are equal keep two ids, and creating a synthesized type computes no key, so
+two synthesized entries may hold one type too. Creation shares an entry only
+by in-workspace identity: an immediate payload over the same child ids, or
+the same imported type (importing module and imported id) projected again.
+A type that reaches no identity variable is one type wherever it occurs, so a
+consumer that needs one entry per type asks the module's view for the one id
+its key index holds for the type's key (`canonicalId`) or compares two ids
+with `sameType`. A type that reaches an identity variable is identified by
+its id alone, because its key names its variables only by position. Whether
+a type reaches an identity variable is found by walking the types it reaches,
+never through its key.
+
+A synthesized type's key is computed on first demand through its own key
+slot, like a source type's. A synthesized function type records that its key
+composes its children's keys (`CheckedTypeKeyRecipe.synthetic_function`), and
+a projected type keeps the recipe of the type it projects.
+
+A scheme belongs to one root type of its module and is identified within the
+module by its id; references to a scheme hold that id. Its canonical key is
+its root's key in the scheme namespace, computed only for a consumer that
+needs a key (`CheckedTypeStoreView.schemeKey`).
 
 ### Platform/App Composition
 
@@ -5244,8 +5259,9 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
 - Per-component slots: analyses that are fixpoints over the call graph
   (template demand vectors, literal requirements) are claimed for a whole
   strongly connected component of the module's call graph, never per root.
-- Per-module slots: the key index, interface capabilities, the method registry
-  view, and provided exports.
+- Per-module slots: the key index (one over source types, one over
+  synthesized types), interface capabilities, the method registry view, and
+  provided exports.
 
 A slot (`collections.OnceSlot`) is a state word with three states: empty,
 claimed and done; a claimed word also records whether a consumer is parked on

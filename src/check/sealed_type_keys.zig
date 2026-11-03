@@ -38,12 +38,18 @@ pub const SealedTypeKeys = struct {
     index: collections.OnceSlot(*KeyIndex, .sealed_type_key_index) = .empty,
     writer_mutex: std.Io.Mutex = .init,
     writer: ?canonical_type_keys.TypeWriter = null,
+    /// Per variable: 0 while unknown, else 1 + whether a walk found the
+    /// variable reaches an identity variable.
+    identity: []std.atomic.Value(u8),
 
     /// Key slots for `env`'s sealed store. `allocator` must be safe to use
     /// from every thread that reads the module's types.
     pub fn create(allocator: Allocator, io: std.Io, env: *const ModuleEnv) Allocator.Error!*SealedTypeKeys {
         const keys = try allocator.create(SealedTypeKeys);
-        keys.* = .{ .allocator = allocator, .io = io, .env = env };
+        errdefer allocator.destroy(keys);
+        const identity = try allocator.alloc(std.atomic.Value(u8), @intCast(env.types.len()));
+        @memset(identity, .init(0));
+        keys.* = .{ .allocator = allocator, .io = io, .env = env, .identity = identity };
         return keys;
     }
 
@@ -55,6 +61,7 @@ pub const SealedTypeKeys = struct {
             allocator.destroy(index);
         }
         if (self.writer) |*writer| writer.deinit();
+        allocator.free(self.identity);
         allocator.destroy(self);
     }
 
@@ -90,6 +97,24 @@ pub const SealedTypeKeys = struct {
             return try keys.writer.?.fromVar(request.var_);
         }
     };
+
+    /// Whether `var_` reaches an identity variable, when a walk recorded it.
+    pub fn knownIdentity(self: *const SealedTypeKeys, var_: Var) ?bool {
+        const index: usize = @backingInt(var_);
+        if (index >= self.identity.len) return null;
+        return switch (self.identity[index].load(.acquire)) {
+            0 => null,
+            1 => false,
+            else => true,
+        };
+    }
+
+    /// Record whether `var_` reaches an identity variable.
+    pub fn recordIdentity(self: *SealedTypeKeys, var_: Var, value: bool) void {
+        const index: usize = @backingInt(var_);
+        if (index >= self.identity.len) return;
+        self.identity[index].store(if (value) 2 else 1, .release);
+    }
 
     /// The lowest reached checked representative of `view`'s store whose key
     /// is `key`, if any.

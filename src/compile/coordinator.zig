@@ -4682,8 +4682,10 @@ pub const Coordinator = struct {
             manager.stats.recordInvalidation();
             return null;
         };
+        const platform_keys = platform.checked_types.sealed_keys orelse coordinatorInvariant("a platform was paired before its key slots were attached", .{});
+        const synthesized_keys = CheckedArtifact.SynthesizedTypeKeys.create(platform_keys.allocator, platform_keys.io, header.synthesizedTypeCount(platform)) catch return null;
         installed = true;
-        return header.install(platform, arena);
+        return header.install(platform, arena, synthesized_keys);
     }
 
     /// Write `artifact`'s checked entry. This reads none of the module's
@@ -4911,6 +4913,12 @@ pub const Coordinator = struct {
         };
         var sealed_keys_owned = true;
         defer if (sealed_keys_owned) sealed_keys.destroy();
+        const synthesized_keys = check.CheckedArtifact.SynthesizedTypeKeys.create(module_alloc, self.roc_ctx.std_io, @intCast(artifact_serialized.checked_types.roots.len)) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
+        var synthesized_keys_owned = true;
+        defer if (synthesized_keys_owned) synthesized_keys.destroy();
 
         // Transform E: the artifact's sub-stores alias `artifact_buffer` and the
         // freshly relocated env is injected as its storage. Cross-artifact
@@ -4934,8 +4942,9 @@ pub const Coordinator = struct {
                 .source = source,
             } },
         );
-        artifact_ptr.checked_types.attachSealedTypes(cached_env, sealed_keys);
+        artifact_ptr.checked_types.attachSealedTypes(cached_env, sealed_keys, synthesized_keys);
         sealed_keys_owned = false;
+        synthesized_keys_owned = false;
         entry_owned = false;
         source_owned = false;
         cached_env_owned = false;

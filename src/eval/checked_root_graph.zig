@@ -462,7 +462,7 @@ pub fn rootHoldsFunction(
     defer seen.deinit(allocator);
     var pending = std.ArrayList(Pending).empty;
     defer pending.deinit(allocator);
-    const own_types = artifact.checked_types.view();
+    const own_types = artifact.typesView();
     const own_key = artifact.key.digest().bytes;
     // The root's checked type is its wrapper's function type; its value is
     // the wrapper's result.
@@ -541,7 +541,7 @@ pub fn rootHoldsFunction(
 
 fn typesOf(modules: []const *const checked.CheckedModuleArtifact, imports: []const checked.ImportedModuleView, key: canonical.CheckedModuleDigest) ?checked.CheckedTypeStoreView {
     for (modules) |module| {
-        if (module.key.digest().eql(key)) return module.checked_types.view();
+        if (module.key.digest().eql(key)) return module.typesView();
     }
     for (imports) |import| {
         if (import.key.digest().eql(key)) return import.checked_types;

@@ -3295,10 +3295,14 @@ test "codec function evidence identity excludes per-use replay addresses" {
     const allocator = std.testing.allocator;
     var types = checked.CheckedTypeStore{};
     defer types.deinit(allocator);
+    types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(allocator, std.testing.io, 0));
+    var key_names = check.CanonicalNames.CanonicalNameStore.init(allocator);
+    defer key_names.deinit();
+    types.key_names = &key_names;
     // Allocate distinct replay addresses with the same checked root key.
     var replay_types: [4]checked.CheckedTypeId = undefined;
     for (&replay_types) |*ty| {
-        ty.* = try types.reserveSyntheticTypeRoot(allocator, .{ .bytes = @as([32]u8, @splat(2)) }, true);
+        ty.* = try types.reserveSyntheticTypeRoot(allocator);
         try types.fillSyntheticTypeRoot(allocator, ty.*, .{ .flex = .{} });
     }
     var derivation_ids: [3]static_dispatch.GeneratedCodecDerivationId = undefined;

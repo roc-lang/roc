@@ -657,13 +657,15 @@ test "codec identity preserves cross-root sharing, method roles, and recursive s
     const gpa = std.testing.allocator;
     var types = checked.CheckedTypeStore{};
     defer types.deinit(gpa);
+    types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
     var variables: [3]TypeId = undefined;
     for (&variables) |*variable| {
-        variable.* = try types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @as([32]u8, @splat(7)) }, true);
+        variable.* = try types.reserveSyntheticTypeRoot(gpa);
         try types.fillSyntheticTypeRoot(gpa, variable.*, .{ .flex = .{} });
     }
     var names = @import("canonical_names.zig").CanonicalNameStore.init(gpa);
     defer names.deinit();
+    types.key_names = &names;
     const method = try names.internMethodName("to_encoder");
     var derivations: [5]dispatch.GeneratedCodecDerivation = undefined;
     var calls: [5]dispatch.GeneratedCodecCall = undefined;
@@ -716,14 +718,16 @@ fn digestTestContract(padding: usize, shared: bool) (Allocator.Error || error{No
     const gpa = std.testing.allocator;
     var types = checked.CheckedTypeStore{};
     defer types.deinit(gpa);
+    types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
     var variables: [2]TypeId = undefined;
     for (0..padding + variables.len) |index| {
-        const variable = try types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @as([32]u8, @splat(7)) }, true);
+        const variable = try types.reserveSyntheticTypeRoot(gpa);
         try types.fillSyntheticTypeRoot(gpa, variable, .{ .flex = .{} });
         if (index >= padding) variables[index - padding] = variable;
     }
     var names = canonical.CanonicalNameStore.init(gpa);
     defer names.deinit();
+    types.key_names = &names;
     for (0..padding) |index| {
         var text: [16]u8 = undefined;
         _ = try names.internMethodName(try std.fmt.bufPrint(&text, "padding_{d}", .{index}));
@@ -781,10 +785,12 @@ fn digestTestChain(order: []const u32, comptime method: []const u8, cyclic: bool
     const gpa = std.testing.allocator;
     var types = checked.CheckedTypeStore{};
     defer types.deinit(gpa);
-    const ty = try types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @as([32]u8, @splat(7)) }, true);
+    types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    const ty = try types.reserveSyntheticTypeRoot(gpa);
     try types.fillSyntheticTypeRoot(gpa, ty, .{ .flex = .{} });
     var names = canonical.CanonicalNameStore.init(gpa);
     defer names.deinit();
+    types.key_names = &names;
     const outer_method = try names.internMethodName("to_encoder");
     const inner_method = try names.internMethodName(method);
     var derivations: [4]dispatch.GeneratedCodecDerivation = undefined;

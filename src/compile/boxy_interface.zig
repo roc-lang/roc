@@ -244,7 +244,7 @@ pub const Digests = struct {
     }
 
     fn hashNominals(hasher: *Sha256, artifact: *const Artifact) void {
-        const checked_types = artifact.checked_types.view();
+        const checked_types = artifact.typesView();
         for (checked_types.nominal_declarations) |declaration| {
             hashBytes(hasher, artifact.canonical_names.typeNameText(checked_types.nominalDeclarationName(declaration)));
         }

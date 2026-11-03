@@ -2444,7 +2444,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
             .name = root.canonical_names.moduleNameText(root.module_identity.display_module_name),
             .kind = @tagName(root.module_identity.kind),
             .names = &root.canonical_names,
-            .types = root.checked_types.view(),
+            .types = root.typesView(),
             .templates = &root.checked_procedure_templates,
             .env = root.moduleEnvConst(),
         });

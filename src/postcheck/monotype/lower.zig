@@ -67646,8 +67646,9 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     defer graph.destroy();
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
-    const outer_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
-    const inner_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    const outer_ty = try checked_types.reserveSyntheticTypeRoot(gpa);
+    const inner_ty = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, outer_ty, .{ .flex = .{} });
     try checked_types.fillSyntheticTypeRoot(gpa, inner_ty, .{ .flex = .{} });
     const fn_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{outer_ty}, outer_ty);
@@ -67754,11 +67755,13 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
 
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
-    const receiver_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
-    const other_receiver_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+
+    checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    const receiver_ty = try checked_types.reserveSyntheticTypeRoot(gpa);
+    const other_receiver_ty = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, receiver_ty, .{ .flex = .{} });
     try checked_types.fillSyntheticTypeRoot(gpa, other_receiver_ty, .{ .flex = .{} });
-    const result_ty = try checked_types.appendSyntheticPayloadRoot(gpa, &frame_names, .empty_record);
+    const result_ty = try checked_types.appendSyntheticPayloadRoot(gpa, .empty_record);
     const encode_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{receiver_ty}, result_ty);
     const other_decode_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{other_receiver_ty}, other_receiver_ty);
     const decode_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{receiver_ty}, receiver_ty);
@@ -67823,36 +67826,48 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
 }
 
 test "specialization evidence equality includes exact target instantiation" {
-    var roots: [11]checked.CheckedTypeRoot = undefined;
-    for (&roots, 0..) |*root, index| {
-        root.* = .{ .id = check.CheckedTypeIds.fromSynthesized(index), .key = .{} };
-        root.key.bytes[0] = @intCast(index);
+    const gpa = std.testing.allocator;
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    var checked_types = checked.CheckedTypeStore{};
+    defer checked_types.deinit(gpa);
+    checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    checked_types.key_names = &name_store;
+    // Ten distinct types: the empty record, then tuples of 1 through 9 of it.
+    const unit = try checked_types.appendSyntheticPayloadRoot(gpa, .empty_record);
+    for (1..10) |len| {
+        const elems = try gpa.alloc(checked.CheckedTypeId, len);
+        @memset(elems, unit);
+        _ = try checked_types.appendSyntheticPayloadRoot(gpa, .{ .tuple = elems });
     }
-    // A fresh checked identity may have a distinct raw id while retaining the
-    // same canonical type topology.
-    roots[10].key = roots[8].key;
-    const payloads: [roots.len]checked.StoredCheckedTypePayload = @splat(.empty_record);
+    // A fresh checked identity may have a distinct raw id while being the
+    // same type as root 8.
+    const fresh = try checked_types.reserveSyntheticTypeRoot(gpa);
+    const fresh_elems = try gpa.alloc(checked.CheckedTypeId, 8);
+    @memset(fresh_elems, unit);
+    try checked_types.fillSyntheticTypeRoot(gpa, fresh, .{ .tuple = fresh_elems });
+    try std.testing.expectEqual(check.CheckedTypeIds.fromSynthesized(10), fresh);
 
     var target_view_data: ModuleViewData = undefined;
     const target_view = &target_view_data;
     target_view.key = .{};
     target_view.key.bytes[0] = 1;
-    target_view.types = .{ .roots = &roots, .stored_payloads = &payloads };
+    target_view.types = checked_types.view();
     var other_target_view_data: ModuleViewData = undefined;
     const other_target_view = &other_target_view_data;
     other_target_view.key = .{};
     other_target_view.key.bytes[0] = 2;
-    other_target_view.types = .{ .roots = &roots, .stored_payloads = &payloads };
+    other_target_view.types = checked_types.view();
     var instantiation_view_data: ModuleViewData = undefined;
     const instantiation_view = &instantiation_view_data;
     instantiation_view.key = .{};
     instantiation_view.key.bytes[0] = 3;
-    instantiation_view.types = .{ .roots = &roots, .stored_payloads = &payloads };
+    instantiation_view.types = checked_types.view();
     var other_instantiation_view_data: ModuleViewData = undefined;
     const other_instantiation_view = &other_instantiation_view_data;
     other_instantiation_view.key = .{};
     other_instantiation_view.key.bytes[0] = 4;
-    other_instantiation_view.types = .{ .roots = &roots, .stored_payloads = &payloads };
+    other_instantiation_view.types = checked_types.view();
 
     const method: static_dispatch.MethodTarget = .{
         .module_idx = 5,
@@ -71080,10 +71095,11 @@ test "issue 11362: checked instantiation reserves only recursive node identities
     graph.setDiagnostics(&diagnostics.graph);
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
-    const variable = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    const variable = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, variable, .{ .flex = .{} });
     const function = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{variable}, variable);
-    const alias = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(2) }, true);
+    const alias = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, alias, .{ .alias = .{
         .name = try name_store.internTypeName("Callback"),
         .origin_module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(2)))),
@@ -71091,7 +71107,7 @@ test "issue 11362: checked instantiation reserves only recursive node identities
         .args = try gpa.dupe(checked.CheckedTypeId, &.{variable}),
         .backing = function,
     } });
-    const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(1) }, false);
+    const recursive = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ recursive, recursive }) });
 
     var program = Ast.Program.init(gpa);
@@ -71179,7 +71195,8 @@ test "issue 11362: allocation failure removes active checked instantiation marke
             defer graph.destroy();
             var checked_types = checked.CheckedTypeStore{};
             defer checked_types.deinit(gpa);
-            const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(1) }, false);
+            checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+            const recursive = try checked_types.reserveSyntheticTypeRoot(gpa);
             try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{recursive}) });
             var program = Ast.Program.init(gpa);
             defer program.deinit();
@@ -71329,14 +71346,15 @@ fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error
     graph.setDiagnostics(&diagnostics.graph);
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(std.testing.allocator);
-    const leaf = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator, .{}, false);
+    checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(std.testing.allocator, std.testing.io, 0));
+    const leaf = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator);
     try checked_types.fillSyntheticTypeRoot(std.testing.allocator, leaf, .empty_record);
     const acyclic = try checked_types.appendSyntheticFunctionRoot(std.testing.allocator, .pure, &.{leaf}, leaf);
-    const recursive = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator, .{ .bytes = @splat(1) }, false);
+    const recursive = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator);
     try checked_types.fillSyntheticTypeRoot(std.testing.allocator, recursive, .{ .tuple = try std.testing.allocator.dupe(checked.CheckedTypeId, &.{ recursive, recursive, acyclic }) });
-    const open = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator, .{}, true);
+    const open = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator);
     try checked_types.fillSyntheticTypeRoot(std.testing.allocator, open, .{ .flex = .{} });
-    const alias = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator, .{ .bytes = @splat(2) }, false);
+    const alias = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator);
     try checked_types.fillSyntheticTypeRoot(std.testing.allocator, alias, .{ .alias = .{
         .name = try name_store.internTypeName("Alias"),
         .origin_module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0)))),
@@ -71433,15 +71451,16 @@ test "issue 11362: checked instantiation allocates placeholders only for recursi
     graph.setDiagnostics(&diagnostics);
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
-    const leaf = try checked_types.appendSyntheticPayloadRoot(gpa, &name_store, .empty_record);
-    const pair = try checked_types.appendSyntheticPayloadRoot(gpa, &name_store, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ leaf, leaf }) });
-    const alias = try checked_types.appendSyntheticPayloadRoot(gpa, &name_store, .{ .alias = .{
+    checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    const leaf = try checked_types.appendSyntheticPayloadRoot(gpa, .empty_record);
+    const pair = try checked_types.appendSyntheticPayloadRoot(gpa, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ leaf, leaf }) });
+    const alias = try checked_types.appendSyntheticPayloadRoot(gpa, .{ .alias = .{
         .name = try name_store.internTypeName("Pair"),
         .origin_module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x62)))),
         .owner_module = .{},
         .backing = pair,
     } });
-    const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, false);
+    const recursive = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ recursive, recursive }) });
 
     var program = Ast.Program.init(gpa);
@@ -71506,7 +71525,8 @@ test "issue 11362: allocation failure removes checked instantiation markers" {
     const gpa = std.testing.allocator;
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
-    const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, false);
+    checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    const recursive = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ recursive, recursive }) });
     const Helper = struct {
         fn run(allocator: Allocator, view: checked.CheckedTypeStoreView, root: checked.CheckedTypeId) Allocator.Error!void {
@@ -71565,11 +71585,12 @@ fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) (Allocato
     const gpa = std.testing.allocator;
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
-    const closed = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, false);
+    checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    const closed = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, closed, .empty_record);
-    const leaf = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    const leaf = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, leaf, .{ .flex = .{} });
-    const tuple = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
+    const tuple = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, tuple, .{
         .tuple = try gpa.dupe(checked.CheckedTypeId, if (recursive) &.{ tuple, tuple, leaf } else &.{ leaf, leaf }),
     });
@@ -71686,17 +71707,18 @@ test "lazy checked instantiation allocates only recursive placeholders and clear
             graph.setDiagnostics(&diagnostics);
             var checked_types = checked.CheckedTypeStore{};
             defer checked_types.deinit(std.testing.allocator);
-            const variable = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator, .{}, true);
+            checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(std.testing.allocator, std.testing.io, 0));
+            const variable = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator);
             try checked_types.fillSyntheticTypeRoot(std.testing.allocator, variable, .{ .flex = .{} });
             const function = try checked_types.appendSyntheticFunctionRoot(std.testing.allocator, .pure, &.{variable}, variable);
-            const recursive = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator, .{}, true);
+            const recursive = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator);
             try checked_types.fillSyntheticTypeRoot(std.testing.allocator, recursive, .{ .function = .{
                 .kind = .pure,
                 .args = try std.testing.allocator.dupe(checked.CheckedTypeId, &.{ recursive, recursive }),
                 .ret = variable,
             } });
 
-            const alias = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator, .{}, true);
+            const alias = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator);
             try checked_types.fillSyntheticTypeRoot(std.testing.allocator, alias, .{ .alias = .{
                 .name = try name_store.internTypeName("Alias"),
                 .origin_module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0)))),
@@ -71777,8 +71799,11 @@ test "lazy checked placeholders obey closed and innermost declaration scopes" {
     defer graph.destroy();
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
-    const open = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
-    const closed = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(1) }, false);
+    checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    const open = try checked_types.reserveSyntheticTypeRoot(gpa);
+    const closed = try checked_types.reserveSyntheticTypeRoot(gpa);
+    try checked_types.fillSyntheticTypeRoot(gpa, open, .{ .flex = .{} });
+    try checked_types.fillSyntheticTypeRoot(gpa, closed, .empty_record);
     // This test exercises only scope allocation and checked-node lookup.
     var program = Ast.Program.init(gpa);
     defer program.deinit();
@@ -71838,18 +71863,19 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
     defer source_names.deinit();
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
+    checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
     const origin = try source_names.internModuleIdentity(&(@as([32]u8, @splat(7))));
     const alias_name = try source_names.internTypeName("Alias");
-    const unit = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(1) }, false);
+    const unit = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, unit, .empty_record);
-    const empty = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(2) }, false);
+    const empty = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, empty, .empty_tag_union);
-    const pair = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(3) }, false);
+    const pair = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, pair, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ unit, empty }) });
     var aliases: [64]checked.CheckedTypeId = undefined;
     var previous = pair;
     for (&aliases, 0..) |*alias, index| {
-        alias.* = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(@as(u8, @intCast(index + 4))) }, false);
+        alias.* = try checked_types.reserveSyntheticTypeRoot(gpa);
         try checked_types.fillSyntheticTypeRoot(gpa, alias.*, .{ .alias = .{
             .name = alias_name,
             .origin_module = origin,
@@ -71865,7 +71891,7 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
     // with the same arguments must all remain distinct nominal identities.
     var nominals: [3]checked.CheckedTypeId = undefined;
     for (&nominals, 0..) |*nominal, index| {
-        nominal.* = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(@as(u8, @intCast(index + 68))) }, false);
+        nominal.* = try checked_types.reserveSyntheticTypeRoot(gpa);
         try checked_types.fillSyntheticTypeRoot(gpa, nominal.*, .{ .nominal = .{
             .name = try source_names.internTypeName("Opaque"),
             .origin_module = origin,
@@ -71876,15 +71902,15 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
             .args = try gpa.dupe(checked.CheckedTypeId, &.{if (index == 1) empty else unit}),
         } });
     }
-    const nominal_alias = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(71) }, false);
+    const nominal_alias = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, nominal_alias, .{ .alias = .{
         .name = alias_name,
         .origin_module = origin,
         .owner_module = .{},
         .backing = nominals[0],
     } });
-    const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(72) }, false);
-    const recursive_alias = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(73) }, false);
+    const recursive = try checked_types.reserveSyntheticTypeRoot(gpa);
+    const recursive_alias = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, recursive_alias, .{ .alias = .{
         .name = alias_name,
         .origin_module = origin,
@@ -71892,13 +71918,13 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
         .backing = recursive,
     } });
     try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{recursive_alias}) });
-    const aliased_function = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(74) }, false);
+    const aliased_function = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, aliased_function, .{ .function = .{
         .kind = .pure,
         .args = try gpa.dupe(checked.CheckedTypeId, &.{previous}),
         .ret = previous,
     } });
-    const structural_function = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(75) }, false);
+    const structural_function = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, structural_function, .{ .function = .{
         .kind = .pure,
         .args = try gpa.dupe(checked.CheckedTypeId, &.{pair}),
@@ -71973,6 +71999,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     const module_key: checked.ModuleId = .{ .bytes = @splat(7) };
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
+    checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
     const stored_owner: names.CheckedModuleDigest = .{ .bytes = module_key.bytes };
     const str = try stored_types.append(.{ .primitive = .str });
     const nominal = try stored_types.append(.{ .named = .{

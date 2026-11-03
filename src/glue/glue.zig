@@ -1518,7 +1518,7 @@ const TypeTable = struct {
             const bound = self.template_bindings.get(key) orelse break;
             cur = bound;
         }
-        cur.checked_type = try cur.artifact.checked_types.view().canonicalId(cur.checked_type);
+        cur.checked_type = try cur.artifact.typesView().canonicalId(cur.checked_type);
         return cur;
     }
 
