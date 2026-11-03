@@ -1524,9 +1524,12 @@ pub const BoxyObjectLowering = struct {
     /// the build's link lowers its root unit against the same table; the
     /// scheduler owns one otherwise.
     interfaces: ?*eval.CompileTimeFinalization.ExportInterfaces = null,
-    /// Whether the build's link composes every unit's pieces, so a unit the
+    /// Whether the build's link reads every unit's object, so a unit the
     /// link needs is built as soon as its module is checked.
     links: bool = false,
+    /// Whether that link composes the units' pieces (rather than placing
+    /// their unit images with a fast dev link), so the units decode them.
+    link_reads_pieces: bool = false,
 };
 
 /// The module objects of a `.boxy` compilation, each restored from the
@@ -1569,8 +1572,19 @@ const BoxyObjects = struct {
     unbound_hosted: std.ArrayList(*const Artifact) = .empty,
     /// The modules whose import closures are known (`closureKnown`).
     closures_known: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
-    /// The pieces of every object recorded, kept for the compilation.
+    /// The pieces of every object recorded with its pieces, kept for the
+    /// compilation.
     owned_pieces: std.ArrayList(*backend.dev.UnitPieces.Pieces) = .empty,
+    /// The pieces of the latest object recorded for each module, by module
+    /// key, when it was recorded with them.
+    pieces: std.AutoHashMapUnmanaged([32]u8, *backend.dev.UnitPieces.Pieces) = .empty,
+    /// The unit image of the latest object recorded for each module, for a
+    /// target that `boxy_unit.producesImage`, by module key.
+    images: std.AutoHashMapUnmanaged([32]u8, boxy_unit.Image) = .empty,
+    /// Images of objects a later record of their module replaced: loaded
+    /// code may still name symbols in them, so they are kept for the
+    /// compilation too.
+    replaced_images: std.ArrayList(boxy_unit.Image) = .empty,
     session: post_check_executor.Session,
     first_error: ?Error = null,
     /// Whether a task finished since `progress` last reported, whichever
@@ -1640,6 +1654,12 @@ const BoxyObjects = struct {
             gpa.destroy(pieces);
         }
         self.owned_pieces.deinit(gpa);
+        self.pieces.deinit(gpa);
+        var images = self.images.valueIterator();
+        while (images.next()) |image| image.deinit(gpa);
+        self.images.deinit(gpa);
+        for (self.replaced_images.items) |image| image.deinit(gpa);
+        self.replaced_images.deinit(gpa);
         self.records.deinit(gpa);
         if (self.owned_interfaces) |*owned| owned.deinit();
         self.digests.deinit();
@@ -1667,6 +1687,19 @@ const BoxyObjects = struct {
         const known = self.records.get(artifact.key.bytes) orelse return null;
         if (known.object == null or !std.mem.eql(u8, &known.key.bytes, &key.bytes)) return null;
         return known;
+    }
+
+    /// The unit image of `artifact`'s recorded object, for a target that
+    /// `boxy_unit.producesImage`.
+    pub fn imageOf(self: *const BoxyObjects, artifact: *const Artifact) ?boxy_unit.Image {
+        return self.images.get(artifact.key.bytes);
+    }
+
+    /// The pieces of `artifact`'s recorded object, when it was recorded
+    /// with them (`BoxyObjectLowering.link_reads_pieces`, or a host that
+    /// loads pieces).
+    pub fn piecesOf(self: *const BoxyObjects, artifact: *const Artifact) ?*const backend.dev.UnitPieces.Pieces {
+        return self.pieces.get(artifact.key.bytes);
     }
 
     /// Whether the objects of `module`'s import closure are all known,
@@ -1823,6 +1856,9 @@ const BoxyObjects = struct {
         // pool, whichever thread runs the unit.
         config.post_check_executor = self.coordinator.postCheckExecutor();
         config.checked_module_state = if (artifact.evaluation_state == .finalized) .complete else .checking_finalization;
+        // Compile-time evaluation loads what this host loads
+        // (`boxy_object_code`); a link that composes pieces reads them too.
+        const want_pieces = eval.CompileTimeFinalization.boxy_object_code == .pieces or self.lowering.link_reads_pieces;
         return .{ .unit = .{
             .gpa = gpa,
             .artifact = artifact,
@@ -1833,6 +1869,7 @@ const BoxyObjects = struct {
             .interfaces = self.interfaces,
             .cache_manager = self.manager,
             .key = undefined,
+            .want_pieces = want_pieces,
         } };
     }
 
@@ -1842,7 +1879,7 @@ const BoxyObjects = struct {
         const unit = &prepared.unit;
         try self.addToDigests(&self.coordinator.builtin_modules.checked_artifact);
         try self.addToDigests(unit.artifact);
-        unit.key = try boxy_unit.objectKey(self.coordinator.gpa, &self.digests, unit.artifact, unit.platform, self.lowering.opt, self.lowering.inline_expects, self.lowering.target, &.{});
+        unit.key = try boxy_unit.objectKey(self.coordinator.gpa, &self.digests, unit.artifact, unit.platform, self.lowering.opt, self.lowering.inline_expects, self.lowering.target, &.{}, false, false);
     }
 
     /// Give the digests `artifact` and its import closure, which checking
@@ -1859,13 +1896,45 @@ const BoxyObjects = struct {
     fn record(self: *BoxyObjects, artifact: *const Artifact, built: boxy_unit.Built) Error!Object {
         const gpa = self.coordinator.gpa;
         const arena = self.arena.allocator();
+        // A host whose units carry images loads them; every other host
+        // composes the pieces (`boxy_object_code`).
+        std.debug.assert(boxy_unit.producesImage(self.lowering.target) == (eval.CompileTimeFinalization.boxy_object_code == .image));
         try self.owned_pieces.ensureUnusedCapacity(gpa, 1);
-        defer built.deinitKeepingPieces(gpa);
+        try self.replaced_images.ensureUnusedCapacity(gpa, 1);
+        try self.pieces.ensureUnusedCapacity(gpa, 1);
+        try self.images.ensureUnusedCapacity(gpa, 1);
+        // The image and the pieces become the compilation's once stored;
+        // until then a failure releases them with the rest of `built`.
+        var code_stored = false;
+        errdefer if (!code_stored) {
+            if (built.image) |image| image.deinit(gpa);
+            if (built.pieces) |pieces| {
+                pieces.deinit();
+                gpa.destroy(pieces);
+            }
+        };
+        defer built.deinitKeepingCode(gpa);
+        const code: @FieldType(Object, "code") = switch (eval.CompileTimeFinalization.boxy_object_code) {
+            .image => image: {
+                const image = built.image orelse Coordinator.coordinatorInvariant("a compile-time evaluation unit was built without its image", .{});
+                break :image .{ .image = .{ .bytes = image.bytes, .code_locations = image.code_locations } };
+            },
+            .pieces => .{ .pieces = built.pieces orelse Coordinator.coordinatorInvariant("a compile-time evaluation unit was built without its pieces", .{}) },
+        };
         try self.digests.recordExports(artifact, built.exports);
         const symbols = try arena.alloc([]const u8, built.hosted_symbols.len);
         for (built.hosted_symbols, symbols) |symbol, *copy| copy.* = try arena.dupe(u8, symbol);
-        self.owned_pieces.appendAssumeCapacity(built.pieces);
-        return .{ .module = artifact.key.bytes, .pieces = built.pieces, .hosted_symbols = symbols };
+        code_stored = true;
+        if (built.image) |image| {
+            const entry = self.images.getOrPutAssumeCapacity(artifact.key.bytes);
+            if (entry.found_existing) self.replaced_images.appendAssumeCapacity(entry.value_ptr.*);
+            entry.value_ptr.* = image;
+        }
+        if (built.pieces) |pieces| {
+            self.owned_pieces.appendAssumeCapacity(pieces);
+            self.pieces.putAssumeCapacity(artifact.key.bytes, pieces);
+        }
+        return .{ .module = artifact.key.bytes, .code = code, .hosted_symbols = symbols };
     }
 
     /// One unit's build as a post-check task.

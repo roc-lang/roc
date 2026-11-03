@@ -274,6 +274,21 @@ pub const CliProblem = union(enum) {
         target: []const u8,
     },
 
+    /// A value the app provides to the host is larger than the room a dev
+    /// executable keeps for one
+    provided_value_too_large: struct {
+        symbol: []const u8,
+        size: u64,
+        limit: u64,
+        target: []const u8,
+    },
+
+    /// The app's code and data do not fit the addresses a dev executable
+    /// keeps for them
+    dev_program_too_large: struct {
+        target: []const u8,
+    },
+
     /// Object compilation failed
     object_compilation_failed: struct {
         path: []const u8,
@@ -430,6 +445,8 @@ pub const CliProblem = union(enum) {
             .linker_failed,
             .undefined_compiler_symbols,
             .missing_host_symbols,
+            .provided_value_too_large,
+            .dev_program_too_large,
             => .fatal,
 
             // Runtime errors - operation failed
@@ -498,6 +515,8 @@ pub const CliProblem = union(enum) {
             .linker_failed => |info| try createLinkerFailedReport(allocator, info),
             .undefined_compiler_symbols => |info| try createUndefinedCompilerSymbolsReport(allocator, info),
             .missing_host_symbols => |info| try createMissingHostSymbolsReport(allocator, info),
+            .provided_value_too_large => |info| try createProvidedValueTooLargeReport(allocator, info),
+            .dev_program_too_large => |info| try createDevProgramTooLargeReport(allocator, info),
             .object_compilation_failed => |info| try createObjectCompilationFailedReport(allocator, info),
             .shim_generation_failed => |info| try createShimGenerationFailedReport(allocator, info),
             .invalid_url => |info| try createInvalidUrlReport(allocator, info),
@@ -1144,6 +1163,34 @@ fn createMissingHostSymbolsReport(allocator: Allocator, info: anytype) Allocator
     try report.document.addAnnotated("targets", .emphasized);
     try report.document.addText(" section.");
 
+    return report;
+}
+
+fn createProvidedValueTooLargeReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The value the application provides to the host as {s} is {d} bytes, and a dev executable for target {s} keeps room for at most {d} bytes per provided value.", .{ info.symbol, info.size, info.target, info.limit });
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Provided Value Too Large", headline, .fatal);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("A dev build places each value named in the platform header's ");
+    try report.document.addAnnotated("provides", .emphasized);
+    try report.document.addText(" section at a fixed address the host is linked against. Build with ");
+    try report.document.addAnnotated("--opt=size", .emphasized);
+    try report.document.addText(" or ");
+    try report.document.addAnnotated("--opt=speed", .emphasized);
+    try report.document.addText(", or provide the value behind a pointer (for example in a List or a Box).");
+    return report;
+}
+
+fn createDevProgramTooLargeReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The application's code and data are too large for a dev executable for target {s}, which keeps them within 2 GiB of the host.", .{info.target});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Dev Program Too Large", headline, .fatal);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Build with ");
+    try report.document.addAnnotated("--opt=size", .emphasized);
+    try report.document.addText(" or ");
+    try report.document.addAnnotated("--opt=speed", .emphasized);
+    try report.document.addText(".");
     return report;
 }
 

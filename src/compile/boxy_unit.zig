@@ -14,6 +14,8 @@ const static_data_exports = @import("static_data");
 const object_cache = @import("boxy_object_cache.zig");
 const boxy_interface = @import("boxy_interface.zig");
 const cache_manager_mod = @import("cache_manager.zig");
+const CacheData = @import("cache_module.zig").CacheModule.CacheData;
+const watch_inputs = @import("watch_inputs.zig");
 
 const Allocator = std.mem.Allocator;
 const CacheManager = cache_manager_mod.CacheManager;
@@ -37,29 +39,84 @@ pub const Unit = struct {
     interfaces: *ExportInterfaces,
     cache_manager: ?*CacheManager,
     key: object_cache.Key,
+    /// Whether the caller reads the unit's pieces. A fast dev link, and
+    /// compile-time evaluation on a host that loads unit images, read only
+    /// the unit image, and a restored entry is then served from a mapping
+    /// without decoding its pieces.
+    want_pieces: bool = true,
+    /// Whether this is a test unit (`roc test`, design.md "Unit-Image Test
+    /// Execution"): `config.boxy_unit.expect_sites` is set, so every inline
+    /// expect it lowers counts into a site of its expect-site table, and it
+    /// exports a wrapper per top-level expect of its module.
+    test_unit: bool = false,
+};
+
+/// Whether a unit compiled for `target` carries a unit image: the targets
+/// a fast dev link serves. Every entry for such a target holds one,
+/// whichever command wrote it.
+pub fn producesImage(target: roc_target.RocTarget) bool {
+    return target.toOsTag() == .linux and target.toCpuArch() == .x86_64;
+}
+
+/// A unit image's bytes, its code locations, and what keeps them alive.
+pub const Image = struct {
+    bytes: []align(backend.dev.UnitImage.alignment.toByteUnits()) const u8,
+    /// Where the image's code came from (`backend.dev.CodeLocations`), as
+    /// the cache entry files it beside the image
+    /// (`object_cache.Entry.code_locations`).
+    code_locations: []const u8,
+    owner: union(enum) {
+        /// Both are allocated from the unit's allocator.
+        owned,
+        /// Both are slices of this mapped cache entry.
+        mapped: CacheData,
+    },
+
+    pub fn deinit(self: Image, gpa: Allocator) void {
+        switch (self.owner) {
+            .owned => {
+                gpa.free(self.bytes);
+                gpa.free(self.code_locations);
+            },
+            .mapped => |data| data.deinit(gpa),
+        }
+    }
 };
 
 /// A unit's object.
 pub const Built = struct {
     restored: bool,
-    /// The unit's code in pieces. Owned by the unit's `gpa`.
-    pieces: *backend.dev.UnitPieces.Pieces,
+    /// The unit's code in pieces, when the unit wanted them. Owned by the
+    /// unit's `gpa`.
+    pieces: ?*backend.dev.UnitPieces.Pieces,
+    /// The unit's image, for a target that `producesImage`.
+    image: ?Image = null,
     hosted_symbols: []const []const u8,
     /// The ownership signatures the object exports. Owned by the unit's `gpa`.
     exports: []const object_cache.ExportRecord,
+    /// A test unit's expect-site table and test-root table. Owned by the
+    /// unit's `gpa`.
+    expect_sites: []const object_cache.ExpectSiteRecord = &.{},
+    test_roots: []const object_cache.TestRootRecord = &.{},
 
     pub fn deinit(self: Built, gpa: Allocator) void {
-        self.pieces.deinit();
-        gpa.destroy(self.pieces);
-        self.deinitKeepingPieces(gpa);
+        if (self.pieces) |pieces| {
+            pieces.deinit();
+            gpa.destroy(pieces);
+        }
+        if (self.image) |image| image.deinit(gpa);
+        self.deinitKeepingCode(gpa);
     }
 
-    /// Release everything but the pieces, which the caller now owns.
-    pub fn deinitKeepingPieces(self: Built, gpa: Allocator) void {
+    /// Release everything but the pieces and the image, which the caller
+    /// now owns.
+    pub fn deinitKeepingCode(self: Built, gpa: Allocator) void {
         for (self.exports) |record| gpa.free(record.rc_ret_conditions);
         gpa.free(self.exports);
         for (self.hosted_symbols) |symbol| gpa.free(symbol);
         gpa.free(self.hosted_symbols);
+        gpa.free(self.expect_sites);
+        gpa.free(self.test_roots);
     }
 };
 
@@ -71,7 +128,10 @@ pub const Built = struct {
 /// their implementations at the app's types and calls its supplied workers.
 /// A library module's object is a function of the module and its imports'
 /// interfaces alone, whatever program pairs it.
-pub fn objectKey(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *const Artifact, platform: ?ImportedView, opt: []const u8, inline_expects: bool, target: roc_target.RocTarget, paired_platforms: []const [32]u8) Allocator.Error!object_cache.Key {
+/// `run_image` marks the root unit of a dev run image
+/// (`object_cache.KeyInput.run_image`), and `expect_sites` a test unit
+/// (`object_cache.KeyInput.expect_sites`).
+pub fn objectKey(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *const Artifact, platform: ?ImportedView, opt: []const u8, inline_expects: bool, target: roc_target.RocTarget, paired_platforms: []const [32]u8, run_image: bool, expect_sites: bool) Allocator.Error!object_cache.Key {
     const hosted_bindings: ?[32]u8 = if (platform) |platform_view| blk: {
         const inputs = try gpa.alloc(object_cache.HostedBindingInput, platform_view.hosted_bindings.bindings.len);
         defer gpa.free(inputs);
@@ -91,6 +151,8 @@ pub fn objectKey(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *co
         .target = @tagName(target),
         .opt = opt,
         .inline_expects = inline_expects,
+        .run_image = run_image,
+        .expect_sites = expect_sites,
     });
 }
 
@@ -115,6 +177,62 @@ pub fn restore(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.
         },
     };
     errdefer object_cache.deinitEntry(gpa, entry);
+    if (!imageReads(entry)) {
+        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache entry for key {s} holds no image this compiler reads\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
+        object_cache.deinitEntry(gpa, entry);
+        return null;
+    }
+    try recordInterfaces(interfaces, entry);
+    return entry;
+}
+
+/// Whether `entry`'s image, if it has one, is an image this compiler reads,
+/// and its code locations, if it has them, a table this compiler reads. A
+/// library unit's entry carries both; the root unit's, which no
+/// compile-time evaluation loads, only the image. An entry that does not
+/// read is bytes this compiler did not write (a miss), never a link-time or
+/// compile-time evaluation failure.
+fn imageReads(entry: object_cache.Entry) bool {
+    if (entry.image.len == 0) return entry.code_locations.len == 0;
+    const image: []align(backend.dev.UnitImage.alignment.toByteUnits()) const u8 = @alignCast(entry.image);
+    _ = backend.dev.UnitImage.View.init(image) catch return false;
+    return entry.code_locations.len == 0 or backend.dev.CodeLocations.validate(entry.code_locations);
+}
+
+/// Restore `key`'s entry like `restore`, serving it from a mapping of the
+/// cache file: the pieces are left undecoded and the image is borrowed from
+/// the mapping, which the returned `Image` keeps alive.
+pub fn restoreMapped(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.Key, interfaces: *ExportInterfaces) Allocator.Error!?struct { entry: object_cache.Entry, data: CacheData } {
+    const manager = cache_manager orelse return null;
+    const data = manager.loadFamilyMapped(gpa, .checked, .boxy_object, key.bytes, object_cache.scope) orelse {
+        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: no object cache entry for key {s}\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
+        return null;
+    };
+    const entry = object_cache.decodeView(gpa, data.data()) catch |err| switch (err) {
+        error.OutOfMemory => {
+            data.deinit(gpa);
+            return error.OutOfMemory;
+        },
+        error.InvalidEntry => {
+            data.deinit(gpa);
+            return null;
+        },
+    };
+    errdefer {
+        object_cache.deinitEntryView(gpa, entry);
+        data.deinit(gpa);
+    }
+    if (!imageReads(entry)) {
+        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache entry for key {s} holds no image this compiler reads\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
+        object_cache.deinitEntryView(gpa, entry);
+        data.deinit(gpa);
+        return null;
+    }
+    try recordInterfaces(interfaces, entry);
+    return .{ .entry = entry, .data = data };
+}
+
+fn recordInterfaces(interfaces: *ExportInterfaces, entry: object_cache.Entry) Allocator.Error!void {
     for (entry.exports) |record| try interfaces.put(.{ .bytes = record.identity }, .{
         .rc_borrowed_params = record.rc_borrowed_params,
         .rc_ret_borrowed = record.rc_ret_borrowed,
@@ -125,7 +243,6 @@ pub fn restore(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.
         .rc_ret_conditions = record.rc_ret_conditions,
         .may_leave_pending = record.may_leave_pending,
     });
-    return entry;
 }
 
 /// The export records of `lowered`'s exported procedures, recorded in
@@ -177,6 +294,11 @@ pub fn hostedSymbols(arena: Allocator, store_: *const lir.LirStore) Allocator.Er
     return symbols.items;
 }
 
+fn freeSymbols(gpa: Allocator, symbols: []const []const u8) void {
+    for (symbols) |symbol| gpa.free(symbol);
+    gpa.free(symbols);
+}
+
 /// Copies of `symbols`, each and the slice allocated from `gpa`.
 fn dupeSymbols(gpa: Allocator, symbols: []const []const u8) Allocator.Error![]const []const u8 {
     const copies = try gpa.alloc([]const u8, symbols.len);
@@ -197,41 +319,83 @@ pub const BuildError = eval.CompileTimeFinalization.RuntimeMaterializationError 
 pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     const gpa = unit.gpa;
     const module_name = unit.artifact.canonical_names.moduleNameText(unit.artifact.module_identity.module_name);
-    if (try restore(gpa, unit.cache_manager, unit.key, unit.interfaces)) |entry| {
-        defer object_cache.deinitEntry(gpa, entry);
+    var restore_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_restore);
+    defer restore_scope.end();
+    if (try restoreMapped(gpa, unit.cache_manager, unit.key, unit.interfaces)) |restored| {
+        defer object_cache.deinitEntryView(gpa, restored.entry);
+        // The mapping stays alive as the image's owner; otherwise it is
+        // released once the pieces are decoded.
+        const keeps_mapping = producesImage(unit.target);
+        defer if (!keeps_mapping) restored.data.deinit(gpa);
+        errdefer if (keeps_mapping) restored.data.deinit(gpa);
+        const entry = restored.entry;
         if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache hit for {s} key {s}\n", .{ module_name, &std.fmt.bytesToHex(unit.key.bytes[0..8], .lower) });
+        std.debug.assert(entry.image.len != 0 or !keeps_mapping);
         if (dev_diagnostics.isSet(.verify_boxy_object_reuse)) {
             const fresh = try build(unit, module_name);
             defer fresh.deinit(gpa);
-            const encoded = try backend.dev.UnitPieces.encode(gpa, fresh.pieces);
+            const encoded = try backend.dev.UnitPieces.encode(gpa, fresh.pieces.?);
             defer gpa.free(encoded);
             if (!std.mem.eql(u8, encoded, entry.pieces)) {
                 base.invariant("the cached pieces of module {s} differ from a fresh build of them: its key misses an input", .{module_name});
             }
+            if (fresh.image) |image| if (!std.mem.eql(u8, image.bytes, entry.image)) {
+                base.invariant("the cached image of module {s} differs from a fresh build of it: its key misses an input", .{module_name});
+            };
         }
-        const pieces = try gpa.create(backend.dev.UnitPieces.Pieces);
-        errdefer gpa.destroy(pieces);
-        pieces.* = backend.dev.UnitPieces.decode(gpa, entry.pieces) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.MalformedPieces, error.UnsupportedPiecesVersion => base.invariant("the cached pieces of module {s} were admitted but do not decode: {s}", .{ module_name, @errorName(err) }),
+        const pieces: ?*backend.dev.UnitPieces.Pieces = if (unit.want_pieces) pieces: {
+            const decoded = try gpa.create(backend.dev.UnitPieces.Pieces);
+            errdefer gpa.destroy(decoded);
+            decoded.* = backend.dev.UnitPieces.decode(gpa, entry.pieces) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.MalformedPieces, error.UnsupportedPiecesVersion => base.invariant("the cached pieces of module {s} were admitted but do not decode: {s}", .{ module_name, @errorName(err) }),
+            };
+            break :pieces decoded;
+        } else null;
+        errdefer if (pieces) |decoded| {
+            decoded.deinit();
+            gpa.destroy(decoded);
         };
-        errdefer pieces.deinit();
+        const hosted_symbols = try dupeSymbols(gpa, entry.hosted_symbols);
+        errdefer freeSymbols(gpa, hosted_symbols);
+        const expect_sites = try gpa.dupe(object_cache.ExpectSiteRecord, entry.expect_sites);
+        errdefer gpa.free(expect_sites);
+        const test_roots = try gpa.dupe(object_cache.TestRootRecord, entry.test_roots);
+        errdefer gpa.free(test_roots);
+        const exports = try dupeRecords(gpa, entry.exports);
         return .{
             .restored = true,
             .pieces = pieces,
-            .hosted_symbols = try dupeSymbols(gpa, entry.hosted_symbols),
-            .exports = try dupeRecords(gpa, entry.exports),
+            .image = if (keeps_mapping) .{ .bytes = @alignCast(entry.image), .code_locations = entry.code_locations, .owner = .{ .mapped = restored.data } } else null,
+            .hosted_symbols = hosted_symbols,
+            .exports = exports,
+            .expect_sites = expect_sites,
+            .test_roots = test_roots,
         };
     }
+    restore_scope.end();
     if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache miss for {s} key {s}\n", .{ module_name, &std.fmt.bytesToHex(unit.key.bytes[0..8], .lower) });
     const built = try build(unit, module_name);
     errdefer built.deinit(gpa);
     var cache_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_cache);
     defer cache_scope.end();
-    const encoded = try backend.dev.UnitPieces.encode(gpa, built.pieces);
+    const encoded = try backend.dev.UnitPieces.encode(gpa, built.pieces.?);
     defer gpa.free(encoded);
-    try store(gpa, unit.cache_manager, unit.key, .{ .exports = built.exports, .hosted_symbols = built.hosted_symbols, .pieces = encoded });
-    return built;
+    try store(gpa, unit.cache_manager, unit.key, .{
+        .exports = built.exports,
+        .hosted_symbols = built.hosted_symbols,
+        .pieces = encoded,
+        .code_locations = if (built.image) |image| image.code_locations else &.{},
+        .image = if (built.image) |image| image.bytes else &.{},
+        .expect_sites = built.expect_sites,
+        .test_roots = built.test_roots,
+    });
+    if (unit.want_pieces) return built;
+    var without_pieces = built;
+    built.pieces.?.deinit();
+    gpa.destroy(built.pieces.?);
+    without_pieces.pieces = null;
+    return without_pieces;
 }
 
 /// Lower and compile `unit`.
@@ -252,8 +416,23 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
         .root = check.CheckedArtifact.loweringViewWithRelations(unit.artifact, &.{}),
         .imports = views.items,
     };
-    var lowered = try eval.CompileTimeFinalization.lowerBoxyRuntime(gpa, modules, .{}, unit.config);
+    std.debug.assert(unit.test_unit == (if (unit.config.boxy_unit) |module_unit| module_unit.expect_sites else false));
+    // A test unit lowers its module's top-level expects as roots too.
+    const test_requests = if (unit.test_unit) try testRootRequests(gpa, unit.artifact) else &.{};
+    defer gpa.free(test_requests);
+    const test_metadata = try testPlanMetadata(gpa, test_requests);
+    defer gpa.free(test_metadata);
+    var lowered = try eval.CompileTimeFinalization.lowerBoxyRuntime(gpa, modules, .{ .requests = test_requests, .test_plan_metadata = test_metadata }, unit.config);
     defer lowered.deinit();
+    const module_digest = moduleDigest(unit.artifact);
+    const test_modules = try gpa.alloc([32]u8, test_requests.len);
+    defer gpa.free(test_modules);
+    @memset(test_modules, module_digest);
+    const test_root_indices = try gpa.alloc(u32, test_requests.len);
+    defer gpa.free(test_root_indices);
+    for (test_root_indices, 0..) |*index, position| index.* = @intCast(position);
+    var wrappers = try testEntrypoints(gpa, &lowered, test_modules, test_root_indices);
+    defer wrappers.deinit(gpa);
     if (trace_clock) |io| std.debug.print("boxy-work: lowered {s} ({d} procs, {d} ms)\n", .{ module_name, lowered.lir_result.store.procSpecCount(), @divTrunc(std.Io.Timestamp.now(io, .awake).nanoseconds - build_started_ns, std.time.ns_per_ms) }) else if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: lowered {s} ({d} procs)\n", .{ module_name, lowered.lir_result.store.procSpecCount() });
 
     const static_data = try static_data_exports.buildStaticData(gpa, .{ .root = modules.root, .imports = views.items }, &lowered, unit.target, .{});
@@ -267,12 +446,15 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
     object_compiler.link_unit = true;
     object_compiler.post_check_executor = unit.config.post_check_executor;
+    // The command calls a test unit's wrappers in its own process.
+    object_compiler.internal_entrypoints = unit.test_unit;
+    object_compiler.relocatable_expect_sites = unit.test_unit;
     const pieces = try gpa.create(backend.dev.UnitPieces.Pieces);
     errdefer gpa.destroy(pieces);
     pieces.* = object_compiler.compileToPieces(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
-        &.{},
+        wrappers.entrypoints,
         static_data,
         lowered.lir_result.store.getProcSpecs(),
         unit.target,
@@ -281,6 +463,17 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
         return error.NativeCompilationFailed;
     };
     errdefer pieces.deinit();
+    // The image goes into the unit's cache entry, which later fast dev links
+    // read; a build without a cache has no use for it.
+    const image: ?Image = if (producesImage(unit.target) and unit.cache_manager != null) image: {
+        var code_locations: []const u8 = &.{};
+        const bytes = object_compiler.buildUnitImage(pieces, unit.target, .every_procedure, &code_locations) catch |err| {
+            std.log.err("Building the unit image of module {s} failed: {}", .{ module_name, err });
+            return error.NativeCompilationFailed;
+        };
+        break :image .{ .bytes = bytes, .code_locations = code_locations, .owner = .owned };
+    } else null;
+    errdefer if (image) |owned| owned.deinit(gpa);
     codegen_scope.end();
     if (backend_timing) |timing| {
         const snapshot = timing.snapshot();
@@ -301,13 +494,131 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     var hosted_arena = std.heap.ArenaAllocator.init(gpa);
     defer hosted_arena.deinit();
     const hosted = try hostedSymbols(hosted_arena.allocator(), &lowered.lir_result.store);
+    const expect_sites = if (unit.test_unit) try expectSiteRecords(gpa, &lowered) else &.{};
+    errdefer gpa.free(expect_sites);
+    // A test unit runs only from its image, which a run with a cache has.
+    if (unit.test_unit and image == null) base.invariant("a test unit of module {s} was built without its image", .{module_name});
+    const test_roots = if (unit.test_unit) try testRootRecords(gpa, image.?.bytes, test_modules, test_root_indices) else &.{};
+    errdefer gpa.free(test_roots);
+    const hosted_symbols = try dupeSymbols(gpa, hosted);
+    errdefer freeSymbols(gpa, hosted_symbols);
     if (trace_clock) |io| std.debug.print("boxy-work: built {s} in {d} ms\n", .{ module_name, @divTrunc(std.Io.Timestamp.now(io, .awake).nanoseconds - build_started_ns, std.time.ns_per_ms) });
     return .{
         .restored = false,
         .pieces = pieces,
-        .hosted_symbols = try dupeSymbols(gpa, hosted),
+        .image = image,
+        .hosted_symbols = hosted_symbols,
         .exports = try dupeRecords(gpa, records),
+        .expect_sites = expect_sites,
+        .test_roots = test_roots,
     };
+}
+
+/// A module's top-level expects, in source order: the roots a test unit
+/// exports wrappers for, and the roots `roc test` plans for the module.
+pub fn testRootRequests(gpa: Allocator, artifact: *const Artifact) Allocator.Error![]check.CheckedArtifact.RootRequest {
+    var roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
+    errdefer roots.deinit(gpa);
+    for (artifact.root_requests.requests) |root| {
+        if (root.kind != .test_expect) continue;
+        try roots.append(gpa, root);
+    }
+    return try roots.toOwnedSlice(gpa);
+}
+
+/// The digest a test unit's tables name `artifact`'s module by: its
+/// package-qualified name's (`watch_inputs.hashBytes`).
+pub fn moduleDigest(artifact: *const Artifact) [32]u8 {
+    return watch_inputs.hashBytes(artifact.moduleEnvConst().qualifiedModuleName());
+}
+
+/// The test-plan metadata of a test unit's roots: each root's slot is its
+/// own position, so the lowering is a function of the unit's sources alone.
+pub fn testPlanMetadata(gpa: Allocator, requests: []const check.CheckedArtifact.RootRequest) Allocator.Error![]lir.CheckedPipeline.RootTestPlanMetadata {
+    const metadata = try gpa.alloc(lir.CheckedPipeline.RootTestPlanMetadata, requests.len);
+    for (requests, metadata, 0..) |request, *slot, index| slot.* = .{
+        .request_index = @intCast(index),
+        .root_order = request.order,
+        .result_index = @intCast(index),
+        .module_index = 0,
+        .root_index = @intCast(index),
+    };
+    return metadata;
+}
+
+/// The symbol a test unit exports the wrapper of the root at `root_index`
+/// among the test roots of the module `module` names under.
+pub fn testWrapperName(gpa: Allocator, module: [32]u8, root_index: u32) Allocator.Error![]u8 {
+    return std.fmt.allocPrint(gpa, "roc__test_{s}_{d}", .{ std.fmt.bytesToHex(module[0..16], .lower), root_index });
+}
+
+/// A test unit's root wrappers, one per lowered root in request order.
+pub const TestWrappers = struct {
+    entrypoints: []backend.Entrypoint = &.{},
+
+    pub fn deinit(self: *TestWrappers, gpa: Allocator) void {
+        for (self.entrypoints) |entrypoint| {
+            gpa.free(entrypoint.symbol_name);
+            gpa.free(entrypoint.arg_layouts);
+        }
+        gpa.free(self.entrypoints);
+        self.* = .{};
+    }
+};
+
+/// The wrapper of each of `lowered`'s roots, which are the test roots that
+/// `modules` and `root_indices` name, in order.
+pub fn testEntrypoints(gpa: Allocator, lowered: *const lir.CheckedPipeline.LoweredProgram, modules: []const [32]u8, root_indices: []const u32) Allocator.Error!TestWrappers {
+    const root_procs = lowered.lir_result.root_procs.items;
+    std.debug.assert(root_procs.len == modules.len and root_indices.len == modules.len);
+    var wrappers: TestWrappers = .{ .entrypoints = try gpa.alloc(backend.Entrypoint, root_procs.len) };
+    var filled: usize = 0;
+    errdefer {
+        wrappers.entrypoints = wrappers.entrypoints[0..filled];
+        wrappers.deinit(gpa);
+    }
+    const store_ = &lowered.lir_result.store;
+    for (root_procs, modules, root_indices, wrappers.entrypoints) |proc_id, module, root_index, *entrypoint| {
+        const name = try testWrapperName(gpa, module, root_index);
+        errdefer gpa.free(name);
+        const proc = store_.getProcSpec(proc_id);
+        const arg_ids = store_.getLocalSpan(proc.args);
+        const arg_layouts = try gpa.alloc(@import("layout").Idx, arg_ids.len);
+        for (arg_layouts, 0..) |*arg_layout, index| arg_layout.* = store_.getLocal(@import("collections").GuardedList.at(arg_ids, index)).layout_idx;
+        entrypoint.* = .{ .symbol_name = name, .proc = proc_id, .arg_layouts = arg_layouts, .ret_layout = proc.ret_layout };
+        filled += 1;
+    }
+    return wrappers;
+}
+
+/// `lowered`'s expect sites as a test unit files them, by site id.
+pub fn expectSiteRecords(gpa: Allocator, lowered: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error![]object_cache.ExpectSiteRecord {
+    const sites = lowered.lir_result.expect_sites.items;
+    const records = try gpa.alloc(object_cache.ExpectSiteRecord, sites.len);
+    for (sites, records) |site, *record| {
+        if (!site.loc.hasLocation()) base.invariant("a test unit's expect site has no source location", .{});
+        record.* = .{
+            .module = watch_inputs.hashBytes(lowered.lir_result.store.sourceFileQualifiedName(site.loc.file)),
+            .region_start = site.region.start.offset,
+            .region_end = site.region.end.offset,
+        };
+    }
+    return records;
+}
+
+/// The test-root table of a test unit whose image is `image`: where it
+/// exports the wrapper of each root that `modules` and `root_indices` name.
+pub fn testRootRecords(gpa: Allocator, image: []align(backend.dev.UnitImage.alignment.toByteUnits()) const u8, modules: []const [32]u8, root_indices: []const u32) Allocator.Error![]object_cache.TestRootRecord {
+    const view = backend.dev.UnitImage.View.init(image) catch |err| base.invariant("a test unit's image does not read: {s}", .{@errorName(err)});
+    const records = try gpa.alloc(object_cache.TestRootRecord, modules.len);
+    errdefer gpa.free(records);
+    for (modules, root_indices, records) |module, root_index, *record| {
+        const name = try testWrapperName(gpa, module, root_index);
+        defer gpa.free(name);
+        const symbol = view.findExportIndex(name) orelse base.invariant("a test unit's image does not export its wrapper {s}", .{name});
+        record.* = .{ .module = module, .root_index = root_index, .symbol = symbol };
+    }
+    return records;
 }
 
 /// Copies of `records`, each and the slice allocated from `gpa`.

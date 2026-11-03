@@ -1506,14 +1506,37 @@ pub const ExportInterfaces = lir.CheckedPipeline.BoxyExportInterfaces;
 /// The names the modules of one link give their workers and nominal types.
 pub const ModuleNames = lir.CheckedPipeline.BoxyModuleNames;
 
+/// How a cached module's code reaches this process for compile-time
+/// evaluation. A Linux x86_64 host, whose module units carry unit images
+/// (`compile.boxy_unit.producesImage`), loads each unit's image as the
+/// cache holds it; every other host composes the unit's pieces into a
+/// relocatable object and loads that.
+pub const BoxyObjectCode = enum { image, pieces };
+
+/// The form this host loads module objects in.
+pub const boxy_object_code: BoxyObjectCode = if (builtin.os.tag == .linux and builtin.cpu.arch == .x86_64) .image else .pieces;
+
 /// One imported module's object, loaded into the compiler's process.
 pub const BoxyObject = struct {
     /// The module's checked key.
     module: [32]u8,
-    /// The module's code in pieces, which the evaluator composes into the
-    /// image it loads (design.md "Unit Pieces And Whole-Program Dead Code").
-    pieces: *const backend.dev.UnitPieces.Pieces,
+    /// The module's code, in the form this host loads (`boxy_object_code`):
+    /// its unit image, or its pieces, which the evaluator composes into the
+    /// object it loads (design.md "Unit Pieces And Whole-Program Dead Code").
+    code: union(BoxyObjectCode) {
+        image: BoxyImage,
+        pieces: *const backend.dev.UnitPieces.Pieces,
+    },
     hosted_symbols: []const []const u8,
+};
+
+/// A module's unit image and its code locations, both kept alive by the
+/// evaluation's object source.
+pub const BoxyImage = struct {
+    bytes: []align(backend.dev.UnitImage.alignment.toByteUnits()) const u8,
+    /// `backend.dev.CodeLocations` over offsets from the start of the
+    /// image's text.
+    code_locations: []const u8,
 };
 
 /// A module's imports as objects, and as the views its unit lowers against.
@@ -1564,19 +1587,43 @@ pub const BoxyObjectSource = struct {
 const BoxyLinkedImages = struct {
     allocator: Allocator,
     mutex: std.atomic.Mutex = .unlocked,
-    images: std.ArrayList(object_image.Image) = .empty,
+    images: std.ArrayList(LoadedObject) = .empty,
     /// Each image's code, in `images` order.
     code: std.ArrayList([]const u8) = .empty,
-    /// Each image's locations, in `images` order. Owned.
+    /// Each image's locations, in `images` order: borrowed from a unit
+    /// image, owned for a composed object.
     locations: std.ArrayList(backend.dev.CodeLocations) = .empty,
+    /// What every loaded unit image exports, by name. A procedure two units
+    /// define binds to the first image loaded, as a name lookup over the
+    /// images in load order finds it. Names borrow the images' bytes, which
+    /// the evaluation's object source keeps for the compilation.
+    exports: switch (boxy_object_code) {
+        .image => std.StringHashMapUnmanaged(ImageLoader.Binding),
+        .pieces => void,
+    } = switch (boxy_object_code) {
+        .image => .empty,
+        .pieces => {},
+    },
     loaded: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
     hosted: std.StringHashMapUnmanaged(void) = .empty,
 
+    const ImageLoader = backend.dev.UnitImageLoader;
+    const LoadedObject = switch (boxy_object_code) {
+        .image => ImageLoader.Loaded,
+        .pieces => object_image.Image,
+    };
+
     fn deinit(self: *BoxyLinkedImages) void {
-        if (comptime !compilerHostMustUseInterpreterForCtfe()) for (self.images.items) |*image| image.deinit();
+        if (comptime !compilerHostMustUseInterpreterForCtfe()) for (self.images.items) |*image| switch (boxy_object_code) {
+            .image => image.unload(),
+            .pieces => image.deinit(),
+        };
         self.images.deinit(self.allocator);
         self.code.deinit(self.allocator);
-        for (self.locations.items) |locations| self.allocator.free(locations.bytes);
+        switch (boxy_object_code) {
+            .image => self.exports.deinit(self.allocator),
+            .pieces => for (self.locations.items) |locations| self.allocator.free(locations.bytes),
+        }
         self.locations.deinit(self.allocator);
         self.loaded.deinit(self.allocator);
         var names = self.hosted.keyIterator();
@@ -1591,14 +1638,17 @@ const BoxyLinkedImages = struct {
     /// entry at all.
     fn resetMutableData(self: *const BoxyLinkedImages) void {
         if (comptime compilerHostMustUseInterpreterForCtfe()) return;
-        for (self.images.items) |*image| image.resetZeroFilled();
+        for (self.images.items) |*image| switch (boxy_object_code) {
+            .image => image.resetZeroFill(),
+            .pieces => image.resetZeroFilled(),
+        };
     }
 
     fn lock(self: *BoxyLinkedImages) void {
         while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
     }
 
-    fn load(self: *BoxyLinkedImages, objects: []const BoxyObject) FinalizeError!void {
+    fn load(self: *BoxyLinkedImages, objects: []const BoxyObject, timing: ?*Timing) FinalizeError!void {
         self.lock();
         defer self.mutex.unlock();
         for (objects) |object| {
@@ -1607,26 +1657,73 @@ const BoxyLinkedImages = struct {
                 if (self.hosted.contains(symbol)) continue;
                 try self.hosted.put(self.allocator, try self.allocator.dupe(u8, symbol), {});
             }
-            // A unit's image holds every piece of it: a module's roots may
-            // call any export, and each procedure is found by its symbol.
-            var compiler = backend.ObjectFileCompiler.init(self.allocator);
-            var composed = compiler.composeObject(&.{object.pieces}, backend.dev.LirCodeGenMod.host_lir_codegen_target, .{
-                .global_procs = true,
-                .capture_code_locations = true,
-            }) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => finalizationInvariantFmt("a cached Boxy module's pieces would not compose: {s}", .{@errorName(err)}),
-            };
-            defer composed.deinit();
-            const image = object_image.Image.load(self.allocator, composed.object_bytes, .{ .context = self, .resolve = resolve }) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => finalizationInvariantFmt("a cached Boxy module object would not load: {s}", .{@errorName(err)}),
-            };
-            try self.images.append(self.allocator, image);
-            try self.code.append(self.allocator, image.code);
-            const locations = try self.allocator.dupe(u8, composed.code_locations);
-            try self.locations.append(self.allocator, .{ .bytes = locations });
+            try self.images.ensureUnusedCapacity(self.allocator, 1);
+            try self.code.ensureUnusedCapacity(self.allocator, 1);
+            try self.locations.ensureUnusedCapacity(self.allocator, 1);
+            switch (boxy_object_code) {
+                .image => try self.loadImage(object.code.image, timing),
+                .pieces => try self.loadPieces(object.code.pieces, timing),
+            }
         }
+    }
+
+    /// Load a unit image as the cache holds it. It holds every procedure of
+    /// its unit: a module's roots may call any export, and each procedure is
+    /// found by its symbol.
+    fn loadImage(self: *BoxyLinkedImages, object: BoxyImage, timing: ?*Timing) FinalizeError!void {
+        const load_started_ns = if (timing) |active| nowNs(active.std_io) else 0;
+        // The image and its code locations were read when their cache
+        // entry was admitted, or built by this compilation; a library
+        // unit's entry always files code locations.
+        std.debug.assert(object.code_locations.len != 0);
+        const view = backend.dev.UnitImage.View.init(object.bytes) catch |err| finalizationInvariantFmt("an admitted unit image does not read: {s}", .{@errorName(err)});
+        var diagnostic: ImageLoader.Diagnostic = .{};
+        var image = ImageLoader.load(self.allocator, view, .{ .context = self, .resolve = resolveImport }, &diagnostic) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.UndefinedImport => finalizationInvariantFmt("a cached Boxy module's image imports {s}, which nothing loaded defines", .{diagnostic.name}),
+            error.SiteOutOfRange => finalizationInvariantFmt("a cached Boxy module's image has a reference to '{s}' out of its field's reach", .{diagnostic.name}),
+        };
+        errdefer image.unload();
+        const symbols = view.symbols();
+        try self.exports.ensureUnusedCapacity(self.allocator, @intCast(view.exports().len));
+        for (view.exports()) |index| {
+            const symbol = symbols[index];
+            const entry = self.exports.getOrPutAssumeCapacity(view.name(symbol.name));
+            if (entry.found_existing) continue;
+            entry.value_ptr.* = .{ .address = image.symbolAddress(symbol), .function = symbol.type == @backingInt(backend.dev.UnitImage.SymbolType.func) };
+        }
+        self.images.appendAssumeCapacity(image);
+        self.code.appendAssumeCapacity(image.text());
+        self.locations.appendAssumeCapacity(.{ .bytes = object.code_locations });
+        if (timing) |active| active.finishUnitStep(load_started_ns, &active.unit_load_ns);
+    }
+
+    /// Compose a unit's pieces into an object and load it. The object holds
+    /// every piece of the unit: a module's roots may call any export, and
+    /// each procedure is found by its symbol.
+    fn loadPieces(self: *BoxyLinkedImages, pieces: *const backend.dev.UnitPieces.Pieces, timing: ?*Timing) FinalizeError!void {
+        const compose_started_ns = if (timing) |active| nowNs(active.std_io) else 0;
+        var compiler = backend.ObjectFileCompiler.init(self.allocator);
+        var composed = compiler.composeObject(&.{pieces}, backend.dev.LirCodeGenMod.host_lir_codegen_target, .{
+            .global_procs = true,
+            .capture_code_locations = true,
+        }) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => finalizationInvariantFmt("a cached Boxy module's pieces would not compose: {s}", .{@errorName(err)}),
+        };
+        defer composed.deinit();
+        if (timing) |active| active.finishUnitStep(compose_started_ns, &active.unit_compose_ns);
+        const load_started_ns = if (timing) |active| nowNs(active.std_io) else 0;
+        var image = object_image.Image.load(self.allocator, composed.object_bytes, .{ .context = self, .resolve = resolve }) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => finalizationInvariantFmt("a cached Boxy module object would not load: {s}", .{@errorName(err)}),
+        };
+        errdefer image.deinit();
+        const locations = try self.allocator.dupe(u8, composed.code_locations);
+        self.images.appendAssumeCapacity(image);
+        self.code.appendAssumeCapacity(image.code);
+        self.locations.appendAssumeCapacity(.{ .bytes = locations });
+        if (timing) |active| active.finishUnitStep(load_started_ns, &active.unit_load_ns);
     }
 
     /// The offset of `address` in a loaded image's code, and that image's
@@ -1649,8 +1746,13 @@ const BoxyLinkedImages = struct {
     }
 
     fn lookupLocked(self: *const BoxyLinkedImages, name: []const u8) ?usize {
-        for (self.images.items) |*image| if (image.lookupAddress(name)) |address| return address;
-        return null;
+        switch (boxy_object_code) {
+            .image => return if (self.exports.get(name)) |binding| binding.address else null,
+            .pieces => {
+                for (self.images.items) |*image| if (image.lookupAddress(name)) |address| return address;
+                return null;
+            },
+        }
     }
 
     /// Bind a reference of an object being loaded, under `load`'s lock.
@@ -1659,6 +1761,16 @@ const BoxyLinkedImages = struct {
         if (backend.dev.HostSplice.hostFunction(name)) |address| return address;
         if (self.lookupLocked(name)) |address| return address;
         if (self.hosted.contains(name)) return @intFromPtr(&hostedCallAtCompileTime);
+        return null;
+    }
+
+    /// Bind an import of a unit image being loaded, under `load`'s lock, by
+    /// the same policy as `resolve`.
+    fn resolveImport(context: *anyopaque, name: []const u8) ?ImageLoader.Binding {
+        const self: *BoxyLinkedImages = @ptrCast(@alignCast(context));
+        if (backend.dev.HostSplice.hostFunction(name)) |address| return .{ .address = address, .function = true };
+        if (self.exports.get(name)) |binding| return binding;
+        if (self.hosted.contains(name)) return .{ .address = @intFromPtr(&hostedCallAtCompileTime), .function = true };
         return null;
     }
 
@@ -2093,7 +2205,7 @@ const ModuleEvaluation = struct {
         if ((comptime !compilerHostMustUseInterpreterForCtfe()) and self.links(shared)) {
             const source = shared.options.boxy_objects.?;
             if (try source.objects(source.context, module)) |set| {
-                try shared.images.load(set.objects);
+                try shared.images.load(set.objects, shared.options.timing);
                 run_options.boxy_linked_images = shared.images;
                 lowering_modules = .{ .root = checked.loweringViewWithRelations(module, &.{}), .imports = set.views };
                 target = boxyLinkedCompileTimeTarget(source, shared.options);
@@ -3475,6 +3587,10 @@ pub const Timing = struct {
     code_generation_ns: TimingCounter = .{},
     execution_ns: TimingCounter = .{},
     store_results_ns: TimingCounter = .{},
+    /// Composing a module object's pieces into an object to load, and
+    /// loading a module object into this process (`BoxyLinkedImages`).
+    unit_compose_ns: TimingCounter = .{},
+    unit_load_ns: TimingCounter = .{},
     /// Compile-time roots the shared program declared, and how many of them
     /// it published for evaluation.
     specialization_passes: TimingCounter = .{},
@@ -3508,6 +3624,8 @@ pub const Timing = struct {
             .code_generation_ns = self.code_generation_ns.load(),
             .execution_ns = self.execution_ns.load(),
             .store_results_ns = self.store_results_ns.load(),
+            .unit_compose_ns = self.unit_compose_ns.load(),
+            .unit_load_ns = self.unit_load_ns.load(),
             .specialization_passes = self.specialization_passes.load(),
             .respecialization_passes = self.respecialization_passes.load(),
             .roots_declared = self.roots_declared.load(),
@@ -3532,6 +3650,8 @@ pub const Timing = struct {
         self.code_generation_ns.add(snapshot_value.code_generation_ns);
         self.execution_ns.add(snapshot_value.execution_ns);
         self.store_results_ns.add(snapshot_value.store_results_ns);
+        self.unit_compose_ns.add(snapshot_value.unit_compose_ns);
+        self.unit_load_ns.add(snapshot_value.unit_load_ns);
         self.specialization_passes.add(snapshot_value.specialization_passes);
         self.respecialization_passes.add(snapshot_value.respecialization_passes);
         self.roots_declared.add(snapshot_value.roots_declared);
@@ -3562,6 +3682,13 @@ pub const Timing = struct {
         self.execution_ns.add(elapsed);
     }
 
+    /// Add the time since `started_ns` to `counter`, one of the module
+    /// object loading steps, without the footprint reading a burst boundary
+    /// takes.
+    fn finishUnitStep(self: *Timing, started_ns: i64, counter: *TimingCounter) void {
+        counter.add(@intCast(@max(0, nowNs(self.std_io) - started_ns)));
+    }
+
     fn finish(self: *Timing, started_ns: i64, phase: TimingPhase) void {
         self.sampleMemory();
         const elapsed_ns: u64 = @intCast(@max(0, nowNs(self.std_io) - started_ns));
@@ -3588,6 +3715,8 @@ pub const TimingSnapshot = struct {
     code_generation_ns: u64 = 0,
     execution_ns: u64 = 0,
     store_results_ns: u64 = 0,
+    unit_compose_ns: u64 = 0,
+    unit_load_ns: u64 = 0,
     specialization_passes: u64 = 0,
     respecialization_passes: u64 = 0,
     roots_declared: u64 = 0,
@@ -3616,6 +3745,8 @@ test "shared lowering timing preserves full snapshots through aggregation" {
         .code_generation_ns = 107,
         .execution_ns = 109,
         .store_results_ns = 113,
+        .unit_compose_ns = 117,
+        .unit_load_ns = 119,
         .mem_min = 127,
         .mem_max = 131,
         .native_emission = .{ .tasks_submitted = 3, .procedures_emitted = 5, .procedures_reused = 7, .peak_inflight_fragments = 2 },

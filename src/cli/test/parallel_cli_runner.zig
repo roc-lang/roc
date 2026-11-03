@@ -624,6 +624,7 @@ const CustomCase = enum {
     absolute_platform_path_check_build_reject,
     watch_completed_run_refresh_reruns,
     hot_reload_dev_shim,
+    hot_reload_dev_shim_boxy_unit_images,
     hot_reload_model_boundary,
     hot_reload_retired_static_str,
     hot_reload_retired_static_data,
@@ -631,6 +632,8 @@ const CustomCase = enum {
     issue_12633_hot_reload_erased_callable_same_state,
     issue_12633_hot_reload_erased_callable_state_boxy,
     issue_12633_hot_reload_erased_callable_same_state_boxy,
+    issue_12633_hot_reload_erased_callable_state_boxy_unit_images,
+    issue_12633_hot_reload_erased_callable_same_state_boxy_unit_images,
     hot_reload_default_app,
     platform_requires_checker_diagnostics,
     generated_graph_1_1,
@@ -2739,6 +2742,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11714: check and build reject an absolute platform path", .body = .{ .custom = .absolute_platform_path_check_build_reject } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check --watch reruns when completed child snapshot is stale", .skip = .{ .windows = "watch refresh race test uses a POSIX wrapper script" }, .body = .{ .custom = .watch_completed_run_refresh_reruns } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch hot reloads dev shim code", .skip = .{ .windows = "generated hot-reload test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_dev_shim } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy roc --watch with a cache hot reloads dev shim code composed from unit images", .skip = .{ .windows = "generated hot-reload test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_dev_shim_boxy_unit_images } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch hot reloads app-provided Model through Box", .skip = .{ .windows = "generated hot-reload model test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_model_boundary } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch keeps retired image static Str alive for a live value", .skip = .{ .windows = "generated hot-reload static-string test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_retired_static_str } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch keeps retired image static lists and boxed closures alive and reuses unchanged static data", .skip = .{ .windows = "generated hot-reload static-data test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_retired_static_data } },
@@ -2746,6 +2750,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12633: roc --watch reloads an unchanged State the host reaches only through an erased callable", .skip = .{ .windows = "generated hot-reload erased-callable test platform uses POSIX host code" }, .body = .{ .custom = .issue_12633_hot_reload_erased_callable_same_state } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12633: boxy roc --watch rejects a State layout change the host reaches only through an erased callable", .skip = .{ .windows = "generated hot-reload erased-callable test platform uses POSIX host code" }, .body = .{ .custom = .issue_12633_hot_reload_erased_callable_state_boxy } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12633: boxy roc --watch reloads an unchanged State the host reaches only through an erased callable", .skip = .{ .windows = "generated hot-reload erased-callable test platform uses POSIX host code" }, .body = .{ .custom = .issue_12633_hot_reload_erased_callable_same_state_boxy } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12633: boxy roc --watch with a cache rejects a State layout change the host reaches only through an erased callable", .skip = .{ .windows = "generated hot-reload erased-callable test platform uses POSIX host code" }, .body = .{ .custom = .issue_12633_hot_reload_erased_callable_state_boxy_unit_images } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12633: boxy roc --watch with a cache reloads an unchanged State the host reaches only through an erased callable", .skip = .{ .windows = "generated hot-reload erased-callable test platform uses POSIX host code" }, .body = .{ .custom = .issue_12633_hot_reload_erased_callable_same_state_boxy_unit_images } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch runs headerless default app", .body = .{ .custom = .hot_reload_default_app } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10307: direct dev run passes source path as argv0", .backend = .dev, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/fx-open/argv0.roc", .app_args = &.{ "first", "second" }, .file_path_mode = .relative, .stdout_exact = "test/fx-open/argv0.roc|first|second\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10307: explicit run passes source path as argv0", .backend = .dev, .body = .{ .command = .{ .args = &.{ "run", "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/argv0.roc", .app_args = &.{ "first", "second" }, .file_path_mode = .relative, .stdout_exact = "test/fx-open/argv0.roc|first|second\n" } } },
@@ -3310,6 +3316,11 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10620: optimized imported List.sublist test passes", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/issue_10620_optimized_sublist_import/Main.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stdout, .text = "failed" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test expect_err reports across linked optimized modules", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/multi_module_expect_err/Main.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Ran 2 tests" }, .{ .stream = .stderr, .text = "result = to_positive(-2)?" }, .{ .stream = .stderr, .text = "result = to_positive(-1)?" }, .{ .stream = .stderr, .text = "The value was: Err(IsNegative)" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "roc_expect_err_region" }, .{ .stream = .stderr, .text = "symbol multiply defined" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test crash in one optimized root does not pollute the next root", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/MultiRootCrashIsolation.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Ran 2 tests" }, .{ .stream = .stderr, .text = "passed" }, .{ .stream = .stderr, .text = "failed" }, .{ .stream = .stderr, .text = "Roc application crashed with this message:" }, .{ .stream = .stderr, .text = "first root crashed" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    // With a cache, `roc test --specialize=no --opt=dev` runs its roots from test units' images.
+    .{ .id = 0, .suite = .subcommands, .name = "roc test from test units: imported inline expects report and aggregate by declaring source", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev" }, .roc_file = "test/cli/issue_11091_imported_inline_expect/Main.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Ran 3 tests" }, .{ .stream = .stderr, .text = "2 passed" }, .{ .stream = .stderr, .text = "1 failed" }, .{ .stream = .stderr, .text = "Helper.roc:4:" }, .{ .stream = .stderr, .text = "expect x == 2" }, .{ .stream = .stderr, .text = "This test ran 2 times: 0 passed, 2 failed" } }, .occurrences = &.{.{ .stream = .stderr, .text = "Helper.roc:4:", .count = 1 }}, .not_contains = &.{ .{ .stream = .stderr, .text = "Main.roc:4:" }, .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test from test units: an app's expects run without its platform entrypoint", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev" }, .roc_file = "test/cli/AppWithoutEntrypoint.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test from test units: ? on Err inside a top-level expect fails with snippet and value", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev" }, .roc_file = "test/cli/QuestionInExpectFail.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "evaluated an `Err` inside an" }, .{ .stream = .stderr, .text = "The value was: Err(IsNegative)" }, .{ .stream = .stderr, .text = "result = to_positive(-3)?" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "crash" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test from test units: a crash in one root spares the next, and an inline expect reports at its line", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev" }, .roc_file = "test/cli/TestUnitCrashAndInlineExpect.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Roc application crashed with this message:" }, .{ .stream = .stderr, .text = "the list was empty" }, .{ .stream = .stderr, .text = "TestUnitCrashAndInlineExpect.roc:20:1" }, .{ .stream = .stderr, .text = "TestUnitCrashAndInlineExpect.roc:9:5" }, .{ .stream = .stderr, .text = "This test ran 2 times: 1 passed, 1 failed" }, .{ .stream = .stderr, .text = "Ran 4 tests" }, .{ .stream = .stderr, .text = "2 passed" }, .{ .stream = .stderr, .text = "2 failed" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9897: nested callback capture count matches target", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/Issue9897NestedCaptureCount.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "function reference capture count differs from its target" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11661: closure loop preserves previous list (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue_11661_closure_loop_alias.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11661: closure loop preserves previous list (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/issue_11661_closure_loop_alias.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }} } } },
@@ -6040,14 +6051,18 @@ fn runCustomCase(
         .watch_inputs_reject_absolute_import => customWatchInputsRejectAbsoluteImport(io, allocator, &env, &timer, timeout_ms),
         .absolute_platform_path_check_build_reject => customAbsolutePlatformPathCheckBuildReject(io, allocator, &env, &timer, timeout_ms),
         .watch_completed_run_refresh_reruns => customWatchCompletedRunRefreshReruns(io, allocator, &env, &timer, timeout_ms),
-        .hot_reload_dev_shim => customHotReloadDevShim(io, allocator, &env, &timer, timeout_ms),
+        .hot_reload_dev_shim => customHotReloadDevShim(io, allocator, &env, &timer, timeout_ms, .lss_no_cache),
+        .hot_reload_dev_shim_boxy_unit_images => customHotReloadDevShim(io, allocator, &env, &timer, timeout_ms, .boxy_cache),
         .hot_reload_model_boundary => customHotReloadModelBoundary(io, allocator, &env, &timer, timeout_ms),
         .hot_reload_retired_static_str => customHotReloadRetiredStaticStr(io, allocator, &env, &timer, timeout_ms),
         .hot_reload_retired_static_data => customHotReloadRetiredStaticData(io, allocator, &env, &timer, timeout_ms),
-        .issue_12633_hot_reload_erased_callable_state => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .larger_state, "--specialize=yes"),
-        .issue_12633_hot_reload_erased_callable_same_state => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .same_state, "--specialize=yes"),
-        .issue_12633_hot_reload_erased_callable_state_boxy => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .larger_state, "--specialize=no"),
-        .issue_12633_hot_reload_erased_callable_same_state_boxy => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .same_state, "--specialize=no"),
+        .issue_12633_hot_reload_erased_callable_state => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .larger_state, "--specialize=yes", .no_cache),
+        .issue_12633_hot_reload_erased_callable_same_state => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .same_state, "--specialize=yes", .no_cache),
+        .issue_12633_hot_reload_erased_callable_state_boxy => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .larger_state, "--specialize=no", .no_cache),
+        .issue_12633_hot_reload_erased_callable_same_state_boxy => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .same_state, "--specialize=no", .no_cache),
+        // With the case's cache, a `.boxy` run composes its images from unit images.
+        .issue_12633_hot_reload_erased_callable_state_boxy_unit_images => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .larger_state, "--specialize=no", .cache),
+        .issue_12633_hot_reload_erased_callable_same_state_boxy_unit_images => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .same_state, "--specialize=no", .cache),
         .hot_reload_default_app => customHotReloadDefaultApp(io, allocator, &env, &timer, timeout_ms),
         .platform_requires_checker_diagnostics => customPlatformRequiresCheckerDiagnostics(io, allocator, &env, &timer, timeout_ms),
         .generated_graph_1_1 => customGeneratedModuleGraph(io, allocator, &env, &timer, timeout_ms, .{ .roc_file_count = 1, .symbols_per_file = 1 }),
@@ -7339,6 +7354,9 @@ fn customHotReloadDevShim(
     env: *const CaseEnv,
     timer: *harness.Timer,
     timeout_ms: u64,
+    /// `.boxy_cache` runs `--specialize=no` with the case's cache, which
+    /// composes every generation from unit images.
+    mode: enum { lss_no_cache, boxy_cache },
 ) ?TestResult {
     const target = nativeMuslTarget() orelse {
         return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "hot-reload dev-shim integration runs only on native Linux x64/arm64 hosts" };
@@ -7439,18 +7457,11 @@ fn customHotReloadDevShim(
 
     const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
         return timeoutFailure(allocator, timer, .run, "case timeout exhausted before roc --watch started");
-    const result = runRawInEnv(io, allocator, env, &.{
-        roc_binary_path,
-        "--watch",
-        "--opt=dev",
-        "--no-cache",
-        target_arg,
-        app_path,
-        app_path,
-        data_path,
-        extra_path,
-        platform_path,
-        slow_path,
+    const lss_argv = [_][]const u8{ roc_binary_path, "--watch", "--opt=dev", "--no-cache", target_arg, app_path, app_path, data_path, extra_path, platform_path, slow_path };
+    const boxy_argv = [_][]const u8{ roc_binary_path, "--watch", "--opt=dev", "--specialize=no", target_arg, app_path, app_path, data_path, extra_path, platform_path, slow_path };
+    const result = runRawInEnv(io, allocator, env, switch (mode) {
+        .lss_no_cache => &lss_argv,
+        .boxy_cache => &boxy_argv,
     }, project_root_path, null, child_timeout_ms) catch |err|
         return customInfraFailure(allocator, timer, "roc --watch spawn error: {}", .{err});
 
@@ -8630,6 +8641,7 @@ fn customIssue12633HotReloadErasedCallableState(
     timeout_ms: u64,
     edit: Issue12633Edit,
     specialize_arg: []const u8,
+    cache: enum { no_cache, cache },
 ) ?TestResult {
     const target = nativeMuslTarget() orelse {
         return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "hot-reload erased-callable integration runs only on native Linux x64/arm64 hosts" };
@@ -8695,16 +8707,11 @@ fn customIssue12633HotReloadErasedCallableState(
 
     const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
         return timeoutFailure(allocator, timer, .run, "case timeout exhausted before roc --watch started");
-    const result = runRawInEnv(io, allocator, env, &.{
-        roc_binary_path,
-        "--watch",
-        "--opt=dev",
-        "--no-cache",
-        specialize_arg,
-        target_arg,
-        app_path,
-        app_path,
-        edited_app_path,
+    const no_cache_argv = [_][]const u8{ roc_binary_path, "--watch", "--opt=dev", "--no-cache", specialize_arg, target_arg, app_path, app_path, edited_app_path };
+    const cache_argv = [_][]const u8{ roc_binary_path, "--watch", "--opt=dev", specialize_arg, target_arg, app_path, app_path, edited_app_path };
+    const result = runRawInEnv(io, allocator, env, switch (cache) {
+        .no_cache => &no_cache_argv,
+        .cache => &cache_argv,
     }, project_root_path, null, child_timeout_ms) catch |err|
         return customInfraFailure(allocator, timer, "roc --watch spawn error: {}", .{err});
 
@@ -10312,11 +10319,12 @@ fn customBoxyTestOutcomes(io: std.Io, allocator: Allocator, env: *const CaseEnv,
 
 /// design.md "Caching Under `.boxy`": with `--specialize=no`, a command
 /// writes nothing to the cache once its checking is done apart from `roc
-/// test`'s outcome files. `roc test` checks its module with explicit roots, so
-/// its checked entries are its own; what it may not add is an entry of
-/// another family `roc check` writes none of, and running its tests again
-/// under another execution mode, which has its own outcome file, must change
-/// nothing else.
+/// test`'s outcome files and the test units a dev `roc test` runs its roots
+/// from (Unit-Image Test Execution). `roc test` checks its module with
+/// explicit roots, so its checked entries are its own; what it may not add
+/// is an entry of another family `roc check` writes none of, and running
+/// its tests again under another execution mode, which has its own outcome
+/// file, must change nothing else.
 fn customBoxyCachesNothingAfterChecking(
     io: std.Io,
     allocator: Allocator,
@@ -10371,15 +10379,30 @@ fn customBoxyCachesNothingAfterChecking(
         }
         if (outcomes == 0) return customFailure(allocator, timer, "`roc test {s}` recorded no test outcome", .{command.args[2]});
         if (test_inventory) |previous| {
-            if (firstInventoryDifference(previous, lowered.items)) |entry| {
-                return customFailure(allocator, timer, "running the tests again with {s} changed the cache: {s} {x}", .{ command.args[2], @tagName(entry.family), &entry.key });
+            // A dev run files its modules' test units, which run its roots;
+            // it changes nothing else.
+            for (lowered.items) |entry| {
+                const before = for (previous) |earlier| {
+                    if (earlier.eql(entry)) break true;
+                } else false;
+                if (!before and entry.family != .boxy_object) {
+                    return customFailure(allocator, timer, "running the tests again with {s} changed the cache: {s} {x}", .{ command.args[2], @tagName(entry.family), &entry.key });
+                }
             }
-        } else test_inventory = lowered.items;
+            for (previous) |earlier| {
+                const after = for (lowered.items) |entry| {
+                    if (earlier.eql(entry)) break true;
+                } else false;
+                if (!after) return customFailure(allocator, timer, "running the tests again with {s} removed a cache entry: {s} {x}", .{ command.args[2], @tagName(earlier.family), &earlier.key });
+            }
+        }
+        test_inventory = lowered.items;
     }
 
     const check_inventory = cacheInventory(io, allocator, cache_roots[0]) catch |err|
         return customInfraFailure(allocator, timer, "failed to read the cache: {}", .{err});
     for (test_inventory.?) |entry| {
+        if (entry.family == .boxy_object) continue; // the dev run's test units
         const written_by_check = for (check_inventory) |checked| {
             if (checked.family == entry.family) break true;
         } else false;
@@ -10831,22 +10854,29 @@ fn customBoxyBuildAndRunCacheWhatCheckCaches(
         inventory.* = cacheInventory(io, allocator, cache_root) catch |err|
             return customInfraFailure(allocator, timer, "failed to read the cache: {}", .{err});
         if (index == 0) continue;
-        // A build's extra entries are module objects, and nothing else;
-        // every other command leaves exactly the check's cache.
+        // A build's extra entries are module objects and the host its fast
+        // dev link patches; a run's are module objects and the host
+        // executable its composed image runs in. Nothing else differs from
+        // the check's cache.
         const is_build = std.mem.eql(u8, args[0], "build");
         var objects: usize = 0;
+        var extra: usize = 0;
         for (inventory.*) |entry| {
             const in_check = for (inventories[0]) |checked| {
                 if (checked.eql(entry)) break true;
             } else false;
             if (in_check) continue;
-            if (is_build and entry.family == .boxy_object) {
-                objects += 1;
-                continue;
-            }
-            return customFailure(allocator, timer, "`roc {s} --specialize=no` left a cache entry `roc check` does not: {s} {x}", .{ args[0], @tagName(entry.family), entry.key });
+            const allowed = switch (entry.family) {
+                .boxy_object => true,
+                .prelinked_host => is_build,
+                .run_host => !is_build,
+                .checked, .canonicalized, .placement, .literals, .pairing, .local_discovery => false,
+            };
+            if (!allowed) return customFailure(allocator, timer, "`roc {s} --specialize=no` left a cache entry `roc check` does not: {s} {x}", .{ args[0], @tagName(entry.family), entry.key });
+            if (entry.family == .boxy_object) objects += 1;
+            extra += 1;
         }
-        if (inventory.len - objects != inventories[0].len) return customFailure(allocator, timer, "`roc {s} --specialize=no` left fewer of `roc check`'s entries", .{args[0]});
+        if (inventory.len - extra != inventories[0].len) return customFailure(allocator, timer, "`roc {s} --specialize=no` left fewer of `roc check`'s entries", .{args[0]});
         if (is_build and objects == 0) return customFailure(allocator, timer, "`roc build --specialize=no` filed no module object", .{});
     }
     return null;
@@ -10897,23 +10927,6 @@ fn cacheInventory(io: std.Io, allocator: Allocator, cache_root: []const u8) CliR
     }
     std.mem.sort(CacheEntryName, names.items, {}, CacheEntryName.lessThan);
     return names.toOwnedSlice(allocator);
-}
-
-/// The first entry one sorted inventory holds and the other lacks.
-fn firstInventoryDifference(left: []const CacheEntryName, right: []const CacheEntryName) ?CacheEntryName {
-    var l: usize = 0;
-    var r: usize = 0;
-    while (l < left.len and r < right.len) {
-        if (left[l].eql(right[r])) {
-            l += 1;
-            r += 1;
-        } else if (CacheEntryName.lessThan({}, left[l], right[r])) {
-            return left[l];
-        } else return right[r];
-    }
-    if (l < left.len) return left[l];
-    if (r < right.len) return right[r];
-    return null;
 }
 
 fn customIssue11673CallableCache(

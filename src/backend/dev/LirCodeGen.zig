@@ -54,6 +54,7 @@ const CpuLevel = roc_target_mod.CpuLevel;
 // with 24-byte RocList struct returns on aarch64
 
 const Relocation = @import("Relocation.zig").IndexedRelocation;
+const relocation_mod = @import("Relocation.zig");
 const collections = @import("collections");
 const SymbolTable = @import("SymbolTable.zig");
 const StackPlan = lir.StackPlan;
@@ -745,6 +746,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Whether object-file entrypoints should use the synthetic default
         /// platform runtime contract.
         enable_default_platform_runtime: bool = false,
+
+        /// Whether an expect site's id is emitted as a field relative to
+        /// `expect_site_base_symbol` (a test unit's image, whose loader binds
+        /// the symbol to the first program-wide id of its sites), rather
+        /// than as the program-wide id itself.
+        relocatable_expect_sites: bool = false,
 
         /// Native execution's hosted symbol addresses; see `HostedSymbolResolver`.
         hosted_symbol_resolver: ?HostedSymbolResolver = null,
@@ -20989,11 +20996,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const cond_loc = try self.emitValueLocal(expect_stmt.condition);
                             const cond_reg = try self.ensureInGeneralReg(cond_loc);
                             if (expect_stmt.site) |site| {
+                                const site_reg: ?GeneralReg = if (self.relocatable_expect_sites) reg: {
+                                    const reg = try self.allocTempGeneral();
+                                    try self.emitRelocatableExpectSite(reg, @backingInt(site));
+                                    break :reg reg;
+                                } else null;
                                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                                 defer builder.deinit();
-                                try builder.addImmArg(@backingInt(site));
+                                if (site_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(@backingInt(site));
                                 try builder.addRegArg(cond_reg);
                                 try self.callRuntimeSymbol(&builder, .roc_expect_observed);
+                                if (site_reg) |reg| self.codegen.freeGeneral(reg);
                                 self.codegen.freeGeneral(cond_reg);
                             } else {
                                 try self.emitCmpImm(cond_reg, 0);
@@ -22070,6 +22083,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call one of the host's fixed runtime symbols: by its in-process
         /// address under native execution, by relocation everywhere else.
+        /// Load `site`, a unit-local expect site id, into `dst` as an
+        /// `abs32s` field against `expect_site_base_symbol` whose bytes hold
+        /// the id.
+        fn emitRelocatableExpectSite(self: *Self, dst: GeneralReg, site: u32) Allocator.Error!void {
+            switch (isa) {
+                .x86_64 => {
+                    const start = self.codegen.currentOffset();
+                    // REX.W C7 /0 imm32: the field starts three bytes in.
+                    try self.codegen.emit.movRegImm32(dst, @intCast(site));
+                    try self.codegen.relocations.append(self.allocator, .{ .linked_data = .{
+                        .offset = @intCast(start + 3),
+                        .symbol = try self.codegen.symbols.intern(self.allocator, relocation_mod.expect_site_base_symbol, .shared),
+                        .kind = .abs32s,
+                    } });
+                },
+                .aarch64 => base.invariant("LirCodeGen invariant violated: relocatable expect sites in aarch64 code; only Linux x86_64 test units relocate them", .{}),
+            }
+        }
+
         fn callRuntimeSymbol(self: *Self, builder: *Builder, symbol: builtins.in_process_host.Symbol) Allocator.Error!void {
             switch (self.generation_mode) {
                 .native_execution => try builder.call(symbol.address()),
