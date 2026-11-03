@@ -290,6 +290,8 @@ pub const BuildError = eval.CompileTimeFinalization.RuntimeMaterializationError 
 pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     const gpa = unit.gpa;
     const module_name = unit.artifact.canonical_names.moduleNameText(unit.artifact.module_identity.module_name);
+    var restore_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_restore);
+    defer restore_scope.end();
     if (try restoreMapped(gpa, unit.cache_manager, unit.key, unit.interfaces)) |restored| {
         defer object_cache.deinitEntryView(gpa, restored.entry);
         // The mapping stays alive as the image's owner; otherwise it is
@@ -336,6 +338,7 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
             .exports = exports,
         };
     }
+    restore_scope.end();
     if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache miss for {s} key {s}\n", .{ module_name, &std.fmt.bytesToHex(unit.key.bytes[0..8], .lower) });
     const built = try build(unit, module_name);
     errdefer built.deinit(gpa);

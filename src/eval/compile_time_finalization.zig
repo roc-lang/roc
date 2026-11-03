@@ -1788,7 +1788,7 @@ const BoxyLinkedImages = struct {
         while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
     }
 
-    fn load(self: *BoxyLinkedImages, objects: []const BoxyObject) FinalizeError!void {
+    fn load(self: *BoxyLinkedImages, objects: []const BoxyObject, timing: ?*Timing) FinalizeError!void {
         self.lock();
         defer self.mutex.unlock();
         for (objects) |object| {
@@ -1799,6 +1799,7 @@ const BoxyLinkedImages = struct {
             }
             // A unit's image holds every piece of it: a module's roots may
             // call any export, and each procedure is found by its symbol.
+            const compose_started_ns = if (timing) |active| nowNs(active.std_io) else 0;
             var compiler = backend.ObjectFileCompiler.init(self.allocator);
             var composed = compiler.composeObject(&.{object.pieces}, backend.dev.LirCodeGenMod.host_lir_codegen_target, .{
                 .global_procs = true,
@@ -1808,10 +1809,13 @@ const BoxyLinkedImages = struct {
                 else => finalizationInvariantFmt("a cached Boxy module's pieces would not compose: {s}", .{@errorName(err)}),
             };
             defer composed.deinit();
+            if (timing) |active| active.finishUnitStep(compose_started_ns, &active.unit_compose_ns);
+            const load_started_ns = if (timing) |active| nowNs(active.std_io) else 0;
             const image = object_image.Image.load(self.allocator, composed.object_bytes, .{ .context = self, .resolve = resolve }) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => finalizationInvariantFmt("a cached Boxy module object would not load: {s}", .{@errorName(err)}),
             };
+            if (timing) |active| active.finishUnitStep(load_started_ns, &active.unit_load_ns);
             try self.images.append(self.allocator, image);
             try self.code.append(self.allocator, image.code);
             const locations = try self.allocator.dupe(u8, composed.code_locations);
@@ -2286,7 +2290,7 @@ const ModuleEvaluation = struct {
         if ((comptime !compilerHostMustUseInterpreterForCtfe()) and self.links(shared)) {
             const source = shared.options.boxy_objects.?;
             if (try source.objects(source.context, module)) |set| {
-                try shared.images.load(set.objects);
+                try shared.images.load(set.objects, shared.options.timing);
                 run_options.boxy_linked_images = shared.images;
                 lowering_modules = .{ .root = checked.loweringViewWithRelations(module, &.{}), .imports = set.views };
                 target = boxyLinkedCompileTimeTarget(source, shared.options);
@@ -3671,6 +3675,10 @@ pub const Timing = struct {
     code_generation_ns: TimingCounter = .{},
     execution_ns: TimingCounter = .{},
     store_results_ns: TimingCounter = .{},
+    /// Composing a module object's pieces into an object to load, and
+    /// loading a module object into this process (`BoxyLinkedImages`).
+    unit_compose_ns: TimingCounter = .{},
+    unit_load_ns: TimingCounter = .{},
     /// Compile-time roots the shared program declared, and how many of them
     /// it published for evaluation.
     specialization_passes: TimingCounter = .{},
@@ -3704,6 +3712,8 @@ pub const Timing = struct {
             .code_generation_ns = self.code_generation_ns.load(),
             .execution_ns = self.execution_ns.load(),
             .store_results_ns = self.store_results_ns.load(),
+            .unit_compose_ns = self.unit_compose_ns.load(),
+            .unit_load_ns = self.unit_load_ns.load(),
             .specialization_passes = self.specialization_passes.load(),
             .respecialization_passes = self.respecialization_passes.load(),
             .roots_declared = self.roots_declared.load(),
@@ -3728,6 +3738,8 @@ pub const Timing = struct {
         self.code_generation_ns.add(snapshot_value.code_generation_ns);
         self.execution_ns.add(snapshot_value.execution_ns);
         self.store_results_ns.add(snapshot_value.store_results_ns);
+        self.unit_compose_ns.add(snapshot_value.unit_compose_ns);
+        self.unit_load_ns.add(snapshot_value.unit_load_ns);
         self.specialization_passes.add(snapshot_value.specialization_passes);
         self.respecialization_passes.add(snapshot_value.respecialization_passes);
         self.roots_declared.add(snapshot_value.roots_declared);
@@ -3758,6 +3770,13 @@ pub const Timing = struct {
         self.execution_ns.add(elapsed);
     }
 
+    /// Add the time since `started_ns` to `counter`, one of the module
+    /// object loading steps, without the footprint reading a burst boundary
+    /// takes.
+    fn finishUnitStep(self: *Timing, started_ns: i64, counter: *TimingCounter) void {
+        counter.add(@intCast(@max(0, nowNs(self.std_io) - started_ns)));
+    }
+
     fn finish(self: *Timing, started_ns: i64, phase: TimingPhase) void {
         self.sampleMemory();
         const elapsed_ns: u64 = @intCast(@max(0, nowNs(self.std_io) - started_ns));
@@ -3784,6 +3803,8 @@ pub const TimingSnapshot = struct {
     code_generation_ns: u64 = 0,
     execution_ns: u64 = 0,
     store_results_ns: u64 = 0,
+    unit_compose_ns: u64 = 0,
+    unit_load_ns: u64 = 0,
     specialization_passes: u64 = 0,
     respecialization_passes: u64 = 0,
     roots_declared: u64 = 0,
@@ -3812,6 +3833,8 @@ test "shared lowering timing preserves full snapshots through aggregation" {
         .code_generation_ns = 107,
         .execution_ns = 109,
         .store_results_ns = 113,
+        .unit_compose_ns = 117,
+        .unit_load_ns = 119,
         .mem_min = 127,
         .mem_max = 131,
         .native_emission = .{ .tasks_submitted = 3, .procedures_emitted = 5, .procedures_reused = 7, .peak_inflight_fragments = 2 },

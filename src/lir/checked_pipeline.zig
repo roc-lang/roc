@@ -409,6 +409,7 @@ pub const Timing = struct {
     boxy_lowering_ns: TimingCounter = .{},
     boxy_unit_codegen_ns: TimingCounter = .{},
     boxy_unit_cache_ns: TimingCounter = .{},
+    boxy_unit_restore_ns: TimingCounter = .{},
     lir_passes_ns: TimingCounter = .{},
     arc_ns: TimingCounter = .{},
 
@@ -468,6 +469,7 @@ pub const Timing = struct {
             .boxy_lowering_ns = self.boxy_lowering_ns.load(),
             .boxy_unit_codegen_ns = self.boxy_unit_codegen_ns.load(),
             .boxy_unit_cache_ns = self.boxy_unit_cache_ns.load(),
+            .boxy_unit_restore_ns = self.boxy_unit_restore_ns.load(),
             .lir_passes_ns = self.lir_passes_ns.load(),
             .arc_ns = self.arc_ns.load(),
             .monotype_diagnostics = diagnostics,
@@ -527,6 +529,7 @@ pub const Timing = struct {
         self.boxy_lowering_ns.add(snapshot_value.boxy_lowering_ns);
         self.boxy_unit_codegen_ns.add(snapshot_value.boxy_unit_codegen_ns);
         self.boxy_unit_cache_ns.add(snapshot_value.boxy_unit_cache_ns);
+        self.boxy_unit_restore_ns.add(snapshot_value.boxy_unit_restore_ns);
         self.lir_passes_ns.add(snapshot_value.lir_passes_ns);
         self.arc_ns.add(snapshot_value.arc_ns);
         self.addMonotypeDiagnostics(snapshot_value.monotype_diagnostics);
@@ -549,6 +552,7 @@ pub const Timing = struct {
             .boxy_lowering => self.boxy_lowering_ns.add(elapsed_ns),
             .boxy_unit_codegen => self.boxy_unit_codegen_ns.add(elapsed_ns),
             .boxy_unit_cache => self.boxy_unit_cache_ns.add(elapsed_ns),
+            .boxy_unit_restore => self.boxy_unit_restore_ns.add(elapsed_ns),
             .lir_passes => self.lir_passes_ns.add(elapsed_ns),
             .arc => self.arc_ns.add(elapsed_ns),
         }
@@ -699,6 +703,7 @@ pub const TimingSnapshot = struct {
     boxy_lowering_ns: u64 = 0,
     boxy_unit_codegen_ns: u64 = 0,
     boxy_unit_cache_ns: u64 = 0,
+    boxy_unit_restore_ns: u64 = 0,
     lir_passes_ns: u64 = 0,
     arc_ns: u64 = 0,
     monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
@@ -718,6 +723,9 @@ pub const TimingPhase = enum {
     boxy_unit_codegen,
     /// Encoding and filing a module unit's object in the object cache.
     boxy_unit_cache,
+    /// Reading a module unit's object from the object cache, decoding its
+    /// pieces when the caller wants them.
+    boxy_unit_restore,
     lir_passes,
     arc,
 };

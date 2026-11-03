@@ -19750,7 +19750,7 @@ fn frontEndBreakdown(timing: anytype) [4]progress.SubTiming {
     };
 }
 
-fn compileTimeEvaluationBreakdown(timing: eval.CompileTimeFinalization.TimingSnapshot) [15]progress.SubTiming {
+fn compileTimeEvaluationBreakdown(timing: eval.CompileTimeFinalization.TimingSnapshot) [18]progress.SubTiming {
     return .{
         .{ .name = "Shared Monotype Lowering", .ns = timing.lowering.monotype_ns },
         .{ .name = "Shared Closure Lifting", .ns = timing.lowering.lift_ns },
@@ -19767,6 +19767,9 @@ fn compileTimeEvaluationBreakdown(timing: eval.CompileTimeFinalization.TimingSna
         .{ .name = "Shared Boxy Lowering", .ns = timing.lowering.boxy_lowering_ns },
         .{ .name = "Shared Boxy Unit Codegen", .ns = timing.lowering.boxy_unit_codegen_ns },
         .{ .name = "Shared Boxy Object Cache", .ns = timing.lowering.boxy_unit_cache_ns },
+        .{ .name = "Shared Boxy Object Restore", .ns = timing.lowering.boxy_unit_restore_ns },
+        .{ .name = "Boxy Object Compose", .ns = timing.unit_compose_ns },
+        .{ .name = "Boxy Object Load", .ns = timing.unit_load_ns },
     };
 }
 
@@ -20521,7 +20524,7 @@ fn finishFrontEndPhaseExcluding(gpa: Allocator, config: reporting.ReportingConfi
     reporter.recordRankedTimings("Slowest Module Type Inference", slowest_rows[0..slowest.len]);
     const compile_time = timing.compile_time_evaluation;
     if (timing.program_finalization_ns != 0) {
-        var subs_buf: [15]progress.SubTiming = undefined;
+        var subs_buf: [18]progress.SubTiming = undefined;
         reporter.recordCompletedWithBreakdown(
             "Shared Lowering + Compile-Time Eval",
             timing.program_finalization_ns,
@@ -20583,6 +20586,7 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
             .boxy_lowering_ns = 13,
             .boxy_unit_codegen_ns = 14,
             .boxy_unit_cache_ns = 15,
+            .boxy_unit_restore_ns = 16,
             .solved_lir_parallel = .{ .tasks_submitted = 61, .tasks_committed = 61 },
             .spec_constr_parallel = .{ .tasks_submitted = 63, .tasks_committed = 63 },
             .lir_pass_parallel = .{ .tasks_submitted = 67, .tasks_committed = 67 },
@@ -20592,6 +20596,8 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
         .code_generation_ns = 10,
         .execution_ns = 11,
         .store_results_ns = 12,
+        .unit_compose_ns = 17,
+        .unit_load_ns = 18,
         .native_emission = .{ .procedures_emitted = 83 },
     };
     const rows = compileTimeEvaluationBreakdown(shared);
@@ -20617,6 +20623,8 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
             shared_input.code_generation_ns = 0;
             shared_input.execution_ns = 0;
             shared_input.store_results_ns = 0;
+            shared_input.unit_compose_ns = 0;
+            shared_input.unit_load_ns = 0;
         }
         var buf = std.Io.Writer.Allocating.init(std.testing.allocator);
         defer buf.deinit();
