@@ -10,6 +10,8 @@ const ctx_mod = @import("ctx");
 const threading = @import("threading.zig");
 
 pub const CacheModule = @import("cache_module.zig").CacheModule;
+/// An acquired cache entry: its open file and lease.
+pub const AcquiredArtifact = @import("artifact_store.zig").Artifact;
 const Allocator = std.mem.Allocator;
 const CoreCtx = ctx_mod.CoreCtx;
 const CacheStats = @import("cache_config.zig").CacheStats;
@@ -286,6 +288,52 @@ pub const CacheManager = struct {
 
     pub fn loadFamilyMapped(self: *Self, allocator: Allocator, kind: Kind, family: artifacts.Family, key: [32]u8, scope: []const u8) ?CacheModule.CacheData {
         return self.loadMapped(allocator, kind, family, key, scope, true);
+    }
+
+    /// File a copy of the file at `source_path` as `family`'s entry for
+    /// `key`, staged beside the entry and renamed into place.
+    pub fn storeFamilyFile(self: *Self, family: artifacts.Family, key: [32]u8, scope: []const u8, source_path: []const u8, name: []const u8) void {
+        if (comptime threading.is_freestanding) return;
+        if (!self.config.enabled) return;
+        const store = self.storeHandle() orelse {
+            self.recordStoreFailureFor(.checked);
+            return;
+        };
+        var stage = store.reserve(identity(family, key, scope)) catch |err| {
+            self.verboseLog(self.allocator, "Failed to reserve {s} cache entry for {s}: {}\n", .{ @tagName(family), name, err });
+            self.recordStoreFailureFor(.checked);
+            return;
+        };
+        defer stage.deinit();
+        self.roc_ctx.copyFile(source_path, stage.path) catch |err| {
+            self.verboseLog(self.allocator, "Failed to copy {s} into its cache entry: {}\n", .{ name, err });
+            self.recordStoreFailureFor(.checked);
+            return;
+        };
+        stage.publish() catch |err| {
+            self.verboseLog(self.allocator, "Failed to publish {s} cache entry: {}\n", .{ name, err });
+            self.recordStoreFailureFor(.checked);
+            return;
+        };
+        self.recordStoreFor(.checked, 0);
+    }
+
+    /// Acquire `key`'s entry of `family` as an open file, owned by the
+    /// caller until its `deinit`, for a consumer that copies its bytes by
+    /// file range. Null for a miss.
+    pub fn acquireFamily(self: *Self, family: artifacts.Family, key: [32]u8, scope: []const u8) ?artifacts.Artifact {
+        if (comptime threading.is_freestanding) return null;
+        if (!self.config.enabled) return null;
+        const store = self.storeHandle() orelse {
+            self.recordMissFor(.checked);
+            return null;
+        };
+        const artifact = (store.acquire(identity(family, key, scope)) catch null) orelse {
+            self.recordMissFor(.checked);
+            return null;
+        };
+        self.recordHitFor(.checked, artifact.size);
+        return artifact;
     }
 
     fn loadMapped(self: *Self, allocator: Allocator, kind: Kind, family: artifacts.Family, key: [32]u8, scope: []const u8, counted: bool) ?CacheModule.CacheData {

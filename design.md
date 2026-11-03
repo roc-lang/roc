@@ -668,7 +668,8 @@ coordinator builds it once, before any body is lowered, and workers borrow it.
 ### Cache storage
 
 Checked modules, canonicalized modules, compile-time values and their checking
-metadata, Boxy objects and Boxy test outcomes use direct content-addressed
+metadata, Boxy objects, Boxy test outcomes, prelinked hosts (Fast Dev Link) and
+the host executables of composed `.boxy` dev runs use direct content-addressed
 files. Each cache
 identity includes compiler compatibility, family, logical group and key.
 Writers stage complete files beside their destination and publish by atomic
@@ -14469,19 +14470,25 @@ parallel.
 #### Caching Under `.boxy`
 
 With `--specialize=no`, every command writes what `roc check` writes, and
-`roc build` adds its remaining module objects. Checked module and composition entries, the canonicalized
+`roc build` adds its remaining module objects, as does a dev run whose run
+image is composed from unit images (Hot Loading For Default Dev-Shim Runs),
+which also files its root unit and the host executable it launches.
+Checked module and composition entries, the canonicalized
 module cache, and the compile-time evaluation results `roc check` produces
 (`ConstStore` constants) are written exactly as `roc check` writes them.
 `roc check` also files the host-target, dev-opt object of every
 module a module with roots left to evaluate imports, which compile-time
 evaluation runs against (Compile-Time Evaluation Strategy). `roc check` and
 `roc run` with `--specialize=no` therefore leave identical cache contents for
-the same sources, and `roc build` adds exactly the module objects still
-missing (`compile.boxy_object_cache`, the `boxy_object` family).
+the same sources when the run lowers its whole program, and `roc build`
+adds exactly the module objects still missing (`compile.boxy_object_cache`,
+the `boxy_object` family).
 `roc test` checks its root for explicit test roots
 (`Validation.explicit_roots`), which is its own check under either strategy,
 and with `--specialize=no` it leaves exactly what that check leaves plus one
-outcome file per module with test roots (Test outcome files). `roc
+outcome file per module with test roots (Test outcome files) and, when it runs
+its roots from test units (Unit-Image Test Execution), the test units it
+built. `roc
 check` accepts `--opt` and ignores it; it honors `--specialize`, because the
 strategy selects the compile-time evaluator that completes the module's
 roots. The checked module itself names no strategy: both evaluators store
@@ -14767,8 +14774,18 @@ tasks and receives its own completions, a token on the worker channel tells a
 worker a session has a task queued, and the session's owner takes completions
 it already has without waiting while checking continues. A platform module with
 requirements has no object of its own, so a module importing one runs as the
-whole program. Each object is filed with its `CodeLocations`: its line table,
-failure sites and source files (Compile-Time Failure Sites). A failure in an
+whole program. How an object is loaded depends only on the compiler's host,
+never on what a load finds: a Linux x86_64 host, whose units carry unit
+images (Fast Dev Link), loads each object's image as the cache mapping or
+the building unit holds it, copying its code and data into the process,
+binding its imports once (the compiler's own functions, then the objects
+already loaded, then the hosted-call trap) and filling its patch sites;
+every other host composes the unit's pieces into a relocatable object and
+loads that. Either way an object holds every procedure of its unit. A
+Linux x86_64 compilation therefore decodes a unit's pieces only for a link
+that composes them. Each object is filed with its `CodeLocations`: its line table,
+failure sites and source files (Compile-Time Failure Sites), beside its
+unit image where it has one. A failure in an
 object's code is therefore found and reported exactly as one in a whole
 program's own code, and the two forms report identically. The table is read
 only when something fails, so the code that succeeds carries nothing extra. A
@@ -20317,7 +20334,10 @@ callee can return with a call pending, and on each deferred call:
 - `always`: pending calls are made here. This is every use of the value other
   than returning it, and every tail position in a procedure something other
   than Roc code or the erased-call runtime can enter: a root, a dictionary
-  worker, a procedure whose address is taken.
+  worker, a procedure whose address is taken. A module unit's exported
+  worker is not one: only Roc code in other units calls it, compiled against
+  the `may_leave_pending` its export interface carries, so it hands pending
+  calls up exactly as it would inside one program.
 - `unless_caller_drives`: in an erased-callable procedure or a `.boxy`
   erased worker, which reads at entry whether the erased-call runtime invoked
   it. A host that calls an
@@ -23243,6 +23263,57 @@ fresh observations only during the existing deterministic reporting merge.
 Work counters distinguish the complete reporting plan and outcome admission
 from the procedures and entrypoints actually emitted for execution.
 
+### Unit-Image Test Execution
+
+A `roc test --opt=dev --specialize=no` with a cache on a Linux x86_64
+compiler runs its execution subset from test units loaded into the
+compiler's own process, not from one program lowered for the subset; the
+choice is the same switch on optimization, strategy, cache presence and host
+as a composed dev run (`unitImageTestApplies`, `unitImageRunApplies`), never
+a reaction to a failure. A default app keeps the shared program, as it
+does in a dev run: the hosted functions its code calls belong to its
+synthetic platform, which no unit of the app has in view. Every other `roc
+test` keeps the shared program too.
+
+A test unit is a module's Boxy unit lowered for `roc test`: every inline
+`expect` it lowers gets a unit-local expect site (dense, in lowering order)
+and counts through `roc_expect_observed`, and it exports a wrapper per
+top-level `expect` of its module, in the `(ret_ptr, args_ptr)` convention,
+under a name made of its module's package-qualified-name digest and the
+root's index among the module's test roots. Both are functions of the
+module's sources alone, never of the execution subset or the reporting
+plan, so a module has at most two cache entries: its build unit and its test
+unit (`boxy_object_cache.KeyInput.expect_sites`). Every unit of a test
+program is a test unit, dependencies included, because the shared program
+counts every inline expect any reached code holds. Beside the image, the
+entry files the unit's expect-site table (each site's module digest and
+source region, by site id) and its test-root table (each wrapper's module
+digest, root index and image symbol). A table that does not read makes the
+entry a miss. Compile-time evaluation and builds never load a test unit.
+
+Each site immediate is a relocatable field (`abs32s`, the field's bytes
+holding the unit-local id as its addend) against one import,
+`roc__expect_site_base`, which the loader binds per image to the first
+program-wide id of that image's sites. The program-wide site table is the
+concatenation of the loaded images' tables in load order; module partitions
+of the counters keep the shared program's convention, one copy of the
+program's sites per module, so the reporting merge is unchanged.
+
+The command builds a test unit for each planned module and everything they
+import, restored from the per-module cache or lowered and filed there. As
+in a composed run, an app's program is rooted at its executable root, the
+platform module paired with the app: the app is a library unit like every
+module without platform requirements, and when a planned module has
+platform requirements, those modules lower together in a root unit keyed as
+a test unit with the paired platforms' keys. It loads the builtins'
+unit, then every other unit after everything it imports, then the root
+unit, binding imports to the in-process host's symbols, the builtins'
+implementations, the compiler's Boxy runtime, the loaded images' exports,
+and, for a hosted symbol, a stub that crashes exactly as a hosted call in an
+in-process test does. It then calls the subset's wrappers, found by module
+and source root index through the test-root tables, with the existing
+bool-root runner, its workers in one `BoxyInProcessState`.
+
 ### Command-level execution
 
 `roc test --opt=size` and `roc test --opt=speed` use one command-level test
@@ -24808,6 +24879,80 @@ it directly. CLI and post-check consumers join hosted procedures to the binding
 table by those identities in linear time; they must not reconstruct or match
 qualified source names.
 
+## Fast Dev Link
+
+A `roc build --opt=dev --specialize=no` of a Linux x86_64 executable, by a
+compiler running on Linux with a cache, links its executable without composing a program object and without
+LLD. The per-build work after the edited module's code exists is a function
+of that module and of the output's size, never of the program's module count
+or the host's size. Every other target, output kind and `--no-cache` composes
+a program object and links it with LLD; the choice is a switch on target,
+output kind and cache presence (`fastDevLinkApplies`), never a reaction to a
+failure.
+
+**Unit images.** A `.boxy` unit's cache entry (`boxy_object_cache`) carries,
+beside its pieces, a unit image (`backend.dev.UnitImage`): the unit's text
+followed by its read-only data in one block, its writable data and zero-fill
+size, its symbols, its patch sites, its DWARF fragments and its content
+digest. Every reference the unit's own placement decides is resolved when the
+image is built; what remains is a patch site: an import of another image or
+of the host, or a reference whose distance depends on where the linker places
+the image's regions. The image is a pure function of the unit (Per-Module
+Output), so two builds of a unit write identical images. The block divides
+into atoms, one per symbol start, each recording what it references; a link
+writes only the atoms the program reaches and leaves the rest as zero holes.
+The compiler's builtins and Boxy runtime objects are converted once, in Roc's
+own build graph, into a support image of the same format and embedded. A
+library unit's cache entry files the image's `CodeLocations` beside it, so
+compile-time evaluation loads the image itself into the compiler's process
+and reports failures in it without composing anything (Compile-Time
+Evaluation Strategy). The table stays out of the image because it names
+modules by their package-qualified names, which for a local package include
+the package's path, while the image's bytes, and so the link's placement and
+build id, are a function of the code alone.
+
+**Pre-linked host.** A platform's host is linked once with the existing LLD
+flags from the platform's link inputs plus one generated object, and filed as
+one cache entry per host (`host_prelink`, family `prelinked_host`). The
+generated object defines every `provides` symbol as an absolute address in a
+fixed window of the app region, so the host's references to the app resolve
+at prelink time to bytes each build fills in: a jump to the entry wrapper for
+a procedure, the value's bytes for a data symbol. A provided value larger than
+its window is a reported build error. The object also reserves room in the
+host's first segment for a program header table with spare entries, which
+the post-processing fills. The host link keeps (`-u`) exactly the symbols the
+app region may import: the platform's hosted symbols, the fixed runtime set
+and the support image's imports. The host's key is a function of contents
+only (compiler compatibility, target, link ABI, the provides and kept symbol
+lists, the link item names, and the bundle hash or per-file content digests
+of the inputs); it never contains a path, so checkouts at different paths
+share the entry. Reserved room in the host holds only what the platform or
+target fixes the count of; anything whose size depends on the app is
+appended after the host.
+
+**Sealed boundary.** Compiler-owned code (generated procedures, builtins,
+Boxy runtime, helpers) is part of the app region and local in the output;
+nothing compiler-owned enters the host link. After app-internal resolution,
+every remaining import must be a hosted symbol or a member of the runtime
+set: a host that lacks one is the user's missing-host-symbols error, any
+other unresolved name is a compiler invariant.
+
+**The link.** The output is created as an anonymous file in the destination
+directory when the build starts, and a background job hashes the host inputs,
+looks the host up and copies it into the output while the program compiles;
+on a miss the link step prelinks the host. The link then walks atoms from
+the `provides` symbols, places the reached images after the host at
+addresses that are a function of their content digests, resolves imports
+(app region first, then host), fills the output through a shared mapping on
+the compilation's worker threads, writes the provide windows, program
+headers, build id (a hash of the host's and the images' content digests),
+symbol table, debug fragments and section headers, and gives the file its
+name. A fixup writes into the referring site, never into the referent, and
+every region an image owns is disjoint from every other image's, so the
+workers never write the same bytes. Output bytes are a function of the host's
+content, the images' content and nothing else: not of cache state, worker
+count, checkout path or the compiler's build mode.
+
 ## Watch Mode For Check And Test
 
 `roc check --watch` and `roc test --watch` are long-running compiler commands.
@@ -24997,6 +25142,36 @@ a function pointer names its own image's code and is never reused; an image
 with such an entry records that its static data references code, and the shim
 holds a reference to it for the rest of the session once it accepts it, which
 keeps that image's code, data, and Boxy runtime alive.
+
+A `--specialize=no` dev run with a cache on a Linux x86_64 host composes
+its `RunImage` from unit images (Fast Dev Link) instead of lowering and
+compiling the whole program, for the first generation and every rebuild
+alike (`unitImageRunApplies`; every other run lowers the whole program).
+Library units are restored from the per-module cache or built and filed
+there as `roc build` builds them; the root unit, the app with the platform
+modules paired with it, is compiled with entrypoint wrappers in the shim's
+`(ret_ptr, args_ptr)` convention and filed under a key of its own, with
+each entrypoint's host boundary digest, so a run that restores it computes
+the checked host identity without lowering. The image places the atoms the
+entrypoint wrappers reach of the support image and the units, at offsets
+that are a function of the images' content digests, and resolves every
+reference whose distance it decides. What is left to the shim is what only
+the mapping decides: each host import (a hosted symbol, the runtime set,
+or one of the builtins through which code tracks its image, which the shim
+defines in place of the support image's), resolved once by name and then
+filled at each of its sites, and each 64-bit address into the image, which
+the shim rebases by the image's address. Every composed image carries its
+own builtins and Boxy runtime, so the runtime state a program composes
+(its descriptor interning, keyed by addresses in that program) is never
+shared between generations. Its constants live in its code blocks at a
+fixed distance from the code that reads them, so a composed image's static
+data cannot outlive its code separately: the image records that its static
+data must live as long as its code, has no static pool chunk, and an
+accepted one stays loaded for the rest of the session, as an image whose
+static data names its code does. Because the host executable of such a run
+links no compiler-owned code, it is cached by the checked host identity and
+the link inputs, and the root program is lowered for it only when that
+cache misses.
 
 The compiler parent process is the sole owner of committing candidate descriptor offsets
 and shared-memory image-byte reclamation. It keeps unbounded process-local lists of descriptor offsets,

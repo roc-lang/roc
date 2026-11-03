@@ -38,6 +38,7 @@ const SymbolTable = @import("SymbolTable.zig");
 const IndexedRelocation = @import("Relocation.zig").IndexedRelocation;
 const StaticStringData = @import("StaticStringData.zig");
 const UnitPieces = @import("UnitPieces.zig");
+const UnitImage = @import("UnitImage.zig");
 const Composition = @import("Composition.zig");
 const TargetUsize = @import("base").target.TargetUsize;
 
@@ -90,6 +91,24 @@ pub const ComposeOptions = struct {
     /// into its own process looks procedures up by name.
     global_procs: bool = false,
     capture_code_locations: bool = false,
+    /// Receives every code reference the assembly patched in place rather
+    /// than emitting a relocation for: an excerpt's references to other
+    /// excerpts of the object. A unit image needs them to know what each
+    /// piece of code reaches.
+    patched_refs: ?*PatchedRefs = null,
+};
+
+/// The code references a composition patched in place, as offsets in its
+/// text section.
+pub const PatchedRefs = struct {
+    edges: std.ArrayList(UnitImage.CodeEdge) = .empty,
+    /// Whether some excerpt also has symbolic references, which the
+    /// assembly resolves without reporting them here.
+    incomplete: bool = false,
+
+    pub fn deinit(self: *PatchedRefs, allocator: Allocator) void {
+        self.edges.deinit(allocator);
+    }
 };
 
 /// Errors that can occur during compilation
@@ -132,6 +151,13 @@ pub const ObjectFileCompiler = struct {
     /// as excerpts leaves this off, and its result's `object_bytes` is
     /// empty.
     emit_object: bool = true,
+    /// Compile entrypoint wrappers to the `(ret_ptr, args_ptr)` convention
+    /// the machine-code shim calls, for the root unit of a dev run image,
+    /// rather than to the natural C ABI an executable's host calls.
+    internal_entrypoints: bool = false,
+    /// Emit each expect site's id relative to `expect_site_base_symbol`,
+    /// for a test unit (`LirCodeGen.relocatable_expect_sites`).
+    relocatable_expect_sites: bool = false,
 
     pub const TimingSnapshot = struct {
         backend_setup_ns: u64 = 0,
@@ -251,6 +277,8 @@ pub const ObjectFileCompiler = struct {
                         self.erased_capture_prefix,
                         self.timing,
                         self.post_check_executor,
+                        self.internal_entrypoints,
+                        self.relocatable_expect_sites,
                     );
                 } else {
                     return CompilationError.UnsupportedTarget;
@@ -283,6 +311,66 @@ pub const ObjectFileCompiler = struct {
             }
         }
         return CompilationError.UnsupportedTarget;
+    }
+
+    /// Which pieces of a unit its image keeps.
+    pub const ImageRoots = enum {
+        /// A library unit: every procedure, since any importer may call it.
+        every_procedure,
+        /// The root unit, which no other unit imports: only what its
+        /// entrypoint wrappers and host-visible constants reach.
+        entrypoints,
+    };
+
+    /// Build the unit image (`UnitImage`) of one unit's pieces for a Linux
+    /// x86_64 target: the pieces composed on their own, keeping what `roots`
+    /// selects with what it reaches, every entrypoint wrapper and every
+    /// host-visible constant, and every procedure given a global symbol so
+    /// other units' references to it resolve by name; then lifted from the
+    /// composed relocatable object.
+    pub fn buildUnitImage(
+        self: *ObjectFileCompiler,
+        pieces: *const UnitPieces.Pieces,
+        target: RocTarget,
+        roots: ImageRoots,
+        /// Receives the image's code locations (`CodeLocations`, over offsets
+        /// from the start of its text), owned by the caller, when non-null.
+        code_locations: ?*[]const u8,
+    ) CompilationError![]align(UnitImage.alignment.toByteUnits()) u8 {
+        std.debug.assert(target.toOsTag() == .linux and target.toCpuArch() == .x86_64);
+        var patched: PatchedRefs = .{};
+        defer patched.deinit(self.allocator);
+        var composed = try self.composeObject(&.{pieces}, target, .{
+            .roots = switch (roots) {
+                .every_procedure => null,
+                .entrypoints => &.{},
+            },
+            .global_procs = true,
+            .patched_refs = &patched,
+            .capture_code_locations = code_locations != null,
+        });
+        defer composed.deinit();
+        const image = UnitImage.build(self.allocator, &.{composed.object_bytes}, .{
+            .keep_debug = true,
+            // Code reached only through references the image cannot see
+            // keeps the whole image together.
+            .atoms = if (patched.incomplete) .whole else .{ .symbols = patched.edges.items },
+        }) catch |err| switch (err) {
+            error.OutOfMemory => return CompilationError.OutOfMemory,
+            error.InvalidObject,
+            error.UnsupportedSection,
+            error.UnsupportedSymbol,
+            error.UnsupportedRelocation,
+            error.DuplicateDefinition,
+            error.RelocationOutOfRange,
+            error.ImageTooLarge,
+            => invariant("the dev backend's object for a unit is not convertible into a unit image: {s}", .{@errorName(err)}),
+        };
+        if (code_locations) |out| {
+            out.* = composed.code_locations;
+            composed.code_locations = &.{};
+        }
+        return image;
     }
 
     pub fn compileToObjectFileAndWrite(
@@ -1174,6 +1262,8 @@ fn compilePiecesWithCodeGen(
     erased_capture_prefix: u32,
     timing: ?*ObjectFileCompiler.Timing,
     executor: ?Executor,
+    internal_entrypoints: bool,
+    relocatable_expect_sites: bool,
 ) CompilationError!UnitPieces.Pieces {
     const backend_setup_started_ns = if (timing) |timings| timings.start() else 0;
     var static_strings = StaticStringData.build(allocator, lir_store, target) catch return CompilationError.OutOfMemory;
@@ -1190,6 +1280,7 @@ fn compilePiecesWithCodeGen(
     codegen.generation_mode = .object_file;
     codegen.setStaticDataSymbols(static_data_exports) catch return CompilationError.OutOfMemory;
     codegen.enable_default_platform_runtime = enable_default_platform_runtime;
+    codegen.relocatable_expect_sites = relocatable_expect_sites;
     const static_rc_helpers = static_data_export.collectRequiredRcHelpers(allocator, static_data_exports) catch return CompilationError.OutOfMemory;
     defer allocator.free(static_rc_helpers);
     if (timing) |timings| timings.finish(backend_setup_started_ns, .backend_setup);
@@ -1214,9 +1305,11 @@ fn compilePiecesWithCodeGen(
     // Entrypoint wrappers join the unit's image here, so they are lifted
     // out as pieces named by their symbols.
     const entrypoint_instructions_started_ns = if (timing) |timings| timings.start() else 0;
+    if (internal_entrypoints) codegen.generation_mode = .shim_execution;
     for (entrypoints) |entrypoint| {
         _ = codegen.generateEntrypointWrapper(entrypoint.symbol_name, entrypoint.proc, entrypoint.arg_layouts, entrypoint.ret_layout) catch return CompilationError.OutOfMemory;
     }
+    codegen.generation_mode = .object_file;
     if (timing) |timings| timings.finish(entrypoint_instructions_started_ns, .entrypoint_instructions);
     const extraction_started_ns = if (timing) |timings| timings.start() else 0;
     codegen.finishImage() catch return CompilationError.OutOfMemory;
@@ -1390,6 +1483,14 @@ fn composeWithCodeGen(
     defer helper_keys.deinit();
     const starts = CodeExcerpt.assembleArranged(CodeGen, allocator, &final, &canonical.set, &procs_by_identity, &helper_keys) catch return CompilationError.OutOfMemory;
     defer allocator.free(starts);
+    if (options.patched_refs) |patched| {
+        for (canonical.set.excerpts, starts) |excerpt, start| {
+            if (excerpt.symbolic_refs.len != 0) patched.incomplete = true;
+            for (excerpt.refs) |ref| {
+                patched.edges.append(allocator, .{ .site = start + ref.site, .target = starts[ref.target] + ref.delta }) catch return CompilationError.OutOfMemory;
+            }
+        }
+    }
     var symbols = std.ArrayList(SymbolDefinition).empty;
     defer symbols.deinit(allocator);
     var rodata = std.ArrayList(u8).empty;

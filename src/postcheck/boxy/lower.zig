@@ -97,6 +97,10 @@ pub const ModuleUnit = struct {
     root: bool,
     /// The name each module of the link gives its workers and nominal types.
     names: *const types.ModuleNames,
+    /// Whether this is a test unit (`roc test`): every inline expect it
+    /// lowers gets a unit-local expect site, whether or not the unit lowers
+    /// any test root (design.md "Unit-Image Test Execution").
+    expect_sites: bool = false,
 };
 
 /// The ownership signature and tail-drive summary a unit's ARC solved for
@@ -2422,7 +2426,10 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         .layouts = undefined,
         .result = result,
         .static_descs = undefined,
-        .observe_expects = input.roots.test_plan_metadata.len != 0,
+        .observe_expects = input.roots.test_plan_metadata.len != 0 or switch (input.unit) {
+            .program => false,
+            .module => |unit| unit.expect_sites,
+        },
         .list_in_place_map = input.list_in_place_map,
         .arena = std.heap.ArenaAllocator.init(allocator),
     };

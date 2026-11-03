@@ -22,6 +22,10 @@ pub const Family = enum {
     boxy_object,
     /// One module's `roc test` outcomes under `--specialize=no`.
     test_outcomes,
+    /// A platform host linked once for fast dev links of its executables.
+    prelinked_host,
+    /// The host executable a composed `.boxy` dev run launches.
+    run_host,
 };
 
 /// Explicit producer identity for one file.

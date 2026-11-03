@@ -243,6 +243,8 @@ fn loadDevProgram(
 ) LoadDevProgramError!DevProgram {
     if (view.code.len == 0) return error.EmptyCode;
     try validateDirectImageLayout(view);
+    // A composed image's host imports own the stub area.
+    if (view.host_imports.len != 0 and (view.relocations.len != 0 or view.data_relocations.len != 0)) return error.InvalidDevRunImage;
     try prepareDirectImageForRelocation(view);
 
     var function_stubs = std.ArrayList(FunctionStub).empty;
@@ -314,6 +316,7 @@ fn loadDevProgram(
         RelocationContext.resolve,
     );
     try applyDataRelocations(view, &relocation_context);
+    try applyComposedRelocations(view);
     try finishDirectImageRelocation(view);
 
     return .{
@@ -327,6 +330,53 @@ fn loadDevProgram(
         .local_refs = std.atomic.Value(usize).init(1),
         .static_code_references = view.static_code_references,
     };
+}
+
+/// Fill a composed image's host sites and rebase its absolute addresses into
+/// itself: each host import is resolved once by name and its sites filled,
+/// a displacement reaching it through the import's jump stub; each rebased
+/// word becomes the image's code address plus its value.
+fn applyComposedRelocations(view: *const RunImage.ProgramView) LoadDevProgramError!void {
+    if (view.host_imports.len == 0 and view.rebases.len == 0) return;
+    const stub_size = try jumpStubSize();
+    if (view.host_imports.len > view.function_stubs.len / stub_size) return error.InvalidDevRunImage;
+    const code_base = @intFromPtr(view.code.ptr);
+    for (view.host_imports, 0..) |import, index| {
+        const name = try view.symbolName(import.symbol);
+        const address = resolveShimFunction(name) orelse return unresolvedSymbol(name);
+        const stub = view.function_stubs[index * stub_size ..][0..stub_size];
+        try writeJumpStub(stub, address);
+        const stub_address: i64 = @intCast(@intFromPtr(stub.ptr));
+        for (try view.hostImportSites(import)) |site| switch (try site.siteKind()) {
+            .pc32 => {
+                const field = try composedField(view, site.offset, 4);
+                const displacement = std.math.cast(i32, stub_address + site.addend - @as(i64, @intCast(@intFromPtr(field.ptr)))) orelse return error.BranchOutOfRange;
+                std.mem.writeInt(i32, field[0..4], displacement, .little);
+            },
+            .abs64 => {
+                const field = try composedField(view, site.offset, 8);
+                std.mem.writeInt(u64, field[0..8], @bitCast(@as(i64, @intCast(address)) + site.addend), .little);
+            },
+        };
+    }
+    for (view.rebases) |rebase| {
+        const field = try composedField(view, rebase.offset, 8);
+        std.mem.writeInt(u64, field[0..8], @as(u64, code_base) +% rebase.value, .little);
+    }
+}
+
+/// The `width` bytes at `offset` from the start of a composed image's code,
+/// which lie in its executable pages or its writable data.
+fn composedField(view: *const RunImage.ProgramView, offset: u64, width: usize) RunImage.ImageError![]u8 {
+    if (offset > std.math.maxInt(usize)) return error.InvalidDevRunImage;
+    const address = @intFromPtr(view.code.ptr) +% @as(usize, @intCast(offset));
+    for ([_][]u8{ view.executable, view.mutable_data }) |region| {
+        const start = @intFromPtr(region.ptr);
+        if (address >= start and address - start <= region.len and width <= region.len - (address - start)) {
+            return region[address - start ..][0..width];
+        }
+    }
+    return error.InvalidDevRunImage;
 }
 
 /// The name of the last symbol the image needed and this shim could not
