@@ -13,7 +13,7 @@ const put = catalog.put;
 const get = catalog.get;
 
 /// Storage-format namespace shared by all compiler compatibility identities.
-pub const format_directory = "artifacts-v2";
+pub const format_directory = "artifacts-v3";
 /// Fixed number of independently coordinated catalogs.
 pub const shard_count = 16;
 /// One minute in the timestamp units used by retention.
@@ -131,11 +131,20 @@ pub const Metadata = struct {
     slot: u64,
     variant: [32]u8 = @splat(0),
 
+    /// A slice has no physical file and accounts zero bytes; its container
+    /// owns the bytes. Slot AND generation validate the immutable placement.
+    storage: enum(u8) { file, container, slice } = .file,
+    container_slot: u64 = 0,
+    container_generation: u64 = 0,
+    offset: u64 = 0,
+    length: u64 = 0,
+
     pub fn encode(self: Metadata) catalog.Value {
         var bytes: catalog.Value = @splat(0);
-        @memcpy(bytes[0..8], "ROCART02");
+        @memcpy(bytes[0..8], "ROCART03");
         bytes[8] = @backingInt(self.state);
         bytes[9] = @backingInt(self.family);
+        bytes[10] = @backingInt(self.storage);
         put(u32, &bytes, 12, self.pack_format);
         @memcpy(bytes[16..48], &self.namespace);
         put(u64, &bytes, 48, self.generation);
@@ -146,11 +155,15 @@ pub const Metadata = struct {
         put(u64, &bytes, 144, self.slot);
         @memcpy(bytes[152..184], &self.variant);
         put(i64, &bytes, 184, self.indexed_used);
+        put(u64, &bytes, 192, self.container_slot);
+        put(u64, &bytes, 200, self.container_generation);
+        put(u64, &bytes, 208, self.offset);
+        put(u64, &bytes, 216, self.length);
         return bytes;
     }
 
     pub fn decode(bytes: catalog.Value) Error!Metadata {
-        if (!std.mem.eql(u8, bytes[0..8], "ROCART02") or get(i64, &bytes, 184) > get(i64, &bytes, 72)) return error.CorruptCatalog;
+        if (!std.mem.eql(u8, bytes[0..8], "ROCART03") or get(i64, &bytes, 184) > get(i64, &bytes, 72)) return error.CorruptCatalog;
         return .{
             .state = std.enums.fromInt(State, bytes[8]) orelse return error.CorruptCatalog,
             .family = std.enums.fromInt(Family, bytes[9]) orelse return error.CorruptCatalog,
@@ -164,6 +177,11 @@ pub const Metadata = struct {
             .key = bytes[80..144].*,
             .slot = get(u64, &bytes, 144),
             .variant = bytes[152..184].*,
+            .storage = std.enums.fromInt(@FieldType(Metadata, "storage"), bytes[10]) orelse return error.CorruptCatalog,
+            .container_slot = get(u64, &bytes, 192),
+            .container_generation = get(u64, &bytes, 200),
+            .offset = get(u64, &bytes, 208),
+            .length = get(u64, &bytes, 216),
         };
     }
 
@@ -217,15 +235,18 @@ pub const Store = struct {
     }
 
     fn reserveWith(self: *const Store, identity: Identity, size: u64, timestamp: i64, required: bool) Error!Staging {
+        return self.reserveKey(identity, identity.indexedKey(), size, timestamp, required);
+    }
+
+    fn reserveKey(self: *const Store, identity: Identity, key: catalog.Key, size: u64, timestamp: i64, required: bool) Error!Staging {
         var counters = catalog.Counters{};
-        var shard = try Shard.openWith(self, shardFor(identity.indexedKey()), true, &counters, required);
+        var shard = try Shard.openWith(self, shardFor(key), true, &counters, required);
         defer shard.close();
-        return self.reserveInShard(&shard, identity, size, timestamp);
+        return self.reserveInShard(&shard, identity, key, size, timestamp);
     }
 
     /// Reserve a slot in `shard`, which the caller holds open and locked.
-    fn reserveInShard(self: *const Store, shard: *Shard, identity: Identity, size: u64, timestamp: i64) Error!Staging {
-        const key = identity.indexedKey();
+    fn reserveInShard(self: *const Store, shard: *Shard, identity: Identity, key: catalog.Key, size: u64, timestamp: i64) Error!Staging {
         var tx = shard.index.transaction();
         if (tx.header.user[0] == std.math.maxInt(u64)) return error.CapacityExceeded;
         tx.header.user[0] += 1;
@@ -312,14 +333,41 @@ pub const Store = struct {
             else => return err,
         };
         defer shard.close();
-        return self.acquireFromShard(key, timestamp, deferred, &shard);
+        return self.acquireFromShard(key, timestamp, deferred, &shard, null);
     }
 
-    fn acquireFromShard(self: *const Store, key: catalog.Key, timestamp: i64, deferred: ?*?Session.Observation, shard: *Shard) Error!?Artifact {
+    fn acquireFromShard(self: *const Store, key: catalog.Key, timestamp: i64, deferred: ?*?Session.Observation, shard: *Shard, containers: ?*ContainerReaders) Error!?Artifact {
         var tx = shard.index.transaction();
         const found = (try tx.find(.artifacts, key)) orelse return null;
         var metadata = try currentMetadata(&tx, key, found.value);
         if (metadata.state != .published or metadata.family == .scratch) return null;
+        if (metadata.storage == .slice) {
+            const container = (try sliceContainer(&tx, metadata)) orelse return null;
+            var result = if (containers) |readers|
+                (try readers.acquire(self, shard, container, timestamp)) orelse return null
+            else
+                (try self.acquireFromShard(container.key, timestamp, deferred, shard, null)) orelse return null;
+            errdefer result.deinit();
+            if (metadata.offset > result.size or metadata.length > result.size - metadata.offset) {
+                result.deinit();
+                return null;
+            }
+            // A slice may be retired while its accepted bytes remain pinned.
+            // Its container's observation is advanced once per reader session.
+            tx = shard.index.transaction();
+            if (metadata.used < timestamp) {
+                if (deferred) |observation| {
+                    observation.* = .{ .key = key, .slot = metadata.slot, .generation = metadata.generation, .timestamp = timestamp };
+                } else {
+                    metadata.used = timestamp;
+                    try tx.replaceValue(metadata.slot, storageKey(metadata.generation), metadata.encode());
+                    try tx.commit();
+                }
+            }
+            result.offset = metadata.offset;
+            result.size = metadata.length;
+            return result;
+        }
         const path = try self.payloadPath(shard.number, metadata.slot, ".data");
         errdefer self.allocator.free(path);
         var stem_buffer: [128]u8 = undefined;
@@ -406,7 +454,7 @@ pub const Store = struct {
         while (try tx.lowerBound(.artifacts, cursor)) |entry| {
             if (!std.mem.eql(u8, entry.key[0..32], group_key[0..32])) break;
             const metadata = try Metadata.decode(entry.value);
-            if (metadata.state == .published) try keys.append(allocator, entry.key);
+            if (metadata.state == .published and metadata.storage != .container) try keys.append(allocator, entry.key);
             cursor = entry.key;
             if (!advanceKey(&cursor)) break;
         }
@@ -441,6 +489,7 @@ pub const Session = struct {
     caches: [shard_count]catalog.ReadCache = @splat(.{}),
     counters: [shard_count]catalog.Counters = @splat(.{}),
     mutexes: [shard_count]threading.Mutex = @splat(.init),
+    containers: [shard_count]ContainerReaders = @splat(.{}),
 
     pub fn init(store: *const Store) Allocator.Error!Session {
         return .{ .store = .{ .allocator = store.allocator, .io = store.io, .root = try store.allocator.dupe(u8, store.root) } };
@@ -452,6 +501,7 @@ pub const Session = struct {
         // until this flush attempt has finished.
         self.flush() catch {};
         for (&self.shards) |*entry| if (entry.*) |*shard| shard.close();
+        for (&self.containers) |*readers| readers.deinit(self.store.allocator);
         self.store.deinit();
     }
 
@@ -472,7 +522,7 @@ pub const Session = struct {
         defer self.releaseShard(number);
         if (self.counts[number] == catalog.max_changes) try self.flushHeldShard(number);
         var observation: ?Observation = null;
-        const artifact = try self.store.acquireFromShard(key, timestamp, &observation, shard);
+        const artifact = try self.store.acquireFromShard(key, timestamp, &observation, shard, &self.containers[number]);
         if (observation) |value| {
             self.pending[number][self.counts[number]] = value;
             self.counts[number] += 1;
@@ -517,7 +567,7 @@ pub const Session = struct {
                 while (next < limit) : (next += 1) {
                     const index = order[next];
                     var observation: ?Observation = null;
-                    result[index] = try self.store.acquireFromShard(keys[index], timestamp, &observation, shard);
+                    result[index] = try self.store.acquireFromShard(keys[index], timestamp, &observation, shard, &self.containers[number]);
                     if (observation) |value| {
                         self.pending[number][self.counts[number]] = value;
                         self.counts[number] += 1;
@@ -540,7 +590,7 @@ pub const Session = struct {
         const number = Store.shardFor(identity.indexedKey());
         const shard = try self.acquireShard(number, true);
         defer self.releaseShard(number);
-        var staging = try self.store.reserveInShard(shard, identity, size, timestamp);
+        var staging = try self.store.reserveInShard(shard, identity, identity.indexedKey(), size, timestamp);
         staging.session = self;
         return staging;
     }
@@ -597,6 +647,16 @@ pub const Session = struct {
         const io = self.store.io;
         self.shards[number].?.lock.unlock(io);
         self.mutexes[number].unlock(io);
+    }
+
+    pub fn containerCount(self: *Session) usize {
+        var count: usize = 0;
+        for (0..shard_count) |number| {
+            self.mutexes[number].lockUncancelable(self.store.io);
+            count += self.containers[number].entries.count();
+            self.mutexes[number].unlock(self.store.io);
+        }
+        return count;
     }
 
     pub fn flush(self: *Session) Error!void {
@@ -798,10 +858,13 @@ pub const Shard = struct {
         if (metadata.generation != generation or !std.mem.eql(u8, &metadata.key, &key) or metadata.slot != found.id) return error.CorruptCatalog;
         var stem_buffer: [128]u8 = undefined;
         const stem = try slotStem(&stem_buffer, found.id);
+        const physical = if (metadata.storage == .slice) try sliceContainer(&tx, metadata) else metadata;
+        var lease_stem_buffer: [128]u8 = undefined;
+        const lease_stem = try slotStem(&lease_stem_buffer, if (physical) |owner| owner.slot else found.id);
         var lease_buffer: [140]u8 = undefined;
-        const lease_path = std.fmt.bufPrint(&lease_buffer, "{s}.lease", .{stem}) catch return error.PathTooLong;
-        const lease = try leaseFile(self.dir, self.io, lease_path, false, false);
-        defer lease.close(self.io);
+        const lease_path = std.fmt.bufPrint(&lease_buffer, "{s}.lease", .{lease_stem}) catch return error.PathTooLong;
+        const lease = if (physical == null) null else try leaseFile(self.dir, self.io, lease_path, false, false);
+        defer if (lease) |held| held.close(self.io);
         if (metadata.state != .retiring) {
             const counter: usize = if (metadata.state == .staging) 2 else 1;
             if (tx.header.user[counter] < metadata.size) return error.CorruptCatalog;
@@ -816,14 +879,14 @@ pub const Shard = struct {
             try tx.commit();
         }
         if (metadata.family == .scratch and !try drainScratch(self, stem, metadata.generation)) return false;
-        for ([_][]const u8{ ".pending", ".data", ".pending.txt", ".cursor" }) |suffix| {
+        if (metadata.storage != .slice) for ([_][]const u8{ ".pending", ".data", ".pending.txt", ".cursor" }) |suffix| {
             var buffer: [140]u8 = undefined;
             const path = std.fmt.bufPrint(&buffer, "{s}{s}", .{ stem, suffix }) catch return error.PathTooLong;
             self.dir.deleteFile(self.io, path) catch |err| switch (err) {
                 error.FileNotFound => {},
                 else => return error.IoFailure,
             };
-        }
+        };
         var finish = self.index.transaction();
         if (finish.header.user[3] < metadata.size) return error.CorruptCatalog;
         finish.header.user[3] -= metadata.size;
@@ -856,6 +919,23 @@ pub const Staging = struct {
     pub fn deinit(self: *Staging) void {
         if (!self.published) self.lease.close(self.store.io);
         self.store.allocator.free(self.path);
+    }
+
+    /// Account an exact producer-declared length before extending its file.
+    pub fn resizeContainer(self: *Staging, size: u64) Error!void {
+        var counters = catalog.Counters{};
+        var shard = try Shard.openRequired(self.store, Store.shardFor(self.key), false, &counters);
+        defer shard.close();
+        var tx = shard.index.transaction();
+        const found = (try tx.find(.owners, storageKey(self.generation))) orelse return error.Changed;
+        var metadata = try Metadata.decode(found.value);
+        if (found.id != self.slot or metadata.state != .staging or tx.header.user[2] < metadata.size) return error.Changed;
+        tx.header.user[2] -= metadata.size;
+        tx.header.user[2] = std.math.add(u64, tx.header.user[2], size) catch return error.CapacityExceeded;
+        metadata.size = size;
+        metadata.storage = .container;
+        try tx.replaceValue(self.slot, storageKey(self.generation), metadata.encode());
+        try tx.commit();
     }
 
     pub fn publish(self: *Staging) Error!void {
@@ -908,8 +988,14 @@ pub const Artifact = struct {
     lease: Io.File,
     path: []u8,
     size: u64,
+    offset: u64 = 0,
+    shared: ?*SharedContainer = null,
 
     pub fn deinit(self: *Artifact) void {
+        if (self.shared) |container| {
+            container.release();
+            return;
+        }
         self.file.close(self.store.io);
         self.lease.close(self.store.io);
         self.store.allocator.free(self.path);
@@ -919,9 +1005,181 @@ pub const Artifact = struct {
         const size = std.math.cast(usize, self.size) orelse return error.OutOfMemory;
         const bytes = try allocator.alloc(u8, size);
         errdefer allocator.free(bytes);
-        const len = self.file.readPositionalAll(self.store.io, bytes, 0) catch return error.IoFailure;
+        const len = self.file.readPositionalAll(self.store.io, bytes, self.offset) catch return error.IoFailure;
         if (len != bytes.len) return error.InvalidArtifact;
         return bytes;
+    }
+};
+
+/// Validate a slice's physical owner without trusting a recycled slot. Missing
+/// containers are optional cache misses, including after independent eviction.
+pub fn sliceContainer(tx: *catalog.Transaction, slice: Metadata) Error!?Metadata {
+    if (slice.container_slot == 0 or slice.container_slot >= tx.header.next) return null;
+    const row = try tx.node(slice.container_slot);
+    if (row.kind != .leaf or !std.mem.eql(u8, &row.key, &storageKey(slice.container_generation))) return null;
+    const container = try Metadata.decode(row.value);
+    if (container.slot != slice.container_slot or container.generation != slice.container_generation or
+        container.storage != .container or container.state != .published) return null;
+    if (slice.offset > container.size or slice.length > container.size - slice.offset) return null;
+    return container;
+}
+
+/// One open file and lease shared by all acquired slices, including captured
+/// native code that outlives the lookup session. Reference release can be parallel.
+const SharedContainer = struct {
+    allocator: Allocator,
+    io: Io,
+    file: Io.File,
+    lease: Io.File,
+    path: []u8,
+    size: u64,
+    references: std.atomic.Value(usize) = .init(1),
+
+    fn release(self: *SharedContainer) void {
+        if (self.references.fetchSub(1, .acq_rel) != 1) return;
+        self.file.close(self.io);
+        self.lease.close(self.io);
+        self.allocator.free(self.path);
+        self.allocator.destroy(self);
+    }
+
+    fn artifact(self: *SharedContainer, store: *const Store) Artifact {
+        _ = self.references.fetchAdd(1, .monotonic);
+        return .{ .store = store, .file = self.file, .lease = self.lease, .path = self.path, .size = self.size, .shared = self };
+    }
+};
+
+const ContainerReaders = struct {
+    const Key = struct { shard: u4, generation: u64 };
+    entries: std.AutoHashMapUnmanaged(Key, *SharedContainer) = .{},
+
+    fn deinit(self: *ContainerReaders, allocator: Allocator) void {
+        var it = self.entries.valueIterator();
+        while (it.next()) |entry| entry.*.release();
+        self.entries.deinit(allocator);
+    }
+
+    fn acquire(self: *ContainerReaders, store: *const Store, shard: *Shard, metadata: Metadata, timestamp: i64) Error!?Artifact {
+        const key: Key = .{ .shard = shard.number, .generation = metadata.generation };
+        if (self.entries.get(key)) |existing| {
+            if (metadata.used < timestamp) {
+                var tx = shard.index.transaction();
+                var current = metadata;
+                current.used = timestamp;
+                try tx.replaceValue(current.slot, storageKey(current.generation), current.encode());
+                try tx.commit();
+            }
+            return existing.artifact(store);
+        }
+        try self.entries.ensureUnusedCapacity(store.allocator, 1);
+        const shared = try store.allocator.create(SharedContainer);
+        errdefer store.allocator.destroy(shared);
+        var original = (try store.acquireFromShard(metadata.key, timestamp, null, shard, null)) orelse {
+            store.allocator.destroy(shared);
+            return null;
+        };
+        errdefer original.deinit();
+        shared.* = .{ .allocator = store.allocator, .io = store.io, .file = original.file, .lease = original.lease, .path = original.path, .size = original.size };
+        self.entries.putAssumeCapacity(key, shared);
+        return shared.artifact(store);
+    }
+};
+
+/// Streams new immutable records directly into a private registered container.
+/// Containers are homogeneous in group/retention policy and never rewritten.
+/// Publication installs one exact slice per bounded redo transaction. An
+/// interrupted writer exposes only complete bytes; unpublished staging remains
+/// reclaimable. Independent writers never replace a directory-wide manifest.
+pub const ContainerWriter = struct {
+    store: *const Store,
+    stage: ?Staging = null,
+    file: ?Io.File = null,
+    size: u64 = 0,
+    entries: std.ArrayList(Entry) = .empty,
+    held: ?Artifact = null,
+    const Entry = struct { identity: Identity, offset: u64, length: u64 };
+
+    pub fn deinit(self: *ContainerWriter) void {
+        if (self.held) |*held| held.deinit();
+        if (self.file) |file| file.close(self.store.io);
+        if (self.stage) |*stage| stage.deinit();
+        self.entries.deinit(self.store.allocator);
+    }
+
+    pub fn append(self: *ContainerWriter, identity: Identity, bytes: []const u8) Error!void {
+        try self.entries.ensureUnusedCapacity(self.store.allocator, 1);
+        if (self.stage == null) {
+            var key = identity.indexedKey();
+            self.store.io.random(key[32..]);
+            self.stage = try self.store.reserveKey(identity, key, 0, self.store.now(), true);
+            self.file = Dir.cwd().createFile(self.store.io, self.stage.?.path, .{ .exclusive = true }) catch return error.IoFailure;
+        }
+        const key = identity.indexedKey();
+        if (!std.mem.eql(u8, key[0..32], self.stage.?.key[0..32])) base.invariant("container producer supplies one artifact group", .{});
+        const end = std.math.add(u64, self.size, bytes.len) catch return error.CapacityExceeded;
+        try self.stage.?.resizeContainer(end);
+        self.file.?.writePositionalAll(self.store.io, bytes, self.size) catch return error.IoFailure;
+        self.entries.appendAssumeCapacity(.{ .identity = identity, .offset = self.size, .length = bytes.len });
+        self.size = end;
+    }
+
+    pub fn publish(self: *ContainerWriter) Error!void {
+        const stage = if (self.stage) |*value| value else return;
+        self.file.?.close(self.store.io);
+        self.file = null;
+        try stage.publish();
+        self.held = (try self.store.acquireKey(stage.key, self.store.now())) orelse return error.Changed;
+        for (self.entries.items) |entry| try self.publishSlice(entry);
+    }
+
+    fn publishSlice(self: *ContainerWriter, entry: Entry) Error!void {
+        const stage = &self.stage.?;
+        const key = entry.identity.indexedKey();
+        var counters = catalog.Counters{};
+        var shard = try Shard.openRequired(self.store, Store.shardFor(key), false, &counters);
+        defer shard.close();
+        var tx = shard.index.transaction();
+        if (tx.header.user[0] == std.math.maxInt(u64)) return error.CapacityExceeded;
+        tx.header.user[0] += 1;
+        const generation = tx.header.user[0];
+        const timestamp = self.store.now();
+        var metadata: Metadata = .{
+            .state = .published,
+            .family = entry.identity.family,
+            .pack_format = entry.identity.pack_format,
+            .namespace = entry.identity.namespace,
+            .variant = entry.identity.variant,
+            .generation = generation,
+            .size = 0,
+            .created = timestamp,
+            .used = timestamp,
+            .indexed_used = timestamp,
+            .key = key,
+            .slot = 0,
+            .storage = .slice,
+            .container_slot = stage.slot,
+            .container_generation = stage.generation,
+            .offset = entry.offset,
+            .length = entry.length,
+        };
+        // Replacement keeps accepted readers alive through their container
+        // leases. A concurrent publisher's unrelated keys are never touched.
+        if (try tx.find(.artifacts, key)) |previous| {
+            var old = try currentMetadata(&tx, key, previous.value);
+            if (old.state != .published or tx.header.user[1] < old.size) return error.CorruptCatalog;
+            if (!try tx.remove(.recency, old.recency(old.slot))) return error.CorruptCatalog;
+            tx.header.user[1] -= old.size;
+            tx.header.user[3] = std.math.add(u64, tx.header.user[3], old.size) catch return error.CapacityExceeded;
+            old.state = .retiring;
+            _ = try tx.putValue(.owners, storageKey(old.generation), old.encode());
+        }
+        metadata.slot = try tx.putValue(.owners, storageKey(generation), metadata.encode());
+        _ = try tx.putValue(.owners, storageKey(generation), metadata.encode());
+        _ = try tx.putValue(.artifacts, key, metadata.encode());
+        var value: catalog.Value = @splat(0);
+        @memcpy(value[0..64], &key);
+        _ = try tx.putValue(.recency, metadata.recency(metadata.slot), value);
+        try tx.commit();
     }
 };
 
@@ -1524,4 +1782,234 @@ test "grouped acquisitions preserve order absence duplicates and generation leas
     defer a.free(current);
     try std.testing.expectEqualStrings("replacement", current);
     try std.testing.expectError(error.Busy, store.invalidate(identities[79]));
+}
+
+test "container slices share physical ownership and survive logical retirement" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(root);
+    var store = try Store.init(a, io, root);
+    defer store.deinit();
+    const id: Identity = .{ .namespace = @splat(71), .family = .local_pack, .key = @splat(1) };
+    var other = id;
+    other.key = @splat(2);
+    var writer: ContainerWriter = .{ .store = &store };
+    defer writer.deinit();
+    try writer.append(id, "first");
+    try writer.append(other, "second");
+    try std.testing.expect((try store.acquire(id, 1)) == null);
+    try writer.publish();
+    var reads = try Session.init(&store);
+    var first = (try reads.acquireKey(id.indexedKey(), store.now())).?;
+    defer first.deinit();
+    var second = (try reads.acquireKey(other.indexedKey(), store.now())).?;
+    defer second.deinit();
+    try std.testing.expect(first.shared == second.shared);
+    try std.testing.expectEqual(@as(usize, 1), reads.containerCount());
+    reads.deinit(); // Captured slices outlive the acquisition session.
+    try std.testing.expectError(error.Busy, store.invalidate(id));
+    // Replacement may detach the logical generation, but cannot change bytes
+    // retained by the accepted reader.
+    try store.write(id, "new generation", store.now());
+    const first_bytes = try first.read(a);
+    defer a.free(first_bytes);
+    const second_bytes = try second.read(a);
+    defer a.free(second_bytes);
+    try std.testing.expectEqualStrings("first", first_bytes);
+    try std.testing.expectEqualStrings("second", second_bytes);
+    var counters: catalog.Counters = .{};
+    var shard = try Shard.openRequired(&store, Store.shardFor(id.indexedKey()), false, &counters);
+    defer shard.close();
+    try std.testing.expectError(error.Busy, shard.retire(writer.stage.?.key, writer.stage.?.generation));
+    try std.testing.expectEqual(@as(u64, 25), shard.index.header.user[1]);
+}
+
+test "container abandoned writers and retired physical generations are cache misses" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(root);
+    var store = try Store.init(a, io, root);
+    defer store.deinit();
+    const id: Identity = .{ .namespace = @splat(72), .family = .local_pack, .key = @splat(3) };
+    var abandoned: ContainerWriter = .{ .store = &store };
+    try abandoned.append(id, "incomplete");
+    const abandoned_key = abandoned.stage.?.key;
+    const abandoned_generation = abandoned.stage.?.generation;
+    abandoned.deinit();
+    try std.testing.expect((try store.acquire(id, 1)) == null);
+    var writer: ContainerWriter = .{ .store = &store };
+    try writer.append(id, "complete");
+    try writer.publish();
+    const key = writer.stage.?.key;
+    const generation = writer.stage.?.generation;
+    writer.deinit();
+    {
+        var counters: catalog.Counters = .{};
+        var shard = try Shard.openRequired(&store, Store.shardFor(id.indexedKey()), false, &counters);
+        defer shard.close();
+        try std.testing.expect(try shard.retire(abandoned_key, abandoned_generation));
+        try std.testing.expect(try shard.retire(key, generation));
+    }
+    try std.testing.expect((try store.acquire(id, 2)) == null);
+    var replacement: ContainerWriter = .{ .store = &store };
+    defer replacement.deinit();
+    try replacement.append(id, "replacement");
+    try replacement.publish();
+    const bytes = (try store.read(a, id, 3)).?;
+    defer a.free(bytes);
+    try std.testing.expectEqualStrings("replacement", bytes);
+}
+
+test "shared session acquires container slices concurrently across shards" {
+    const a = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", a);
+    defer a.free(root);
+    var store = try Store.init(a, std.testing.io, root);
+    defer store.deinit();
+    var identities: [32]Identity = undefined;
+    var covered: [shard_count]bool = @splat(false);
+    for (&identities, 0..) |*identity, i| {
+        identity.* = .{ .namespace = @splat(7), .family = .local_pack, .group = @splat(@intCast(i)), .key = @splat(11) };
+        covered[Store.shardFor(identity.indexedKey())] = true;
+        var writer: ContainerWriter = .{ .store = &store };
+        defer writer.deinit();
+        try writer.append(identity.*, "shared container payload");
+        try writer.publish();
+    }
+    try std.testing.expect(std.mem.count(bool, &covered, &.{true}) > 1);
+    var session = try Session.init(&store);
+    defer session.deinit();
+    const Worker = struct {
+        session: *Session,
+        identities: []const Identity,
+        start: *std.atomic.Value(bool),
+        failed: bool = false,
+        fn run(self: *@This()) void {
+            while (!self.start.load(.acquire)) std.atomic.spinLoopHint();
+            for (0..4) |_| {
+                for (self.identities) |identity| {
+                    var artifact = (self.session.acquire(identity, self.session.now()) catch {
+                        self.failed = true;
+                        return;
+                    }) orelse {
+                        self.failed = true;
+                        return;
+                    };
+                    defer artifact.deinit();
+                    const bytes = artifact.read(self.session.store.allocator) catch {
+                        self.failed = true;
+                        return;
+                    };
+                    defer self.session.store.allocator.free(bytes);
+                    if (!std.mem.eql(u8, bytes, "shared container payload")) self.failed = true;
+                }
+            }
+        }
+    };
+    var start = std.atomic.Value(bool).init(false);
+    var workers: [4]Worker = undefined;
+    var threads: [workers.len]std.Thread = undefined;
+    var spawned: usize = 0;
+    defer {
+        start.store(true, .release);
+        for (threads[0..spawned]) |thread| thread.join();
+    }
+    for (&workers, &threads) |*worker, *thread| {
+        worker.* = .{ .session = &session, .identities = &identities, .start = &start };
+        thread.* = try std.Thread.spawn(.{}, Worker.run, .{worker});
+        spawned += 1;
+    }
+    start.store(true, .release);
+    for (threads) |thread| thread.join();
+    spawned = 0;
+    for (workers) |worker| try std.testing.expect(!worker.failed);
+    try std.testing.expectEqual(identities.len, session.containerCount());
+}
+
+test "container concurrent publishers preserve shared and independent records" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(root);
+    var store = try Store.init(a, io, root);
+    defer store.deinit();
+    const Worker = struct {
+        store: *const Store,
+        id: u8,
+        failure: ?Error = null,
+        fn run(self: *@This()) void {
+            self.publish() catch |err| {
+                self.failure = err;
+            };
+        }
+        fn publish(self: *@This()) Error!void {
+            const identity: Identity = .{ .namespace = @splat(73), .family = .local_pack, .key = @splat(self.id) };
+            var shared = identity;
+            shared.key = @splat(0);
+            var writer: ContainerWriter = .{ .store = self.store };
+            defer writer.deinit();
+            try writer.append(identity, &.{self.id});
+            try writer.append(shared, "shared bytes");
+            try writer.publish();
+        }
+    };
+    var workers: [4]Worker = undefined;
+    var threads: [4]std.Thread = undefined;
+    var started: usize = 0;
+    errdefer for (threads[0..started]) |thread| thread.join();
+    for (&workers, &threads, 0..) |*worker, *thread, i| {
+        worker.* = .{ .store = &store, .id = @intCast(i + 1) };
+        thread.* = try std.Thread.spawn(.{}, Worker.run, .{worker});
+        started += 1;
+    }
+    for (threads) |thread| thread.join();
+    started = 0;
+    for (workers) |worker| {
+        if (worker.failure) |err| return err;
+        const id: Identity = .{ .namespace = @splat(73), .family = .local_pack, .key = @splat(worker.id) };
+        const bytes = (try store.read(a, id, store.now())).?;
+        defer a.free(bytes);
+        try std.testing.expectEqualSlices(u8, &.{worker.id}, bytes);
+    }
+    const shared: Identity = .{ .namespace = @splat(73), .family = .local_pack, .key = @splat(0) };
+    const bytes = (try store.read(a, shared, store.now())).?;
+    defer a.free(bytes);
+    try std.testing.expectEqualStrings("shared bytes", bytes);
+}
+
+test "container allocation failures release staging handles and shared readers" {
+    const a = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", a);
+    defer a.free(root);
+    const Check = struct {
+        fn run(allocator: Allocator, directory: []const u8) Error!void {
+            var store = try Store.init(allocator, std.testing.io, directory);
+            defer store.deinit();
+            const id: Identity = .{ .namespace = @splat(74), .family = .local_pack, .key = @splat(4) };
+            var writer: ContainerWriter = .{ .store = &store };
+            defer writer.deinit();
+            try writer.append(id, "allocation test");
+            try writer.publish();
+            var reads = try Session.init(&store);
+            defer reads.deinit();
+            var record = (try reads.acquireKey(id.indexedKey(), store.now())) orelse return error.Missing;
+            defer record.deinit();
+            const bytes = try record.read(allocator);
+            defer allocator.free(bytes);
+        }
+    };
+    var deterministic = base.DeterministicAllocator.init(a);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), Check.run, .{root});
 }

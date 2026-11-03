@@ -89,6 +89,8 @@ pub fn resolveCheckedAbiLayouts(
 
 /// The export interfaces a `.boxy` module unit compiles its calls against.
 pub const BoxyExportInterfaces = postcheck.Boxy.Lower.ExportInterfaces;
+/// The identity a `.boxy` unit's object defines a module's template worker under.
+pub const boxyTemplateWorkerIdentity = postcheck.Boxy.Lower.templateWorkerIdentity;
 /// What reading a `.boxy` program's function values takes after lowering.
 pub const BoxyStoredFunctions = postcheck.Boxy.StoredFn.Retained;
 /// The names the modules of one link give their workers and nominal types.
