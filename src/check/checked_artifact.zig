@@ -28427,12 +28427,7 @@ pub const BoxPayloadCapabilityEntry = struct {
     id: BoxPayloadCapabilityId,
     nominal: canonical.NominalTypeKey,
     source_ty_payload: CheckedTypeId,
-    source_ty: canonical.CanonicalTypeKey,
     backing_ty: CheckedTypeId,
-    backing_ty_key: canonical.CanonicalTypeKey,
-    /// Range into `ModuleInterfaceCapabilities.args_pool` (transform B).
-    args_start: u32 = 0,
-    args_len: u32 = 0,
     /// Range into `ModuleInterfaceCapabilities.padding_pool` for this instance's
     /// unnamed padding field types, instantiated with its type arguments (in
     /// declared order). Empty for nominals with no unnamed fields.
@@ -28451,10 +28446,6 @@ pub const OpaqueAtomicProofEntry = struct {
     id: OpaqueAtomicProofId,
     nominal: canonical.NominalTypeKey,
     source_ty_payload: CheckedTypeId,
-    source_ty: canonical.CanonicalTypeKey,
-    /// Range into `ModuleInterfaceCapabilities.args_pool` (transform B).
-    args_start: u32 = 0,
-    args_len: u32 = 0,
 };
 
 /// Public `HostedRepresentationCapability` declaration.
@@ -28478,7 +28469,7 @@ pub const PlatformRepresentationCapability = struct {
 pub const ExportedNominalRepresentation = struct {
     id: ExportedNominalRepresentationId,
     nominal: canonical.NominalTypeKey,
-    source_ty: canonical.CanonicalTypeKey,
+    source_ty_payload: CheckedTypeId,
     box_payload_capability: BoxPayloadCapabilityId,
     opaque_atomic_proof: ?OpaqueAtomicProofId = null,
 };
@@ -28490,9 +28481,6 @@ pub const ModuleInterfaceCapabilities = struct {
     hosted_representations: []const HostedRepresentationCapability = &.{},
     platform_representations: []const PlatformRepresentationCapability = &.{},
     exported_nominal_representations: []const ExportedNominalRepresentation = &.{},
-    /// Shared flat pool of instantiated type args referenced by box/opaque
-    /// entries' `(args_start, args_len)` ranges (transform-B side list).
-    args_pool: []const canonical.CanonicalTypeKey = &.{},
     /// Shared flat pool of instantiated padding field types referenced by box
     /// entries' `(padding_start, padding_len)` ranges.
     padding_pool: []const CheckedTypeId = &.{},
@@ -28503,7 +28491,6 @@ pub const ModuleInterfaceCapabilities = struct {
         hosted_representations: SerializedSlice(HostedRepresentationCapability) = .{},
         platform_representations: SerializedSlice(PlatformRepresentationCapability) = .{},
         exported_nominal_representations: SerializedSlice(ExportedNominalRepresentation) = .{},
-        args_pool: SerializedSlice(canonical.CanonicalTypeKey) = .{},
         padding_pool: SerializedSlice(CheckedTypeId) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(ModuleInterfaceCapabilities, @This());
         pub const serialize = Serde.serialize;
@@ -28532,15 +28519,15 @@ pub const ModuleInterfaceCapabilities = struct {
         errdefer opaque_atomic_proofs.deinit(allocator);
         var exported_nominal_representations = std.ArrayList(ExportedNominalRepresentation).empty;
         errdefer exported_nominal_representations.deinit(allocator);
-        // Shared pool of instantiated args; box + opaque entries reference ranges.
-        var args_pool = std.ArrayList(canonical.CanonicalTypeKey).empty;
-        errdefer args_pool.deinit(allocator);
         // Shared pool of instantiated padding field types; box entries reference ranges.
         var padding_pool = std.ArrayList(CheckedTypeId).empty;
         errdefer padding_pool.deinit(allocator);
 
-        var seen_nominals = std.AutoHashMap(NominalCapabilitySeenKey, CheckedNominalRepresentationRef).init(allocator);
+        var seen_nominals = std.HashMap(NominalCapabilitySeenKey, CheckedNominalRepresentationRef, NominalCapabilitySeenKey.Context, std.hash_map.default_max_load_percentage).init(allocator);
         defer seen_nominals.deinit();
+        var seen_args_arena = base.SingleThreadArena.init(allocator);
+        defer seen_args_arena.deinit();
+        const seen_args = seen_args_arena.allocator();
 
         // Every local nominal type the module holds: its synthesized entries,
         // then the source types publication reached, in variable order.
@@ -28559,30 +28546,21 @@ pub const ModuleInterfaceCapabilities = struct {
             const nominal = payload.nominal;
             if (nominal.builtin != null) continue;
             if (nominal.origin_module != current_module) continue;
-            const root_info = try checked_types.rootInfo(nominal_ty);
-            const source_key = root_info.key;
             const nominal_key = checkedNominalTypeKey(nominal);
-            const seen_key = NominalCapabilitySeenKey{
-                .source_ty = source_key,
-                .nominal = nominal_key,
-            };
-            if (seen_nominals.get(seen_key)) |representation| {
-                // An identity-free type is one type whichever root names it,
-                // so every root of it carries its capability; a type with
-                // variables keeps its own declaration representation.
-                if (!root_info.contains_identity_variables) try setNominalTypeRepresentation(allocator, checked_types, &source_capabilities, nominal_ty, representation);
-                continue;
-            }
-
             // nominal.args aliases type_id_pool; copy before any pool growth.
             const nominal_args = try allocator.dupe(CheckedTypeId, nominal.args);
             defer allocator.free(nominal_args);
-
-            const args = try checkedTypeKeysForIds(allocator, checked_types, nominal_args);
-            defer allocator.free(args);
-            const args_start: u32 = @intCast(args_pool.items.len);
-            const args_len: u32 = @intCast(args.len);
-            try args_pool.appendSlice(allocator, args);
+            // Roots naming one declaration over the same argument ids are
+            // one instance and share its capability; an identity-free
+            // instance is one type whichever root names it, while a type
+            // with variables keeps its own declaration representation.
+            const seen = try seen_nominals.getOrPut(.{ .nominal = nominal_key, .args = nominal_args });
+            if (seen.found_existing) {
+                if (!try checked_types.rootContainsIdentityVariables(nominal_ty)) try setNominalTypeRepresentation(allocator, checked_types, &source_capabilities, nominal_ty, seen.value_ptr.*);
+                continue;
+            }
+            errdefer _ = seen_nominals.remove(.{ .nominal = nominal_key, .args = nominal_args });
+            seen.key_ptr.args = try seen_args.dupe(CheckedTypeId, nominal_args);
 
             const declaration = checked_types.nominalDeclaration(nominal_key) orelse {
                 checkedArtifactInvariant("nominal representation publication could not find the checked nominal declaration", .{});
@@ -28607,11 +28585,7 @@ pub const ModuleInterfaceCapabilities = struct {
                 .id = capability_id,
                 .nominal = nominal_key,
                 .source_ty_payload = nominal_ty,
-                .source_ty = source_key,
                 .backing_ty = backing_ty,
-                .backing_ty_key = try checkedTypeKeyForId(checked_types, backing_ty),
-                .args_start = args_start,
-                .args_len = args_len,
                 .padding_start = padding_start,
                 .padding_len = padding_len,
                 .is_opaque = nominal.is_opaque,
@@ -28627,9 +28601,6 @@ pub const ModuleInterfaceCapabilities = struct {
                     .id = id,
                     .nominal = nominal_key,
                     .source_ty_payload = nominal_ty,
-                    .source_ty = source_key,
-                    .args_start = args_start,
-                    .args_len = args_len,
                 });
                 break :blk id;
             };
@@ -28638,14 +28609,14 @@ pub const ModuleInterfaceCapabilities = struct {
                 .capability = capability_id,
                 .opaque_atomic_proof = proof_id,
             } };
-            try seen_nominals.put(seen_key, representation);
+            seen.value_ptr.* = representation;
             try setNominalTypeRepresentation(allocator, checked_types, &source_capabilities, nominal_ty, representation);
 
             const exported_id: ExportedNominalRepresentationId = @fromBackingInt(@intCast(@as(u32, @intCast(exported_nominal_representations.items.len))));
             try exported_nominal_representations.append(allocator, .{
                 .id = exported_id,
                 .nominal = nominal_key,
-                .source_ty = source_key,
+                .source_ty_payload = nominal_ty,
                 .box_payload_capability = capability_id,
                 .opaque_atomic_proof = proof_id,
             });
@@ -28686,7 +28657,6 @@ pub const ModuleInterfaceCapabilities = struct {
             .hosted_representations = hosted_representations,
             .platform_representations = platform_representations,
             .exported_nominal_representations = try exported_nominal_representations.toOwnedSlice(allocator),
-            .args_pool = try args_pool.toOwnedSlice(allocator),
             .padding_pool = try padding_pool.toOwnedSlice(allocator),
         };
     }
@@ -28734,7 +28704,7 @@ pub const ModuleInterfaceCapabilities = struct {
             }
             const capability = self.boxed_payload_templates[capability_index];
             if (!canonicalNominalTypeKeyEql(entry.nominal, capability.nominal) or
-                !canonicalTypeKeyEql(entry.source_ty, capability.source_ty))
+                entry.source_ty_payload != capability.source_ty_payload)
             {
                 base.invariant("checked artifact invariant violated: nominal representation disagrees with boxed-payload capability identity", .{});
             }
@@ -28745,7 +28715,7 @@ pub const ModuleInterfaceCapabilities = struct {
                 }
                 const proof_entry = self.opaque_atomic_proofs[proof_index];
                 if (!canonicalNominalTypeKeyEql(entry.nominal, proof_entry.nominal) or
-                    !canonicalTypeKeyEql(entry.source_ty, proof_entry.source_ty))
+                    entry.source_ty_payload != proof_entry.source_ty_payload)
                 {
                     base.invariant("checked artifact invariant violated: nominal representation disagrees with opaque atomic proof identity", .{});
                 }
@@ -28754,9 +28724,24 @@ pub const ModuleInterfaceCapabilities = struct {
     }
 };
 
+/// A nominal instance by in-workspace identity: its declaration and its
+/// argument ids.
 const NominalCapabilitySeenKey = struct {
-    source_ty: canonical.CanonicalTypeKey,
     nominal: canonical.NominalTypeKey,
+    args: []const CheckedTypeId,
+
+    const Context = struct {
+        pub fn hash(_: Context, key: NominalCapabilitySeenKey) u64 {
+            var hasher = std.hash.Wyhash.init(0);
+            std.hash.autoHash(&hasher, key.nominal);
+            hasher.update(std.mem.sliceAsBytes(key.args));
+            return hasher.final();
+        }
+
+        pub fn eql(_: Context, left: NominalCapabilitySeenKey, right: NominalCapabilitySeenKey) bool {
+            return std.meta.eql(left.nominal, right.nominal) and std.mem.eql(CheckedTypeId, left.args, right.args);
+        }
+    };
 };
 
 fn canonicalTypeKeyEql(a: canonical.CanonicalTypeKey, b: canonical.CanonicalTypeKey) bool {
@@ -28790,27 +28775,6 @@ fn testCheckedModuleKey(byte: u8) CheckedModuleArtifactKey {
     var key = CheckedModuleArtifactKey{};
     key.bytes[0] = byte;
     return key;
-}
-
-fn checkedTypeKeyForId(
-    checked_types: *const CheckedTypeStore,
-    id: CheckedTypeId,
-) Allocator.Error!canonical.CanonicalTypeKey {
-    return try checked_types.rootKey(id);
-}
-
-fn checkedTypeKeysForIds(
-    allocator: Allocator,
-    checked_types: *const CheckedTypeStore,
-    ids: []const CheckedTypeId,
-) Allocator.Error![]const canonical.CanonicalTypeKey {
-    if (ids.len == 0) return &.{};
-    const out = try allocator.alloc(canonical.CanonicalTypeKey, ids.len);
-    errdefer allocator.free(out);
-    for (ids, 0..) |id, i| {
-        out[i] = try checkedTypeKeyForId(checked_types, id);
-    }
-    return out;
 }
 
 /// Whether no type reachable from `root` holds a callable. The answer is the
@@ -35121,7 +35085,7 @@ pub const CheckedModuleArtifact = struct {
             // two pools of their own. Template demand vectors add one.
             // Literal arguments add the literal requirement pool, the demand pool, and the root lookup table.
             // The sealed type columns of the checked type store add five.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 247);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 246);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -41384,8 +41348,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x1E, 0x1D, 0x89, 0xA5, 0xF5, 0x03, 0x53, 0x66, 0x32, 0x9D, 0x79, 0x2C, 0xBA, 0x31, 0xE2, 0xC3,
-        0x88, 0x14, 0x3C, 0xEC, 0x55, 0x06, 0xC1, 0xBF, 0xA7, 0x6E, 0x45, 0x0D, 0x9B, 0xA1, 0x03, 0xA1,
+        0x2E, 0x74, 0x7C, 0x64, 0xA3, 0x9E, 0xBB, 0xAE, 0xF9, 0x85, 0x6A, 0xDB, 0xB8, 0xE9, 0xC9, 0x5C,
+        0xAF, 0x4F, 0x76, 0x90, 0xC8, 0x4D, 0xE1, 0xDC, 0xAE, 0x32, 0x7D, 0x63, 0x55, 0xFD, 0xBD, 0xF7,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
