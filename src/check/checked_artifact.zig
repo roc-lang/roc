@@ -34119,7 +34119,7 @@ fn expectAllSliceStoreRoundTrips(comptime Store: type) artifact_serialize.TestEr
     var store: Store = .{};
     inline for (@typeInfo(Store).@"struct".field_names) |field_name| {
         // A nested store round-trips through its own `Serialized` form.
-        if (comptime @typeInfo(@FieldType(Store, field_name)) == .@"struct" and @hasDecl(@FieldType(Store, field_name), "Serialized")) continue;
+        if (comptime isNestedStoreField(@FieldType(Store, field_name))) continue;
         const slice = comptime isSliceField(@FieldType(Store, field_name));
         const Elem = std.meta.Child(if (slice) @FieldType(Store, field_name) else @FieldType(@FieldType(Store, field_name), "items"));
         // Give lists spare capacity to prove serialization only writes live rows.
@@ -34139,11 +34139,17 @@ fn expectAllSliceStoreRoundTrips(comptime Store: type) artifact_serialize.TestEr
     const rt = try artifact_serialize.roundTripForTest(gpa, Store, &store);
     defer gpa.free(rt.buffer);
     inline for (@typeInfo(Store).@"struct".field_names) |field_name| {
+        if (comptime isNestedStoreField(@FieldType(Store, field_name))) continue;
         const slice = comptime isSliceField(@FieldType(Store, field_name));
         const before = if (slice) @field(store, field_name) else @field(store, field_name).items;
         const after = if (slice) @field(rt.loaded, field_name) else @field(rt.loaded, field_name).items;
         try artifact_serialize.expectSlicesByteEqual(std.meta.Child(@TypeOf(before)), before, after);
     }
+}
+
+/// Whether a store field is itself a store with its own `Serialized` form.
+fn isNestedStoreField(comptime T: type) bool {
+    return @typeInfo(T) == .@"struct" and @hasDecl(T, "Serialized");
 }
 
 test "transform-A stores: serialize/deserialize round-trip preserves every slice field" {
