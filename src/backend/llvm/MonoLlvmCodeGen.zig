@@ -4409,7 +4409,11 @@ pub const MonoLlvmCodeGen = struct {
         try self.emitSlotLifetimeMarkers(stmt_id);
         switch (stmt) {
             .dyn => |dyn_stmt| {
-                try self.emitDyn(dyn_stmt.target, self.store.stmtRow(dyn_stmt.data));
+                const op = self.store.stmtRow(dyn_stmt.data);
+                if (dyn_stmt.composition_cache) |cache|
+                    try self.emitCachedComposition(dyn_stmt.target.?, op, cache)
+                else
+                    try self.emitDyn(dyn_stmt.target, op);
                 try work.append(wa, .{ .node = dyn_stmt.next });
             },
             .assign_ref => |assign| {
@@ -9320,7 +9324,10 @@ pub const MonoLlvmCodeGen = struct {
         const export_row = self.static_data_export_rows.get(raw_id);
         if (export_row) |row| {
             const data_export = self.static_data_exports[row];
-            if (data_export.symbol_offset == 0 and data_export.bytes.len >= size) {
+            // A mutable slot (a composition site) is the program's one
+            // writable copy, defined in its zero-fill data and named by
+            // symbol below; its initial zero bytes are not a constant.
+            if (!data_export.is_mutable and data_export.symbol_offset == 0 and data_export.bytes.len >= size) {
                 if (try self.frozenExportConstant(data_export)) |initializer| {
                     const name = builder.strtabStringFmt(".roc.static_data.{d}", .{raw_id}) catch return error.OutOfMemory;
                     const variable = builder.addVariable(name, initializer.typeOf(builder), .default) catch return error.OutOfMemory;
@@ -9335,9 +9342,16 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
 
-        const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, id);
-        defer self.allocator.free(symbol_name);
-        const value = (try self.staticDataSymbol(symbol_name)).toValue();
+        // The export defines the symbol under its own name; a slot without
+        // an export row (one the static data object defines by slot) is
+        // named by its slot.
+        const value = if (export_row) |row|
+            (try self.staticDataSymbol(self.static_data_exports[row].symbol_name)).toValue()
+        else blk: {
+            const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, id);
+            defer self.allocator.free(symbol_name);
+            break :blk (try self.staticDataSymbol(symbol_name)).toValue();
+        };
         try self.static_data_globals.put(raw_id, value);
         return value;
     }
@@ -12006,6 +12020,72 @@ pub const MonoLlvmCodeGen = struct {
 
     fn materializeDynOperand(self: *MonoLlvmCodeGen, local: LocalId) Error!void {
         try self.materializeLocalIfDeferred(local);
+    }
+
+    /// A descriptor or dictionary composition that owns a site cache
+    /// (design.md "Runtime"): the site's published entry is acquire-loaded,
+    /// and when every operand word equals the entry's, the entry's result is
+    /// the composition's without entering the runtime. A miss composes
+    /// through the runtime and publishes the result, except for a
+    /// recursive-open operation that returned an unfinished placeholder,
+    /// which stays private until recursive-close finishes it.
+    fn emitCachedComposition(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LIR.DynOp, cache: lir.LIR.StaticDataId) Error!void {
+        try lir.DynOps.Operands.of(op).each(self.store, self, materializeDynOperand);
+        var operands: std.ArrayList(LocalId) = .empty;
+        defer operands.deinit(self.allocator);
+        try lir.DynOps.Operands.of(op).appendAll(self.store, self.allocator, &operands);
+        const builder, const wip = try self.builderAndWip();
+        const ptr_ty = try self.ptrType();
+        const usize_ty = self.ptrSizedIntType();
+        const word = self.targetWordSize();
+        const ptr_align = self.targetPointerAlignment();
+        const words = try self.allocator.alloc(LlvmBuilder.Value, operands.items.len);
+        defer self.allocator.free(words);
+        for (words, operands.items) |*value, operand| value.* = try self.wordValue(operand);
+        const site = try self.staticDataGlobal(cache, word);
+        const entry = wip.loadAtomic(.normal, ptr_ty, site, .system, .acquire, ptr_align, "site_entry") catch return error.OutOfMemory;
+
+        const miss = wip.block(0, "site_miss") catch return error.OutOfMemory;
+        const hit = wip.block(0, "site_hit") catch return error.OutOfMemory;
+        const done = wip.block(0, "site_done") catch return error.OutOfMemory;
+        const empty = wip.icmp(.eq, entry, builder.nullValue(ptr_ty) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const checks = try self.allocator.alloc(LlvmBuilder.Function.Block.Index, words.len);
+        defer self.allocator.free(checks);
+        for (checks) |*check| check.* = wip.block(0, "site_check") catch return error.OutOfMemory;
+        _ = wip.brCond(empty, miss, if (words.len == 0) hit else checks[0], .none) catch return error.OutOfMemory;
+        // The entry's operand words follow its result word.
+        for (words, checks, 0..) |value, check, index| {
+            wip.cursor = .{ .block = check };
+            const expected = wip.load(.normal, ptr_ty, try self.offsetPtr(entry, @intCast((index + 1) * word)), ptr_align, "") catch return error.OutOfMemory;
+            const same = wip.icmp(.eq, value, expected, "") catch return error.OutOfMemory;
+            _ = wip.brCond(same, if (index + 1 == words.len) hit else checks[index + 1], miss, .none) catch return error.OutOfMemory;
+        }
+
+        wip.cursor = .{ .block = hit };
+        try self.bindWord(target, wip.load(.normal, ptr_ty, entry, ptr_align, "") catch return error.OutOfMemory);
+        _ = wip.br(done) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = miss };
+        try self.emitDyn(target, op);
+        const composed = try self.wordValue(target);
+        if (op == .desc_recursive_open) {
+            const publish = wip.block(0, "site_publish") catch return error.OutOfMemory;
+            const size = try self.loadDescField(composed, desc_size_offset);
+            const open = wip.icmp(.eq, size, try self.intValue(usize_ty, std.math.maxInt(u32)), "") catch return error.OutOfMemory;
+            _ = wip.brCond(open, done, publish, .none) catch return error.OutOfMemory;
+            wip.cursor = .{ .block = publish };
+        }
+        const operand_words = try self.allocEntryBlockSlot(usize_ty, @intCast(@max(words.len, 1)), ptr_align, "site_words");
+        for (words, 0..) |value, index| try self.storePointer(try self.offsetPtr(operand_words, @intCast(index * word)), value);
+        _ = try self.callBoxyRuntime("roc_desc_site_publish", .void, &.{ ptr_ty, .i32, ptr_ty, usize_ty }, &.{
+            site,
+            try self.intValue(.i32, words.len),
+            operand_words,
+            wip.cast(.ptrtoint, composed, usize_ty, "") catch return error.OutOfMemory,
+        });
+        _ = wip.br(done) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = done };
     }
 
     fn emitDyn(self: *MonoLlvmCodeGen, target_or_null: ?LocalId, op: lir.LIR.DynOp) Error!void {
@@ -14810,9 +14890,16 @@ pub const MonoLlvmCodeGen = struct {
 
         for (wip.blocks.items, 0..) |*block, block_idx| {
             for (block.instructions.items) |instruction| {
-                const tag = wip.instructions.get(@backingInt(instruction)).tag;
+                const inst = wip.instructions.get(@backingInt(instruction));
+                const tag = inst.tag;
                 if (builtin.mode == .debug and block_idx != 0) {
-                    if (tag == .alloca or tag == .@"alloca inalloca") {
+                    // A procedure's dynamic frame region is sized by its
+                    // descriptors, so its alloca follows their composition,
+                    // whose site caches branch; a fixed-size alloca belongs
+                    // in the entry block.
+                    const fixed_size = (tag == .alloca or tag == .@"alloca inalloca") and
+                        wip.extraData(LlvmBuilder.Function.Instruction.Alloca, inst.data).len.toConst() != null;
+                    if (fixed_size) {
                         const builder = self.builder orelse return error.CompilationFailed;
                         const instruction_index = @backingInt(instruction);
                         const instruction_name = if (wip.strip)

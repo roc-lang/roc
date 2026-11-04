@@ -14153,22 +14153,25 @@ adding it, takes the lock, probes the current table again, and interns on a
 true miss. Only insertion and growth hold the lock. Keys are a few words of
 constructor tags and operand addresses, hashed by mixing each word.
 
-Where the consumer is the interpreter or the native dev backend, each descriptor
-or dictionary composition statement also owns a one-entry site cache in
-zero-initialized writable static data; LLVM and wasm consumers read no sites, so
-their lowering emits no slots and every composition reaches the interner. The
+Where the consumer is the interpreter, the native dev backend, or the LLVM
+backend, each descriptor or dictionary composition statement also owns a
+one-entry site cache in zero-initialized writable static data; the wasm dev
+backend reads no sites, so its lowering emits no slots and every composition
+it runs reaches the interner. The
 lowerer assigns its slot
 and stable worker/site identity; LIR cloning and compaction preserve that
 reference. Mutable slots are never content-deduplicated or pooled between
 program images. Dev run images place them on separate writable pages outside
-the code and read-only data sections and outside the retained static pool.
+the code and read-only data sections and outside the retained static pool. An
+LLVM object names a site by the symbol of the zero-fill definition in the
+program's static data, never by a private constant copy of its initial bytes.
 Saved objects and LirImages carry the initial zero bytes, never runtime pointers.
 Each interpreter owns its own instances of these slots, with
 the lifetime of its composition arena.
 
-The dev backend and interpreter acquire-load a site's pointer to an immutable
+Every consumer with sites acquire-loads a site's pointer to an immutable
 snapshot of the last operand pointers and result. If every operand matches,
-they use that result without entering the runtime or probing the interner. The
+it uses that result without entering the runtime or probing the interner. The
 constructor, worker, arities and other non-local arguments are fixed by the
 site; the local operand sequence is its complete varying key. A miss composes
 normally, then release-stores a complete snapshot pointer. An atomic store
@@ -14176,7 +14179,10 @@ of one pointer means no reader can observe a partially replaced operand/result
 pair, even with several writers. Snapshots are themselves interned by result
 and operand sequence in the program's immortal table, so alternating previously
 seen instantiations does not allocate on each replacement. A replaced snapshot
-stays alive for racing readers until the program is destroyed.
+stays alive for racing readers until the program is destroyed. The native dev
+backend and the LLVM backend emit the load and the operand comparisons inline
+at the site, so a hit costs a few loads and compares, and only a miss enters
+the runtime (`roc_desc_site_publish`).
 
 A snapshot belongs to the program whose immortal table interned it. A cached
 module object is loaded once per compile-time evaluation and shared by every
