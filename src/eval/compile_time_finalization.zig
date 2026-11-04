@@ -3650,7 +3650,7 @@ const RootCompletionState = struct {
         // instantiates (design.md "Literal Arguments").
         if (self.module.compile_time_roots.root(request_root_id).literal_argument) |argument| switch (argument.edge) {
             .literal => {},
-            .node => |id| switch (self.module.static_dispatch_plans.evidenceNode(id).target.kind) {
+            .node => |id| switch ((try self.module.dispatch().evidenceNode(id)).target.kind) {
                 .procedure => |procedure| try self.pending_templates.append(self.allocator, procedure.template),
                 .local_proc, .structural => {},
             },

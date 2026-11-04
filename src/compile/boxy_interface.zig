@@ -106,7 +106,7 @@ pub const Digests = struct {
         switch (part) {
             .name => hasher.update(&self.nameOf(artifact.key.bytes)),
             .checking => hasher.update(&artifact.moduleEnvConst().checking_dependency.digest),
-            .templates => for (artifact.exported_procedure_templates.templates) |exported| self.hashTemplateRef(hasher, artifact, exported.template),
+            .templates => for (artifact.exported_procedure_templates.templates) |exported| try self.hashTemplateRef(hasher, artifact, exported.template),
             .bindings => self.hashBindings(hasher, artifact),
             .methods => self.hashMethods(hasher, artifact),
             .defaults => hasher.update(std.mem.asBytes(&@as(u32, @intCast(artifact.bodies().defaultExprs().len)))),
@@ -206,7 +206,7 @@ pub const Digests = struct {
     fn hashPublicSurface(self: *Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
         hasher.update(&artifact.moduleEnvConst().checking_dependency.digest);
         for (artifact.exported_procedure_templates.templates) |exported| {
-            self.hashTemplateRef(hasher, artifact, exported.template);
+            try self.hashTemplateRef(hasher, artifact, exported.template);
         }
         self.hashBindings(hasher, artifact);
         self.hashMethods(hasher, artifact);
@@ -221,7 +221,7 @@ pub const Digests = struct {
             hashTag(hasher, @tagName(std.meta.activeTag(binding.body)));
             switch (binding.body) {
                 .direct_template => |direct| switch (direct.template) {
-                    .checked => |ref| self.hashTemplateRef(hasher, artifact, ref),
+                    .checked => |ref| try self.hashTemplateRef(hasher, artifact, ref),
                     .lifted, .synthetic => hasher.update(&artifact.key.bytes),
                 },
                 .callable_eval_template, .checked_error => {},
@@ -237,7 +237,7 @@ pub const Digests = struct {
             };
             hashTag(hasher, @tagName(std.meta.activeTag(target.kind)));
             switch (target.kind) {
-                .procedure => |procedure| self.hashTemplateRef(hasher, artifact, procedure.template),
+                .procedure => |procedure| try self.hashTemplateRef(hasher, artifact, procedure.template),
                 .local_proc, .structural => {},
             }
         }
@@ -262,14 +262,15 @@ pub const Digests = struct {
     /// The name of `ref`'s worker, and the hidden parameters a call to it
     /// passes when `artifact` declares it. An imported template's are part of
     /// its own module's interface.
-    fn hashTemplateRef(self: *const Digests, hasher: *Sha256, artifact: *const Artifact, ref: canonical.ProcedureTemplateRef) void {
+    fn hashTemplateRef(self: *const Digests, hasher: *Sha256, artifact: *const Artifact, ref: canonical.ProcedureTemplateRef) Allocator.Error!void {
         hasher.update(&self.nameOf(ref.artifact.bytes));
         hasher.update(std.mem.asBytes(&@as(u32, @backingInt(ref.template))));
         if (!std.mem.eql(u8, &ref.artifact.bytes, &artifact.key.bytes)) return;
         const templates = &artifact.checked_procedure_templates;
         const template = templates.templates.items[@backingInt(ref.template)];
-        hasher.update(std.mem.asBytes(&template.scheme_vars.len));
-        for (templates.evidence_params_pool[template.evidence_params.start..][0..template.evidence_params.len]) |param| {
+        const schema = try artifact.dispatch().templateSchema(ref.template);
+        hasher.update(std.mem.asBytes(&schema.vars.len));
+        for (schema.params) |param| {
             hashBytes(hasher, artifact.canonical_names.methodNameText(param.method));
             hasher.update(std.mem.asBytes(&(param.slot orelse @as(u32, std.math.maxInt(u32)))));
         }
@@ -281,7 +282,7 @@ pub const Digests = struct {
     fn hashConstTemplate(self: *Digests, hasher: *Sha256, artifact: *const Artifact, template: CheckedArtifact.ConstTemplate) Allocator.Error!void {
         hashTag(hasher, @tagName(std.meta.activeTag(template.state)));
         switch (template.state) {
-            .eval_template => |eval_template| self.hashTemplateRef(hasher, artifact, eval_template.entry_template),
+            .eval_template => |eval_template| try self.hashTemplateRef(hasher, artifact, eval_template.entry_template),
             .stored_const => {
                 const root = switch (template.owner) {
                     .hoisted_root => |hoisted| (artifact.hoisted_constants.lookupByRoot(hoisted.root) orelse return).root,

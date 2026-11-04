@@ -114,7 +114,8 @@ const Walker = struct {
     /// Per module, the walk that last reached each of its templates.
     visited: [][]u32,
     /// Per module, the summary that last reached each of its evidence nodes.
-    visited_nodes: [][]u32,
+    /// The evidence walk that last visited each evidence node of a module.
+    visited_nodes: std.AutoHashMapUnmanaged(NodeVisitKey, u32) = .empty,
     /// Per module, the summary that last reached each of its generated codec
     /// derivations.
     visited_derivations: [][]u32,
@@ -150,19 +151,13 @@ const Walker = struct {
             }
         }.count);
         errdefer freeStamps(allocator, visited);
-        const visited_nodes = try walkStamps(allocator, modules, struct {
-            fn count(module: *const checked.CheckedModuleArtifact) usize {
-                return module.static_dispatch_plans.evidence_nodes.len;
-            }
-        }.count);
-        errdefer freeStamps(allocator, visited_nodes);
         const visited_derivations = try walkStamps(allocator, modules, struct {
             fn count(module: *const checked.CheckedModuleArtifact) usize {
-                return module.static_dispatch_plans.generated_codec_derivations.len;
+                return module.static_dispatch_plans.recorded_codec_derivations.len;
             }
         }.count);
         errdefer freeStamps(allocator, visited_derivations);
-        return .{ .allocator = allocator, .modules = modules, .by_key = by_key, .root_ordinals = root_ordinals, .visited = visited, .visited_nodes = visited_nodes, .visited_derivations = visited_derivations };
+        return .{ .allocator = allocator, .modules = modules, .by_key = by_key, .root_ordinals = root_ordinals, .visited = visited, .visited_derivations = visited_derivations };
     }
 
     /// Per module, a zeroed walk stamp per item `count` counts.
@@ -188,7 +183,7 @@ const Walker = struct {
 
     fn deinit(self: *Walker) void {
         freeStamps(self.allocator, self.visited);
-        freeStamps(self.allocator, self.visited_nodes);
+        self.visited_nodes.deinit(self.allocator);
         freeStamps(self.allocator, self.visited_derivations);
         self.summaries.deinit(self.allocator);
         self.summary_templates.deinit(self.allocator);
@@ -258,16 +253,16 @@ const Walker = struct {
             if (raw >= module.resolved_value_refs.records.len) base.invariant("compile-time finalization invariant violated: a value reference id is outside its checked table", .{});
             const record = module.resolved_value_refs.records[raw];
             try self.walkRef(record.ref);
-            if (module.static_dispatch_plans.siteEvidence(record.expr)) |evidence| {
+            if (try module.dispatch().siteEvidence(record.expr)) |evidence| {
                 try self.walkEntries(key.module, evidence);
                 try self.drainNodes(key.module);
             }
         }
-        const plans = &module.static_dispatch_plans;
+        const plan_refs = module.checked_procedure_templates.dispatch_plan_refs;
         const plan_span = template.static_dispatch_plans;
-        if (plan_span.start + plan_span.len > plans.template_refs.len) base.invariant("compile-time finalization invariant violated: a template's dispatch plan span is outside its checked table", .{});
-        for (plans.template_refs[plan_span.start..][0..plan_span.len]) |plan_id| {
-            const plan = plans.plans[@backingInt(plan_id)];
+        if (plan_span.start + plan_span.len > plan_refs.len) base.invariant("compile-time finalization invariant violated: a template's dispatch plan span is outside its checked table", .{});
+        for (plan_refs[plan_span.start..][0..plan_span.len]) |plan_id| {
+            const plan = try module.dispatch().plan(plan_id);
             switch (plan.resolution) {
                 .direct_closed, .direct_parametric => |direct| try self.nodes.append(self.allocator, direct.evidence),
                 .structural => if (plan.generated_codec_derivation) |id| try self.derivations.append(self.allocator, id),
@@ -294,14 +289,15 @@ const Walker = struct {
     /// procedure target is a template the evaluation reaches, and each
     /// node's nested evidence names further targets.
     fn drainNodes(self: *Walker, module: u32) Allocator.Error!void {
-        const plans = &self.modules[module].static_dispatch_plans;
+        const dispatch = self.modules[module].dispatch();
         while (self.nodes.items.len != 0 or self.derivations.items.len != 0) {
             if (self.derivations.pop()) |id| {
                 const stamps_of = self.visited_derivations[module];
                 if (stamps_of[@backingInt(id)] == self.evidence_visit) continue;
                 stamps_of[@backingInt(id)] = self.evidence_visit;
-                const derivation = plans.generated_codec_derivations[@backingInt(id)];
-                for (derivation.callsSlice(plans)) |call| switch (call.resolution) {
+                const codecs = try dispatch.generatedCodecs();
+                const derivation = codecs.generated_codec_derivations[@backingInt(id)];
+                for (derivation.callsSlice(&codecs)) |call| switch (call.resolution) {
                     .callable => |node| try self.nodes.append(self.allocator, node),
                     .structural => |nested| try self.derivations.append(self.allocator, nested),
                     .pending, .checked_error => {},
@@ -309,29 +305,30 @@ const Walker = struct {
                 continue;
             }
             const id = self.nodes.pop().?;
-            const stamps_of = self.visited_nodes[module];
-            if (stamps_of[@backingInt(id)] == self.evidence_visit) continue;
-            stamps_of[@backingInt(id)] = self.evidence_visit;
-            const node = plans.evidenceNode(id);
+            const stamp = try self.visited_nodes.getOrPut(self.allocator, .{ .module = module, .node = id });
+            if (stamp.found_existing and stamp.value_ptr.* == self.evidence_visit) continue;
+            stamp.value_ptr.* = self.evidence_visit;
+            const node = try dispatch.evidenceNode(id);
             switch (node.target.kind) {
                 .procedure => |procedure| try self.pushTemplate(procedure.template),
                 .local_proc, .structural => {},
             }
             switch (node.nested) {
-                .resolved => try self.walkEntries(module, plans.nestedEvidence(node)),
-                .through_alias => try self.walkEntries(module, plans.aliasScopeEvidence(node)),
+                .resolved => try self.walkEntries(module, try dispatch.nestedEvidence(node)),
+                .through_alias => try self.walkEntries(module, try dispatch.aliasScopeEvidence(node)),
                 .from_callable => {},
             }
         }
     }
 
+    const NodeVisitKey = struct { module: u32, node: static_dispatch.EvidenceNodeId };
+
     /// Queue the evidence nodes and derivations `evidence` resolves to.
     fn walkEntries(self: *Walker, module: u32, evidence: []const static_dispatch.CheckedEvidence) Allocator.Error!void {
-        const plans = &self.modules[module].static_dispatch_plans;
+        const dispatch = self.modules[module].dispatch();
         for (evidence) |entry| {
             try self.walkResolution(entry.resolution);
-            const contracts = entry.callable_contracts;
-            for (plans.evidence_refs[contracts.start..][0..contracts.len]) |contract| try self.walkResolution(contract.resolution);
+            for (try dispatch.evidenceEntries(entry.callable_contracts)) |contract| try self.walkResolution(contract.resolution);
         }
     }
 
@@ -349,7 +346,7 @@ const Walker = struct {
         const artifact = self.modules[module];
         switch (edge) {
             .literal => {},
-            .node => |id| switch (artifact.static_dispatch_plans.evidenceNode(id).target.kind) {
+            .node => |id| switch ((try artifact.dispatch().evidenceNode(id)).target.kind) {
                 .procedure => |procedure| try self.pushTemplate(procedure.template),
                 .local_proc, .structural => {},
             },
@@ -585,26 +582,29 @@ fn expectSharedDependencies(source: []const u8, imports: []const @import("inspec
     evidence_probe.visit = 1;
     var probed_evidence = false;
     evidence: for (modules.items, 0..) |module, module_index| {
-        for (module.static_dispatch_plans.evidence_nodes, 0..) |node, node_index| {
-            if (node.target.kind != .procedure or evidence_probe.moduleOf(node.target.kind.procedure.template.artifact) == null) continue;
-            const id: static_dispatch.EvidenceNodeId = @fromBackingInt(@intCast(node_index));
-            evidence_probe.evidence_visit = 1;
-            try evidence_probe.nodes.append(allocator, id);
-            try evidence_probe.drainNodes(@intCast(module_index));
-            try std.testing.expect(evidence_probe.pending.items.len > 0);
-            const targets = try allocator.dupe(TemplateKey, evidence_probe.pending.items);
-            defer allocator.free(targets);
-            const reads = try allocator.dupe(u32, evidence_probe.reads.items);
-            defer allocator.free(reads);
-            evidence_probe.pending.clearRetainingCapacity();
-            evidence_probe.reads.clearRetainingCapacity();
-            evidence_probe.evidence_visit = 2;
-            try evidence_probe.nodes.append(allocator, id);
-            try evidence_probe.drainNodes(@intCast(module_index));
-            try std.testing.expectEqualSlices(TemplateKey, targets, evidence_probe.pending.items);
-            try std.testing.expectEqualSlices(u32, reads, evidence_probe.reads.items);
-            probed_evidence = true;
-            break :evidence;
+        for (0..module.checked_procedure_templates.templates.items.len) |raw_template| {
+            const owner = static_dispatch.EvidenceOwner.forTemplate(@fromBackingInt(@intCast(raw_template)));
+            for ((try module.dispatch().pool(owner)).nodes, 0..) |node, node_index| {
+                if (node.target.kind != .procedure or evidence_probe.moduleOf(node.target.kind.procedure.template.artifact) == null) continue;
+                const id: static_dispatch.EvidenceNodeId = .{ .index = @intCast(node_index), .owner = owner };
+                evidence_probe.evidence_visit = 1;
+                try evidence_probe.nodes.append(allocator, id);
+                try evidence_probe.drainNodes(@intCast(module_index));
+                try std.testing.expect(evidence_probe.pending.items.len > 0);
+                const targets = try allocator.dupe(TemplateKey, evidence_probe.pending.items);
+                defer allocator.free(targets);
+                const reads = try allocator.dupe(u32, evidence_probe.reads.items);
+                defer allocator.free(reads);
+                evidence_probe.pending.clearRetainingCapacity();
+                evidence_probe.reads.clearRetainingCapacity();
+                evidence_probe.evidence_visit = 2;
+                try evidence_probe.nodes.append(allocator, id);
+                try evidence_probe.drainNodes(@intCast(module_index));
+                try std.testing.expectEqualSlices(TemplateKey, targets, evidence_probe.pending.items);
+                try std.testing.expectEqualSlices(u32, reads, evidence_probe.reads.items);
+                probed_evidence = true;
+                break :evidence;
+            }
         }
     }
     try std.testing.expect(probed_evidence);
