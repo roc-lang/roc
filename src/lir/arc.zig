@@ -16356,6 +16356,129 @@ test "RC field takes through repeated dominating complete projections" {
     try testing.expectEqual(first_view, second_projection_stmt.assign_ref.op.source);
 }
 
+test "RC a closure taken from a dying record of closures through a borrowed wrapper leaves its sibling released before the call" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Repro for https://github.com/roc-lang/roc/issues/12841: a tag holds a
+    // record of two closures capturing one list. `site_set` reads the second
+    // closure out of the tag's payload, unwraps its captures, and passes
+    // them to the closure body, which mutates the list on one path. The
+    // wrapper's base borrows the tag, so a caller passing a dying tag
+    // selects its owned variant: there the closure's field is taken, the
+    // sibling closure is released before the call, and the captures reach
+    // the body's owned variant without a retain.
+    const captures_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = f.list_i64 },
+    });
+    const closure_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{captures_layout});
+    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = closure_layout },
+        .{ .index = 1, .layout = closure_layout },
+    });
+    const site_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{record_layout});
+
+    // The closure body: consumes its captured list on one path only, so its
+    // base keeps the captures borrowed with an owned-only take.
+    const body_index = try f.local(.i64);
+    const body_captures = try f.local(captures_layout);
+    const body_list = try f.local(f.list_i64);
+    const body_changed = try f.local(f.list_i64);
+    const body_empty = try f.local(f.list_i64);
+    const consume_ret = try f.ret(body_changed);
+    const consume = try f.assignLowLevel(body_changed, &.{body_list}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), consume_ret);
+    const empty_ret = try f.ret(body_empty);
+    const make_empty = try f.assignList(body_empty, &.{}, empty_ret);
+    const body_switch = try f.switchStmt(body_index, consume, make_empty, null);
+    const body_read = try f.assignRefField(body_list, body_captures, 0, body_switch);
+    const closure_body = try f.addProc(&.{ body_index, body_captures }, body_read, f.list_i64);
+
+    // The wrapper: site_set = |Site(fs), i| (fs.set)(i)
+    const site = try f.local(site_layout);
+    const index = try f.local(.i64);
+    const record_view = try f.local(record_layout);
+    const closure = try f.local(closure_layout);
+    const captures = try f.local(captures_layout);
+    const wrapper_result = try f.local(f.list_i64);
+    const wrapper_ret = try f.ret(wrapper_result);
+    const wrapper_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = wrapper_result,
+        .proc = closure_body,
+        .args = try f.span(&.{ index, captures }),
+        .next = wrapper_ret,
+    } }, .test_fixture);
+    const read_captures = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = captures,
+        .op = .tagPayloadStruct(closure, 0, 0),
+        .next = wrapper_call,
+    } }, .test_fixture);
+    const read_closure = try f.assignRefField(closure, record_view, 1, read_captures);
+    const read_record = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = record_view,
+        .op = .tagPayloadStruct(site, 0, 0),
+        .next = read_closure,
+    } }, .test_fixture);
+    const wrapper = try f.addProc(&.{ site, index }, read_record, f.list_i64);
+
+    // The caller builds the site from one list captured twice and passes it
+    // dying.
+    const list = try f.local(f.list_i64);
+    const first_captures = try f.local(captures_layout);
+    const first_closure = try f.local(closure_layout);
+    const second_captures = try f.local(captures_layout);
+    const second_closure = try f.local(closure_layout);
+    const record = try f.local(record_layout);
+    const site_value = try f.local(site_layout);
+    const caller_index = try f.local(.i64);
+    const caller_result = try f.local(f.list_i64);
+    const caller_ret = try f.ret(caller_result);
+    const caller_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = caller_result,
+        .proc = wrapper,
+        .args = try f.span(&.{ site_value, caller_index }),
+        .next = caller_ret,
+    } }, .test_fixture);
+    const assign_index = try f.assignI64(caller_index, 0, caller_call);
+    const make_site = try f.assignTag(site_value, 0, record, assign_index);
+    const make_record = try f.assignStruct(record, &.{ first_closure, second_closure }, make_site);
+    const make_second_closure = try f.assignTag(second_closure, 0, second_captures, make_record);
+    const make_second_captures = try f.assignStruct(second_captures, &.{list}, make_second_closure);
+    const make_first_closure = try f.assignTag(first_closure, 0, first_captures, make_second_captures);
+    const make_first_captures = try f.assignStruct(first_captures, &.{list}, make_first_closure);
+    const caller_body = try f.assignList(list, &.{}, make_first_captures);
+    const caller = try f.addProc(&.{}, caller_body, f.list_i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    try f.run();
+
+    // The caller selects the wrapper's owned variant and moves the site.
+    const call_from_caller = try f.directCallTo(caller, caller_result);
+    try testing.expect(@backingInt(call_from_caller.proc) >= base_proc_count);
+    try testing.expectEqual(@as(usize, 0), f.countRc(site_value, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(site_value, .decref));
+    // The record view and the closure read never retain. In the owned
+    // variant nothing retains: the sibling closure is released before the
+    // call, and the captures move into an emission of the body that owns
+    // them.
+    try testing.expectEqual(@as(usize, 0), f.countRc(record_view, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(closure, .incref));
+    const variant_body = f.store.getProcSpecImmediate(call_from_caller.proc).body orelse return error.MissingProcBody;
+    var cursor = variant_body;
+    var released_before_call = false;
+    var retained_before_call = false;
+    var remaining: usize = f.store.cfStmtCount() + 1;
+    const variant_call = while (remaining > 0) : (remaining -= 1) {
+        const stmt = f.store.getCFStmt(cursor);
+        if (stmt == .decref) released_before_call = true;
+        if (stmt == .incref) retained_before_call = true;
+        if (stmt == .assign_call) break stmt.assign_call;
+        cursor = body_clone.linearNextOrNull(stmt) orelse return error.NonLinearPath;
+    } else return error.CyclicPath;
+    try testing.expect(released_before_call);
+    try testing.expect(!retained_before_call);
+    try testing.expectEqual(arc_sig.Mode.owned, arc_sig.RcSig.paramMode(.{ .borrowed_params = @intCast(f.store.getProcSpecImmediate(variant_call.proc).rc_borrowed_params) }, 1));
+}
+
 test "RC borrowed field read takes its field at the last consuming operand" {
     for ([_]bool{ false, true }) |consumed_after| {
         try expectBorrowedReadTakesAtLastOperand(consumed_after);
