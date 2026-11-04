@@ -1418,6 +1418,16 @@ pub const SmallWords = [3]usize;
 const word_bits = @bitSizeOf(usize);
 const WordShift = std.math.Log2Int(usize);
 
+// The word arithmetic below (`concatSmall`, `concatShort`) puts a string's
+// first byte in the lowest bits of its first word, which holds only where the
+// target is little-endian. A big-endian target fails here instead of
+// scrambling every small concat.
+comptime {
+    if (builtin.cpu.arch.endian() != .little) {
+        @compileError("small-string concat works on words in little-endian byte order");
+    }
+}
+
 /// A small string's words, its bytes past the length and its flag byte as
 /// they are.
 pub inline fn smallWords(string: RocStr) SmallWords {
@@ -3901,6 +3911,23 @@ test "RocStr.concat: a small first argument and every length, small and big resu
             }
         }
     }
+}
+
+test "RocStr.concat: a small string's first byte is its first word's lowest" {
+    // The layout the word arithmetic of `concatSmall` and `concatShort`
+    // relies on, checked from memory on the target the tests run on: each
+    // byte of the string at its place in the words, the flag byte the last
+    // word's highest.
+    const text = "abcdefghijklmnopqrstuvw";
+    const string = RocStr.fromSliceSmall(text[0 .. SMALL_STRING_SIZE - 1]);
+    const words = smallWords(string);
+    for (0..SMALL_STRING_SIZE - 1) |index| {
+        const word = words[index / @sizeOf(usize)];
+        const byte: u8 = @truncate(word >> @intCast(8 * (index % @sizeOf(usize))));
+        try std.testing.expectEqual(text[index], byte);
+    }
+    const flag: u8 = @truncate(words[2] >> (word_bits - 8));
+    try std.testing.expectEqual(RocStr.smallStrFlagByte(SMALL_STRING_SIZE - 1), flag);
 }
 
 test "RocStr.concat: concatShort is concatSmall for every pair of lengths it takes" {
