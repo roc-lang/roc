@@ -10168,6 +10168,9 @@ test "checked output retains defaulted identity inside parent function digest" {
 
 /// Empty per-artifact tables for building `ImportedModuleView`s in tests.
 const TestImportViewTables = struct {
+    /// The store a view's dispatch resolution would synthesize types in;
+    /// these views resolve no dispatch, so it stays empty.
+    checked_type_store: CheckedTypeStore = .{},
     checked_const_bodies: CheckedConstBodyTable = .{},
     exhaustiveness_sites: CheckedExhaustivenessSiteTable = .{},
     checked_procedure_templates: CheckedProcedureTemplateTable = .{},
@@ -10204,6 +10207,7 @@ const TestImportViewTables = struct {
         for (self.analyses.items) |analyses| analyses.destroy();
         self.analyses.deinit(self.allocator);
         self.const_store.deinit();
+        self.checked_type_store.deinit(self.allocator);
     }
 
     fn view(
@@ -10226,6 +10230,7 @@ const TestImportViewTables = struct {
             .module_identity = identity,
             .exports = .{},
             .checked_types = checked_types,
+            .checked_type_store = &self.checked_type_store,
             .checked_bodies = .{
                 .env = module_env,
                 .names = names,
@@ -34100,6 +34105,8 @@ fn expectAllSliceStoreRoundTrips(comptime Store: type) artifact_serialize.TestEr
     const gpa = std.testing.allocator;
     var store: Store = .{};
     inline for (@typeInfo(Store).@"struct".field_names) |field_name| {
+        // A nested store round-trips through its own `Serialized` form.
+        if (comptime @hasDecl(@FieldType(Store, field_name), "Serialized")) continue;
         const slice = comptime isSliceField(@FieldType(Store, field_name));
         const Elem = std.meta.Child(if (slice) @FieldType(Store, field_name) else @FieldType(@FieldType(Store, field_name), "items"));
         // Give lists spare capacity to prove serialization only writes live rows.
@@ -34193,6 +34200,7 @@ fn testVisibilityImportedView(
         },
         .module_analyses = analyses,
         .exports = undefined,
+        .checked_type_store = undefined,
         .checked_types = undefined,
         .checked_bodies = undefined,
         .exhaustiveness_sites = undefined,

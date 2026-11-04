@@ -130,7 +130,7 @@ test "concrete recursive dispatch records a shared method instance without copyi
 fn assertBuiltinIterExtremum(
     artifact: *const checked_artifact.CheckedModuleArtifact,
     method_name: []const u8,
-) error{ NoSpaceLeft, TestUnexpectedResult }!void {
+) (std.mem.Allocator.Error || error{ NoSpaceLeft, TestUnexpectedResult })!void {
     const env = artifact.moduleEnvConst();
     const source = env.getSourceAll();
     var needle_buffer: [64]u8 = undefined;
