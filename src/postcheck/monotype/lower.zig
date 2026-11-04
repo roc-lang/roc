@@ -31128,7 +31128,7 @@ const BodyContext = struct {
             const callable_plan = task.callable_plan;
             const plan = callable_plan.plan;
             const plan_args = callable_plan.operands;
-            const resolution = self.evidenceResolution(plan) orelse
+            const resolution = try self.evidenceResolution(plan) orelse
                 Common.invariant("runtime method result had no CheckedCallResolution evidence");
             switch (resolution) {
                 .target => |lookup| {
@@ -35892,7 +35892,7 @@ const BodyContext = struct {
             },
             // A resolved method call's remaining operands.
             5, 6 => {
-                const lookup = switch (self.evidenceResolution(plan) orelse
+                const lookup = switch (try self.evidenceResolution(plan) orelse
                     Common.invariant("CheckedStaticDispatchCallPlan had no MethodTarget or StructuralDerivation")) {
                     .target => |lookup| lookup,
                     .structural => Common.invariant("resolved dispatch operands reached a structural derivation"),
@@ -35986,7 +35986,7 @@ const BodyContext = struct {
             expected_ret_node,
             .expression_lowering,
         );
-        const resolution = self.evidenceResolution(plan) orelse
+        const resolution = try self.evidenceResolution(plan) orelse
             Common.invariant("runtime method call had no CheckedCallResolution evidence");
         switch (resolution) {
             .target => |initial_lookup| {
@@ -36113,7 +36113,7 @@ const BodyContext = struct {
         // reported missing methods); both emit an ordinary Roc runtime crash
         // and never return a dispatch result. A genuinely reachable ownerless
         // dispatch was rejected at check time.
-        switch (self.evidenceResolution(plan) orelse
+        switch (try self.evidenceResolution(plan) orelse
             Common.invariant("CheckedStaticDispatchCallPlan had no MethodTarget or StructuralDerivation")) {
             .target => {},
             .structural => |structural| return self.dispatchLowerDone(task, switch (structural.derivation) {
@@ -53175,11 +53175,11 @@ const BodyContext = struct {
             // alias when the frame finishes.
             .through_alias => .{
                 (try site_view.dispatch.aliasScopeEvidence(node)),
-                try self.aliasScopeSchema(.{
+                (try self.aliasScopeSchema(.{
                     .view = lookup.view,
                     .alias = node.target.alias orelse
                         Common.invariant("alias-scope evidence named a target with no alias binding"),
-                }).params,
+                })).params,
             },
         };
         if (node.nested != .from_callable and refs.len != params.len) {
@@ -53980,7 +53980,7 @@ const BodyContext = struct {
     fn dispatchTargetEvidenceSource(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
-    ) TargetEvidenceSource {
+    ) Allocator.Error!TargetEvidenceSource {
         return switch (plan.resolution) {
             .direct_closed, .direct_parametric => |direct| if (try self.directAliasScopeContract(direct.evidence)) |contract|
                 .{ .alias_scope = contract }
@@ -54244,7 +54244,7 @@ const BodyContext = struct {
 
     /// The requirement contract a checked iterator dispatch call recorded for
     /// its target, mirroring `dispatchTargetContract`.
-    fn iteratorCallContract(self: *BodyContext, call: static_dispatch.ResolvedIteratorDispatchCall) ?EvidenceContract {
+    fn iteratorCallContract(self: *BodyContext, call: static_dispatch.ResolvedIteratorDispatchCall) Allocator.Error!?EvidenceContract {
         return switch (call.resolution) {
             .direct_closed, .direct_parametric => |direct| blk: {
                 const node = (try self.view.dispatch.evidenceNode(direct.evidence));
@@ -54265,7 +54265,7 @@ const BodyContext = struct {
         return switch (call.resolution) {
             .direct_closed, .direct_parametric => |direct| if (try self.directAliasScopeContract(direct.evidence)) |contract|
                 .{ .alias_scope = contract }
-            else if (self.iteratorCallContract(call)) |contract|
+            else if (try self.iteratorCallContract(call)) |contract|
                 .{ .checked = contract }
             else
                 .derive,
@@ -54295,10 +54295,10 @@ const BodyContext = struct {
 
     /// The plan's checked or edge-supplied resolution. Null is reserved for
     /// checked-error and explicitly unreachable dispatches.
-    fn evidenceResolution(self: *BodyContext, plan: static_dispatch.StaticDispatchCallPlan) ?EvidenceResolved {
+    fn evidenceResolution(self: *BodyContext, plan: static_dispatch.StaticDispatchCallPlan) Allocator.Error!?EvidenceResolved {
         switch (plan.resolution) {
             .direct_closed, .direct_parametric => |direct| {
-                return .{ .target = self.methodLookupForEvidenceNode((try self.view.dispatch.evidenceNode(direct.evidence))) };
+                return .{ .target = try self.methodLookupForEvidenceNode((try self.view.dispatch.evidenceNode(direct.evidence))) };
             },
             .evidence_dependent => |dependent| {
                 const entry = self.evidence.at(dependent.index) orelse
@@ -54372,7 +54372,7 @@ const BodyContext = struct {
         callable_node: NodeId,
         shape_node: NodeId,
     ) Allocator.Error!void {
-        const resolution = self.evidenceResolution(plan) orelse
+        const resolution = try self.evidenceResolution(plan) orelse
             Common.invariant("generated runtime source plan had no structural evidence");
         const structural = switch (resolution) {
             .structural => |structural| structural,
@@ -54467,7 +54467,7 @@ const BodyContext = struct {
     /// The target a checked evidence node of this module selected, with the
     /// callable instantiation and substitution checking recorded at the edge
     /// that selected it.
-    fn methodLookupForEvidenceNode(self: *BodyContext, node: static_dispatch.EvidenceNode) MethodLookup {
+    fn methodLookupForEvidenceNode(self: *BodyContext, node: static_dispatch.EvidenceNode) Allocator.Error!MethodLookup {
         var lookup = self.methodLookupForResolvedTarget(node.target);
         lookup.instantiation = switch (node.instantiation) {
             .monomorphic => null,
@@ -55320,7 +55320,7 @@ const BodyContext = struct {
             try self.methodTargetCalleeAtNodeWithEvidence(
                 lookup,
                 request_fn_node,
-                self.dispatchTargetEvidenceSource(plan),
+                try self.dispatchTargetEvidenceSource(plan),
             );
         return try self.draftFnSlotTypeNode(slot, request_fn_node);
     }
@@ -55337,7 +55337,7 @@ const BodyContext = struct {
             .callee = draftProcCalleeForSlot(try self.methodTargetCalleeAtNodeWithEvidence(
                 contextual_lookup,
                 callable_node,
-                self.dispatchTargetEvidenceSource(plan),
+                try self.dispatchTargetEvidenceSource(plan),
             )),
             .args = args,
             .iterator_procedure = self.iteratorProcedureForMethodTarget(contextual_lookup.target),
@@ -64764,7 +64764,7 @@ const BodyContext = struct {
     fn iteratorMethodLookup(self: *BodyContext, plan: static_dispatch.ResolvedIteratorDispatchCall) Allocator.Error!MethodLookup {
         return switch (plan.resolution) {
             .direct_closed, .direct_parametric => |direct| blk: {
-                break :blk self.methodLookupForEvidenceNode((try self.view.dispatch.evidenceNode(direct.evidence)));
+                break :blk try self.methodLookupForEvidenceNode((try self.view.dispatch.evidenceNode(direct.evidence)));
             },
             .evidence_dependent => |dependent| if (self.evidence.at(dependent.index)) |entry| switch (selectCallableContract(entry, dependent.callable_contract) orelse entry) {
                 .target => |target| .{

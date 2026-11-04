@@ -4126,7 +4126,7 @@ pub const Builder = struct {
                     .local_proc, .structural => invariant("a literal argument's edge instantiates no procedure template"),
                 };
                 const callee = try self.program.templateRefWorker(procedure.template);
-                const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
+                const subst = (try table.substitution(node.subst));
                 var deferred = false;
                 self.chain_frame = true;
                 defer self.chain_frame = false;
@@ -4674,7 +4674,7 @@ pub const Builder = struct {
             .from_callable => null,
             .through_alias => invariant("alias-scope evidence accompanies only an alias instantiation"),
         };
-        const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
+        const subst = (try table.substitution(node.subst));
         return try self.localProcInstanceValue(local, fn_ty, evidence, null, subst);
     }
 
@@ -6133,7 +6133,7 @@ pub const Builder = struct {
                     return try self.localMethodValue(node, fn_ty);
                 }
                 const target = try self.methodTargetWorker(node.target);
-                const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
+                const subst = (try table.substitution(node.subst));
                 switch (node.instantiation) {
                     .derived_from_callable, .alias => |callable| {
                         const hidden = if (node.instantiation == .alias) try self.aliasTargetHidden(node, target, .{ .node = node_id }) else try self.relatedHiddenArgs(target, callable);
@@ -6462,7 +6462,7 @@ pub const Builder = struct {
             .local => |local| try self.localAliasStep(alias_module, local.lookup, local.dispatch_scope),
         };
         // The edge's instantiation of the first alias's scope, in this body.
-        const node_subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
+        const node_subst = (try table.substitution(node.subst));
         if (node_subst.len != first.vars.len) invariant("an alias edge's substitution differs from its alias's scope");
         const bound = try self.program.arena.allocator().alloc(TypeId, node_subst.len);
         for (node_subst, bound) |checked_ty, *ty| ty.* = try self.convert(checked_ty);
@@ -7449,7 +7449,7 @@ pub const Builder = struct {
                     // instantiation the call's callable type gives it.
                     .alias => try self.aliasTargetInstance(node, callee, .{ .node = direct.evidence }),
                     .monomorphic, .callable, .derived_from_callable => blk: {
-                        const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
+                        const subst = (try table.substitution(node.subst));
                         break :blk switch (node.nested) {
                             .resolved => try self.callInstanceAt(callee, subst, (try table.nestedEvidence(node)), call_fn, .{ .node = direct.evidence }),
                             .from_callable => try self.callableDerivedInstance(callee, subst, call_fn),
@@ -9352,7 +9352,7 @@ pub const Builder = struct {
                     return try self.emitErasedCall(try self.localMethodValue(node, fn_ty), fn_ty, args, result_ty);
                 }
                 const callee = try self.methodTargetWorker(node.target);
-                const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
+                const subst = (try table.substitution(node.subst));
                 const call_fn = try self.dispatchCallable(resolution, callable_ty);
                 // Reached through a procedure alias, the target takes the
                 // instantiation the call's callable type gives it.

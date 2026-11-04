@@ -1269,7 +1269,7 @@ const Gen = struct {
                     .resolved => try table.nestedEvidence(node),
                     .from_callable, .through_alias => invariant("a generated codec call's evidence is not resolved"),
                 };
-                const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
+                const subst = (try table.substitution(node.subst));
                 const instance = switch (node.instantiation) {
                     .alias => blk: {
                         if (b.module != self.fam().module) invariant("a generated codec piece is lowered outside its family's module");
