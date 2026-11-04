@@ -261,6 +261,10 @@ const AliasScope = struct {
     /// other requirements can name types only the scopes the chain never
     /// entered bind: each read composes the one it names.
     deferred_dicts: ?DeferredDictionaries = null,
+    /// The declaration context `dicts` come from, for the scope a local
+    /// procedure's own scheme is resolved in when it is built from one: a
+    /// slot still being built holds a null word there.
+    declaration: ?*const Declaration = null,
     saved_env: types.Env,
 };
 
@@ -4465,6 +4469,7 @@ pub const Builder = struct {
                 .dicts = scope.dicts,
                 .literals = scope.literals,
                 .literal_requirements = if (declaring.literal_scopes.len == 0) &.{} else declaring.literal_scopes[0],
+                .declaration = scope.declaration,
                 .saved_env = self.env,
             });
             self.foreign_scopes = saved_scopes;
@@ -4582,10 +4587,21 @@ pub const Builder = struct {
 
     /// The declaration context a function value of the local procedure
     /// whose lambda is `lambda_expr` is built from: the innermost one being
-    /// built whose callee is the template owning the procedure's site.
+    /// built whose callee is the template owning the procedure's site. There
+    /// is none when this body is, or is nested in, that template's body: a
+    /// local procedure named in this body is then this body's own, even
+    /// while it builds the dictionaries of a call of its own procedure.
     fn localProcDeclaration(self: *Builder, lambda_expr: CheckedExprId) ?*Declaration {
         if (self.declaration == null) return null;
-        return self.declarationOf(self.localProcOwner(lambda_expr) orelse return null);
+        const owner = self.localProcOwner(lambda_expr) orelse return null;
+        var chain = self.worker_id;
+        while (chain != owner) {
+            switch (self.program.worker(chain).key) {
+                .lambda => |key| chain = key.outer,
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => return self.declarationOf(owner),
+            }
+        }
+        return null;
     }
 
     /// The worker of the procedure template owning the site of the local
@@ -4669,10 +4685,13 @@ pub const Builder = struct {
             };
         };
         // A procedure built from a declaration context is a method of a type
-        // its callee's body declares, outside every generalized local, and
-        // methods capture no values.
-        if (self.view.view.nested_proc_sites.sites[self.program.sites_by_expr.get(.{ .module = self.module, .expr = lambda_expr }).?].lexical_scope != .root)
-            invariant("a local procedure built from a declaration context is declared in a generalized local");
+        // its callee's body declares, outside every generalized local other
+        // than its own scheme's, and methods capture no values.
+        switch (self.view.view.nested_proc_sites.sites[self.program.sites_by_expr.get(.{ .module = self.module, .expr = lambda_expr }).?].lexical_scope) {
+            .root => {},
+            .generalized => |scope_id| if (self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr }) != scope_id)
+                invariant("a local procedure built from a declaration context is declared in a generalized local"),
+        }
         const worker = try self.declaredLambdaWorker(context.worker, lambda_expr, closure_expr.ty, captures, false);
         const dicts = try self.program.arena.allocator().alloc(LocalId, context.dicts.len);
         for (dicts, 0..) |*dict, slot| dict.* = (try self.declarationDictionary(context, slot)) orelse try self.nullWord();
@@ -7297,6 +7316,18 @@ pub const Builder = struct {
     fn frameDictionary(self: *Builder, position: usize, param: u32) Allocator.Error!LocalId {
         const scope = self.alias_scopes.items[position];
         const slot = std.mem.findScalar(u32, scope.params, param) orelse invariant("evidence named a dictionary parameter its alias scope does not have");
+        if (scope.declaration) |declaration| if (declaration.dicts[slot] == null) {
+            // Only a requirement naming a type the callee's body declares
+            // (a captured codec requirement whose format is a local type)
+            // composes a dictionary that reaches the callee's local
+            // procedures, so only such a slot is ever being built while one
+            // is. A local procedure's own scheme names a declaring slot only
+            // through a requirement on one of the callee's quantified
+            // variables, which the callee's annotation states outside its
+            // body and so cannot name a type its body declares; a captured
+            // requirement on a structural receiver resolves structurally.
+            invariant("a local procedure's own scheme names a declaration context's dictionary while it is built");
+        };
         const deferred = scope.deferred_dicts orelse return scope.dicts[slot];
         if (deferred.composed[slot]) |dictionary| return dictionary;
         if (deferred.declaring) |declaring| if (self.frameDeclaration(deferred.composed) == null) {
