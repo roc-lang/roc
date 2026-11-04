@@ -6904,11 +6904,6 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         self.split_mode = false;
     }
     self.restoreState(saved);
-    if (base.dev_diagnostics.isSet(.wasm_function_census)) {
-        const body = self.pending_bodies.getPtr(self.localFunctionIndexFromGlobal(func_idx)).?;
-        var name_buffer: [LIR.ProcIdentity.symbol_name_len]u8 = undefined;
-        std.debug.print("WASM_FUNCTION\t{s}\t{s}\t{d}\t{s}\n", .{ proc.identity.writeSymbolName(&name_buffer), self.store.procDebugName(proc_id) orelse "?", body.preamble.items.len + body.code.items.len, @tagName(proc.abi) });
-    }
 }
 
 /// Whether the direct emission of the proc at `func_idx` fits one function

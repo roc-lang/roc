@@ -215,7 +215,6 @@ pub fn imageOfModule(gpa: Allocator, module: *const WasmModule, stack_checks: bo
     var data_exports: std.ArrayList(WasmUnitImage.InputDataExport) = .empty;
     for (symbols) |symbol| {
         if (symbol.isUndefined()) continue;
-        if (symbol.kind == .function) functions[symbol.index - import_count].name = symbol.name;
         if (symbol.flags & (WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN) != 0) continue;
         switch (symbol.kind) {
             .function => {

@@ -48,13 +48,6 @@ pub const Var = enum {
     /// Write every wasm unit image a wasm build restores or builds into the
     /// named directory, one file per unit named by its unit key.
     dump_wasm_unit_images,
-    /// Write a wasm fast dev link's placed program to the named file: for
-    /// every image, its functions and segments reached against its total,
-    /// with their bytes, and each reached segment's size and zero count.
-    dump_wasm_link_layout,
-    /// Print one line per procedure the wasm backend compiles: its symbol,
-    /// its debug name when lowering recorded one, its body bytes and its ABI.
-    wasm_function_census,
 
     /// The variable's name in the environment.
     pub fn envName(comptime self: Var) [:0]const u8 {
@@ -73,8 +66,6 @@ pub const Var = enum {
             .dump_run_image => "ROC_DUMP_RUN_IMAGE",
             .wasm_split_bytes => "ROC_WASM_SPLIT_BYTES",
             .dump_wasm_unit_images => "ROC_DUMP_WASM_UNIT_IMAGES",
-            .dump_wasm_link_layout => "ROC_DUMP_WASM_LINK_LAYOUT",
-            .wasm_function_census => "ROC_WASM_FUNCTION_CENSUS",
         };
     }
 };
