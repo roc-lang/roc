@@ -40,6 +40,7 @@
 //! only changes which task writes which range.
 const std = @import("std");
 const base = @import("base");
+const dev_diagnostics = base.dev_diagnostics;
 const backend = @import("backend");
 const layout = @import("layout");
 const unit_walk = @import("unit_walk.zig");
@@ -883,6 +884,7 @@ pub fn composeModule(
 
     const layout_started = now(std_io);
     var plan = try planLayout(arena, &program, .module, config, outcome);
+    if (dev_diagnostics.get(.dump_wasm_link_layout)) |path| dumpLayout(std_io, path, &program);
     try checkParameters(arena, &program, inputs, outcome);
 
     // Exports: memory, the platform's exports, the stack exports, and what
@@ -1290,6 +1292,53 @@ fn planMemory(plan: *Layout, config: ModuleConfig, outcome: *Outcome) LinkError!
         memory.emit_end = memory.data_end;
     }
     plan.memory = memory;
+}
+
+/// Write the placed program to the file at `path` (the developer
+/// diagnostic `ROC_DUMP_WASM_LINK_LAYOUT`): one line per image with its
+/// role, a label (its first exported function), its reached and total
+/// function and segment counts and bytes, and one line per reached segment
+/// with its size, alignment, zero-fill flag and the zero bytes it holds.
+fn dumpLayout(std_io: std.Io, path: []const u8, program: *const Program) void {
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(std.heap.page_allocator);
+    for (program.order) |image| {
+        const item = program.items[image];
+        const view = item.view;
+        const function_count: u32 = @intCast(view.functions().len);
+        var reached_functions: u64 = 0;
+        var reached_function_bytes: u64 = 0;
+        var function_bytes: u64 = 0;
+        for (view.functions(), 0..) |function, local| {
+            function_bytes += function.body_size;
+            if (program.reached(image, @intCast(local))) {
+                reached_functions += 1;
+                reached_function_bytes += function.body_size;
+            }
+        }
+        var reached_segments: u64 = 0;
+        var reached_segment_bytes: u64 = 0;
+        var segment_bytes: u64 = 0;
+        for (view.segments(), 0..) |segment, index| {
+            segment_bytes += segment.size;
+            if (program.reached(image, function_count + @as(u32, @intCast(index)))) {
+                reached_segments += 1;
+                reached_segment_bytes += segment.size;
+            }
+        }
+        const label = if (view.exports().len != 0) view.name(view.exports()[0].name) else "";
+        text.print(std.heap.page_allocator, "image {d} role {s} label {s} functions {d}/{d} bytes {d}/{d} segments {d}/{d} bytes {d}/{d}\n", .{ image, @tagName(item.role), label, reached_functions, view.functions().len, reached_function_bytes, function_bytes, reached_segments, view.segments().len, reached_segment_bytes, segment_bytes }) catch return;
+        for (view.segments(), 0..) |segment, index| {
+            if (!program.reached(image, function_count + @as(u32, @intCast(index)))) continue;
+            const zero_fill = segment.flags & WasmUnitImage.segment_zero_fill != 0;
+            const bytes = view.segmentBytes(segment);
+            var zeros: u64 = 0;
+            for (bytes) |byte| zeros += @intFromBool(byte == 0);
+            text.print(std.heap.page_allocator, "  segment {d} size {d} align {d} zero_fill {} zeros {d}\n", .{ index, segment.size, segment.alignment_log2, zero_fill, zeros }) catch return;
+        }
+    }
+    std.Io.Dir.cwd().writeFile(std_io, .{ .sub_path = path, .data = text.items }) catch |err|
+        std.log.err("could not write the wasm link layout {s}: {}", .{ path, err });
 }
 
 /// An object's segments sit in a virtual address space from 0, each at its
