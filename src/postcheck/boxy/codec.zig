@@ -821,7 +821,7 @@ pub fn storedEdge(b: *Builder, source: lower.ConstSource, edge: check.ConstStore
 fn edgeIn(view: *const types.ModuleView, codec: check.ConstStore.StoredCodecEdge) Allocator.Error!?struct { callable_ty: checked.CheckedTypeId, id: DerivationId } {
     _ = (try view.types().rootForKey(codec.dispatcher_key)) orelse return null;
     const callable_ty = (try view.types().rootForKey(codec.callable_key)) orelse return null;
-    for (view.view.static_dispatch_plans.generated_codec_derivations, 0..) |contract, index| {
+    for ((try view.view.dispatch().generatedCodecs()).generated_codec_derivations, 0..) |contract, index| {
         if (std.mem.eql(u8, &contract.content.bytes, &codec.content.bytes)) return .{ .callable_ty = callable_ty, .id = @fromBackingInt(@intCast(index)) };
     }
     return null;
@@ -838,7 +838,7 @@ pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.Const
         .dispatch_call, .type_dispatch_call => owner_view.bodies().dispatchPlan(@backingInt(expr)) orelse invariant("a stored generated codec runtime's dispatch has no plan"),
         .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a stored generated codec runtime does not name a dispatch"),
     };
-    const plan = owner_view.view.static_dispatch_plans.plans[@backingInt(plan_id)];
+    const plan = (try owner_view.view.dispatch().plan(plan_id));
     // A dispatch on a constrained variable reaches its derivation through
     // the evidence the stored value's procedure was instantiated with.
     const derivation_module, const derivation = if (plan.generated_codec_derivation) |id| .{ owner_view.index, id } else switch (plan.resolution) {

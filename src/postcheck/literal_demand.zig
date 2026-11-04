@@ -230,7 +230,7 @@ pub const LiteralDemand = struct {
     pub fn checkedEvidenceFlags(
         self: *const LiteralDemand,
         allocator: Allocator,
-        plans: *const static_dispatch.StaticDispatchPlanTable,
+        dispatch: checked.CheckedDispatch,
         evidence: []const static_dispatch.CheckedEvidence,
     ) Allocator.Error!Flags {
         var result: Flags = .{};
@@ -238,17 +238,17 @@ pub const LiteralDemand = struct {
         defer pending.deinit(allocator);
         try pending.appendSlice(allocator, evidence);
         while (pending.pop()) |entry| {
-            try pending.appendSlice(allocator, plans.evidence_refs[entry.callable_contracts.start..][0..entry.callable_contracts.len]);
+            try pending.appendSlice(allocator, try dispatch.evidenceEntries(entry.callable_contracts));
             switch (entry.resolution) {
                 .direct => |node_id| {
-                    const node = plans.evidenceNode(node_id);
+                    const node = try dispatch.evidenceNode(node_id);
                     switch (node.target.kind) {
                         .procedure => |procedure| result = result.merge(self.templateFlags(procedure.template)),
                         .local_proc => return Flags.all,
                         .structural => {},
                     }
                     switch (node.nested) {
-                        .resolved => try pending.appendSlice(allocator, plans.nestedEvidence(node)),
+                        .resolved => try pending.appendSlice(allocator, try dispatch.nestedEvidence(node)),
                         .from_callable, .through_alias => return Flags.all,
                     }
                 },
@@ -483,15 +483,15 @@ const Builder = struct {
             }
         }
 
-        const plans = view.static_dispatch_plans;
-        for (plans.template_refs[template.static_dispatch_plans.start..][0..template.static_dispatch_plans.len]) |plan_id| {
-            const plan = plans.plans[@backingInt(plan_id)];
+        const dispatch = view.dispatch();
+        for (view.checked_procedure_templates.dispatch_plan_refs[template.static_dispatch_plans.start..][0..template.static_dispatch_plans.len]) |plan_id| {
+            const plan = try dispatch.plan(plan_id);
             try self.addTypeEdge(node, view, plan.callable_ty);
             try self.addTypeEdge(node, view, plan.dispatcher_ty);
             self.markOwn(node, self.literalFlags(view, plan_id, plan));
             switch (plan.resolution) {
-                .direct_closed, .direct_parametric => |direct| try self.addEvidenceNode(node, plans, direct.evidence),
-                .direct_pending => |evidence| try self.addEvidenceNode(node, plans, evidence),
+                .direct_closed, .direct_parametric => |direct| try self.addEvidenceNode(node, dispatch, direct.evidence),
+                .direct_pending => |evidence| try self.addEvidenceNode(node, dispatch, evidence),
                 // The target comes from the specialization's evidence or is
                 // derived from the types, which the instance's and this
                 // body's type edges reach.
@@ -500,19 +500,19 @@ const Builder = struct {
         }
     }
 
-    fn addEvidenceNode(self: *Builder, from: NodeId, plans: *const static_dispatch.StaticDispatchPlanTable, root: static_dispatch.EvidenceNodeId) Allocator.Error!void {
+    fn addEvidenceNode(self: *Builder, from: NodeId, dispatch: checked.CheckedDispatch, root: static_dispatch.EvidenceNodeId) Allocator.Error!void {
         var pending = std.ArrayList(static_dispatch.EvidenceNodeId).empty;
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, root);
         while (pending.pop()) |node_id| {
-            const node = plans.evidenceNode(node_id);
+            const node = try dispatch.evidenceNode(node_id);
             switch (node.target.kind) {
                 .procedure => |procedure| try self.addEdge(from, try self.templateNode(procedure.template)),
                 .local_proc => self.markUnbounded(from, "local procedure evidence"),
                 .structural => {},
             }
             switch (node.nested) {
-                .resolved => for (plans.nestedEvidence(node)) |nested| try self.addCheckedEvidence(from, plans, nested, &pending),
+                .resolved => for (try dispatch.nestedEvidence(node)) |nested| try self.addCheckedEvidence(from, dispatch, nested, &pending),
                 .from_callable => self.markUnbounded(from, "callable nested evidence"),
                 .through_alias => self.markUnbounded(from, "evidence composed through a procedure alias"),
             }
@@ -522,12 +522,12 @@ const Builder = struct {
     fn addCheckedEvidence(
         self: *Builder,
         from: NodeId,
-        plans: *const static_dispatch.StaticDispatchPlanTable,
+        dispatch: checked.CheckedDispatch,
         evidence: static_dispatch.CheckedEvidence,
         pending: *std.ArrayList(static_dispatch.EvidenceNodeId),
     ) Allocator.Error!void {
-        for (plans.evidence_refs[evidence.callable_contracts.start..][0..evidence.callable_contracts.len]) |contract| {
-            try self.addCheckedEvidence(from, plans, contract, pending);
+        for (try dispatch.evidenceEntries(evidence.callable_contracts)) |contract| {
+            try self.addCheckedEvidence(from, dispatch, contract, pending);
         }
         switch (evidence.resolution) {
             .direct => |node_id| try pending.append(self.allocator, node_id),
@@ -619,15 +619,19 @@ const Builder = struct {
     /// Record every method name dispatch can select by type in this module.
     fn addImplicitMethods(self: *Builder, view: checked.ImportedModuleView) Allocator.Error!void {
         const names = view.canonical_names;
-        for (view.checked_procedure_templates.evidence_params_pool) |param| {
-            try self.implicit_methods.put(self.allocator, names.methodNameText(param.method), {});
+        const dispatch = view.dispatch();
+        for (0..view.checked_procedure_templates.templates.items.len) |raw| {
+            for (try dispatch.evidenceParams(@fromBackingInt(@intCast(raw)))) |param| try self.implicit_methods.put(self.allocator, names.methodNameText(param.method), {});
+        }
+        for (0..view.checked_procedure_templates.dispatch_scopes.len) |raw| {
+            for ((try dispatch.scopeSchema(@fromBackingInt(@intCast(raw)))).params) |param| try self.implicit_methods.put(self.allocator, names.methodNameText(param.method), {});
         }
         const plans = view.static_dispatch_plans;
-        for (plans.plans) |plan| switch (plan.resolution) {
-            .evidence_dependent, .structural => try self.implicit_methods.put(self.allocator, names.methodNameText(plan.method), {}),
+        for (0..plans.plans.len) |raw| switch ((try dispatch.plan(@fromBackingInt(@intCast(raw)))).resolution) {
+            .evidence_dependent, .structural => try self.implicit_methods.put(self.allocator, names.methodNameText(plans.plans[raw].method), {}),
             .direct_pending, .direct_closed, .direct_parametric, .checked_error, .@"unreachable" => {},
         };
-        for (plans.generated_codec_calls) |call| try self.implicit_methods.put(self.allocator, names.methodNameText(call.method), {});
+        for (plans.recorded_codec_calls) |call| try self.implicit_methods.put(self.allocator, names.methodNameText(call.method), {});
         for (plans.iterator_for_plans) |plan| {
             try self.implicit_methods.put(self.allocator, names.methodNameText(plan.iter.method), {});
             try self.implicit_methods.put(self.allocator, names.methodNameText(plan.next.method), {});
@@ -824,8 +828,8 @@ fn rootFlags(
     if (request.root_evidence) |evidence| {
         const evidence_view = findView(modules, evidence.checked_module) orelse
             Common.invariant("discovery root evidence named a checked module outside its lowering set");
-        const plans = evidence_view.static_dispatch_plans;
-        evidence_flags = try demand.checkedEvidenceFlags(allocator, plans, plans.evidence_refs[evidence.span.start..][0..evidence.span.len]);
+        const dispatch = evidence_view.dispatch();
+        evidence_flags = try demand.checkedEvidenceFlags(allocator, dispatch, try dispatch.evidenceEntries(evidence.span));
     }
     if (traceEnabled()) std.debug.print("ctfe-demand root-flags template={b:0>8} type={b:0>8} evidence={b:0>8}\n", .{
         @as(u8, @bitCast(template_flags)),

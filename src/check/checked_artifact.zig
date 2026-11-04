@@ -13763,7 +13763,7 @@ pub const CheckedDispatch = struct {
     /// checked instantiation edge was recorded for the expression.
     pub fn siteEvidence(self: CheckedDispatch, expr: CIR.Expr.Idx) Error!?[]const static_dispatch.CheckedEvidence {
         const found = (try self.siteEntry(expr)) orelse return null;
-        return self.evidenceEntries(.{ .owner = found.owner, .start = found.entry.start, .len = found.entry.len });
+        return try self.evidenceEntries(.{ .owner = found.owner, .start = found.entry.start, .len = found.entry.len });
     }
 
     /// The range `siteEvidence` reads.
@@ -13778,7 +13778,7 @@ pub const CheckedDispatch = struct {
     /// all; empty when its entry recorded no instantiation.
     pub fn siteSubstitution(self: CheckedDispatch, expr: CIR.Expr.Idx) Error!?[]const CheckedTypeId {
         const found = (try self.siteEntry(expr)) orelse return null;
-        return self.substitution(.{ .owner = found.owner, .start = found.entry.subst_start, .len = found.entry.subst_len });
+        return try self.substitution(.{ .owner = found.owner, .start = found.entry.subst_start, .len = found.entry.subst_len });
     }
 
     /// The checked type of the instance a stored nested-function use at
