@@ -13508,6 +13508,16 @@ const Builder = struct {
                     },
                     .default_root => if (!in_default_expr) continue,
                 }
+                if (@import("builtin").mode == .debug) {
+                    for (view.nested_proc_sites.sites[@backingInt(candidate.site) + 1 ..]) |later| {
+                        if (later.checked_expr == null or later.checked_expr.? != expr_id) continue;
+                        const same_owner = switch (later.owner) {
+                            .template => |site_owner| !in_default_expr and names.procedureTemplateRefEql(site_owner, owner),
+                            .default_root => in_default_expr,
+                        };
+                        if (same_owner) Common.invariant("nested function expression matched two checked nested function sites");
+                    }
+                }
                 try self.nested_site_cache.put(address, candidate.site);
                 break :blk candidate.site;
             }
@@ -65786,20 +65796,10 @@ const BodyContext = struct {
         for (view.nested_proc_sites.sites) |candidate| {
             if (candidate.checked_expr == null or candidate.checked_expr.? != expr) continue;
             switch (candidate.owner) {
-                .template => |site_owner| {
-                    if (self.in_default_expr) continue;
-                    if (site) |existing| {
-                        if (!names.procedureTemplateRefEql(existing.owner.template, site_owner)) {
-                            Common.invariant("restored local procedure matched checked nested sites of different templates");
-                        }
-                        continue;
-                    }
-                },
-                .default_root => {
-                    if (!self.in_default_expr) continue;
-                    if (site != null) Common.invariant("restored local procedure matched multiple checked nested sites");
-                },
+                .template => if (self.in_default_expr) continue,
+                .default_root => if (!self.in_default_expr) continue,
             }
+            if (site != null) Common.invariant("restored local procedure matched multiple checked nested sites");
             site = candidate;
         }
         const nested_site = site orelse
