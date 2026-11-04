@@ -52,6 +52,35 @@ pub fn roc_desc_site_publish(site: *compose.CompositionSite, count: u32, operand
     site.publish(cache(), composeOps(), items(usize, count, operands), result);
 }
 
+/// The bytes a procedure's frame of dynamic locals needs: each local of
+/// `descs`, in order, placed after the previous one at its own alignment.
+pub fn roc_desc_frame_size(count: u32, descs: [*]const *const TypeDesc) callconv(.c) usize {
+    var total: usize = 0;
+    for (descs[0..count]) |desc| total = frameOffset(total, desc) + desc.size;
+    return total;
+}
+
+/// Place a procedure's dynamic locals in `region`, measured as
+/// `roc_desc_frame_size` measures them, writing each local's address through
+/// its entry of `slots`. Compiled code keeps each address in its local's slot;
+/// computing the layout here, rather than in the procedure, leaves each slot in
+/// memory the procedure reads where it uses the local, so no address stays
+/// live in a register across the whole body.
+pub fn roc_desc_frame_place(count: u32, descs: [*]const *const TypeDesc, region: [*]u8, slots: [*]const *[*]u8) callconv(.c) void {
+    var total: usize = 0;
+    for (descs[0..count], slots[0..count]) |desc, slot| {
+        const offset = frameOffset(total, desc);
+        slot.* = region + offset;
+        total = offset + desc.size;
+    }
+}
+
+/// `total` rounded up to `desc`'s alignment, a power of two.
+fn frameOffset(total: usize, desc: *const TypeDesc) usize {
+    const alignment: usize = desc.alignment;
+    return (total +% alignment -% 1) & (0 -% alignment);
+}
+
 /// The C-ABI form of `compose.list`.
 pub fn roc_desc_list(elem: *const TypeDesc) callconv(.c) *const TypeDesc {
     return compose.list(cache(), composeOps(), elem);

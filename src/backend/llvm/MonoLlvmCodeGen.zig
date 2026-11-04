@@ -1977,9 +1977,10 @@ pub const MonoLlvmCodeGen = struct {
             break :blk self.tail_scratch.items[@backingInt(group)];
         } else .{};
         const tail_args = try self.tailArgs(arena, proc, lowered, owned, group_scratch.size > 0);
-        // Wasm has no group storage: each call's stored arguments live in
-        // storage its caller owns, sized for this procedure alone.
-        const scratch: TailScratch = if (self.usesTailDrivers()) tail_args.scratch else group_scratch;
+        // Under tail drivers, and for a procedure outside every tail group,
+        // each call's stored arguments live in storage its caller owns, sized
+        // for this procedure alone.
+        const scratch: TailScratch = if (self.usesTailDrivers() or proc.tail_group == null) tail_args.scratch else group_scratch;
         var cursor: u32 = if (lowered.ret == .indirect) 1 else 0;
         const args_start = cursor;
         for (lowered.args, tail_args.stored) |placement, stored| {
@@ -2037,10 +2038,21 @@ pub const MonoLlvmCodeGen = struct {
             }
         } else if (proc.tail_group != null) {
             layout.abi.markRegisterOverflow(self.abiTarget(), lowered, trailing_pointers + @intFromBool(group_storage), stored);
+        } else {
+            // Arguments past the registers travel in storage the caller owns,
+            // through one pointer, rather than each in its own stack slot:
+            // the callee then reads each where it uses it, instead of holding
+            // every incoming argument from entry to its use, which LLVM's
+            // register allocator handles quadratically in the number of them.
+            layout.abi.markRegisterOverflow(self.abiTarget(), lowered, trailing_pointers, stored);
+            if (std.mem.findScalar(bool, stored, true) != null) {
+                layout.abi.markRegisterOverflow(self.abiTarget(), lowered, trailing_pointers + 1, stored);
+            }
         }
+        const own_storage = self.usesTailDrivers() or proc.tail_group == null;
         var cursor: TailScratchCursor = .{};
         for (lowered.args, arg_layouts, offsets, stored) |placement, arg_layout, *offset, is_stored| {
-            if (!is_stored and (placement != .indirect or self.usesTailDrivers())) continue;
+            if (!is_stored and (placement != .indirect or own_storage)) continue;
             offset.* = cursor.place(self.layoutDataSize(arg_layout), @intCast(@max(self.sizeAlignOf(arg_layout).alignment.toByteUnits(), 1)));
         }
         return .{
@@ -2383,8 +2395,8 @@ pub const MonoLlvmCodeGen = struct {
     /// in the same group passes its own along; any other caller owns a slot
     /// for that group in its frame.
     fn tailScratchArg(self: *MonoLlvmCodeGen, callee: LirProcSpec, sig: *const FastSignature) Error!LlvmBuilder.Value {
+        const group = callee.tail_group orelse return self.wasmStoredArgs(sig);
         if (self.usesTailDrivers()) return self.wasmStoredArgs(sig);
-        const group = callee.tail_group orelse llvmInvariantFmt("procedure without a tail group takes tail argument storage", .{});
         if (self.current_tail_scratch) |own| {
             if (self.current_tail_group == group) return own;
         }
@@ -2401,8 +2413,9 @@ pub const MonoLlvmCodeGen = struct {
         return storage.*.?;
     }
 
-    /// Storage in this frame for a wasm call's stored arguments, which the
-    /// callee copies out on entry.
+    /// Storage in this frame for the stored arguments of a call under tail
+    /// drivers or to a procedure outside every tail group. The callee reads a
+    /// parameter it never writes in place and copies out the rest on entry.
     fn wasmStoredArgs(self: *MonoLlvmCodeGen, sig: *const FastSignature) Error!LlvmBuilder.Value {
         return self.allocEntryBlockSlot(.i8, sig.scratch.size, LlvmBuilder.Alignment.fromByteUnits(sig.scratch.alignment), "stored_args");
     }
@@ -2526,8 +2539,8 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Bind the fast function's parameters to the procedure's parameters:
     /// register pieces store into a slot or assemble an SSA value, and
-    /// indirect arguments borrow stable storage when proven immutable, while
-    /// stored tail-group arguments copy out of the caller's memory.
+    /// indirect and stored arguments borrow stable storage when proven
+    /// immutable, while the rest copy out of the caller's memory.
     fn unpackFastProcArgs(self: *MonoLlvmCodeGen, proc: LirProcSpec, sig: *const FastSignature) Error!void {
         const builder, const wip = try self.builderAndWip();
         const params = self.store.getLocalSpan(proc.args);
@@ -2536,6 +2549,17 @@ pub const MonoLlvmCodeGen = struct {
             const param = GuardedList.at(params, i);
             if (sig.tail_args.stored[i]) {
                 const scratch = wip.arg(sig.scratch_index orelse llvmInvariantFmt("stored argument without tail group storage", .{}));
+                if (self.value_plan.place(param) == .parameter) {
+                    const sa = self.sizeAlignOf(arg_layout);
+                    self.local_slots[@backingInt(param)] = .{
+                        .ptr = try self.offsetPtr(scratch, sig.tail_args.offsets[i]),
+                        .layout_idx = arg_layout,
+                        .size = sa.size,
+                        .alignment = self.llvmAlignment(sa.alignment),
+                        .allocated = true,
+                    };
+                    continue;
+                }
                 const param_slot = self.slot(param);
                 if (param_slot.size != 0) {
                     try self.copyBytes(param_slot.ptr, try self.offsetPtr(scratch, sig.tail_args.offsets[i]), self.layoutDataSize(arg_layout), param_slot.alignment);
@@ -2969,7 +2993,8 @@ pub const MonoLlvmCodeGen = struct {
             const sig = self.fast_sig orelse return false;
             // Tail-group argument storage is overwritten before the next
             // member enters; those parameters must keep their snapshots.
-            return self.proc.tail_group == null and !sig.tail_args.stored[index] and sig.lowered.args[index] == .indirect;
+            // Storage a caller owns for one call lives until the call returns.
+            return self.proc.tail_group == null and (sig.tail_args.stored[index] or sig.lowered.args[index] == .indirect);
         }
 
         pub fn memoryView(self: PlanOps, assign: @FieldType(lir.LIR.CFStmt, "assign_ref")) ?ValuePlan.View {
@@ -11763,37 +11788,38 @@ pub const MonoLlvmCodeGen = struct {
     /// Reserve the procedure's dynamic frame region and set the address of
     /// every `frame` dynamic local. The region's size is the sum of the
     /// locals' aligned descriptor sizes; the procedure's return releases it.
+    /// Allocate the procedure's frame of dynamic locals. The Boxy runtime
+    /// measures it and writes each local's address into its slot, so the
+    /// addresses live in memory the procedure reads at each use. Computing the
+    /// offsets here would hold one address per local in a register from the
+    /// allocation to its use, which LLVM's register allocator handles
+    /// quadratically in a large generic body.
     fn emitDynFrameAlloc(self: *MonoLlvmCodeGen) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
+        const ptr_ty = try self.ptrType();
         const usize_ty = self.ptrSizedIntType();
         const locals = self.store.getLocalSpan(self.current_frame_locals);
-        var offsets: std.ArrayList(LlvmBuilder.Value) = .empty;
-        defer offsets.deinit(self.allocator);
-        var total = try self.intValue(usize_ty, 0);
+        var frame_count: usize = 0;
         for (0..locals.len) |i| {
-            const local = GuardedList.at(locals, i);
-            const dyn = self.localDyn(local) orelse continue;
-            if (dyn.storage != .frame) continue;
-            const desc = try self.wordValue(dyn.desc);
-            const size = try self.loadDescField(desc, desc_size_offset);
-            const alignment = try self.loadDescField(desc, desc_alignment_offset);
-            // offset = alignForward(total, alignment)
-            const bumped = wip.bin(.add, total, alignment, "") catch return error.OutOfMemory;
-            const last = wip.bin(.sub, bumped, try self.intValue(usize_ty, 1), "") catch return error.OutOfMemory;
-            const mask = wip.bin(.sub, try self.intValue(usize_ty, 0), alignment, "") catch return error.OutOfMemory;
-            const offset = wip.bin(.@"and", last, mask, "") catch return error.OutOfMemory;
-            try offsets.append(self.allocator, offset);
-            total = wip.bin(.add, offset, size, "") catch return error.OutOfMemory;
+            const dyn = self.localDyn(GuardedList.at(locals, i)) orelse continue;
+            if (dyn.storage == .frame) frame_count += 1;
         }
-        const region = wip.alloca(.normal, .i8, total, LlvmBuilder.Alignment.fromByteUnits(collections.max_roc_alignment.toByteUnits()), .default, "dyn_region") catch return error.OutOfMemory;
-        var next: usize = 0;
+        const word = self.targetWordSize();
+        const descs = try self.dynInputArray(word, frame_count);
+        const slots = try self.dynInputArray(word, frame_count);
+        var next: u32 = 0;
         for (0..locals.len) |i| {
             const local = GuardedList.at(locals, i);
             const dyn = self.localDyn(local) orelse continue;
             if (dyn.storage != .frame) continue;
-            try self.storePointer(self.slot(local).ptr, try self.offsetPtrValue(region, offsets.items[next]));
+            try self.storePointer(try self.offsetPtr(descs, next * word), try self.wordValue(dyn.desc));
+            try self.storePointer(try self.offsetPtr(slots, next * word), self.slot(local).ptr);
             next += 1;
         }
+        const count = try self.intValue(.i32, frame_count);
+        const total = try self.callBoxyRuntime("roc_desc_frame_size", usize_ty, &.{ .i32, ptr_ty }, &.{ count, descs });
+        const region = wip.alloca(.normal, .i8, total, LlvmBuilder.Alignment.fromByteUnits(collections.max_roc_alignment.toByteUnits()), .default, "dyn_region") catch return error.OutOfMemory;
+        _ = try self.callBoxyRuntime("roc_desc_frame_place", .void, &.{ .i32, ptr_ty, ptr_ty, ptr_ty }, &.{ count, descs, region, slots });
     }
 
     const DynArrayKind = enum {
