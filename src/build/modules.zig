@@ -226,6 +226,7 @@ pub const ModuleType = enum {
     builtins,
     ctx,
     build_options,
+    layout_shape,
     layout,
     static_data,
     eval,
@@ -236,6 +237,8 @@ pub const ModuleType = enum {
     backend,
     lir_core,
     value_rules,
+    boxy_runtime,
+    boxy_layout_equivalence,
     postcheck,
     lir,
     symbol,
@@ -315,9 +318,15 @@ pub const ModuleType = enum {
                 .root = null,
                 .tests = .{ .no_tests = "generated constants" },
             },
+            // The std-only shape arithmetic and field order the layout store
+            // and the Boxy runtime share.
+            .layout_shape => .{
+                .root = "src/layout/shape.zig",
+                .tests = .{ .unit = .{ .aggregators = &.{"layout shape declarations are referenced"} } },
+            },
             .layout => .{
                 .root = "src/layout/mod.zig",
-                .deps = &.{ .tracy, .collections, .base, .types, .builtins, .can },
+                .deps = &.{ .tracy, .collections, .base, .types, .builtins, .can, .layout_shape },
                 .tests = .{ .unit = .{ .aggregators = &.{"layout tests"} } },
             },
             .static_data => .{
@@ -327,7 +336,7 @@ pub const ModuleType = enum {
             },
             .eval => .{
                 .root = "src/eval/mod.zig",
-                .deps = &.{ .tracy, .ctx, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .static_data, .build_options, .reporting, .backend, .lir, .symbol, .roc_target, .sljmp, .ipc, .value_rules },
+                .deps = &.{ .tracy, .ctx, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .static_data, .build_options, .reporting, .backend, .lir, .symbol, .roc_target, .sljmp, .ipc, .value_rules, .boxy_runtime },
                 .extra_imports = &.{"vendor_relocatable_loader"},
                 .tests = .{ .unit = .{ .aggregators = &.{"eval tests"} } },
             },
@@ -352,7 +361,7 @@ pub const ModuleType = enum {
             },
             .backend => .{
                 .root = "src/backend/mod.zig",
-                .deps = &.{ .collections, .base, .layout, .builtins, .can, .lir, .static_data, .roc_target, .ctx, .build_options },
+                .deps = &.{ .collections, .base, .layout, .builtins, .can, .lir, .static_data, .roc_target, .ctx, .build_options, .boxy_runtime },
                 .tests = .{ .unit = .{} },
             },
             .lir_core => .{
@@ -360,16 +369,31 @@ pub const ModuleType = enum {
                 .deps = &.{ .base, .collections, .layout, .types, .can, .check },
                 .tests = .{ .unit = .{ .aggregators = &.{"lir core declarations are referenced"} } },
             },
-            // Shared by the post-check lowerers and the standalone Boxy
-            // runtime object, so it imports nothing from the compiler.
+            // Shared by the post-check lowerers; it imports nothing from the
+            // compiler.
             .value_rules => .{
                 .root = "src/postcheck/value_rules/mod.zig",
                 .deps = &.{.builtins},
                 .tests = .{ .unit = .{ .aggregators = &.{"value rules declarations are referenced"} } },
             },
+            // The Boxy runtime: descriptors, composition, and walkers. It must
+            // compile without libc and without the rest of the compiler.
+            .boxy_runtime => .{
+                .root = "src/boxy_runtime/mod.zig",
+                .deps = &.{ .builtins, .layout_shape, .value_rules },
+                .tests = .{ .unit = .{ .aggregators = &.{"boxy runtime tests"} } },
+            },
+            // Composes a corpus of closed types through both the layout store
+            // and the Boxy runtime and requires identical shapes.
+            .boxy_layout_equivalence => .{
+                .root = "src/boxy_runtime/layout_equivalence_test.zig",
+                .deps = &.{ .base, .builtins, .layout, .boxy_runtime },
+                .tests = .{ .unit = .{} },
+                .available = .dependents_only,
+            },
             .postcheck => .{
                 .root = "src/postcheck/mod.zig",
-                .deps = &.{ .base, .builtins, .can, .check, .collections, .layout, .lir_core, .types, .value_rules, .build_options },
+                .deps = &.{ .base, .builtins, .can, .check, .collections, .layout, .lir_core, .types, .value_rules, .build_options, .boxy_runtime },
                 .tests = .{ .unit = .{ .aggregators = &.{"postcheck declarations are referenced"} } },
             },
             .lir => .{
@@ -408,7 +432,7 @@ pub const ModuleType = enum {
             },
             .glue => .{
                 .root = "src/glue/mod.zig",
-                .deps = &.{ .base, .collections, .parse, .compile, .can, .check, .reporting, .echo_platform, .builtins, .roc_target, .types, .layout, .backend, .eval, .lir, .build_options },
+                .deps = &.{ .base, .collections, .parse, .compile, .can, .check, .reporting, .echo_platform, .builtins, .roc_target, .types, .layout, .backend, .eval, .lir, .build_options, .boxy_runtime },
                 .extra_imports = &.{"compiler_platform_sources"},
                 .tests = .{ .unit = .{ .aggregators = &.{"glue tests"} } },
             },
@@ -549,6 +573,7 @@ pub const RocModules = struct {
     tracy: *Module,
     ctx: *Module,
     build_options: *Module,
+    layout_shape: *Module,
     layout: *Module,
     static_data: *Module,
     eval: *Module,
@@ -564,6 +589,8 @@ pub const RocModules = struct {
     backend: *Module,
     lir_core: *Module,
     value_rules: *Module,
+    boxy_runtime: *Module,
+    boxy_layout_equivalence: *Module,
     postcheck: *Module,
     lir: *Module,
     symbol: *Module,
@@ -592,10 +619,9 @@ pub const RocModules = struct {
     shim_symbols: *Module,
 
     // Anonymous page mapping (`src/raw_pages.zig`) for the objects linked into
-    // standalone Roc programs: the default-platform runtimes and the boxy
-    // runtime. Shared rather than restated per consumer because a NetBSD
-    // program links two of them and the assembly thunk its `mmap` ABI needs may
-    // only be defined once.
+    // standalone Roc programs: the default-platform runtimes. Shared rather
+    // than restated per consumer because the assembly thunk a NetBSD `mmap`
+    // ABI needs may only be defined once.
     raw_pages: *Module,
 
     // Memory-fault classification (`src/base/memory_fault.zig`) as a standalone
@@ -661,6 +687,7 @@ pub const RocModules = struct {
 
         // `embedded_lld` needs `collections` for the single-threaded arena.
         self.embedded_lld.addImport("collections", self.collections);
+        self.boxy_runtime.addImport("raw_pages", self.raw_pages);
 
         // The vendored Mach-O code-signing helpers use the build-time `tracy`
         // tracing shim.

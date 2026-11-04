@@ -348,7 +348,8 @@ pub const Constants = struct {
     /// 163: producer-owned declaration slots and stored checking diagnostics.
     /// 164: sorted array builders serialize zeroed entry padding and an
     ///      integer offset that the cache validator checks.
-    pub const CACHE_VERSION = 164;
+    /// 165: compile-time reads persist placement and semantic root identity.
+    pub const CACHE_VERSION = 167;
 };
 
 /// Configuration for the Roc cache system.
@@ -475,22 +476,6 @@ pub const CacheConfig = struct {
         defer allocator.free(version_dir);
 
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "src" });
-    }
-
-    /// Get the executable cache directory (for cached linked executables).
-    pub fn getExeCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
-        const version_dir = try self.getVersionCacheDir(allocator);
-        defer allocator.free(version_dir);
-
-        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "exe" });
-    }
-
-    /// Logical scope for cached test results.
-    pub fn getTestCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
-        const version_dir = try self.getVersionCacheDir(allocator);
-        defer allocator.free(version_dir);
-
-        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "test" });
     }
 
     /// Get the cache entries directory (alias for module cache dir).

@@ -324,16 +324,16 @@ pub const FnTemplate = struct {
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     mono_fn_ty: Type.TypeId,
+    /// For a nested function, the function type of the template specialization
+    /// it was lowered in, which names the variables a stored value of it keeps
+    /// no other record of. Not part of the function's identity: a body that
+    /// depended on one would have a different request or evidence.
+    owner_fn_ty: ?Type.TypeId = null,
     evidence_digest: EvidenceDigest = .{},
     /// `specIdentityKey` of the specialization this template was reserved
-    /// for: the key an object-cache lookup can compute at reservation time,
-    /// before the body exists. Null for functions that are not template
+    /// for, computed before the body exists. Null for functions that are not template
     /// specializations.
     spec_key: ?names.TypeDigest = null,
-    /// Set when the object cache served this specialization: the body is
-    /// never lowered, and Direct LIR emits an external procedure that the
-    /// object writer fills from the cache entry.
-    cached: ?Common.SpecCacheHit = null,
     /// Set for a closed specialization of a Builtin template whose checked
     /// provided low-level operation is on `LowLevel.procedureKeyedByLayout`'s
     /// allow list. Direct LIR identifies the plain procedure of such a
@@ -372,10 +372,6 @@ pub const FnTemplate = struct {
     /// so such a procedure never stands for, or is merged with, the procedure
     /// an evaluation lowers from the same template and types.
     discovery: bool = false,
-    /// The `spec_key` a procedure lowered only for discovery was reserved
-    /// under. Its discovery summary is recorded under this key (design.md
-    /// "Discovery Summaries"); the procedure itself has no object-cache key.
-    discovery_key: ?names.TypeDigest = null,
     /// Explicit dispatch selections captured when this specialization was
     /// created, retained for compile-time function values.
     const_evidence: ConstEvidenceSpans = .{},
@@ -1195,6 +1191,12 @@ pub const LambdaExpr = struct {
     fn_id: FnId,
     args: Span(TypedLocal),
     body: ExprId,
+    /// The locals a stored value of this function holds whether or not its
+    /// body reads them, each bound around the lambda. A generated codec
+    /// names here its encoding and every renamed field name, which its
+    /// restore reads by generated capture id (design.md "Stored Function
+    /// Capture Contract").
+    stored_captures: Span(TypedLocal) = .empty(),
 };
 
 /// Call through a function value before lambda solving.
@@ -2054,6 +2056,8 @@ pub const ProgramView = struct {
 
 /// Mutable builder-side Monotype program storage plus side arrays.
 pub const ProgramBuilder = struct {
+    /// See `MonotypeLifted.Ast.Program.retains_declared_captures`.
+    retains_declared_captures: bool = false,
     allocator: std.mem.Allocator,
     names: names.NameStore,
     next_symbol: u32,

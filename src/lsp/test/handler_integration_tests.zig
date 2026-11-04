@@ -276,7 +276,7 @@ fn runSessionResponses(
     var bodies: std.ArrayList([]const u8) = .empty;
     defer bodies.deinit(allocator);
     try bodies.append(allocator,
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     );
     try bodies.append(allocator,
         \\{"jsonrpc":"2.0","method":"initialized","params":{}}
@@ -313,8 +313,7 @@ fn runSessionResponses(
 
 /// Handler integration specs exported to the LSP harness.
 pub const specs = [_]integration_spec.Spec{
-    .{ .name = "untrusted workspace never creates a compiler build", .run = untrustedWorkspaceNeverBuilds },
-    .{ .name = "initialize advertises semantic features only when trusted", .run = initializeAdvertisesSemanticFeaturesOnlyWhenTrusted },
+    .{ .name = "initialize advertises all supported features without options", .run = initializeAdvertisesAllSupportedFeatures },
     .{ .name = "document symbol handler extracts function declarations", .run = documentSymbolHandlerExtractsFunctionDeclarations },
     .{ .name = "document highlight handler finds variable occurrences", .run = documentHighlightHandlerFindsVariableOccurrences },
     .{ .name = "document highlight handler resolves symbol from a reference site", .run = documentHighlightHandlerResolvesFromReferenceSite },
@@ -410,7 +409,7 @@ pub fn documentSymbolHandlerExtractsFunctionDeclarations() integration_spec.Spec
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "symbols.roc", .data = roc_source });
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -510,7 +509,7 @@ pub fn documentHighlightHandlerFindsVariableOccurrences() integration_spec.SpecE
     defer allocator.free(file_uri);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -619,7 +618,7 @@ pub fn documentHighlightHandlerResolvesFromReferenceSite() integration_spec.Spec
     defer allocator.free(escaped_source);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -730,7 +729,7 @@ pub fn documentHighlightHandlerIncludesAnnotationName() integration_spec.SpecErr
     defer allocator.free(escaped_source);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -2050,7 +2049,7 @@ pub fn definitionHandlerFindsLocalVariableDefinition() integration_spec.SpecErro
     defer allocator.free(escaped_source);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -2137,7 +2136,7 @@ pub fn definitionHandlerReturnsNullForUndefinedSymbol() integration_spec.SpecErr
     defer allocator.free(platform_path);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -2226,7 +2225,7 @@ pub fn hoverHandlerReturnsTypeInfoForTypeAnnotation() integration_spec.SpecError
     defer allocator.free(platform_path);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -2323,7 +2322,7 @@ pub fn definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation() integration_s
     defer allocator.free(platform_path);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -2421,7 +2420,7 @@ pub fn documentSymbolsWorksAfterGotoDefinitionRegressionTest() integration_spec.
     defer allocator.free(escaped_source);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -2536,7 +2535,7 @@ pub fn multipleGotoDefinitionCallsDontBreakDocumentSymbols() integration_spec.Sp
     defer allocator.free(escaped_source);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -2668,7 +2667,7 @@ pub fn documentSymbolHandlerReturnsSymbolsWithCorrectNames() integration_spec.Sp
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "outline.roc", .data = roc_source });
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -2783,7 +2782,7 @@ pub fn documentSymbolHandlerWorksIndependentlyOfCheck() integration_spec.SpecErr
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "independent.roc", .data = roc_source });
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -2884,7 +2883,7 @@ pub fn completionHandlerReturnsModuleDefinitions() integration_spec.SpecError!vo
     defer allocator.free(platform_path);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -2973,7 +2972,7 @@ pub fn completionHandlerReturnsModuleMembersAfterDot() integration_spec.SpecErro
     defer allocator.free(platform_path);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -3061,7 +3060,7 @@ pub fn completionHandlerReturnsModuleNamesInExpressionContext() integration_spec
     defer allocator.free(file_uri);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -3151,7 +3150,7 @@ pub fn completionHandlerReturnsTypesAfterColon() integration_spec.SpecError!void
     defer allocator.free(platform_path);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -3240,7 +3239,7 @@ pub fn completionHandlerReturnsListModuleMembersAfterListDot() integration_spec.
     const platform_path = try platformPath(allocator);
     defer allocator.free(platform_path);
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -3335,7 +3334,7 @@ pub fn completionHandlerReturnsLocalVariablesInBlockScope() integration_spec.Spe
     defer allocator.free(platform_path);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -3428,7 +3427,7 @@ pub fn completionHandlerReturnsLambdaParameters() integration_spec.SpecError!voi
     defer allocator.free(platform_path);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -3517,7 +3516,7 @@ pub fn completionHandlerReturnsTopLevelDefinitions() integration_spec.SpecError!
     defer allocator.free(file_uri);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -3607,7 +3606,7 @@ pub fn completionHandlerReturnsRecordFieldsAfterDot() integration_spec.SpecError
     defer allocator.free(platform_path);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -3723,7 +3722,7 @@ pub fn definitionHandlerNavigatesToBuiltinDeclarations() integration_spec.SpecEr
     defer allocator.free(platform_path);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -3848,7 +3847,7 @@ pub fn workspaceDocumentEndingInBuiltinRocBuildsAndProducesDiagnostics() integra
     defer allocator.free(platform_path);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -3936,7 +3935,7 @@ pub fn openingBuiltinRocDoesNotPanic() integration_spec.SpecError!void {
     defer allocator.free(builtin_uri);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -4022,7 +4021,7 @@ pub fn definitionHandlerNavigatesToExternalModuleMembers() integration_spec.Spec
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "ComputeHelper.roc", .data = helper_source });
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -4156,7 +4155,7 @@ pub fn definitionHandlerNavigatesToExposedImportMemberInImportStatement() integr
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "Helpers.roc", .data = helper_source });
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -4265,7 +4264,7 @@ pub fn definitionHandlerNavigatesToUnqualifiedExposedImportFunctionCall() integr
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "Helpers.roc", .data = helper_source });
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -4359,7 +4358,7 @@ pub fn definitionHandlerNavigatesToTagDeclarationInPatternMatch() integration_sp
     defer allocator.free(platform_path);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -4463,7 +4462,7 @@ pub fn definitionHandlerNavigatesToExposedTypeAliasInTypeAnnotation() integratio
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "Helpers.roc", .data = helper_source });
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -4560,7 +4559,7 @@ pub fn semanticTokensHandlerHandlesFileImportsWithoutCrashing() integration_spec
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "input.txt", .data = "hello roc" });
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -4688,7 +4687,7 @@ pub fn definitionHandlerNavigatesToFileImportPath() integration_spec.SpecError!v
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "input.txt", .data = "hello roc" });
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -4810,7 +4809,7 @@ pub fn definitionHandlerNavigatesToEchoPlatformDefinition() integration_spec.Spe
     defer allocator.free(platform_path);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -4920,7 +4919,7 @@ pub fn definitionHandlerResolvesPackageShorthandQualifiedImport() integration_sp
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "main.roc", .data = main_source });
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -5057,7 +5056,7 @@ pub fn definitionHandlerDisambiguatesSameNamedModuleAcrossPackages() integration
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "main.roc", .data = main_source });
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -5249,7 +5248,7 @@ pub fn definitionHandlerResolvesShorthandInImportingPackageContext() integration
     try tmp.dir.writeFile(test_env.io, .{ .sub_path = "main.roc", .data = main_source });
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -5379,7 +5378,7 @@ pub fn definitionHandlerNavigatesToTagDeclarationInPackageQualifiedImport() inte
     defer allocator.free(platform_path);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -5479,7 +5478,7 @@ pub fn definitionHandlerDisambiguatesSameNamedTagAcrossImportedModules() integra
     defer allocator.free(platform_path);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -5578,7 +5577,7 @@ pub fn definitionHandlerBranchValueOpenTagDoesNotNavigateToMatchConditionType() 
     defer allocator.free(platform_path);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -6459,85 +6458,22 @@ pub fn codeActionsMatchDocumentLineEndings() integration_spec.SpecError!void {
     );
 }
 
-/// An untrusted workspace serves parse-only features and never starts a build.
-pub fn untrustedWorkspaceNeverBuilds() integration_spec.SpecError!void {
-    const allocator = test_env.allocator;
-    const messages = [_][]const u8{
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}}
-        ,
-        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
-        ,
-        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/untrusted.roc","languageId":"roc","version":1,"text":"app [main!] { pf: platform \"http://127.0.0.1:1/platform.tar.zst\" }\nmain! = |_| {}\n"}}}
-        ,
-        \\{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/untrusted.roc","version":2},"contentChanges":[{"text":"module [x]\nx = crash \"must not evaluate\"\n"}]}}
-        ,
-        \\{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/untrusted.roc"},"position":{"line":1,"character":0}}}
-        ,
+/// All supported features are advertised without initialization options.
+pub fn initializeAdvertisesAllSupportedFeatures() integration_spec.SpecError!void {
+    const features = [_][]const u8{
+        "positionEncoding",          "textDocumentSync",       "documentFormattingProvider",
+        "foldingRangeProvider",      "selectionRangeProvider", "semanticTokensProvider",
+        "hoverProvider",             "definitionProvider",     "documentSymbolProvider",
+        "documentHighlightProvider", "completionProvider",     "referencesProvider",
+        "inlayHintProvider",         "codeActionProvider",     "renameProvider",
     };
-    var input: std.ArrayList(u8) = .empty;
-    defer input.deinit(allocator);
-    for (messages) |message| {
-        const framed = try frame(allocator, message);
-        defer allocator.free(framed);
-        try input.appendSlice(allocator, framed);
-    }
-    var output: [16384]u8 = undefined;
-    var server = try server_module.Server(std.Io.Reader, std.Io.Writer).init(
-        allocator,
-        test_env.io,
-        .fixed(input.items),
-        .fixed(&output),
-        null,
-        .{},
-    );
-    defer server.deinit();
-    try server.run();
-    try std.testing.expect(server.doc_store.get("file:///tmp/untrusted.roc") != null);
-    // Downloads and evaluation require a BuildEnv. No compiler state was even
-    // initialized, regardless of what the document asks the compiler to do.
-    try std.testing.expect(server.syntax_checker.build_env == null);
-    try std.testing.expect(server.syntax_checker.previous_build_env == null);
-    try std.testing.expect(server.syntax_checker.builtin_modules == null);
-    const responses = try collectResponses(allocator, output[0..server.transport.writer.end]);
-    defer {
-        for (responses) |body| allocator.free(body);
-        allocator.free(responses);
-    }
-    try std.testing.expectEqual(@as(usize, 2), responses.len);
-    var hover = try responseById(allocator, responses, 2);
-    defer hover.deinit();
-    try std.testing.expect(hover.isError());
-}
-
-/// Untrusted sessions advertise only what they serve, so clients don't send
-/// requests that would fail with a trust error.
-pub fn initializeAdvertisesSemanticFeaturesOnlyWhenTrusted() integration_spec.SpecError!void {
-    const parse_only = [_][]const u8{ "positionEncoding", "textDocumentSync", "documentFormattingProvider", "foldingRangeProvider", "selectionRangeProvider" };
-    const semantic = [_][]const u8{ "semanticTokensProvider", "hoverProvider", "definitionProvider", "documentSymbolProvider", "documentHighlightProvider", "completionProvider", "referencesProvider", "inlayHintProvider", "codeActionProvider", "renameProvider" };
-
-    var untrusted = try initializeResponse(
+    var response = try initializeResponse(
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}}
     );
-    defer untrusted.deinit();
-    const untrusted_caps = try capabilitiesOf(&untrusted);
-    var advertised: usize = 0;
-    var it = untrusted_caps.iterator();
-    while (it.next()) |entry| {
-        // Unset capabilities are omitted, never sent as null.
-        try std.testing.expect(entry.value_ptr.* != .null);
-        if (entry.value_ptr.* == .bool and !entry.value_ptr.bool) continue;
-        advertised += 1;
-        try std.testing.expect(containsName(&parse_only, entry.key_ptr.*));
-    }
-    try std.testing.expectEqual(parse_only.len, advertised);
-
-    var trusted = try initializeResponse(
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
-    );
-    defer trusted.deinit();
-    const trusted_caps = try capabilitiesOf(&trusted);
-    for (parse_only ++ semantic) |name| {
-        const value = trusted_caps.get(name) orelse return error.TestUnexpectedResult;
+    defer response.deinit();
+    const caps = try capabilitiesOf(&response);
+    for (features) |name| {
+        const value = caps.get(name) orelse return error.TestUnexpectedResult;
         try std.testing.expect(value != .null and !(value == .bool and !value.bool));
     }
 }
@@ -6571,11 +6507,4 @@ fn capabilitiesOf(response: *const ParsedResponse) integration_spec.SpecError!st
     const caps = result.object.get("capabilities") orelse return error.TestUnexpectedResult;
     if (caps != .object) return error.TestUnexpectedResult;
     return caps.object;
-}
-
-fn containsName(names: []const []const u8, name: []const u8) bool {
-    for (names) |candidate| {
-        if (std.mem.eql(u8, candidate, name)) return true;
-    }
-    return false;
 }

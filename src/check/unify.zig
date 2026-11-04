@@ -4027,6 +4027,12 @@ pub const DeferredConstraintCheck = struct {
     /// receiver is concrete—re-processing it before the target's group is
     /// checked would just re-defer it again.
     waiting_on_target_def: bool = false,
+    /// True when the constraint's selection would repeat a same-target
+    /// ancestor's state up to renaming, with variables its ancestor doesn't
+    /// share. Selecting it now would decide on types still being inferred, so
+    /// it waits for those variables. Such an entry is not "resolvable" for the
+    /// literal-defaulting cascade even though its receiver is concrete.
+    waiting_on_repeated_state: bool = false,
     /// The binding group whose checking created this obligation (for an
     /// instantiated scheme copy, the group that instantiated it), or null when
     /// it was created outside any group frame (REPL, expect bodies, module

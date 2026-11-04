@@ -299,6 +299,7 @@ const jobs = [_]Job{
     .{ .name = "run-test-eval-host-effects", .kind = .harness },
     .{ .name = "run-test-playground", .kind = .harness },
     .{ .name = "run-test-cli", .kind = .harness },
+    .{ .name = "run-test-cli-platforms-boxy", .kind = .harness },
     .{ .name = "run-test-serialization-sizes" },
     .{ .name = "run-test-builtin-bake-reproducible" },
     .{ .name = "run-test-downstream-package" },

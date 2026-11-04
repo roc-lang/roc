@@ -93,6 +93,7 @@ const Relocation = struct {
             .{ Mono.RecordUpdate, "fields", "field_exprs" },
             .{ Mono.TagExpr, "payloads", "expr_ids" },
             .{ Mono.LambdaExpr, "args", "typed_locals" },
+            .{ Mono.LambdaExpr, "stored_captures", "typed_locals" },
             .{ Mono.CallValue, "args", "expr_ids" },
             .{ Mono.LowLevelCall, "args", "expr_ids" },
             .{ Mono.ContinueExpr, "values", "expr_ids" },

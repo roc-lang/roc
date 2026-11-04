@@ -44,7 +44,7 @@ const StagingObserver = struct {
     filesystem: CoreCtx,
     store: ?*artifacts.Store = null,
     greeting: ?*ModuleState = null,
-    key: artifacts.catalog.Key = @splat(0),
+    destination: []const u8 = "",
     attempts: usize = 0,
     fail: bool,
 
@@ -52,10 +52,10 @@ const StagingObserver = struct {
         const self: *@This() = @ptrCast(@alignCast(raw.?));
         if (self.greeting) |mod| {
             // The environment is streamed before its solver types are released;
-            // the final entry is streamed afterward. Identify its reservation
-            // through the catalog, independently of physical slot assignment.
+            // the final entry is streamed afterward. Both stage beside the
+            // same destination with unique suffixes.
             if (!mod.solver_types_released and
-                (registeredPending(self.store.?, path, self.key) catch return error.IoError))
+                std.mem.startsWith(u8, path, self.destination))
             {
                 self.attempts += 1;
                 if (self.fail) {
@@ -90,6 +90,7 @@ fn compileReleasingSolverTypes(
         .enabled = cache_dir != null,
         .cache_dir = cache_dir orelse "",
     }, roc_ctx);
+    defer cache_manager.deinit();
 
     var builtin_modules = try eval.BuiltinModules.init(gpa);
     defer builtin_modules.deinit();
@@ -131,7 +132,9 @@ fn compileReleasingSolverTypes(
     const identity = CacheManager.identity(.checked, key, entries_dir);
     observer.store = &store;
     observer.greeting = mod;
-    observer.key = identity.indexedKey();
+    const destination = try store.entryPath(gpa, identity);
+    defer gpa.free(destination);
+    observer.destination = destination;
     const awaited_evaluation = mod.pending_evaluation != null;
     try coord.finishCheckedProgram(.none);
 
@@ -160,7 +163,7 @@ fn compileReleasingSolverTypes(
             if (value == .str and std.mem.eql(u8, artifact.const_store.strBytes(value.str), "Hello, World!")) value_completed = true;
         }
     }
-    const published = if (cache_dir != null) try store.acquire(identity, store.now()) else null;
+    const published = if (cache_dir != null) try store.acquire(identity) else null;
     defer if (published) |value| {
         var acquired = value;
         acquired.deinit();
@@ -185,49 +188,14 @@ fn compileReleasingSolverTypes(
     };
 }
 
-/// Test-only inventory: every unfinished payload must have a registered owner.
-fn registeredPending(store: *const artifacts.Store, path: []const u8, key: ?artifacts.catalog.Key) artifacts.Error!bool {
-    for (0..artifacts.shard_count) |number| {
-        var counters = artifacts.catalog.Counters{};
-        var shard = artifacts.Shard.open(store, @intCast(number), false, &counters) catch |err| switch (err) {
-            error.Missing => continue,
-            else => return err,
-        };
-        defer shard.close();
-        var tx = shard.index.transaction();
-        var cursor: artifacts.catalog.Key = @splat(0);
-        while (try tx.lowerBound(.owners, cursor)) |entry| {
-            const metadata = try artifacts.Metadata.decode(entry.value);
-            if (key == null or std.mem.eql(u8, &metadata.key, &key.?)) {
-                const pending = try store.payloadPath(@intCast(number), metadata.slot, ".pending");
-                defer store.allocator.free(pending);
-                if (std.mem.eql(u8, path, pending)) return true;
-            }
-            cursor = entry.key;
-            if (!artifacts.advanceKey(&cursor)) break;
-        }
-    }
-    return false;
-}
-
-/// Aborted writes may remain for bounded maintenance, but cannot be unregistered.
-fn countUnregisteredStagingFiles(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) (artifacts.Error || std.Io.Dir.RealPathFileAllocError || std.Io.Dir.SelectiveWalker.Error)!usize {
-    const root = try dir.realPathFileAlloc(io, ".", gpa);
-    defer gpa.free(root);
-    var store = try artifacts.Store.init(gpa, io, root);
-    defer store.deinit();
+/// Completed or abandoned staging writes must be cleaned up.
+fn countStagingFiles(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) (artifacts.Error || std.Io.Dir.RealPathFileAllocError || std.Io.Dir.SelectiveWalker.Error)!usize {
     var walker = try dir.walk(gpa);
     defer walker.deinit();
     var count: usize = 0;
     while (try walker.next(io)) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.basename, ".pending")) {
-            // Payload paths join the store root and the components below it
-            // with `/` on every host.
-            const below_root = entry.path[artifacts.format_directory.len + 1 ..];
-            const path = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ store.root, below_root });
-            defer gpa.free(path);
-            std.mem.replaceScalar(u8, path[store.root.len..], '\\', '/');
-            if (!try registeredPending(&store, path, null)) count += 1;
+            count += 1;
         }
     }
     return count;
@@ -318,7 +286,7 @@ test "checked cache entries published after releasing solver types load on the n
 
     var cache = try tmp_dir.dir.openDir(io, "cache", .{ .iterate = true });
     defer cache.close(io);
-    try std.testing.expectEqual(@as(usize, 0), try countUnregisteredStagingFiles(gpa, io, cache));
+    try std.testing.expectEqual(@as(usize, 0), try countStagingFiles(gpa, io, cache));
 
     const second = try compileReleasingSolverTypes(gpa, cache_dir, app_path, false);
     defer second.deinit(gpa);
@@ -328,7 +296,7 @@ test "checked cache entries published after releasing solver types load on the n
     }
     try std.testing.expect(!second.has_user_errors);
     try std.testing.expectEqual(@as(u64, 0), second.store_failures);
-    try std.testing.expectEqual(@as(usize, 0), try countUnregisteredStagingFiles(gpa, io, cache));
+    try std.testing.expectEqual(@as(usize, 0), try countStagingFiles(gpa, io, cache));
 }
 
 const warning_source =
@@ -443,7 +411,7 @@ test "issue 12570: later evaluation diagnostics discard the staged warning-beari
         try std.testing.expectEqual(@as(usize, 1), run.greeting_staged);
         try std.testing.expect(!run.greeting_published);
         try std.testing.expect(std.mem.find(u8, run.reports, "late evaluation failure") != null);
-        try std.testing.expectEqual(@as(usize, 0), try countUnregisteredStagingFiles(gpa, io, cache));
+        try std.testing.expectEqual(@as(usize, 0), try countStagingFiles(gpa, io, cache));
     }
 }
 
@@ -468,7 +436,7 @@ test "issue 12570: staging write failure releases solver types without publishin
     try std.testing.expectEqual(@as(u64, 1), failed.store_failures);
     var cache = try tmp.dir.openDir(io, "cache", .{ .iterate = true });
     defer cache.close(io);
-    try std.testing.expectEqual(@as(usize, 0), try countUnregisteredStagingFiles(gpa, io, cache));
+    try std.testing.expectEqual(@as(usize, 0), try countStagingFiles(gpa, io, cache));
     const retry = try compileReleasingSolverTypes(gpa, cache_dir, app_path, false);
     defer retry.deinit(gpa);
     try std.testing.expect(retry.greeting_checked);

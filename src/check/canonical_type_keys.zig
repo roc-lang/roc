@@ -152,13 +152,16 @@ pub fn identityVarsFromVarIgnoringConstraints(
     return try allocator.dupe(types.Var, builder.identity_variables.items);
 }
 
-/// Public `fromVarErrSensitive` function.
+/// Key one type of a dispatch state, up to renaming of its variables.
 ///
-/// Like `fromVar`, except erroneous content digests as its resolved root var
-/// rather than as one universal token. Dispatch-state digests use this so two
-/// states that were poisoned by unrelated failures never compare equal, while
-/// re-encountering the very same poisoned var still digests stably.
-pub fn fromVarErrSensitive(
+/// Unlike `fromVar`, erroneous content digests as its resolved root var rather
+/// than as one universal token, so two states poisoned by unrelated failures
+/// never compare equal while re-encountering the very same poisoned var still
+/// digests stably. Variable names are not written, since they don't affect
+/// which state this is. Constraints attached to variables are omitted: each is
+/// a separate relation settled on its own receiver, and none of them can
+/// change which method a state selects.
+pub fn dispatchStateKey(
     allocator: Allocator,
     store: *const TypeStore,
     env: *const ModuleEnv,
@@ -166,7 +169,7 @@ pub fn fromVarErrSensitive(
 ) Allocator.Error!canonical.CanonicalTypeKey {
     var digester = Digester.init(allocator, store, env);
     defer digester.deinit();
-    digester.adapter.err_by_var = true;
+    digester.adapter.setDispatchStateMode(true);
     return (try digester.info(var_)).key;
 }
 
@@ -297,10 +300,10 @@ pub const TypeWriter = struct {
         return schemeKeyForType((try self.digester.info(var_)).key);
     }
 
-    /// Dispatch-state keys retain the identity of each erroneous root.
-    pub fn fromVarErrSensitive(self: *TypeWriter, var_: Var) Allocator.Error!canonical.CanonicalTypeKey {
-        self.mode_digester.adapter.err_by_var = true;
-        defer self.mode_digester.adapter.err_by_var = false;
+    /// See the module-level `dispatchStateKey`.
+    pub fn dispatchStateKey(self: *TypeWriter, var_: Var) Allocator.Error!canonical.CanonicalTypeKey {
+        self.mode_digester.adapter.setDispatchStateMode(true);
+        defer self.mode_digester.adapter.setDispatchStateMode(false);
         return (try self.mode_digester.info(var_)).key;
     }
 
@@ -486,6 +489,9 @@ const SourceAdapter = struct {
     /// requirement-shape keys ignore them because names do not affect type
     /// compatibility.
     write_identity_names: bool = true,
+    /// Whether a type variable's attached constraints are left out of its
+    /// description.
+    omit_identity_constraints: bool = false,
     /// Whether a row that repeats a label along its extension chain is
     /// reported to the caller (the checker, which normalizes the row and
     /// asks again) instead of violating the settled-row invariant.
@@ -512,6 +518,12 @@ const SourceAdapter = struct {
             .rank_scratch = base.TextRankCache.init(allocator),
             .ext_seen = collections.IndexedStack(Var).init(allocator),
         };
+    }
+
+    fn setDispatchStateMode(self: *SourceAdapter, enabled: bool) void {
+        self.err_by_var = enabled;
+        self.write_identity_names = !enabled;
+        self.omit_identity_constraints = enabled;
     }
 
     fn deinit(self: *SourceAdapter) void {
@@ -623,7 +635,10 @@ const SourceAdapter = struct {
             try sink.boolean(name != null);
             if (name) |text| try self.ident(sink, text);
         }
-        const items = self.store.sliceStaticDispatchConstraints(constraints);
+        const items: []const types.StaticDispatchConstraint = if (self.omit_identity_constraints)
+            &.{}
+        else
+            self.store.sliceStaticDispatchConstraints(constraints);
         try sink.varint(@intCast(items.len));
         sink.constraint_count = @intCast(items.len);
         for (items) |constraint| {
@@ -1328,9 +1343,9 @@ test "err-sensitive keys distinguish unrelated erroneous vars and stay stable pe
     const err_a = try store.freshFromContent(.err);
     const err_b = try store.freshFromContent(.err);
 
-    const key_a = try fromVarErrSensitive(allocator, &store, &env, err_a);
-    const key_b = try fromVarErrSensitive(allocator, &store, &env, err_b);
-    const key_a_again = try fromVarErrSensitive(allocator, &store, &env, err_a);
+    const key_a = try dispatchStateKey(allocator, &store, &env, err_a);
+    const key_b = try dispatchStateKey(allocator, &store, &env, err_b);
+    const key_a_again = try dispatchStateKey(allocator, &store, &env, err_a);
 
     try std.testing.expect(!std.meta.eql(key_a, key_b));
     try std.testing.expect(std.meta.eql(key_a, key_a_again));
@@ -1356,7 +1371,7 @@ test "err-sensitive keys match plain keys on error-free types" {
     const tuple = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = tuple_elems } } });
 
     const plain = try fromVar(allocator, &store, &env, tuple);
-    const sensitive = try fromVarErrSensitive(allocator, &store, &env, tuple);
+    const sensitive = try dispatchStateKey(allocator, &store, &env, tuple);
     try std.testing.expect(std.meta.eql(plain, sensitive));
 }
 
@@ -1597,11 +1612,11 @@ test "type writer resets checker digest modes between requests" {
     const ordinary = try fromVar(gpa, &store, &env, root);
     const plain_error = try fromVar(gpa, &store, &env, err);
     const anchored = try fromVarWithAnchoredIdentities(gpa, &store, &env, root, &anchors);
-    const sensitive = try fromVarErrSensitive(gpa, &store, &env, err);
+    const sensitive = try dispatchStateKey(gpa, &store, &env, err);
     for (0..3) |_| {
         try std.testing.expectEqualDeep(anchored, try writer.fromVarWithAnchoredIdentities(root, &anchors));
         try std.testing.expectEqualDeep(ordinary, (try writer.fromVar(root)).key);
-        try std.testing.expectEqualDeep(sensitive, try writer.fromVarErrSensitive(err));
+        try std.testing.expectEqualDeep(sensitive, try writer.dispatchStateKey(err));
         try std.testing.expectEqualDeep(plain_error, (try writer.fromVar(err)).key);
         try std.testing.expect(try writer.containsError(err));
         try std.testing.expect(!try writer.containsError(root));
@@ -1968,8 +1983,8 @@ test "err-sensitive keys distinguish erroneous content inside closed subtrees" {
 
     try std.testing.expect(std.meta.eql(try fromVar(allocator, &store, &env, outer_a), try fromVar(allocator, &store, &env, outer_b)));
     try std.testing.expect(!std.meta.eql(
-        try fromVarErrSensitive(allocator, &store, &env, outer_a),
-        try fromVarErrSensitive(allocator, &store, &env, outer_b),
+        try dispatchStateKey(allocator, &store, &env, outer_a),
+        try dispatchStateKey(allocator, &store, &env, outer_b),
     ));
 
     // A writer that keyed the erroneous subtree in the plain encoding must not
@@ -1979,7 +1994,7 @@ test "err-sensitive keys distinguish erroneous content inside closed subtrees" {
     writer.retainComposedKeys();
     _ = try writer.fromVar(outer_a);
     _ = try writer.fromVar(outer_b);
-    try std.testing.expect(!std.meta.eql(try writer.fromVarErrSensitive(outer_a), try writer.fromVarErrSensitive(outer_b)));
+    try std.testing.expect(!std.meta.eql(try writer.dispatchStateKey(outer_a), try writer.dispatchStateKey(outer_b)));
 }
 
 /// Test-only reader of the key encoding: it consumes one node per call and

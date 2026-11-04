@@ -94,7 +94,7 @@ test "chained specialization discovery costs no extra executor barriers" {
     try std.testing.expectEqual(independent.specialization_tasks_submitted, chained.specialization_tasks_submitted);
     try std.testing.expectEqual(chained.specialization_tasks_submitted, chained.specialization_tasks_committed);
     try std.testing.expectEqual(independent.specialization_tasks_submitted, independent.specialization_tasks_committed);
-    try std.testing.expectEqual(@as(u64, specialization_workers), chained.peak_worker_lanes_available);
+    try std.testing.expectEqual(@as(u64, specialization_workers + 1), chained.peak_worker_lanes_available);
     if (chained.task_waves > independent.task_waves) {
         std.debug.print("chained discovery drained {d} specialization bodies in {d} executor barriers; the same {d} bodies discovered at one level drained in {d}\n", .{
             chained.specialization_tasks_submitted,     chained.task_waves,
@@ -137,13 +137,14 @@ const DiscoveryExecutor = struct {
         }) };
     }
 
-    fn begin(context: *anyopaque) void {
+    fn begin(context: *anyopaque) std.mem.Allocator.Error!*anyopaque {
         const self: *@This() = @ptrCast(@alignCast(context));
         std.debug.assert(!self.open and self.outstanding == 0);
         self.open = true;
+        return context;
     }
 
-    fn submit(context: *anyopaque, task: executor_api.Task) std.mem.Allocator.Error!void {
+    fn submit(context: *anyopaque, _: *anyopaque, task: executor_api.Task) std.mem.Allocator.Error!void {
         const self: *@This() = @ptrCast(@alignCast(context));
         if (self.fail_at_submission == self.submitted) return error.OutOfMemory;
         std.debug.assert(self.open and self.outstanding < 4);
@@ -164,7 +165,7 @@ const DiscoveryExecutor = struct {
         self.peak_outstanding = @max(self.peak_outstanding, self.outstanding);
     }
 
-    fn receive(context: *anyopaque) executor_api.Completion {
+    fn receive(context: *anyopaque, _: *anyopaque) executor_api.Completion {
         const self: *@This() = @ptrCast(@alignCast(context));
         std.debug.assert(self.outstanding > 0);
         self.outstanding -= 1;
@@ -183,7 +184,11 @@ const DiscoveryExecutor = struct {
         return self.execute(task.task, 1);
     }
 
-    fn end(context: *anyopaque) void {
+    fn tryReceive(_: *anyopaque, _: *anyopaque) ?executor_api.Completion {
+        return null;
+    }
+
+    fn end(context: *anyopaque, _: *anyopaque) void {
         const self: *@This() = @ptrCast(@alignCast(context));
         std.debug.assert(self.open and self.outstanding == 0);
         self.open = false;
@@ -193,9 +198,11 @@ const DiscoveryExecutor = struct {
         return .{
             .context = self,
             .worker_count = 4,
+            .lane_count = 4,
             .beginFn = begin,
             .submitFn = submit,
             .receiveFn = receive,
+            .tryReceiveFn = tryReceive,
             .endFn = end,
         };
     }

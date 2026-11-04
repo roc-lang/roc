@@ -189,7 +189,7 @@ pub const LiteralDemand = struct {
         while (pending.pop()) |ty| {
             if ((try seen.getOrPut(ty)).found_existing) continue;
             switch (types.payload(ty)) {
-                .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+                .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
                 .alias => |alias| {
                     try pending.append(allocator, alias.backing);
                     try pending.appendSlice(allocator, alias.args);
@@ -340,7 +340,7 @@ const Builder = struct {
             const view = item.view;
             const types = view.checked_types;
             switch (types.payload(item.ty)) {
-                .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+                .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
                 .alias => |alias| {
                     try self.addTypeEdge(item.node, view, alias.backing);
                     for (alias.args) |arg| try self.addTypeEdge(item.node, view, arg);

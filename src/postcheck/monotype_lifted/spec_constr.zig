@@ -1582,7 +1582,7 @@ const Pass = struct {
             const symbol_start = self.symbols.next;
             const join_start = self.next_join_point;
             if (self.options.executor) |executor| {
-                var session = executor.begin();
+                var session = try executor.begin();
                 var submitted: usize = 0;
                 var received: usize = 0;
                 var failure: ?Allocator.Error = null;
@@ -12961,7 +12961,7 @@ const Cloner = struct {
                             continue;
                         }
                         for (tag.payloads, 0..) |payload, index| {
-                            if (!steps[0].eql(Step.payload(tag.name, @intCast(index)))) continue;
+                            if (!steps[0].isPayload(tag.name, @intCast(index))) continue;
                             try work.append(self.pass.allocator, .{ .value = .{ .value = payload, .steps = steps[1..] } });
                         }
                     },
@@ -12971,7 +12971,7 @@ const Cloner = struct {
                             continue;
                         }
                         for (record.fields) |field| {
-                            if (!steps[0].eql(Step.field(field.name))) continue;
+                            if (!steps[0].isField(field.name)) continue;
                             try work.append(self.pass.allocator, .{ .value = .{ .value = field.value, .steps = steps[1..] } });
                         }
                     },
@@ -12981,7 +12981,7 @@ const Cloner = struct {
                             continue;
                         }
                         for (tuple.items, 0..) |tuple_item, index| {
-                            if (!steps[0].eql(Step.item(@intCast(index)))) continue;
+                            if (!steps[0].isItem(@intCast(index))) continue;
                             try work.append(self.pass.allocator, .{ .value = .{ .value = tuple_item, .steps = steps[1..] } });
                         }
                     },
@@ -13029,7 +13029,7 @@ const Cloner = struct {
                         }
                         const payloads = program.exprSpan(tag.payloads);
                         for (0..payloads.len) |index| {
-                            if (!steps[0].eql(Step.payload(tag.name, @intCast(index)))) continue;
+                            if (!steps[0].isPayload(tag.name, @intCast(index))) continue;
                             try work.append(self.pass.allocator, .{ .expr = .{ .id = GuardedList.at(payloads, index), .steps = steps[1..] } });
                         }
                     },
@@ -13041,7 +13041,7 @@ const Cloner = struct {
                         const fields = program.fieldExprSpan(span);
                         for (0..fields.len) |index| {
                             const field = GuardedList.at(fields, index);
-                            if (!steps[0].eql(Step.field(field.name))) continue;
+                            if (!steps[0].isField(field.name)) continue;
                             try work.append(self.pass.allocator, .{ .expr = .{ .id = field.value, .steps = steps[1..] } });
                         }
                     },
@@ -13053,7 +13053,7 @@ const Cloner = struct {
                         const fields = program.fieldExprSpan(update.fields);
                         const updated = for (0..fields.len) |index| {
                             const field = GuardedList.at(fields, index);
-                            if (steps[0].eql(Step.field(field.name))) break field.value;
+                            if (steps[0].isField(field.name)) break field.value;
                         } else null;
                         if (updated) |value| {
                             try work.append(self.pass.allocator, .{ .expr = .{ .id = value, .steps = steps[1..] } });
@@ -13068,7 +13068,7 @@ const Cloner = struct {
                         }
                         const items = program.exprSpan(span);
                         for (0..items.len) |index| {
-                            if (!steps[0].eql(Step.item(@intCast(index)))) continue;
+                            if (!steps[0].isItem(@intCast(index))) continue;
                             try work.append(self.pass.allocator, .{ .expr = .{ .id = GuardedList.at(items, index), .steps = steps[1..] } });
                         }
                     },
@@ -17762,20 +17762,21 @@ const ReverseSpecConstrExecutor = struct {
     submitted: usize = 0,
 
     fn executor(self: *@This()) TaskExecutor.Executor {
-        return .{ .context = self, .worker_count = self.worker_count, .beginFn = begin, .submitFn = submit, .receiveFn = receive, .endFn = end };
+        return .{ .context = self, .worker_count = self.worker_count, .lane_count = self.worker_count, .beginFn = begin, .submitFn = submit, .receiveFn = receive, .tryReceiveFn = tryReceive, .endFn = end };
     }
-    fn begin(context: *anyopaque) void {
+    fn begin(context: *anyopaque) std.mem.Allocator.Error!*anyopaque {
         const self: *@This() = @ptrCast(@alignCast(context));
         std.debug.assert(self.len == 0);
+        return context;
     }
-    fn submit(context: *anyopaque, task: TaskExecutor.Task) Allocator.Error!void {
+    fn submit(context: *anyopaque, _: *anyopaque, task: TaskExecutor.Task) Allocator.Error!void {
         const self: *@This() = @ptrCast(@alignCast(context));
         if (self.fail_after == self.submitted) return error.OutOfMemory;
         self.queued[self.len] = task;
         self.len += 1;
         self.submitted += 1;
     }
-    fn receive(context: *anyopaque) TaskExecutor.Completion {
+    fn receive(context: *anyopaque, _: *anyopaque) TaskExecutor.Completion {
         const self: *@This() = @ptrCast(@alignCast(context));
         self.len -= 1;
         const task = self.queued[self.len];
@@ -17790,7 +17791,10 @@ const ReverseSpecConstrExecutor = struct {
             .lane_state = &lane,
         }) };
     }
-    fn end(context: *anyopaque) void {
+    fn tryReceive(_: *anyopaque, _: *anyopaque) ?TaskExecutor.Completion {
+        return null;
+    }
+    fn end(context: *anyopaque, _: *anyopaque) void {
         const self: *@This() = @ptrCast(@alignCast(context));
         std.debug.assert(self.len == 0);
     }

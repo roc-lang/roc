@@ -36,6 +36,7 @@ pub const CliArgs = union(enum) {
     version,
     docs: DocsArgs,
     deps: DepsArgs,
+    loc: LocArgs,
     bump: BumpArgs,
     install: InstallArgs,
     experimental_lsp: ExperimentalLspArgs,
@@ -215,6 +216,8 @@ pub const CheckArgs = struct {
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
     root_source_url: ?[]const u8 = null, // internal: bundle URL provenance when the source was a URL or installed shorthand
     main_source_url: ?[]const u8 = null, // internal: bundle URL provenance when --main was a URL or installed shorthand
+    opt: OptLevel = default_dev_opt, // accepted so one command line serves every command; checking ignores it
+    specialization_strategy: ?SpecializationStrategy = null, // the strategy whose evaluator completes compile-time roots; part of the checked-module cache identity
 };
 
 /// Arguments for `roc build`
@@ -300,6 +303,13 @@ pub const DocsArgs = struct {
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
     root_source_url: ?[]const u8 = null, // internal: bundle URL provenance when the source was a URL or installed shorthand
     main_source_url: ?[]const u8 = null, // internal: bundle URL provenance when --main was a URL or installed shorthand
+};
+
+/// Arguments for `roc loc`
+pub const LocArgs = struct {
+    path: []const u8 = default_roc_file,
+    no_cache: bool = false,
+    resolve_limits: ResolveLimitArgs = .{},
 };
 
 /// Arguments for `roc deps`
@@ -975,7 +985,8 @@ const commands = [_]Command{
         .usage = " [OPTIONS] [ROC_FILE]",
         .arguments = "  [ROC_FILE]  The .roc file to check [default: " ++ default_roc_file ++ "]",
         .flags = &.{
-            .{ .name = "--specialize", .form = .rejected },
+            .{ .name = "--opt", .form = .attached, .field = "opt" },
+            .{ .name = "--specialize", .form = .attached, .field = "specialization_strategy" },
             .{ .name = "--main", .form = .attached, .field = "main", .value_name = "<main>", .help = "The .roc file of the main app/package module to resolve dependencies from" },
             .{ .name = "--time", .field = "time", .help = "Print timing information for each compilation phase. Will not print anything if everything is cached." },
             .{ .name = "--timings", .field = "timings", .help = "Show how long each compilation phase took (shown automatically when checking is slow)" },
@@ -1010,6 +1021,23 @@ const commands = [_]Command{
         .resolve = .limits_and_replace_deps,
         .positionals = &.{.{ .field = "path" }},
         .derived = &.{ "root_source_url", "main_source_url" },
+    },
+    .{
+        .name = "loc",
+        .tag = .loc,
+        .summary = "Count lines of Roc source across the import graph",
+        .about =
+        \\Count lines of Roc source across the import graph, counting shared files once.
+        \\Report application, package, or platform lines separately from local and
+        \\HTTPS dependencies, with a second count excluding comments and blank lines.
+        \\Only imported modules and their package headers are counted. No type
+        \\checking or code execution is performed. Uncached dependencies are downloaded.
+        ,
+        .usage = " [OPTIONS] [ROC_FILE]",
+        .arguments = "  [ROC_FILE]  The root .roc file [default: " ++ default_roc_file ++ "]",
+        .flags = &.{.{ .name = "--no-cache", .field = "no_cache", .help = "Disable source import caching" }},
+        .resolve = .limits_and_replace_deps,
+        .positionals = &.{.{ .field = "path" }},
     },
     .{
         .name = "deps",
@@ -1495,10 +1523,10 @@ test "specialization strategy parsing" {
         try testing.expectEqual(SpecializationStrategy.lss, result.glue.specialization_strategy.?);
     }
     {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "check", "--specialize=no" });
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "check", "--specialize=no", "--opt=dev" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("check", result.problem.unexpected_argument.cmd);
-        try testing.expectEqualStrings("--specialize=no", result.problem.unexpected_argument.arg);
+        try testing.expectEqual(SpecializationStrategy.boxy, result.check.specialization_strategy.?);
+        try testing.expectEqual(OptLevel.dev, result.check.opt);
     }
 }
 
@@ -2988,6 +3016,7 @@ test "golden help: roc --help" {
         \\  version          Print the Roc compiler's version
         \\  check            Check the code for problems, but don't build or run it
         \\  docs             Generate documentation for a Roc package or platform
+        \\  loc              Count lines of Roc source across the import graph
         \\  deps             Print the dependency tree of a Roc app, package, or platform
         \\  bump             Compare a package's public API against a previous version and report the required semver bump
         \\  experimental-lsp Start the experimental language server (LSP) implementation
@@ -3426,4 +3455,18 @@ test "golden help: roc licenses --help" {
         \\  -h, --help  Print help
         \\
     );
+}
+
+test "roc loc defaults to main.roc and accepts source and dependency options" {
+    const gpa = testing.allocator;
+    const defaults = try parse(gpa, testing.io, &.{"loc"});
+    try testing.expectEqualStrings("main.roc", defaults.loc.path);
+    const explicit = try parse(gpa, testing.io, &.{ "loc", "pkg/main.roc", "--no-cache", "--replace-dep", "old/main.roc", "new/main.roc" });
+    try testing.expectEqualStrings("pkg/main.roc", explicit.loc.path);
+    try testing.expect(explicit.loc.no_cache);
+    try testing.expectEqual(@as(usize, 1), explicit.loc.resolve_limits.replace_deps.len);
+    const extra = try parse(gpa, testing.io, &.{ "loc", "a.roc", "b.roc" });
+    try testing.expectEqualStrings("b.roc", extra.problem.unexpected_argument.arg);
+    const help = try parse(gpa, testing.io, &.{ "loc", "--help" });
+    try testing.expect(std.mem.find(u8, help.help, "without") != null or std.mem.find(u8, help.help, "excluding comments") != null);
 }

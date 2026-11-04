@@ -568,19 +568,6 @@ pub const UseOrder = struct {
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -588,6 +575,7 @@ pub const UseOrder = struct {
             .store_struct,
             .store_tag,
             .set_local,
+            .dyn,
             .debug,
             .expect,
             .expect_err,
@@ -746,7 +734,7 @@ pub const UseOrder = struct {
         fn buildAll(allocator: Allocator, row_tables: *[3]RowTableTask, executor: ?*const task_executor.Executor, task_metrics: ?*TopologyTaskMetrics) Allocator.Error!void {
             const lanes = executor orelse return buildInline(allocator, row_tables);
             if (lanes.worker_count <= 1) return buildInline(allocator, row_tables);
-            var session = lanes.begin();
+            var session = try lanes.begin();
             var submitted: usize = 0;
             var received: usize = 0;
             var failed = false;
@@ -761,7 +749,7 @@ pub const UseOrder = struct {
                 }
                 if (received < submitted) {
                     const completion = session.receive();
-                    if (completion.id >= submitted or completion.worker_id >= lanes.worker_count) topologyInvariant("row table received invalid task identity");
+                    if (completion.id >= submitted or completion.worker_id >= lanes.lane_count) topologyInvariant("row table received invalid task identity");
                     const context = &row_tables[completion.id];
                     if (context.completed or completion.value != @as(*anyopaque, @ptrCast(context))) topologyInvariant("row table received invalid task completion");
                     context.completed = true;
@@ -1077,19 +1065,6 @@ pub const UseOrder = struct {
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -1097,6 +1072,7 @@ pub const UseOrder = struct {
             .store_struct,
             .store_tag,
             .set_local,
+            .dyn,
             .debug,
             .expect,
             .expect_err,

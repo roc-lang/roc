@@ -12,7 +12,8 @@ const builtins = @import("builtins");
 const layout_mod = @import("layout.zig");
 const graph_mod = @import("./graph.zig");
 const rc_helper = @import("./rc_helper.zig");
-const field_order = @import("./field_order.zig");
+const layout_shape = @import("layout_shape");
+const field_order = layout_shape.field_order;
 const digest_mod = @import("./digest.zig");
 
 const target = base.target;
@@ -513,6 +514,7 @@ pub const Store = struct {
             .scalar => base.invariant("layout.Store invariant violated: scalar layouts have fixed indices and no intern key", .{}),
             .zst => try self.startInternKey(.zst),
             .hole => try self.startInternKey(.hole),
+            .dynamic => try self.startInternKey(.dynamic),
             .box => {
                 try self.startInternKey(.box);
                 try self.appendInternKeyIdx(layout.getIdx());
@@ -522,7 +524,6 @@ pub const Store = struct {
                 try self.appendInternKeyIdx(layout.getIdx());
             },
             .box_of_zst => try self.startInternKey(.box_of_zst),
-            .erased_box => try self.startInternKey(.erased_box),
             .erased_callable => try self.startInternKey(.erased_callable),
             .list => {
                 try self.startInternKey(.list);
@@ -662,11 +663,6 @@ pub const Store = struct {
     pub fn insertBox(self: *Self, elem_idx: Idx) std.mem.Allocator.Error!Idx {
         const layout = Layout.box(elem_idx);
         return try self.insertLayout(layout);
-    }
-
-    /// Insert the descriptor-backed runtime box used for Boxy dynamic storage.
-    pub fn insertErasedBox(self: *Self) std.mem.Allocator.Error!Idx {
-        return try self.insertLayout(Layout.erasedBox());
     }
 
     /// Insert a compiler-internal pointer layout with the given element layout.
@@ -1646,10 +1642,6 @@ pub const Store = struct {
             recursive_nodes: []bool,
             component_ids: []u32,
 
-            /// How a parent reads a child: as its final value, or as a
-            /// pointer target, which looks through nominal wrappers.
-            const ChildMode = enum { value, pointer };
-
             /// The layout of child `ref`, or the node that must be finalized
             /// first to produce it.
             const ChildLayout = union(enum) {
@@ -1657,18 +1649,21 @@ pub const Store = struct {
                 finalize: GraphNodeId,
             };
 
-            fn childLayout(self_finalizer: *@This(), ref: GraphRef, mode: ChildMode) ChildLayout {
+            /// A nominal wrapper's layout is its child's whether the parent
+            /// stores the child or points at it, so a read looks through it:
+            /// a parent on a cycle through the wrapper then reads the
+            /// child's slot, and the wrapper never fills a slot of its own
+            /// with a copy of the child's layout.
+            fn childLayout(self_finalizer: *@This(), ref: GraphRef) ChildLayout {
                 var current = ref;
                 while (true) {
                     const node_id = switch (current) {
                         .canonical => |layout_idx| return .{ .layout = layout_idx },
                         .local => |node_id| node_id,
                     };
-                    if (mode == .pointer) {
-                        if (self_finalizer.graph.getNode(node_id) == .nominal) {
-                            current = self_finalizer.graph.getNode(node_id).nominal;
-                            continue;
-                        }
+                    if (self_finalizer.graph.getNode(node_id) == .nominal) {
+                        current = self_finalizer.graph.getNode(node_id).nominal;
+                        continue;
                     }
                     const index = @backingInt(node_id);
                     return switch (self_finalizer.finalize_state[index]) {
@@ -1773,17 +1768,16 @@ pub const Store = struct {
                     input = null;
                     const node_id = frame.node_id;
                     const node = self_finalizer.graph.getNode(node_id);
-                    // The next child to read, with how it is read.
-                    const next: ?struct { ref: GraphRef, mode: ChildMode } = switch (node) {
+                    // The next child to read.
+                    const next: ?GraphRef = switch (node) {
                         .pending, .committed => unreachable, // commitGraph builds this working graph with committed leaves as canonical refs and every reserved node filled
-                        .nominal => |child| if (frame.children.items.len == 0) .{ .ref = child, .mode = .value } else null,
-                        .box, .list, .closure => |child| if (frame.children.items.len == 0) .{ .ref = child, .mode = .pointer } else null,
+                        .nominal, .box, .list, .closure => |child| if (frame.children.items.len == 0) child else null,
                         .erased_callable => null,
                         .struct_ => |span| blk: {
                             const graph_fields = self_finalizer.graph.getFields(span);
                             while (frame.children.items.len < graph_fields.len) {
                                 const field = graph_fields[frame.children.items.len];
-                                if (!self_finalizer.shouldBoxRecursiveSlotEdge(node_id, field.child)) break :blk .{ .ref = field.child, .mode = .value };
+                                if (!self_finalizer.shouldBoxRecursiveSlotEdge(node_id, field.child)) break :blk field.child;
                                 try frame.children.append(allocator, try self_finalizer.recursiveSlotLayout(field.child));
                             }
                             break :blk null;
@@ -1792,14 +1786,14 @@ pub const Store = struct {
                             const graph_refs = self_finalizer.graph.getRefs(span);
                             while (frame.children.items.len < graph_refs.len) {
                                 const variant_ref = graph_refs[frame.children.items.len];
-                                if (!self_finalizer.shouldBoxRecursiveSlotEdge(node_id, variant_ref)) break :blk .{ .ref = variant_ref, .mode = .value };
+                                if (!self_finalizer.shouldBoxRecursiveSlotEdge(node_id, variant_ref)) break :blk variant_ref;
                                 try frame.children.append(allocator, try self_finalizer.recursiveSlotLayout(variant_ref));
                             }
                             break :blk null;
                         },
                     };
                     if (next) |child| {
-                        switch (self_finalizer.childLayout(child.ref, child.mode)) {
+                        switch (self_finalizer.childLayout(child)) {
                             .layout => |layout_idx| input = layout_idx,
                             .finalize => |child_id| {
                                 self_finalizer.finalize_state[@backingInt(child_id)] = .active;
@@ -2209,19 +2203,6 @@ pub const Store = struct {
         return self.internStructShape(try self.measureStructFields(temp_fields.items), temp_fields.items);
     }
 
-    /// Whether a value stored in this layout is described by a Boxy
-    /// descriptor wherever one governs it: a box, or a struct, tag union,
-    /// list, or vector whose parts can hold Boxy values. List operations and
-    /// the runtime read a governed list item through the list's descriptor.
-    pub fn layoutTakesBoxyStructuralDesc(self: *const Self, idx: Idx) bool {
-        const value_layout = self.getLayout(idx);
-        return switch (value_layout.tag) {
-            .erased_box, .box, .list, .list_of_zst, .struct_, .tag_union => true,
-            .scalar => value_layout.getScalar().tag == .vector,
-            .box_of_zst, .closure, .erased_callable, .zst, .ptr, .hole => false,
-        };
-    }
-
     pub fn getLayout(self: *const Self, idx: Idx) Layout {
         return self.layouts.get(@fromBackingInt(@intCast(@backingInt(idx)))).*;
     }
@@ -2296,7 +2277,7 @@ pub const Store = struct {
                         try pending.append(allocator, .{ actual_field.layout, expected_field.layout });
                     }
                 },
-                .scalar, .box_of_zst, .list_of_zst, .closure, .erased_callable, .zst, .ptr, .erased_box, .hole, .tag_union => return false,
+                .scalar, .box_of_zst, .list_of_zst, .closure, .erased_callable, .zst, .ptr, .hole, .tag_union, .dynamic => return false,
             }
         }
         return true;
@@ -2311,7 +2292,7 @@ pub const Store = struct {
         return switch (value.tag) {
             .hole => true,
             .list, .box => self.getLayout(value.getIdx()).tag == .hole,
-            .scalar, .box_of_zst, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .erased_box => false,
+            .scalar, .box_of_zst, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .dynamic => false,
         };
     }
 
@@ -2389,7 +2370,7 @@ pub const Store = struct {
         const struct_data = self.getStructData(layout.getStruct().idx);
         return StructInfo{
             .data = struct_data,
-            .alignment = layout.getStruct().sort_key.alignment(self.targetUsize()),
+            .alignment = layout.getStruct().sort_key.alignment(self.targetUsize().alignment()),
             .byte_size = struct_data.size.get(self.targetUsize()),
             .fields = self.struct_fields.sliceRange(struct_data.getFields()),
             .contains_refcounted = self.layoutContainsRefcounted(layout),
@@ -2403,7 +2384,7 @@ pub const Store = struct {
         return TagUnionInfo{
             .idx = layout.getTagUnion().idx,
             .data = tu_data,
-            .alignment = layout.getTagUnion().sort_key.alignment(self.targetUsize()),
+            .alignment = layout.getTagUnion().sort_key.alignment(self.targetUsize().alignment()),
             .byte_size = tu_data.size.get(self.targetUsize()),
             .discriminant_offset = tu_data.discriminant_offset.get(self.targetUsize()),
             .variants = self.tag_union_variants.sliceRange(tu_data.getVariants()),
@@ -2444,16 +2425,6 @@ pub const Store = struct {
     /// Get the canonical size of a struct at an explicit pointer width.
     pub fn getStructSizeAt(self: *const Self, struct_idx: StructIdx, target_usize: target.TargetUsize) u32 {
         return self.getStructData(struct_idx).size.get(target_usize);
-    }
-
-    /// Get the offset of a struct field at the given sorted index.
-    /// Effective alignment (in bytes) of a struct field for offset/size
-    /// computation. Padding spacers are always alignment 1—their value
-    /// layout's alignment is ignored so they never introduce internal padding
-    /// nor inflate the struct's alignment.
-    fn structFieldAlignmentBytes(field: StructField, size_align: SizeAlign) u32 {
-        if (field.is_padding) return 1;
-        return @intCast(size_align.alignment.toByteUnits());
     }
 
     /// Record a newly committed struct's field offsets for both pointer
@@ -2607,6 +2578,11 @@ pub const Store = struct {
         return .zst;
     }
 
+    /// The layout every `.boxy` dynamic local has (see `Layout.dynamic`).
+    pub fn dynamicLayout(self: *Self) Allocator.Error!Idx {
+        return self.insertLayout(Layout.dynamic());
+    }
+
     /// Get both the size and alignment of a layout in a single call.
     /// This is more efficient than calling layoutSize and alignment separately
     /// since both values often share computation paths.
@@ -2620,6 +2596,28 @@ pub const Store = struct {
             .size = @intCast(self.sizeAt(layout, target_usize)),
             .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.alignment(target_usize).toByteUnits())),
         };
+    }
+
+    /// Whether a list of `in_idx` items and a list of `out_idx` items can
+    /// share one allocation at `target_usize`: the same item stride, the same
+    /// allocation alignment class, and the same refcounted-items header
+    /// shape. A list of zero-sized items has no allocation to share.
+    pub fn listItemsInterchangeableAt(self: *const Self, in_idx: Idx, out_idx: Idx, target_usize: target.TargetUsize) bool {
+        const in_item = self.getLayout(in_idx);
+        const in_size = self.sizeAt(in_item, target_usize);
+        if (in_size == 0) return false;
+        const out_item = self.getLayout(out_idx);
+        if (self.sizeAt(out_item, target_usize) != in_size) return false;
+        // The allocation's hidden header and the alignment passed to the
+        // allocator both derive from max(ptr_width, item alignment) and from
+        // whether items are refcounted (which reserves an extra item-count
+        // slot for seamless slices). Both must agree or a later free would
+        // compute the wrong allocation pointer.
+        const ptr_width = target_usize.size();
+        const in_alignment: u32 = @intCast(in_item.alignment(target_usize).toByteUnits());
+        const out_alignment: u32 = @intCast(out_item.alignment(target_usize).toByteUnits());
+        if (@max(ptr_width, in_alignment) != @max(ptr_width, out_alignment)) return false;
+        return self.layoutContainsRefcounted(in_item) == self.layoutContainsRefcounted(out_item);
     }
 
     /// Whether a list's item layout occupies at most `bound` bytes, decided
@@ -2644,7 +2642,8 @@ pub const Store = struct {
                 .opaque_ptr => target_usize.size(),
                 .vector => 16,
             },
-            .box, .box_of_zst, .erased_box, .erased_callable, .ptr => target_usize.size(),
+            // A dynamic local holds the address of its bytes.
+            .box, .box_of_zst, .erased_callable, .ptr, .dynamic => target_usize.size(),
             .list, .list_of_zst => builtins.list.RocList.word_count * target_usize.size(),
             .struct_ => self.getStructData(layout.getStruct().idx).size.get(target_usize),
             // A closure's captures follow its header, aligned; captures
@@ -2681,48 +2680,45 @@ pub const Store = struct {
         const offsets = &self.scratch_field_offsets;
         offsets.clearRetainingCapacity();
         try offsets.ensureTotalCapacity(self.allocator, fields.len);
-        var ends = layout_mod.WidthValues(u32).both(0, 0);
-        var max_alignments = layout_mod.WidthValues(u32).both(1, 1);
-        var sort_key: layout_mod.SortKey = .align_1;
+        var measures: [2]layout_shape.StructMeasure = .{ .{}, .{} };
         for (fields) |field| {
             const field_layout = self.getLayout(field.layout);
-            if (!field.is_padding) sort_key = sort_key.max(field_layout.sortKey());
+            const sort_key = field_layout.sortKey();
             var field_offsets: layout_mod.WidthValues(u32) = undefined;
             inline for (.{ target.TargetUsize.u32, target.TargetUsize.u64 }) |target_usize| {
                 const width = @backingInt(target_usize);
                 const size_align = self.layoutSizeAlignAt(field_layout, target_usize);
-                const field_align = structFieldAlignmentBytes(field, size_align);
-                max_alignments.per_target[width] = @max(max_alignments.per_target[width], field_align);
-                const offset = std.mem.alignForward(u32, ends.per_target[width], field_align);
-                field_offsets.per_target[width] = offset;
-                ends.per_target[width] = offset + size_align.size;
+                field_offsets.per_target[width] = measures[width].place(.{
+                    .size = size_align.size,
+                    .alignment = @intCast(size_align.alignment.toByteUnits()),
+                    .sort_key = sort_key,
+                    .is_padding = field.is_padding,
+                });
             }
             offsets.appendAssumeCapacity(field_offsets);
         }
+        const m32 = measures[@backingInt(target.TargetUsize.u32)].finish();
+        const m64 = measures[@backingInt(target.TargetUsize.u64)].finish();
         return .{
-            .sizes = layout_mod.WidthValues(u32).both(
-                std.mem.alignForward(u32, ends.get(.u32), max_alignments.get(.u32)),
-                std.mem.alignForward(u32, ends.get(.u64), max_alignments.get(.u64)),
-            ),
-            .sort_key = sort_key,
+            .sizes = layout_mod.WidthValues(u32).both(m32.size, m64.size),
+            .sort_key = m64.sort_key,
         };
     }
 
     /// A tag union's total size and discriminant offset for one target.
     const TagUnionMetrics = struct { size: u32, discriminant_offset: u32 };
     fn tagUnionMetricsAt(self: *const Self, variant_layouts: []const Idx, discriminant_size: u8, target_usize: target.TargetUsize) TagUnionMetrics {
-        var max_payload_size: u32 = 0;
-        var max_payload_alignment: u32 = 1;
+        var measure = layout_shape.TagUnionMeasure.init(discriminant_size);
         for (variant_layouts) |variant_idx| {
             const variant_layout = self.getLayout(variant_idx);
-            max_payload_size = @max(max_payload_size, self.sizeAt(variant_layout, target_usize));
-            max_payload_alignment = @max(max_payload_alignment, @as(u32, @intCast(variant_layout.alignment(target_usize).toByteUnits())));
+            measure.addPayload(.{
+                .size = self.sizeAt(variant_layout, target_usize),
+                .alignment = @intCast(variant_layout.alignment(target_usize).toByteUnits()),
+                .sort_key = variant_layout.sortKey(),
+            });
         }
-        const disc_align: u32 = @intCast(TagUnionData.alignmentForDiscriminantSize(discriminant_size).toByteUnits());
-        const disc_offset: u32 = @intCast(std.mem.alignForward(u32, max_payload_size, disc_align));
-        const tu_align = @max(max_payload_alignment, disc_align);
-        const total_size: u32 = @intCast(std.mem.alignForward(u32, disc_offset + discriminant_size, tu_align));
-        return .{ .size = total_size, .discriminant_offset = disc_offset };
+        const metrics = measure.finish();
+        return .{ .size = metrics.size, .discriminant_offset = metrics.discriminant_offset };
     }
 
     /// Get the size in bytes of a layout, given the store's target usize.
@@ -2733,7 +2729,7 @@ pub const Store = struct {
     /// The alignment class of a tag union from its variant payloads and
     /// discriminant size. Used at commit time.
     fn tagUnionVariantsSortKey(self: *const Self, variant_layouts: []const Idx, discriminant_size: u8) layout_mod.SortKey {
-        var key = layout_mod.SortKey.fromAlignBytes(TagUnionData.alignmentForDiscriminantSize(discriminant_size).toByteUnits());
+        var key = layout_shape.discriminantSortKey(discriminant_size);
         for (variant_layouts) |variant_idx| {
             key = key.max(self.getLayout(variant_idx).sortKey());
         }
@@ -2763,13 +2759,16 @@ pub const Store = struct {
     pub fn layoutContainsRefcounted(self: *const Self, l: Layout) bool {
         return switch (l.tag) {
             .scalar => l.getScalar().tag == .str,
-            .list, .list_of_zst, .box, .erased_box, .erased_callable => true,
+            .list, .list_of_zst, .box, .erased_callable => true,
             // Compiler-internal pointers are never refcounted (TRMC holes); this is
             // what keeps ARC from tracking hole/head locals.
             .ptr, .box_of_zst => false,
             .zst => false,
             // A hole stands for an element no procedure body touches.
             .hole => false,
+            // A dynamic local is one opaque owned unit: its descriptor decides
+            // at runtime whether anything in it is refcounted.
+            .dynamic => true,
             .struct_ => self.getStructData(l.getStruct().idx).contains_refcounted,
             .tag_union => self.getTagUnionData(l.getTagUnion().idx).contains_refcounted,
             .closure => blk: {
@@ -3253,7 +3252,7 @@ test "layout store records explicit resolved list layout facts for boxed lists" 
     try testing.expectEqual(@as(?Idx, null), store.resolvedListLayoutIdx(.u8));
 }
 
-test "ZST containers and erased boxes have distinct RC semantics" {
+test "ZST containers have distinct RC semantics" {
     const testing = std.testing;
 
     var store = try Store.init(testing.allocator, .u64);
@@ -3261,14 +3260,10 @@ test "ZST containers and erased boxes have distinct RC semantics" {
 
     const list_zst_idx = try store.insertLayout(Layout.listOfZst());
     const box_zst_idx = try store.insertLayout(Layout.boxOfZst());
-    const erased_box_idx = try store.insertErasedBox();
-    const list_erased_box_idx = try store.insertList(erased_box_idx);
 
     try testing.expect(!store.layoutContainsRefcounted(store.getLayout(.zst)));
     try testing.expect(store.layoutContainsRefcounted(store.getLayout(list_zst_idx)));
     try testing.expect(!store.layoutContainsRefcounted(store.getLayout(box_zst_idx)));
-    try testing.expect(store.layoutContainsRefcounted(store.getLayout(erased_box_idx)));
-    try testing.expectEqual(store.targetUsize().size(), store.layoutSize(store.getLayout(erased_box_idx)));
 
     const list_abi = store.builtinListAbi(list_zst_idx);
     try testing.expectEqual(@as(?Idx, null), list_abi.elem_layout_idx);
@@ -3279,15 +3274,6 @@ test "ZST containers and erased boxes have distinct RC semantics" {
     try testing.expectEqual(@as(?Idx, null), box_abi.elem_layout_idx);
     try testing.expectEqual(@as(u32, 0), box_abi.elem_size);
     try testing.expect(!box_abi.contains_refcounted);
-
-    const list_erased_box_abi = store.builtinListAbi(list_erased_box_idx);
-    try testing.expectEqual(erased_box_idx, list_erased_box_abi.elem_layout_idx.?);
-    try testing.expectEqual(store.targetUsize().size(), list_erased_box_abi.elem_size);
-    try testing.expectEqual(
-        @as(u32, @intCast(store.targetUsize().alignment().toByteUnits())),
-        list_erased_box_abi.elem_alignment,
-    );
-    try testing.expect(list_erased_box_abi.contains_refcounted);
 
     try testing.expectEqual(
         rc_helper.Plan.noop,

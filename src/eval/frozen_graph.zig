@@ -145,26 +145,6 @@ pub fn Graph(comptime AllocationKey: type) type {
             return .{ .dest = dest, .fresh = true };
         }
 
-        /// A new node holding the closed Boxy descriptor `id`. Descriptors
-        /// are pointer-free image rows whose child references remain IDs in
-        /// the program's immutable sidecar, exactly as in LirImage.
-        pub fn frozenDescriptor(self: *Self, id: Program.BoxyTypeDescId) Allocator.Error!Destination {
-            const descriptor = &self.program.boxy_type_descs.items[@backingInt(id)];
-            if (descriptor.closure != .closed) invariant("frozen descriptor recipe retained runtime context");
-            const dest = Destination{ .symbol = try self.addChildNode(@sizeOf(Program.BoxyTypeDesc), @alignOf(Program.BoxyTypeDesc)) };
-            @memcpy(self.bytes(dest, @sizeOf(Program.BoxyTypeDesc)), std.mem.asBytes(descriptor));
-            return dest;
-        }
-
-        /// A new node holding the closed Boxy dictionary `id`.
-        pub fn frozenDictionary(self: *Self, id: Program.BoxyDictId) Allocator.Error!Destination {
-            const dict = self.program.boxy_dicts.items[@backingInt(id)];
-            if (dict.template) invariant("frozen dictionary retained a runtime template");
-            const dest = Destination{ .symbol = try self.addChildNode(@sizeOf(Program.BoxyDict), @alignOf(Program.BoxyDict)) };
-            @memcpy(self.bytes(dest, @sizeOf(Program.BoxyDict)), std.mem.asBytes(&dict));
-            return dest;
-        }
-
         /// Hand the graph to exports owned by `output`: each export takes
         /// its node's name and bytes. The first export is the requested slot.
         pub fn finish(self: *Self) Allocator.Error![]static_data.StaticDataExport {
@@ -215,17 +195,6 @@ pub fn Graph(comptime AllocationKey: type) type {
             return exports;
         }
     };
-}
-
-/// The field layout and offset of Boxy capture `slot` inside capture layout `idx`.
-pub fn boxyCaptureLocation(program: *const Program.Result, idx: layout.Idx, slot: u32) struct { idx: layout.Idx, offset: usize } {
-    const physical = program.layouts.getLayout(idx);
-    if (physical.tag == .struct_) return .{
-        .idx = program.layouts.getStructFieldLayoutByOriginalIndex(physical.getStruct().idx, @intCast(slot)),
-        .offset = program.layouts.getStructFieldOffsetByOriginalIndex(physical.getStruct().idx, @intCast(slot)),
-    };
-    if (slot != 0) invariant("non-struct Boxy capture had multiple fields");
-    return .{ .idx = idx, .offset = 0 };
 }
 
 fn invariant(comptime message: []const u8) noreturn {

@@ -303,19 +303,6 @@ pub fn addProcGraph(
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -323,6 +310,7 @@ pub fn addProcGraph(
             .store_struct,
             .store_tag,
             .set_local,
+            .dyn,
             .debug,
             .expect,
             .expect_err,
@@ -375,19 +363,6 @@ pub fn addProcGraph(
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -395,6 +370,7 @@ pub fn addProcGraph(
             .store_struct,
             .store_tag,
             .set_local,
+            .dyn,
             .debug,
             .expect,
             .expect_err,
@@ -769,6 +745,136 @@ fn lastNodeOf(self: *const Self, block: Block) u32 {
     }
 }
 
+/// Validate proposed alias representatives against independent local lifetimes.
+/// The caller admits only equal-representation, single-definition aliases and
+/// sources with at most one definition. Cycles and snapshots live across their
+/// ultimate owner's definition keep independent storage. Unioning the accepted
+/// aliases' ranges then gives each owner its complete storage lifetime without
+/// solving the control-flow graph a second time.
+/// Set physical sizes and call `assignSlots` after this operation.
+pub fn solveAliasLifetimes(self: *Self, entry: u32) Allocator.Error!void {
+    var has_candidates = false;
+    for (self.values.items, 0..) |*value, i| {
+        has_candidates = has_candidates or value.representative != i;
+        // Even externally allocated parameters participate in the proof.
+        value.size = 1;
+    }
+    if (!has_candidates) return self.solveLifetimes();
+
+    const Alias = struct {
+        source: u32,
+        state: enum { pending, visiting, resolved },
+        start: usize = 0,
+        end: usize = 0,
+        definition: ?u32 = null,
+    };
+    const aliases = try self.allocator.alloc(Alias, self.values.items.len);
+    defer self.allocator.free(aliases);
+    for (self.values.items, 0..) |*v, i| {
+        aliases[i] = .{ .source = v.representative, .state = if (v.representative == i) .resolved else .pending };
+        v.representative = @intCast(i);
+    }
+    try self.solveLifetimes();
+    const accesses = self.sortedAccesses();
+    var begin: usize = 0;
+    while (begin < accesses.len) {
+        const value = accesses[begin].value;
+        var end = begin;
+        while (end < accesses.len and accesses[end].value == value) : (end += 1) {
+            if (accesses[end].write) aliases[value].definition = accesses[end].node;
+        }
+        aliases[value].start = begin;
+        aliases[value].end = end;
+        begin = end;
+    }
+    var work: std.ArrayList(u32) = .empty;
+    defer work.deinit(self.allocator);
+    var any_alias = false;
+    for (aliases, 0..) |*candidate, i| {
+        if (candidate.state != .pending) continue;
+        var cursor: u32 = @intCast(i);
+        while (aliases[cursor].state == .pending) {
+            aliases[cursor].state = .visiting;
+            try work.append(self.allocator, cursor);
+            cursor = aliases[cursor].source;
+        }
+        if (aliases[cursor].state == .visiting) {
+            // A cycle has no independently defined storage owner.
+            for (work.items) |index| aliases[index].state = .resolved;
+            work.clearRetainingCapacity();
+            continue;
+        }
+        while (work.pop()) |index| {
+            const alias = &aliases[index];
+            const owner = self.values.items[alias.source].representative;
+            const reads = accesses[alias.start..alias.end];
+            const crosses_definition = if (aliases[owner].definition) |definition|
+                self.liveIn(index, reads, definition)
+            else
+                false;
+            if (!self.liveIn(index, reads, entry) and !crosses_definition) {
+                self.values.items[index].representative = owner;
+                any_alias = true;
+            }
+            alias.state = .resolved;
+        }
+    }
+    if (!any_alias) return;
+
+    const OwnedRange = struct {
+        owner: u32,
+        range: Range,
+        fn less(_: void, a: @This(), b: @This()) bool {
+            if (a.owner != b.owner) return a.owner < b.owner;
+            return a.range.start < b.range.start;
+        }
+    };
+    const owned = try self.allocator.alloc(OwnedRange, self.ranges.items.len);
+    defer self.allocator.free(owned);
+    var count: usize = 0;
+    for (self.values.items) |v| {
+        for (self.ranges.items[v.range_start..][0..v.range_len]) |range| {
+            owned[count] = .{ .owner = v.representative, .range = range };
+            count += 1;
+        }
+    }
+    std.debug.assert(count == owned.len);
+    std.mem.sort(OwnedRange, owned, {}, OwnedRange.less);
+    self.ranges.clearRetainingCapacity();
+    for (self.values.items) |*v| {
+        v.range_start = 0;
+        v.range_len = 0;
+    }
+    for (owned) |item| {
+        const value = &self.values.items[item.owner];
+        if (value.range_len == 0) value.range_start = std.math.cast(u32, self.ranges.items.len) orelse return error.OutOfMemory;
+        if (value.range_len != 0 and item.range.start <= self.ranges.items[self.ranges.items.len - 1].end) {
+            const last = &self.ranges.items[self.ranges.items.len - 1];
+            last.end = @max(last.end, item.range.end);
+        } else {
+            // Coalescing cannot add more ranges than the independent solve.
+            self.ranges.appendAssumeCapacity(item.range);
+            value.range_len = std.math.add(u32, value.range_len, 1) catch return error.OutOfMemory;
+        }
+    }
+    // Keep the solved access inventory in the same storage domain as its
+    // ranges, so live-in and lifetime-boundary queries remain valid too.
+    self.resolveAliasAccesses();
+    std.mem.sort(Access, self.accesses.items, self, accessLess);
+}
+
+fn resolveAliasAccesses(self: *Self) void {
+    for (self.accesses.items) |*a| {
+        const root = self.representative(a.value);
+        if (root != a.value and a.write) {
+            // Defining an alias does not overwrite the representative's bytes.
+            a.write = false;
+            a.read = true;
+        }
+        a.value = root;
+    }
+}
+
 /// Solve exact read-before-write lifetimes and assign reusable physical slots.
 /// `size == 0` values have externally assigned storage or no represented bytes.
 pub fn solve(self: *Self) Allocator.Error!void {
@@ -792,15 +898,7 @@ pub fn solveLifetimes(self: *Self) Allocator.Error!void {
     for (self.nodes.items, 0..) |n, i| if (n.block == none) {
         try self.appendBlock(blocks, @intCast(i), &position);
     };
-    for (self.accesses.items) |*a| {
-        const root = self.representative(a.value);
-        if (root != a.value and a.write) {
-            // Defining an alias does not overwrite the representative's bytes.
-            a.write = false;
-            a.read = true;
-        }
-        a.value = root;
-    }
+    self.resolveAliasAccesses();
     var structure = try BlockStructure.init(self, blocks.items);
     defer structure.deinit(self.allocator);
     std.mem.sort(Access, self.accesses.items, self, accessLess);
@@ -1059,10 +1157,11 @@ fn valueLess(self: *Self, a: u32, b: u32) bool {
     const y = self.liveRanges(b)[0].start;
     return if (x == y) a < b else x < y;
 }
-fn assignSlots(self: *Self) Allocator.Error!void {
+/// Assign physical storage to the already solved nonzero-sized values.
+pub fn assignSlots(self: *Self) Allocator.Error!void {
     const order = &self.slot_order;
     order.clearRetainingCapacity();
-    for (self.values.items, 0..) |v, i| if (v.range_len != 0) {
+    for (self.values.items, 0..) |v, i| if (v.range_len != 0 and v.size != 0) {
         try order.append(self.allocator, @intCast(i));
     };
     std.mem.sort(u32, order.items, self, valueLess);
@@ -1429,4 +1528,77 @@ test "stack plan reuses lifetime holes without overwriting future reservations" 
 
 test "stack plan releases all storage on allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, checkLifetimeHoles, .{});
+}
+
+test "issue 12819 alias lifetimes preserve loop snapshots and extend owners through chains" {
+    const gpa = std.testing.allocator;
+    for ([_]bool{ false, true }) |read_previous| {
+        var plan = Self.init(gpa);
+        defer plan.deinit();
+        const owner = testLocal(0);
+        const alias = testLocal(1);
+        const chained = testLocal(2);
+        for (0..5) |_| _ = try plan.node();
+        for (0..4) |i| try plan.edge(@intCast(i), @intCast(i + 1));
+        try plan.edge(4, 0);
+        try plan.access(0, owner, false, true);
+        try plan.access(1, owner, true, false);
+        try plan.access(1, alias, false, true);
+        try plan.access(2, alias, true, false);
+        try plan.access(2, chained, false, true);
+        try plan.access(4, chained, true, false);
+        // A guarded read of the previous iteration's value cannot use the
+        // owner's refreshed bytes. No guard correlation is assumed here.
+        if (read_previous) try plan.access(0, chained, true, false);
+        plan.values.items[plan.localIndex(alias).?].representative = plan.localIndex(owner).?;
+        plan.values.items[plan.localIndex(chained).?].representative = plan.localIndex(alias).?;
+        try plan.solveAliasLifetimes(0);
+        try std.testing.expectEqual(plan.localIndex(owner).?, plan.representative(plan.localIndex(alias).?));
+        try std.testing.expectEqual(if (read_previous) plan.localIndex(chained).? else plan.localIndex(owner).?, plan.representative(plan.localIndex(chained).?));
+
+        // Independently solve the accepted storage mapping. Coalescing the
+        // original ranges must equal a fresh CFG solve of the aliased accesses.
+        var reference = Self.init(gpa);
+        defer reference.deinit();
+        for (plan.nodes.items) |_| _ = try reference.node();
+        for (plan.edges.items) |e| try reference.edge(e.from, e.to);
+        for (plan.values.items) |v| _ = try reference.local(v.local);
+        for (plan.accesses.items) |a| try reference.access(a.node, plan.values.items[a.value].local, a.read, a.write);
+        for (reference.values.items, plan.values.items) |*v, solved| {
+            v.representative = solved.representative;
+            v.size = 8;
+        }
+        try reference.solveLifetimes();
+        var expected_boundaries: std.ArrayList(Boundary) = .empty;
+        defer expected_boundaries.deinit(gpa);
+        var actual_boundaries: std.ArrayList(Boundary) = .empty;
+        defer actual_boundaries.deinit(gpa);
+        try reference.appendLifetimeBoundaries(0, &expected_boundaries);
+        try plan.appendLifetimeBoundaries(0, &actual_boundaries);
+        try std.testing.expectEqualSlices(Boundary, expected_boundaries.items, actual_boundaries.items);
+        for (plan.values.items, 0..) |v, i| {
+            try std.testing.expectEqualSlices(Range, reference.liveRanges(@intCast(i)), plan.liveRanges(@intCast(i)));
+            if (v.representative == i) plan.values.items[i].size = 8 else plan.values.items[i].size = 0;
+        }
+        try plan.assignSlots();
+        if (read_previous) try std.testing.expect(plan.values.items[0].slot != plan.values.items[2].slot);
+    }
+}
+
+test "issue 12819 cyclic alias proposals retain independent storage" {
+    var plan = Self.init(std.testing.allocator);
+    defer plan.deinit();
+    const first = try plan.node();
+    const second = try plan.node();
+    try plan.edge(first, second);
+    try plan.edge(second, first);
+    try plan.access(first, testLocal(0), true, false);
+    try plan.access(first, testLocal(1), false, true);
+    try plan.access(second, testLocal(1), true, false);
+    try plan.access(second, testLocal(0), false, true);
+    plan.values.items[0].representative = 1;
+    plan.values.items[1].representative = 0;
+    try plan.solveAliasLifetimes(first);
+    try std.testing.expectEqual(@as(u32, 0), plan.representative(0));
+    try std.testing.expectEqual(@as(u32, 1), plan.representative(1));
 }

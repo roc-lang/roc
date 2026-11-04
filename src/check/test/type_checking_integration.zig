@@ -1089,6 +1089,54 @@ test "check type - record - opt - destructure of optional field binds Try" {
     );
 }
 
+test "check type - record - opt - nested destructure of optional field binds Try" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record : { outer : { n ?: Str } }
+        \\my_record = { outer: {} }
+        \\
+        \\use_it = {
+        \\    { outer: { n } } = my_record
+        \\    n
+        \\}
+    ;
+    // A record pattern means the same thing nested as it does on its own:
+    // the inner pattern checks against the outer field's value, whose `n` is
+    // optional, so `n` binds `Try(Str, [MissingField])`.
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_it" } },
+        \\Try(Str, [MissingField])
+    );
+}
+
+test "check type - record - opt - nested destructure of optional field in a parameter binds Try" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\inner : { outer : { n ?: Str } } -> Try(Str, [MissingField])
+        \\inner = |{ outer: { n } }| n
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "inner" } },
+        \\{ outer: { n ?: Str } } -> Try(Str, [MissingField])
+    );
+}
+
+test "check type - record - opt - nested destructure of still-flex base pins required" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record = { outer: { n: "hi" } }
+        \\
+        \\use_it = {
+        \\    { outer: { n } } = my_record
+        \\    n
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_it" } },
+        \\Str
+    );
+}
+
 test "check type - record - opt - destructure of required sibling unchanged" {
     const source =
         \\main! = |_| {}
@@ -13739,12 +13787,125 @@ test "check type - self-recursive where-clause dispatch is rejected as recursive
     try test_env.assertOneTypeError("Recursive Dispatch");
 }
 
-test "check type - self-dispatch method over module receiver is rejected as recursive dispatch" {
+test "check type - dispatch - a chain accumulating constraints on a shared variable closes" {
+    // Each hop copies `n + 1`'s `plus` onto the same `n`. Those copies are
+    // separate relations, so the state repeats with `n` still unresolved.
+    var test_env = try TestEnv.init("Test",
+        \\Expr := [Leaf(U64), Next(Expr)].{
+        \\    count = |e, n| match e {
+        \\        Leaf(_) => n + 1
+        \\        Next(inner) => inner.count(n)
+        \\    }
+        \\}
+        \\
+        \\main : U64
+        \\main = Expr.Next(Expr.Leaf(3)).count(2)
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - dispatch - a repeated state over its ancestor's variables closes before they resolve" {
+    var test_env = try TestEnv.init("Test",
+        \\Expr := [Leaf(U64), Next(Expr)].{
+        \\    keep = |e, n| match e {
+        \\        Leaf(_) => n
+        \\        Next(inner) => inner.keep(n)
+        \\    }
+        \\}
+        \\
+        \\main = Expr.Next(Expr.Leaf(3)).keep(2)
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - dispatch - a repeated state over a quantified variable closes" {
+    var test_env = try TestEnv.init("Test",
+        \\Expr := [Leaf(U64), Next(Expr)].{
+        \\    keep = |e, n| match e {
+        \\        Leaf(_) => n
+        \\        Next(inner) => inner.keep(n)
+        \\    }
+        \\}
+        \\
+        \\generic = |x| Expr.Next(Expr.Leaf(3)).keep(x)
+        \\
+        \\a : U64
+        \\a = generic(1)
+        \\
+        \\b : Str
+        \\b = generic("b")
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - dispatch - mutually recursive methods accumulating constraints close" {
+    var test_env = try TestEnv.init("Test",
+        \\Expr := [Leaf(U64), Next(Expr)].{
+        \\    even = |e, n| match e {
+        \\        Leaf(_) => n + 1
+        \\        Next(inner) => inner.odd(n)
+        \\    }
+        \\    odd = |e, n| match e {
+        \\        Leaf(_) => n + 2
+        \\        Next(inner) => inner.even(n)
+        \\    }
+        \\}
+        \\
+        \\main : U64
+        \\main = Expr.Next(Expr.Leaf(3)).even(2)
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - dispatch - a state repeating only up to renaming waits for its variables" {
+    // Each hop's argument is a fresh result variable, which `step`'s own
+    // relation fixes once the call's argument is known. `m` also grows `n`'s
+    // constraints, so the state differs only by what the key leaves out.
+    var test_env = try TestEnv.init("Test",
+        \\Wrap := [W(U64)].{
+        \\    step = |w| w
+        \\}
+        \\
+        \\Expr := [Leaf(U64), Next(Expr)].{
+        \\    count = |e, n, m| match e {
+        \\        Leaf(_) => n + 1
+        \\        Next(inner) => inner.count(n, m.step())
+        \\    }
+        \\}
+        \\
+        \\main : U64
+        \\main = Expr.Next(Expr.Leaf(3)).count(2, Wrap.W(1))
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - dispatch - a state that grows every hop is still rejected" {
+    var test_env = try TestEnv.init("Test",
+        \\Expr := [Leaf(U64), Next(Expr)].{
+        \\    pump = |e, n| match e {
+        \\        Leaf(_) => 0.U64
+        \\        Next(inner) => inner.pump(Box.box(n))
+        \\    }
+        \\}
+        \\
+        \\main = Expr.Next(Expr.Leaf(3)).pump(1.U64)
+    );
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Recursive Dispatch");
+}
+
+test "check type - self-dispatch method over module receiver closes as recursion" {
     // The receiver is a module-level numeral pinned to `N` by annotation, and
     // the unannotated method re-dispatches the same method on it: satisfying
-    // the dispatch re-enters the same binding with an equal state, which the
-    // exact-repeat rule rejects. No self-edge ever enters the derivation
-    // graph on the way there.
+    // the dispatch re-enters the same binding with the same state, which
+    // closes as a recursive call. The method never returns, so its result is
+    // quantified, as `loop = |x| loop(x)`'s is. No self-edge ever enters the
+    // derivation graph on the way there.
     var test_env = try TestEnv.init("Test",
         \\n = 3
         \\N := [Val(I64)].{
@@ -13757,7 +13918,7 @@ test "check type - self-dispatch method over module receiver is rejected as recu
         \\main = N.Val(7).poke()
     );
     defer test_env.deinit();
-    try test_env.assertOneTypeError("Recursive Dispatch");
+    try test_env.assertNoErrors();
 }
 
 // Instantiation depth pin for the explicit-worklist graph copier

@@ -1839,11 +1839,10 @@ fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError!
 
     var static_strings = try eval.LirInterpreter.buildStaticStrings(allocator, &lowered.lir_result.store);
     defer static_strings.deinit();
-    var interpreter = try eval.LirInterpreter.initWithBoxyTables(
+    var interpreter = try eval.LirInterpreter.init(
         allocator,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
-        eval.LirInterpreter.BoxyTables.fromResult(&lowered.lir_result),
         static_strings.view(),
         runtime_env.get_ops(),
     );

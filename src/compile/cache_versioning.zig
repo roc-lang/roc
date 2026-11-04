@@ -34,9 +34,6 @@ pub const Entry = enum {
     /// One module's canonicalization output: an env body and the encoded
     /// parse-stage record.
     canonicalized_module,
-    /// One program root module's literal values: explicitly encoded tables
-    /// and a serialized `ConstStore`.
-    literal_values,
 };
 
 /// Layout fingerprint of `ModuleEnv.Serialized`.
@@ -49,9 +46,6 @@ const checked_envelope_version: u32 = 14;
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order.
 const canonicalized_envelope_version: u32 = 3;
-
-/// Version of the literal values file: its magic, header and table layout.
-const literal_values_version: u32 = 1;
 
 /// The running compiler's admission hash for `entry`.
 pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
@@ -75,13 +69,6 @@ pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
             "roc-canonicalized-module-entry-v1",
             &.{ canonicalized_envelope_version, canonicalized_cache_entry.format_version },
             &.{module_env_layout},
-        ),
-        // The literal values' const store has the checked module's
-        // `ConstStore` layout, which the artifact fingerprint covers.
-        .literal_values => compose(
-            "roc-literal-values-entry-v1",
-            &.{literal_values_version},
-            &.{CheckedModuleArtifact.SERIALIZED_VERSION_HASH},
         ),
     };
 }
@@ -134,7 +121,6 @@ test "every entry kind has a distinct admission hash" {
         entryVersionHash(.inference),
         entryVersionHash(.platform_pairing),
         entryVersionHash(.canonicalized_module),
-        entryVersionHash(.literal_values),
     };
     for (hashes, 0..) |a, i| {
         for (hashes[i + 1 ..]) |b| try std.testing.expect(!std.mem.eql(u8, &a, &b));
@@ -160,8 +146,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x5A, 0x7C, 0xED, 0xE8, 0x50, 0x9E, 0x1D, 0xCB, 0x20, 0x43, 0xA7, 0x8B, 0x93, 0xDB, 0xE0, 0x8C,
-        0x02, 0x58, 0x9C, 0x96, 0xF0, 0x0C, 0xC8, 0x30, 0xE1, 0x40, 0x29, 0x0E, 0xDE, 0xCE, 0x96, 0x14,
+        0xAD, 0xF3, 0x82, 0xDD, 0x8E, 0x95, 0xF7, 0x9B, 0x86, 0xC6, 0x05, 0x66, 0x33, 0x26, 0x2E, 0xB1,
+        0x78, 0x91, 0xE3, 0xD5, 0x5F, 0xF5, 0xAB, 0x6D, 0x07, 0x00, 0x8C, 0x88, 0x2C, 0x7D, 0x1E, 0x81,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }

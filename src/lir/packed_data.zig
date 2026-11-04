@@ -46,6 +46,7 @@ pub const Plan = struct {
             const value = layouts.getLayout(next.layout_idx);
             switch (value.tag) {
                 .hole => unreachable, // a hole sits only behind a List or Box, which a fixed product never holds
+                .dynamic => unreachable, // a dynamic value is never a component of a closed layout
                 .zst => {},
                 .scalar => {
                     switch (value.getScalar().tag) {
@@ -82,7 +83,7 @@ pub const Plan = struct {
                     try pending.ensureUnusedCapacity(self.allocator, fields.items.len);
                     for (fields.items) |field| pending.appendAssumeCapacity(.{ .layout_idx = field.layout_idx, .offset = offset + field.offset });
                 },
-                .box, .box_of_zst, .list, .list_of_zst, .closure, .tag_union, .ptr, .erased_box, .erased_callable => base.invariant("packed data invariant violated: fixed product holds a {s} layout", .{@tagName(value.tag)}),
+                .box, .box_of_zst, .list, .list_of_zst, .closure, .tag_union, .ptr, .erased_callable => base.invariant("packed data invariant violated: fixed product holds a {s} layout", .{@tagName(value.tag)}),
             }
         }
     }

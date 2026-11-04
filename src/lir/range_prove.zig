@@ -596,9 +596,9 @@ test "range prove folds a threaded Bool join site that wrote the parameter as a 
     try testing.expectEqual(one, chosen.ret.value);
 }
 
-// Lowering shares a value's consumer between a join declared for the result
-// and a path that writes the result and arrives at the consumer directly. A
-// literal written on that path says nothing about the join's own jump.
+// A loop's `break`s share the statement after the loop, so a join declared for
+// one `break`'s value and another `break` that writes the result both enter it.
+// A literal written on that path says nothing about the join's own jump.
 test "range prove keeps a join body's arms when another path arrives at it with a literal" {
     const testing = std.testing;
     var store = LirStore.init(testing.allocator);
@@ -696,8 +696,9 @@ test "range prove keeps a join body's arms when another path arrives at it with 
     try testing.expect(returns_zero);
 }
 
-// Lowering gives a value's consumer to every join declared for that result. A
-// literal one join's only jump writes says nothing about the other join's.
+// A loop's `break`s share the statement after the loop, so the joins declared
+// for two `break`s' values share a body. A literal one join's only jump writes
+// says nothing about the other join's.
 test "range prove keeps a body's arms when two joins share it" {
     const testing = std.testing;
     var store = LirStore.init(testing.allocator);
@@ -3011,24 +3012,12 @@ const Pass = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
                 .assign_tag,
                 .set_local,
+                .dyn,
                 .debug,
                 .expect,
                 .expect_err,
@@ -3191,19 +3180,6 @@ const Pass = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -3211,6 +3187,7 @@ const Pass = struct {
                 .store_struct,
                 .store_tag,
                 .set_local,
+                .dyn,
                 .debug,
                 .expect,
                 .expect_err,
@@ -3352,19 +3329,6 @@ const Pass = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -3372,6 +3336,7 @@ const Pass = struct {
                 .store_struct,
                 .store_tag,
                 .set_local,
+                .dyn,
                 .debug,
                 .expect,
                 .expect_err,
@@ -3509,19 +3474,6 @@ const Pass = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -3529,6 +3481,7 @@ const Pass = struct {
                 .store_struct,
                 .store_tag,
                 .set_local,
+                .dyn,
                 .debug,
                 .expect,
                 .expect_err,
@@ -5109,19 +5062,6 @@ const Pass = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -5129,6 +5069,7 @@ const Pass = struct {
                 .store_struct,
                 .store_tag,
                 .set_local,
+                .dyn,
                 .debug,
                 .expect,
                 .expect_err,
@@ -5161,19 +5102,6 @@ const Pass = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -5181,6 +5109,7 @@ const Pass = struct {
                 .store_struct,
                 .store_tag,
                 .set_local,
+                .dyn,
                 .debug,
                 .expect,
                 .expect_err,
@@ -5264,19 +5193,6 @@ const Pass = struct {
                     .assign_call,
                     .assign_call_erased,
                     .assign_packed_erased_fn,
-                    .assign_boxy_desc_ref,
-                    .assign_boxy_dict_ref,
-                    .assign_boxy_box,
-                    .assign_boxy_record_update,
-                    .assign_boxy_unbox,
-                    .assign_boxy_adapt,
-                    .assign_boxy_inspect,
-                    .assign_boxy_eq,
-                    .assign_boxy_hash,
-                    .assign_boxy_tag,
-                    .assign_boxy_tag_payload,
-                    .boxy_tag_match,
-                    .assign_call_dict,
                     .assign_low_level,
                     .assign_list,
                     .assign_struct,
@@ -5284,6 +5200,7 @@ const Pass = struct {
                     .store_struct,
                     .store_tag,
                     .set_local,
+                    .dyn,
                     .debug,
                     .expect,
                     .expect_err,
@@ -5538,18 +5455,6 @@ const Pass = struct {
                     .assign_call,
                     .assign_call_erased,
                     .assign_packed_erased_fn,
-                    .assign_boxy_desc_ref,
-                    .assign_boxy_dict_ref,
-                    .assign_boxy_box,
-                    .assign_boxy_record_update,
-                    .assign_boxy_unbox,
-                    .assign_boxy_adapt,
-                    .assign_boxy_inspect,
-                    .assign_boxy_eq,
-                    .assign_boxy_hash,
-                    .assign_boxy_tag,
-                    .assign_boxy_tag_payload,
-                    .assign_call_dict,
                     .assign_list,
                     => |s| {
                         try self.visited.put(current, {});
@@ -5564,6 +5469,11 @@ const Pass = struct {
                     inline .store_struct, .store_tag => |s| {
                         try self.visited.put(current, {});
                         try self.bindFresh(s.dest);
+                        current = s.next;
+                    },
+                    .dyn => |s| {
+                        try self.visited.put(current, {});
+                        if (s.target) |target| try self.bindFresh(target);
                         current = s.next;
                     },
                     inline .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
@@ -5586,7 +5496,7 @@ const Pass = struct {
                         try self.pushFrame(s.uninitialized_branch, null);
                         break :walk;
                     },
-                    inline .str_match, .boxy_tag_match => |s| {
+                    inline .str_match => |s| {
                         try self.visited.put(current, {});
                         try self.pushFrame(s.on_match, null);
                         try self.pushFrame(s.on_miss, null);
@@ -5785,7 +5695,7 @@ const Pass = struct {
         const known_len: ?u64 = switch (value) {
             .bytes_literal => |lit| lit.len,
             .static_data => list_len,
-            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
+            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .proc_ref => null,
         };
         if (known_len) |len| {
             const list_node = try self.unknownFor(self.localLayout(target));
@@ -5808,7 +5718,7 @@ const Pass = struct {
                 const lit = self.store.stmtRow(lit_id);
                 break :blk_lit if (lit.value >= 0) lit.value else null;
             },
-            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
+            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref => null,
         };
         if (literal) |v| {
             // A non-negative literal is the same number whatever its type,
@@ -5837,7 +5747,9 @@ const Pass = struct {
 
     fn modelLowLevel(self: *Pass, stmt: CFStmtId, s: anytype) ResourceError!void {
         const args = self.store.getLocalSpan(s.args);
-        const arg_count = GuardedList.borrowLen(args);
+        // An operation over a list of dynamic elements takes the element
+        // descriptor as a trailing argument after its value operands.
+        const arg_count = GuardedList.borrowLen(args) - @intFromBool(self.store.stmtRowOrDefault(s.extra).dyn_elem_desc);
 
         switch (s.op) {
             .simd_concat_shift_bytes => {
@@ -6158,6 +6070,7 @@ const Pass = struct {
             .list_map_can_reuse,
             .list_item_size_at_most,
             .list_map_extract_unsafe,
+            .list_move_out_unsafe,
             .dict_pseudo_seed,
             .hasher_finish,
             .hasher_write_bool,
@@ -7208,19 +7121,6 @@ const RangeProveCertify = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -7228,6 +7128,7 @@ const RangeProveCertify = struct {
                 .store_struct,
                 .store_tag,
                 .set_local,
+                .dyn,
                 .debug,
                 .expect,
                 .expect_err,

@@ -28,6 +28,8 @@ const Ident = base.Ident;
 
 /// Whether the graph checks that reads keep every existing class's root.
 const debug_reads = @import("builtin").mode == .debug;
+/// Debug builds prove every row extension chain finite as they flatten it.
+const check_row_chains_finite = @import("builtin").mode == .debug;
 
 /// A compile-time entry root qualified by the checked module that owns it.
 /// `ComptimeRootId`s are module-local, so a root that travels across template
@@ -2039,10 +2041,16 @@ const NodePairContext = struct {
 
 const NodePairSet = std.HashMap(NodePair, void, NodePairContext, std.hash_map.default_max_load_percentage);
 
+/// What one entry of the nominal backing table instantiates: a declaration's
+/// backing, or its unnamed field at `component - 1`, which recurses through its
+/// nominal as a backing does.
 const NominalBackingDeclaration = struct {
     module_bytes: [32]u8,
     declaration_id: u32,
+    component: u32 = backing_component,
 };
+
+const backing_component: u32 = 0;
 
 /// Exact iterator construction identity. Argument roots are maintained by
 /// union_, while declaration and callable evidence are producer-owned data.
@@ -2161,7 +2169,7 @@ const NominalBackingKeyHasher = struct {
     fn init(declaration: NominalBackingDeclaration, arity: usize) NominalBackingKeyHasher {
         const module_word = std.mem.readInt(u64, declaration.module_bytes[0..8], .little);
         const declaration_word = (@as(u64, declaration.declaration_id) << 32) | @as(u64, @as(u32, @truncate(arity)));
-        return .{ .state = mix(module_word ^ declaration_word) };
+        return .{ .state = mix(mix(module_word ^ declaration_word) ^ declaration.component) };
     }
 
     fn add(self: *NominalBackingKeyHasher, arg: NodeId) void {
@@ -2181,7 +2189,8 @@ const NominalBackingKeyHasher = struct {
 
 fn nominalBackingDeclarationsEqual(left: NominalBackingDeclaration, right: NominalBackingDeclaration) bool {
     return std.mem.eql(u8, left.module_bytes[0..], right.module_bytes[0..]) and
-        left.declaration_id == right.declaration_id;
+        left.declaration_id == right.declaration_id and
+        left.component == right.component;
 }
 
 /// The structural key stored in one nominal backing instance: its declaration
@@ -4099,13 +4108,47 @@ pub const InstGraph = struct {
         declaration_id: u32,
         args: []const NodeId,
     ) ?NodeId {
+        return self.nominalComponentNode(.{ .module_bytes = module_bytes, .declaration_id = declaration_id }, args);
+    }
+
+    pub fn putNominalBackingNode(
+        self: *InstGraph,
+        module_bytes: [32]u8,
+        declaration_id: u32,
+        args: []const NodeId,
+        node: NodeId,
+    ) Allocator.Error!void {
+        try self.putNominalComponentNode(.{ .module_bytes = module_bytes, .declaration_id = declaration_id }, args, node);
+    }
+
+    /// The instantiation of a declaration's unnamed field `padding_index` at
+    /// `args`, or its placeholder while that instantiation is underway.
+    pub fn nominalPaddingNode(
+        self: *InstGraph,
+        module_bytes: [32]u8,
+        declaration_id: u32,
+        padding_index: u32,
+        args: []const NodeId,
+    ) ?NodeId {
+        return self.nominalComponentNode(.{ .module_bytes = module_bytes, .declaration_id = declaration_id, .component = padding_index + 1 }, args);
+    }
+
+    pub fn putNominalPaddingNode(
+        self: *InstGraph,
+        module_bytes: [32]u8,
+        declaration_id: u32,
+        padding_index: u32,
+        args: []const NodeId,
+        node: NodeId,
+    ) Allocator.Error!void {
+        try self.putNominalComponentNode(.{ .module_bytes = module_bytes, .declaration_id = declaration_id, .component = padding_index + 1 }, args, node);
+    }
+
+    fn nominalComponentNode(self: *InstGraph, declaration: NominalBackingDeclaration, args: []const NodeId) ?NodeId {
         self.countDiagnostic("nominal_backing_lookups");
         const instance_id = self.nominal_backing_index.getAdapted(
             NominalBackingLookup{
-                .declaration = .{
-                    .module_bytes = module_bytes,
-                    .declaration_id = declaration_id,
-                },
+                .declaration = declaration,
                 .args = args,
             },
             NominalBackingLookupContext{ .graph = self },
@@ -4116,18 +4159,8 @@ pub const InstGraph = struct {
         return instance.node;
     }
 
-    pub fn putNominalBackingNode(
-        self: *InstGraph,
-        module_bytes: [32]u8,
-        declaration_id: u32,
-        args: []const NodeId,
-        node: NodeId,
-    ) Allocator.Error!void {
+    fn putNominalComponentNode(self: *InstGraph, declaration: NominalBackingDeclaration, args: []const NodeId, node: NodeId) Allocator.Error!void {
         self.requireRelationProduction();
-        const declaration = NominalBackingDeclaration{
-            .module_bytes = module_bytes,
-            .declaration_id = declaration_id,
-        };
         const stored_args = try self.arena().alloc(NodeId, args.len);
         for (stored_args, args) |*stored, arg| {
             stored.* = self.find(arg);
@@ -5340,17 +5373,19 @@ pub const InstGraph = struct {
         defer self.node_set_pool.release(&seen);
         var current = self.find(raw_root);
         while (true) {
-            // A row is recorded as it is left, so reaching one again is a
-            // cyclic chain.
             switch (try self.rootContent(current)) {
                 .tag_union => |row| {
                     if (kind != .tag_union) return false;
-                    if ((try seen.getOrPut(current)).found_existing) return false;
+                    if (check_row_chains_finite and (try seen.getOrPut(current)).found_existing) {
+                        Common.invariant("instantiation tag row has a cyclic extension chain");
+                    }
                     current = self.find(row.ext);
                 },
                 .record => |row| {
                     if (kind != .record) return false;
-                    if ((try seen.getOrPut(current)).found_existing) return false;
+                    if (check_row_chains_finite and (try seen.getOrPut(current)).found_existing) {
+                        Common.invariant("instantiation record row has a cyclic extension chain");
+                    }
                     current = self.find(row.ext);
                 },
                 .empty_tag_union => return kind == .tag_union,
@@ -7927,14 +7962,18 @@ pub const InstGraph = struct {
                 {
                     Common.invariant("instantiation unified a non-absorbable record with an empty record");
                 }
-                try self.unify(flat.ext, empty);
                 if (flat.fields.len == 0) {
+                    try self.unify(flat.ext, empty);
                     try self.setContent(row, .empty_record);
                     try self.union_(empty, row);
                 } else {
                     // The empty construction adopts the explicit optional or
                     // defaulted slots; its lowering materializes Missing tags
-                    // or defaults from the now-shared record class.
+                    // or defaults from the now-shared record class. That class
+                    // becomes the record, so the record closes at its own tail.
+                    const tail = try self.newNode(.empty_record);
+                    if (self.find(flat.ext) != self.find(empty)) try self.unify(flat.ext, tail);
+                    try self.setContent(row, .{ .record = .{ .fields = flat.fields, .ext = tail } });
                     try self.union_(row, empty);
                 }
             },
@@ -8012,17 +8051,12 @@ pub const InstGraph = struct {
 
         var seen = self.node_set_pool.acquire();
         defer self.node_set_pool.release(&seen);
-        try seen.put(root, {});
+        if (check_row_chains_finite) try seen.put(root, {});
 
         while (true) {
-            if (seen.contains(ext)) {
-                // A cyclic extension chain contributes no further tags—every
-                // tag on the cycle is already collected—but the row remains
-                // extensible, so the chain terminates open.
-                ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
-                break;
+            if (check_row_chains_finite and (try seen.getOrPut(ext)).found_existing) {
+                Common.invariant("instantiation tag row has a cyclic extension chain");
             }
-            try seen.put(ext, {});
             switch (try self.rootContent(ext)) {
                 .tag_union => |tail| {
                     try tags.appendSlice(self.allocator, tail.tags);
@@ -8088,17 +8122,12 @@ pub const InstGraph = struct {
 
         var seen = self.node_set_pool.acquire();
         defer self.node_set_pool.release(&seen);
-        try seen.put(root, {});
+        if (check_row_chains_finite) try seen.put(root, {});
 
         while (true) {
-            if (seen.contains(ext)) {
-                // A cyclic extension chain contributes no further fields—
-                // every field on the cycle is already collected—but the row
-                // remains extensible, so the chain terminates open.
-                ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
-                break;
+            if (check_row_chains_finite and (try seen.getOrPut(ext)).found_existing) {
+                Common.invariant("instantiation record row has a cyclic extension chain");
             }
-            try seen.put(ext, {});
             switch (try self.rootContent(ext)) {
                 .record => |tail| {
                     try fields.appendSlice(row_allocator, tail.fields);
@@ -11123,21 +11152,6 @@ test "open function interface shape includes producer-owned graph evidence" {
     try std.testing.expect(!std.mem.eql(u8, private_left_shape.bytes, private_right_shape.bytes));
 }
 
-test "cyclic row extension is not a resolved graph type" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const row = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-    try graph.setContent(row, .{ .tag_union = .{ .tags = &.{}, .ext = row } });
-    try std.testing.expect(!try graph.typeIsResolved(row));
-}
-
 fn assertNoNodeId(comptime T: type, comptime path: []const u8) void {
     if (T == NodeId) @compileError(path ++ " exposes instantiation graph NodeId");
     if (T == MaybeNodeId) @compileError(path ++ " exposes instantiation graph MaybeNodeId");
@@ -12417,6 +12431,24 @@ test "construction row relation absorbs only explicit optional or defaulted fiel
     const absorbed_empty = try graph.flattenRecordRow(empty);
     try std.testing.expectEqual(@as(usize, 1), absorbed_empty.fields.len);
     try std.testing.expectEqual(b, absorbed_empty.fields[0].name);
+    try std.testing.expectEqual(InstNode.empty_record, try graph.content(absorbed_empty.ext));
+
+    const open_tail = try graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
+    const open_optional = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &right_only),
+        .ext = open_tail,
+    } });
+    try graph.unifyConstruction(try graph.newNode(.empty_record), open_optional);
+    try std.testing.expectEqual(InstNode.empty_record, try graph.content(open_tail));
+
+    const shared_tail = try graph.newNode(.empty_record);
+    const shared_optional = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &right_only),
+        .ext = shared_tail,
+    } });
+    try graph.unifyConstruction(shared_tail, shared_optional);
+    const absorbed_shared = try graph.flattenRecordRow(shared_optional);
+    try std.testing.expectEqual(InstNode.empty_record, try graph.content(absorbed_shared.ext));
 }
 
 test "independent closed tag-row imports have distinct solver nodes" {
@@ -13950,14 +13982,26 @@ test "nominal backing index rekeys root tuples and merges collisions" {
     const empty_backing = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
     try graph.putNominalBackingNode(module_bytes, 3, &.{}, empty_backing);
     try std.testing.expectEqual(empty_backing, graph.nominalBackingNode(module_bytes, 3, &.{}).?);
+
+    // Each unnamed field of a declaration has an entry of its own, beside its
+    // backing's and at its arguments.
+    try std.testing.expect(graph.nominalPaddingNode(module_bytes, 3, 0, &.{}) == null);
+    const first_padding = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const second_padding = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    try graph.putNominalPaddingNode(module_bytes, 3, 0, &.{}, first_padding);
+    try graph.putNominalPaddingNode(module_bytes, 3, 1, &.{}, second_padding);
+    try std.testing.expectEqual(first_padding, graph.nominalPaddingNode(module_bytes, 3, 0, &.{}).?);
+    try std.testing.expectEqual(second_padding, graph.nominalPaddingNode(module_bytes, 3, 1, &.{}).?);
+    try std.testing.expectEqual(empty_backing, graph.nominalBackingNode(module_bytes, 3, &.{}).?);
+    try std.testing.expect(graph.nominalPaddingNode(module_bytes, 3, 0, &.{a}) == null);
     try expectNominalBackingIndexConsistent(graph);
 
     var active_instances: usize = 0;
     for (graph.nominal_backing_instances.items) |instance| {
         if (instance.active) active_instances += 1;
     }
-    try std.testing.expectEqual(@as(usize, 3), active_instances);
-    try std.testing.expectEqual(@as(u32, 3), graph.nominal_backing_index.count());
+    try std.testing.expectEqual(@as(usize, 5), active_instances);
+    try std.testing.expectEqual(@as(u32, 5), graph.nominal_backing_index.count());
 }
 
 test "related named instances reuse exact backing witnesses" {

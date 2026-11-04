@@ -35,7 +35,6 @@ pub const suites = [_]Suite{
     .{ .suffix = "build-helpers", .coverage = .minici },
     .{ .suffix = "backend-llvm", .coverage = .minici },
     .{ .suffix = "rc-conformance", .coverage = .minici },
-    .{ .suffix = "boxy-abi", .coverage = .minici },
     .{ .suffix = "cli-runner-unit", .coverage = .minici },
     .{ .suffix = "http-header-decoder-platform", .coverage = .minici },
     .{ .suffix = "json-decoder-platform", .coverage = .minici },

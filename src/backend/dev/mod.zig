@@ -13,10 +13,13 @@ const builtin = @import("builtin");
 pub const x86_64 = @import("x86_64/mod.zig");
 pub const aarch64 = @import("aarch64/mod.zig");
 pub const object = @import("object/mod.zig");
+/// The instruction sets the dev backend emits.
+pub const isa = @import("isa.zig");
 const relocation_mod = @import("Relocation.zig");
 pub const Relocation = relocation_mod.Relocation;
 pub const applyRelocations = relocation_mod.applyRelocations;
 pub const applyRelocationsWithContext = relocation_mod.applyRelocationsWithContext;
+pub const expect_site_base_symbol = relocation_mod.expect_site_base_symbol;
 pub const SymbolResolver = relocation_mod.SymbolResolver;
 pub const SymbolResolverContext = relocation_mod.SymbolResolverContext;
 pub const ValueStorage = @import("ValueStorage.zig");
@@ -42,22 +45,23 @@ pub const host_lir_codegen_available = LirCodeGenMod.host_lir_codegen_available;
 /// Supports cross-compilation to any RocTarget.
 /// Only available on non-freestanding targets (uses std.fs)
 pub const ObjectFileCompiler = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").ObjectFileCompiler;
+/// The source locations and failure meanings of an object's code.
+pub const CodeLocations = @import("CodeLocations.zig");
 /// Per-region machine-code excerpts and their reassembly.
 pub const CodeExcerpt = @import("CodeExcerpt.zig");
 /// Declared compatibility of relocatable native dev procedures.
-pub const NativeProcDomain = @import("NativeProcDomain.zig");
 /// Shared native procedure task driver and same-program retained excerpts.
 pub const NativeProcCompiler = @import("NativeProcCompiler.zig");
-/// An excerpt located in a loaded pack.
-pub const LocatedExcerpt = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").LocatedExcerpt;
-/// Where the object compiler splices object-cache procedures from.
-pub const SpliceSource = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").SpliceSource;
-/// Place object-cache entries into an open code generator.
-pub const spliceExternalProcs = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").spliceExternalProcs;
-/// Links object-cache entries spliced into the compile-time evaluator's image.
+/// Links native code and data in the compile-time evaluator's image.
 pub const HostSplice = if (builtin.os.tag == .freestanding) void else @import("HostSplice.zig").HostSplice;
 /// On-disk form of one module's pack of excerpts.
-pub const PackFile = @import("PackFile.zig");
+pub const UnitPieces = @import("UnitPieces.zig");
+/// One unit's machine code laid out for a fast dev link.
+pub const UnitImage = @import("UnitImage.zig");
+/// Loads a unit image into this process; only a Linux x86_64 host loads
+/// the x86_64 code unit images hold.
+pub const UnitImageLoader = if (builtin.os.tag == .linux and builtin.cpu.arch == .x86_64) @import("UnitImageLoader.zig") else void;
+pub const Composition = @import("Composition.zig");
 pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").Entrypoint;
 pub const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
 pub const StaticDataRelocation = @import("StaticDataExport.zig").StaticDataRelocation;

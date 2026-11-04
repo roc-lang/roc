@@ -248,14 +248,7 @@ const Pass = struct {
                 if (callee_index >= self.proc_returns.len) tagReachabilityInvariant("callee proc id exceeded proc table");
                 return try self.localInfoMut(s.target).mergeFrom(self.allocator, &self.proc_returns[callee_index]);
             },
-            .assign_call_erased => |inline_s| {
-                const s = self.store.stmtRow(inline_s.data);
-                var changed = self.localInfoMut(inline_s.target).markAll(self.allocator);
-                if (s.out_desc) |out_desc| {
-                    if (self.localInfoMut(out_desc).markAll(self.allocator)) changed = true;
-                }
-                return changed;
-            },
+            .assign_call_erased => |s| return self.localInfoMut(s.target).markAll(self.allocator),
             .assign_struct => |s| return try self.localInfoMut(s.target).addConstruction(self.allocator, stmt_id),
             .assign_tag => |s| {
                 const target = self.localInfoMut(s.target);
@@ -269,22 +262,10 @@ const Pass = struct {
             inline .init_uninitialized,
             .assign_literal,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             => |s| return self.localInfoMut(s.target).markAll(self.allocator),
-            .boxy_tag_match,
+            .dyn => |s| return if (s.target) |target| self.localInfoMut(target).markAll(self.allocator) else false,
             .store_struct,
             .store_tag,
             .debug,

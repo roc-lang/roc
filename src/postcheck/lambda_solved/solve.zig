@@ -23,10 +23,13 @@
 //!   order for a given member set, whatever order unification met it in.
 //! - Erasure comes from explicit boundaries: hosted and platform function
 //!   signatures, layout and runtime-schema requests (including constants the
-//!   const store materializes), box and unbox operations, and forced-dynamic
-//!   iterators. Debug builds re-walk every boundary after solving
-//!   (`verifyErasedBoundaries`) and require each callable it reaches to be
-//!   erased.
+//!   const store materializes), and forced-dynamic iterators. A `Box` is a
+//!   boundary by its type alone: every function a box holds is erased
+//!   (`eraseCallablesHeldByBoxes`), whether or not the program boxes a value
+//!   of that type, so a closed specialization key determines the solved types
+//!   of its procedure in every program. Debug builds re-walk every boundary
+//!   after solving (`verifyErasedBoundaries`) and require each callable it
+//!   reaches to be erased.
 //!
 //! Definitions are output in `FnId` order. No consumer reads them in
 //! dependency order: Lambda Mono and LIR lowering reach functions only through
@@ -49,7 +52,6 @@ const Type = @import("type.zig");
 const Allocator = std.mem.Allocator;
 const static_dispatch = check.StaticDispatchRegistry;
 const names = check.CheckedNames;
-const AnalysisCache = @import("analysis_cache.zig");
 
 const UninhabitedAnswer = struct {
     epoch: u64,
@@ -256,46 +258,21 @@ pub fn run(
     allocator: Allocator,
     lifted: Lifted.Program,
 ) Common.LowerError!Ast.Program {
-    return runWithCache(allocator, lifted, null);
-}
-
-/// The optional cache records only completed analysis, under the exact lifted
-/// input consumed by this solver. The current program remains the lowered IR.
-pub fn runWithCache(allocator: Allocator, lifted: Lifted.Program, cache: ?Common.InterfaceSummaryCache) Common.LowerError!Ast.Program {
     // `Ast.Program.init` cannot fail and takes ownership of `lifted`, so
     // `program.deinit()` is the only cleanup a later error needs.
     var program = Ast.Program.init(allocator, lifted);
     errdefer program.deinit();
 
-    const analysis_id = if (cache != null) try AnalysisCache.identity(allocator, program.lifted.view()) else null;
-    defer if (analysis_id) |id| id.deinit(allocator);
-    const key = if (analysis_id) |id| id.key else null;
-    if (diagnostics.isSet(.pack_trace)) AnalysisCache.traceIdentity(program.lifted.view());
-    var family: [32]u8 = undefined;
-    baseHash("roc.lambda-analysis-cache.v1", &family);
-    if (cache) |provider| {
-        if (try provider.load(provider.context, allocator, family, key.?)) |bytes| {
-            defer allocator.free(bytes);
-            if (try AnalysisCache.restore(allocator, &program.lifted, &analysis_id.?, bytes)) |restored| {
-                if (diagnostics.isSet(.lambda_solve_stats)) std.debug.print("lambda-analysis hit key={x} bytes={d}\n", .{ key.?, bytes.len });
-                // The empty annotation stores allocated by init own no storage;
-                // restore consumed its lifted input and owns the returned arena.
-                return restored;
-            }
-        }
-        if (diagnostics.isSet(.lambda_solve_stats)) std.debug.print("lambda-analysis miss key={x}\n", .{key.?});
-    }
-
-    var solver = try Solver.init(allocator, &program);
+    var row_joined = try findRowJoinedTypes(allocator, &program);
+    var solver = Solver.init(allocator, &program) catch |err| {
+        row_joined.deinit(allocator);
+        return err;
+    };
     defer solver.deinit();
+    solver.setRowJoined(row_joined);
     var counters: WorkCounters = .{};
     if (diagnostics.isSet(.lambda_solve_stats)) solver.counters = &counters;
     try solver.solve();
-    if (cache) |provider| if (try AnalysisCache.encode(allocator, &program, &analysis_id.?)) |bytes| {
-        defer allocator.free(bytes);
-        try provider.record(provider.context, family, key.?, bytes);
-        if (diagnostics.isSet(.lambda_solve_stats)) std.debug.print("lambda-analysis record key={x} bytes={d}\n", .{ key.?, bytes.len });
-    };
     if (diagnostics.isSet(.lambda_solve_stats)) {
         var buffer: [2048]u8 = undefined;
         var out = std.Io.Writer.fixed(&buffer);
@@ -312,10 +289,56 @@ pub fn runWithCache(allocator: Allocator, lifted: Lifted.Program, cache: ?Common
     return program;
 }
 
-fn baseHash(bytes: []const u8, out: *[32]u8) void {
-    var hash = @import("base").Sha256.init(.{});
-    hash.update(bytes);
-    out.* = hash.finalResult();
+/// The lifted Monotypes whose rows a row join can change (design.md "Row
+/// Joins"), closed over structurally equal Monotypes and over every type
+/// containing one. Every other callable-free type solves to its Monotype's
+/// own rows wherever it occurs, so one clone serves all of its occurrences.
+///
+/// An analysis solve finds them: it relates every body exactly as solving
+/// does, but with one clone for every callable-free Monotype, and records
+/// both sides of every unification whose two types were instantiated from
+/// different Monotypes. Sharing a clone only adds relations, so every pair
+/// of different Monotypes the real solve relates, the analysis relates too.
+fn findRowJoinedTypes(allocator: Allocator, program: *Ast.Program) Common.LowerError!std.DynamicBitSetUnmanaged {
+    var found = blk: {
+        var analysis = try Solver.init(allocator, program);
+        defer analysis.deinit();
+        analysis.join_sides = try std.DynamicBitSetUnmanaged.initEmpty(allocator, analysis.lifted.types.types.len);
+        try analysis.solveBodies();
+        var sides = analysis.join_sides.?;
+        analysis.join_sides = null;
+        // Only a row can change under a join; a row-free type is one clone
+        // wherever it occurs whatever it meets.
+        sides.setIntersection(analysis.contains_tag_row);
+        break :blk sides;
+    };
+    errdefer found.deinit(allocator);
+    program.resetSolution();
+
+    const lifted_types = &program.lifted.types;
+    const view = lifted_types.view();
+    var rows = try computeReachabilityMasks(allocator, view);
+    defer rows.deinit(allocator);
+
+    // A structurally equal Monotype under another id is the same type to
+    // unification, so it joins exactly where this one does.
+    var joined_digests = std.AutoHashMap(names.TypeDigest, void).init(allocator);
+    defer joined_digests.deinit();
+    var joined = found.iterator(.{});
+    while (joined.next()) |index| {
+        try joined_digests.put(lifted_types.equalityDigest(&program.lifted.names, @fromBackingInt(@intCast(index))), {});
+    }
+    var row_types = rows.contains_tag_row.iterator(.{});
+    while (row_types.next()) |index| {
+        if (found.isSet(index)) continue;
+        if (joined_digests.contains(lifted_types.equalityDigest(&program.lifted.names, @fromBackingInt(@intCast(index))))) found.set(index);
+    }
+
+    // One clone of a container is one clone of everything inside it.
+    var parents = try ParentIndex.build(allocator, view);
+    defer parents.deinit(allocator);
+    try parents.markAncestors(allocator, &found);
+    return found;
 }
 
 const Solver = struct {
@@ -348,9 +371,6 @@ const Solver = struct {
     loop_params: std.ArrayList(Type.Span),
     join_points: std.ArrayList(ActiveJoinPoint),
     return_contexts: std.ArrayList(ReturnContext),
-    /// Debug builds only: the operand types of every box and unbox
-    /// operation, which `verifyErasedBoundaries` re-walks after solving.
-    box_boundaries: std.ArrayList(Type.TypeVarId),
     /// Child types gathered for one expression's low-level binding; a use
     /// keeps its own suffix, from the length it found to the end.
     span_scratch: std.ArrayList(Type.TypeVarId) = .empty,
@@ -368,10 +388,18 @@ const Solver = struct {
     contains_forced_dynamic: std.DynamicBitSetUnmanaged,
     /// Per lifted Monotype: whether a structural tag union is reachable from
     /// it. Rows join where values flow (design.md "Row Joins"), so a clone of
-    /// such a type is mutable state of the uses it was made for, and every use
-    /// materializes its own; sharing one clone would join every row of that
-    /// Monotype across the program by type identity rather than by flow.
+    /// such a type whose rows a join can change (`row_joined`) is mutable
+    /// state of the uses it was made for, and every use materializes its own;
+    /// sharing one clone would join every row of that Monotype across the
+    /// program by type identity rather than by flow.
     contains_tag_row: std.DynamicBitSetUnmanaged,
+    /// Per lifted Monotype: whether a row join can change a row reachable
+    /// from it (`findRowJoinedTypes`). A callable-free type holding a tag row
+    /// is clone-invariant exactly when no row join can change it.
+    row_joined: std.DynamicBitSetUnmanaged,
+    /// Set only for the analysis solve of `findRowJoinedTypes`: the
+    /// Monotypes a unification related to a different Monotype.
+    join_sides: ?std.DynamicBitSetUnmanaged = null,
     /// Finalization's clone of each lifted Monotype, shared by every
     /// untouched leaf of it.
     shared_clones: collections.DenseMap(MonoType.TypeId, Type.TypeVarId),
@@ -481,57 +509,6 @@ const Solver = struct {
         ret: Type.TypeVarId,
     };
 
-    const BoundLowLevel = enum {
-        box_box,
-        box_unbox,
-        list_get_unsafe,
-        list_append_unsafe,
-        list_concat,
-        list_reserve,
-        list_reserve_for_append,
-        list_drop_at,
-        list_sublist,
-        list_take_first,
-        list_take_last,
-        list_release_excess_capacity,
-        list_clear,
-        list_reverse,
-        list_set,
-        list_replace_unsafe,
-        list_swap,
-        list_prepend,
-        list_map_prepare_reuse,
-        list_prefetched,
-        list_map_can_reuse,
-        list_map_write_unsafe,
-        dict_pseudo_seed,
-        hasher_finish,
-        crypto_sha256_hash_bytes,
-        crypto_sha256_hasher_finish,
-        crypto_blake3_hash_bytes,
-        crypto_blake3_hasher_finish,
-        crypto_sha256_hasher_empty,
-        crypto_blake3_hasher_empty,
-        crypto_sha256_hasher_write,
-        crypto_blake3_hasher_write,
-        hasher_write_bool,
-        hasher_write_u8,
-        hasher_write_u16,
-        hasher_write_u32,
-        hasher_write_u64,
-        hasher_write_u128,
-        hasher_write_i8,
-        hasher_write_i16,
-        hasher_write_i32,
-        hasher_write_i64,
-        hasher_write_i128,
-        hasher_write_f32,
-        hasher_write_f64,
-        hasher_write_dec,
-        hasher_write_bytes,
-        hasher_write_str,
-    };
-
     const ReturnContext = struct {
         mono_ret: MonoType.TypeId,
         solved_ret: Type.TypeVarId,
@@ -566,6 +543,8 @@ const Solver = struct {
         var masks = try computeReachabilityMasks(allocator, lifted.types);
         errdefer masks.deinit(allocator);
 
+        const row_joined = try std.DynamicBitSetUnmanaged.initEmpty(allocator, lifted.types.types.len);
+
         return .{
             .allocator = allocator,
             .program = program,
@@ -580,13 +559,13 @@ const Solver = struct {
             .loop_params = .empty,
             .join_points = .empty,
             .return_contexts = .empty,
-            .box_boundaries = .empty,
             .active_unifications = .{},
             .unify_stack = .empty,
             .active_private_evidence_relations = .{},
             .contains_callable = masks.contains_callable,
             .contains_forced_dynamic = masks.contains_forced_dynamic,
             .contains_tag_row = masks.contains_tag_row,
+            .row_joined = row_joined,
             .shared_clones = collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(allocator),
             .leaf_origins = collections.DenseMap(Type.TypeVarId, MonoType.TypeId).init(allocator),
             .leaf_contexts = .empty,
@@ -658,6 +637,8 @@ const Solver = struct {
         self.reaches_cycle.deinit(self.allocator);
         self.shared_clones.deinit();
         self.leaf_origins.deinit();
+        if (self.join_sides) |*sides| sides.deinit(self.allocator);
+        self.row_joined.deinit(self.allocator);
         self.contains_tag_row.deinit(self.allocator);
         self.contains_forced_dynamic.deinit(self.allocator);
         self.contains_callable.deinit(self.allocator);
@@ -666,7 +647,6 @@ const Solver = struct {
         self.unify_stack.deinit(self.allocator);
         self.active_unifications.deinit(self.allocator);
         self.return_contexts.deinit(self.allocator);
-        self.box_boundaries.deinit(self.allocator);
         self.span_scratch.deinit(self.allocator);
         self.join_points.deinit(self.allocator);
         self.loop_params.deinit(self.allocator);
@@ -679,7 +659,19 @@ const Solver = struct {
         self.allocator.free(self.local_tys);
     }
 
+    /// Take ownership of the Monotypes whose rows a row join can change.
+    fn setRowJoined(self: *Solver, row_joined: std.DynamicBitSetUnmanaged) void {
+        self.row_joined.deinit(self.allocator);
+        self.row_joined = row_joined;
+    }
+
     fn solve(self: *Solver) Allocator.Error!void {
+        try self.solveBodies();
+        try self.finishSolve();
+    }
+
+    /// Relate every function's signature and body.
+    fn solveBodies(self: *Solver) Allocator.Error!void {
         if (@import("builtin").mode == .debug) try self.verifyDistinctFnSymbols();
 
         for (self.lifted.locals, 0..) |local, index| {
@@ -707,7 +699,10 @@ const Solver = struct {
             const fn_id: Lifted.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             try self.solveFn(fn_id, fn_);
         }
+    }
 
+    /// Seed erasure boundaries, then output and finalize every solved type.
+    fn finishSolve(self: *Solver) Allocator.Error!void {
         try self.markAbiBoundaryCallables();
 
         try self.program.layout_requests.ensureTotalCapacity(self.allocator, self.lifted.layout_requests.len);
@@ -763,6 +758,7 @@ const Solver = struct {
         }
 
         try self.finalizeMonoLeaves();
+        try self.eraseCallablesHeldByBoxes();
         // After finalization so the materialized clones' callable slots close
         // exactly as their eager counterparts always did.
         try self.closeUnfilledCallableSlots();
@@ -844,7 +840,6 @@ const Solver = struct {
 
         for (self.program.layout_requests.items) |request| try pending.append(self.allocator, request.ty);
         for (self.program.runtime_schema_requests.items) |request| try pending.append(self.allocator, request.ty);
-        try pending.appendSlice(self.allocator, self.box_boundaries.items);
         for (self.lifted.fns, 0..) |fn_, index| {
             if (fn_.body == .hosted) try self.appendFunctionBoundary(self.program.fn_tys.items[index], &pending);
         }
@@ -856,6 +851,7 @@ const Solver = struct {
             const ty: Type.TypeVarId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             const content = self.program.types.get(ty);
             if (content == .named and content.named.def.iterator_representation == .forced_dynamic) try pending.append(self.allocator, ty);
+            if (content == .box) try pending.append(self.allocator, ty);
         }
 
         const types = &self.program.types;
@@ -1932,6 +1928,25 @@ const Solver = struct {
         }
     }
 
+    /// Erase every function any box holds, including a box whose type no
+    /// operation of this program touches and whose callable slots would
+    /// otherwise close as empty lambda sets. A specialization request whose
+    /// function types all sit inside a `Box` is closed, so its key must name
+    /// the same solved types in every program. One traversal covers every box:
+    /// marking a root twice changes nothing, and a callable-free leaf ends
+    /// the walk where it stands. Expanding a leaf appends fresh vars, so the
+    /// bound is re-read every iteration.
+    fn eraseCallablesHeldByBoxes(self: *Solver) Allocator.Error!void {
+        var visited = self.solved_set_pool.acquire();
+        defer self.solved_set_pool.release(&visited);
+        var index: usize = 0;
+        while (index < self.program.types.varCount()) : (index += 1) {
+            const ty: Type.TypeVarId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+            const content = self.program.types.get(ty);
+            if (std.meta.activeTag(content) == .box) try self.markErasedCallablesReachedByTypeInner(content.box, &visited);
+        }
+    }
+
     /// Marking a root erases every callable it reaches, and marking it again
     /// in the same traversal changes nothing, so each root is visited once.
     /// Types are visited in preorder on an explicit stack.
@@ -2071,10 +2086,17 @@ const Solver = struct {
     }
 
     /// Whether every clone of this Monotype solves identically: it is
-    /// callable-free and holds no tag row, so unification never changes it
-    /// and one shared clone serves every use.
+    /// callable-free and no row join can change a row it holds, so
+    /// unification never changes it and one shared clone serves every use.
     fn isCloneInvariant(self: *const Solver, ty: MonoType.TypeId) bool {
-        return self.isCallableFree(ty) and !self.contains_tag_row.isSet(@backingInt(ty));
+        const raw_id = @backingInt(ty);
+        return self.isCallableFree(ty) and (!self.contains_tag_row.isSet(raw_id) or !self.row_joined.isSet(raw_id));
+    }
+
+    /// A shared clone that holds a tag row: one var stands for every
+    /// occurrence, so it must only ever meet instances of its own Monotype.
+    fn isSharedRowClone(self: *const Solver, ty: MonoType.TypeId) bool {
+        return self.contains_tag_row.isSet(@backingInt(ty)) and self.isCloneInvariant(ty);
     }
 
     /// How the lazy leaves of one Monotype relate to each other.
@@ -2082,7 +2104,8 @@ const Solver = struct {
         /// Clone-invariant: one clone, in the shared context, serves every
         /// occurrence in the program.
         shared,
-        /// Callable-free, holding a tag row, and reaching no cycle: each
+        /// Callable-free, holding a tag row a row join can change, and
+        /// reaching no cycle: each
         /// occurrence is its own clone, in no context, and its own expansion
         /// opens a context of its own. Rows join where values flow (design.md
         /// "Row Joins"), and two occurrences of one Monotype are two positions
@@ -2182,9 +2205,10 @@ const Solver = struct {
 
     /// Replace every output-reachable lazy leaf with a link to a materialized
     /// clone so program views never observe one. A leaf that survived solving
-    /// was never unified: its clone's callable slots all close empty, and its
-    /// forced-dynamic marks depend only on its Monotype, so every untouched
-    /// leaf of one Monotype shares one clone, callable-bearing or not.
+    /// was never unified: its clone's callable slots are erased under a box
+    /// and otherwise close empty, and its forced-dynamic marks depend only on
+    /// its Monotype, so every untouched leaf of one Monotype shares one
+    /// clone, callable-bearing or not.
     fn finalizeMonoLeaves(self: *Solver) Allocator.Error!void {
         var visited = collections.DenseMap(Type.TypeVarId, void).init(self.allocator);
         defer visited.deinit();
@@ -2549,19 +2573,16 @@ const Solver = struct {
         expected: Type.TypeVarId,
         args: []const Type.TypeVarId,
     ) Allocator.Error!void {
-        const bound_op = std.meta.stringToEnum(BoundLowLevel, @tagName(op)) orelse return;
-        switch (bound_op) {
+        switch (op) {
             .box_box => {
                 expectLowLevelArity(op, args, 1);
                 try self.unify(args[0], try self.boxElem(expected));
                 try self.markErasedCallablesReachedByType(args[0]);
-                if (@import("builtin").mode == .debug) try self.box_boundaries.append(self.allocator, args[0]);
             },
             .box_unbox => {
                 expectLowLevelArity(op, args, 1);
                 try self.unify(expected, try self.boxElem(args[0]));
                 try self.markErasedCallablesReachedByType(expected);
-                if (@import("builtin").mode == .debug) try self.box_boundaries.append(self.allocator, expected);
             },
             .list_get_unsafe => {
                 expectLowLevelArity(op, args, 2);
@@ -2629,6 +2650,35 @@ const Solver = struct {
                 if (transform.args.count() != 1) Common.invariant("list map transform must have one argument");
                 try self.unify(try self.listElem(args[0]), self.program.types.spanItem(transform.args, 0));
             },
+            // The buffer is typed by the output item, so only the transform's
+            // type says that a slot read here holds an input item.
+            .list_map_extract_unsafe => {
+                expectLowLevelArity(op, args, 3);
+                const transform = try self.functionShape(args[2]);
+                if (transform.args.count() != 1) Common.invariant("list map transform must have one argument");
+                try self.unify(expected, self.program.types.spanItem(transform.args, 0));
+            },
+            .list_move_out_unsafe => {
+                expectLowLevelArity(op, args, 2);
+                try self.unify(expected, try self.listElem(args[0]));
+            },
+            .list_append_range_within => {
+                expectLowLevelArity(op, args, 3);
+                try self.unify(expected, args[0]);
+            },
+            .list_copy_range_within => {
+                expectLowLevelArity(op, args, 4);
+                try self.unify(expected, args[0]);
+            },
+            .list_append_sublist => {
+                expectLowLevelArity(op, args, 4);
+                try self.unify(expected, args[0]);
+                try self.unify(expected, args[1]);
+            },
+            // Retyping keeps the input and output callable sets apart: the
+            // items written later flow into the output through
+            // `list_map_write_unsafe`.
+            .list_map_cast_unsafe => expectLowLevelArity(op, args, 1),
             .dict_pseudo_seed => expectLowLevelArity(op, args, 0),
             .hasher_finish => expectLowLevelArity(op, args, 1),
             .crypto_sha256_hash_bytes,
@@ -2659,6 +2709,490 @@ const Solver = struct {
             .hasher_write_bytes,
             .hasher_write_str,
             => expectLowLevelArity(op, args, 2),
+            // Later stages build these from LIR, after solving has finished.
+            .list_prefetch,
+            .list_append_range_within_unsafe,
+            .list_append_le_bytes_unsafe,
+            .list_slack_unique,
+            .list_set_in_place_unsafe,
+            .list_sublist_borrowed,
+            .box_unbox_borrowed,
+            .box_prepare_update,
+            .box_alloc_zeroed,
+            .erased_capture_load,
+            .ptr_alloca,
+            .ptr_store,
+            .ptr_load,
+            .ptr_cast,
+            => Common.invariantFmt("low-level op {s} reached Lambda Solved", .{@tagName(op)}),
+            // No value of these flows from an operand into the result, because
+            // their results hold no function: numbers, strings, and byte lists,
+            // or an answer about an operand that the operation only reads.
+            .str_is_eq,
+            .str_is_eq_static_small,
+            .str_static_small_word_eq,
+            .str_static_small_word_caseless_eq,
+            .str_concat,
+            .str_contains,
+            .str_trim,
+            .str_trim_start,
+            .str_trim_end,
+            .str_caseless_ascii_equals,
+            .str_with_ascii_lowercased,
+            .str_with_ascii_uppercased,
+            .str_starts_with,
+            .str_ends_with,
+            .str_repeat,
+            .str_drop_prefix,
+            .str_drop_prefix_caseless_ascii,
+            .str_drop_suffix,
+            .str_split_first,
+            .str_split_last,
+            .str_count_utf8_bytes,
+            .str_get_utf8_byte_unsafe,
+            .str_substring_unsafe,
+            .str_with_capacity,
+            .str_reserve,
+            .str_release_excess_capacity,
+            .str_to_utf8,
+            .str_from_utf8_lossy,
+            .str_from_utf8_validated,
+            .str_from_utf16_le_short,
+            .str_from_utf16_be_short,
+            .str_from_utf32_le_short,
+            .str_from_utf32_be_short,
+            .str_from_utf8,
+            .str_split_on,
+            .str_join_with,
+            .str_inspect,
+            .u8_to_str,
+            .i8_to_str,
+            .u16_to_str,
+            .i16_to_str,
+            .u32_to_str,
+            .i32_to_str,
+            .u64_to_str,
+            .i64_to_str,
+            .u128_to_str,
+            .i128_to_str,
+            .dec_to_str,
+            .f32_to_str,
+            .f64_to_str,
+            .list_len,
+            .list_capacity,
+            .list_append_le_bytes,
+            .list_owned_unique,
+            .list_with_capacity,
+            .list_item_size_at_most,
+            .bool_not,
+            .bool_likely,
+            .num_is_eq,
+            .num_is_gt,
+            .num_is_gte,
+            .num_is_lt,
+            .num_is_lte,
+            .num_negate,
+            .num_abs,
+            .num_abs_diff,
+            .num_plus,
+            .num_minus,
+            .num_times,
+            .num_int_add_wrap,
+            .num_int_add_crash_on_overflow,
+            .num_int_add_overflows,
+            .num_int_add_proven_cannot_overflow,
+            .num_int_sub_wrap,
+            .num_int_sub_crash_on_overflow,
+            .num_int_sub_overflows,
+            .num_int_sub_proven_cannot_overflow,
+            .num_int_mul_wrap,
+            .num_int_mul_crash_on_overflow,
+            .num_int_mul_overflows,
+            .num_int_mul_proven_cannot_overflow,
+            .num_float_add,
+            .num_float_sub,
+            .num_float_mul,
+            .dec_mul,
+            .num_div_by,
+            .num_div_by_checked,
+            .num_div_trunc_by,
+            .num_div_trunc_by_checked,
+            .num_rem_by,
+            .num_rem_by_checked,
+            .num_mod_by,
+            .num_mod_by_checked,
+            .num_negate_checked,
+            .num_abs_checked,
+            .num_pow,
+            .num_atan2,
+            .num_sqrt,
+            .num_sin,
+            .num_cos,
+            .num_tan,
+            .num_asin,
+            .num_acos,
+            .num_atan,
+            .num_floor,
+            .num_ceiling,
+            .f32_to_bits,
+            .f32_from_bits,
+            .f64_to_bits,
+            .f64_from_bits,
+            .num_shift_left_by,
+            .num_shift_right_by,
+            .num_shift_right_zf_by,
+            .num_bitwise_and,
+            .num_bitwise_or,
+            .num_bitwise_xor,
+            .num_bitwise_not,
+            .num_count_one_bits,
+            .num_count_leading_zero_bits,
+            .num_count_trailing_zero_bits,
+            .num_from_le_bytes_unchecked,
+            .simd_load_16_unchecked,
+            .simd_store_16_unchecked,
+            .simd_append_16,
+            .simd_splat,
+            .simd_get_lane_unchecked,
+            .simd_with_lane_unchecked,
+            .simd_to_u128_bits,
+            .simd_from_u128_bits,
+            .simd_add_wrap,
+            .simd_sub_wrap,
+            .simd_add_sat,
+            .simd_sub_sat,
+            .simd_neg_wrap,
+            .simd_abs_wrap,
+            .simd_min,
+            .simd_max,
+            .simd_abs_diff,
+            .simd_avg_rounded,
+            .simd_mul_wrap,
+            .simd_mul_high,
+            .simd_mul_q15_sat,
+            .simd_mul_wide_lo,
+            .simd_mul_wide_hi,
+            .simd_dot_pairs,
+            .simd_dot_pairs_sat,
+            .simd_sad,
+            .simd_and,
+            .simd_or,
+            .simd_xor,
+            .simd_not,
+            .simd_bit_select,
+            .simd_eq_lanes,
+            .simd_gt_lanes,
+            .simd_gte_lanes,
+            .simd_bitmask,
+            .simd_shl_wrap,
+            .simd_shr_wrap,
+            .simd_shr_zf_wrap,
+            .simd_shr_rounded,
+            .simd_interleave_lo,
+            .simd_interleave_hi,
+            .simd_even_lanes,
+            .simd_odd_lanes,
+            .simd_reverse_lanes,
+            .simd_table_lookup,
+            .simd_concat_shift_bytes,
+            .simd_widen_lo,
+            .simd_widen_hi,
+            .simd_pairwise_add_widen,
+            .simd_narrow_wrap,
+            .simd_narrow_sat,
+            .simd_sum_lanes,
+            .simd_sum_lanes_wrap,
+            .simd_clmul_lo,
+            .simd_clmul_hi,
+            .u8_from_str,
+            .i8_from_str,
+            .u16_from_str,
+            .i16_from_str,
+            .u32_from_str,
+            .i32_from_str,
+            .u64_from_str,
+            .i64_from_str,
+            .u128_from_str,
+            .i128_from_str,
+            .dec_from_str,
+            .dec_to_attos,
+            .dec_from_attos,
+            .f32_from_str,
+            .f64_from_str,
+            .u8_from_str_prefix,
+            .u8_from_utf8_prefix,
+            .i8_from_str_prefix,
+            .i8_from_utf8_prefix,
+            .u16_from_str_prefix,
+            .u16_from_utf8_prefix,
+            .i16_from_str_prefix,
+            .i16_from_utf8_prefix,
+            .u32_from_str_prefix,
+            .u32_from_utf8_prefix,
+            .i32_from_str_prefix,
+            .i32_from_utf8_prefix,
+            .u64_from_str_prefix,
+            .u64_from_utf8_prefix,
+            .i64_from_str_prefix,
+            .i64_from_utf8_prefix,
+            .u128_from_str_prefix,
+            .u128_from_utf8_prefix,
+            .i128_from_str_prefix,
+            .i128_from_utf8_prefix,
+            .dec_from_str_prefix,
+            .dec_from_utf8_prefix,
+            .f32_from_str_prefix,
+            .f32_from_utf8_prefix,
+            .f64_from_str_prefix,
+            .f64_from_utf8_prefix,
+            .u8_to_i8_wrap,
+            .u8_to_i8_try,
+            .u8_to_i16,
+            .u8_to_i32,
+            .u8_to_i64,
+            .u8_to_i128,
+            .u8_to_u16,
+            .u8_to_u32,
+            .u8_to_u64,
+            .u8_to_u128,
+            .u8_to_f32,
+            .u8_to_f64,
+            .u8_to_dec,
+            .i8_to_i16,
+            .i8_to_i32,
+            .i8_to_i64,
+            .i8_to_i128,
+            .i8_to_u8_wrap,
+            .i8_to_u8_try,
+            .i8_to_u16_wrap,
+            .i8_to_u16_try,
+            .i8_to_u32_wrap,
+            .i8_to_u32_try,
+            .i8_to_u64_wrap,
+            .i8_to_u64_try,
+            .i8_to_u128_wrap,
+            .i8_to_u128_try,
+            .i8_to_f32,
+            .i8_to_f64,
+            .i8_to_dec,
+            .u16_to_i8_wrap,
+            .u16_to_i8_try,
+            .u16_to_i16_wrap,
+            .u16_to_i16_try,
+            .u16_to_i32,
+            .u16_to_i64,
+            .u16_to_i128,
+            .u16_to_u8_wrap,
+            .u16_to_u8_try,
+            .u16_to_u32,
+            .u16_to_u64,
+            .u16_to_u128,
+            .u16_to_f32,
+            .u16_to_f64,
+            .u16_to_dec,
+            .i16_to_i8_wrap,
+            .i16_to_i8_try,
+            .i16_to_i32,
+            .i16_to_i64,
+            .i16_to_i128,
+            .i16_to_u8_wrap,
+            .i16_to_u8_try,
+            .i16_to_u16_wrap,
+            .i16_to_u16_try,
+            .i16_to_u32_wrap,
+            .i16_to_u32_try,
+            .i16_to_u64_wrap,
+            .i16_to_u64_try,
+            .i16_to_u128_wrap,
+            .i16_to_u128_try,
+            .i16_to_f32,
+            .i16_to_f64,
+            .i16_to_dec,
+            .u32_to_i8_wrap,
+            .u32_to_i8_try,
+            .u32_to_i16_wrap,
+            .u32_to_i16_try,
+            .u32_to_i32_wrap,
+            .u32_to_i32_try,
+            .u32_to_i64,
+            .u32_to_i128,
+            .u32_to_u8_wrap,
+            .u32_to_u8_try,
+            .u32_to_u16_wrap,
+            .u32_to_u16_try,
+            .u32_to_u64,
+            .u32_to_u128,
+            .u32_to_f32,
+            .u32_to_f64,
+            .u32_to_dec,
+            .i32_to_i8_wrap,
+            .i32_to_i8_try,
+            .i32_to_i16_wrap,
+            .i32_to_i16_try,
+            .i32_to_i64,
+            .i32_to_i128,
+            .i32_to_u8_wrap,
+            .i32_to_u8_try,
+            .i32_to_u16_wrap,
+            .i32_to_u16_try,
+            .i32_to_u32_wrap,
+            .i32_to_u32_try,
+            .i32_to_u64_wrap,
+            .i32_to_u64_try,
+            .i32_to_u128_wrap,
+            .i32_to_u128_try,
+            .i32_to_f32,
+            .i32_to_f64,
+            .i32_to_dec,
+            .u64_to_i8_wrap,
+            .u64_to_i8_try,
+            .u64_to_i16_wrap,
+            .u64_to_i16_try,
+            .u64_to_i32_wrap,
+            .u64_to_i32_try,
+            .u64_to_i64_wrap,
+            .u64_to_i64_try,
+            .u64_to_i128,
+            .u64_to_u8_wrap,
+            .u64_to_u8_try,
+            .u64_to_u16_wrap,
+            .u64_to_u16_try,
+            .u64_to_u32_wrap,
+            .u64_to_u32_try,
+            .u64_to_u128,
+            .u64_to_f32,
+            .u64_to_f64,
+            .u64_to_dec,
+            .i64_to_i8_wrap,
+            .i64_to_i8_try,
+            .i64_to_i16_wrap,
+            .i64_to_i16_try,
+            .i64_to_i32_wrap,
+            .i64_to_i32_try,
+            .i64_to_i128,
+            .i64_to_u8_wrap,
+            .i64_to_u8_try,
+            .i64_to_u16_wrap,
+            .i64_to_u16_try,
+            .i64_to_u32_wrap,
+            .i64_to_u32_try,
+            .i64_to_u64_wrap,
+            .i64_to_u64_try,
+            .i64_to_u128_wrap,
+            .i64_to_u128_try,
+            .i64_to_f32,
+            .i64_to_f64,
+            .i64_to_dec,
+            .u128_to_i8_wrap,
+            .u128_to_i8_try,
+            .u128_to_i16_wrap,
+            .u128_to_i16_try,
+            .u128_to_i32_wrap,
+            .u128_to_i32_try,
+            .u128_to_i64_wrap,
+            .u128_to_i64_try,
+            .u128_to_i128_wrap,
+            .u128_to_i128_try,
+            .u128_to_u8_wrap,
+            .u128_to_u8_try,
+            .u128_to_u16_wrap,
+            .u128_to_u16_try,
+            .u128_to_u32_wrap,
+            .u128_to_u32_try,
+            .u128_to_u64_wrap,
+            .u128_to_u64_try,
+            .u128_to_f32,
+            .u128_to_f64,
+            .u128_to_dec_try_unsafe,
+            .i128_to_i8_wrap,
+            .i128_to_i8_try,
+            .i128_to_i16_wrap,
+            .i128_to_i16_try,
+            .i128_to_i32_wrap,
+            .i128_to_i32_try,
+            .i128_to_i64_wrap,
+            .i128_to_i64_try,
+            .i128_to_u8_wrap,
+            .i128_to_u8_try,
+            .i128_to_u16_wrap,
+            .i128_to_u16_try,
+            .i128_to_u32_wrap,
+            .i128_to_u32_try,
+            .i128_to_u64_wrap,
+            .i128_to_u64_try,
+            .i128_to_u128_wrap,
+            .i128_to_u128_try,
+            .i128_to_f32,
+            .i128_to_f64,
+            .i128_to_dec_try_unsafe,
+            .f32_to_i8_trunc,
+            .f32_to_i8_try_unsafe,
+            .f32_to_i16_trunc,
+            .f32_to_i16_try_unsafe,
+            .f32_to_i32_trunc,
+            .f32_to_i32_try_unsafe,
+            .f32_to_i64_trunc,
+            .f32_to_i64_try_unsafe,
+            .f32_to_i128_trunc,
+            .f32_to_i128_try_unsafe,
+            .f32_to_u8_trunc,
+            .f32_to_u8_try_unsafe,
+            .f32_to_u16_trunc,
+            .f32_to_u16_try_unsafe,
+            .f32_to_u32_trunc,
+            .f32_to_u32_try_unsafe,
+            .f32_to_u64_trunc,
+            .f32_to_u64_try_unsafe,
+            .f32_to_u128_trunc,
+            .f32_to_u128_try_unsafe,
+            .f32_to_f64,
+            .f64_to_i8_trunc,
+            .f64_to_i8_try_unsafe,
+            .f64_to_i16_trunc,
+            .f64_to_i16_try_unsafe,
+            .f64_to_i32_trunc,
+            .f64_to_i32_try_unsafe,
+            .f64_to_i64_trunc,
+            .f64_to_i64_try_unsafe,
+            .f64_to_i128_trunc,
+            .f64_to_i128_try_unsafe,
+            .f64_to_u8_trunc,
+            .f64_to_u8_try_unsafe,
+            .f64_to_u16_trunc,
+            .f64_to_u16_try_unsafe,
+            .f64_to_u32_trunc,
+            .f64_to_u32_try_unsafe,
+            .f64_to_u64_trunc,
+            .f64_to_u64_try_unsafe,
+            .f64_to_u128_trunc,
+            .f64_to_u128_try_unsafe,
+            .f64_to_f32_wrap,
+            .f64_to_f32_try_unsafe,
+            .dec_to_i8_trunc,
+            .dec_to_i8_try_unsafe,
+            .dec_to_i16_trunc,
+            .dec_to_i16_try_unsafe,
+            .dec_to_i32_trunc,
+            .dec_to_i32_try_unsafe,
+            .dec_to_i64_trunc,
+            .dec_to_i64_try_unsafe,
+            .dec_to_i128_trunc,
+            .dec_to_u8_trunc,
+            .dec_to_u8_try_unsafe,
+            .dec_to_u16_trunc,
+            .dec_to_u16_try_unsafe,
+            .dec_to_u32_trunc,
+            .dec_to_u32_try_unsafe,
+            .dec_to_u64_trunc,
+            .dec_to_u64_try_unsafe,
+            .dec_to_u128_trunc,
+            .dec_to_u128_try_unsafe,
+            .dec_to_f32_wrap,
+            .dec_to_f32_try_unsafe,
+            .dec_to_f64,
+            .compare,
+            .crash,
+            => {},
         }
     }
 
@@ -2719,7 +3253,7 @@ const Solver = struct {
         // rows are one row (design.md "Row Joins"), so a read at a wider row
         // widens the root's type in this program, and the root's slot is laid
         // out at that joined type.
-        if (self.isCloneInvariant(read_mono)) return;
+        if (self.isCallableFree(read_mono) and !self.contains_tag_row.isSet(@backingInt(read_mono))) return;
         const root_ty = self.inferredExpr(initializer);
         const initializer_expr = self.lifted.exprs[@backingInt(initializer)];
         if (initializer_expr.data != .call_proc) return self.unify(read_ty, root_ty);
@@ -2824,6 +3358,7 @@ const Solver = struct {
         var a = self.program.types.rootCompressed(lhs);
         var b = self.program.types.rootCompressed(rhs);
         if (a == b) return;
+        if (self.join_sides != null or @import("builtin").mode == .debug) try self.noteMonotypePair(a, b);
 
         const raw_left = self.program.types.get(a);
         const raw_right = self.program.types.get(b);
@@ -2870,6 +3405,27 @@ const Solver = struct {
         const finish_index = stack.items.len;
         try stack.append(self.allocator, .{ .finish = .{ .pair = pair, .action = .none, .structural_isolated = structural_isolated, .lifts_before = self.lift_count } });
         try self.unifyRoots(stack, finish_index, a, b, left, right, structural_isolated);
+    }
+
+    /// Two classes instantiated from different Monotypes are a row join's
+    /// two sides. The analysis solve records both; the real solve never
+    /// relates a shared row-bearing clone that way, since the analysis
+    /// relates every pair the real solve does.
+    fn noteMonotypePair(self: *Solver, a: Type.TypeVarId, b: Type.TypeVarId) Allocator.Error!void {
+        const left = self.leaf_origins.get(a) orelse return;
+        const right = self.leaf_origins.get(b) orelse return;
+        if (left == right) return;
+        if (self.join_sides) |*sides| {
+            if (sides.isSet(@backingInt(left)) and sides.isSet(@backingInt(right))) return;
+            if (try self.sameMonoType(left, right)) return;
+            sides.set(@backingInt(left));
+            sides.set(@backingInt(right));
+            return;
+        }
+        if (!self.isSharedRowClone(left) and !self.isSharedRowClone(right)) return;
+        if (!try self.sameMonoType(left, right)) {
+            Common.invariant("a shared row-bearing clone met a different Monotype in unification");
+        }
     }
 
     /// An unexpanded leaf whose expansion nothing else can observe stands for
@@ -4529,24 +5085,15 @@ const ReachabilityMasks = struct {
     }
 };
 
-/// Reverse-reachability over the lifted Monotype store: from `func` and
-/// `erased` nodes (types whose clones need fresh callable slots), from
-/// forced-dynamic iterator named nodes (leaves the forced-dynamic scan must
-/// materialize), and from structural tag unions (types whose clones join
-/// where their values flow).
-fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Error!ReachabilityMasks {
-    const count = types.types.len;
-    var flags = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
-    errdefer flags.deinit(allocator);
-    var forced = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
-    errdefer forced.deinit(allocator);
-
-    const edge_counts = try allocator.alloc(u32, count);
-    defer allocator.free(edge_counts);
-    @memset(edge_counts, 0);
+/// Every lifted Monotype's parents: the types that hold it as a direct
+/// component.
+const ParentIndex = struct {
+    /// `parents[starts[child]..starts[child + 1]]` are `child`'s parents.
+    parents: []u32,
+    starts: []u32,
 
     const Walk = struct {
-        fn children(store: @TypeOf(types), content: MonoType.Content, callback: anytype) void {
+        fn children(store: MonoType.Store.View, content: MonoType.Content, callback: anytype) void {
             switch (content) {
                 .primitive, .zst, .hole, .erased => {},
                 .list, .box => |elem| callback.child(elem),
@@ -4574,103 +5121,103 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
         }
     };
 
-    for (0..types.types.len) |content_index| {
-        const content = types.get(@fromBackingInt(@intCast(content_index)));
-        const Counter = struct {
-            counts: []u32,
-            fn child(self: @This(), ty: MonoType.TypeId) void {
-                self.counts[@backingInt(ty)] += 1;
-            }
-        };
-        Walk.children(types, content, Counter{ .counts = edge_counts });
+    fn build(allocator: Allocator, types: MonoType.Store.View) Allocator.Error!ParentIndex {
+        const count = types.types.len;
+        const edge_counts = try allocator.alloc(u32, count);
+        defer allocator.free(edge_counts);
+        @memset(edge_counts, 0);
+        for (0..count) |content_index| {
+            const content = types.get(@fromBackingInt(@intCast(content_index)));
+            const Counter = struct {
+                counts: []u32,
+                fn child(self: @This(), ty: MonoType.TypeId) void {
+                    self.counts[@backingInt(ty)] += 1;
+                }
+            };
+            Walk.children(types, content, Counter{ .counts = edge_counts });
+        }
+
+        const starts = try allocator.alloc(u32, count + 1);
+        errdefer allocator.free(starts);
+        starts[0] = 0;
+        for (edge_counts, 0..) |edge_count, index| {
+            starts[index + 1] = starts[index] + edge_count;
+        }
+        const parents = try allocator.alloc(u32, starts[count]);
+        errdefer allocator.free(parents);
+        const parent_writes = try allocator.dupe(u32, starts[0..count]);
+        defer allocator.free(parent_writes);
+        for (0..count) |parent_index| {
+            const content = types.get(@fromBackingInt(@intCast(parent_index)));
+            const Filler = struct {
+                parents: []u32,
+                writes: []u32,
+                parent: u32,
+                fn child(self: @This(), ty: MonoType.TypeId) void {
+                    const child_index = @backingInt(ty);
+                    self.parents[self.writes[child_index]] = self.parent;
+                    self.writes[child_index] += 1;
+                }
+            };
+            Walk.children(types, content, Filler{ .parents = parents, .writes = parent_writes, .parent = @intCast(parent_index) });
+        }
+        return .{ .parents = parents, .starts = starts };
     }
 
-    var parent_starts = try allocator.alloc(u32, count + 1);
-    defer allocator.free(parent_starts);
-    parent_starts[0] = 0;
-    for (edge_counts, 0..) |edge_count, index| {
-        parent_starts[index + 1] = parent_starts[index] + edge_count;
-    }
-    const parents = try allocator.alloc(u32, parent_starts[count]);
-    defer allocator.free(parents);
-    const parent_writes = try allocator.dupe(u32, parent_starts[0..count]);
-    defer allocator.free(parent_writes);
-    for (0..types.types.len) |parent_index| {
-        const content = types.get(@fromBackingInt(@intCast(parent_index)));
-        const Filler = struct {
-            parents: []u32,
-            writes: []u32,
-            parent: u32,
-            fn child(self: @This(), ty: MonoType.TypeId) void {
-                const child_index = @backingInt(ty);
-                self.parents[self.writes[child_index]] = self.parent;
-                self.writes[child_index] += 1;
-            }
-        };
-        Walk.children(types, content, Filler{ .parents = parents, .writes = parent_writes, .parent = @intCast(parent_index) });
+    fn deinit(self: *ParentIndex, allocator: Allocator) void {
+        allocator.free(self.parents);
+        allocator.free(self.starts);
     }
 
-    var work = std.ArrayList(u32).empty;
-    defer work.deinit(allocator);
-    for (0..types.types.len) |index| {
-        const content = types.get(@fromBackingInt(@intCast(index)));
-        const tag = std.meta.activeTag(content);
-        if (tag == .func or tag == .erased) {
-            flags.set(index);
-            try work.append(allocator, @intCast(index));
-        }
-    }
-    while (work.pop()) |index| {
-        for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
-            if (flags.isSet(parent)) continue;
-            flags.set(parent);
-            try work.append(allocator, parent);
-        }
-    }
-    for (0..types.types.len) |index| {
-        const content = types.get(@fromBackingInt(@intCast(index)));
-        if (std.meta.activeTag(content) == .named) {
-            if (content.named.def.iterator_representation == .forced_dynamic) {
-                forced.set(index);
-                try work.append(allocator, @intCast(index));
+    /// Add to `set` every type that reaches a type already in it.
+    fn markAncestors(self: *const ParentIndex, allocator: Allocator, set: *std.DynamicBitSetUnmanaged) Allocator.Error!void {
+        var work = std.ArrayList(u32).empty;
+        defer work.deinit(allocator);
+        var members = set.iterator(.{});
+        while (members.next()) |index| try work.append(allocator, @intCast(index));
+        while (work.pop()) |index| {
+            for (self.parents[self.starts[index]..self.starts[index + 1]]) |parent| {
+                if (set.isSet(parent)) continue;
+                set.set(parent);
+                try work.append(allocator, parent);
             }
         }
     }
-    while (work.pop()) |index| {
-        for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
-            if (forced.isSet(parent)) continue;
-            forced.set(parent);
-            try work.append(allocator, parent);
-        }
-    }
+};
+
+/// Reverse-reachability over the lifted Monotype store: from `func` and
+/// `erased` nodes (types whose clones need fresh callable slots), from
+/// forced-dynamic iterator named nodes (leaves the forced-dynamic scan must
+/// materialize), and from structural tag unions (types whose clones join
+/// where their values flow).
+fn computeReachabilityMasks(allocator: Allocator, types: MonoType.Store.View) Allocator.Error!ReachabilityMasks {
+    const count = types.types.len;
+    var index_ = try ParentIndex.build(allocator, types);
+    defer index_.deinit(allocator);
+
+    var flags = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
+    errdefer flags.deinit(allocator);
+    var forced = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
+    errdefer forced.deinit(allocator);
     var rows = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
     errdefer rows.deinit(allocator);
-    for (0..types.types.len) |index| {
+    for (0..count) |index| {
         const content = types.get(@fromBackingInt(@intCast(index)));
-        if (std.meta.activeTag(content) == .tag_union) {
-            rows.set(index);
-            try work.append(allocator, @intCast(index));
+        switch (std.meta.activeTag(content)) {
+            .func, .erased => flags.set(index),
+            .named => if (content.named.def.iterator_representation == .forced_dynamic) forced.set(index),
+            .tag_union => rows.set(index),
+            .primitive, .zst, .hole, .list, .box, .tuple, .record => {},
         }
     }
-    while (work.pop()) |index| {
-        for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
-            if (rows.isSet(parent)) continue;
-            rows.set(parent);
-            try work.append(allocator, parent);
-        }
-    }
+    try index_.markAncestors(allocator, &flags);
+    try index_.markAncestors(allocator, &forced);
+    try index_.markAncestors(allocator, &rows);
+
     var cycle = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
     errdefer cycle.deinit(allocator);
-    try markCycleMembers(allocator, parents, parent_starts, &cycle);
-    var on_cycle = cycle.iterator(.{});
-    while (on_cycle.next()) |index| try work.append(allocator, @intCast(index));
-    while (work.pop()) |index| {
-        for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
-            if (cycle.isSet(parent)) continue;
-            cycle.set(parent);
-            try work.append(allocator, parent);
-        }
-    }
+    try markCycleMembers(allocator, index_.parents, index_.starts, &cycle);
+    try index_.markAncestors(allocator, &cycle);
     return .{ .contains_callable = flags, .contains_forced_dynamic = forced, .contains_tag_row = rows, .reaches_cycle = cycle };
 }
 
@@ -6055,6 +6602,82 @@ test "lambda solved list map primitives preserve callable element flow" {
     try std.testing.expect(program.types.rootCompressed(callables[0]) != program.types.rootCompressed(callables[2]));
 }
 
+test "lambda solved reading a retyped list buffer keeps the input callable flow" {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator, emptyLiftedProgramForTest(allocator));
+    defer program.deinit();
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+
+    const scalar = try program.types.add(.{ .primitive = .u64 });
+    var callables: [4]Type.TypeVarId = undefined;
+    var elements: [4]Type.TypeVarId = undefined;
+    for (&callables, &elements) |*callable, *element| {
+        callable.* = try program.types.add(.unbound);
+        element.* = try program.types.add(.{ .func = .{
+            .args = .empty(),
+            .callable = callable.*,
+            .ret = scalar,
+        } });
+    }
+    const input_list = try program.types.add(.{ .list = elements[0] });
+    const buffer = try program.types.add(.{ .list = elements[1] });
+    const transform = try program.types.add(.{ .func = .{
+        .args = try program.types.addSpan(&.{elements[2]}),
+        .callable = try program.types.add(.unbound),
+        .ret = elements[1],
+    } });
+    const reuse_result = try program.types.add(.{ .primitive = .u8 });
+    try solver.bindLowLevelTypes(.list_map_can_reuse, reuse_result, &.{ input_list, transform });
+
+    // The item read from the buffer has the input list's callable set, though
+    // the buffer's type names only the output item.
+    try solver.bindLowLevelTypes(.list_map_extract_unsafe, elements[3], &.{ buffer, scalar, transform });
+    try std.testing.expectEqual(program.types.rootCompressed(callables[0]), program.types.rootCompressed(callables[3]));
+    try std.testing.expect(program.types.rootCompressed(callables[3]) != program.types.rootCompressed(callables[1]));
+}
+
+test "lambda solved moving an item out of a list keeps its callable set" {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator, emptyLiftedProgramForTest(allocator));
+    defer program.deinit();
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+
+    const scalar = try program.types.add(.{ .primitive = .u64 });
+    const list_callable = try program.types.add(.unbound);
+    const item_callable = try program.types.add(.unbound);
+    const element = try program.types.add(.{ .func = .{ .args = .empty(), .callable = list_callable, .ret = scalar } });
+    const item = try program.types.add(.{ .func = .{ .args = .empty(), .callable = item_callable, .ret = scalar } });
+    const list = try program.types.add(.{ .list = element });
+    try solver.bindLowLevelTypes(.list_move_out_unsafe, item, &.{ list, scalar });
+    try std.testing.expectEqual(program.types.rootCompressed(list_callable), program.types.rootCompressed(item_callable));
+}
+
+test "lambda solved list range operations keep their operands' callable sets" {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator, emptyLiftedProgramForTest(allocator));
+    defer program.deinit();
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+
+    const scalar = try program.types.add(.{ .primitive = .u64 });
+    var callables: [7]Type.TypeVarId = undefined;
+    var lists: [7]Type.TypeVarId = undefined;
+    for (&callables, &lists) |*callable, *list| {
+        callable.* = try program.types.add(.unbound);
+        list.* = try program.types.add(.{ .list = try program.types.add(.{ .func = .{ .args = .empty(), .callable = callable.*, .ret = scalar } }) });
+    }
+    try solver.bindLowLevelTypes(.list_append_range_within, lists[1], &.{ lists[0], scalar, scalar });
+    try std.testing.expectEqual(program.types.rootCompressed(callables[0]), program.types.rootCompressed(callables[1]));
+    try solver.bindLowLevelTypes(.list_copy_range_within, lists[3], &.{ lists[2], scalar, scalar, scalar });
+    try std.testing.expectEqual(program.types.rootCompressed(callables[2]), program.types.rootCompressed(callables[3]));
+    // Both the list and the source of its appended items flow into the result.
+    try solver.bindLowLevelTypes(.list_append_sublist, lists[6], &.{ lists[4], lists[5], scalar, scalar });
+    try std.testing.expectEqual(program.types.rootCompressed(callables[4]), program.types.rootCompressed(callables[6]));
+    try std.testing.expectEqual(program.types.rootCompressed(callables[5]), program.types.rootCompressed(callables[6]));
+}
+
 fn emptyLiftedProgramForTest(allocator: Allocator) Lifted.Program {
     return Lifted.Program.init(
         allocator,
@@ -6571,6 +7194,59 @@ test "issue 12505 tag compatibility preserves lazy wide payloads for unification
     }
 }
 
+// repro for https://github.com/roc-lang/roc/issues/12630
+test "every occurrence of a callable-free recursive nominal that no row join reaches shares one clone" {
+    const allocator = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(allocator);
+    var lifted_owned = true;
+    errdefer if (lifted_owned) lifted.deinit();
+    // Node := [Big({ count : U64, label : Str }), Branch(List(Node)), Leaf]
+    const module = try lifted.names.internModuleIdentity(&(@as([32]u8, @splat(0x12))));
+    const node_name = try lifted.names.internTypeName("Node");
+    const slot = try lifted.types.beginRecursive();
+    const u64_ty = try lifted.types.add(.{ .primitive = .u64 });
+    const str_ty = try lifted.types.add(.{ .primitive = .str });
+    const children = try lifted.types.add(.{ .list = slot.ty });
+    const big = try lifted.types.add(.{ .record = try lifted.types.addRecordFields(&lifted.names, &.{
+        .{ .name = try lifted.names.internRecordFieldLabel("count"), .ty = u64_ty, .default = null },
+        .{ .name = try lifted.names.internRecordFieldLabel("label"), .ty = str_ty, .default = null },
+    }) });
+    const big_name = try lifted.names.internTagLabel("Big");
+    const branch_name = try lifted.names.internTagLabel("Branch");
+    const leaf_name = try lifted.names.internTagLabel("Leaf");
+    const row = try lifted.types.add(.{ .tag_union = try lifted.types.addTags(&.{
+        .{ .name = big_name, .checked_name = big_name, .payloads = try lifted.types.addSpan(&.{big}) },
+        .{ .name = branch_name, .checked_name = branch_name, .payloads = try lifted.types.addSpan(&.{children}) },
+        .{ .name = leaf_name, .checked_name = leaf_name, .payloads = .empty() },
+    }) });
+    lifted.types.finishRecursive(slot, .{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
+        .def = .{ .module = module, .type_name = node_name },
+        .kind = .nominal,
+        .args = .empty(),
+        .backing = .{ .ty = row, .use = .inspectable },
+    } });
+    const node = slot.ty;
+    var program = Ast.Program.init(allocator, lifted);
+    lifted_owned = false;
+    defer program.deinit();
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+
+    // The program has no expression, so no row join reaches `Node`'s row:
+    // unification can never change it, and every occurrence of `Node` is
+    // one solved type rather than a copy of its whole row per occurrence.
+    const first = try solver.lowerTypeFresh(node);
+    const first_backing = (try solver.resolvedContent(first)).named.backing.?.ty;
+    try std.testing.expectEqual(@as(usize, 3), (try solver.resolvedContent(first_backing)).tag_union.count());
+
+    const second = try solver.lowerTypeFresh(node);
+    const before = program.types.vars.items.len;
+    const second_backing = (try solver.resolvedContent(second)).named.backing.?.ty;
+    try std.testing.expectEqual(@as(usize, 3), (try solver.resolvedContent(second_backing)).tag_union.count());
+    try std.testing.expectEqual(before, program.types.vars.items.len);
+}
+
 test "issue 12505 scoped positional payloads only expand for reachable argument bindings" {
     const allocator = std.testing.allocator;
     for ([_]bool{ false, true }) |reachable_binding| {
@@ -6599,6 +7275,9 @@ test "issue 12505 scoped positional payloads only expand for reachable argument 
         defer program.deinit();
         var solver = try Solver.init(allocator, &program);
         defer solver.deinit();
+        // Every row here is one some row join reaches, so `state`'s
+        // occurrences keep positional rows.
+        solver.row_joined.setUnion(solver.contains_tag_row);
         const left = try solver.lowerTypeFresh(state);
         const right = try solver.lowerTypeFresh(state);
         _ = try solver.resolvedContent(right);
@@ -6754,6 +7433,8 @@ test "exact cyclic clone proofs avoid repeated expansion and reject widened or u
     defer program.deinit();
     var solver = try Solver.init(a, &program);
     defer solver.deinit();
+    // Every row here is one some row join reaches.
+    solver.row_joined.setUnion(solver.contains_tag_row);
     var counts: WorkCounters = .{};
     solver.counters = &counts;
     const root = try solver.lowerTypeFresh(recursive.ty);
@@ -6855,6 +7536,8 @@ test "argument scope expansion queries reuse exact answers and invalidate on new
     defer program.deinit();
     var solver = try Solver.init(a, &program);
     defer solver.deinit();
+    // Every row here is one some row join reaches.
+    solver.row_joined.setUnion(solver.contains_tag_row);
     var counts: WorkCounters = .{};
     solver.counters = &counts;
     const scope = try solver.newArgScope();

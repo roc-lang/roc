@@ -33,8 +33,8 @@
 //!    └─────────┘      └─────────┘        └─────────┘      └─────────┘
 //! ```
 
+const backend = @import("backend");
 const std = @import("std");
-const completed = @import("completed_compilation.zig");
 const builtin = @import("builtin");
 const threading = @import("threading.zig");
 const can = @import("can");
@@ -55,8 +55,10 @@ const compile_package = @import("compile_package.zig");
 const compile_build = @import("compile_build.zig");
 const module_discovery = @import("module_discovery.zig");
 const cache_manager_mod = @import("cache_manager.zig");
+const boxy_unit = @import("boxy_unit.zig");
+const boxy_interface = @import("boxy_interface.zig");
+const boxy_object_cache = @import("boxy_object_cache.zig");
 const cache_versioning = @import("cache_versioning.zig");
-const discovery_roots = @import("discovery_roots.zig");
 const cache_key_mod = @import("cache_key.zig");
 const canonicalized_cache_entry = @import("canonicalized_cache_entry.zig");
 const package_source = @import("package_source.zig");
@@ -218,7 +220,7 @@ fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
     return 0;
 }
 
-const checked_module_cache_magic = "roc-mod-cache-v11";
+const checked_module_cache_magic = "roc-mod-cache-v12";
 
 // Header: magic, entry-version hash (32), artifact key (32), env-blob length
 // (u64), artifact-blob length (u64), pin-validation stamp (32), and zero bytes
@@ -245,70 +247,6 @@ fn checkedModuleCacheEnvPadding(env_len: usize) usize {
 }
 
 const checked_module_cache_zero_padding: [CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()]u8 = @splat(0);
-
-/// Counts of compile-time value reuse across module edits in one compilation.
-pub const CtfeReuseStats = struct {
-    settled_discovery_roots: u32 = 0,
-    validated_comptime_roots: u32 = 0,
-    /// Freshly checked modules whose previous cache entry was found.
-    previous_entries: u32 = 0,
-    /// Roots of those modules awaiting evaluation when they were checked.
-    pending_roots: u32 = 0,
-    /// Roots copied from those entries instead of evaluated.
-    transplanted_roots: u32 = 0,
-    /// Per-program literal roots evaluated, other than the verifiers of
-    /// restored ones.
-    literal_roots: u32 = 0,
-    /// Literal roots that restored a value the program root module's
-    /// literal values file held.
-    restored_literals: u32 = 0,
-    /// Restored literal roots whose conversion ran and matched.
-    verified_literals: u32 = 0,
-    /// Literal values written to the program root module's file.
-    stored_literals: u32 = 0,
-};
-
-/// The literal values of one program (design.md "Compile-Time Value Reuse
-/// Across Edits").
-const ProgramLiteralValues = struct {
-    placement: [32]u8,
-    /// The program's top modules' names, joined by `+`. Owned.
-    module_name: []const u8,
-    values: *eval.LiteralValues.LiteralValues,
-};
-
-/// A transplant a compiler with runtime safety verifies after finalization,
-/// with the previous entry's artifact body its columns borrow.
-const PendingTransplant = struct {
-    module: *CheckedArtifact.CheckedModuleArtifact,
-    buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
-    previous: eval.CompileTimeReuse.Previous,
-    transplant: eval.CompileTimeReuse.Transplant,
-
-    fn deinit(self: *PendingTransplant, gpa: Allocator) void {
-        self.transplant.deinit();
-        self.previous.deinit();
-        gpa.free(self.buffer);
-    }
-};
-
-/// Where a module's latest checked entry is recorded: what stays the same
-/// across edits of it, the package's URL or root directory and the module's
-/// path within it.
-fn checkedPlacement(pkg: *const PackageState, mod: *const ModuleState) [32]u8 {
-    var hasher = base.Sha256.init(.{});
-    hasher.update("roc-checked-placement\x00");
-    if (pkg.url) |url| {
-        hasher.update("pkg\x00");
-        hasher.update(url.url);
-    } else {
-        hasher.update("local\x00");
-        hasher.update(pkg.root_dir);
-    }
-    hasher.update("\x00");
-    hasher.update(mod.path);
-    return hasher.finalResult();
-}
 
 /// The cache entry kinds written in the checked-module envelope.
 const CheckedEnvelopeEntry = enum {
@@ -778,9 +716,6 @@ pub const ModuleState = struct {
     external_dependents: std.ArrayList(ModuleRef),
     /// Diagnostic reports
     reports: std.ArrayList(Report),
-    completion_report_start: usize = 0,
-    /// Diagnostic ownership before app/platform pairing replaces an artifact.
-    completion_module_key: ?[32]u8 = null,
     /// Reports already present before checked-cache lookup: parsing and
     /// canonicalization produced them, and their own caches reproduce them.
     /// Checking (including the deferred import drain) and evaluation append
@@ -1448,6 +1383,772 @@ test "dependency post-order of a deep dependency chain runs on a small stack" {
     for (order, 0..) |node, position| try std.testing.expectEqual(depth - 1 - position, node);
 }
 
+/// One post-check session's state on the coordinator
+/// (`messages.PostCheckSession`).
+/// One open post-check session: the tasks its owner submitted that no
+/// thread has taken yet, and the completions delivered and not yet received.
+/// A box outlives its sessions: a token for a task the owner ran itself can
+/// still be in the worker channel when the session ends, and a worker
+/// finding the box's queue empty just moves on.
+const SessionBox = struct {
+    tasks: Channel(post_check_executor.Task),
+    completions: Channel(post_check_executor.Completion),
+    /// The work the session's owner was doing when it began, if it recorded
+    /// any, for the crash context of the threads running its tasks.
+    frame: ?base.ice_context.Frame = null,
+
+    fn deinit(self: *SessionBox) void {
+        self.tasks.deinit();
+        self.completions.deinit();
+    }
+};
+
+/// How deep sessions nest on one thread: a thread waiting in a session runs
+/// that session's tasks itself, and such a task may wait in a session of its
+/// own. Every depth has a lane of its own, so a task never shares lane state
+/// or scratch with the task waiting under it.
+const max_lane_depth = 4;
+
+/// A thread's lanes, one per session nesting depth, each created when first
+/// used.
+const ThreadLanes = struct {
+    backing: Allocator,
+    /// The thread's index: a worker's id, or the worker count for the
+    /// coordinating thread.
+    index: usize,
+    /// Whether these are a worker thread's lanes, which outlive every
+    /// session the worker serves; the coordinating thread's belong to one
+    /// coordinator, and another coordinator on that thread replaces them.
+    worker: bool,
+    depth: usize = 0,
+    allocs: [max_lane_depth]?WorkerAllocators = .{ null, null, null, null },
+
+    fn init(backing: Allocator, index: usize, worker: bool) ThreadLanes {
+        return .{ .backing = backing, .index = index, .worker = worker };
+    }
+
+    fn deinit(self: *ThreadLanes) void {
+        for (&self.allocs) |*slot| if (slot.*) |*allocs| {
+            allocs.deinit();
+            slot.* = null;
+        };
+    }
+
+    fn at(self: *ThreadLanes, depth: usize) *WorkerAllocators {
+        if (self.allocs[depth] == null) self.allocs[depth] = WorkerAllocators.init(self.backing);
+        return &self.allocs[depth].?;
+    }
+
+    fn laneId(self: *const ThreadLanes, depth: usize) usize {
+        return self.index * max_lane_depth + depth;
+    }
+};
+
+/// The lanes of the thread running this code, once it has any: workers set
+/// theirs when they start, the coordinating thread when it first uses the
+/// executor.
+threadlocal var thread_lanes: ?*ThreadLanes = null;
+
+/// The lowering of the module objects compile-time evaluation links against.
+pub const BoxyObjectLowering = struct {
+    target: roc_target.RocTarget,
+    config: lir.CheckedPipeline.TargetConfig,
+    opt: []const u8,
+    inline_expects: bool,
+    /// The export interface table the units record their exports in, when
+    /// the build's link lowers its root unit against the same table; the
+    /// scheduler owns one otherwise.
+    interfaces: ?*eval.CompileTimeFinalization.ExportInterfaces = null,
+    /// Whether the build's link reads every unit's object, so a unit the
+    /// link needs is built as soon as its module is checked.
+    links: bool = false,
+    /// Whether that link composes the units' pieces (rather than placing
+    /// their unit images with a fast dev link), so the units decode them.
+    link_reads_pieces: bool = false,
+};
+
+/// The module objects of a `.boxy` compilation, each restored from the
+/// per-module cache or compiled whole and filed there as soon as the module
+/// can have one (design.md "Caching Under `.boxy`"). A module can have an
+/// object once every compile-time root of its own is complete: the object
+/// restores their stored values, which the other objects of a link read
+/// through it. Its unit lowers once its imports' units are done, since its
+/// calls compile against their export interfaces. The units run on the
+/// post-check executor in their own session, alongside checking, the
+/// compile-time evaluations, and one another; a module's evaluation waits
+/// only for the objects of its import closure, and `roc build` links the
+/// objects this compilation built or restored without restoring them again.
+const BoxyObjects = struct {
+    coordinator: *Coordinator,
+    lowering: BoxyObjectLowering,
+    manager: *CacheManager,
+    digests: boxy_interface.Digests,
+    interfaces: *eval.CompileTimeFinalization.ExportInterfaces,
+    owned_interfaces: ?eval.CompileTimeFinalization.ExportInterfaces,
+    arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator),
+    /// Each module whose object is known, by checked key.
+    records: std.AutoHashMapUnmanaged([32]u8, Record) = .empty,
+    /// The units offered and not yet known, by module.
+    units: std.AutoHashMapUnmanaged([32]u8, *UnitTask) = .empty,
+    /// The units waiting for each module's object: its importers among the
+    /// units whose imports are not all known.
+    waiting: std.AutoHashMapUnmanaged([32]u8, std.ArrayList(*UnitTask)) = .empty,
+    /// Units whose imports are all known, not submitted yet.
+    ready: std.ArrayList(*UnitTask) = .empty,
+    /// The compile-time programs the evaluation asked to build, not
+    /// submitted yet (`BoxyObjectSource.submit`).
+    programs: std.ArrayList(post_check_executor.Task) = .empty,
+    /// The programs submitted and not yet finished, by task id.
+    program_ids: std.AutoHashMapUnmanaged(usize, void) = .empty,
+    /// The programs finished and not yet taken by the evaluation.
+    program_completions: std.ArrayList(post_check_executor.Completion) = .empty,
+    /// Modules declaring hosted functions, offered while no checked platform
+    /// module bound them. They are offered again when one is checked.
+    unbound_hosted: std.ArrayList(*const Artifact) = .empty,
+    /// The modules whose import closures are known (`closureKnown`).
+    closures_known: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
+    /// Completed immutable import closures, owned by `arena` for this naming epoch.
+    object_sets: std.AutoHashMapUnmanaged([32]u8, eval.CompileTimeFinalization.BoxyObjectSet) = .empty,
+    /// The pieces of every object recorded with its pieces, kept for the
+    /// compilation.
+    owned_pieces: std.ArrayList(*backend.dev.UnitPieces.Pieces) = .empty,
+    /// The pieces of the latest object recorded for each module, by module
+    /// key, when it was recorded with them.
+    pieces: std.AutoHashMapUnmanaged([32]u8, *backend.dev.UnitPieces.Pieces) = .empty,
+    /// The unit image of the latest object recorded for each module, for a
+    /// target that `boxy_unit.producesImage`, by module key.
+    images: std.AutoHashMapUnmanaged([32]u8, boxy_unit.Image) = .empty,
+    /// Images of objects a later record of their module replaced: loaded
+    /// code may still name symbols in them, so they are kept for the
+    /// compilation too.
+    replaced_images: std.ArrayList(boxy_unit.Image) = .empty,
+    session: post_check_executor.Session,
+    first_error: ?Error = null,
+    /// Whether a task finished since `progress` last reported, whichever
+    /// call took its completion. A finished task can make a program waiting
+    /// on the evaluation's loop runnable, with nothing left in flight.
+    finished_since_progress: bool = false,
+    /// Whether `settleNames` ran.
+    names_settled: bool = false,
+
+    const Object = eval.CompileTimeFinalization.BoxyObject;
+    const Artifact = CheckedArtifact.CheckedModuleArtifact;
+    const Error = eval.CompileTimeFinalization.FinalizeError;
+
+    /// A module's object, once known: null for a module with none of its
+    /// own.
+    const Record = struct {
+        object: ?Object,
+        /// The object's key in the per-module cache.
+        key: boxy_object_cache.Key = undefined,
+        /// Whether the object was restored from the cache rather than built.
+        restored: bool = false,
+    };
+
+    fn init(coordinator: *Coordinator, lowering: BoxyObjectLowering, manager: *CacheManager) Error!BoxyObjects {
+        // The module objects are built during compile-time evaluation, so
+        // their lowering, code generation, and cache writes count toward it.
+        var unit_lowering = lowering;
+        unit_lowering.config.timing = &coordinator.ctfe_timing.lowering;
+        var self: BoxyObjects = .{
+            .coordinator = coordinator,
+            .lowering = unit_lowering,
+            .manager = manager,
+            .digests = .{ .gpa = coordinator.gpa, .names = .{} },
+            .interfaces = undefined,
+            .owned_interfaces = if (lowering.interfaces == null) .init(coordinator.gpa, coordinator.roc_ctx.std_io) else null,
+            .session = try coordinator.postCheckExecutor().begin(),
+        };
+        self.interfaces = lowering.interfaces orelse &self.owned_interfaces.?;
+        return self;
+    }
+
+    /// Point the borrowed table at this scheduler's own, once it has its
+    /// final address.
+    fn bindOwnedInterfaces(self: *BoxyObjects) void {
+        if (self.owned_interfaces) |*owned| self.interfaces = owned;
+    }
+
+    fn deinit(self: *BoxyObjects) void {
+        const gpa = self.coordinator.gpa;
+        // A session that still has tasks out is torn down with the
+        // coordinator, whose workers have stopped.
+        if (self.session.outstanding == 0) self.session.end();
+        var units = self.units.valueIterator();
+        while (units.next()) |task| task.*.destroy(gpa);
+        self.units.deinit(gpa);
+        var lists = self.waiting.valueIterator();
+        while (lists.next()) |list| list.deinit(gpa);
+        self.waiting.deinit(gpa);
+        self.ready.deinit(gpa);
+        self.programs.deinit(gpa);
+        self.program_ids.deinit(gpa);
+        self.program_completions.deinit(gpa);
+        self.unbound_hosted.deinit(gpa);
+        self.closures_known.deinit(gpa);
+        self.object_sets.deinit(gpa);
+        for (self.owned_pieces.items) |pieces| {
+            pieces.deinit();
+            gpa.destroy(pieces);
+        }
+        self.owned_pieces.deinit(gpa);
+        self.pieces.deinit(gpa);
+        var images = self.images.valueIterator();
+        while (images.next()) |image| image.deinit(gpa);
+        self.images.deinit(gpa);
+        for (self.replaced_images.items) |image| image.deinit(gpa);
+        self.replaced_images.deinit(gpa);
+        self.records.deinit(gpa);
+        if (self.owned_interfaces) |*owned| owned.deinit();
+        self.digests.deinit();
+        self.arena.deinit();
+    }
+
+    fn source(self: *BoxyObjects) eval.CompileTimeFinalization.BoxyObjectSource {
+        return .{
+            .context = self,
+            .ready = objectsReady,
+            .objects = objectSet,
+            .completed = moduleCompleted,
+            .submit = submitProgram,
+            .takeCompletion = takeProgramCompletion,
+            .progress = progress,
+            .interfaces = self.interfaces,
+            .names = &self.digests.names,
+            .target = self.lowering.config,
+        };
+    }
+
+    /// `artifact`'s object with the cache key `key`, when this compilation
+    /// built or restored it.
+    pub fn objectWithKey(self: *const BoxyObjects, artifact: *const Artifact, key: boxy_object_cache.Key) ?Record {
+        const known = self.records.get(artifact.key.bytes) orelse return null;
+        if (known.object == null or !std.mem.eql(u8, &known.key.bytes, &key.bytes)) return null;
+        return known;
+    }
+
+    /// The unit image of `artifact`'s recorded object, for a target that
+    /// `boxy_unit.producesImage`.
+    pub fn imageOf(self: *const BoxyObjects, artifact: *const Artifact) ?boxy_unit.Image {
+        return self.images.get(artifact.key.bytes);
+    }
+
+    /// The pieces of `artifact`'s recorded object, when it was recorded
+    /// with them (`BoxyObjectLowering.link_reads_pieces`, or a host that
+    /// loads pieces).
+    pub fn piecesOf(self: *const BoxyObjects, artifact: *const Artifact) ?*const backend.dev.UnitPieces.Pieces {
+        return self.pieces.get(artifact.key.bytes);
+    }
+
+    /// Whether the objects of `module`'s import closure are all known,
+    /// offering the ones not offered yet: the compile-time program
+    /// evaluating `module`'s roots links against them.
+    fn objectsReady(context: *anyopaque, module: *const Artifact) Error!bool {
+        const self: *BoxyObjects = @ptrCast(@alignCast(context));
+        try self.offerClosure(module);
+        if (self.first_error) |err| return err;
+        const known = try self.closureKnown(module);
+        if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: objects for {s}: {s}, {d} known, {d} units in progress, {d} ready\n", .{ module.moduleEnvConst().module_name, if (known) "ready" else "waiting", self.records.count(), self.units.count(), self.ready.items.len });
+        return known;
+    }
+
+    /// The objects of `module`'s import closure, imports first, for the
+    /// compile-time program evaluating `module`'s roots, once `objectsReady`
+    /// found them known.
+    fn objectSet(context: *anyopaque, module: *const Artifact) Error!?eval.CompileTimeFinalization.BoxyObjectSet {
+        const self: *BoxyObjects = @ptrCast(@alignCast(context));
+        if (self.object_sets.get(module.key.bytes)) |known| return known;
+        var ordered = std.ArrayList(Object).empty;
+        var visited = std.AutoHashMapUnmanaged([32]u8, *const Artifact).empty;
+        defer visited.deinit(self.coordinator.gpa);
+        const builtin_artifact = &self.coordinator.builtin_modules.checked_artifact;
+        if (!try self.visit(builtin_artifact, &visited, &ordered)) return null;
+        for (module.direct_import_module_keys) |key| {
+            const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse return null;
+            if (!try self.visit(imported, &visited, &ordered)) return null;
+        }
+        const result = eval.CompileTimeFinalization.BoxyObjectSet{
+            .objects = ordered.items,
+            .views = try self.withEveryObjectsModule(try self.viewsOf(module), visited),
+        };
+        try self.object_sets.put(self.coordinator.gpa, module.key.bytes, result);
+        return result;
+    }
+
+    /// `module`'s roots are complete: its object can be built, and its
+    /// importers' evaluations may need it.
+    fn moduleCompleted(context: *anyopaque, module: *const Artifact) Error!void {
+        const self: *BoxyObjects = @ptrCast(@alignCast(context));
+        if (self.waiting.contains(module.key.bytes) or self.linkNeeds(module)) try self.offer(module);
+    }
+
+    fn viewsOf(self: *BoxyObjects, module: *const Artifact) Allocator.Error![]const CheckedArtifact.ImportedModuleView {
+        const views = try self.coordinator.collectImportedArtifactViews(self.coordinator.gpa, module);
+        defer self.coordinator.gpa.free(views);
+        return try self.arena.allocator().dupe(CheckedArtifact.ImportedModuleView, views);
+    }
+
+    /// `views`, and a view of every module whose object runs: a failure in
+    /// that object's code is reported against its module, which a private
+    /// import of an import leaves out of `views`.
+    fn withEveryObjectsModule(self: *BoxyObjects, views: []const CheckedArtifact.ImportedModuleView, visited: std.AutoHashMapUnmanaged([32]u8, *const Artifact)) Error![]const CheckedArtifact.ImportedModuleView {
+        const arena = self.arena.allocator();
+        var all = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
+        try all.appendSlice(arena, views);
+        var present = std.AutoHashMapUnmanaged([32]u8, void).empty;
+        defer present.deinit(self.coordinator.gpa);
+        for (views) |view| try present.put(self.coordinator.gpa, view.key.bytes, {});
+        var artifacts = visited.valueIterator();
+        while (artifacts.next()) |artifact| {
+            if (!present.contains(artifact.*.key.bytes)) try all.append(arena, CheckedArtifact.importedView(artifact.*));
+        }
+        return all.items;
+    }
+
+    /// Append the known objects of `artifact` and its imports to `ordered`,
+    /// imports first. False when one has no object of its own.
+    fn visit(self: *BoxyObjects, artifact: *const Artifact, visited: *std.AutoHashMapUnmanaged([32]u8, *const Artifact), ordered: *std.ArrayList(Object)) Error!bool {
+        const gpa = self.coordinator.gpa;
+        const entry = try visited.getOrPut(gpa, artifact.key.bytes);
+        if (entry.found_existing) return true;
+        entry.value_ptr.* = artifact;
+        for (artifact.direct_import_module_keys) |key| {
+            const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse return false;
+            if (!try self.visit(imported, visited, ordered)) return false;
+        }
+        const known = self.records.get(artifact.key.bytes) orelse Coordinator.coordinatorInvariant("a compile-time program's import closure was not known when its objects were gathered", .{});
+        const object = known.object orelse return false;
+        try ordered.append(self.arena.allocator(), object);
+        return true;
+    }
+
+    /// Whether every module of `module`'s import closure, the compiler's
+    /// Builtin module included, has a known object or is known to have none.
+    /// Objects only become known, so a closure once known stays known until
+    /// the build starts over under the link's names.
+    fn closureKnown(self: *BoxyObjects, module: *const Artifact) Allocator.Error!bool {
+        if (self.closures_known.contains(module.key.bytes)) return true;
+        if (!self.records.contains(self.coordinator.builtin_modules.checked_artifact.key.bytes)) return false;
+        for (module.direct_import_module_keys) |key| {
+            const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
+            if (!self.records.contains(imported.key.bytes)) return false;
+            if (!try self.closureKnown(imported)) return false;
+        }
+        try self.closures_known.put(self.coordinator.gpa, module.key.bytes, {});
+        return true;
+    }
+
+    /// The module whose hosted section binds `artifact`'s hosted functions.
+    fn platformOf(self: *BoxyObjects, artifact: *const Artifact) ?CheckedArtifact.ImportedModuleView {
+        if (artifact.hosted_procs.procs.len == 0) return null;
+        var packages = self.coordinator.packages.iterator();
+        while (packages.next()) |package| {
+            for (package.value_ptr.*.modules.items) |*mod| {
+                const candidate = mod.checkedArtifact() orelse continue;
+                if (candidate.module_identity.kind == .platform) return CheckedArtifact.importedView(candidate);
+            }
+        }
+        return null;
+    }
+
+    /// Everything a unit's build reads, gathered on the coordinating thread
+    /// so the build itself touches no state another build shares.
+    const Prepared = struct {
+        unit: boxy_unit.Unit,
+
+        fn deinit(self: Prepared, gpa: Allocator) void {
+            gpa.free(self.unit.views);
+        }
+
+        fn build(self: Prepared) Error!boxy_unit.Built {
+            if (comptime eval.CompileTimeFinalization.compilerHostMustUseInterpreterForCtfe()) {
+                Coordinator.coordinatorInvariant("a host that interprets compile-time evaluation built a Boxy object", .{});
+            }
+            return boxy_unit.restoreOrBuild(self.unit) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => Coordinator.coordinatorInvariant("a module's object failed to compile for compile-time evaluation: {s}", .{@errorName(err)}),
+            };
+        }
+    };
+
+    /// Whether `artifact` can have an object: never (a platform module with
+    /// requirements is lowered at its app's types), not yet (a root of its
+    /// own still to evaluate, or hosted functions no checked platform module
+    /// binds while checking continues), or now.
+    fn eligibility(self: *BoxyObjects, artifact: *const Artifact) enum { never, later, now } {
+        if (artifact.platform_type_inputs.requirements.len != 0) return .never;
+        if (Coordinator.unevaluatedRequestCount(artifact, .boxy) != 0) return .later;
+        if (artifact.hosted_procs.procs.len != 0 and self.platformOf(artifact) == null) {
+            return if (self.coordinator.frontend_complete) .never else .later;
+        }
+        return .now;
+    }
+
+    /// `artifact`'s unit, which `eligibility` admitted.
+    fn prepare(self: *BoxyObjects, artifact: *const Artifact) Error!Prepared {
+        const gpa = self.coordinator.gpa;
+        const platform = self.platformOf(artifact);
+        const views = try self.coordinator.collectImportedArtifactViews(gpa, artifact);
+        errdefer gpa.free(views);
+        var config = self.lowering.config;
+        config.boxy_unit = .{ .imports = self.interfaces, .root = false, .names = &self.digests.names };
+        // The unit's ARC and code generation run their waves on the same
+        // pool, whichever thread runs the unit.
+        config.post_check_executor = self.coordinator.postCheckExecutor();
+        config.checked_module_state = if (artifact.evaluation_state == .finalized) .complete else .checking_finalization;
+        // Compile-time evaluation loads what this host loads
+        // (`boxy_object_code`); a link that composes pieces reads them too.
+        const want_pieces = eval.CompileTimeFinalization.boxy_object_code == .pieces or self.lowering.link_reads_pieces;
+        return .{ .unit = .{
+            .gpa = gpa,
+            .artifact = artifact,
+            .platform = platform,
+            .views = views,
+            .target = self.lowering.target,
+            .config = config,
+            .interfaces = self.interfaces,
+            .cache_manager = self.manager,
+            .key = undefined,
+            .want_pieces = want_pieces,
+        } };
+    }
+
+    /// Key `prepared`'s unit. A key reads what the unit's imports recorded,
+    /// so this runs on the coordinating thread once they are done.
+    fn keyUnit(self: *BoxyObjects, prepared: *Prepared) Error!void {
+        const unit = &prepared.unit;
+        try self.addToDigests(&self.coordinator.builtin_modules.checked_artifact);
+        try self.addToDigests(unit.artifact);
+        unit.key = try boxy_unit.objectKey(self.coordinator.gpa, &self.digests, unit.artifact, unit.platform, self.lowering.opt, self.lowering.inline_expects, self.lowering.target, &.{}, false, false, false);
+    }
+
+    /// Give the digests `artifact` and its import closure, which checking
+    /// finished before anything keys them.
+    fn addToDigests(self: *BoxyObjects, artifact: *const Artifact) Error!void {
+        if (!try self.digests.add(artifact)) return;
+        for (artifact.direct_import_module_keys) |key| {
+            const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
+            try self.addToDigests(imported);
+        }
+    }
+
+    /// Keep `built` as `artifact`'s object, in the arena.
+    fn record(self: *BoxyObjects, artifact: *const Artifact, built: boxy_unit.Built) Error!Object {
+        const gpa = self.coordinator.gpa;
+        const arena = self.arena.allocator();
+        // A host whose units carry images loads them; every other host
+        // composes the pieces (`boxy_object_code`).
+        std.debug.assert(boxy_unit.producesImage(self.lowering.target) == (eval.CompileTimeFinalization.boxy_object_code == .image));
+        try self.owned_pieces.ensureUnusedCapacity(gpa, 1);
+        try self.replaced_images.ensureUnusedCapacity(gpa, 1);
+        try self.pieces.ensureUnusedCapacity(gpa, 1);
+        try self.images.ensureUnusedCapacity(gpa, 1);
+        // The image and the pieces become the compilation's once stored;
+        // until then a failure releases them with the rest of `built`.
+        var code_stored = false;
+        errdefer if (!code_stored) {
+            if (built.image) |image| image.deinit(gpa);
+            if (built.pieces) |pieces| {
+                pieces.deinit();
+                gpa.destroy(pieces);
+            }
+        };
+        defer built.deinitKeepingCode(gpa);
+        const code: @FieldType(Object, "code") = switch (eval.CompileTimeFinalization.boxy_object_code) {
+            .image => image: {
+                const image = built.image orelse Coordinator.coordinatorInvariant("a compile-time evaluation unit was built without its image", .{});
+                break :image .{ .image = .{ .bytes = image.bytes, .code_locations = image.code_locations } };
+            },
+            .pieces => .{ .pieces = built.pieces orelse Coordinator.coordinatorInvariant("a compile-time evaluation unit was built without its pieces", .{}) },
+        };
+        try self.digests.recordExports(artifact, built.exports);
+        const symbols = try arena.alloc([]const u8, built.hosted_symbols.len);
+        for (built.hosted_symbols, symbols) |symbol, *copy| copy.* = try arena.dupe(u8, symbol);
+        code_stored = true;
+        if (built.image) |image| {
+            const entry = self.images.getOrPutAssumeCapacity(artifact.key.bytes);
+            if (entry.found_existing) self.replaced_images.appendAssumeCapacity(entry.value_ptr.*);
+            entry.value_ptr.* = image;
+        }
+        if (built.pieces) |pieces| {
+            self.owned_pieces.appendAssumeCapacity(pieces);
+            self.pieces.putAssumeCapacity(artifact.key.bytes, pieces);
+        }
+        return .{ .module = artifact.key.bytes, .code = code, .hosted_symbols = symbols };
+    }
+
+    /// One unit's build as a post-check task.
+    const UnitTask = struct {
+        artifact: *const Artifact,
+        prepared: Prepared,
+        /// The imports whose objects are not known yet.
+        remaining: u32,
+        outcome: union(enum) { pending, failed: Error, done: boxy_unit.Built } = .pending,
+
+        fn run(context: *anyopaque, _: post_check_executor.Worker) ?*anyopaque {
+            const self: *UnitTask = @ptrCast(@alignCast(context));
+            self.outcome = if (self.prepared.build()) |built| .{ .done = built } else |err| .{ .failed = err };
+            return null;
+        }
+
+        fn destroy(self: *UnitTask, gpa: Allocator) void {
+            switch (self.outcome) {
+                .pending, .failed => {},
+                .done => |built| built.deinit(gpa),
+            }
+            self.prepared.deinit(gpa);
+            gpa.destroy(self);
+        }
+    };
+
+    /// Build `artifact`'s object once its imports' are known, if it can have
+    /// one now. A module that cannot have one yet is offered again when it
+    /// can; one that never can is known to have none.
+    fn offer(self: *BoxyObjects, artifact: *const Artifact) Error!void {
+        const gpa = self.coordinator.gpa;
+        if (self.records.contains(artifact.key.bytes) or self.units.contains(artifact.key.bytes)) return;
+        const eligible = self.eligibility(artifact);
+        if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: offer {s}: {s}\n", .{ artifact.moduleEnvConst().module_name, @tagName(eligible) });
+        switch (eligible) {
+            .never => {
+                try self.records.put(gpa, artifact.key.bytes, .{ .object = null });
+                try self.release(artifact.key.bytes);
+                return;
+            },
+            .later => {
+                if (artifact.hosted_procs.procs.len != 0) try self.unbound_hosted.append(gpa, artifact);
+                return;
+            },
+            .now => {},
+        }
+        const task = try gpa.create(UnitTask);
+        errdefer gpa.destroy(task);
+        task.* = .{ .artifact = artifact, .prepared = try self.prepare(artifact), .remaining = 0 };
+        errdefer task.prepared.deinit(gpa);
+        try self.units.put(gpa, artifact.key.bytes, task);
+        errdefer _ = self.units.remove(artifact.key.bytes);
+        for (artifact.direct_import_module_keys) |key| {
+            const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
+            try self.offer(imported);
+            if (self.records.contains(imported.key.bytes)) continue;
+            // The import's unit is in progress, or the import is offered
+            // again once it can have an object; either way, knowing its
+            // object releases this unit.
+            const waiting = try self.waiting.getOrPut(gpa, imported.key.bytes);
+            if (!waiting.found_existing) waiting.value_ptr.* = .empty;
+            try waiting.value_ptr.append(gpa, task);
+            task.remaining += 1;
+        }
+        if (task.remaining == 0) try self.ready.append(gpa, task);
+        try self.submitReady();
+    }
+
+    /// Offer the import closure of `module`, which the compile-time program
+    /// evaluating its roots runs against.
+    fn offerClosure(self: *BoxyObjects, module: *const Artifact) Error!void {
+        try self.offer(&self.coordinator.builtin_modules.checked_artifact);
+        for (module.direct_import_module_keys) |key| {
+            const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse continue;
+            try self.offer(imported);
+        }
+    }
+
+    /// Whether this compilation links `artifact`'s object as the scheduler
+    /// builds it. A run links nothing, and a build of another target links
+    /// objects of its own.
+    fn linkNeeds(self: *const BoxyObjects, artifact: *const Artifact) bool {
+        return self.lowering.links and self.coordinator.rootSees(artifact);
+    }
+
+    /// Fix the link's module names now that checking has named every module
+    /// of it. Units started during checking name each module by what the
+    /// module alone says; when two modules turn out to share that name, those
+    /// units named workers the link cannot tell apart, so everything starts
+    /// over under the link's names. A cache entry of the old names stays
+    /// valid under its own key.
+    fn settleNames(self: *BoxyObjects) Error!void {
+        if (self.names_settled) return;
+        self.names_settled = true;
+        var settled = try self.coordinator.boxyLinkDigests();
+        errdefer settled.deinit();
+        if (settled.names.content_named.count() == 0) {
+            settled.deinit();
+            return;
+        }
+        try self.waitUntil({}, nothingRunning);
+        if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: restarting under the link's names: {d} modules share a name, {d} objects and {d} units discarded\n", .{ settled.names.content_named.count(), self.records.count(), self.units.count() });
+        const gpa = self.coordinator.gpa;
+        self.digests.deinit();
+        self.digests = settled;
+        var units = self.units.valueIterator();
+        while (units.next()) |task| task.*.destroy(gpa);
+        self.units.clearRetainingCapacity();
+        var lists = self.waiting.valueIterator();
+        while (lists.next()) |list| list.deinit(gpa);
+        self.waiting.clearRetainingCapacity();
+        self.ready.clearRetainingCapacity();
+        self.records.clearRetainingCapacity();
+        self.closures_known.clearRetainingCapacity();
+        self.object_sets.clearRetainingCapacity();
+        self.interfaces.clear();
+    }
+
+    /// Offer every checked module the program's root sees, and every one a
+    /// unit waits for, that is not known or in progress yet.
+    fn offerPending(self: *BoxyObjects) Error!void {
+        var locations = self.coordinator.checked_artifact_index.valueIterator();
+        while (locations.next()) |location| {
+            const artifact = location.module().checkedArtifact().?;
+            if (self.records.contains(artifact.key.bytes) or self.units.contains(artifact.key.bytes)) continue;
+            if (self.waiting.contains(artifact.key.bytes) or self.linkNeeds(artifact)) try self.offer(artifact);
+        }
+    }
+
+    /// Offer again the modules whose hosted functions no checked platform
+    /// module bound when they were offered.
+    fn offerUnboundHosted(self: *BoxyObjects) Error!void {
+        const gpa = self.coordinator.gpa;
+        var unbound = self.unbound_hosted;
+        self.unbound_hosted = .empty;
+        defer unbound.deinit(gpa);
+        for (unbound.items) |artifact| try self.offer(artifact);
+    }
+
+    /// Build the compile-time program `program` on the session, as soon as
+    /// it has a worker for it.
+    fn submitProgram(context: *anyopaque, program: post_check_executor.Task) Error!void {
+        const self: *BoxyObjects = @ptrCast(@alignCast(context));
+        const gpa = self.coordinator.gpa;
+        try self.program_ids.put(gpa, program.id, {});
+        errdefer _ = self.program_ids.remove(program.id);
+        try self.programs.append(gpa, program);
+        try self.submitReady();
+    }
+
+    /// A finished program's completion, if one is filed.
+    fn takeProgramCompletion(context: *anyopaque) Error!?post_check_executor.Completion {
+        const self: *BoxyObjects = @ptrCast(@alignCast(context));
+        try self.drain();
+        if (self.first_error) |err| return err;
+        return self.program_completions.pop();
+    }
+
+    /// Whether a unit or program finished since the last call, through
+    /// whichever call recorded it; otherwise wait for the next one to
+    /// finish, running queued units and programs on this thread meanwhile.
+    /// False when none finished and none is running: nothing the evaluation
+    /// waits for will happen.
+    fn progress(context: *anyopaque) Error!bool {
+        const self: *BoxyObjects = @ptrCast(@alignCast(context));
+        try self.drain();
+        if (self.first_error) |err| return err;
+        if (self.finished_since_progress) {
+            self.finished_since_progress = false;
+            return true;
+        }
+        if (self.session.outstanding == 0) return false;
+        try self.complete(self.session.receive());
+        return true;
+    }
+
+    /// Submit the programs the evaluation waits for, then ready units, as
+    /// many as the executor takes. While checking continues, one worker is
+    /// left to it.
+    fn submitReady(self: *BoxyObjects) Error!void {
+        const workers = self.session.executor.worker_count;
+        const limit = if (self.coordinator.frontend_complete) workers else @max(1, workers - 1);
+        while (self.programs.items.len != 0 and self.first_error == null and self.session.canSubmit() and self.session.outstanding < limit) {
+            const program = self.programs.pop().?;
+            if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: building a compile-time program ({d} tasks in progress)\n", .{self.session.outstanding + 1});
+            self.session.submit(program) catch |err| {
+                self.programs.appendAssumeCapacity(program);
+                return err;
+            };
+        }
+        while (self.ready.items.len != 0 and self.first_error == null and self.session.canSubmit() and self.session.outstanding < limit) {
+            const task = self.ready.pop().?;
+            try self.keyUnit(&task.prepared);
+            if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: building {s} key {s} ({d} units in progress)\n", .{ task.artifact.moduleEnvConst().module_name, &std.fmt.bytesToHex(task.artifact.key.bytes[0..8], .lower), self.session.outstanding + 1 });
+            self.session.submit(.{ .id = @intFromPtr(task), .context = task, .run = UnitTask.run }) catch |err| {
+                self.ready.appendAssumeCapacity(task);
+                return err;
+            };
+        }
+    }
+
+    /// Record the completions filed with the scheduler's session, without
+    /// waiting for or running anything.
+    fn drain(self: *BoxyObjects) Error!void {
+        while (self.session.tryReceive()) |completion| try self.complete(completion);
+    }
+
+    fn complete(self: *BoxyObjects, completion: post_check_executor.Completion) Error!void {
+        const gpa = self.coordinator.gpa;
+        self.finished_since_progress = true;
+        if (self.program_ids.remove(completion.id)) {
+            try self.program_completions.append(gpa, completion);
+            try self.submitReady();
+            return;
+        }
+        const task: *UnitTask = @ptrFromInt(completion.id);
+        defer task.destroy(gpa);
+        const artifact = task.artifact;
+        if (!self.units.remove(artifact.key.bytes)) Coordinator.coordinatorInvariant("a module's object build completed for a module with no unit", .{});
+        switch (task.outcome) {
+            .pending => Coordinator.coordinatorInvariant("a module's object build completed without an outcome", .{}),
+            .failed => |err| {
+                if (self.first_error == null) self.first_error = err;
+                return;
+            },
+            .done => |built| {
+                task.outcome = .pending;
+                const object = try self.record(artifact, built);
+                try self.records.put(gpa, artifact.key.bytes, .{ .object = object, .key = task.prepared.unit.key, .restored = built.restored });
+            },
+        }
+        try self.release(artifact.key.bytes);
+        try self.submitReady();
+    }
+
+    /// Ready the units waiting for the object of the module with checked key
+    /// `module`, now known.
+    fn release(self: *BoxyObjects, module: [32]u8) Allocator.Error!void {
+        const gpa = self.coordinator.gpa;
+        const entry = self.waiting.fetchRemove(module) orelse return;
+        var list = entry.value;
+        defer list.deinit(gpa);
+        for (list.items) |dependent| {
+            dependent.remaining -= 1;
+            if (dependent.remaining == 0) try self.ready.append(gpa, dependent);
+        }
+    }
+
+    /// Record completions until `done` holds of `context`, waiting for each
+    /// next one and running queued tasks on this thread meanwhile.
+    fn waitUntil(self: *BoxyObjects, context: anytype, comptime done: fn (*BoxyObjects, @TypeOf(context)) bool) Error!void {
+        while (true) {
+            try self.drain();
+            if (self.first_error) |err| return err;
+            if (done(self, context)) return;
+            if (self.session.outstanding == 0) Coordinator.coordinatorInvariant("a module's object waits for an import no unit builds", .{});
+            try self.complete(self.session.receive());
+        }
+    }
+
+    fn nothingRunning(self: *BoxyObjects, _: void) bool {
+        return self.session.outstanding == 0;
+    }
+
+    fn nothingInProgress(self: *BoxyObjects, _: void) bool {
+        return self.units.count() == 0 and self.program_ids.count() == 0;
+    }
+
+    /// Wait for every unit offered so far.
+    pub fn waitAll(self: *BoxyObjects) Error!void {
+        try self.waitUntil({}, nothingInProgress);
+    }
+};
+
 /// Coordinator manages all compilation state and coordinates workers
 pub const Coordinator = struct {
     gpa: Allocator,
@@ -1469,10 +2170,9 @@ pub const Coordinator = struct {
     /// Persistent lane used when the executor runs inline. Keeping it on the
     /// coordinator gives lane-local state the same lifetime in both modes.
     inline_worker_allocs: WorkerAllocators,
-    /// Inline sessions have capacity one, so one coordinator-owned slot is enough.
-    inline_post_check_completion: ?post_check_executor.Completion,
 
-    /// Number of tasks currently being processed by workers (atomic for thread safety)
+    /// Number of tasks queued or being processed by workers, frontend and
+    /// post-check tasks alike (atomic for thread safety)
     inflight: std.atomic.Value(usize),
 
     /// Set by shutdown() to tell workers to stop promptly instead of draining
@@ -1486,35 +2186,39 @@ pub const Coordinator = struct {
     /// `error.OutOfMemory` instead of hanging or silently dropping the failure.
     worker_oom: std.atomic.Value(bool),
 
-    /// Prevents nested or concurrent use of the shared worker result channel.
-    post_check_session_active: std.atomic.Value(bool),
-    /// The work the active post-check session's submitter was doing when the
-    /// session began, if it recorded any. Workers record it while running the
-    /// session's tasks, so a crash on a worker names the stage it was working
-    /// for. Written before any task is sent, so the task channel orders it
-    /// before worker reads.
-    post_check_session_frame: ?base.ice_context.Frame = null,
-    /// Set only after the frontend coordinator loop has drained every task and
-    /// result. Post-check work shares those channels and cannot start earlier.
+    /// The post-check sessions the worker channels serve
+    /// (`messages.PostCheckSession`). Every completion names its session,
+    /// and whichever consumer takes it off the result channel files it with
+    /// that session, so the Boxy unit scheduler's session stays open while
+    /// the general session is borrowed and released around it, and while
+    /// the frontend loop still consumes its own results.
+    /// The coordinating thread's lanes for the post-check tasks it runs
+    /// while waiting in a session.
+    coordinator_lanes: ThreadLanes,
+    /// Every session box allocated, for teardown, and the ones no session
+    /// uses now.
+    all_session_boxes: Channel(*SessionBox),
+    free_session_boxes: Channel(*SessionBox),
+    /// Set only after the frontend coordinator loop has drained every
+    /// frontend task and result.
     frontend_complete: bool,
     /// Set by checked-program finalization: whether it published a program,
     /// which requires a checked app root.
     checked_program: bool = false,
     runtime_lowering: ?compile_build.RuntimeLoweringConfig = null,
-    runtime_output_probe: ?compile_build.RuntimeOutputProbe = null,
-    /// A completed result owns the semantic outcome independently of checked
-    /// modules, which can remain prepared when no live finalization is needed.
-    compilation_result: union(enum) { live, recorded: *const completed.Outcome } = .live,
-    completion_arena: ?*base.SingleThreadArena = null,
-    completion_outcome: completed.Outcome = .{},
-    completion_capture_ns: u64 = 0,
-    completion_observations: std.ArrayList([]const u8) = .empty,
-    completion_demand: std.ArrayList(completed.Demand) = .empty,
+    /// The strategy whose compile-time evaluator completes every module's
+    /// compile-time roots: `.boxy` under `--specialize=no`, `.lss`
+    /// otherwise (design.md "Caching Under `.boxy`"). It is part of each
+    /// checked module's cache identity.
+    specialization_strategy: base.SpecializationStrategy = .lss,
+    /// The lowering of the module objects a `.boxy` compile-time evaluation
+    /// links against, and the host target they are compiled for.
+    boxy_object_lowering: ?BoxyObjectLowering = null,
+    /// The compilation's module objects, once it has one to build.
+    boxy_objects: ?BoxyObjects = null,
     debug_observer: ?eval.CompileTimeFinalization.DebugObserver = null,
-    compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
-    /// Keep the code compile-time evaluation ran as artifacts even without
-    /// an object cache to publish it to, so a test can compare it with a
-    /// build's code.
+    /// Keep compile-time evaluation artifacts so tests can compare them
+    /// with the code emitted by a build.
     keep_compile_time_artifacts: bool = false,
     /// The checked modules whose `expect`s are the developer's own tests, in
     /// the order their test roots join compile-time evaluation. Every command
@@ -1558,19 +2262,6 @@ pub const Coordinator = struct {
 
     /// Optional cache manager for transparent checked-module disk caching.
     cache_manager: ?*CacheManager,
-    /// What reuse of compile-time values from modules' previous cache
-    /// entries did in this compilation (design.md "Compile-Time Value Reuse
-    /// Across Edits").
-    ctfe_reuse_stats: CtfeReuseStats = .{},
-    /// Whether transplanted roots are evaluated anyway and compared with
-    /// their copies before the copies are installed. Compilers with runtime
-    /// safety verify; a test turns it off to exercise the installation an
-    /// optimized compiler performs.
-    verify_transplants: bool = std.debug.runtime_safety,
-    /// The literal values of each program root module this compilation
-    /// evaluated a program for.
-    program_literal_values: std.ArrayList(ProgramLiteralValues) = .empty,
-
     /// Entry directories of the caches `cache_manager` holds, resolved once.
     cache_entry_dirs: CacheEntryDirs,
 
@@ -1699,12 +2390,12 @@ pub const Coordinator = struct {
             .task_channel = try Channel(WorkerTask).init(channel_allocator, initial_task_capacity, roc_ctx.std_io),
             .workers = std.ArrayList(Thread).empty,
             .inline_worker_allocs = WorkerAllocators.init(worker_allocator),
-            .inline_post_check_completion = null,
             .inflight = std.atomic.Value(usize).init(0),
             .shutting_down = std.atomic.Value(bool).init(false),
             .worker_oom = std.atomic.Value(bool).init(false),
-            .post_check_session_active = std.atomic.Value(bool).init(false),
-            .post_check_session_frame = null,
+            .coordinator_lanes = ThreadLanes.init(worker_allocator, max_threads, false),
+            .all_session_boxes = try Channel(*SessionBox).init(channel_allocator, 64, roc_ctx.std_io),
+            .free_session_boxes = try Channel(*SessionBox).init(channel_allocator, 64, roc_ctx.std_io),
             .frontend_complete = false,
             .total_remaining = 0,
             .app_package_name = null,
@@ -1753,8 +2444,10 @@ pub const Coordinator = struct {
             std.debug.print("[COORD DEINIT] shutdown done, freeing packages...\n", .{});
         }
 
-        // A successful frontend consumed every task/result. Only aborted
-        // compilations need to drain channels; the normal path takes no locks.
+        // A successful frontend consumed every frontend task/result, and a
+        // unit scheduler that ran to the end received every completion.
+        // Only aborted compilations need to drain channels; the normal path
+        // takes no locks.
         if (!self.frontend_complete) {
             const payload_alloc = self.getWorkerAllocator();
             while (self.task_channel.tryRecv()) |task| {
@@ -1782,21 +2475,19 @@ pub const Coordinator = struct {
                 discarded.discard(payload_alloc);
             }
         }
-
-        if (self.completion_arena) |arena| {
-            self.completion_demand.deinit(self.gpa);
-            self.completion_observations.deinit(self.gpa);
-            arena.deinit();
-            self.gpa.destroy(arena);
+        if (self.boxy_objects) |*objects| objects.deinit();
+        self.boxy_objects = null;
+        while (self.all_session_boxes.tryRecv()) |box| {
+            box.deinit();
+            self.sessionBoxAllocator().destroy(box);
         }
+        self.all_session_boxes.deinit();
+        self.free_session_boxes.deinit();
+        if (thread_lanes == &self.coordinator_lanes) thread_lanes = null;
+        self.coordinator_lanes.deinit();
+
         if (self.program_session) |*session| session.deinit();
         self.program_session = null;
-        for (self.program_literal_values.items) |entry| {
-            entry.values.deinit();
-            self.gpa.destroy(entry.values);
-            self.gpa.free(entry.module_name);
-        }
-        self.program_literal_values.deinit(self.gpa);
 
         // Free packages
         // Note: ModuleEnv stores its own allocator (env.gpa), so deinit will use the correct
@@ -2385,17 +3076,6 @@ pub const Coordinator = struct {
         try self.checkCancelRequest();
         if (self.release_checked_solver_types) try self.releaseCheckedSolverTypes();
         self.checked_program = mode == .executable_artifacts and self.appRootChecked();
-        if (self.checked_program and self.runtime_lowering != null and !self.hasUserErrors()) {
-            if (self.runtime_output_probe) |probe| {
-                if (try probe.cached(probe.context, self.executableRootCheckedArtifact())) |outcome| {
-                    try self.replayCompleted(outcome);
-                    self.compilation_result = .{ .recorded = outcome };
-                    return;
-                }
-                try self.beginCompletion();
-            }
-        }
-
         if (self.checked_program and self.findRootModule(.platform) != null) {
             const platform_root = self.findRootModule(.platform).?;
             const platform = platform_root.mod.checkedArtifact().?;
@@ -2403,7 +3083,10 @@ pub const Coordinator = struct {
                 if (platform.root_requests.compile_time_requests.len == 0) {
                     // No evaluator is needed to finish this parametric module.
                     // App checking and runtime roots still share one program.
-                    try self.commitPreparedModule(platform_root.pkg, platform_root.mod);
+                    var stores = std.ArrayList(PendingStore).empty;
+                    defer stores.deinit(self.gpa);
+                    try self.commitPreparedModule(platform_root.mod, &stores);
+                    try self.writePendingStores(stores.items);
                 } else {
                     const runtime = self.runtime_lowering;
                     self.runtime_lowering = null;
@@ -2421,11 +3104,9 @@ pub const Coordinator = struct {
             const program_root = if (self.checked_program) self.executableRootCheckedArtifact() else null;
             try self.evaluateProgram(null, program_root);
         }
-        if (self.completion_arena != null) try self.captureCompletionReports();
     }
 
-    /// Evaluate only the live alternative. Recorded compilations return before
-    /// platform evaluation, pairing and shared demand discovery.
+    /// Evaluate the checked program and its compile-time demands.
     fn evaluateProgram(
         self: *Coordinator,
         extra_cached: ?*const CheckedArtifact.CheckedModuleArtifact,
@@ -2434,142 +3115,6 @@ pub const Coordinator = struct {
         return self.evaluatePreparedModules(true, null, extra_cached, program_root);
     }
 
-    /// Full checked closure after resolution and content validation, before any
-    /// evaluation or app/platform pairing. Physical paths serve diagnostic
-    /// rebinding; identity paths exclude compiler-owned staging directories.
-    pub fn compilationModules(self: *Coordinator, allocator: Allocator) Allocator.Error![]completed.Module {
-        var modules = std.ArrayList(completed.Module).empty;
-        errdefer modules.deinit(allocator);
-        var packages = self.packages.iterator();
-        while (packages.next()) |entry| {
-            const pkg = entry.value_ptr.*;
-            const compiler_source = std.mem.eql(u8, pkg.name, package_identity.synthetic_platform_identity) or compiler_platforms.fromIdentity(pkg.name) != null;
-            for (pkg.modules.items) |*mod| {
-                if (mod.checkedArtifact()) |artifact| try modules.append(allocator, .{
-                    .key = artifact.key.bytes,
-                    .path = mod.path,
-                    // Compiler-owned platform locations are logical names;
-                    // their materialization directory is not a program input.
-                    .identity_path = if (compiler_source) mod.name else self.crashReportPath(mod.path),
-                });
-            }
-        }
-        std.mem.sort(completed.Module, modules.items, {}, struct {
-            fn lessThan(_: void, a: completed.Module, b: completed.Module) bool {
-                const order = std.mem.order(u8, &a.key, &b.key);
-                return if (order == .eq) std.mem.lessThan(u8, a.identity_path, b.identity_path) else order == .lt;
-            }
-        }.lessThan);
-        return modules.toOwnedSlice(allocator);
-    }
-
-    fn beginCompletion(self: *Coordinator) Allocator.Error!void {
-        const started = std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds;
-        defer self.completion_capture_ns += @intCast(std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds - started);
-        const arena = try self.gpa.create(base.SingleThreadArena);
-        arena.* = base.SingleThreadArena.init(self.gpa);
-        self.completion_arena = arena;
-        self.completion_outcome.modules = try self.compilationModules(arena.allocator());
-        var packages = self.packages.iterator();
-        while (packages.next()) |entry| for (entry.value_ptr.*.modules.items) |*mod| {
-            mod.completion_report_start = mod.reports.items.len;
-            mod.completion_module_key = if (mod.checkedArtifact()) |artifact| artifact.key.bytes else null;
-        };
-    }
-
-    fn captureDebug(context: *anyopaque, message: []const u8) Allocator.Error!void {
-        const self: *Coordinator = @ptrCast(@alignCast(context));
-        const started = std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds;
-        defer self.completion_capture_ns += @intCast(std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds - started);
-        try self.completion_observations.append(self.gpa, try self.completion_arena.?.allocator().dupe(u8, message));
-    }
-
-    fn captureDemand(context: *anyopaque, demand: lir.CheckedPipeline.ComptimeDemand, roots: []const lir.CheckedPipeline.MonotypeRoot, modules: []const CheckedArtifact.ModuleId, literals: []const lir.CheckedPipeline.MonotypeLiteralRoot) Allocator.Error!void {
-        const self: *Coordinator = @ptrCast(@alignCast(context));
-        const started = std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds;
-        defer self.completion_capture_ns += @intCast(std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds - started);
-        const allocator = self.completion_arena.?.allocator();
-        const evaluated = try allocator.alloc(completed.RootDemand, roots.len);
-        for (roots, evaluated, 0..) |root, *out, i| out.* = .{
-            .root = .{ .module = modules[@backingInt(root.owner)].bytes, .root = @backingInt(root.request.compile_time_root.?) },
-            .reads = try copyCompletionRoots(allocator, demand.rootReads(i)),
-        };
-        const literal_demands = try allocator.alloc(completed.LiteralDemand, demand.literals.len);
-        for (demand.literals, literals, literal_demands) |literal, source, *out| out.* = .{
-            .module = source.module.bytes,
-            .checked_expr = source.site.checked_expr,
-            .kind = source.site.kind,
-            .identity = literal.identity,
-            .reads = try copyCompletionRoots(allocator, demand.reads[literal.reads.start..][0..literal.reads.len]),
-        };
-        try self.completion_demand.append(self.gpa, .{
-            .evaluated = evaluated,
-            .stored = try copyCompletionRoots(allocator, demand.stored),
-            .literals = literal_demands,
-        });
-    }
-
-    fn copyCompletionRoots(allocator: Allocator, roots: []const lir.CheckedPipeline.ComptimeDemandRoot) Allocator.Error![]const completed.Root {
-        const result = try allocator.alloc(completed.Root, roots.len);
-        for (roots, result) |root, *out| out.* = .{ .module = root.module.bytes, .root = @backingInt(root.root) };
-        return result;
-    }
-
-    fn captureCompletionReports(self: *Coordinator) Allocator.Error!void {
-        const started = std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds;
-        defer self.completion_capture_ns += @intCast(std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds - started);
-        const allocator = self.completion_arena.?.allocator();
-        var diagnostics = std.ArrayList(completed.Diagnostic).empty;
-        var packages = self.packages.iterator();
-        while (packages.next()) |entry| for (entry.value_ptr.*.modules.items) |*mod| {
-            const module_key = mod.completion_module_key orelse continue;
-            for (mod.reports.items[mod.completion_report_start..]) |report| try diagnostics.append(allocator, .{
-                .module = module_key,
-                .title = report.title,
-                .severity = report.severity,
-                .file = report.file,
-                .headline = report.headline.elements.items,
-                .body = report.document.elements.items,
-            });
-        };
-        // Reports move to the build's sink after finalization; retain structured
-        // copies before their owner can render and release them.
-        const bytes = try completed.encode(allocator, diagnostics.items);
-        var reader = completed.Reader{ .bytes = bytes, .arena = allocator, .remaining = bytes.len * 4 };
-        self.completion_outcome.diagnostics = reader.read([]completed.Diagnostic) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.InvalidRecord => coordinatorInvariant("the completion writer produced an invalid diagnostic record", .{}),
-        };
-        self.completion_outcome.observations = self.completion_observations.items;
-        self.completion_outcome.demand = self.completion_demand.items;
-    }
-
-    fn replayCompleted(self: *Coordinator, outcome: *const completed.Outcome) Allocator.Error!void {
-        const modules = try self.compilationModules(self.gpa);
-        defer self.gpa.free(modules);
-        for (outcome.diagnostics) |diagnostic| {
-            const location = self.checked_artifact_index.get(diagnostic.module) orelse
-                coordinatorInvariant("validated completion diagnostic omitted its checked module", .{});
-            const mod = location.module();
-            var report = try Report.init(self.gpa, diagnostic.title, "", diagnostic.severity);
-            errdefer report.deinit();
-            report.title = try report.addOwnedString(diagnostic.title);
-            // The record's arena outlives all reports emitted by this build.
-            completed.rebindElements(diagnostic.headline, outcome.modules, modules);
-            completed.rebindElements(diagnostic.body, outcome.modules, modules);
-            try report.headline.elements.appendSlice(diagnostic.headline);
-            try report.document.elements.appendSlice(diagnostic.body);
-            if (completed.rebindPath(diagnostic.file, outcome.modules, modules)) |path| try report.setFile(path);
-            try mod.reports.append(self.gpa, report);
-        }
-        for (outcome.observations) |message| {
-            self.roc_ctx.writeStderr("[dbg] ") catch {};
-            self.roc_ctx.writeStderr(message) catch {};
-            self.roc_ctx.writeStderr("\n") catch {};
-        }
-    }
-
-    /// Return `error.Canceled` when the embedder has asked to abandon this build.
     fn checkCancelRequest(self: *const Coordinator) error{Canceled}!void {
         const request = self.cancel_request orelse return;
         if (request.load(.acquire)) return error.Canceled;
@@ -2944,10 +3489,6 @@ pub const Coordinator = struct {
     /// pick up additional queued work.
     pub fn shutdown(self: *Coordinator) void {
         if (!threads_available) return;
-        if (self.post_check_session_active.load(.acquire)) {
-            base.invariant("{s}", .{"compiler coordinator shut down during a post-check session"});
-        }
-
         // Signal workers to stop before closing channels, so workers that
         // are between recv() calls see the flag and exit instead of
         // processing more buffered tasks.
@@ -2962,6 +3503,10 @@ pub const Coordinator = struct {
             w.join();
         }
         self.workers.clearRetainingCapacity();
+        // The coordinating thread's lanes go with the workers': lane state
+        // is destroyed with the pool.
+        if (thread_lanes == &self.coordinator_lanes) thread_lanes = null;
+        self.coordinator_lanes.deinit();
     }
 
     /// Enqueue a task for processing
@@ -3060,7 +3605,6 @@ pub const Coordinator = struct {
             // cannot return the error itself, so it recorded the OOM here.
             if (self.worker_oom.load(.acquire)) return error.OutOfMemory;
             try self.checkCancelRequest();
-            if (comptime !threading.is_freestanding) @import("cache_cleanup.zig").safePoint(.serial);
 
             var made_progress = false;
 
@@ -3076,10 +3620,6 @@ pub const Coordinator = struct {
                 // Multi-threaded: receive from workers via channel
                 // Use blocking recv with timeout to avoid busy spinning
                 const next_result = self.result_channel.tryRecv() orelse blk: {
-                    if (comptime !threading.is_freestanding) @import("cache_cleanup.zig").safePoint(.{ .waiting = .{
-                        .budget = self.max_threads,
-                        .tasks = self.inflight.load(.acquire),
-                    } });
                     break :blk self.result_channel.recvTimeout(10_000_000);
                 };
                 if (next_result) |result| {
@@ -3093,14 +3633,14 @@ pub const Coordinator = struct {
             if (!made_progress) {
                 if (try self.tryUnblockAllWaiting()) {
                     made_progress = true;
-                } else if (self.inflight.load(.acquire) == 0 and self.task_channel.isEmpty()) {
+                } else if (self.frontendInflight() == 0 and (self.hasWorkers() or self.task_channel.isEmpty())) {
                     if (try self.resolveImportCycles()) made_progress = true;
                 }
             }
 
             if (made_progress) {
                 iterations_without_progress = 0;
-            } else if (self.inflight.load(.acquire) > 0) {
+            } else if (self.frontendInflight() > 0) {
                 // A worker is still processing a task or has one queued.
                 // `inflight` is incremented in enqueueTask before the task is
                 // sent to the channel, so it covers both "queued" and
@@ -3206,7 +3746,7 @@ pub const Coordinator = struct {
             for (package.value_ptr.*.modules.items) |*mod| {
                 if (mod.pending_evaluation != null) continue;
                 const artifact = mod.checkedArtifact() orelse continue;
-                if (artifact.evaluation_state != .finalized or !artifact.hasUnevaluatedRequests()) continue;
+                if (artifact.evaluation_state != .finalized or !artifact.hasUnevaluatedRequests(self.specialization_strategy)) continue;
                 if (dependency_root != null and !dependencies.contains(artifact.key.bytes)) continue;
                 // A platform awaiting its app relation finalizes in the pass
                 // that evaluates the platform alone, which demands every root.
@@ -3215,7 +3755,7 @@ pub const Coordinator = struct {
                 errdefer state.deinit();
                 try artifact.reopenForEvaluation(self.gpa);
                 mod.pending_evaluation = state;
-                mod.reopened_unevaluated = unevaluatedRequestCount(artifact);
+                mod.reopened_unevaluated = unevaluatedRequestCount(artifact, self.specialization_strategy);
             }
         }
         var entries = std.ArrayList(Entry).empty;
@@ -3239,14 +3779,6 @@ pub const Coordinator = struct {
         var indices = std.AutoHashMap([32]u8, usize).init(self.gpa);
         defer indices.deinit();
         for (entries.items, 0..) |entry, index| try indices.put(entry.mod.checkedArtifact().?.key.bytes, index);
-        // A freshly checked module copies the values its previous entry
-        // stored for roots whose value identity is unchanged.
-        var transplants = std.ArrayList(PendingTransplant).empty;
-        defer {
-            for (transplants.items) |*pending| pending.deinit(self.gpa);
-            transplants.deinit(self.gpa);
-        }
-        for (entries.items) |entry| try self.transplantPreviousValues(entry.pkg, entry.mod, &transplants);
         const order = try self.gpa.alloc(usize, entries.items.len);
         defer self.gpa.free(order);
         try dependencyPostOrder(self.gpa, PreparedModuleGraph{ .entries = entries.items, .by_key = &indices }, order);
@@ -3337,7 +3869,9 @@ pub const Coordinator = struct {
                 const artifact = self.checkedArtifactByKey(key.digest()) orelse
                     coordinatorInvariant("program test module has no checked module data", .{});
                 for (artifact.root_requests.requests) |request| {
-                    if (request.kind != .test_expect) continue;
+                    // An expect reading a platform requirement runs only once
+                    // the platform has its app; until then it demands nothing.
+                    if (request.kind != .test_expect or request.requires_pairing) continue;
                     try discovery_requests.append(self.gpa, request);
                     try discovery_sources.append(self.gpa, key.digest());
                 }
@@ -3358,10 +3892,19 @@ pub const Coordinator = struct {
             .include_internal_static_data = config.include_internal_static_data,
         } else .{};
         var options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, &self.ctfe_timing);
+        options.strategy = self.specialization_strategy;
+        options.validate_all_comptime_roots = explicit_runtime;
         options.post_check_executor = self.postCheckExecutor();
+        if (try self.boxyObjects()) |objects| {
+            options.boxy_objects = objects.source();
+            if (self.frontend_complete) try objects.settleNames();
+            // Every module the root sees whose roots are complete already
+            // (evaluated in this compilation or restored from its exact cache entry)
+            // can have its object built now.
+            if (self.checked_program) try objects.offerPending();
+        }
         options.cancel_request = self.cancel_request;
-        options.object_cache = self.compile_time_object_cache;
-        options.keep_artifacts = self.compile_time_object_cache != null or self.keep_compile_time_artifacts;
+        options.keep_artifacts = self.keep_compile_time_artifacts;
         options.cached_debug_modules = cached_debug_modules.items;
         if (self.runtime_lowering) |config| {
             const configured = config.compile_time_discovery_roots;
@@ -3372,53 +3915,8 @@ pub const Coordinator = struct {
                 try discovery_sources.appendSlice(self.gpa, configured.source_modules);
             }
         }
-        // A validation fact does not copy a stored value or its old checked
-        // type references. It permits deferring that value until actually read.
-        var validation_cache = discovery_roots.Cache{ .allocator = self.gpa, .manager = self.cache_manager, .namespace = "semantic-initializer-validation-v1" };
-        defer validation_cache.deinit();
-        var validated_roots = std.AutoHashMapUnmanaged(lir.CheckedPipeline.ComptimeDemandRoot, void).empty;
-        defer validated_roots.deinit(self.gpa);
-        for (entries.items) |entry| {
-            const artifact = entry.mod.checkedArtifact().?;
-            const placement = checkedPlacement(entry.pkg, entry.mod);
-            for (artifact.root_requests.compile_time_requests) |request| {
-                const key = discovery_roots.rootKey(artifact, request);
-                if (try validation_cache.lookup(placement, key)) {
-                    try validation_cache.retain(placement, key);
-                    try validated_roots.put(self.gpa, .{ .module = artifact.key.digest(), .root = request.compile_time_root.? }, {});
-                }
-            }
-        }
-        self.ctfe_reuse_stats.validated_comptime_roots += @intCast(validated_roots.count());
-        if (eval.CompileTimeReuse.traceEnabled()) std.debug.print("ctfe-reuse validated initializers: {d} roots\n", .{validated_roots.count()});
-        // Explicit tests retain check-like validation of every initializer;
-        // uncertified roots remain mandatory even when no test executes.
-        if (explicit_runtime) options.validated_comptime_roots = &validated_roots;
-        var discovery_cache = discovery_roots.Cache{ .allocator = self.gpa, .manager = self.cache_manager };
-        defer discovery_cache.deinit();
-        // Runtime tests settle discovery too, but their execution is never
-        // omitted on the strength of a discovery-only certificate.
-        for (program_roots.requests, 0..) |request, index| {
-            const owner = if (program_roots.source_modules.len == 0) root.key.digest() else program_roots.source_modules[index];
-            _ = try self.registerTestDiscovery(&discovery_cache, request, owner);
-        }
-        var retained: usize = 0;
-        for (discovery_requests.items, discovery_sources.items) |request, owner| {
-            if (try self.registerTestDiscovery(&discovery_cache, request, owner)) {
-                discovery_cache.hits += 1;
-                continue;
-            }
-            discovery_requests.items[retained] = request;
-            discovery_sources.items[retained] = owner;
-            retained += 1;
-        }
-        discovery_requests.shrinkRetainingCapacity(retained);
-        discovery_sources.shrinkRetainingCapacity(retained);
-        self.ctfe_reuse_stats.settled_discovery_roots += discovery_cache.hits;
-        if (eval.CompileTimeReuse.traceEnabled()) std.debug.print("ctfe-reuse settled test discovery: {d} roots\n", .{discovery_cache.hits});
         options.discovery_roots = .{ .requests = discovery_requests.items, .source_modules = discovery_sources.items };
         options.defer_debug_replay = !replay_cached_debug;
-        if (self.completion_arena != null) options.completion_sink = .{ .context = self, .demand = captureDemand, .debug = captureDebug };
         options.debug_observer = self.debug_observer;
         var runtime_target: ?lir.CheckedPipeline.TargetConfig = if (self.runtime_lowering) |config| config.target else null;
         // An explicitly empty test execution subset has no runtime consumer.
@@ -3431,12 +3929,6 @@ pub const Coordinator = struct {
         defer unfinalized.deinit();
         options.unfinalized_reports = .{ .context = &unfinalized, .module = UnfinalizedReportDestinations.module };
         const lowering_set: lir.CheckedPipeline.CheckedModuleSet = .{ .root = CheckedArtifact.loweringViewWithRelations(root, relations), .imports = imports.items };
-        const literal_values = try self.programLiteralValues(lowering_set);
-        if (literal_values) |entry| {
-            options.literal_values = entry.values;
-            options.verify_literal_values = self.verify_transplants;
-        }
-        const literal_records_before = if (literal_values) |entry| entry.values.records.items.len else 0;
         std.debug.assert(self.program_session == null);
         self.program_session = try eval.CompileTimeFinalization.finalizeProgram(
             self.gpa,
@@ -3447,39 +3939,25 @@ pub const Coordinator = struct {
             runtime_target,
             options,
         );
-        const checked_modules: eval.CompileTimeReuse.CheckedModules = .{ .context = self, .find = findCheckedModule };
-        for (transplants.items) |*pending| try eval.CompileTimeReuse.verifyAndInstall(pending.module, &pending.previous, &pending.transplant, checked_modules);
-        if (literal_values) |entry| try self.storeProgramLiteralValues(entry, literal_records_before);
-        for (entries.items) |entry| try self.commitPreparedModule(entry.pkg, entry.mod);
-        try unfinalized.commit();
-        if (!self.hasUserErrors() and self.program_session.?.discovery_silent) {
-            try discovery_cache.publish();
-            for (entries.items) |entry| {
-                const artifact = entry.mod.checkedArtifact().?;
-                const placement = checkedPlacement(entry.pkg, entry.mod);
-                for (artifact.root_requests.compile_time_requests) |request| {
-                    switch (artifact.compile_time_roots.root(request.compile_time_root.?).payload) {
-                        .const_node, .discarded => try validation_cache.retain(placement, discovery_roots.rootKey(artifact, request)),
-                        .pending, .unevaluated, .fn_value, .expect, .runtime => {},
-                    }
-                }
+        // The objects are read by the link and filed by this evaluation;
+        // committing the modules below writes
+        // what the units read.
+        if (self.boxy_objects) |*objects| {
+            if (dependency_root != null) {
+                // Platform-only evaluation can leave app units waiting for
+                // roots evaluated after pairing. Join the readers currently
+                // running before publishing values; queued units resume in
+                // program evaluation, which joins every unit below.
+                try objects.waitUntil({}, BoxyObjects.nothingRunning);
+            } else {
+                try objects.waitAll();
             }
-            try validation_cache.publish();
         }
-    }
-
-    fn registerTestDiscovery(self: *Coordinator, cache: *discovery_roots.Cache, request: CheckedArtifact.RootRequest, owner: CheckedArtifact.ModuleId) Allocator.Error!bool {
-        if (request.kind != .test_expect) return false;
-        const location = self.checked_artifact_index.get(owner.bytes) orelse return false;
-        const module = location.module();
-        const artifact = module.checkedArtifact().?;
-        return cache.register(checkedPlacement(location.pkg, module), discovery_roots.rootKey(artifact, request));
-    }
-
-    /// The checked module of this compilation whose key is `key`.
-    fn findCheckedModule(context: *anyopaque, key: [32]u8) ?*const CheckedArtifact.CheckedModuleArtifact {
-        const self: *Coordinator = @ptrCast(@alignCast(context));
-        return self.checkedArtifactByKey(.{ .bytes = key });
+        var stores = std.ArrayList(PendingStore).empty;
+        defer stores.deinit(self.gpa);
+        for (entries.items) |entry| try self.commitPreparedModule(entry.mod, &stores);
+        try self.writePendingStores(stores.items);
+        try unfinalized.commit();
     }
 
     fn cacheEnabled(self: *const Coordinator) bool {
@@ -3487,211 +3965,14 @@ pub const Coordinator = struct {
         return manager.config.enabled;
     }
 
-    /// Copy into a freshly checked module the roots its previous cache entry
-    /// stored whose value identity is unchanged (design.md "Compile-Time
-    /// Value Reuse Across Edits"). A missing, swept or unreadable entry
-    /// copies nothing. Compilers with runtime safety keep the copies for
-    /// `CompileTimeReuse.verifyAndInstall` after finalization; others install
-    /// them now.
-    fn transplantPreviousValues(
-        self: *Coordinator,
-        pkg: *const PackageState,
-        mod: *ModuleState,
-        pending: *std.ArrayList(PendingTransplant),
-    ) CoordinatorError!void {
-        const manager = self.cache_manager orelse return;
-        if (!manager.config.enabled or mod.reopened_unevaluated != null) return;
-        const artifact = mod.checkedArtifact().?;
-        if (artifact.evaluation_state != .prepared or artifact.pairing_arena != null) return;
-        if (artifact.compile_time_root_identities.rows.len == 0) return;
-        const previous_key = manager.loadPlacementPointer(checkedPlacement(pkg, mod)) orelse return;
-        if (std.mem.eql(u8, &previous_key, &artifact.key.bytes)) return;
-        const data = manager.loadCheckedEntryUncounted(previous_key) orelse return;
-        defer data.deinit(manager.allocator);
-        const bodies = decodeCheckedModuleCacheEntry(.{ .bytes = previous_key }, data.data()) orelse return;
-        const buffer = try self.gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bodies.artifact_body.len);
-        var buffer_owned = true;
-        defer if (buffer_owned) self.gpa.free(buffer);
-        @memcpy(buffer, bodies.artifact_body);
-        const serialized: *const CheckedArtifact.CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(buffer.ptr));
-        serialized.validate(buffer.len) catch return;
-        if (!std.mem.eql(u8, &serialized.key.bytes, &previous_key)) return;
-        var previous = eval.CompileTimeReuse.Previous.fromSerialized(serialized, self.gpa);
-        var previous_owned = true;
-        defer if (previous_owned) previous.deinit();
-        var transplant = try eval.CompileTimeReuse.plan(self.gpa, artifact, &previous);
-        var transplant_owned = true;
-        defer if (transplant_owned) transplant.deinit();
-
-        self.ctfe_reuse_stats.previous_entries += 1;
-        self.ctfe_reuse_stats.pending_roots += transplant.pending_roots;
-        self.ctfe_reuse_stats.transplanted_roots += @intCast(transplant.count());
-        if (eval.CompileTimeReuse.traceEnabled()) self.traceTransplant(mod.qualified_name, artifact, &previous_key, &transplant);
-        if (transplant.count() == 0) return;
-        if (self.verify_transplants) {
-            try pending.append(self.gpa, .{ .module = artifact, .buffer = buffer, .previous = previous, .transplant = transplant });
-            buffer_owned = false;
-            previous_owned = false;
-            transplant_owned = false;
-            return;
-        }
-        try eval.CompileTimeReuse.install(artifact, &previous, &transplant);
-    }
-
-    /// The literal values of the program `lowering` names, loaded from the
-    /// file filed under its placement the first time a program with that
-    /// placement is evaluated. The placement combines the placements of the
-    /// program's top modules (those no other module of it imports), which
-    /// stay the same across edits. Null without an enabled cache, or when a
-    /// top module belongs to no package.
-    fn programLiteralValues(self: *Coordinator, lowering: lir.CheckedPipeline.CheckedModuleSet) CoordinatorError!?ProgramLiteralValues {
-        const manager = self.cache_manager orelse return null;
-        if (!manager.config.enabled) return null;
-        var top = try eval.CompileTimeFinalization.literalTopModules(self.gpa, lowering);
-        defer top.deinit(self.gpa);
-        const Found = struct { placement: [32]u8, name: []const u8 };
-        var found = std.ArrayList(Found).empty;
-        defer found.deinit(self.gpa);
-        for (top.keys()) |key| {
-            const located = located: {
-                var packages = self.packages.iterator();
-                while (packages.next()) |package| {
-                    for (package.value_ptr.*.modules.items) |*mod| {
-                        const artifact = mod.checkedArtifact() orelse continue;
-                        if (std.mem.eql(u8, &artifact.key.bytes, &key) or std.mem.eql(u8, &artifact.codeGenerationKey().bytes, &key))
-                            break :located Found{ .placement = checkedPlacement(package.value_ptr.*, mod), .name = mod.qualified_name };
-                    }
-                }
-                return null;
-            };
-            try found.append(self.gpa, located);
-        }
-        if (found.items.len == 0) return null;
-        std.mem.sort(Found, found.items, {}, struct {
-            fn lessThan(_: void, a: Found, b: Found) bool {
-                return std.mem.order(u8, &a.placement, &b.placement) == .lt;
-            }
-        }.lessThan);
-        var hasher = base.Sha256.init(.{});
-        hasher.update("roc-literal-values-placement\x00");
-        for (found.items) |item| hasher.update(&item.placement);
-        const placement = hasher.finalResult();
-        for (self.program_literal_values.items) |entry| {
-            if (std.mem.eql(u8, &entry.placement, &placement)) return entry;
-        }
-        var name = std.ArrayList(u8).empty;
-        defer name.deinit(self.gpa);
-        for (found.items, 0..) |item, index| {
-            if (index != 0) try name.append(self.gpa, '+');
-            try name.appendSlice(self.gpa, item.name);
-        }
-        const values = try self.gpa.create(eval.LiteralValues.LiteralValues);
-        errdefer self.gpa.destroy(values);
-        values.* = eval.LiteralValues.LiteralValues.init(self.gpa, cache_versioning.entryVersionHash(.literal_values));
-        errdefer values.deinit();
-        if (manager.loadLiteralValues(placement)) |bytes| {
-            defer manager.allocator.free(bytes);
-            try values.load(bytes);
-        }
-        const module_name = try name.toOwnedSlice(self.gpa);
-        errdefer self.gpa.free(module_name);
-        const entry: ProgramLiteralValues = .{ .placement = placement, .module_name = module_name, .values = values };
-        try self.program_literal_values.append(self.gpa, entry);
-        return entry;
-    }
-
-    /// Write the program root module's literal values file, count what the
-    /// finalization did with its literal roots, and trace it.
-    fn storeProgramLiteralValues(self: *Coordinator, entry: ProgramLiteralValues, records_before: usize) CoordinatorError!void {
-        const records = entry.values.records.items[records_before..];
-        var restored: u32 = 0;
-        var verified: u32 = 0;
-        var stored: u32 = 0;
-        for (records) |record| {
-            if (record.outcome == .restored) restored += 1;
-            if (record.verified) verified += 1;
-            if (record.stored) stored += 1;
-        }
-        self.ctfe_reuse_stats.literal_roots += @intCast(records.len);
-        self.ctfe_reuse_stats.restored_literals += restored;
-        self.ctfe_reuse_stats.verified_literals += verified;
-        self.ctfe_reuse_stats.stored_literals += stored;
-        if (eval.CompileTimeReuse.traceEnabled()) self.traceLiteralValues(entry.module_name, records, restored, verified, stored);
-        const manager = self.cache_manager orelse return;
-        const bytes = try entry.values.encode(self.gpa);
-        defer self.gpa.free(bytes);
-        manager.storeLiteralValues(entry.placement, bytes);
-    }
-
-    /// `ROC_CTFE_REUSE_TRACE`: one line per program evaluated, and one per
-    /// literal root.
-    fn traceLiteralValues(self: *Coordinator, module_name: []const u8, records: []const eval.LiteralValues.Record, restored: u32, verified: u32, stored: u32) void {
-        var out = std.Io.Writer.Allocating.init(self.gpa);
-        defer out.deinit();
-        const writer = &out.writer;
-        writer.print("ctfe-reuse literals {s}: {d} of {d} literal roots restored, {d} verified, {d} stored\n", .{
-            module_name,
-            restored,
-            records.len,
-            verified,
-            stored,
-        }) catch return;
-        for (records) |record| {
-            const text = record.text[0..@min(record.text.len, 72)];
-            writer.print("ctfe-reuse literals {s}:   {s}{s}{s} {s}\n", .{
-                module_name,
-                @tagName(record.outcome),
-                if (record.verified) " verified" else "",
-                if (record.stored) " stored" else "",
-                text,
-            }) catch return;
-        }
-        self.roc_ctx.writeStderr(out.written()) catch {};
-    }
-
-    /// `ROC_CTFE_REUSE_TRACE`: one line per module that found its previous
-    /// entry, and one per root copied from it.
-    fn traceTransplant(
-        self: *Coordinator,
-        module_name: []const u8,
-        artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        previous_key: *const [32]u8,
-        transplant: *const eval.CompileTimeReuse.Transplant,
-    ) void {
-        var out = std.Io.Writer.Allocating.init(self.gpa);
-        defer out.deinit();
-        const writer = &out.writer;
-        writer.print("ctfe-reuse {s}: {d} of {d} pending roots from previous entry {x}\n", .{
-            module_name,
-            transplant.count(),
-            transplant.pending_roots,
-            previous_key[0..4],
-        }) catch return;
-        const env = artifact.moduleEnvConst();
-        for (0..transplant.count()) |index| {
-            const root = artifact.compile_time_roots.root(transplant.rootAt(index));
-            const region = switch (root.source) {
-                .def => |def| env.store.getPatternRegion(env.store.getDef(def).pattern),
-                .expr => |expr| env.store.getExprRegion(expr),
-                .hoisted => |hoisted| env.store.getExprRegion(hoisted.expr),
-                .statement => |statement| env.store.getStatementRegion(statement),
-                .required_binding => base.Region.zero(),
-            };
-            const text = env.getSourceAll()[region.start.offset..region.end.offset];
-            writer.print("ctfe-reuse {s}:   root {d} {s} {s}\n", .{
-                module_name,
-                @backingInt(root.id),
-                @tagName(root.kind),
-                text[0..@min(text.len, 72)],
-            }) catch return;
-        }
-        self.roc_ctx.writeStderr(out.written()) catch {};
-    }
-
-    fn unevaluatedRequestCount(artifact: *const CheckedArtifact.CheckedModuleArtifact) usize {
+    /// The roots a compilation under `strategy` has yet to evaluate; a
+    /// `.lss` compilation never evaluates a literal argument root.
+    fn unevaluatedRequestCount(artifact: *const CheckedArtifact.CheckedModuleArtifact, strategy: base.SpecializationStrategy) usize {
         var count: usize = 0;
         for (artifact.root_requests.compile_time_requests) |request| {
             const root = request.compile_time_root orelse continue;
+            if (strategy == .lss and artifact.compile_time_roots.root(root).kind == .literal_argument) continue;
+            if (strategy == .boxy and artifact.compile_time_roots.root(root).boxy_value != null) continue;
             if (artifact.compile_time_roots.root(root).payload == .unevaluated or
                 artifact.compile_time_roots.root(root).payload == .pending) count += 1;
         }
@@ -3803,7 +4084,40 @@ pub const Coordinator = struct {
         }
     };
 
-    fn commitPreparedModule(self: *Coordinator, pkg: *const PackageState, mod: *ModuleState) CoordinatorError!void {
+    /// A finalized module's checked entry, written by a worker after commit.
+    const PendingStore = struct {
+        coordinator: *Coordinator,
+        mod: *ModuleState,
+        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        staged_env: ?CacheManager.StagedPart,
+        fn run(context: *anyopaque, _: post_check_executor.Worker) ?*anyopaque {
+            const self: *PendingStore = @ptrCast(@alignCast(context));
+            self.coordinator.storeCheckedModuleInCache(self.mod, self.artifact, self.staged_env);
+            return null;
+        }
+    };
+
+    /// Write finalized checked modules, including their evaluated constants.
+    fn writePendingStores(self: *Coordinator, stores: []PendingStore) CoordinatorError!void {
+        if (stores.len == 0) return;
+        if (self.hasWorkers()) {
+            var session = try self.postCheckExecutor().begin();
+            defer session.end();
+            var next: usize = 0;
+            var received: usize = 0;
+            while (received < stores.len) {
+                while (next < stores.len and session.canSubmit()) : (next += 1) {
+                    try session.submit(.{ .id = next, .context = &stores[next], .run = PendingStore.run });
+                }
+                _ = session.receive();
+                received += 1;
+            }
+        } else {
+            for (stores) |*store| _ = PendingStore.run(store, undefined);
+        }
+    }
+
+    fn commitPreparedModule(self: *Coordinator, mod: *ModuleState, stores: *std.ArrayList(PendingStore)) CoordinatorError!void {
         const state = mod.pending_evaluation.?;
         const artifact = mod.checkedArtifact().?;
         try eval.CompileTimeFinalization.finishPendingExhaustiveness(artifact, &state.problems);
@@ -3833,14 +4147,19 @@ pub const Coordinator = struct {
         }
         // A reopened cache entry is published again only when this
         // compilation evaluated roots it lacked.
-        const evaluated_more = if (mod.reopened_unevaluated) |before| unevaluatedRequestCount(artifact) < before else true;
+        const evaluated_more = if (mod.reopened_unevaluated) |before| unevaluatedRequestCount(artifact, self.specialization_strategy) < before else true;
         mod.reopened_unevaluated = null;
         if (mod.hasOnlyPreCheckReports() and evaluated_more) {
             if (artifact.pairing_arena == null) {
-                if (self.cacheEnabled()) try eval.CompileTimeReuse.publishPortability(artifact);
-                self.storeCheckedModuleInCache(mod, artifact);
-                if (artifact.compile_time_roots.roots.len != 0) {
-                    if (self.cache_manager) |manager| manager.storePlacementPointer(checkedPlacement(pkg, mod), artifact.key.bytes);
+                if (self.cacheEnabled()) {
+                    const staged_env = mod.staged_checked_env;
+                    mod.staged_checked_env = null;
+                    try stores.append(self.gpa, .{
+                        .coordinator = self,
+                        .mod = mod,
+                        .artifact = artifact,
+                        .staged_env = staged_env,
+                    });
                 }
             } else self.storePlatformPairingInCache(artifact);
         }
@@ -4083,7 +4402,9 @@ pub const Coordinator = struct {
     /// inflight is 0 while work is still pending. The `isEmpty` check is therefore
     /// redundant but kept as a defensive invariant.
     pub fn isComplete(self: *Coordinator) bool {
-        return self.total_remaining == 0 and self.inflight.load(.acquire) == 0 and self.task_channel.isEmpty();
+        // Post-check tasks run alongside the frontend; a frontend task in
+        // the channel counts as in flight, and the inline path counts none.
+        return self.total_remaining == 0 and self.frontendInflight() == 0 and (self.hasWorkers() or self.task_channel.isEmpty());
     }
 
     /// An entry module compiled from a staged copy of the user's file.
@@ -4123,91 +4444,139 @@ pub const Coordinator = struct {
     }
 
     /// A stage-independent view over the persistent compilation workers.
-    ///
-    /// Call this only after `coordinatorLoop` has completed and before shutdown.
-    /// The returned executor is owned by the coordinator thread and must not be
-    /// used concurrently with coordinator lifecycle methods.
+    /// A session may be opened on any thread, a running task included; its
+    /// owner runs the session's queued tasks itself while it waits for a
+    /// completion none of the workers has delivered.
     pub fn postCheckExecutor(self: *Coordinator) post_check_executor.Executor {
-        if (!self.frontend_complete or self.shutting_down.load(.acquire)) {
-            base.invariant("{s}", .{"post-check executor requested outside the completed frontend lifetime"});
+        if (self.shutting_down.load(.acquire)) {
+            base.invariant("{s}", .{"post-check executor requested after the coordinator shut down"});
         }
+        if (thread_lanes == null or !thread_lanes.?.worker) thread_lanes = &self.coordinator_lanes;
         return .{
             .context = self,
-            .worker_count = if (threads_available and self.mode == .multi_threaded and self.workers.items.len > 0)
-                self.workers.items.len
-            else
-                1,
+            .worker_count = self.workerCount(),
+            .lane_count = (self.max_threads + 1) * max_lane_depth,
             .beginFn = beginPostCheckSession,
             .submitFn = submitPostCheckTask,
             .receiveFn = receivePostCheckCompletion,
+            .tryReceiveFn = tryReceivePostCheckCompletion,
             .endFn = endPostCheckSession,
         };
     }
 
-    fn beginPostCheckSession(context: *anyopaque) void {
-        const self: *Coordinator = @ptrCast(@alignCast(context));
-        if (!self.frontend_complete or self.shutting_down.load(.acquire)) {
-            base.invariant("{s}", .{"post-check session started outside the completed frontend lifetime"});
-        }
-        if (self.post_check_session_active.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) {
-            base.invariant("{s}", .{"compiler coordinator started overlapping post-check sessions"});
-        }
-        std.debug.assert(self.inline_post_check_completion == null);
-        self.post_check_session_frame = base.ice_context.innermost();
+    /// Whether worker threads run the tasks the coordinator enqueues; the
+    /// coordinator thread runs them itself otherwise.
+    fn hasWorkers(self: *const Coordinator) bool {
+        return threads_available and self.mode == .multi_threaded and self.workers.items.len > 0;
     }
 
-    fn submitPostCheckTask(context: *anyopaque, task: post_check_executor.Task) Allocator.Error!void {
+    /// The threads that take post-check tasks: the workers, or this thread.
+    fn workerCount(self: *const Coordinator) usize {
+        return if (self.hasWorkers()) self.workers.items.len else 1;
+    }
+
+    fn sessionBoxAllocator(self: *const Coordinator) Allocator {
+        return if (threads_available) thread_safe_allocator else self.gpa;
+    }
+
+    fn beginPostCheckSession(context: *anyopaque) Allocator.Error!*anyopaque {
         const self: *Coordinator = @ptrCast(@alignCast(context));
-        if (!threads_available or self.mode == .single_threaded or self.workers.items.len == 0) {
-            std.debug.assert(self.inline_post_check_completion == null);
-            const allocator = self.inline_worker_allocs.taskAllocators().module;
-            defer self.inline_worker_allocs.resetArena();
-            self.inline_post_check_completion = .{
-                .id = task.id,
-                .worker_id = 0,
-                .value = task.run(task.context, .{
-                    .id = 0,
-                    .allocator = allocator,
-                    .scratch = self.inline_worker_allocs.taskAllocators().scratch,
-                    .lane_state = &self.inline_worker_allocs.post_check_lane_state,
-                }),
+        if (self.shutting_down.load(.acquire)) {
+            base.invariant("{s}", .{"post-check session started after the coordinator shut down"});
+        }
+        const box = self.free_session_boxes.tryRecv() orelse blk: {
+            const allocator = self.sessionBoxAllocator();
+            const box = try allocator.create(SessionBox);
+            errdefer allocator.destroy(box);
+            // A session has at most `worker_count` tasks out, so neither
+            // channel fills.
+            const capacity = self.workerCount() + 1;
+            box.* = .{
+                .tasks = try Channel(post_check_executor.Task).init(allocator, capacity, self.roc_ctx.std_io),
+                .completions = undefined,
             };
-            return;
-        }
-        // enqueueTask increments inflight before sending and rolls it back if
-        // channel growth fails, so a failed submit accepts no work.
-        try self.enqueueTask(.{ .post_check = task });
+            errdefer box.tasks.deinit();
+            box.completions = try Channel(post_check_executor.Completion).init(allocator, capacity, self.roc_ctx.std_io);
+            errdefer box.completions.deinit();
+            self.all_session_boxes.sendGrowable(box) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.Closed => base.invariant("{s}", .{"a post-check session began after the coordinator's boxes closed"}),
+            };
+            break :blk box;
+        };
+        box.frame = base.ice_context.innermost();
+        return box;
     }
 
-    fn receivePostCheckCompletion(context: *anyopaque) post_check_executor.Completion {
+    fn submitPostCheckTask(context: *anyopaque, handle: *anyopaque, task: post_check_executor.Task) Allocator.Error!void {
         const self: *Coordinator = @ptrCast(@alignCast(context));
-        if (!threads_available or self.mode == .single_threaded or self.workers.items.len == 0) {
-            const completion = self.inline_post_check_completion orelse
-                base.invariant("{s}", .{"inline post-check receive without a submitted task"});
-            self.inline_post_check_completion = null;
-            return completion;
-        }
-        const result = self.result_channel.recv() orelse
-            base.invariant("{s}", .{"post-check result channel closed while a session was active"});
-        _ = self.inflight.fetchSub(1, .monotonic);
-        return switch (result) {
-            .post_check => |completion| completion,
-            .parsed,
-            .canonicalized,
-            .canonicalized_cached,
-            .type_checked,
-            .operation_failed,
-            .worker_oom,
-            => coordinatorInvariant("post-check session received a {t} result", .{std.meta.activeTag(result)}),
+        const box: *SessionBox = @ptrCast(@alignCast(handle));
+        box.tasks.send(task) catch base.invariant("{s}", .{"a post-check session's task queue refused a task within its window"});
+        if (!self.hasWorkers()) return;
+        // A token wakes a worker, which takes whatever task of the box is
+        // queued then; the owner may have run this one itself meanwhile.
+        self.task_channel.sendGrowable(.{ .post_check = box }) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Closed => base.invariant("{s}", .{"a post-check task was submitted after the worker channel closed"}),
         };
     }
 
-    fn endPostCheckSession(context: *anyopaque) void {
+    /// Run `task` of `box` on this thread, on the lane of the current
+    /// nesting depth, and deliver its completion.
+    fn runSessionTask(box: *SessionBox, task: post_check_executor.Task) void {
+        const lanes = thread_lanes orelse base.invariant("{s}", .{"a post-check task ran on a thread without lanes"});
+        if (lanes.depth == max_lane_depth) base.invariant("{s}", .{"post-check sessions nested deeper than a thread's lanes"});
+        const depth = lanes.depth;
+        lanes.depth += 1;
+        defer lanes.depth -= 1;
+        const allocs = lanes.at(depth);
+        const ice = if (box.frame) |frame| base.ice_context.enter(frame) else null;
+        defer if (ice) |guard| guard.leave();
+        const lane_id = lanes.laneId(depth);
+        const value = task.run(task.context, .{
+            .id = lane_id,
+            .allocator = allocs.taskAllocators().module,
+            .scratch = allocs.taskAllocators().scratch,
+            .lane_state = &allocs.post_check_lane_state,
+        });
+        allocs.resetArena();
+        box.completions.send(.{ .id = task.id, .worker_id = lane_id, .value = value }) catch base.invariant("{s}", .{"a post-check session's completions refused a completion within its window"});
+    }
+
+    fn receivePostCheckCompletion(_: *anyopaque, handle: *anyopaque) post_check_executor.Completion {
+        const box: *SessionBox = @ptrCast(@alignCast(handle));
+        while (true) {
+            if (box.completions.tryRecv()) |completion| return completion;
+            // Nobody else submits to this session, so once its queue is
+            // empty every task of it is running on another thread, which
+            // delivers the completion this wait is for.
+            if (box.tasks.tryRecv()) |task| {
+                runSessionTask(box, task);
+                continue;
+            }
+            return box.completions.recv() orelse base.invariant("{s}", .{"a post-check session's completions closed while a task was out"});
+        }
+    }
+
+    fn tryReceivePostCheckCompletion(_: *anyopaque, handle: *anyopaque) ?post_check_executor.Completion {
+        const box: *SessionBox = @ptrCast(@alignCast(handle));
+        return box.completions.tryRecv();
+    }
+
+    fn endPostCheckSession(context: *anyopaque, handle: *anyopaque) void {
         const self: *Coordinator = @ptrCast(@alignCast(context));
-        std.debug.assert(self.inline_post_check_completion == null);
-        std.debug.assert(self.inflight.load(.acquire) == 0);
-        std.debug.assert(self.task_channel.isEmpty());
-        self.post_check_session_active.store(false, .release);
+        const box: *SessionBox = @ptrCast(@alignCast(handle));
+        std.debug.assert(box.tasks.isEmpty() and box.completions.isEmpty());
+        box.frame = null;
+        self.free_session_boxes.sendGrowable(box) catch |err| switch (err) {
+            // The box stays in `all_session_boxes` for teardown.
+            error.OutOfMemory, error.Closed => {},
+        };
+    }
+
+    /// The frontend tasks queued or running.
+    fn frontendInflight(self: *const Coordinator) usize {
+        return self.inflight.load(.acquire);
     }
 
     fn createOwnedSemanticResult(
@@ -4281,6 +4650,20 @@ pub const Coordinator = struct {
     ) Allocator.Error!void {
         const serialized = try writer.appendAlloc(arena_alloc, T.Serialized);
         try serialized.serialize(value, arena_alloc, writer);
+    }
+
+    /// The digests of every checked module of this compilation, its link.
+    pub fn boxyLinkDigests(self: *Coordinator) Allocator.Error!boxy_interface.Digests {
+        var artifacts = std.ArrayList(*const CheckedModuleArtifact).empty;
+        defer artifacts.deinit(self.gpa);
+        try artifacts.append(self.gpa, &self.builtin_modules.checked_artifact);
+        var packages = self.packages.iterator();
+        while (packages.next()) |package| {
+            for (package.value_ptr.*.modules.items) |*mod| {
+                if (mod.checkedArtifact()) |artifact| try artifacts.append(self.gpa, artifact);
+            }
+        }
+        return try boxy_interface.Digests.init(self.gpa, artifacts.items);
     }
 
     fn checkedModuleCacheKey(
@@ -4483,11 +4866,12 @@ pub const Coordinator = struct {
         return header.install(platform, arena);
     }
 
-    fn storeCheckedModuleInCache(self: *Coordinator, mod: *ModuleState, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) void {
+    /// Write `artifact`'s checked entry. `staged_env` is the module's staged
+    /// source environment, taken from the module by the caller; this reads
+    /// nothing else of the module's mutable state, so it runs on any thread.
+    fn storeCheckedModuleInCache(self: *Coordinator, mod: *const ModuleState, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, staged_env: ?CacheManager.StagedPart) void {
         const manager = self.cache_manager orelse return;
         if (!manager.config.enabled) return;
-        const staged_env = mod.staged_checked_env;
-        mod.staged_checked_env = null;
         defer if (staged_env) |part| manager.discardStagedPart(part);
         // A released solver type store survives only in its staged part; a
         // staging failure was already counted when it happened.
@@ -4986,8 +5370,11 @@ pub const Coordinator = struct {
             .type_checked => |*r| try self.handleTypeChecked(r),
             .operation_failed => |r| return self.handleOperationFailed(r),
             .worker_oom => return error.OutOfMemory,
-            .post_check => coordinatorInvariant("post-check completions are received by the post-check session, never handleResult", .{}),
         }
+        // The unit scheduler's completions arrive in its own session while
+        // frontend tasks run; recording them releases the units waiting
+        // for them.
+        if (self.boxy_objects) |*objects| try objects.drain();
     }
 
     /// Handle a successful parse result
@@ -5713,7 +6100,7 @@ pub const Coordinator = struct {
     }
 
     /// Handle a successful type-check result
-    fn handleTypeChecked(self: *Coordinator, result: *TypeCheckedResult) Allocator.Error!void {
+    fn handleTypeChecked(self: *Coordinator, result: *TypeCheckedResult) CoordinatorError!void {
         if (comptime trace_build) {
             std.debug.print("[COORD] TYPE_CHECKED: pkg={s} module={s} result_reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
@@ -5795,6 +6182,78 @@ pub const Coordinator = struct {
         }
 
         try self.completeModuleSuccessfully(pkg, result.module_id);
+
+        // A compilation that links the objects it builds builds each one as
+        // soon as the module can have one, while checking continues.
+        // Only a module the program's roots can reach is built this early:
+        // the root's exact visibility is known once the root is checked. A
+        // root module waits for that too, since the program's own root links
+        // no library object.
+        if (self.runtime_lowering != null) if (try self.boxyObjects()) |objects| {
+            if (self.moduleIsPlatformRoot(mod)) try objects.offerUnboundHosted();
+            if (objects.lowering.links and !self.moduleIsRoot(mod) and try self.reachableFromRoots(mod)) try objects.offer(artifact_ptr);
+        };
+    }
+
+    /// The compilation's Boxy unit scheduler: with `--specialize=no`, a
+    /// cache to file the objects in, and a host that runs native code.
+    fn boxyObjects(self: *Coordinator) CoordinatorError!?*BoxyObjects {
+        if (self.boxy_objects) |*objects| return objects;
+        if (comptime eval.CompileTimeFinalization.compilerHostMustUseInterpreterForCtfe()) return null;
+        if (self.specialization_strategy != .boxy) return null;
+        const lowering = self.boxy_object_lowering orelse return null;
+        const manager = self.cache_manager orelse return null;
+        if (!manager.config.enabled) return null;
+        self.boxy_objects = try BoxyObjects.init(self, lowering, manager);
+        self.boxy_objects.?.bindOwnedInterfaces();
+        return &self.boxy_objects.?;
+    }
+
+    /// Whether `mod` is the root package's root module or the platform's.
+    fn moduleIsRoot(self: *Coordinator, mod: *ModuleState) bool {
+        if (self.moduleIsPlatformRoot(mod)) return true;
+        const pkg = self.packages.get(self.root_package_name orelse return false) orelse return false;
+        return pkg.getModule(pkg.root_module_id orelse return false) == mod;
+    }
+
+    /// Whether the program's root sees `artifact` (its lowering
+    /// visibility), which is what its link needs the object of. The root
+    /// itself is the root unit, under its own key.
+    fn rootSees(self: *Coordinator, artifact: *const CheckedArtifact.CheckedModuleArtifact) bool {
+        if (!self.checked_program) return false;
+        const root = self.executableRootCheckedArtifact();
+        for (root.lowering_visibility.module_ids) |key| {
+            if (std.mem.eql(u8, &key.bytes, &artifact.key.bytes)) return true;
+        }
+        return false;
+    }
+
+    /// Whether `target` is reachable through import edges from the root
+    /// package's root module or the platform root: every module the
+    /// program's root will see is, and the edges are known as modules are
+    /// canonicalized, before the root is checked.
+    fn reachableFromRoots(self: *Coordinator, target: *const ModuleState) Allocator.Error!bool {
+        var visited = std.AutoHashMapUnmanaged(*const ModuleState, void).empty;
+        defer visited.deinit(self.gpa);
+        var work = std.ArrayList(ModuleRef).empty;
+        defer work.deinit(self.gpa);
+        const root_package_name = self.root_package_name orelse return false;
+        if (self.packages.get(root_package_name)) |pkg| if (pkg.root_module_id) |root_id| try work.append(self.gpa, .{ .pkg = pkg, .module_id = root_id });
+        if (self.platformRootCandidate()) |platform| {
+            const platform_id = platform.pkg.root_module_id orelse coordinatorInvariant("platform root package has no root module", .{});
+            try work.append(self.gpa, .{ .pkg = platform.pkg, .module_id = platform_id });
+        }
+        while (work.pop()) |ref| {
+            const mod = ref.module();
+            if (mod == target) return true;
+            if ((try visited.getOrPut(self.gpa, mod)).found_existing) continue;
+            for (mod.imports.items) |edge| try work.append(self.gpa, .{ .pkg = ref.pkg, .module_id = edge.module_id });
+            for (mod.external_imports.items) |edge| {
+                const resolved = edge.target orelse continue;
+                try work.append(self.gpa, resolved.module);
+            }
+        }
+        return false;
     }
 
     /// Preserve the operational failure for reporting and watch mode, then
@@ -6712,6 +7171,10 @@ pub const Coordinator = struct {
         errdefer destroyModuleEnvAndSource(env);
         errdefer parse_ast.deinit();
 
+        if (self.cache_manager) |manager| {
+            try @import("source_inventory.zig").publishAst(task_allocs.scratch, manager, parse_ast);
+        }
+
         // The result payloads outlive this task, so they use the result
         // allocator. Only import-discovery intermediates use task scratch below.
         const worker_alloc = task_allocs.result;
@@ -7010,7 +7473,8 @@ pub const Coordinator = struct {
         var local_ctfe_timing = eval.CompileTimeFinalization.Timing.init(self.roc_ctx.std_io);
         if (self.detailed_lowering_timing) local_ctfe_timing.lowering.enableDetailedMonotypeBody();
         const ctfe_timing = &local_ctfe_timing;
-        const ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing);
+        var ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing);
+        ctfe_options.strategy = self.specialization_strategy;
         // Import resolution runs inside the type-check task and records its
         // own diagnostics on the env, after the canonicalize task already
         // reported the ones canonicalization recorded.
@@ -7159,8 +7623,11 @@ pub const Coordinator = struct {
         // - gpa: smp_allocator for long-lived data (ModuleEnv, source)
         // - arena: for temporary allocations, reset between tasks
         const backing = if (threads_available) thread_safe_allocator else self.gpa;
-        var worker_allocs = WorkerAllocators.init(backing);
-        defer worker_allocs.deinit();
+        var lanes = ThreadLanes.init(backing, worker_id, true);
+        defer lanes.deinit();
+        thread_lanes = &lanes;
+        defer thread_lanes = null;
+        const worker_allocs = lanes.at(0);
 
         while (true) {
             // Check shutdown flag before blocking on the next task.
@@ -7173,21 +7640,10 @@ pub const Coordinator = struct {
             const t = self.task_channel.recv() orelse break;
 
             if (t == .post_check) {
-                const task = t.post_check;
-                const ice = if (self.post_check_session_frame) |frame| base.ice_context.enter(frame) else null;
-                defer if (ice) |guard| guard.leave();
-                const completion: WorkerResult = .{ .post_check = .{
-                    .id = task.id,
-                    .worker_id = worker_id,
-                    .value = task.run(task.context, .{
-                        .id = worker_id,
-                        .allocator = worker_allocs.taskAllocators().module,
-                        .scratch = worker_allocs.taskAllocators().scratch,
-                        .lane_state = &worker_allocs.post_check_lane_state,
-                    }),
-                } };
-                worker_allocs.resetArena();
-                self.result_channel.send(completion) catch break;
+                // A token of a session: run a task of it if one is still
+                // queued.
+                const box: *SessionBox = @ptrCast(@alignCast(t.post_check));
+                if (box.tasks.tryRecv()) |task| runSessionTask(box, task);
                 continue;
             }
 
@@ -7286,6 +7742,7 @@ fn compileAppWithCheckedModuleCache(
         .enabled = true,
         .cache_dir = cache_dir,
     }, roc_ctx);
+    defer cache_manager.deinit();
 
     const builtin_modules = try sharedBuiltinModules();
 
@@ -7408,6 +7865,7 @@ fn compileAppFactsWithWorkers(
         .enabled = cache_dir != null,
         .cache_dir = cache_dir orelse "",
     }, roc_ctx);
+    defer cache_manager.deinit();
 
     const builtin_modules = try sharedBuiltinModules();
 
@@ -7490,13 +7948,7 @@ fn compileAppFactsWithWorkers(
             if (mod.checkedArtifact()) |artifact| {
                 try keys.append(allocator, artifact.key.bytes);
                 if (!coord.hasUserErrors()) {
-                    // Portability is populated only when the optional cross-edit
-                    // value cache is used. Compare all semantic columns, including
-                    // evaluated values and their references, without that cache's
-                    // population bookkeeping.
-                    var semantic_artifact = artifact.*;
-                    semantic_artifact.compile_time_root_portability = .{};
-                    const bytes = try serializedCheckedArtifactBytes(arena, &semantic_artifact);
+                    const bytes = try serializedCheckedArtifactBytes(arena, artifact);
                     var hash = base.Sha256.init(.{});
                     hash.update(bytes);
                     try digests.append(allocator, hash.finalResult());
@@ -7641,6 +8093,7 @@ fn compileAppRootIdentityExpecting(
         .enabled = true,
         .cache_dir = cache_dir,
     }, roc_ctx);
+    defer cache_manager.deinit();
 
     const builtin_modules = try sharedBuiltinModules();
 
@@ -8182,34 +8635,22 @@ test "issue 11389 cached platform evaluates app-dependent constants for each bin
 
 /// What one compilation of an app reports about compile-time value reuse.
 const ReuseRun = struct {
-    stats: CtfeReuseStats,
     stderr: []u8,
     /// The app module's top-level root names and their value identities.
     names: [][]u8,
     identities: [][32]u8,
-    /// The app module's stored `I64` constants, by name, as evaluated or
-    /// transplanted.
+    /// The app module's stored `I64` constants, by name.
     values: []?i64,
-    /// What each per-program literal root did, with its source owned.
-    literals: []eval.LiteralValues.Record,
-    /// The checked occurrence of every named type in each root's stored
-    /// value and type, by name, in walk order.
-    occurrences: [][]NamedOccurrence,
     /// The app module's checked key, whose version-specific checked types
     /// no stored closed occurrence of an imported type names.
     module_key: [32]u8,
     hoisted: []HoistedIdentity,
 
     const HoistedIdentity = struct { text: []u8, value: [32]u8 };
-    const NamedOccurrence = struct { ty_module: [32]u8, ty: u32 };
 
     fn deinit(self: *ReuseRun, allocator: Allocator) void {
         for (self.hoisted) |entry| allocator.free(entry.text);
         allocator.free(self.hoisted);
-        for (self.occurrences) |list| allocator.free(list);
-        allocator.free(self.occurrences);
-        for (self.literals) |literal| allocator.free(literal.text);
-        allocator.free(self.literals);
         for (self.names) |name| allocator.free(name);
         allocator.free(self.names);
         allocator.free(self.identities);
@@ -8237,41 +8678,20 @@ const ReuseRun = struct {
     fn value(self: *const ReuseRun, name: []const u8) ?i64 {
         return self.values[self.index(name)];
     }
-
-    fn namedOccurrences(self: *const ReuseRun, name: []const u8) []const NamedOccurrence {
-        return self.occurrences[self.index(name)];
-    }
-
-    /// The literal root whose source is `text`.
-    fn literalRoot(self: *const ReuseRun, text: []const u8) eval.LiteralValues.Record {
-        for (self.literals) |candidate| {
-            if (std.mem.eql(u8, candidate.text, text)) return candidate;
-        }
-        std.debug.panic("no literal root {s}", .{text});
-    }
-
-    fn literalIdentity(self: *const ReuseRun, text: []const u8) [32]u8 {
-        return self.literalRoot(text).identity orelse std.debug.panic("literal root {s} has no value identity", .{text});
-    }
 };
 
 fn compileForReuse(allocator: Allocator, cache_dir: []const u8, app_path: []const u8) CheckedModuleCacheRunError!ReuseRun {
-    return compileForReuseVerifying(allocator, cache_dir, app_path, std.debug.runtime_safety);
+    return compileForReuseWithStrategy(allocator, cache_dir, app_path, null, .lss);
 }
 
-fn compileForReuseVerifying(allocator: Allocator, cache_dir: []const u8, app_path: []const u8, verify: bool) CheckedModuleCacheRunError!ReuseRun {
-    return compileForReuseWith(allocator, cache_dir, app_path, verify, null);
-}
-
-/// Compile the app, and, given a runtime target, build its runtime program
-/// from the evaluation's specialization.
-fn compileForReuseWith(allocator: Allocator, cache_dir: []const u8, app_path: []const u8, verify: bool, runtime: ?lir.CheckedPipeline.TargetConfig) CheckedModuleCacheRunError!ReuseRun {
+fn compileForReuseWithStrategy(allocator: Allocator, cache_dir: []const u8, app_path: []const u8, runtime: ?lir.CheckedPipeline.TargetConfig, strategy: base.SpecializationStrategy) CheckedModuleCacheRunError!ReuseRun {
     var stderr_capture: StderrCapture = .{ .allocator = allocator };
     defer stderr_capture.bytes.deinit(allocator);
     var roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
     roc_ctx.ctx = &stderr_capture;
     roc_ctx.vtable.writeStderr = StderrCapture.write;
     var cache_manager = CacheManager.init(allocator, .{ .enabled = true, .cache_dir = cache_dir }, roc_ctx);
+    defer cache_manager.deinit();
     var coord = try Coordinator.init(
         allocator,
         .single_threaded,
@@ -8284,7 +8704,7 @@ fn compileForReuseWith(allocator: Allocator, cache_dir: []const u8, app_path: []
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
-    coord.verify_transplants = verify;
+    coord.specialization_strategy = strategy;
     var arena_impl = base.SingleThreadArena.init(allocator);
     defer arena_impl.deinit();
     try coord.start();
@@ -8315,11 +8735,6 @@ fn compileForReuseWith(allocator: Allocator, cache_dir: []const u8, app_path: []
     errdefer identities.deinit(allocator);
     var values = std.ArrayList(?i64).empty;
     errdefer values.deinit(allocator);
-    var occurrences = std.ArrayList([]ReuseRun.NamedOccurrence).empty;
-    errdefer {
-        for (occurrences.items) |list| allocator.free(list);
-        occurrences.deinit(allocator);
-    }
     var hoisted = std.ArrayList(ReuseRun.HoistedIdentity).empty;
     errdefer {
         for (hoisted.items) |entry| allocator.free(entry.text);
@@ -8350,115 +8765,17 @@ fn compileForReuseWith(allocator: Allocator, cache_dir: []const u8, app_path: []
             if (node == .scalar and node.scalar == .i64) stored = node.scalar.i64;
         }
         try values.append(allocator, stored);
-        try occurrences.append(allocator, try storedNamedOccurrences(allocator, &coord, app, root));
-    }
-    var literals = std.ArrayList(eval.LiteralValues.Record).empty;
-    errdefer {
-        for (literals.items) |literal| allocator.free(literal.text);
-        literals.deinit(allocator);
-    }
-    for (coord.program_literal_values.items) |entry| {
-        for (entry.values.records.items) |record| {
-            var copy = record;
-            copy.text = try allocator.dupe(u8, record.text);
-            literals.append(allocator, copy) catch |err| {
-                allocator.free(copy.text);
-                return err;
-            };
-        }
     }
     const stderr = try stderr_capture.bytes.toOwnedSlice(allocator);
     errdefer allocator.free(stderr);
     return .{
-        .stats = coord.ctfe_reuse_stats,
         .stderr = stderr,
         .names = try names.toOwnedSlice(allocator),
         .identities = try identities.toOwnedSlice(allocator),
         .values = try values.toOwnedSlice(allocator),
-        .literals = try literals.toOwnedSlice(allocator),
-        .occurrences = try occurrences.toOwnedSlice(allocator),
         .module_key = app.key.bytes,
         .hoisted = try hoisted.toOwnedSlice(allocator),
     };
-}
-
-/// The checked occurrences of the named types in a root's stored value and
-/// type, each checked to re-enter, in this compilation's checked modules, the
-/// nominal type it stands for.
-fn storedNamedOccurrences(
-    allocator: Allocator,
-    coord: *Coordinator,
-    app: *const CheckedArtifact.CheckedModuleArtifact,
-    root: CheckedArtifact.CompileTimeRoot,
-) (Allocator.Error || error{TestUnexpectedResult})![]ReuseRun.NamedOccurrence {
-    var found = std.ArrayList(ReuseRun.NamedOccurrence).empty;
-    errdefer found.deinit(allocator);
-    var named_types = std.ArrayList(check.ConstStore.NamedType).empty;
-    defer named_types.deinit(allocator);
-    const node = switch (root.payload) {
-        .const_node => |node| node,
-        .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => return found.toOwnedSlice(allocator),
-    };
-    var nodes = std.ArrayList(check.ConstStore.ConstNodeId).empty;
-    defer nodes.deinit(allocator);
-    try nodes.append(allocator, node);
-    while (nodes.pop()) |current| switch (app.const_store.get(current)) {
-        .nominal => |nominal| {
-            try named_types.append(allocator, nominal.named_type);
-            try nodes.append(allocator, nominal.backing);
-        },
-        .box => |payload| try nodes.append(allocator, payload),
-        .list => |list| switch (list) {
-            .nodes => |items| try nodes.appendSlice(allocator, items),
-            .packed_bytes, .empty => {},
-        },
-        .tuple, .record => |items| try nodes.appendSlice(allocator, items),
-        .tag => |tag| try nodes.appendSlice(allocator, tag.payloads),
-        .pending, .zst, .scalar, .str, .crash, .checked_error, .fn_value => {},
-    };
-    const def = switch (root.source) {
-        .def => |def| def,
-        .expr, .statement, .required_binding, .hoisted => null,
-    };
-    if (def) |def_idx| if (app.top_level_values.lookupByDef(def_idx)) |top| switch (top.value) {
-        .const_ref => |ref| switch (app.const_templates.get(ref).state) {
-            .stored_const => |stored| {
-                var types = std.ArrayList(check.ConstStore.ConstTypeId).empty;
-                defer types.deinit(allocator);
-                var seen = collections.DenseMap(check.ConstStore.ConstTypeId, void).init(allocator);
-                defer seen.deinit();
-                try types.append(allocator, stored.root_type);
-                while (types.pop()) |ty| {
-                    if ((try seen.getOrPut(ty)).found_existing) continue;
-                    const store = &app.const_store.type_store;
-                    switch (store.get(ty)) {
-                        .named => |named| {
-                            try named_types.append(allocator, named.named_type);
-                            try types.appendSlice(allocator, store.typeSpan(named.args));
-                        },
-                        .list, .box => |elem| try types.append(allocator, elem),
-                        .tuple => |span| try types.appendSlice(allocator, store.typeSpan(span)),
-                        .record => |span| for (store.fieldSpan(span)) |field| try types.append(allocator, field.ty),
-                        .tag_union => |span| for (store.tagSpan(span)) |tag| try types.appendSlice(allocator, store.typeSpan(tag.payloads)),
-                        .primitive, .zst, .erased, .func => {},
-                    }
-                }
-            },
-            .reserved, .eval_template, .unimplemented => {},
-        },
-        .procedure_binding => {},
-    };
-    for (named_types.items) |named_type| {
-        const owner = coord.checkedArtifactByKey(.{ .bytes = named_type.ty_module.bytes }) orelse return error.TestUnexpectedResult;
-        const types = owner.checked_types.view();
-        if (@backingInt(named_type.ty) >= types.payloadCount()) return error.TestUnexpectedResult;
-        switch (types.payload(named_type.ty)) {
-            .nominal => |nominal| if (!std.mem.eql(u8, &nominal.owner_module.bytes, &named_type.module.bytes)) return error.TestUnexpectedResult,
-            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
-        }
-        try found.append(allocator, .{ .ty_module = named_type.ty_module.bytes, .ty = @backingInt(named_type.ty) });
-    }
-    return found.toOwnedSlice(allocator);
 }
 
 const reuse_platform =
@@ -8546,141 +8863,63 @@ test "compile-time value identity changes exactly with what a root reads" {
     try std.testing.expectEqual(@as(?i64, 4), file_edit.value("size"));
 }
 
-test "an edited module reuses the compile-time values its edit leaves unchanged" {
+test "imported edits recompute nominal literal results and changed conversions" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try writeReuseFixture(&tmp, reuse_app);
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "data.txt", .data = "abc" });
-    try tmp.dir.createDirPath(std.testing.io, "cold");
-    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
-    defer allocator.free(cache);
-    const cold_cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cold", allocator);
-    defer allocator.free(cold_cache);
-    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
-    defer allocator.free(app);
-
-    var first = try compileForReuse(allocator, cache, app);
-    defer first.deinit(allocator);
-    try std.testing.expectEqual(@as(u32, 0), first.stats.previous_entries);
-    try std.testing.expectEqualStrings("[dbg] 40\n", first.stderr);
-
-    // A comment changes the module's cache key and no root's identity:
-    // every evaluated value is transplanted, and the build reports and
-    // stores exactly what a cold build of the edited source does.
-    const commented = reuse_app ++ "# a trailing comment\n";
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = commented });
-    var warm = try compileForReuse(allocator, cache, app);
-    defer warm.deinit(allocator);
-    try std.testing.expectEqual(@as(u32, 1), warm.stats.previous_entries);
-    try std.testing.expect(warm.stats.pending_roots >= 6);
-    try std.testing.expectEqual(warm.stats.pending_roots, warm.stats.transplanted_roots);
-    var cold = try compileForReuse(allocator, cold_cache, app);
-    defer cold.deinit(allocator);
-    try std.testing.expectEqual(@as(u32, 0), cold.stats.previous_entries);
-    try std.testing.expectEqualStrings(cold.stderr, warm.stderr);
-    for (cold.names, 0..) |name, i| try std.testing.expectEqual(cold.values[i], warm.value(name));
-    try std.testing.expectEqual(@as(?i64, 42), warm.value("answer"));
-
-    // A cache hit of the transplanted entry replays its observation.
-    var hit = try compileForReuse(allocator, cache, app);
-    defer hit.deinit(allocator);
-    try std.testing.expectEqual(@as(u32, 0), hit.stats.previous_entries);
-    try std.testing.expectEqualStrings("[dbg] 40\n", hit.stderr);
-
-    // Editing a root another reads re-evaluates both and reuses the rest.
-    const edited = try std.mem.replaceOwned(u8, allocator, commented, "base = 40.I64", "base = 50.I64");
-    defer allocator.free(edited);
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = edited });
-    var partial = try compileForReuse(allocator, cache, app);
-    defer partial.deinit(allocator);
-    try std.testing.expectEqual(@as(u32, 1), partial.stats.previous_entries);
-    try std.testing.expectEqual(warm.stats.pending_roots, partial.stats.pending_roots);
-    try std.testing.expectEqual(partial.stats.pending_roots - 2, partial.stats.transplanted_roots);
-    try std.testing.expectEqualStrings("[dbg] 50\n", partial.stderr);
-    try std.testing.expectEqual(@as(?i64, 52), partial.value("answer"));
-    try std.testing.expectEqual(@as(?i64, 5), partial.value("wrapped"));
-}
-
-test "a transplanted value carries no checked type occurrence of the version that stored it" {
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const counter =
-        \\Counter := { n : I64 }.{
-        \\    make : I64 -> Counter
-        \\    make = |n| { n: n }
-        \\    get : Counter -> I64
-        \\    get = |c| c.n
+    const app_source =
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\import Word
+        \\import Query
+        \\answer = Word.get(check)
+        \\check : Word
+        \\check = Query.quoted({})
+        \\
+    ;
+    const word_source =
+        \\Word := { n : I64 }.{
+        \\    from_quote : Str -> Try(Word, [BadQuotedBytes(Str)])
+        \\    from_quote = |text| Ok({ n: if text == "one" 1.I64 else 2.I64 })
+        \\    get : Word -> I64
+        \\    get = |word| word.n
         \\}
         \\
     ;
-    // `built`'s type is the app's own annotation and `made`'s is inferred
-    // from `Counter.make`'s return type: both stored constants carry
-    // `Counter`'s own occurrence, which its declaring module holds inside the
-    // app's import closure, never the app's version-specific one.
-    const occurrence_app =
-        \\app [answer] { pf: platform "./platform.roc" }
-        \\
-        \\import Counter
-        \\
-        \\built : Counter
-        \\built = { n: 5.I64 }
-        \\made = Counter.make(6.I64)
-        \\answer = built.get() + made.get()
+    const query_source =
+        \\module [quoted]
+        \\quoted : {} -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
+        \\quoted = |{}| "one"
         \\
     ;
-    try writeReuseFixture(&tmp, occurrence_app);
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Counter.roc", .data = counter });
+    try writeReuseFixture(&tmp, app_source);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Word.roc", .data = word_source });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Query.roc", .data = query_source });
     const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
     defer allocator.free(cache);
     const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
     defer allocator.free(app);
-
-    var first = try compileForReuse(allocator, cache, app);
+    var first = try compileForReuseWithStrategy(allocator, cache, app, null, .boxy);
     defer first.deinit(allocator);
-    for ([_][]const u8{ "built", "made" }) |name| {
-        const stored = first.namedOccurrences(name);
-        try std.testing.expect(stored.len != 0);
-        for (stored) |occurrence| try std.testing.expect(!std.mem.eql(u8, &first.module_key, &occurrence.ty_module));
-    }
-    // All values are unchanged, including the nominals the app annotates.
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = occurrence_app ++ "# unchanged values\n" });
-    var unchanged = try compileForReuseVerifying(allocator, cache, app, true);
-    defer unchanged.deinit(allocator);
-    try std.testing.expectEqual(unchanged.stats.pending_roots, unchanged.stats.transplanted_roots);
-    // A definition ahead of them shifts the app's checked type ids, so an
-    // occurrence the previous version's app types held would name another
-    // type, or none.
-    const shifted = try std.mem.replaceOwned(u8, allocator, occurrence_app, "import Counter\n", "import Counter\n\npad : { a : Str, b : List(U8), d : (I64, Str) }\npad = { a: \"x\", b: [], d: (1, \"y\") }\n");
-    defer allocator.free(shifted);
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = shifted });
-    for ([_]bool{ true, false }, 0..) |verify, index| {
-        const edited = try std.fmt.allocPrint(allocator, "{s}# edit {d}\n", .{ shifted, index });
-        defer allocator.free(edited);
-        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = edited });
-        var warm = try compileForReuseVerifying(allocator, cache, app, verify);
-        defer warm.deinit(allocator);
-        try std.testing.expect(warm.stats.transplanted_roots != 0);
-        const cold_name = try std.fmt.allocPrint(allocator, "cold{d}", .{index});
-        defer allocator.free(cold_name);
-        try tmp.dir.createDirPath(std.testing.io, cold_name);
-        const cold_cache = try tmp.dir.realPathFileAlloc(std.testing.io, cold_name, allocator);
-        defer allocator.free(cold_cache);
-        var cold = try compileForReuse(allocator, cold_cache, app);
-        defer cold.deinit(allocator);
-        for ([_][]const u8{ "built", "made" }) |name| {
-            const expected = cold.namedOccurrences(name);
-            const actual = warm.namedOccurrences(name);
-            try std.testing.expect(expected.len != 0);
-            try std.testing.expectEqual(expected.len, actual.len);
-            for (expected, actual) |e, a| {
-                try std.testing.expectEqualSlices(u8, &e.ty_module, &a.ty_module);
-                try std.testing.expectEqual(e.ty, a.ty);
-            }
-        }
-        try std.testing.expectEqual(cold.value("answer"), warm.value("answer"));
-    }
+    try std.testing.expectEqual(@as(?i64, 1), first.value("answer"));
+    // Both the nominal declaration's artifact and the literal's artifact
+    // change. Their producer-authored meaning and conversion remain identical.
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Word.roc", .data = word_source ++ "# edit\n" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Query.roc", .data = query_source ++ "# edit\n" });
+    var warm = try compileForReuseWithStrategy(allocator, cache, app, null, .boxy);
+    defer warm.deinit(allocator);
+    try std.testing.expectEqual(@as(?i64, 1), warm.value("answer"));
+    const edited = try std.mem.replaceOwned(u8, allocator, word_source, "1.I64", "3.I64");
+    defer allocator.free(edited);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Word.roc", .data = edited });
+    var changed = try compileForReuseWithStrategy(allocator, cache, app, null, .boxy);
+    defer changed.deinit(allocator);
+    try std.testing.expectEqual(@as(?i64, 3), changed.value("answer"));
+    const literal_edit = try std.mem.replaceOwned(u8, allocator, query_source, "\"one\"", "\"two\"");
+    defer allocator.free(literal_edit);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Query.roc", .data = literal_edit });
+    var literal_changed = try compileForReuseWithStrategy(allocator, cache, app, null, .boxy);
+    defer literal_changed.deinit(allocator);
+    try std.testing.expectEqual(@as(?i64, 2), literal_changed.value("answer"));
 }
 
 test "hoisted constants depend on their typed expressions instead of unrelated owner code" {
@@ -8704,7 +8943,7 @@ test "hoisted constants depend on their typed expressions instead of unrelated o
     defer allocator.free(cache);
     const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
     defer allocator.free(app);
-    var first = try compileForReuseVerifying(allocator, cache, app, true);
+    var first = try compileForReuse(allocator, cache, app);
     defer first.deinit(allocator);
     const edits = [_]struct { from: []const u8, to: []const u8, fixed_changes: bool, captured_changes: bool }{
         .{ .from = "n + List.len(fixed)", .to = "n + 1.I64 + List.len(fixed)", .fixed_changes = false, .captured_changes = true },
@@ -8715,14 +8954,45 @@ test "hoisted constants depend on their typed expressions instead of unrelated o
         const edited = try std.mem.replaceOwned(u8, allocator, source, edit.from, edit.to);
         defer allocator.free(edited);
         try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = edited });
-        var current = try compileForReuseVerifying(allocator, cache, app, true);
+        var current = try compileForReuse(allocator, cache, app);
         defer current.deinit(allocator);
         try std.testing.expectEqual(edit.fixed_changes, !std.mem.eql(u8, &first.hoistedIdentity("[base, 20.I64]"), &current.hoistedIdentity("[base, 20.I64]")));
         try std.testing.expectEqual(edit.captured_changes, !std.mem.eql(u8, &first.hoistedIdentity("[local, 40.I64]"), &current.hoistedIdentity("[local, 40.I64]")));
     }
 }
 
-test "compile-time roots that call a generated method have value identities and are reused" {
+test "a hoisted constant naming a block-local type is bound to its module version" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const source =
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\base = 10.I64
+        \\compute = |n| {
+        \\    Local := [First, Second]
+        \\    fixed = [Local.First, Local.Second]
+        \\    n + List.len(fixed).to_i64_wrap()
+        \\}
+        \\answer = compute(base)
+        \\
+    ;
+    try writeReuseFixture(&tmp, source);
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+    var first = try compileForReuse(allocator, cache, app);
+    defer first.deinit(allocator);
+    const edited = try std.mem.replaceOwned(u8, allocator, source, "base = 10.I64", "base = 11.I64");
+    defer allocator.free(edited);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = edited });
+    var current = try compileForReuse(allocator, cache, app);
+    defer current.deinit(allocator);
+    const text = "[Local.First, Local.Second]";
+    try std.testing.expect(!std.mem.eql(u8, &first.hoistedIdentity(text), &current.hoistedIdentity(text)));
+}
+
+test "compile-time roots that call a generated method retain semantic identities" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -8756,342 +9026,7 @@ test "compile-time roots that call a generated method have value identities and 
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = generated_app ++ "# a trailing comment\n" });
     var warm = try compileForReuse(allocator, cache, app);
     defer warm.deinit(allocator);
-    try std.testing.expectEqual(@as(u32, 1), warm.stats.previous_entries);
     try std.testing.expectEqualSlices(u8, &first.identity("same"), &warm.identity("same"));
-    try std.testing.expect(warm.stats.transplanted_roots != 0);
-}
-
-test "compile-time values installed before evaluation read, store and replay like evaluated ones" {
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try writeReuseFixture(&tmp, reuse_app);
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "data.txt", .data = "abc" });
-    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
-    defer allocator.free(cache);
-    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
-    defer allocator.free(app);
-
-    var first = try compileForReuseVerifying(allocator, cache, app, false);
-    defer first.deinit(allocator);
-    // Unverified transplants are installed before evaluation, so the
-    // finalization that follows restores them as stored values, replays
-    // their observations, and evaluates only the edited root and its reader.
-    const edited = try std.mem.replaceOwned(u8, allocator, reuse_app, "unrelated = 7.I64", "unrelated = 9.I64");
-    defer allocator.free(edited);
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = edited });
-    var installed = try compileForReuseVerifying(allocator, cache, app, false);
-    defer installed.deinit(allocator);
-    try std.testing.expectEqual(installed.stats.pending_roots - 1, installed.stats.transplanted_roots);
-    try std.testing.expectEqualStrings(first.stderr, installed.stderr);
-    for (first.names, 0..) |name, i| {
-        if (std.mem.eql(u8, name, "unrelated")) continue;
-        try std.testing.expectEqual(first.values[i], installed.value(name));
-    }
-    try std.testing.expectEqual(@as(?i64, 9), installed.value("unrelated"));
-
-    // The installed entry is itself a complete previous entry: a verifying
-    // compilation of a further edit agrees with every value it reuses.
-    const further = try std.mem.replaceOwned(u8, allocator, reuse_app, "unrelated = 7.I64", "unrelated = 10.I64");
-    defer allocator.free(further);
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = further });
-    var verified = try compileForReuseVerifying(allocator, cache, app, true);
-    defer verified.deinit(allocator);
-    try std.testing.expectEqual(verified.stats.pending_roots - 1, verified.stats.transplanted_roots);
-    try std.testing.expectEqualStrings(first.stderr, verified.stderr);
-}
-
-const literal_reuse_platform =
-    \\platform ""
-    \\    requires {} { answer : I64 -> I64 }
-    \\    exposes []
-    \\    packages {}
-    \\    provides { "roc_entry": entry }
-    \\entry : {} -> I64
-    \\entry = |_| answer(0)
-;
-
-/// A module whose literal type converts through a method of its phantom
-/// type parameter, as roc-pg's `Sql(schema, params, row)` does.
-const literal_reuse_lit =
-    \\Lit(schema) := { text : Str }.{
-    \\    from_quote : Str -> Try(Lit(schema), [BadQuotedBytes(Str)])
-    \\        where [schema.tail : {} -> Str]
-    \\    from_quote = |text| {
-    \\        Schema : schema
-    \\        Ok({ text: Str.concat(text, Schema.tail({})) })
-    \\    }
-    \\    size : Lit(schema) -> I64
-    \\    size = |lit| Str.count_utf8_bytes(lit.text).to_i64_wrap()
-    \\}
-    \\
-;
-
-/// A literal type whose conversion makes an observation, so its values are
-/// never stored.
-const literal_reuse_loud =
-    \\Loud := { text : Str }.{
-    \\    from_quote : Str -> Try(Loud, [BadQuotedBytes(Str)])
-    \\    from_quote = |text| {
-    \\        dbg text
-    \\        Ok({ text: text })
-    \\    }
-    \\    size : Loud -> I64
-    \\    size = |loud| Str.count_utf8_bytes(loud.text).to_i64_wrap()
-    \\}
-    \\
-;
-
-/// An app whose runtime code converts three custom literals per program:
-/// each generic function's literal is converted at the type its caller
-/// gives it, so each is a literal root of the program rather than of a
-/// checked module. Every call depends on `answer`'s argument, so no call is
-/// a hoisted constant whose stored value would stand for the literals. `Lit(Schema)`'s conversion reaches an app method that
-/// reads a compile-time root.
-const literal_reuse_app =
-    \\app [answer] { pf: platform "./platform.roc" }
-    \\
-    \\import Lit
-    \\import Loud
-    \\
-    \\suffix = "!"
-    \\unrelated = 7.I64
-    \\
-    \\Schema := [].{
-    \\    tail : {} -> Str
-    \\    tail = |{}| suffix
-    \\}
-    \\
-    \\Other := [].{
-    \\    tail : {} -> Str
-    \\    tail = |{}| "?"
-    \\}
-    \\
-    \\first : I64 -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
-    \\first = |_| "alpha"
-    \\
-    \\second : I64 -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
-    \\second = |_| "beta"
-    \\
-    \\third : I64 -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
-    \\third = |_| "gamma"
-    \\
-    \\answer = |n| {
-    \\    w1 : Lit(Schema)
-    \\    w1 = first(n)
-    \\    w2 : Lit(Schema)
-    \\    w2 = second(n)
-    \\    loud : Loud
-    \\    loud = third(n)
-    \\    w1.size() + w2.size() + loud.size() + n
-    \\}
-    \\
-    \\total = answer(0)
-    \\
-;
-
-fn writeLiteralReuseFixture(tmp: *std.testing.TmpDir, app: []const u8) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
-    try tmp.dir.createDirPath(std.testing.io, "cache");
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "platform.roc", .data = literal_reuse_platform });
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Lit.roc", .data = literal_reuse_lit });
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Loud.roc", .data = literal_reuse_loud });
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = app });
-}
-
-test "a literal root's value identity changes exactly with what decides its value" {
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try writeLiteralReuseFixture(&tmp, literal_reuse_app);
-    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
-    defer allocator.free(cache);
-    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
-    defer allocator.free(app);
-
-    var original = try compileForReuse(allocator, cache, app);
-    defer original.deinit(allocator);
-    try std.testing.expect(original.literalRoot("\"alpha\"").stored);
-    // The observing conversion still has a value identity; it is never
-    // stored.
-    try std.testing.expect(!original.literalRoot("\"gamma\"").stored);
-
-    const Edit = struct {
-        file: []const u8 = "app.roc",
-        from: []const u8,
-        to: []const u8,
-        /// Literal roots by their source before and after the edit.
-        changed: []const [2][]const u8,
-        unchanged: []const []const u8,
-    };
-    const edits = [_]Edit{
-        // An unrelated definition changes no literal root's identity.
-        .{ .from = "unrelated = 7.I64", .to = "unrelated = 8.I64", .changed = &.{}, .unchanged = &.{ "\"alpha\"", "\"beta\"", "\"gamma\"" } },
-        // Another literal changes only its own.
-        .{ .from = "\"beta\"", .to = "\"betb\"", .changed = &.{.{ "\"beta\"", "\"betb\"" }}, .unchanged = &.{ "\"alpha\"", "\"gamma\"" } },
-        // Its bytes change it.
-        .{ .from = "\"alpha\"", .to = "\"alphx\"", .changed = &.{.{ "\"alpha\"", "\"alphx\"" }}, .unchanged = &.{ "\"beta\"", "\"gamma\"" } },
-        // The type it is converted at changes it.
-        .{ .from = "w1 : Lit(Schema)", .to = "w1 : Lit(Other)", .changed = &.{.{ "\"alpha\"", "\"alpha\"" }}, .unchanged = &.{ "\"beta\"", "\"gamma\"" } },
-        // The code of its conversion changes it, as any edit of a module the
-        // program's top modules import changes every literal root's.
-        .{ .file = "Lit.roc", .from = "Str.concat(text, Schema.tail({}))", .to = "Str.concat(Schema.tail({}), text)", .changed = &.{ .{ "\"alpha\"", "\"alpha\"" }, .{ "\"beta\"", "\"beta\"" }, .{ "\"gamma\"", "\"gamma\"" } }, .unchanged = &.{} },
-        // The app method its conversion reaches changes it.
-        .{ .from = "tail = |{}| suffix", .to = "tail = |{}| Str.concat(suffix, \"\")", .changed = &.{ .{ "\"alpha\"", "\"alpha\"" }, .{ "\"beta\"", "\"beta\"" } }, .unchanged = &.{} },
-        // A root its conversion reads changes it.
-        .{ .from = "suffix = \"!\"", .to = "suffix = \"?\"", .changed = &.{ .{ "\"alpha\"", "\"alpha\"" }, .{ "\"beta\"", "\"beta\"" } }, .unchanged = &.{} },
-        // Comments change nothing.
-        .{ .from = "unrelated = 7.I64\n", .to = "unrelated = 7.I64\n# a comment\n", .changed = &.{}, .unchanged = &.{ "\"alpha\"", "\"beta\"", "\"gamma\"" } },
-    };
-    for (edits) |edit| {
-        const source = if (std.mem.eql(u8, edit.file, "Lit.roc")) literal_reuse_lit else literal_reuse_app;
-        const edited = try std.mem.replaceOwned(u8, allocator, source, edit.from, edit.to);
-        defer allocator.free(edited);
-        try std.testing.expect(!std.mem.eql(u8, edited, source));
-        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = edit.file, .data = edited });
-        var run = try compileForReuse(allocator, cache, app);
-        defer run.deinit(allocator);
-        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = edit.file, .data = source });
-        for (edit.changed) |pair| try std.testing.expect(!std.mem.eql(u8, &original.literalIdentity(pair[0]), &run.literalIdentity(pair[1])));
-        for (edit.unchanged) |text| try std.testing.expectEqualSlices(u8, &original.literalIdentity(text), &run.literalIdentity(text));
-    }
-}
-
-fn expectLiteralOutcome(run: *const ReuseRun, text: []const u8, outcome: eval.LiteralValues.Record.Outcome) error{TestExpectedEqual}!void {
-    try std.testing.expectEqual(outcome, run.literalRoot(text).outcome);
-}
-
-test "an edited program restores the literal values its edit leaves unchanged" {
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try writeLiteralReuseFixture(&tmp, literal_reuse_app);
-    try tmp.dir.createDirPath(std.testing.io, "cold");
-    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
-    defer allocator.free(cache);
-    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
-    defer allocator.free(app);
-
-    var first = try compileForReuse(allocator, cache, app);
-    defer first.deinit(allocator);
-    try std.testing.expectEqual(@as(u32, 0), first.stats.restored_literals);
-    try std.testing.expectEqual(@as(u32, 2), first.stats.stored_literals);
-    // "alpha!" + "beta!" + "gamma"
-    try std.testing.expectEqual(@as(?i64, 16), first.value("total"));
-
-    // A comment changes the module's cache key and no literal's identity:
-    // both stored values are restored, and the compilation reports what a
-    // cold compilation of the edited source does.
-    const commented = literal_reuse_app ++ "# a trailing comment\n";
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = commented });
-    var warm = try compileForReuse(allocator, cache, app);
-    defer warm.deinit(allocator);
-    try std.testing.expectEqual(@as(u32, 2), warm.stats.restored_literals);
-    try std.testing.expectEqual(if (std.debug.runtime_safety) @as(u32, 2) else 0, warm.stats.verified_literals);
-    try expectLiteralOutcome(&warm, "\"alpha\"", .restored);
-    try expectLiteralOutcome(&warm, "\"beta\"", .restored);
-    try expectLiteralOutcome(&warm, "\"gamma\"", .converted);
-    const cold_cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cold", allocator);
-    defer allocator.free(cold_cache);
-    var cold = try compileForReuse(allocator, cold_cache, app);
-    defer cold.deinit(allocator);
-    try std.testing.expectEqual(@as(u32, 0), cold.stats.restored_literals);
-    try std.testing.expectEqualStrings(cold.stderr, warm.stderr);
-    try std.testing.expectEqual(cold.value("total"), warm.value("total"));
-
-    // Editing one literal converts exactly that one again.
-    const edited = try std.mem.replaceOwned(u8, allocator, commented, "\"beta\"", "\"betas\"");
-    defer allocator.free(edited);
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = edited });
-    var partial = try compileForReuse(allocator, cache, app);
-    defer partial.deinit(allocator);
-    try std.testing.expectEqual(@as(u32, 1), partial.stats.restored_literals);
-    try expectLiteralOutcome(&partial, "\"alpha\"", .restored);
-    try expectLiteralOutcome(&partial, "\"betas\"", .converted);
-    try std.testing.expect(partial.literalRoot("\"betas\"").stored);
-    try std.testing.expectEqual(@as(?i64, 17), partial.value("total"));
-
-    // The file now holds only the current program's literals: going back
-    // to the first literals restores alpha and converts beta again. (A
-    // source an earlier compilation checked is a cache hit, which evaluates
-    // no literal root.)
-    const reverted = literal_reuse_app ++ "# another comment\n";
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = reverted });
-    var back = try compileForReuse(allocator, cache, app);
-    defer back.deinit(allocator);
-    try expectLiteralOutcome(&back, "\"alpha\"", .restored);
-    try expectLiteralOutcome(&back, "\"beta\"", .converted);
-    try std.testing.expectEqualStrings(first.stderr, back.stderr);
-    try std.testing.expectEqual(@as(?i64, 16), back.value("total"));
-}
-
-test "restored literal values read and replay like converted ones without verification" {
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try writeLiteralReuseFixture(&tmp, literal_reuse_app);
-    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
-    defer allocator.free(cache);
-    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
-    defer allocator.free(app);
-
-    var first = try compileForReuseVerifying(allocator, cache, app, false);
-    defer first.deinit(allocator);
-    // A compiler without runtime safety restores without converting: the
-    // program reads the restored values and reports what converting does.
-    const edited = try std.mem.replaceOwned(u8, allocator, literal_reuse_app, "unrelated = 7.I64", "unrelated = 9.I64");
-    defer allocator.free(edited);
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = edited });
-    var restored = try compileForReuseVerifying(allocator, cache, app, false);
-    defer restored.deinit(allocator);
-    try std.testing.expectEqual(@as(u32, 2), restored.stats.restored_literals);
-    try std.testing.expectEqual(@as(u32, 0), restored.stats.verified_literals);
-    try std.testing.expectEqualStrings(first.stderr, restored.stderr);
-    try std.testing.expectEqual(first.value("total"), restored.value("total"));
-
-    // The rewritten file is itself a complete one: a verifying compilation
-    // of a further edit agrees with every value it restores.
-    const further = try std.mem.replaceOwned(u8, allocator, literal_reuse_app, "unrelated = 7.I64", "unrelated = 10.I64");
-    defer allocator.free(further);
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = further });
-    var verified = try compileForReuseVerifying(allocator, cache, app, true);
-    defer verified.deinit(allocator);
-    try std.testing.expectEqual(@as(u32, 2), verified.stats.restored_literals);
-    try std.testing.expectEqual(@as(u32, 2), verified.stats.verified_literals);
-    try std.testing.expectEqualStrings(first.stderr, verified.stderr);
-}
-
-test "a build restores the literal values an earlier build stored and runs the restored values" {
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try writeLiteralReuseFixture(&tmp, literal_reuse_app);
-    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
-    defer allocator.free(cache);
-    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
-    defer allocator.free(app);
-    const target: lir.CheckedPipeline.TargetConfig = .{
-        .inline_mode = .wrappers,
-        .spec_constr_clone_inlining = .iterator_fusion,
-        .proc_debug_names = true,
-    };
-
-    var first = try compileForReuseWith(allocator, cache, app, std.debug.runtime_safety, target);
-    defer first.deinit(allocator);
-    try std.testing.expectEqual(@as(u32, 2), first.stats.stored_literals);
-    // A build demands only what its program reads, and the restored values
-    // demand the roots their conversions read, so it evaluates, reports and
-    // runs what the first build did.
-    for ([_]bool{ std.debug.runtime_safety, false }, 0..) |verify, index| {
-        const edited = try std.fmt.allocPrint(allocator, "{s}# edit {d}\n", .{ literal_reuse_app, index });
-        defer allocator.free(edited);
-        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = edited });
-        var warm = try compileForReuseWith(allocator, cache, app, verify, target);
-        defer warm.deinit(allocator);
-        try std.testing.expectEqual(@as(u32, 2), warm.stats.restored_literals);
-        try std.testing.expectEqual(if (verify) @as(u32, 2) else 0, warm.stats.verified_literals);
-        try std.testing.expectEqualStrings(first.stderr, warm.stderr);
-        try std.testing.expectEqual(first.value("total"), warm.value("total"));
-    }
 }
 
 test "issue 11389 pairing cache retains exported constants and debug observations" {
@@ -9905,6 +9840,7 @@ test "hosted distinctness: identical hosted declarations bound to different plat
         .enabled = true,
         .cache_dir = cache_dir,
     }, roc_ctx);
+    defer cache_manager.deinit();
 
     const builtin_modules = try sharedBuiltinModules();
 
@@ -10035,6 +9971,7 @@ fn hashPatternExtractionRegionsForView(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .literal_argument,
             .repl_expr,
             => false,
         };
@@ -10094,6 +10031,7 @@ fn hashPatternExtractionRegionsForView(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .literal_argument,
             .repl_expr,
             => unreachable, // is_selected_root skipped every root of these kinds
         }
@@ -10259,22 +10197,31 @@ fn countHoistedValidations(
     return count;
 }
 
-/// Test-only access to published payloads, without corrupting control records.
+/// Test-only access to published cache payloads.
 fn testCachePaths(allocator: Allocator, root: []const u8, scope: []const u8, family: @import("artifact_store.zig").Family) @import("artifact_store.zig").Error![][]u8 {
     var store = try @import("artifact_store.zig").Store.init(allocator, std.testing.io, root);
     defer store.deinit();
-    const keys = try store.groupKeys(allocator, CacheManager.identity(family, @splat(0), scope));
-    defer allocator.free(keys);
+    const directory = try store.groupPath(allocator, CacheManager.identity(family, @splat(0), scope));
+    defer allocator.free(directory);
+    const filesystem = CoreCtx.os(allocator, allocator, std.testing.io);
+    const entries = filesystem.listDirTop(directory, allocator) catch |err| switch (err) {
+        error.FileNotFound => return allocator.alloc([]u8, 0),
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.IoFailure,
+    };
+    defer {
+        for (entries) |entry| allocator.free(entry.path);
+        allocator.free(entries);
+    }
     var paths: std.ArrayList([]u8) = .empty;
     errdefer {
         for (paths.items) |path| allocator.free(path);
         paths.deinit(allocator);
     }
-    for (keys) |key| {
-        var artifact = (try store.acquireKey(key, store.now())) orelse continue;
-        defer artifact.deinit();
+    for (entries) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.path, ".data")) continue;
         try paths.ensureUnusedCapacity(allocator, 1);
-        paths.appendAssumeCapacity(try allocator.dupe(u8, artifact.path));
+        paths.appendAssumeCapacity(try allocator.dupe(u8, entry.path));
     }
     return paths.toOwnedSlice(allocator);
 }
@@ -10751,7 +10698,7 @@ fn readCheckedModuleCacheEntry(allocator: Allocator, cache_dir: []const u8, key:
     defer allocator.free(entries_dir);
     var store = try @import("artifact_store.zig").Store.init(allocator, io, cache_dir);
     defer store.deinit();
-    return store.read(allocator, CacheManager.identity(.checked, key, entries_dir), store.now());
+    return store.read(allocator, CacheManager.identity(.checked, key, entries_dir));
 }
 
 test "issue 12059: a checked module's cache entry does not depend on how an importer reads its constants" {
@@ -11327,6 +11274,7 @@ fn expectModulesQualifiedByOwningPackage(
         .enabled = true,
         .cache_dir = cache_dir,
     }, roc_ctx);
+    defer cache_manager.deinit();
 
     var coord = try Coordinator.init(
         allocator,
@@ -12062,13 +12010,12 @@ test "Coordinator post-check executor supports incremental sessions and repeated
         }
     };
 
-    var active_by_worker = [_]std.atomic.Value(bool){
-        std.atomic.Value(bool).init(false),
-        std.atomic.Value(bool).init(false),
-    };
+    // One slot per lane: two workers and the coordinating thread, each with
+    // a lane per nesting depth.
+    var active_by_worker: [3 * max_lane_depth]std.atomic.Value(bool) = @splat(std.atomic.Value(bool).init(false));
     var hits = std.atomic.Value(usize).init(0);
     var destroyed_lane_data = std.atomic.Value(usize).init(0);
-    var lane_data_by_worker = [_]?*LaneData{ null, null };
+    var lane_data_by_worker: [3 * max_lane_depth]?*LaneData = @splat(null);
     var contexts: [7]TaskContext = undefined;
     var tasks: [7]post_check_executor.Task = undefined;
     var completions: [7]post_check_executor.Completion = undefined;
@@ -12087,7 +12034,7 @@ test "Coordinator post-check executor supports incremental sessions and repeated
     }
 
     const executor = coord.postCheckExecutor();
-    var session = executor.begin();
+    var session = try executor.begin();
     try session.submit(tasks[0]);
     try session.submit(tasks[1]);
     try std.testing.expect(!session.canSubmit());
@@ -12149,11 +12096,14 @@ test "Coordinator inline post-check executor supports repeated session tasks" {
 
     const TaskContext = struct {
         runs: usize = 0,
+        lane: ?usize = null,
         lane_state: ?*post_check_executor.LaneState = null,
 
         fn run(opaque_context: *anyopaque, worker: post_check_executor.Worker) ?*anyopaque {
             const self: *@This() = @ptrCast(@alignCast(opaque_context));
-            if (worker.id != 0) base.invariant("{s}", .{"inline post-check executor changed worker id"});
+            if (self.lane) |lane| {
+                if (worker.id != lane) base.invariant("{s}", .{"inline post-check executor changed worker id"});
+            } else self.lane = worker.id;
             if (self.lane_state) |existing| {
                 if (existing != worker.lane_state) {
                     base.invariant("{s}", .{"inline post-check executor replaced its lane state"});
@@ -12178,7 +12128,7 @@ test "Coordinator inline post-check executor supports repeated session tasks" {
     const executor = coord.postCheckExecutor();
     try std.testing.expectEqual(@as(usize, 1), executor.worker_count);
 
-    var session = executor.begin();
+    var session = try executor.begin();
     try session.submit(tasks[0]);
     try std.testing.expect(!session.canSubmit());
     const first = session.receive();
@@ -12803,9 +12753,9 @@ test "shared CTFE and runtime requests specialize once per evaluation across wor
     for ([_]usize{ 1, 4 }) |jobs| {
         for ([_]lir.CheckedPipeline.TargetConfig{
             .{ .target_usize = .native, .inline_expects = .run },
-            .{ .target_usize = .native, .inline_expects = .run, .code_provision = .host_dev_objects },
+            .{ .target_usize = .native, .inline_expects = .run },
             .{ .target_usize = other_width, .inline_expects = .run },
-            .{ .target_usize = other_width, .inline_expects = .run, .code_provision = .target_dev_objects },
+            .{ .target_usize = other_width, .inline_expects = .run },
             .{ .target_usize = .native, .inline_expects = .omit },
         }) |consumer| {
             const width = consumer.target_usize;
@@ -12838,7 +12788,6 @@ test "shared CTFE and runtime requests specialize once per evaluation across wor
             const target: lir.CheckedPipeline.TargetConfig = .{
                 .target_usize = width,
                 .inline_expects = consumer.inline_expects,
-                .code_provision = consumer.code_provision,
                 .work_metrics = &metrics,
                 .post_check_executor = coord.postCheckExecutor(),
             };
@@ -12897,7 +12846,7 @@ test "shared CTFE and runtime requests specialize once per evaluation across wor
                             literal_answers += 1;
                         };
                     },
-                    .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .proc_ref => {},
+                    .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bytes_literal, .proc_ref => {},
                 }
             }
             try std.testing.expectEqual(@as(usize, 0), value_exports);
@@ -12960,6 +12909,7 @@ test "successful compile-time dbg replays from warm checked cache without evalua
         ctx.ctx = capture;
         ctx.vtable.writeStderr = Capture.write;
         var cache_manager = CacheManager.init(allocator, .{ .enabled = true, .cache_dir = cache_dir }, ctx);
+        defer cache_manager.deinit();
         var coord = try Coordinator.init(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), builtin_modules, build_options.compiler_compatibility_id, &cache_manager, ctx);
         defer coord.deinit();
         coord.enable_hosted_transform = true;
@@ -13054,6 +13004,7 @@ test "app discovery rejects a repeated package shorthand before registering pack
     const app_path = try tmp.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
     defer gpa.free(app_path);
     var cache_manager = CacheManager.init(gpa, .{ .enabled = false }, ctx);
+    defer cache_manager.deinit();
     var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), builtin_modules, build_options.compiler_compatibility_id, &cache_manager, ctx);
     defer coord.deinit();
     var arena = base.SingleThreadArena.init(gpa);
@@ -13082,6 +13033,7 @@ test "app discovery retains tokenizer rejection reports before platform resoluti
         const app_path = try tmp.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
         defer gpa.free(app_path);
         var cache_manager = CacheManager.init(gpa, .{ .enabled = false }, ctx);
+        defer cache_manager.deinit();
         var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), builtin_modules, build_options.compiler_compatibility_id, &cache_manager, ctx);
         defer coord.deinit();
         var arena = base.SingleThreadArena.init(gpa);
@@ -13105,7 +13057,7 @@ test "app discovery retains tokenizer rejection reports before platform resoluti
     }
 }
 
-test "module-independent compile-time values survive an imported test edit" {
+test "compile-time values remain correct after an imported test edit" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -13129,16 +13081,13 @@ test "module-independent compile-time values survive an imported test edit" {
     defer allocator.free(cache);
     const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
     defer allocator.free(app);
-    var first = try compileForReuseVerifying(allocator, cache, app, true);
+    var first = try compileForReuse(allocator, cache, app);
     defer first.deinit(allocator);
     try std.testing.expectEqual(@as(?i64, 41), first.value("answer"));
 
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Value.roc", .data = dependency ++ "\nexpect True\n" });
-    // Verification evaluates the transplanted roots independently and checks
-    // their values, read dependencies and observations before installation.
-    var edited = try compileForReuseVerifying(allocator, cache, app, true);
+    var edited = try compileForReuse(allocator, cache, app);
     defer edited.deinit(allocator);
-    try std.testing.expect(edited.stats.transplanted_roots > 0);
     try std.testing.expectEqual(@as(?i64, 41), edited.value("answer"));
     try std.testing.expectEqual(@as(?i64, 17), edited.value("fixed"));
     try std.testing.expect(!std.mem.eql(u8, &first.identity("fixed"), &edited.identity("fixed")));
@@ -13146,7 +13095,7 @@ test "module-independent compile-time values survive an imported test edit" {
     const changed = try std.mem.replaceOwned(u8, allocator, dependency, "41.I64", "42.I64");
     defer allocator.free(changed);
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Value.roc", .data = changed });
-    var implementation = try compileForReuseVerifying(allocator, cache, app, true);
+    var implementation = try compileForReuse(allocator, cache, app);
     defer implementation.deinit(allocator);
     // Changing a method also changes the imported semantic type context,
     // so this case requires invalidation rather than a particular reuse count.
@@ -13195,7 +13144,7 @@ test "application builds keep test bodies in discovery rather than runtime deman
     try std.testing.expect(runtime_count > 0);
 }
 
-test "semantic test discovery survives edits and never hides invalid literals or observations" {
+test "test discovery after edits never hides invalid literals or observations" {
     if (is_freestanding) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
@@ -13227,7 +13176,7 @@ test "semantic test discovery survives edits and never hides invalid literals or
         \\}
     ;
     const Run = struct {
-        const Result = struct { hits: u32, errors: bool, observed: bool };
+        const Result = struct { errors: bool, observed: bool };
         fn run(gpa: Allocator, directory: []const u8, path: []const u8) error{ AbsolutePlatformPath, AccessDenied, BuiltinArtifactVersionMismatch, BuiltinLowLevelAnnotationMustBeFunction, Canceled, CorruptArtifact, CorruptBuiltinArtifact, CorruptEmbeddedBuiltins, EmptyCode, FileNotFound, HeaderParseFailed, Internal, InvalidPackageHeader, InvalidPlatformPath, IoError, LockedMemoryLimitExceeded, LowLevelOperationsNotFound, MmapFailed, MprotectFailed, NotAnAppHeader, OutOfMemory, RuntimeError, SourceTokenizationFailed, StaleEmbeddedBuiltins, StreamTooLong, SystemResources, ThreadQuotaExceeded, Unexpected, UnsupportedBuiltinAnnotationOnly, UnsupportedPackageSpec, UnsupportedPlatform, UnsupportedPlatformSpec, UnwindRegistrationFailed, VirtualAllocFailed, VirtualProtectFailed }!Result {
             var capture = StderrCapture{ .allocator = gpa };
             defer capture.bytes.deinit(gpa);
@@ -13235,6 +13184,7 @@ test "semantic test discovery survives edits and never hides invalid literals or
             context.ctx = &capture;
             context.vtable.writeStderr = StderrCapture.write;
             var manager = CacheManager.init(gpa, .{ .enabled = true, .cache_dir = directory }, context);
+            defer manager.deinit();
             var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, context);
             defer coord.deinit();
             coord.enable_hosted_transform = true;
@@ -13248,28 +13198,24 @@ test "semantic test discovery survives edits and never hides invalid literals or
             coord.program_test_modules = &test_modules;
             coord.runtime_lowering = .{ .target = .{ .inline_expects = .run } };
             try coord.finishCheckedProgram(.executable_artifacts);
-            return .{ .hits = coord.ctfe_reuse_stats.settled_discovery_roots, .errors = coord.hasUserErrors(), .observed = std.mem.find(u8, capture.bytes.items, "discovery observation") != null };
+            return .{ .errors = coord.hasUserErrors(), .observed = std.mem.find(u8, capture.bytes.items, "discovery observation") != null };
         }
     };
     const relative = "discovery_cache/app/main.roc";
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = source });
     const cold = try Run.run(allocator, cache, app_path);
     try std.testing.expect(!cold.errors);
-    try std.testing.expectEqual(@as(u32, 0), cold.hits);
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = source ++ "\n# unrelated edit\n" });
     const edited = try Run.run(allocator, cache, app_path);
     try std.testing.expect(!edited.errors);
-    try std.testing.expectEqual(@as(u32, 1), edited.hits);
 
-    // Changing the conversion invalidates the certificate even though the
-    // expect itself did not change, and repeated erroneous builds never settle.
+    // Changing the conversion is visible even when the expect is unchanged.
     const invalid = try std.mem.replaceOwned(u8, allocator, source, "text == \"bad\"", "text == \"good\"");
     defer allocator.free(invalid);
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = invalid });
     for (0..2) |_| {
         const result = try Run.run(allocator, cache, app_path);
         try std.testing.expect(result.errors);
-        try std.testing.expectEqual(@as(u32, 0), result.hits);
     }
     const observing = try std.mem.replaceOwned(u8, allocator, source, "from_quote = |text| if text == \"bad\" Err(BadQuotedBytes(\"rejected\")) else Ok(Word.{ text })", "from_quote = |text| {\n        dbg \"discovery observation\"\n        Ok(Word.{ text })\n    }");
     defer allocator.free(observing);
@@ -13277,12 +13223,11 @@ test "semantic test discovery survives edits and never hides invalid literals or
     for (0..2) |_| {
         const result = try Run.run(allocator, cache, app_path);
         try std.testing.expect(!result.errors);
-        try std.testing.expectEqual(@as(u32, 0), result.hits);
         try std.testing.expect(result.observed);
     }
 }
 
-test "initializer validation certificates defer values without losing errors observations or test positions" {
+test "initializer evaluation after edits preserves errors observations and test positions" {
     if (is_freestanding) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
@@ -13306,7 +13251,7 @@ test "initializer validation certificates defer values without losing errors obs
         \\expect 3.I64 + 1 == 4
     ;
     const Run = struct {
-        const Result = struct { hits: u32, evaluated: u64, errors: bool, observed: bool };
+        const Result = struct { evaluated: u64, errors: bool, observed: bool };
         fn run(gpa: Allocator, directory: []const u8, app_path: []const u8) error{ AbsolutePlatformPath, AccessDenied, BuiltinArtifactVersionMismatch, BuiltinLowLevelAnnotationMustBeFunction, Canceled, CorruptArtifact, CorruptBuiltinArtifact, CorruptEmbeddedBuiltins, EmptyCode, FileNotFound, HeaderParseFailed, Internal, InvalidPackageHeader, InvalidPlatformPath, IoError, LockedMemoryLimitExceeded, LowLevelOperationsNotFound, MmapFailed, MprotectFailed, NotAnAppHeader, OutOfMemory, RuntimeError, SourceTokenizationFailed, StaleEmbeddedBuiltins, StreamTooLong, SystemResources, TestExpectedEqual, TestUnexpectedResult, ThreadQuotaExceeded, Unexpected, UnsupportedBuiltinAnnotationOnly, UnsupportedPackageSpec, UnsupportedPlatform, UnsupportedPlatformSpec, UnwindRegistrationFailed, VirtualAllocFailed, VirtualProtectFailed }!Result {
             var capture = StderrCapture{ .allocator = gpa };
             defer capture.bytes.deinit(gpa);
@@ -13314,6 +13259,7 @@ test "initializer validation certificates defer values without losing errors obs
             context.ctx = &capture;
             context.vtable.writeStderr = StderrCapture.write;
             var manager = CacheManager.init(gpa, .{ .enabled = true, .cache_dir = directory }, context);
+            defer manager.deinit();
             var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, context);
             defer coord.deinit();
             coord.enable_hosted_transform = true;
@@ -13343,7 +13289,7 @@ test "initializer validation certificates defer values without losing errors obs
                     try std.testing.expectEqual(@as(u32, @intCast(index + 11)), item.result_index);
                 }
             };
-            return .{ .hits = coord.ctfe_reuse_stats.validated_comptime_roots, .evaluated = coord.ctfe_timing.snapshot().roots_evaluated, .errors = coord.hasUserErrors(), .observed = std.mem.find(u8, capture.bytes.items, "initializer observation") != null };
+            return .{ .evaluated = coord.ctfe_timing.snapshot().roots_evaluated, .errors = coord.hasUserErrors(), .observed = std.mem.find(u8, capture.bytes.items, "initializer observation") != null };
         }
     };
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = source });
@@ -13356,10 +13302,9 @@ test "initializer validation certificates defer values without losing errors obs
         try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = edited });
         const result = try Run.run(allocator, cache, path);
         try std.testing.expect(!result.errors);
-        try std.testing.expect(result.hits > 0);
-        try std.testing.expectEqual(@as(u64, 0), result.evaluated);
+        try std.testing.expect(result.evaluated > 0);
     }
-    // A new reader needs the nominal value, even though its validation hit.
+    // A new reader must see the initialized nominal value.
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = source ++ "\nexpect unused.get() == 42\n" });
     const reader = try Run.run(allocator, cache, path);
     try std.testing.expect(!reader.errors);
@@ -13376,4 +13321,171 @@ test "initializer validation certificates defer values without losing errors obs
         try std.testing.expect(!result.errors);
         try std.testing.expect(result.observed);
     }
+}
+
+test "issue 12733: compile-time reads survive an import cascade" {
+    const allocator = std.testing.allocator;
+    // Both strategies must preserve values and replay after invalidation.
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const source =
+            \\app [answer] { pf: platform "./platform.roc" }
+            \\import Middle
+            \\local = Middle.value
+            \\answer = {
+            \\    dbg local
+            \\    local + 2.I64
+            \\}
+        ;
+        const dependency =
+            \\module [value, unrelated]
+            \\value = 40.I64
+            \\unrelated = |n| n + 1.I64
+        ;
+        try writeReuseFixture(&tmp, source);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Leaf.roc", .data = dependency });
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Middle.roc", .data =
+            \\module [value]
+            \\import Leaf
+            \\value = Leaf.value
+        });
+        const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+        defer allocator.free(cache);
+        const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+        defer allocator.free(app);
+        var first = try compileForReuseWithStrategy(allocator, cache, app, null, strategy);
+        defer first.deinit(allocator);
+        try std.testing.expectEqual(@as(?i64, 42), first.value("answer"));
+        try std.testing.expectEqualStrings("[dbg] 40\n", first.stderr);
+
+        const edited = try std.mem.replaceOwned(u8, allocator, dependency, "n + 1.I64", "n + 2.I64");
+        defer allocator.free(edited);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Leaf.roc", .data = edited });
+        var warm = try compileForReuseWithStrategy(allocator, cache, app, null, strategy);
+        defer warm.deinit(allocator);
+        try std.testing.expect(!std.meta.eql(first.module_key, warm.module_key));
+        try std.testing.expectEqual(@as(?i64, 42), warm.value("answer"));
+        try std.testing.expectEqualStrings(first.stderr, warm.stderr);
+
+        // Adding an earlier root changes dense root ids; the new checked
+        // entry must record and replay the current reads.
+        const renumbered = try std.mem.replaceOwned(u8, allocator, edited, "value = 40.I64", "extra = 9.I64\nvalue = 40.I64");
+        defer allocator.free(renumbered);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Leaf.roc", .data = renumbered });
+        var again = try compileForReuseWithStrategy(allocator, cache, app, null, strategy);
+        defer again.deinit(allocator);
+        try std.testing.expectEqualStrings(first.stderr, again.stderr);
+
+        // Changing an actual input must recompute every reader in the chain.
+        const changed = try std.mem.replaceOwned(u8, allocator, edited, "40.I64", "50.I64");
+        defer allocator.free(changed);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Leaf.roc", .data = changed });
+        var invalidated = try compileForReuseWithStrategy(allocator, cache, app, null, strategy);
+        defer invalidated.deinit(allocator);
+        try std.testing.expectEqual(@as(?i64, 52), invalidated.value("answer"));
+        try std.testing.expectEqualStrings("[dbg] 50\n", invalidated.stderr);
+    }
+}
+
+test "Boxy checked constants share across checkouts and survive unrelated application edits" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "cache");
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", gpa);
+    defer gpa.free(cache);
+    const source =
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\import Schema
+        \\answer = Schema.count + 1.I64
+    ;
+    const schema =
+        \\module [count]
+        \\import Parser
+        \\import "schema.sql" as sql : Str
+        \\count = Parser.parse(sql)
+    ;
+    const parser =
+        \\module [parse]
+        \\parse = |text| Str.count_utf8_bytes(text).to_i64_wrap()
+    ;
+    for ([_][]const u8{ "checkout-a", "different/checkout-b" }) |directory| {
+        try tmp.dir.createDirPath(std.testing.io, directory);
+        var dir = try tmp.dir.openDir(std.testing.io, directory, .{});
+        defer dir.close(std.testing.io);
+        try dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = source });
+        try dir.writeFile(std.testing.io, .{ .sub_path = "platform.roc", .data = reuse_platform });
+        try dir.writeFile(std.testing.io, .{ .sub_path = "Schema.roc", .data = schema });
+        try dir.writeFile(std.testing.io, .{ .sub_path = "Parser.roc", .data = parser });
+        try dir.writeFile(std.testing.io, .{ .sub_path = "schema.sql", .data = "abc" });
+    }
+    const Run = struct {
+        const Result = struct { key: [32]u8, cached: bool, stored_before_evaluation: bool, value: i64 };
+        fn run(allocator: Allocator, directory: []const u8, path: []const u8) (CoordinatorError || eval.BuiltinModules.InitError || Allocator.Error || std.Thread.SpawnError || Coordinator.AppDiscoveryError || error{TestUnexpectedResult})!Result {
+            const core = CoreCtx.os(allocator, allocator, std.testing.io);
+            var manager = CacheManager.init(allocator, .{ .enabled = true, .cache_dir = directory }, core);
+            defer manager.deinit();
+            var coord = try Coordinator.init(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, core);
+            defer coord.deinit();
+            coord.enable_hosted_transform = true;
+            coord.specialization_strategy = .boxy;
+            var arena = base.SingleThreadArena.init(allocator);
+            defer arena.deinit();
+            try coord.start();
+            try coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = path });
+            try coord.coordinatorLoop();
+            try std.testing.expect(!coord.hasUserErrors());
+            var found: ?*CheckedArtifact.CheckedModuleArtifact = null;
+            var modules = coord.checked_artifact_index.valueIterator();
+            while (modules.next()) |location| {
+                const artifact = location.module().checkedArtifact().?;
+                if (std.mem.eql(u8, artifact.moduleEnvConst().module_name, "Schema")) found = artifact;
+            }
+            const artifact = found orelse return error.TestUnexpectedResult;
+            const root_id = root: for (artifact.compile_time_roots.roots) |root| {
+                if (root.source != .def) continue;
+                const env = artifact.moduleEnvConst();
+                const pattern = env.store.getPattern(env.store.getDef(root.source.def).pattern);
+                if (pattern == .assign and std.mem.eql(u8, env.getIdent(pattern.assign.ident), "count")) break :root root.id;
+            } else return error.TestUnexpectedResult;
+            const cached = artifact.module_env == .cached_entry;
+            const stored = artifact.compile_time_roots.root(root_id).payload == .const_node;
+            try coord.finishCheckedProgram(.executable_artifacts);
+            try std.testing.expect(!coord.hasUserErrors());
+            const root = artifact.compile_time_roots.root(root_id);
+            try std.testing.expect(root.payload == .const_node);
+            const node = artifact.const_store.get(root.payload.const_node);
+            try std.testing.expect(node == .scalar and node.scalar == .i64);
+            return .{ .key = artifact.key.bytes, .cached = cached, .stored_before_evaluation = stored, .value = node.scalar.i64 };
+        }
+    };
+    const first_path = try tmp.dir.realPathFileAlloc(std.testing.io, "checkout-a/app.roc", gpa);
+    defer gpa.free(first_path);
+    const second_path = try tmp.dir.realPathFileAlloc(std.testing.io, "different/checkout-b/app.roc", gpa);
+    defer gpa.free(second_path);
+    const cold = try Run.run(gpa, cache, first_path);
+    try std.testing.expect(!cold.cached and !cold.stored_before_evaluation);
+    try std.testing.expectEqual(@as(i64, 3), cold.value);
+    const moved = try Run.run(gpa, cache, second_path);
+    try std.testing.expect(moved.cached and moved.stored_before_evaluation);
+    try std.testing.expectEqualSlices(u8, &cold.key, &moved.key);
+    try std.testing.expectEqual(cold.value, moved.value);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "different/checkout-b/app.roc", .data = source ++ "\nunrelated = 123.I64\n" });
+    const edited = try Run.run(gpa, cache, second_path);
+    try std.testing.expect(edited.cached and edited.stored_before_evaluation);
+    try std.testing.expectEqualSlices(u8, &cold.key, &edited.key);
+    try std.testing.expectEqual(cold.value, edited.value);
+    // Replacing an imported file at the same path changes the checked identity.
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "different/checkout-b/schema.sql", .data = "abcde" });
+    const input_changed = try Run.run(gpa, cache, second_path);
+    try std.testing.expect(!input_changed.cached and !input_changed.stored_before_evaluation);
+    try std.testing.expect(!std.mem.eql(u8, &cold.key, &input_changed.key));
+    try std.testing.expectEqual(@as(i64, 5), input_changed.value);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "different/checkout-b/Parser.roc", .data = parser ++ " + 10.I64\n" });
+    const parser_changed = try Run.run(gpa, cache, second_path);
+    try std.testing.expect(!parser_changed.cached and !parser_changed.stored_before_evaluation);
+    try std.testing.expect(!std.mem.eql(u8, &input_changed.key, &parser_changed.key));
+    try std.testing.expectEqual(@as(i64, 15), parser_changed.value);
 }

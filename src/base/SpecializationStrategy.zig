@@ -3,7 +3,7 @@
 const std = @import("std");
 
 /// Selects how runtime roots reach LIR after checking.
-pub const SpecializationStrategy = enum {
+pub const SpecializationStrategy = enum(u8) {
     /// Lambda-set specialization: specialize polymorphism and callable flow
     /// before producing LIR.
     lss,

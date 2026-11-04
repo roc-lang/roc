@@ -270,8 +270,8 @@ pub const Tag = struct {
 };
 
 /// One entry of a nominal record's declared fields. The backing row is always
-/// lexicographic; this separate source order supports boxy descriptor planning,
-/// and layout selection consumes it only when padding opts into declared order.
+/// lexicographic; layout selection consumes this separate source order only
+/// when padding opts into declared order.
 /// See design.md "Nominal Record Field Order".
 pub const DeclaredField = union(enum(u8)) {
     /// A named backing field, matched against the lexicographic backing row by

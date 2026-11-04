@@ -12,6 +12,8 @@ const RocTarget = roc_target.RocTarget;
 const Relocation = @import("Relocation.zig").Relocation;
 const IndexedRelocation = @import("Relocation.zig").IndexedRelocation;
 const SymbolTable = @import("SymbolTable.zig");
+const isaOf = @import("isa.zig").isaOf;
+const isaOfOrNull = @import("isa.zig").isaOfOrNull;
 
 /// Generate an object file from code and relocations.
 ///
@@ -98,17 +100,15 @@ pub fn generateIndexedObjectFileWithDebug(
 ) (Allocator.Error || error{UnsupportedTarget})!void {
     const target_indices = try allocator.alloc(u32, symbols.len);
     defer allocator.free(target_indices);
-    const cpu_arch = target.toCpuArch();
+    const isa = isaOfOrNull(target) orelse return error.UnsupportedTarget;
     const os_tag = target.toOsTag();
 
     switch (roc_target.classifyOs(os_tag)) {
         .linux, .freebsd, .openbsd, .netbsd => {
-            const elf_arch: object.elf.Architecture = if (cpu_arch == .x86_64)
-                .x86_64
-            else if (cpu_arch == .aarch64)
-                .aarch64
-            else
-                return error.UnsupportedTarget;
+            const elf_arch: object.elf.Architecture = switch (isa) {
+                .x86_64 => .x86_64,
+                .aarch64 => .aarch64,
+            };
             var elf = try object.ElfWriter.init(allocator, elf_arch, elfOsabi(os_tag));
             defer elf.deinit();
 
@@ -138,7 +138,7 @@ pub fn generateIndexedObjectFileWithDebug(
                 switch (rel) {
                     .linked_function => |f| try elf.addTextRelocation(rel.getOffset(), target_indices[@backingInt(f.symbol)], f.kind),
                     .linked_data => |d| try elf.addTextDataRelocation(rel.getOffset(), target_indices[@backingInt(d.symbol)], d.kind),
-                    .local_data, .retired, .runtime_number => {},
+                    .local_data, .retired => {},
                 }
             }
             for (rodata_relocations) |rel| try elf.addRodataRelocation(rel.offset, target_indices[@backingInt(rel.symbol)], rel.addend);
@@ -146,12 +146,10 @@ pub fn generateIndexedObjectFileWithDebug(
             try elf.write(output);
         },
         .macos => {
-            const macho_arch: object.macho.Architecture = if (cpu_arch == .x86_64)
-                .x86_64
-            else if (cpu_arch == .aarch64)
-                .aarch64
-            else
-                return error.UnsupportedTarget;
+            const macho_arch: object.macho.Architecture = switch (isa) {
+                .x86_64 => .x86_64,
+                .aarch64 => .aarch64,
+            };
             var macho = try object.MachOWriter.init(allocator, macho_arch);
             defer macho.deinit();
 
@@ -160,28 +158,16 @@ pub fn generateIndexedObjectFileWithDebug(
             macho.setZeroFill(zero_fill_size);
             if (debug) |d| macho.debug = d;
 
-            const referenced = try allocator.alloc(bool, symbols.len);
-            defer allocator.free(referenced);
-            @memset(referenced, false);
-            for (relocations) |rel| switch (rel) {
-                .linked_function => |f| {
-                    referenced[@backingInt(f.symbol)] = true;
-                },
-                .linked_data => |d| {
-                    referenced[@backingInt(d.symbol)] = true;
-                },
-                .local_data, .retired, .runtime_number => {},
-            };
-            for (rodata_relocations) |rel| referenced[@backingInt(rel.symbol)] = true;
-
             // Add symbols (underscore prefix for C ABI is added in MachOWriter.write())
+            // A relocation names its target by symbol table index, so a
+            // symbol only relocations reference stays local: another
+            // object of the link may define the same name.
             for (symbols, 0..) |sym, ordinal| {
-                const is_macho_external = sym.is_global or sym.is_external or referenced[ordinal];
                 const sym_idx = try macho.addSymbol(.{
                     .name = sym.name,
                     .section = if (sym.is_external) 0 else machoSectionNumber(sym.section),
                     .offset = sym.offset,
-                    .is_external = is_macho_external,
+                    .is_external = sym.is_global or sym.is_external,
                 });
 
                 target_indices[ordinal] = sym_idx;
@@ -190,7 +176,7 @@ pub fn generateIndexedObjectFileWithDebug(
                 switch (rel) {
                     .linked_function => |f| try macho.addTextRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(f.symbol)], true, f.kind),
                     .linked_data => |d| try macho.addTextDataRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(d.symbol)], true, d.kind),
-                    .local_data, .retired, .runtime_number => {},
+                    .local_data, .retired => {},
                 }
             }
             for (rodata_relocations) |rel| try macho.addRodataRelocation(@intCast(rel.offset), target_indices[@backingInt(rel.symbol)], true, rel.addend);
@@ -198,12 +184,10 @@ pub fn generateIndexedObjectFileWithDebug(
             try macho.write(output);
         },
         .windows => {
-            const coff_arch: object.coff.Architecture = if (cpu_arch == .x86_64)
-                .x86_64
-            else if (cpu_arch == .aarch64)
-                .aarch64
-            else
-                return error.UnsupportedTarget;
+            const coff_arch: object.coff.Architecture = switch (isa) {
+                .x86_64 => .x86_64,
+                .aarch64 => .aarch64,
+            };
             var coff_writer = try object.CoffWriter.init(allocator, coff_arch);
             defer coff_writer.deinit();
 
@@ -234,7 +218,7 @@ pub fn generateIndexedObjectFileWithDebug(
                     sym.frame_size != 0 or
                     sym.callee_saved_mask != 0 or
                     sym.epilogue_offset != 0;
-                if ((coff_arch == .x86_64 or coff_arch == .aarch64) and sym.is_function and !sym.is_external and has_unwind_info) {
+                if (sym.is_function and !sym.is_external and has_unwind_info) {
                     try coff_writer.addFunctionInfo(.{
                         .start_offset = @intCast(sym.offset),
                         .end_offset = @intCast(sym.offset + sym.size),
@@ -265,7 +249,7 @@ pub fn generateIndexedObjectFileWithDebug(
                 switch (rel) {
                     .linked_function => |f| try coff_writer.addTextRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(f.symbol)], f.kind),
                     .linked_data => |d| try coff_writer.addTextDataRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(d.symbol)], d.kind),
-                    .local_data, .retired, .runtime_number => {},
+                    .local_data, .retired => {},
                 }
             }
             for (rodata_relocations) |rel| try coff_writer.addRdataRelocation(@intCast(rel.offset), target_indices[@backingInt(rel.symbol)], rel.addend);
@@ -685,13 +669,10 @@ test "static strings are emitted into readonly object sections for native target
 
 fn expectReadonlyObjectDataForTarget(target: RocTarget, required: []const u8, forbidden: []const u8) (Allocator.Error || error{ UnsupportedTarget, InvalidObjectFile, SectionNotFound, TestUnexpectedResult })!void {
     const allocator = std.testing.allocator;
-    const cpu_arch = target.toCpuArch();
-    const code = if (cpu_arch == .aarch64)
-        &[_]u8{ 0xC0, 0x03, 0x5F, 0xD6 } // ret
-    else if (cpu_arch == .x86_64)
-        &[_]u8{0xC3} // ret
-    else
-        return error.UnsupportedTarget;
+    const code = switch (isaOfOrNull(target) orelse return error.UnsupportedTarget) {
+        .aarch64 => &[_]u8{ 0xC0, 0x03, 0x5F, 0xD6 }, // ret
+        .x86_64 => &[_]u8{0xC3}, // ret
+    };
     const rodata = required;
     const symbols = [_]Symbol{
         .{
@@ -974,12 +955,21 @@ test "indexed object relocations preserve targets through format symbol ordering
         .{ .offset = 0, .symbol = ids[2], .addend = 3 },
         .{ .offset = 24, .symbol = ids[0] },
     };
-    for ([_]RocTarget{ .x64linux, .arm64linux, .x64mac, .arm64mac, .x64win, .arm64win }) |target| {
-        const is_x64 = target.toCpuArch() == .x86_64;
+    inline for ([_]RocTarget{ .x64linux, .arm64linux, .x64mac, .arm64mac, .x64win, .arm64win }) |target| {
+        const isa = comptime isaOf(target);
         const relocations = [_]IndexedRelocation{
-            .{ .linked_data = .{ .offset = 8, .symbol = ids[2], .kind = if (is_x64) .rel32 else .page21 } },
-            .{ .linked_function = .{ .offset = 0, .symbol = ids[0], .kind = if (is_x64) .x86_call_rel32 else .aarch64_call26 } },
-            .{ .linked_data = .{ .offset = 12, .symbol = ids[2], .kind = if (is_x64) .rel32 else .pageoff12 } },
+            .{ .linked_data = .{ .offset = 8, .symbol = ids[2], .kind = switch (isa) {
+                .x86_64 => .rel32,
+                .aarch64 => .page21,
+            } } },
+            .{ .linked_function = .{ .offset = 0, .symbol = ids[0], .kind = switch (isa) {
+                .x86_64 => .x86_call_rel32,
+                .aarch64 => .aarch64_call26,
+            } } },
+            .{ .linked_data = .{ .offset = 12, .symbol = ids[2], .kind = switch (isa) {
+                .x86_64 => .rel32,
+                .aarch64 => .pageoff12,
+            } } },
             .{ .linked_data = .{ .offset = 16, .symbol = ids[1] } },
         };
         var output: std.ArrayList(u8) = .empty;
@@ -990,9 +980,18 @@ test "indexed object relocations preserve targets through format symbol ordering
         try std.testing.expectEqual(@as(usize, 4), decoded.text.len / decoded.relocation_size);
         try std.testing.expectEqual(@as(usize, 2), decoded.data.len / decoded.relocation_size);
         const expected_types: [4]usize = switch (decoded.format) {
-            .elf => if (is_x64) .{ 2, 4, 2, 1 } else .{ 275, 283, 277, 257 },
-            .macho => if (is_x64) .{ 1, 2, 1, 0 } else .{ 3, 2, 4, 0 },
-            .coff => if (is_x64) .{ 4, 4, 4, 1 } else .{ 4, 3, 6, 14 },
+            .elf => switch (isa) {
+                .x86_64 => .{ 2, 4, 2, 1 },
+                .aarch64 => .{ 275, 283, 277, 257 },
+            },
+            .macho => switch (isa) {
+                .x86_64 => .{ 1, 2, 1, 0 },
+                .aarch64 => .{ 3, 2, 4, 0 },
+            },
+            .coff => switch (isa) {
+                .x86_64 => .{ 4, 4, 4, 1 },
+                .aarch64 => .{ 4, 3, 6, 14 },
+            },
         };
         for (expected, relocations, 0..) |name, relocation, i| {
             const record = decoded.text[i * decoded.relocation_size ..][0..decoded.relocation_size];
@@ -1001,10 +1000,15 @@ test "indexed object relocations preserve targets through format symbol ordering
             try std.testing.expectEqual(expected_types[i], decoded.relocationType(record));
         }
         try std.testing.expectEqualStrings("local_data", decoded.targetName(decoded.data[0..decoded.relocation_size]));
+        // A symbol only relocations reference keeps its local binding.
+        if (decoded.format == .macho) try std.testing.expectEqual(@as(u8, 0), decoded.machoSymbolType(decoded.data[0..decoded.relocation_size]) & 0x01);
         try std.testing.expectEqualStrings("external_function", decoded.targetName(decoded.data[decoded.relocation_size..]));
         if (decoded.format == .elf) {
             try std.testing.expectEqual(@as(i64, 3), std.mem.readInt(i64, decoded.data[16..24], .little));
-            try std.testing.expectEqual(@as(i64, if (target.toCpuArch() == .x86_64) -4 else 0), std.mem.readInt(i64, decoded.text[decoded.relocation_size + 16 ..][0..8], .little));
+            try std.testing.expectEqual(@as(i64, switch (isa) {
+                .x86_64 => -4,
+                .aarch64 => 0,
+            }), std.mem.readInt(i64, decoded.text[decoded.relocation_size + 16 ..][0..8], .little));
         } else {
             const bytes = try readonlySection(target, output.items);
             try std.testing.expectEqual(@as(u64, 3), std.mem.readInt(u64, bytes[0..8], .little));
@@ -1081,6 +1085,12 @@ const TestObjectTables = struct {
         };
         const name = std.mem.sliceTo(self.strings[name_offset..], 0);
         return if (self.format == .macho) name[1..] else name;
+    }
+
+    /// The `n_type` of the symbol a Mach-O relocation record names.
+    fn machoSymbolType(self: TestObjectTables, relocation: []const u8) u8 {
+        const index = read32(relocation, 4) & 0x00ff_ffff;
+        return self.symbols[index * 16 + 4];
     }
 
     fn relocationType(self: TestObjectTables, record: []const u8) usize {

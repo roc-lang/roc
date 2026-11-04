@@ -6,7 +6,7 @@
 //! only through `llvm.lifetime.start` / `llvm.lifetime.end`. SROA already
 //! removes slots whose address never escapes, and a marker on such a slot is
 //! pure optimizer work, so markers go only on the slots of locals whose
-//! addresses the backend passes to out-of-line Roc procedure calls.
+//! addresses the backend passes to out-of-line Roc procedure or RC helper calls.
 //!
 //! The markers are `lir.StackPlan`'s lifetime boundaries over the explicit LIR
 //! control-flow graph, each emitted at the entry of its statement. An end may
@@ -97,8 +97,8 @@ pub fn at(self: *const Self, stmt: CFStmtId) []const Marker {
 }
 
 /// Plan the markers of the procedure body rooted at `root` whose parameter
-/// span is `params`. `calls.appendAddressed(call, list)` appends the locals
-/// whose slot addresses one `assign_call` passes to an out-of-line callee, and
+/// span is `params`. `calls.appendAddressed(stmt, list)` appends the locals
+/// whose slot addresses one statement passes to an out-of-line callee, and
 /// fails only with `calls.AppendError`.
 pub fn plan(self: *Self, store: *const LirStore, root: CFStmtId, params: anytype, calls: anytype) (Allocator.Error || @TypeOf(calls).AppendError)!void {
     self.clear();
@@ -150,12 +150,11 @@ fn collectCandidates(self: *Self, store: *const LirStore, root: CFStmtId, params
     try self.work.append(self.allocator, root);
     while (self.work.pop()) |id| {
         if ((try self.visited.getOrPut(self.allocator, @backingInt(id))).found_existing) continue;
-        switch (store.getCFStmt(id)) {
-            .assign_call => |call| {
-                addressed.clearRetainingCapacity();
-                try calls.appendAddressed(call, &addressed);
-                for (addressed.items) |local| try self.candidates.put(self.allocator, @backingInt(calls.storageRoot(local)), {});
-            },
+        const stmt = store.getCFStmt(id);
+        addressed.clearRetainingCapacity();
+        try calls.appendAddressed(stmt, &addressed);
+        for (addressed.items) |local| try self.candidates.put(self.allocator, @backingInt(calls.storageRoot(local)), {});
+        switch (stmt) {
             .assign_ref => |assign| switch (assign.op.kind) {
                 .local, .list_reinterpret, .nominal => try self.copies.append(self.allocator, .{ @backingInt(assign.op.source), @backingInt(assign.target) }),
                 .discriminant, .field, .tag_payload, .tag_payload_struct => {},
@@ -167,22 +166,11 @@ fn collectCandidates(self: *Self, store: *const LirStore, root: CFStmtId, params
                 for (0..arms.len) |i| try self.noteDeferredCaptures(store, s.source, GuardedList.at(arms, i).steps);
             },
             .init_uninitialized,
+            .dyn,
             .assign_literal,
+            .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -301,10 +289,10 @@ test "issue 12505 projected call arguments extend their storage owner's lifetime
         pub fn storageRoot(self: @This(), local: LocalId) LocalId {
             return if (local == self.view) self.owner else local;
         }
-        pub fn appendAddressed(self: @This(), call: @FieldType(lir.LIR.CFStmt, "assign_call"), out: *std.ArrayList(LocalId)) AppendError!void {
+        pub fn appendAddressed(self: @This(), stmt: lir.LIR.CFStmt, out: *std.ArrayList(LocalId)) AppendError!void {
             // Only the consumer passes an address; the producer does not
             // independently put the owner in the candidate set.
-            if (call.args.len != 0) try out.append(std.testing.allocator, self.view);
+            if (stmt == .assign_call and stmt.assign_call.args.len != 0) try out.append(std.testing.allocator, self.view);
         }
     };
     var lifetimes = Self.init(gpa);

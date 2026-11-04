@@ -185,6 +185,34 @@ test "issue 10804: a declaration that grows its own formal is rejected before co
     try test_env.assertOneTypeError("Invalid Recursive Type");
 }
 
+// An unnamed field stays out of the backing row but instantiates with it, so
+// growth through one has no last level either.
+test "issue 10804: a declaration that grows its own formal through an unnamed field is rejected" {
+    const source =
+        \\Nest(a) := { x : U8, _ : [Done, More(Nest(List(a)))], y : U8 }
+        \\nest : Nest(Str)
+        \\nest = { x: 1, y: 2 }
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Invalid Recursive Type");
+}
+
+test "issue 10804: an unnamed field may recur at the declaration's own formal" {
+    const source =
+        \\Nest(a) := { x : a, _ : [Done, More(Nest(a))], y : U8 }
+        \\nest : Nest(Str)
+        \\nest = { x: "s", y: 2 }
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
 // A formal passed straight through leaves the application the same size, so
 // applying a declaration to a sibling's larger argument is not growth.
 test "issue 10804: two applications of one declaration may differ in size" {

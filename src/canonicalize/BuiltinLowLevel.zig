@@ -245,7 +245,7 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         .{ "list_map_cast_unsafe", .list_map_cast_unsafe },
         .{ "list_map_extract_unsafe", .list_map_extract_unsafe },
         .{ "list_map_write_unsafe", .list_map_write_unsafe },
-        .{ "list_move_out_unsafe", .list_map_extract_unsafe },
+        .{ "list_move_out_unsafe", .list_move_out_unsafe },
         .{ "list_move_in_unsafe", .list_map_write_unsafe },
         .{ "list_owned_unique", .list_owned_unique },
         .{ "list_item_size_at_most", .list_item_size_at_most },

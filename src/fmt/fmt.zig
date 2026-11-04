@@ -5902,6 +5902,69 @@ test "issue 10191: leading newline before function parameter formatting is stabl
     defer std.testing.allocator.free(result);
 }
 
+test "issue 12749: multiline strings preserve trailing whitespace" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const input = "with_trailing_whitespace =\n" ++
+        "    \\\\ first line with trailing spaces    \n" ++
+        "    \\\\ spaces should go up to here ----->|\n";
+    const expected = "with_trailing_whitespace =\n" ++
+        "\t\\\\ first line with trailing spaces    \n" ++
+        "\t\\\\ spaces should go up to here ----->|\n";
+    const result = try moduleFmtsStable(gpa, input, false);
+    defer gpa.free(result);
+    try std.testing.expectEqualStrings(expected, result);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file = try tmp.dir.createFile(io, "multiline.roc", .{});
+    try file.writeStreamingAll(io, input);
+    file.close(io);
+
+    var stderr = std.Io.Writer.Allocating.init(gpa);
+    defer stderr.deinit();
+
+    // Exercise the CLI's stdin path with the original, unformatted source.
+    const stdin = try tmp.dir.openFile(io, "multiline.roc", .{});
+    defer stdin.close(io);
+    const stdout = try tmp.dir.createFile(io, "stdout", .{});
+    defer stdout.close(io);
+    try formatStdin(gpa, .{}, io, stdin, stdout, &stderr.writer);
+    const output = try tmp.dir.readFileAlloc(io, "stdout", gpa, .limited(1024));
+    defer gpa.free(output);
+    try std.testing.expectEqualStrings(expected, output);
+
+    // In-place formatting must retain the string bytes on repeated runs.
+    for (0..2) |_| {
+        try formatFilePath(gpa, tmp.dir, "multiline.roc", null, .{}, io, &stderr.writer);
+        const after = try tmp.dir.readFileAlloc(io, "multiline.roc", gpa, .limited(1024));
+        defer gpa.free(after);
+        try std.testing.expectEqualStrings(expected, after);
+    }
+
+    var unformatted = std.array_list.Managed([]const u8).init(gpa);
+    defer {
+        for (unformatted.items) |path| gpa.free(path);
+        unformatted.deinit();
+    }
+    try formatFilePath(gpa, tmp.dir, "multiline.roc", &unformatted, .{}, io, &stderr.writer);
+    try std.testing.expectEqual(@as(usize, 0), unformatted.items.len);
+}
+
+test "issue 12749: multiline string whitespace survives interpolation and type suffixes" {
+    // Quoted Zig strings make significant spaces and tabs visible to editors.
+    const inputs = [_][]const u8{
+        "x =\n\t\\\\ first  \n\t\\\\    \n\t\\\\ last \t \n",
+        "x =\n\t\\\\ ${name}  \n\t\\\\ last ${name}\t \n",
+        "x =\n\t\\\\ first  \n\t\\\\ last  \n\t.Str\n",
+    };
+    for (inputs) |input| {
+        const result = try moduleFmtsStable(std.testing.allocator, input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(input, result);
+    }
+}
+
 test "string token text preserves significant trailing spaces" {
     const regular = try moduleFmtsStable(std.testing.allocator, "regular=\"value \"", false);
     defer std.testing.allocator.free(regular);

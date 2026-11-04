@@ -1258,11 +1258,10 @@ fn runCase(allocator: Allocator, case: Case) SweepError!void {
 
     var static_strings = try Interpreter.buildStaticStrings(allocator, &lowered.view.store);
     defer static_strings.deinit();
-    var interp = try Interpreter.initWithBoxyTables(
+    var interp = try Interpreter.init(
         allocator,
         &lowered.view.store,
         &lowered.view.layouts,
-        Interpreter.BoxyTables.fromImageView(&lowered.view),
         static_strings.view(),
         runtime_env.get_ops(),
     );

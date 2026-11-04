@@ -4,11 +4,12 @@ const std = @import("std");
 const threading_mod = @import("threading.zig");
 
 pub const package = @import("compile_package.zig");
-pub const completed_compilation = @import("completed_compilation.zig");
 pub const build = @import("compile_build.zig");
 pub const targets_config = @import("targets_config.zig");
 pub const TargetsConfig = targets_config.TargetsConfig;
 pub const single_module = @import("compile_module.zig");
+pub const source_inventory = @import("source_inventory.zig");
+pub const source_graph = @import("source_graph.zig");
 pub const module_discovery = @import("module_discovery.zig");
 pub const threading = @import("threading.zig");
 pub const static_data_exports = @import("static_data");
@@ -26,18 +27,18 @@ pub const coordinator = @import("coordinator.zig");
 pub const app_header = @import("app_header.zig");
 
 pub const key = @import("cache_key.zig");
+pub const boxy_object_cache = @import("boxy_object_cache.zig");
+pub const boxy_interface = @import("boxy_interface.zig");
+pub const boxy_unit = @import("boxy_unit.zig");
+pub const boxy_reach = @import("boxy_reach.zig");
 pub const config = @import("cache_config.zig");
 pub const manager = @import("cache_manager.zig");
 pub const artifacts = @import("artifact_store.zig");
-pub const maintenance = @import("cache_maintenance.zig");
-pub const cleanup = @import("cache_cleanup.zig");
 
 pub const CacheManager = manager.CacheManager;
 pub const CacheConfig = config.CacheConfig;
 pub const CacheStats = config.CacheStats;
 /// Cache cleanup utilities for managing temporary and persistent cache files.
-pub const CacheCleanup = cleanup;
-pub const CleanupStats = cleanup.CleanupStats;
 pub const BuildEnv = build.BuildEnv;
 pub const CoreCtx = @import("ctx").CoreCtx;
 
@@ -62,12 +63,13 @@ pub const CoreCtx = @import("ctx").CoreCtx;
 
 test "compile tests" {
     if (!threading_mod.is_freestanding) {
-        std.testing.refAllDecls(@import("cache_cleanup.zig"));
         std.testing.refAllDecls(artifacts);
-        std.testing.refAllDecls(maintenance);
     }
+    std.testing.refAllDecls(boxy_object_cache);
     std.testing.refAllDecls(@import("cache_config.zig"));
     std.testing.refAllDecls(@import("cache_key.zig"));
+    std.testing.refAllDecls(boxy_object_cache);
+    std.testing.refAllDecls(boxy_unit);
     std.testing.refAllDecls(@import("cache_manager.zig"));
     std.testing.refAllDecls(@import("cache_module.zig"));
     std.testing.refAllDecls(@import("cache_versioning.zig"));
@@ -78,6 +80,8 @@ test "compile tests" {
     std.testing.refAllDecls(@import("compile_module.zig"));
     std.testing.refAllDecls(@import("compile_package.zig"));
     std.testing.refAllDecls(@import("module_discovery.zig"));
+    std.testing.refAllDecls(source_inventory);
+    std.testing.refAllDecls(source_graph);
     std.testing.refAllDecls(static_data_exports);
     std.testing.refAllDecls(@import("package_source.zig"));
     std.testing.refAllDecls(@import("package_resolution.zig"));
@@ -214,6 +218,11 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_12631_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12624_test.zig"));
     std.testing.refAllDecls(@import("test/boxy_dictionary_evidence_order_test.zig"));
+    std.testing.refAllDecls(@import("test/boxy_return_construction_test.zig"));
+    std.testing.refAllDecls(@import("test/boxy_unary_argument_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12734_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12745_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12787_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12617_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12682_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11292_test.zig"));
