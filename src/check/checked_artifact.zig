@@ -19138,9 +19138,6 @@ const EvidencePass = struct {
     /// a fresh var that settled onto an enclosing where-var forwards as
     /// `constraint(depth, k)`. Index 0 is the innermost generalized callable.
     current_chain: []const ChainLevel = &.{},
-    /// Whether the obligations being resolved are those of a template running
-    /// as a root (`rootDefaultObligation`).
-    at_template_root: bool = false,
 
     const EvidenceParam = dispatch_evidence.EvidenceParam;
     /// The generated-codec derivation each kind selected for one
@@ -19344,13 +19341,13 @@ const EvidencePass = struct {
             const plan_refs = self.plan_table.template_refs[plan_start .. plan_start + template.static_dispatch_plans.len];
             for (plan_refs, 0..) |plan_id, i| {
                 const chain = try self.chainFor(self.template_iterator_refs.plan_scopes[plan_start + i], template_level);
-                try self.resolvePlan(plan_id, chain, false);
+                try self.resolvePlan(plan_id, chain, .defer_resolution);
             }
 
             const iter_span = self.template_iterator_refs.spans[template_index];
             for (self.template_iterator_refs.pool[iter_span.start .. iter_span.start + iter_span.len], 0..) |iter_plan_id, i| {
                 const chain = try self.chainFor(self.template_iterator_refs.iterator_scopes[iter_span.start + i], template_level);
-                try self.resolveIteratorPlan(iter_plan_id, chain, false);
+                try self.resolveIteratorPlan(iter_plan_id, chain, .defer_resolution);
             }
 
             const value_ref_start = template.resolved_value_refs.start;
@@ -19385,13 +19382,13 @@ const EvidencePass = struct {
             const plan_span = self.template_iterator_refs.default_plan_refs;
             for (self.plan_table.template_refs[plan_span.start .. plan_span.start + plan_span.len], 0..) |plan_id, i| {
                 const chain = try self.chainFor(self.template_iterator_refs.plan_scopes[plan_span.start + i], .empty);
-                try self.resolvePlan(plan_id, chain, false);
+                try self.resolvePlan(plan_id, chain, .defer_resolution);
             }
 
             const iter_span = self.template_iterator_refs.default_iterator_refs;
             for (self.template_iterator_refs.pool[iter_span.start .. iter_span.start + iter_span.len], 0..) |iter_plan_id, i| {
                 const chain = try self.chainFor(self.template_iterator_refs.iterator_scopes[iter_span.start + i], .empty);
-                try self.resolveIteratorPlan(iter_plan_id, chain, false);
+                try self.resolveIteratorPlan(iter_plan_id, chain, .defer_resolution);
             }
 
             const value_span = self.template_iterator_refs.default_value_refs;
@@ -19427,25 +19424,7 @@ const EvidencePass = struct {
                 out.* = null;
                 continue;
             }
-            var entries = std.ArrayListUnmanaged(static_dispatch.CheckedEvidence).empty;
-            defer entries.deinit(self.allocator);
-            try entries.ensureTotalCapacity(self.allocator, params.items.len);
-            self.current_chain = &.{};
-            self.at_template_root = true;
-            defer self.at_template_root = false;
-            for (params.items) |param| {
-                const evidence = (try self.evidenceForVar(
-                    param,
-                    param.dispatcher_var,
-                    param.constraint.fn_var,
-                    true,
-                )) orelse checkedArtifactInvariant(
-                    "procedure template root evidence remained unresolved after checking",
-                    .{},
-                );
-                entries.appendAssumeCapacity(evidence);
-            }
-            out.* = try self.appendEvidenceRefs(entries.items);
+            out.* = try self.rootEvidenceRefs(params.items);
         }
 
         // A platform requirement invokes an app procedure without a source
@@ -19466,23 +19445,7 @@ const EvidencePass = struct {
             // The app definition owns the complete scheme, including captured
             // codec requirements absent from the platform's copied type root.
             try self.enumerateParams(ModuleEnv.varFrom(solution.def), &params);
-            var entries = std.ArrayListUnmanaged(static_dispatch.CheckedEvidence).empty;
-            defer entries.deinit(self.allocator);
-            try entries.ensureTotalCapacity(self.allocator, params.items.len);
-            self.current_chain = &.{};
-            for (params.items) |param| {
-                const evidence = (try self.evidenceForVar(
-                    param,
-                    param.dispatcher_var,
-                    param.constraint.fn_var,
-                    true,
-                )) orelse checkedArtifactInvariant(
-                    "platform requirement root evidence remained unresolved after checking",
-                    .{},
-                );
-                entries.appendAssumeCapacity(evidence);
-            }
-            out.* = try self.appendEvidenceRefs(entries.items);
+            out.* = try self.rootEvidenceRefs(params.items);
         }
 
         // Explicit shared-var use sites no template chain fully bound resolve
@@ -19513,11 +19476,11 @@ const EvidencePass = struct {
         // resolve them chain-free, exactly like root edges.
         for (0..self.plan_table.plans.len) |raw| {
             if (self.plan_resolved[raw]) continue;
-            try self.resolvePlan(@fromBackingInt(@intCast(raw)), &.{}, true);
+            try self.resolvePlan(@fromBackingInt(@intCast(raw)), &.{}, .commit);
         }
         for (0..self.plan_table.iterator_for_plans.len) |raw| {
             if (self.iterator_plan_resolved[raw]) continue;
-            try self.resolveIteratorPlan(@fromBackingInt(@intCast(raw)), &.{}, true);
+            try self.resolveIteratorPlan(@fromBackingInt(@intCast(raw)), &.{}, .commit);
         }
 
         std.mem.sort(static_dispatch.SiteEvidenceEntry, self.site_evidence.items, {}, siteEvidenceLessThan);
@@ -20000,6 +19963,7 @@ const EvidencePass = struct {
                                 .renamings = module_env.generated_codec_renamings.items.items[source_derivation.renamings_start..][0..source_derivation.renamings_len],
                             },
                             .derivation,
+                            .commit,
                         );
                         switch (self.evidence_nodes.items[@backingInt(node_id)].nested) {
                             .resolved => {},
@@ -20538,7 +20502,7 @@ const EvidencePass = struct {
         return .independent_per_use;
     }
 
-    fn resolvePlan(self: *EvidencePass, plan_id: static_dispatch.StaticDispatchPlanId, chain: []const ChainLevel, commit_unpinned: bool) Allocator.Error!void {
+    fn resolvePlan(self: *EvidencePass, plan_id: static_dispatch.StaticDispatchPlanId, chain: []const ChainLevel, policy: UnpinnedPolicy) Allocator.Error!void {
         const raw = @backingInt(plan_id);
         const plan = &self.plan_table.plans[raw];
         if (self.plan_resolved[raw]) return;
@@ -20565,7 +20529,7 @@ const EvidencePass = struct {
             src.constraint_fn_var,
             src.literal_kind,
             chain,
-            commit_unpinned,
+            policy,
         )) {
             .resolved => |resolution| resolution orelse return,
             .node => |request| .{ .direct_pending = try self.evidenceNodeForTarget(
@@ -20574,6 +20538,7 @@ const EvidencePass = struct {
                 request.constraint_fn_var,
                 null,
                 if (src.target_selected_by_checking) request.selection else .publication,
+                policy,
             ) },
         };
         plan.generated_codec_derivation = switch (plan.resolution) {
@@ -20624,7 +20589,7 @@ const EvidencePass = struct {
         }
     }
 
-    fn resolveIteratorPlan(self: *EvidencePass, plan_id: static_dispatch.IteratorForPlanId, chain: []const ChainLevel, commit_unpinned: bool) Allocator.Error!void {
+    fn resolveIteratorPlan(self: *EvidencePass, plan_id: static_dispatch.IteratorForPlanId, chain: []const ChainLevel, policy: UnpinnedPolicy) Allocator.Error!void {
         const raw = @backingInt(plan_id);
         const plan = &self.plan_table.iterator_for_plans[raw];
         if (self.iterator_plan_resolved[raw]) return;
@@ -20640,7 +20605,7 @@ const EvidencePass = struct {
             src.iter_fn_var,
             null,
             chain,
-            commit_unpinned,
+            policy,
         )) orelse return;
         plan.next.resolution = (try self.resolveObligation(
             src.next_dispatcher_var,
@@ -20650,19 +20615,40 @@ const EvidencePass = struct {
             src.next_fn_var,
             null,
             chain,
-            commit_unpinned,
+            policy,
         )) orelse return;
         self.iterator_plan_resolved[raw] = true;
     }
 
+    /// How an obligation that the given chain does not bind resolves.
+    const UnpinnedPolicy = enum {
+        /// Return null, so a template whose scheme does bind it (template
+        /// plan-ref spans can overlap) or the final chain-free sweep resolves
+        /// it instead. Template walks use this.
+        defer_resolution,
+        /// Commit it by the unpinned-dispatch rule; the result is total.
+        commit,
+        /// The obligation belongs to a root edge, which has no caller to pin
+        /// it: a dispatcher its literals constrain takes those literals'
+        /// default owner (`rootDefaultObligation`), and any other commits by
+        /// the unpinned-dispatch rule. The result is total.
+        root_default,
+
+        /// The policy for an obligation whose resolution must be total, such
+        /// as the nested obligations of a target's evidence node or a use
+        /// instantiation's type: `root_default` stays, otherwise `commit`.
+        fn committed(self: UnpinnedPolicy) UnpinnedPolicy {
+            return switch (self) {
+                .defer_resolution, .commit => .commit,
+                .root_default => .root_default,
+            };
+        }
+    };
+
     /// Resolve one dispatch obligation: `method` dispatched on
     /// `dispatcher_var`, with `constraint_fn_var` keying the discharge record
-    /// that carries the chosen target's own nested obligations.
-    /// Resolve one dispatch obligation. With `commit_unpinned = false`
-    /// (template walks), an obligation the given chain does not bind returns
-    /// null so a template whose scheme DOES bind it (template plan-ref spans
-    /// can overlap) or the final chain-free sweep resolves it instead. With
-    /// `commit_unpinned = true` the result is total.
+    /// that carries the chosen target's own nested obligations. `policy`
+    /// decides an obligation `chain` does not bind.
     fn resolveObligation(
         self: *EvidencePass,
         dispatcher_var: Var,
@@ -20672,11 +20658,11 @@ const EvidencePass = struct {
         constraint_fn_var: ?Var,
         literal_kind: ?LiteralKind,
         chain: []const ChainLevel,
-        commit_unpinned: bool,
+        policy: UnpinnedPolicy,
     ) Allocator.Error!?static_dispatch.CheckedCallResolution {
-        return switch (try self.resolveObligationStep(dispatcher_var, dispatcher_ty, method, structural_kind, constraint_fn_var, literal_kind, chain, commit_unpinned)) {
+        return switch (try self.resolveObligationStep(dispatcher_var, dispatcher_ty, method, structural_kind, constraint_fn_var, literal_kind, chain, policy)) {
             .resolved => |resolution| resolution,
-            .node => |request| .{ .direct_pending = try self.evidenceNodeForTarget(request.target, request.dispatcher_ty, request.constraint_fn_var, null, request.selection) },
+            .node => |request| .{ .direct_pending = try self.evidenceNodeForTarget(request.target, request.dispatcher_ty, request.constraint_fn_var, null, request.selection, policy) },
         };
     }
 
@@ -20705,12 +20691,12 @@ const EvidencePass = struct {
         constraint_fn_var_in: ?Var,
         literal_kind: ?LiteralKind,
         chain: []const ChainLevel,
-        commit_unpinned_in: bool,
+        policy_in: UnpinnedPolicy,
     ) Allocator.Error!ObligationStep {
         var dispatcher_var = dispatcher_var_in;
         var dispatcher_ty = dispatcher_ty_in;
         var constraint_fn_var = constraint_fn_var_in;
-        var commit_unpinned = commit_unpinned_in;
+        var policy = policy_in;
         // A generalized value's use redirects resolution to the type that use
         // instantiated, which can itself redirect.
         redirect: while (true) {
@@ -20774,7 +20760,7 @@ const EvidencePass = struct {
                             dispatcher_var = fresh;
                             dispatcher_ty = fresh_dispatcher_ty;
                             constraint_fn_var = fresh_fn orelse constraint_fn_var;
-                            commit_unpinned = true;
+                            policy = policy.committed();
                             continue :redirect;
                         }
                     }
@@ -20791,12 +20777,13 @@ const EvidencePass = struct {
                 // obligations—treat it as inert like `.err`.
                 .err, .field_presence => return .{ .resolved = .checked_error },
                 .flex => |flex| {
-                    if (self.at_template_root) {
-                        if (try self.rootDefaultObligation(flex.constraints, dispatcher_ty, method, structural_kind, constraint_fn_var)) |step| return step;
+                    switch (policy) {
+                        .root_default => if (try self.rootDefaultObligation(flex.constraints, dispatcher_ty, method, structural_kind, constraint_fn_var)) |step| return step,
+                        .defer_resolution, .commit => {},
                     }
-                    return self.resolveVarObligation(resolved.var_, method, structural_kind, constraint_fn_var, chain, commit_unpinned);
+                    return self.resolveVarObligation(resolved.var_, method, structural_kind, constraint_fn_var, chain, policy);
                 },
-                .rigid => return self.resolveVarObligation(resolved.var_, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
+                .rigid => return self.resolveVarObligation(resolved.var_, method, structural_kind, constraint_fn_var, chain, policy),
                 // A transparent alias dispatches exactly as its backing does
                 // (design.md "Type Alias Invariant"), including a backing that
                 // is a where-constrained variable. `dispatcher_ty` stays the
@@ -20855,7 +20842,8 @@ const EvidencePass = struct {
         return by_kind.get(expected_kind);
     }
 
-    /// A template running as a root has no caller to pin the variables of its
+    /// A root edge (a template running as a root, or the app procedure a
+    /// platform requirement invokes) has no caller to pin the variables of its
     /// scheme, so a dispatcher its literals constrain takes those literals'
     /// default owner: Dec for numerals and defaultable arithmetic, Str for
     /// quotes and interpolations.
@@ -20887,7 +20875,7 @@ const EvidencePass = struct {
         structural_kind: ?static_dispatch.StructuralKind,
         constraint_fn_var: ?Var,
         chain: []const ChainLevel,
-        commit_unpinned: bool,
+        policy: UnpinnedPolicy,
     ) Allocator.Error!ObligationStep {
         if (try self.chainParamIndex(chain, dispatcher_root, method, constraint_fn_var)) |match| {
             const independent_callable = match.callable_relation != .exact;
@@ -20907,7 +20895,10 @@ const EvidencePass = struct {
         // Not bound by this chain. During template walks another template's
         // scheme may bind it (plan-ref spans can overlap); only the final
         // sweep commits unpinned classifications.
-        if (!commit_unpinned) return .{ .resolved = null };
+        switch (policy) {
+            .defer_resolution => return .{ .resolved = null },
+            .commit, .root_default => {},
+        }
 
         // Not an evidence param of any enclosing callable, so no edge pins
         // it, and checking resolved no default for it: a dispatcher checking
@@ -21018,7 +21009,7 @@ const EvidencePass = struct {
                 .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => checkedArtifactInvariant("inspect override instance was not a function", .{}),
             };
             if (function.args.len != 1) checkedArtifactInvariant("inspect override instance did not take one argument", .{});
-            entry.inspect_evidence = try self.evidenceNodeForTarget(target, function.args[0], use_var, null, .dispatch_edge);
+            entry.inspect_evidence = try self.evidenceNodeForTarget(target, function.args[0], use_var, null, .dispatch_edge, .commit);
         }
     }
 
@@ -21171,7 +21162,10 @@ const EvidencePass = struct {
         constraint_fn_var: ?Var,
         contract: ?ContractCallable,
         selection: MethodTargetSelection,
+        policy: UnpinnedPolicy,
     ) Allocator.Error!static_dispatch.EvidenceNodeId {
+        // Every nested obligation of a node is resolved totally.
+        const nested_policy = policy.committed();
         var frames = std.ArrayList(EvidenceRecordFrame).empty;
         defer {
             for (frames.items) |*frame| {
@@ -21198,7 +21192,7 @@ const EvidencePass = struct {
                 const param = frame.params.items[frame.next];
                 frame.next += 1;
                 const context = try self.evidenceContextForRecordParam(frame.pairs, param);
-                switch (try self.resolveObligationStep(context.var_, context.dispatcher_ty, context.method, context.structural_kind, context.fresh_fn_var, context.literal_kind, self.current_chain, true)) {
+                switch (try self.resolveObligationStep(context.var_, context.dispatcher_ty, context.method, context.structural_kind, context.fresh_fn_var, context.literal_kind, self.current_chain, nested_policy)) {
                     .resolved => |resolution| frame.entries.appendAssumeCapacity(self.evidenceFromResolution(context, resolution orelse
                         checkedArtifactInvariant("committed evidence resolution was not total", .{}))),
                     .node => |request| switch (try self.beginEvidenceNode(request.target, request.dispatcher_ty, request.constraint_fn_var, null, request.selection)) {
@@ -21576,8 +21570,8 @@ const EvidencePass = struct {
 
         for (params.items) |param| {
             const evidence = switch (unpinned) {
-                .defer_resolution => (try self.evidenceForRecordParam(pairs, param, false)) orelse return null,
-                .commit => (try self.evidenceForRecordParam(pairs, param, true)).?,
+                .defer_resolution => (try self.evidenceForRecordParam(pairs, param, .defer_resolution)) orelse return null,
+                .commit => (try self.evidenceForRecordParam(pairs, param, .commit)).?,
                 .from_callable => try self.storedFunctionEvidenceForRecordParam(pairs, param),
             };
             entries.appendAssumeCapacity(evidence);
@@ -21598,10 +21592,10 @@ const EvidencePass = struct {
         self: *EvidencePass,
         pairs: []const ModuleEnv.SchemeUsePair,
         param: EvidenceParam,
-        commit_unpinned: bool,
+        policy: UnpinnedPolicy,
     ) Allocator.Error!?static_dispatch.CheckedEvidence {
         const context = try self.evidenceContextForRecordParam(pairs, param);
-        const resolution = (try self.resolveObligation(context.var_, context.dispatcher_ty, context.method, context.structural_kind, context.fresh_fn_var, context.literal_kind, self.current_chain, commit_unpinned)) orelse return null;
+        const resolution = (try self.resolveObligation(context.var_, context.dispatcher_ty, context.method, context.structural_kind, context.fresh_fn_var, context.literal_kind, self.current_chain, policy)) orelse return null;
         var evidence = self.evidenceFromResolution(context, resolution);
         if (param.callable_contracts.len != 0) {
             // A non-structural method on one settled receiver has one target.
@@ -21628,7 +21622,7 @@ const EvidencePass = struct {
                 var contract_param = param;
                 contract_param.constraint = constraint;
                 contract_param.callable_contracts = &.{};
-                const contract = (try self.evidenceForRecordParam(pairs, contract_param, commit_unpinned)) orelse return null;
+                const contract = (try self.evidenceForRecordParam(pairs, contract_param, policy)) orelse return null;
                 try contracts.append(self.allocator, contract);
             }
             var needs_contract = self.evidenceNeedsCallableContract(evidence);
@@ -21759,10 +21753,10 @@ const EvidencePass = struct {
         param: EvidenceParam,
         var_: Var,
         fresh_fn_var: ?Var,
-        commit_unpinned: bool,
+        policy: UnpinnedPolicy,
     ) Allocator.Error!?static_dispatch.CheckedEvidence {
         const context = try self.evidenceContext(param, var_, fresh_fn_var);
-        const resolution = (try self.resolveObligation(var_, context.dispatcher_ty, context.method, context.structural_kind, fresh_fn_var, context.literal_kind, self.current_chain, commit_unpinned)) orelse return null;
+        const resolution = (try self.resolveObligation(var_, context.dispatcher_ty, context.method, context.structural_kind, fresh_fn_var, context.literal_kind, self.current_chain, policy)) orelse return null;
         return self.evidenceFromResolution(context, resolution);
     }
 
@@ -21839,6 +21833,30 @@ const EvidencePass = struct {
         return null;
     }
 
+    /// The evidence of a root edge whose scheme requires `params`: a
+    /// procedure template running as a root, or the app procedure a platform
+    /// requirement invokes. A root has no caller to pin its scheme's
+    /// variables, so every obligation resolves under `root_default`.
+    fn rootEvidenceRefs(self: *EvidencePass, params: []const EvidenceParam) Allocator.Error!artifact_serialize.Span {
+        var entries = std.ArrayListUnmanaged(static_dispatch.CheckedEvidence).empty;
+        defer entries.deinit(self.allocator);
+        try entries.ensureTotalCapacity(self.allocator, params.len);
+        self.current_chain = &.{};
+        for (params) |param| {
+            const evidence = (try self.evidenceForVar(
+                param,
+                param.dispatcher_var,
+                param.constraint.fn_var,
+                .root_default,
+            )) orelse checkedArtifactInvariant(
+                "root evidence remained unresolved after checking",
+                .{},
+            );
+            entries.appendAssumeCapacity(evidence);
+        }
+        return try self.appendEvidenceRefs(entries.items);
+    }
+
     fn appendEvidenceRefs(self: *EvidencePass, entries: []const static_dispatch.CheckedEvidence) Allocator.Error!artifact_serialize.Span {
         const start: u32 = @intCast(self.evidence_refs.items.len);
         try self.evidence_refs.appendSlice(self.allocator, entries);
@@ -21912,7 +21930,7 @@ const EvidencePass = struct {
                     param,
                     param.dispatcher_var,
                     param.constraint.fn_var,
-                    true,
+                    .commit,
                 )) orelse checkedArtifactInvariant(
                     "monomorphic local procedure evidence remained unresolved after checking",
                     .{},
@@ -21943,9 +21961,9 @@ const EvidencePass = struct {
         pairs: []const ModuleEnv.SchemeUsePair,
         param: EvidenceParam,
     ) Allocator.Error!static_dispatch.CheckedEvidence {
-        if (try self.evidenceForRecordParam(pairs, param, false)) |evidence| return evidence;
+        if (try self.evidenceForRecordParam(pairs, param, .defer_resolution)) |evidence| return evidence;
         if (param.path_len == 0 or param.source == .constraint_callable or param.source == .erased_row_remainder) {
-            return (try self.evidenceForRecordParam(pairs, param, true)).?;
+            return (try self.evidenceForRecordParam(pairs, param, .commit)).?;
         }
         const dispatcher_root = self.types.resolveVar(param.dispatcher_var).var_;
         const dispatcher_var = self.pairForResolved(pairs, dispatcher_root) orelse param.dispatcher_var;
@@ -22078,7 +22096,7 @@ const EvidencePass = struct {
                 // A callable-derived scope's type can also reach a receiver
                 // an enclosing scope binds, which forwards to that scope.
                 if (param.source != .scheme_requirement) {
-                    if (try self.evidenceForVar(param, param.dispatcher_var, param.constraint.fn_var, false)) |evidence| {
+                    if (try self.evidenceForVar(param, param.dispatcher_var, param.constraint.fn_var, .defer_resolution)) |evidence| {
                         entries.appendAssumeCapacity(evidence);
                         continue;
                     }
@@ -22095,7 +22113,7 @@ const EvidencePass = struct {
                 param,
                 param.dispatcher_var,
                 param.constraint.fn_var,
-                true,
+                .commit,
             )) orelse checkedArtifactInvariant(
                 "pathless nested procedure evidence remained unresolved after checking",
                 .{},

@@ -5250,7 +5250,12 @@ before materializing an edge for a direct call, procedure value, or interface
 relation; downstream specialization receives only that selected edge. Boxy
 lowering selects the same root evidence, read through the app CheckedModule's
 evidence table, for every direct call and procedure-value use of a platform
-requirement.
+requirement. The platform's copied type pins only what the requirement names,
+so this root evidence follows the same default rule as every root's: a
+requirement on a variable its literals constrain and nothing pins resolves
+against the literals' default owner (`Str` for quotes and interpolations,
+`Dec` for numerals), as in `main! : List(Str) => Try({}, _)` returning
+`Err(Fail("x"))`.
 
 A platform `provides` declaration must name a top-level value defined in the
 platform module. It cannot name a value from `requires` directly; a platform
