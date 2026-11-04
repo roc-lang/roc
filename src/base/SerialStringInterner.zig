@@ -178,6 +178,15 @@ pub fn enableRuntimeInserts(self: *SerialStringInterner, gpa: Allocator) Allocat
     self.* = try self.clone(gpa);
 }
 
+/// An insertable interner holding this interner's first `len` names under
+/// their ids.
+pub fn prefixClone(self: *const SerialStringInterner, gpa: Allocator, len: u32) Allocator.Error!SerialStringInterner {
+    var result = try initCapacity(gpa, len);
+    errdefer result.deinit(gpa);
+    for (0..len) |id| _ = try result.insert(gpa, self.textAt(@intCast(id)));
+    return result;
+}
+
 /// Preserve serial IDs and the lookup index while taking independent ownership.
 pub fn clone(self: *const SerialStringInterner, gpa: Allocator) Allocator.Error!SerialStringInterner {
     var new_bytes = try SafeList(u8).initCapacity(gpa, self.bytes.items.items.len);

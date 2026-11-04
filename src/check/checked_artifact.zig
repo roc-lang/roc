@@ -4672,6 +4672,11 @@ pub const CheckedTypeStore = struct {
     /// by importing module and imported id, so an imported type projected
     /// twice names one root.
     projected_imports: std.AutoHashMapUnmanaged(ProjectedImportKey, CheckedTypeId) = .empty,
+    /// Each column's length at the module's publication boundary
+    /// (`markPublished`), which is what the store serializes. Types a module
+    /// analysis synthesizes afterwards lie beyond it and are never
+    /// serialized: a loaded module's analyses synthesize them again.
+    published: ?std.EnumArray(BorrowedColumn, u32) = null,
     const SchemeRootKey = struct { root: CheckedTypeId, domain: CheckedTypeSchemeDomain };
     const ProjectedImportKey = struct { module: [32]u8, ty: CheckedTypeId };
 
@@ -4733,7 +4738,23 @@ pub const CheckedTypeStore = struct {
         "scheme_by_root",
         "sealed_env",
         "sealed_keys",
+        "published",
     };
+
+    /// Record the columns' current lengths as the module's publication
+    /// boundary (`published`).
+    pub fn markPublished(self: *CheckedTypeStore) void {
+        self.published = self.columnLengths();
+    }
+
+    fn columnLengths(self: *const CheckedTypeStore) std.EnumArray(BorrowedColumn, u32) {
+        var lengths = std.EnumArray(BorrowedColumn, u32).initUndefined();
+        inline for (@typeInfo(BorrowedColumn).@"enum".field_names) |field_name| {
+            const column = @field(BorrowedColumn, field_name);
+            lengths.set(column, if (comptime column == .var_names) self.var_names.count() else @intCast(@field(self, field_name).items.len));
+        }
+        return lengths;
+    }
 
     /// Text of a stored variable name id, or null when absent.
     pub fn varName(self: *const CheckedTypeStore, id: OptionalVarNameId) ?[]const u8 {
@@ -5570,15 +5591,40 @@ pub const CheckedTypeStore = struct {
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(CheckedTypeStore, @This());
-        pub const serialize = Serde.serialize;
+
+        /// Serialize each column up to the store's publication boundary.
+        pub fn serialize(self: *Serialized, store: *const CheckedTypeStore, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
+            const published = store.published orelse checkedArtifactInvariant("a checked type store was serialized before its module published it", .{});
+            inline for (@typeInfo(Serialized).@"struct".field_names) |field_name| {
+                if (comptime artifact_serialize.comptimeStrEq(field_name, "var_names")) {
+                    const len = published.get(.var_names);
+                    if (len == store.var_names.count()) {
+                        try self.var_names.serialize(&store.var_names, gpa, writer);
+                    } else {
+                        var prefix = try store.var_names.prefixClone(gpa, len);
+                        defer prefix.deinit(gpa);
+                        try self.var_names.serialize(&prefix, gpa, writer);
+                    }
+                } else if (comptime artifact_serialize.comptimeStrEq(field_name, "builtin_nominal_declarations")) {
+                    try self.builtin_nominal_declarations.serialize(&store.builtin_nominal_declarations, gpa, writer);
+                } else {
+                    const items = @field(store, field_name).items;
+                    const len = published.get(@field(BorrowedColumn, field_name));
+                    std.debug.assert(len <= items.len);
+                    try @field(self, field_name).serialize(items[0..len], gpa, writer);
+                }
+            }
+        }
 
         /// A loaded store's columns alias the backing buffer, so every
         /// column starts borrowed: the first synthesized type appended to a
         /// column copies it into owned memory (`ownColumn`), exactly as a
-        /// pairing's columns do.
+        /// pairing's columns do. Its columns are exactly its publication
+        /// boundary.
         pub fn deserialize(self: *const Serialized, base_addr: usize) CheckedTypeStore {
             var store = Serde.deserialize(self, base_addr);
             store.borrowed_columns = std.EnumSet(BorrowedColumn).full;
+            store.published = store.columnLengths();
             return store;
         }
     };
@@ -13627,7 +13673,9 @@ pub const DispatchSource = struct {
     env: *const ModuleEnv,
     module_idx: u32,
     key: CheckedModuleArtifactKey,
-    names: *const canonical.CanonicalNameStore,
+    /// The module's names, which dispatch resolution interns the method
+    /// names of the obligations it resolves into.
+    names: *canonical.CanonicalNameStore,
     types: DispatchTypes,
     module_index: *const ModuleIndex,
     method_registry: *const static_dispatch.MethodRegistry,
@@ -13865,7 +13913,7 @@ const EvidencePass = struct {
 
     allocator: Allocator,
     module: TypedCIR.Module,
-    names: *const canonical.CanonicalNameStore,
+    names: *canonical.CanonicalNameStore,
     checked_types: DispatchTypes,
     module_index: *const ModuleIndex,
     local_method_registry: *const static_dispatch.MethodRegistry,
@@ -15086,8 +15134,7 @@ const EvidencePass = struct {
             }
             try self.evidence_params_pool.append(self.allocator, .{
                 .callable_contracts = .{ .start = contract_start, .len = @intCast(param.callable_contracts.len) },
-                .method = self.names.lookupMethodIdent(idents, param.constraint.fn_name) orelse
-                    checkedArtifactInvariant("an evidence parameter's method name was not interned with the module's names", .{}),
+                .method = try self.names.internMethodIdent(idents, param.constraint.fn_name),
                 .dispatcher_ty = self.checked_types.rootForSourceVar(self.module, param.dispatcher_var) orelse
                     checkedArtifactInvariant("checked evidence parameter dispatcher type was not published", .{}),
                 .callable_ty = self.checked_types.rootForSourceVar(self.module, param.constraint.fn_var) orelse
@@ -15284,7 +15331,7 @@ const EvidencePass = struct {
         for (level.by_dispatcher.forRoot(dispatcher_root)) |candidate| {
             const k = candidate.param;
             const param = params[k];
-            if (self.names.lookupMethodIdent(idents, param.constraint.fn_name) != method) continue;
+            if (try self.names.internMethodIdent(idents, param.constraint.fn_name) != method) continue;
             if (same_method_fallback == null) same_method_fallback = @intCast(k);
             if (constraint_fn_root) |fn_root| {
                 if (self.types.resolveVar(param.constraint.fn_var).var_ != fn_root) {
@@ -15534,7 +15581,7 @@ const EvidencePass = struct {
                     for (level.params, 0..) |param, index| {
                         if (param.source != .scheme_requirement) continue;
                         if (self.types.resolveVar(param.constraint.fn_var).var_ != self.types.resolveVar(fn_var).var_) continue;
-                        if (self.names.lookupMethodIdent(self.module.identStoreConst(), param.constraint.fn_name) != method) continue;
+                        if (try self.names.internMethodIdent(self.module.identStoreConst(), param.constraint.fn_name) != method) continue;
                         return .{ .resolved = .{ .evidence_dependent = .{
                             .scheme_param = .{
                                 .scheme = level.scheme orelse checkedArtifactInvariant("forwarded scheme requirement was not published", .{}),
@@ -16460,7 +16507,7 @@ const EvidencePass = struct {
             .var_ = var_,
             .fresh_fn_var = fresh_fn_var,
             .literal_kind = param.constraint.origin.literalKind(),
-            .method = self.names.lookupMethodIdent(idents, param.constraint.fn_name) orelse checkedArtifactInvariant("an evidence parameter method name was not interned with the module names", .{}),
+            .method = try self.names.internMethodIdent(idents, param.constraint.fn_name),
             .structural_kind = self.structuralKindForMethodIdent(param.constraint.fn_name),
             .dispatcher_ty = self.checked_types.rootForSourceVar(self.module, var_) orelse
                 checkedArtifactInvariant("checked scheme evidence dispatcher type was not published", .{}),
@@ -20967,7 +21014,7 @@ fn callableIdentityIsSpecializationIndependent(
 /// pool, and the enclosing-identity index.
 const ResolvedDispatchCallableSpecializer = struct {
     allocator: Allocator,
-    names: *const canonical.CanonicalNameStore,
+    names: *canonical.CanonicalNameStore,
     store: *CheckedTypeStore,
     owner: ModuleId,
     imports: CheckedImportViews,
@@ -22336,7 +22383,7 @@ fn instantiateResolvedDispatchTargetCallableMemoized(
 
 fn projectResolvedDispatchTargetCallable(
     allocator: Allocator,
-    names: *const canonical.CanonicalNameStore,
+    names: *canonical.CanonicalNameStore,
     store: *CheckedTypeStore,
     owner: ModuleId,
     imports: CheckedImportViews,
@@ -22351,7 +22398,7 @@ fn projectResolvedDispatchTargetCallable(
 
     const imported = imports.viewForKey(target_key) orelse
         checkedArtifactInvariant("resolved dispatch target module was not among the modules dispatch resolution reads", .{});
-    var projector = CheckedTypeStoreImportProjector.init(allocator, store, @constCast(names), imported);
+    var projector = CheckedTypeStoreImportProjector.init(allocator, store, names, imported);
     defer projector.deinit();
     return try projector.project(target.callable_ty);
 }
@@ -23164,8 +23211,10 @@ pub const PlatformPairing = struct {
             var delta = artifact.checked_types;
             const empty_types = CheckedTypeStore{};
             inline for (@typeInfo(CheckedTypeStore.BorrowedColumn).@"enum".field_names) |field_name| {
-                if (artifact.checked_types.borrowed_columns.contains(@field(CheckedTypeStore.BorrowedColumn, field_name))) {
+                const column = @field(CheckedTypeStore.BorrowedColumn, field_name);
+                if (artifact.checked_types.borrowed_columns.contains(column)) {
                     @field(delta, field_name) = @field(empty_types, field_name);
+                    delta.published.?.set(column, 0);
                 }
             }
             try self.checked_types.serialize(&delta, gpa, writer);
@@ -23221,10 +23270,17 @@ pub const PlatformPairing = struct {
             result.evaluation_state = .finalized;
             result.checking_context_identity.platform_app_relation = .{ .bytes = self.relation };
             result.checked_types = self.checked_types.deserialize(address);
+            const platform_published = platform.checked_types.published orelse checkedArtifactInvariant("a pairing was installed over a platform whose types were not published", .{});
+            var published = result.checked_types.published.?;
             inline for (@typeInfo(CheckedTypeStore.BorrowedColumn).@"enum".field_names) |field_name| {
-                const bit = @backingInt(@field(CheckedTypeStore.BorrowedColumn, field_name));
-                if (self.borrowed_types & (@as(u32, 1) << bit) != 0) @field(result.checked_types, field_name) = @field(platform.checked_types, field_name);
+                const column = @field(CheckedTypeStore.BorrowedColumn, field_name);
+                const bit = @backingInt(column);
+                if (self.borrowed_types & (@as(u32, 1) << bit) != 0) {
+                    @field(result.checked_types, field_name) = @field(platform.checked_types, field_name);
+                    published.set(column, platform_published.get(column));
+                }
             }
+            result.checked_types.published = published;
             result.checked_types.sealed_env = platform.checked_types.sealed_env;
             result.checked_types.sealed_keys = platform.checked_types.sealed_keys;
             result.checked_types.synthesized_keys = null;
@@ -23465,6 +23521,8 @@ pub fn pairCheckedPlatform(
         };
     }
     result.checked_types.key_names = null;
+    result.checked_types.markPublished();
+    result.canonical_names.markPublished();
     return result;
 }
 
@@ -29905,7 +29963,7 @@ pub const CheckedModuleArtifact = struct {
             .env = self.moduleEnvConst(),
             .module_idx = self.module_identity.module_idx,
             .key = self.key,
-            .names = &self.canonical_names,
+            .names = @constCast(&self.canonical_names),
             .types = .{ .store = @constCast(&self.checked_types), .pairing = if (self.pairing_types.images.len != 0) &self.pairing_types else null },
             .module_index = &(self.body_analyses orelse checkedArtifactInvariant("dispatch was read from an artifact without body analyses", .{})).index,
             .method_registry = &self.method_registry,
@@ -33149,6 +33207,8 @@ pub fn publishFromTypedModule(
         artifact.evaluation_state = .finalized;
         try artifact.verifyComplete();
     }
+    artifact.checked_types.markPublished();
+    artifact.canonical_names.markPublished();
     analyses_owned = false;
     module_analyses_owned = false;
     return artifact;
@@ -34508,6 +34568,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     const aa = arena.allocator();
     var writer = CW.init();
     const hdr = try writer.appendAlloc(aa, CheckedTypeStore.Serialized);
+    store.markPublished();
     try hdr.serialize(&store, aa, &writer);
 
     const buffer = try gpa.alignedAlloc(u8, CW.SERIALIZATION_ALIGNMENT, writer.total_bytes);
@@ -34633,6 +34694,8 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     var key = CheckedModuleArtifactKey{};
     @memset(&key.bytes, 0xEE);
 
+    checked_types_src.markPublished();
+    canonical_names_src.markPublished();
     const artifact = CheckedModuleArtifact{
         .key = key,
         .source_hash = @as([32]u8, @splat(0x5c)),
@@ -35382,6 +35445,7 @@ test "pairing type columns borrow frozen storage until written" {
     defer arena.deinit();
     var writer = CompactWriter.init();
     const header = try writer.appendAlloc(arena.allocator(), CheckedTypeStore.Serialized);
+    source.markPublished();
     try header.serialize(&source, arena.allocator(), &writer);
     const bytes = try allocator.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
     defer allocator.free(bytes);
