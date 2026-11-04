@@ -23084,10 +23084,12 @@ source region, by site id) and its test-root table (each wrapper's module
 digest, root index and image symbol). A table that does not read makes the
 entry a miss. Compile-time evaluation and builds never load a test unit.
 
-Each site immediate is a relocatable field (`abs32s`, the field's bytes
-holding the unit-local id as its addend) against one import,
-`roc__expect_site_base`, which the loader binds per image to the first
-program-wide id of that image's sites. The program-wide site table is the
+Each site id is a relocatable field against one import,
+`roc__expect_site_base`, with the field's bytes holding the unit-local id
+as its addend: an `abs32s` immediate on x86_64, and on arm64, whose
+immediates cannot hold a relocated id, an `abs64_field` literal in the
+instruction stream that a `ldr` loads and a branch skips. The loader binds
+the import per image to the first program-wide id of that image's sites. The program-wide site table is the
 concatenation of the loaded images' tables in load order; module partitions
 of the counters keep the shared program's convention, one copy of the
 program's sites per module, so the reporting merge is unchanged.
