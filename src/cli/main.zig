@@ -11168,6 +11168,9 @@ fn fastDevLinkFormat(target: RocTarget) ?fast_dev_link.Format {
 /// whose output file the link writes through the host's own system calls.
 /// Every other combination composes a program object and links it with LLD.
 fn fastDevLinkApplies(target: RocTarget, link_type: roc_target.OutputKind, args: cli_args.BuildArgs) bool {
+    // The fast dev link maps and writes files through Linux and macOS system
+    // calls; on any other host its code is never compiled.
+    if (comptime builtin.target.os.tag != .linux and builtin.target.os.tag != .macos) return false;
     if (args.opt != .dev or currentRuntimeSpecializationStrategy(args.specialization_strategy) != .boxy) return false;
     // The fast dev link reads unit images and the pre-linked host from the
     // cache; without one, a build composes and links with LLD as before
