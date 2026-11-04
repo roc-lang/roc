@@ -321,13 +321,17 @@ pub const LiteralRootPlan = struct {
 pub const StaticDataValue = struct {
     /// Post-ARC guards reading this slot; threaded through ComptimeValueGuard.
     first_comptime_guard: ?u32 = null,
-    /// Null when completed frozen data or a stored node supplies this slot
-    /// directly.
+    /// Null when completed frozen data, a stored node, or a capture-free
+    /// callable supplies this slot directly.
     initializer: ?LIR.LirProcSpecId,
     layout_idx: layout.Idx,
     /// The stored list this value is frozen from, when it has no initializer
     /// (`Mono.StoredStaticList`).
     stored: ?StoredStaticValue = null,
+    /// The capture-free erased callable of this procedure, which needs no
+    /// initializer: its value is the callable's payload (the function
+    /// pointer, no `on_drop`, no capture bytes) with the static refcount.
+    callable: ?LIR.LirProcSpecId = null,
     /// An evaluated root owns this slot. Its initializer is representation
     /// evidence; materialization must consume the completed root value.
     compile_time_root: ?struct {

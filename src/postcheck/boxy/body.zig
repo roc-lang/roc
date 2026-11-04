@@ -7652,6 +7652,9 @@ pub const Builder = struct {
             }
             return try self.composeDictionary(callee, values);
         }
+        // A callable whose captures are all static (none, or only static
+        // callables) is static, immortal data (design.md "Function Values").
+        if (try self.staticDictionary(callee, values)) |static_callable| return static_callable;
         const target = try self.closedLocal(try self.erasedLayout());
         var capture: ?LocalId = null;
         var capture_layout: ?layout.Idx = null;
