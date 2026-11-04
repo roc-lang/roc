@@ -733,6 +733,13 @@ pub const NominalDecl = struct {
     /// never unified against directly—backing access instantiates a copy
     /// with actual args substituted for formals.
     backing: Var,
+    /// The type variables of enclosing functions that this declaration's
+    /// identity depends on, in source order: those its backing reaches and
+    /// those its methods name, directly or through other declarations in
+    /// function bodies (design.md "Body-Local Type Context"). Only a
+    /// declaration in a function body has any. They are not formals: the
+    /// backing names them as themselves, and no application lists them.
+    context: Var.SafeList.Range = Var.SafeList.Range.empty(),
     /// Declaration flags, padding-free so serialized bytes are deterministic.
     flags: Flags,
 

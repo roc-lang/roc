@@ -447,8 +447,10 @@ const Digester = struct {
     retain: bool = false,
 
     fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) Digester {
+        var adapter = SourceAdapter.init(allocator, store, env);
+        adapter.nominal_context = true;
         return .{
-            .adapter = SourceAdapter.init(allocator, store, env),
+            .adapter = adapter,
             .engine = KeyEngine.init(allocator, key_engine_tags),
         };
     }
@@ -501,6 +503,12 @@ const SourceAdapter = struct {
     /// Whether a nominal whose declaration is invalid marks its description
     /// erroneous; only a traversal that detects errors reads the mark.
     detect_invalid_nominals: bool = false,
+    /// Whether a nominal's description lists its declaration's context
+    /// variables after its arguments (design.md "Body-Local Type Context").
+    /// Keys do, so two instantiations of a body never share one. Identity
+    /// enumeration does not: a context variable is a variable of an
+    /// enclosing function's scheme, never of a scheme the walk enumerates.
+    nominal_context: bool = false,
     rank_scratch: base.TextRankCache,
     text_ranks: []const u32 = &.{},
     fields: std.ArrayList(RecordFieldForKey) = .empty,
@@ -669,9 +677,14 @@ const SourceAdapter = struct {
                 try tag(sink, .nominal);
                 try self.namedSourceIdentity(sink, nominal.origin_module, nominal.ident.ident_idx, nominal.sourceDeclOptional());
                 try sink.boolean(nominal.isOpaque());
+                // A declaration in a function body is keyed by the enclosing
+                // type variables its identity depends on too, after its own
+                // arguments, as its checked uses list them.
                 const args = self.store.sliceNominalArgs(nominal);
-                try sink.varint(@intCast(args.len));
+                const context: []const Var = if (self.nominal_context) self.store.nominalContextVars(nominal) else &.{};
+                try sink.varint(@intCast(args.len + context.len));
                 for (args) |arg| try self.child(sink, arg);
+                for (context) |context_var| try self.child(sink, context_var);
             },
             .fn_pure, .fn_unbound => |func| {
                 try tag(sink, .fn_pure);
