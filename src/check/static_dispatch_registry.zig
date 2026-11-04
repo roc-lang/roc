@@ -741,13 +741,10 @@ pub const MethodRegistryEntry = struct {
 };
 
 /// The `to_inspect` method generic inspection calls for an owner, the checked
-/// `T -> Str` instance of its type that inspection calls it at, and the
-/// registry entry whose use evidence the declaring module's dispatch
-/// resolution holds (`inspectOverrideEvidence`).
+/// `T -> Str` instance of its type that inspection calls it at.
 pub const InspectOverride = struct {
     target: MethodTarget,
     callable_ty: CheckedTypeId,
-    entry: u32,
 };
 
 /// Public `MethodRegistry` declaration.
@@ -783,14 +780,12 @@ pub const MethodRegistry = struct {
     pub fn inspectOverride(self: *const MethodRegistry, key: MethodKey) ?InspectOverride {
         var normalized = key;
         collections.CompactWriter.zeroValuePadding(MethodKey, @ptrCast(&normalized));
-        const index = artifact_serialize.binarySearchIndexByKey(MethodRegistryEntry, MethodKey, self.entries, normalized, methodEntryOrder) orelse return null;
-        const found = self.entries[index];
+        const found = artifact_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries, normalized, methodEntryOrder) orelse return null;
         const callable_ty = found.inspect_override orelse return null;
         return .{
             .target = found.target orelse
                 std.debug.panic("checked static dispatch registry invariant violated: rejected declaration was recorded as an inspect override", .{}),
             .callable_ty = callable_ty,
-            .entry = @intCast(index),
         };
     }
 

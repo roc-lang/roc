@@ -13496,7 +13496,7 @@ pub const TemplateDispatchRelations = struct {
 /// The module's dispatch resolution of what no template resolves
 /// (`ModuleAnalyses.moduleDispatch`): the defaulted-field expressions' plans
 /// and sites, plans and sites no template's chain binds (resolved
-/// chain-free), inspect overrides' use evidence, and the generated-codec
+/// chain-free), and the generated-codec
 /// contracts with their calls linked.
 pub const ModuleDispatch = struct {
     pool: static_dispatch.EvidencePool,
@@ -13506,8 +13506,6 @@ pub const ModuleDispatch = struct {
     plans: []PlanResolutionEntry,
     /// Sorted by plan.
     iterator_plans: []IteratorPlanResolutionEntry,
-    /// Parallel to the method registry's entries.
-    inspect_evidence: []?static_dispatch.EvidenceNodeId,
     codec_derivations: []static_dispatch.GeneratedCodecDerivation,
     codec_calls: []static_dispatch.GeneratedCodecCall,
 
@@ -13516,7 +13514,6 @@ pub const ModuleDispatch = struct {
         allocator.free(self.site_evidence);
         allocator.free(self.plans);
         allocator.free(self.iterator_plans);
-        allocator.free(self.inspect_evidence);
         allocator.free(self.codec_derivations);
         allocator.free(self.codec_calls);
         allocator.destroy(self);
@@ -13811,13 +13808,6 @@ pub const CheckedDispatch = struct {
     /// The module's generated-codec contracts with every call linked.
     pub fn generatedCodecs(self: CheckedDispatch) Error!static_dispatch.GeneratedCodecTable {
         return (try self.analyses().moduleDispatch(self)).codecTable();
-    }
-
-    /// The use evidence of the inspect override at method registry entry
-    /// `entry` (`static_dispatch.InspectOverride.entry`).
-    pub fn inspectOverrideEvidence(self: CheckedDispatch, entry: u32) Error!static_dispatch.EvidenceNodeId {
-        return (try self.analyses().moduleDispatch(self)).inspect_evidence[entry] orelse
-            checkedArtifactInvariant("an inspect override had no use evidence", .{});
     }
 
     /// The app's root evidence for its platform requirement solution
@@ -14275,14 +14265,13 @@ const EvidencePass = struct {
     }
 
     /// Resolve what no template resolves: the defaulted-field expressions'
-    /// plans and sites (`defaults`), inspect overrides' use evidence, use
+    /// plans and sites (`defaults`), use
     /// sites no template's chain bound (`deferred`), plans and iterator
     /// plans no template's chain bound, and the generated-codec calls.
     fn resolveModule(
         self: *EvidencePass,
         bound_by_template: *const ModuleBoundSet,
         deferred: []const DeferredUseSite,
-        inspect_evidence: []?static_dispatch.EvidenceNodeId,
         codec_calls: []static_dispatch.GeneratedCodecCall,
     ) Allocator.Error!void {
         try self.linkGeneratedCodecCalls(codec_calls);
@@ -14330,8 +14319,6 @@ const EvidencePass = struct {
                 try self.emitScopeConstructionEvidence(site, .empty);
             }
         }
-
-        try self.publishInspectOverrideEvidence(inspect_evidence);
 
         // Explicit shared-var use sites no chain fully bound resolve
         // chain-free here. A site a template or a default already emitted is
@@ -15857,24 +15844,6 @@ const EvidencePass = struct {
     /// Inspection's use of each override is a dispatch-target edge whose
     /// instantiation checking recorded (design.md "Inspect Overrides"). The
     /// edge's evidence supplies the method's requirements at `T -> Str`.
-    fn publishInspectOverrideEvidence(self: *EvidencePass, out: []?static_dispatch.EvidenceNodeId) Allocator.Error!void {
-        const module_env = self.module.moduleEnvConst();
-        self.current_chain = &.{};
-        for (self.local_method_registry.entries, out) |*entry, *evidence| {
-            const callable_ty = entry.inspect_override orelse continue;
-            const target = entry.target orelse
-                checkedArtifactInvariant("inspect override entry had no method target", .{});
-            const use_var = module_env.inspectOverrideInstance(target.def_idx) orelse
-                checkedArtifactInvariant("inspect override entry had no checked use", .{});
-            const function = switch (self.checked_types.store.payload(callable_ty)) {
-                .function => |function| function,
-                .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => checkedArtifactInvariant("inspect override instance was not a function", .{}),
-            };
-            if (function.args.len != 1) checkedArtifactInvariant("inspect override instance did not take one argument", .{});
-            evidence.* = try self.evidenceNodeForTarget(target, function.args[0], use_var, null, .dispatch_edge);
-        }
-    }
-
     /// Preserve the checked registry's semantic resolution. Compiler-derived
     /// structural declarations are evidence themselves and must never enter a
     /// callable target's evidence-node graph.
@@ -17306,14 +17275,11 @@ pub fn computeModuleDispatch(allocator: Allocator, dispatch: CheckedDispatch) Al
     errdefer allocator.free(codec_derivations);
     const codec_calls = try allocator.dupe(static_dispatch.GeneratedCodecCall, source.plans.recorded_codec_calls);
     errdefer allocator.free(codec_calls);
-    const inspect_evidence = try allocator.alloc(?static_dispatch.EvidenceNodeId, source.method_registry.entries.len);
-    errdefer allocator.free(inspect_evidence);
-    @memset(inspect_evidence, null);
 
     var module_data = TypedCIR.ModuleData.readOnly(source.env);
     var pass = try EvidencePass.init(allocator, dispatch, &module_data, .module, index);
     defer pass.deinit();
-    try pass.resolveModule(&bound, deferred.items, inspect_evidence, codec_calls);
+    try pass.resolveModule(&bound, deferred.items, codec_calls);
     try specializeResolvedPlans(allocator, &pass, index);
 
     const result = try allocator.create(ModuleDispatch);
@@ -17331,7 +17297,6 @@ pub fn computeModuleDispatch(allocator: Allocator, dispatch: CheckedDispatch) Al
         .site_evidence = site_evidence,
         .plans = plans,
         .iterator_plans = iterator_plans,
-        .inspect_evidence = inspect_evidence,
         .codec_derivations = codec_derivations,
         .codec_calls = codec_calls,
     };
@@ -30213,7 +30178,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 180);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 182);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -30337,7 +30302,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 113;
+    const serialized_layout_version: u32 = 114;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
