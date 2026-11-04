@@ -1451,9 +1451,12 @@ pub const BoxyObjectLowering = struct {
     /// the build's link lowers its root unit against the same table; the
     /// scheduler owns one otherwise.
     interfaces: ?*eval.CompileTimeFinalization.ExportInterfaces = null,
-    /// Whether the build's link composes every unit's pieces, so a unit the
+    /// Whether the build's link reads every unit's object, so a unit the
     /// link needs is built as soon as its module is checked.
     links: bool = false,
+    /// Whether that link composes the units' pieces (rather than placing
+    /// their unit images with a fast dev link), so the units decode them.
+    link_reads_pieces: bool = false,
 };
 
 /// The module objects of a `.boxy` compilation, each restored from the
@@ -1496,8 +1499,21 @@ const BoxyObjects = struct {
     unbound_hosted: std.ArrayList(*const Artifact) = .empty,
     /// The modules whose import closures are known (`closureKnown`).
     closures_known: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
-    /// The pieces of every object recorded, kept for the compilation.
+    /// Completed immutable import closures, owned by `arena` for this naming epoch.
+    object_sets: std.AutoHashMapUnmanaged([32]u8, eval.CompileTimeFinalization.BoxyObjectSet) = .empty,
+    /// The pieces of every object recorded with its pieces, kept for the
+    /// compilation.
     owned_pieces: std.ArrayList(*backend.dev.UnitPieces.Pieces) = .empty,
+    /// The pieces of the latest object recorded for each module, by module
+    /// key, when it was recorded with them.
+    pieces: std.AutoHashMapUnmanaged([32]u8, *backend.dev.UnitPieces.Pieces) = .empty,
+    /// The unit image of the latest object recorded for each module, for a
+    /// target that `boxy_unit.producesImage`, by module key.
+    images: std.AutoHashMapUnmanaged([32]u8, boxy_unit.Image) = .empty,
+    /// Images of objects a later record of their module replaced: loaded
+    /// code may still name symbols in them, so they are kept for the
+    /// compilation too.
+    replaced_images: std.ArrayList(boxy_unit.Image) = .empty,
     session: post_check_executor.Session,
     first_error: ?Error = null,
     /// Whether a task finished since `progress` last reported, whichever
@@ -1562,11 +1578,18 @@ const BoxyObjects = struct {
         self.program_completions.deinit(gpa);
         self.unbound_hosted.deinit(gpa);
         self.closures_known.deinit(gpa);
+        self.object_sets.deinit(gpa);
         for (self.owned_pieces.items) |pieces| {
             pieces.deinit();
             gpa.destroy(pieces);
         }
         self.owned_pieces.deinit(gpa);
+        self.pieces.deinit(gpa);
+        var images = self.images.valueIterator();
+        while (images.next()) |image| image.deinit(gpa);
+        self.images.deinit(gpa);
+        for (self.replaced_images.items) |image| image.deinit(gpa);
+        self.replaced_images.deinit(gpa);
         self.records.deinit(gpa);
         if (self.owned_interfaces) |*owned| owned.deinit();
         self.digests.deinit();
@@ -1596,6 +1619,19 @@ const BoxyObjects = struct {
         return known;
     }
 
+    /// The unit image of `artifact`'s recorded object, for a target that
+    /// `boxy_unit.producesImage`.
+    pub fn imageOf(self: *const BoxyObjects, artifact: *const Artifact) ?boxy_unit.Image {
+        return self.images.get(artifact.key.bytes);
+    }
+
+    /// The pieces of `artifact`'s recorded object, when it was recorded
+    /// with them (`BoxyObjectLowering.link_reads_pieces`, or a host that
+    /// loads pieces).
+    pub fn piecesOf(self: *const BoxyObjects, artifact: *const Artifact) ?*const backend.dev.UnitPieces.Pieces {
+        return self.pieces.get(artifact.key.bytes);
+    }
+
     /// Whether the objects of `module`'s import closure are all known,
     /// offering the ones not offered yet: the compile-time program
     /// evaluating `module`'s roots links against them.
@@ -1613,7 +1649,7 @@ const BoxyObjects = struct {
     /// found them known.
     fn objectSet(context: *anyopaque, module: *const Artifact) Error!?eval.CompileTimeFinalization.BoxyObjectSet {
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
-        const arena = self.arena.allocator();
+        if (self.object_sets.get(module.key.bytes)) |known| return known;
         var ordered = std.ArrayList(Object).empty;
         var visited = std.AutoHashMapUnmanaged([32]u8, *const Artifact).empty;
         defer visited.deinit(self.coordinator.gpa);
@@ -1623,10 +1659,12 @@ const BoxyObjects = struct {
             const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse return null;
             if (!try self.visit(imported, &visited, &ordered)) return null;
         }
-        return .{
-            .objects = try arena.dupe(Object, ordered.items),
+        const result = eval.CompileTimeFinalization.BoxyObjectSet{
+            .objects = ordered.items,
             .views = try self.withEveryObjectsModule(try self.viewsOf(module), visited),
         };
+        try self.object_sets.put(self.coordinator.gpa, module.key.bytes, result);
+        return result;
     }
 
     /// `module`'s roots are complete: its object can be built, and its
@@ -1649,12 +1687,12 @@ const BoxyObjects = struct {
         const arena = self.arena.allocator();
         var all = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
         try all.appendSlice(arena, views);
+        var present = std.AutoHashMapUnmanaged([32]u8, void).empty;
+        defer present.deinit(self.coordinator.gpa);
+        for (views) |view| try present.put(self.coordinator.gpa, view.key.bytes, {});
         var artifacts = visited.valueIterator();
         while (artifacts.next()) |artifact| {
-            const present = for (views) |view| {
-                if (std.meta.eql(view.key, artifact.*.key)) break true;
-            } else false;
-            if (!present) try all.append(arena, CheckedArtifact.importedView(artifact.*));
+            if (!present.contains(artifact.*.key.bytes)) try all.append(arena, CheckedArtifact.importedView(artifact.*));
         }
         return all.items;
     }
@@ -1750,6 +1788,9 @@ const BoxyObjects = struct {
         // pool, whichever thread runs the unit.
         config.post_check_executor = self.coordinator.postCheckExecutor();
         config.checked_module_state = if (artifact.evaluation_state == .finalized) .complete else .checking_finalization;
+        // Compile-time evaluation loads what this host loads
+        // (`boxy_object_code`); a link that composes pieces reads them too.
+        const want_pieces = eval.CompileTimeFinalization.boxy_object_code == .pieces or self.lowering.link_reads_pieces;
         return .{ .unit = .{
             .gpa = gpa,
             .artifact = artifact,
@@ -1760,6 +1801,7 @@ const BoxyObjects = struct {
             .interfaces = self.interfaces,
             .cache_manager = self.manager,
             .key = undefined,
+            .want_pieces = want_pieces,
         } };
     }
 
@@ -1769,7 +1811,7 @@ const BoxyObjects = struct {
         const unit = &prepared.unit;
         try self.addToDigests(&self.coordinator.builtin_modules.checked_artifact);
         try self.addToDigests(unit.artifact);
-        unit.key = try boxy_unit.objectKey(self.coordinator.gpa, &self.digests, unit.artifact, unit.platform, self.lowering.opt, self.lowering.inline_expects, self.lowering.target, &.{});
+        unit.key = try boxy_unit.objectKey(self.coordinator.gpa, &self.digests, unit.artifact, unit.platform, self.lowering.opt, self.lowering.inline_expects, self.lowering.target, &.{}, false, false, false);
     }
 
     /// Give the digests `artifact` and its import closure, which checking
@@ -1786,13 +1828,45 @@ const BoxyObjects = struct {
     fn record(self: *BoxyObjects, artifact: *const Artifact, built: boxy_unit.Built) Error!Object {
         const gpa = self.coordinator.gpa;
         const arena = self.arena.allocator();
+        // A host whose units carry images loads them; every other host
+        // composes the pieces (`boxy_object_code`).
+        std.debug.assert(boxy_unit.producesImage(self.lowering.target) == (eval.CompileTimeFinalization.boxy_object_code == .image));
         try self.owned_pieces.ensureUnusedCapacity(gpa, 1);
-        defer built.deinitKeepingPieces(gpa);
+        try self.replaced_images.ensureUnusedCapacity(gpa, 1);
+        try self.pieces.ensureUnusedCapacity(gpa, 1);
+        try self.images.ensureUnusedCapacity(gpa, 1);
+        // The image and the pieces become the compilation's once stored;
+        // until then a failure releases them with the rest of `built`.
+        var code_stored = false;
+        errdefer if (!code_stored) {
+            if (built.image) |image| image.deinit(gpa);
+            if (built.pieces) |pieces| {
+                pieces.deinit();
+                gpa.destroy(pieces);
+            }
+        };
+        defer built.deinitKeepingCode(gpa);
+        const code: @FieldType(Object, "code") = switch (eval.CompileTimeFinalization.boxy_object_code) {
+            .image => image: {
+                const image = built.image orelse Coordinator.coordinatorInvariant("a compile-time evaluation unit was built without its image", .{});
+                break :image .{ .image = .{ .bytes = image.bytes, .code_locations = image.code_locations } };
+            },
+            .pieces => .{ .pieces = built.pieces orelse Coordinator.coordinatorInvariant("a compile-time evaluation unit was built without its pieces", .{}) },
+        };
         try self.digests.recordExports(artifact, built.exports);
         const symbols = try arena.alloc([]const u8, built.hosted_symbols.len);
         for (built.hosted_symbols, symbols) |symbol, *copy| copy.* = try arena.dupe(u8, symbol);
-        self.owned_pieces.appendAssumeCapacity(built.pieces);
-        return .{ .module = artifact.key.bytes, .pieces = built.pieces, .hosted_symbols = symbols };
+        code_stored = true;
+        if (built.image) |image| {
+            const entry = self.images.getOrPutAssumeCapacity(artifact.key.bytes);
+            if (entry.found_existing) self.replaced_images.appendAssumeCapacity(entry.value_ptr.*);
+            entry.value_ptr.* = image;
+        }
+        if (built.pieces) |pieces| {
+            self.owned_pieces.appendAssumeCapacity(pieces);
+            self.pieces.putAssumeCapacity(artifact.key.bytes, pieces);
+        }
+        return .{ .module = artifact.key.bytes, .code = code, .hosted_symbols = symbols };
     }
 
     /// One unit's build as a post-check task.
@@ -1907,6 +1981,7 @@ const BoxyObjects = struct {
         self.ready.clearRetainingCapacity();
         self.records.clearRetainingCapacity();
         self.closures_known.clearRetainingCapacity();
+        self.object_sets.clearRetainingCapacity();
         self.interfaces.clear();
     }
 
@@ -8468,6 +8543,190 @@ test "issue 11389 cached platform evaluates app-dependent constants for each bin
     try std.testing.expectEqual(@as(u32, 0), again.platform_pairing_count);
 }
 
+/// What one compilation of an app reports about its compile-time roots.
+const ReuseRun = struct {
+    stderr: []u8,
+    /// The app module's top-level root names.
+    names: [][]u8,
+    /// The app module's stored `I64` constants, by name.
+    values: []?i64,
+    /// The app module's checked key.
+    module_key: [32]u8,
+
+    fn deinit(self: *ReuseRun, allocator: Allocator) void {
+        for (self.names) |name| allocator.free(name);
+        allocator.free(self.names);
+        allocator.free(self.values);
+        allocator.free(self.stderr);
+        self.* = undefined;
+    }
+
+    fn index(self: *const ReuseRun, name: []const u8) usize {
+        for (self.names, 0..) |candidate, i| {
+            if (std.mem.eql(u8, candidate, name)) return i;
+        }
+        std.debug.panic("no compile-time root named {s}", .{name});
+    }
+
+    fn value(self: *const ReuseRun, name: []const u8) ?i64 {
+        return self.values[self.index(name)];
+    }
+};
+
+fn compileForReuse(allocator: Allocator, cache_dir: []const u8, app_path: []const u8) CheckedModuleCacheRunError!ReuseRun {
+    return compileForReuseWithStrategy(allocator, cache_dir, app_path, null, .lss);
+}
+
+fn compileForReuseWithStrategy(allocator: Allocator, cache_dir: []const u8, app_path: []const u8, runtime: ?lir.CheckedPipeline.TargetConfig, strategy: base.SpecializationStrategy) CheckedModuleCacheRunError!ReuseRun {
+    var stderr_capture: StderrCapture = .{ .allocator = allocator };
+    defer stderr_capture.bytes.deinit(allocator);
+    var roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    roc_ctx.ctx = &stderr_capture;
+    roc_ctx.vtable.writeStderr = StderrCapture.write;
+    var cache_manager = CacheManager.init(allocator, .{ .enabled = true, .cache_dir = cache_dir }, roc_ctx);
+    defer cache_manager.deinit();
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        try sharedBuiltinModules(),
+        build_options.compiler_compatibility_id,
+        &cache_manager,
+        roc_ctx,
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+    coord.specialization_strategy = strategy;
+    var arena_impl = base.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+    try coord.start();
+    try coord.discoverAppFromPath(arena_impl.allocator(), .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+    if (runtime) |target| coord.runtime_lowering = .{ .target = target };
+    try coord.finishCheckedProgram(.executable_artifacts);
+    try std.testing.expect(!coord.hasUserErrors());
+    if (runtime) |target| {
+        const session = &coord.program_session.?;
+        var lowered = session.takeRuntime(allocator, session.runtime_roots, target) catch |err| switch (err) {
+            error.HostedFunctionNotBound => return error.TestUnexpectedResult,
+            else => |other| return other,
+        };
+        defer lowered.deinit();
+        if (session.runtime_roots.requests.len != lowered.lir_result.root_procs.items.len) return error.TestUnexpectedResult;
+    }
+
+    const app = coord.appRootCheckedArtifact();
+    const env = app.moduleEnvConst();
+    var names = std.ArrayList([]u8).empty;
+    errdefer {
+        for (names.items) |name| allocator.free(name);
+        names.deinit(allocator);
+    }
+    var values = std.ArrayList(?i64).empty;
+    errdefer values.deinit(allocator);
+    for (app.compile_time_roots.roots) |root| {
+        const def = switch (root.source) {
+            .def => |def| def,
+            .hoisted, .expr, .statement, .required_binding => continue,
+        };
+        const pattern = env.store.getPattern(env.store.getDef(def).pattern);
+        if (pattern != .assign) continue;
+        try names.append(allocator, try allocator.dupe(u8, env.getIdent(pattern.assign.ident)));
+        var stored: ?i64 = null;
+        if (root.payload == .const_node) {
+            var node = app.const_store.get(root.payload.const_node);
+            while (node == .nominal) node = app.const_store.get(node.nominal.backing);
+            if (node == .scalar and node.scalar == .i64) stored = node.scalar.i64;
+        }
+        try values.append(allocator, stored);
+    }
+    const stderr = try stderr_capture.bytes.toOwnedSlice(allocator);
+    errdefer allocator.free(stderr);
+    return .{
+        .stderr = stderr,
+        .names = try names.toOwnedSlice(allocator),
+        .values = try values.toOwnedSlice(allocator),
+        .module_key = app.key.bytes,
+    };
+}
+
+const reuse_platform =
+    \\platform ""
+    \\    requires {} { answer : I64 }
+    \\    exposes []
+    \\    packages {}
+    \\    provides { "roc_entry": entry }
+    \\entry : {} -> I64
+    \\entry = |_| answer
+;
+
+fn writeReuseFixture(tmp: *std.testing.TmpDir, app: []const u8) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
+    try tmp.dir.createDirPath(std.testing.io, "cache");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "platform.roc", .data = reuse_platform });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = app });
+}
+
+test "imported edits recompute nominal literal results and changed conversions" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const app_source =
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\import Word
+        \\import Query
+        \\answer = Word.get(check)
+        \\check : Word
+        \\check = Query.quoted({})
+        \\
+    ;
+    const word_source =
+        \\Word := { n : I64 }.{
+        \\    from_quote : Str -> Try(Word, [BadQuotedBytes(Str)])
+        \\    from_quote = |text| Ok({ n: if text == "one" 1.I64 else 2.I64 })
+        \\    get : Word -> I64
+        \\    get = |word| word.n
+        \\}
+        \\
+    ;
+    const query_source =
+        \\module [quoted]
+        \\quoted : {} -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
+        \\quoted = |{}| "one"
+        \\
+    ;
+    try writeReuseFixture(&tmp, app_source);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Word.roc", .data = word_source });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Query.roc", .data = query_source });
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+    var first = try compileForReuseWithStrategy(allocator, cache, app, null, .boxy);
+    defer first.deinit(allocator);
+    try std.testing.expectEqual(@as(?i64, 1), first.value("answer"));
+    // Both the nominal declaration's artifact and the literal's artifact
+    // change. Their producer-authored meaning and conversion remain identical.
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Word.roc", .data = word_source ++ "# edit\n" });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Query.roc", .data = query_source ++ "# edit\n" });
+    var warm = try compileForReuseWithStrategy(allocator, cache, app, null, .boxy);
+    defer warm.deinit(allocator);
+    try std.testing.expectEqual(@as(?i64, 1), warm.value("answer"));
+    const edited = try std.mem.replaceOwned(u8, allocator, word_source, "1.I64", "3.I64");
+    defer allocator.free(edited);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Word.roc", .data = edited });
+    var changed = try compileForReuseWithStrategy(allocator, cache, app, null, .boxy);
+    defer changed.deinit(allocator);
+    try std.testing.expectEqual(@as(?i64, 3), changed.value("answer"));
+    const literal_edit = try std.mem.replaceOwned(u8, allocator, query_source, "\"one\"", "\"two\"");
+    defer allocator.free(literal_edit);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Query.roc", .data = literal_edit });
+    var literal_changed = try compileForReuseWithStrategy(allocator, cache, app, null, .boxy);
+    defer literal_changed.deinit(allocator);
+    try std.testing.expectEqual(@as(?i64, 2), literal_changed.value("answer"));
+}
+
 test "issue 11389 pairing cache retains exported constants and debug observations" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
@@ -12450,6 +12709,51 @@ test "app discovery retains tokenizer rejection reports before platform resoluti
     }
 }
 
+test "compile-time values remain correct after an imported test edit" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const source =
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\import Value
+        \\answer = Value.get({})
+        \\fixed = 17.I64
+        \\wrapped = Value.Token.Token(3.I64)
+    ;
+    const dependency =
+        \\Value := {}.{
+        \\    Token := [Token(I64)]
+        \\    get : {} -> I64
+        \\    get = |_| 41.I64
+        \\}
+    ;
+    try writeReuseFixture(&tmp, source);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Value.roc", .data = dependency });
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+    var first = try compileForReuse(allocator, cache, app);
+    defer first.deinit(allocator);
+    try std.testing.expectEqual(@as(?i64, 41), first.value("answer"));
+
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Value.roc", .data = dependency ++ "\nexpect True\n" });
+    var edited = try compileForReuse(allocator, cache, app);
+    defer edited.deinit(allocator);
+    try std.testing.expectEqual(@as(?i64, 41), edited.value("answer"));
+    try std.testing.expectEqual(@as(?i64, 17), edited.value("fixed"));
+
+    const changed = try std.mem.replaceOwned(u8, allocator, dependency, "41.I64", "42.I64");
+    defer allocator.free(changed);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Value.roc", .data = changed });
+    var implementation = try compileForReuse(allocator, cache, app);
+    defer implementation.deinit(allocator);
+    // Changing a method also changes the imported semantic type context,
+    // so this case requires invalidation rather than a particular reuse count.
+    try std.testing.expectEqual(@as(?i64, 42), implementation.value("answer"));
+    try std.testing.expectEqual(@as(?i64, 17), implementation.value("fixed"));
+}
+
 test "application builds keep test bodies in discovery rather than runtime demand" {
     if (is_freestanding) return error.SkipZigTest;
     const allocator = std.testing.allocator;
@@ -12489,4 +12793,350 @@ test "application builds keep test bodies in discovery rather than runtime deman
         if (root.request.abi != .compile_time) runtime_count += 1;
     }
     try std.testing.expect(runtime_count > 0);
+}
+
+test "test discovery after edits never hides invalid literals or observations" {
+    if (is_freestanding) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeCacheKeyPurityFixture(&tmp, "discovery_cache");
+    try tmp.dir.createDirPath(std.testing.io, "cache");
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app_path = try tmp.dir.realPathFileAlloc(std.testing.io, "discovery_cache/app/main.roc", allocator);
+    defer allocator.free(app_path);
+    const source =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\Word := { text : Str }.{
+        \\    from_quote : Str -> Try(Word, [BadQuotedBytes(Str)])
+        \\    from_quote = |text| if text == "bad" Err(BadQuotedBytes("rejected")) else Ok(Word.{ text })
+        \\    show : Word -> Str
+        \\    show = |word| word.text
+        \\}
+        \\label : a -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
+        \\label = |_| "good"
+        \\base = List.len([1.I64, 2, 3])
+        \\add_base = |value| base + value
+        \\total = add_base(3)
+        \\main! = |_args| if total == 6 Ok({}) else crash "wrong total"
+        \\expect {
+        \\    word : Word
+        \\    word = label(Word.{ text: "good" })
+        \\    List.contains(List.map([1.U64, 2, 3], add_base), 6) and word.show() == "good"
+        \\}
+    ;
+    const Run = struct {
+        const Result = struct { errors: bool, observed: bool };
+        fn run(gpa: Allocator, directory: []const u8, path: []const u8) error{ AbsolutePlatformPath, AccessDenied, BuiltinArtifactVersionMismatch, BuiltinLowLevelAnnotationMustBeFunction, Canceled, CorruptArtifact, CorruptBuiltinArtifact, CorruptEmbeddedBuiltins, EmptyCode, FileNotFound, HeaderParseFailed, Internal, InvalidPackageHeader, InvalidPlatformPath, IoError, LockedMemoryLimitExceeded, LowLevelOperationsNotFound, MmapFailed, MprotectFailed, NotAnAppHeader, OutOfMemory, RuntimeError, SourceTokenizationFailed, StaleEmbeddedBuiltins, StreamTooLong, SystemResources, ThreadQuotaExceeded, Unexpected, UnsupportedBuiltinAnnotationOnly, UnsupportedPackageSpec, UnsupportedPlatform, UnsupportedPlatformSpec, UnwindRegistrationFailed, VirtualAllocFailed, VirtualProtectFailed }!Result {
+            var capture = StderrCapture{ .allocator = gpa };
+            defer capture.bytes.deinit(gpa);
+            var context = CoreCtx.os(gpa, gpa, std.testing.io);
+            context.ctx = &capture;
+            context.vtable.writeStderr = StderrCapture.write;
+            var manager = CacheManager.init(gpa, .{ .enabled = true, .cache_dir = directory }, context);
+            defer manager.deinit();
+            var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, context);
+            defer coord.deinit();
+            coord.enable_hosted_transform = true;
+            var arena = base.SingleThreadArena.init(gpa);
+            defer arena.deinit();
+            try coord.start();
+            try coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = path });
+            try coord.coordinatorLoop();
+            const app = coord.appRootCheckedArtifact();
+            const test_modules = [_]CheckedArtifact.CheckedModuleArtifactKey{app.key};
+            coord.program_test_modules = &test_modules;
+            coord.runtime_lowering = .{ .target = .{ .inline_expects = .run } };
+            try coord.finishCheckedProgram(.executable_artifacts);
+            return .{ .errors = coord.hasUserErrors(), .observed = std.mem.find(u8, capture.bytes.items, "discovery observation") != null };
+        }
+    };
+    const relative = "discovery_cache/app/main.roc";
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = source });
+    const cold = try Run.run(allocator, cache, app_path);
+    try std.testing.expect(!cold.errors);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = source ++ "\n# unrelated edit\n" });
+    const edited = try Run.run(allocator, cache, app_path);
+    try std.testing.expect(!edited.errors);
+
+    // Changing the conversion is visible even when the expect is unchanged.
+    const invalid = try std.mem.replaceOwned(u8, allocator, source, "text == \"bad\"", "text == \"good\"");
+    defer allocator.free(invalid);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = invalid });
+    for (0..2) |_| {
+        const result = try Run.run(allocator, cache, app_path);
+        try std.testing.expect(result.errors);
+    }
+    const observing = try std.mem.replaceOwned(u8, allocator, source, "from_quote = |text| if text == \"bad\" Err(BadQuotedBytes(\"rejected\")) else Ok(Word.{ text })", "from_quote = |text| {\n        dbg \"discovery observation\"\n        Ok(Word.{ text })\n    }");
+    defer allocator.free(observing);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = observing });
+    for (0..2) |_| {
+        const result = try Run.run(allocator, cache, app_path);
+        try std.testing.expect(!result.errors);
+        try std.testing.expect(result.observed);
+    }
+}
+
+test "initializer evaluation after edits preserves errors observations and test positions" {
+    if (is_freestanding) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeCacheKeyPurityFixture(&tmp, "validation_cache");
+    try tmp.dir.createDirPath(std.testing.io, "cache");
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const path = try tmp.dir.realPathFileAlloc(std.testing.io, "validation_cache/app/main.roc", allocator);
+    defer allocator.free(path);
+    const relative = "validation_cache/app/main.roc";
+    const source =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\Foo := { value : I64 }.{
+        \\    get = |foo| foo.value
+        \\}
+        \\make = |n| if n == 0 crash "initializer validation failed" else Foo.{ value: n + 1 }
+        \\unused = make(41)
+        \\main! = |_args| Ok({})
+        \\expect 1.I64 + 1 == 2
+        \\expect 3.I64 + 1 == 4
+    ;
+    const Run = struct {
+        const Result = struct { evaluated: u64, errors: bool, observed: bool };
+        fn run(gpa: Allocator, directory: []const u8, app_path: []const u8) error{ AbsolutePlatformPath, AccessDenied, BuiltinArtifactVersionMismatch, BuiltinLowLevelAnnotationMustBeFunction, Canceled, CorruptArtifact, CorruptBuiltinArtifact, CorruptEmbeddedBuiltins, EmptyCode, FileNotFound, HeaderParseFailed, Internal, InvalidPackageHeader, InvalidPlatformPath, IoError, LockedMemoryLimitExceeded, LowLevelOperationsNotFound, MmapFailed, MprotectFailed, NotAnAppHeader, OutOfMemory, RuntimeError, SourceTokenizationFailed, StaleEmbeddedBuiltins, StreamTooLong, SystemResources, TestExpectedEqual, TestUnexpectedResult, ThreadQuotaExceeded, Unexpected, UnsupportedBuiltinAnnotationOnly, UnsupportedPackageSpec, UnsupportedPlatform, UnsupportedPlatformSpec, UnwindRegistrationFailed, VirtualAllocFailed, VirtualProtectFailed }!Result {
+            var capture = StderrCapture{ .allocator = gpa };
+            defer capture.bytes.deinit(gpa);
+            var context = CoreCtx.os(gpa, gpa, std.testing.io);
+            context.ctx = &capture;
+            context.vtable.writeStderr = StderrCapture.write;
+            var manager = CacheManager.init(gpa, .{ .enabled = true, .cache_dir = directory }, context);
+            defer manager.deinit();
+            var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, context);
+            defer coord.deinit();
+            coord.enable_hosted_transform = true;
+            var arena = base.SingleThreadArena.init(gpa);
+            defer arena.deinit();
+            try coord.start();
+            try coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = app_path });
+            try coord.coordinatorLoop();
+            try std.testing.expect(!coord.hasUserErrors());
+            const app = coord.appRootCheckedArtifact();
+            var roots = std.ArrayList(CheckedArtifact.RootRequest).empty;
+            defer roots.deinit(gpa);
+            var metadata = std.ArrayList(lir.CheckedPipeline.RootTestPlanMetadata).empty;
+            defer metadata.deinit(gpa);
+            for (app.root_requests.requests) |request| {
+                if (request.kind != .test_expect) continue;
+                const index: u32 = @intCast(roots.items.len);
+                try roots.append(gpa, request);
+                try metadata.append(gpa, .{ .request_index = index, .root_order = index + 7, .result_index = index + 11, .module_index = 0, .root_index = index });
+            }
+            coord.runtime_lowering = .{ .root_module = app, .target = .{ .inline_expects = .run }, .explicit_roots = .{ .requests = roots.items, .test_plan_metadata = metadata.items } };
+            try coord.finishCheckedProgram(.executable_artifacts);
+            if (!coord.hasUserErrors()) if (coord.program_session.?.runtime_prepared) |prepared| {
+                for (prepared.test_plan_metadata, 0..) |item, index| {
+                    try std.testing.expectEqual(@as(u32, @intCast(index)), item.request_index);
+                    try std.testing.expectEqual(@as(u32, @intCast(index + 7)), item.root_order);
+                    try std.testing.expectEqual(@as(u32, @intCast(index + 11)), item.result_index);
+                }
+            };
+            return .{ .evaluated = coord.ctfe_timing.snapshot().roots_evaluated, .errors = coord.hasUserErrors(), .observed = std.mem.find(u8, capture.bytes.items, "initializer observation") != null };
+        }
+    };
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = source });
+    const cold = try Run.run(allocator, cache, path);
+    try std.testing.expect(!cold.errors);
+    try std.testing.expect(cold.evaluated > 0);
+    for ([_][]const u8{ "\n# first edit\n", "\n# second edit\n" }) |edit| {
+        const edited = try std.mem.concat(allocator, u8, &.{ source, edit });
+        defer allocator.free(edited);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = edited });
+        const result = try Run.run(allocator, cache, path);
+        try std.testing.expect(!result.errors);
+        try std.testing.expect(result.evaluated > 0);
+    }
+    // A new reader must see the initialized nominal value.
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = source ++ "\nexpect unused.get() == 42\n" });
+    const reader = try Run.run(allocator, cache, path);
+    try std.testing.expect(!reader.errors);
+    try std.testing.expect(reader.evaluated > 0);
+    const invalid = try std.mem.replaceOwned(u8, allocator, source, "make(41)", "make(0)");
+    defer allocator.free(invalid);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = invalid });
+    for (0..2) |_| try std.testing.expect((try Run.run(allocator, cache, path)).errors);
+    const observing = try std.mem.replaceOwned(u8, allocator, source, "unused = make(41)", "unused = { dbg \"initializer observation\"\n make(41) }");
+    defer allocator.free(observing);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = relative, .data = observing });
+    for (0..2) |_| {
+        const result = try Run.run(allocator, cache, path);
+        try std.testing.expect(!result.errors);
+        try std.testing.expect(result.observed);
+    }
+}
+
+test "issue 12733: compile-time reads survive an import cascade" {
+    const allocator = std.testing.allocator;
+    // Both strategies must preserve values and replay after invalidation.
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const source =
+            \\app [answer] { pf: platform "./platform.roc" }
+            \\import Middle
+            \\local = Middle.value
+            \\answer = {
+            \\    dbg local
+            \\    local + 2.I64
+            \\}
+        ;
+        const dependency =
+            \\module [value, unrelated]
+            \\value = 40.I64
+            \\unrelated = |n| n + 1.I64
+        ;
+        try writeReuseFixture(&tmp, source);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Leaf.roc", .data = dependency });
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Middle.roc", .data =
+            \\module [value]
+            \\import Leaf
+            \\value = Leaf.value
+        });
+        const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+        defer allocator.free(cache);
+        const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+        defer allocator.free(app);
+        var first = try compileForReuseWithStrategy(allocator, cache, app, null, strategy);
+        defer first.deinit(allocator);
+        try std.testing.expectEqual(@as(?i64, 42), first.value("answer"));
+        try std.testing.expectEqualStrings("[dbg] 40\n", first.stderr);
+
+        const edited = try std.mem.replaceOwned(u8, allocator, dependency, "n + 1.I64", "n + 2.I64");
+        defer allocator.free(edited);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Leaf.roc", .data = edited });
+        var warm = try compileForReuseWithStrategy(allocator, cache, app, null, strategy);
+        defer warm.deinit(allocator);
+        try std.testing.expect(!std.meta.eql(first.module_key, warm.module_key));
+        try std.testing.expectEqual(@as(?i64, 42), warm.value("answer"));
+        try std.testing.expectEqualStrings(first.stderr, warm.stderr);
+
+        // Adding an earlier root changes dense root ids; the new checked
+        // entry must record and replay the current reads.
+        const renumbered = try std.mem.replaceOwned(u8, allocator, edited, "value = 40.I64", "extra = 9.I64\nvalue = 40.I64");
+        defer allocator.free(renumbered);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Leaf.roc", .data = renumbered });
+        var again = try compileForReuseWithStrategy(allocator, cache, app, null, strategy);
+        defer again.deinit(allocator);
+        try std.testing.expectEqualStrings(first.stderr, again.stderr);
+
+        // Changing an actual input must recompute every reader in the chain.
+        const changed = try std.mem.replaceOwned(u8, allocator, edited, "40.I64", "50.I64");
+        defer allocator.free(changed);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Leaf.roc", .data = changed });
+        var invalidated = try compileForReuseWithStrategy(allocator, cache, app, null, strategy);
+        defer invalidated.deinit(allocator);
+        try std.testing.expectEqual(@as(?i64, 52), invalidated.value("answer"));
+        try std.testing.expectEqualStrings("[dbg] 50\n", invalidated.stderr);
+    }
+}
+
+test "Boxy checked constants share across checkouts and survive unrelated application edits" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "cache");
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", gpa);
+    defer gpa.free(cache);
+    const source =
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\import Schema
+        \\answer = Schema.count + 1.I64
+    ;
+    const schema =
+        \\module [count]
+        \\import Parser
+        \\import "schema.sql" as sql : Str
+        \\count = Parser.parse(sql)
+    ;
+    const parser =
+        \\module [parse]
+        \\parse = |text| Str.count_utf8_bytes(text).to_i64_wrap()
+    ;
+    for ([_][]const u8{ "checkout-a", "different/checkout-b" }) |directory| {
+        try tmp.dir.createDirPath(std.testing.io, directory);
+        var dir = try tmp.dir.openDir(std.testing.io, directory, .{});
+        defer dir.close(std.testing.io);
+        try dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = source });
+        try dir.writeFile(std.testing.io, .{ .sub_path = "platform.roc", .data = reuse_platform });
+        try dir.writeFile(std.testing.io, .{ .sub_path = "Schema.roc", .data = schema });
+        try dir.writeFile(std.testing.io, .{ .sub_path = "Parser.roc", .data = parser });
+        try dir.writeFile(std.testing.io, .{ .sub_path = "schema.sql", .data = "abc" });
+    }
+    const Run = struct {
+        const Result = struct { key: [32]u8, cached: bool, stored_before_evaluation: bool, value: i64 };
+        fn run(allocator: Allocator, directory: []const u8, path: []const u8) (CoordinatorError || eval.BuiltinModules.InitError || Allocator.Error || std.Thread.SpawnError || Coordinator.AppDiscoveryError || error{TestUnexpectedResult})!Result {
+            const core = CoreCtx.os(allocator, allocator, std.testing.io);
+            var manager = CacheManager.init(allocator, .{ .enabled = true, .cache_dir = directory }, core);
+            defer manager.deinit();
+            var coord = try Coordinator.init(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), try sharedBuiltinModules(), build_options.compiler_compatibility_id, &manager, core);
+            defer coord.deinit();
+            coord.enable_hosted_transform = true;
+            coord.specialization_strategy = .boxy;
+            var arena = base.SingleThreadArena.init(allocator);
+            defer arena.deinit();
+            try coord.start();
+            try coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = path });
+            try coord.coordinatorLoop();
+            try std.testing.expect(!coord.hasUserErrors());
+            var found: ?*CheckedArtifact.CheckedModuleArtifact = null;
+            var modules = coord.checked_artifact_index.valueIterator();
+            while (modules.next()) |location| {
+                const artifact = location.module().checkedArtifact().?;
+                if (std.mem.eql(u8, artifact.moduleEnvConst().module_name, "Schema")) found = artifact;
+            }
+            const artifact = found orelse return error.TestUnexpectedResult;
+            const root_id = root: for (artifact.compile_time_roots.roots) |root| {
+                if (root.source != .def) continue;
+                const env = artifact.moduleEnvConst();
+                const pattern = env.store.getPattern(env.store.getDef(root.source.def).pattern);
+                if (pattern == .assign and std.mem.eql(u8, env.getIdent(pattern.assign.ident), "count")) break :root root.id;
+            } else return error.TestUnexpectedResult;
+            const cached = artifact.module_env == .cached_entry;
+            const stored = artifact.compile_time_roots.root(root_id).payload == .const_node;
+            try coord.finishCheckedProgram(.executable_artifacts);
+            try std.testing.expect(!coord.hasUserErrors());
+            const root = artifact.compile_time_roots.root(root_id);
+            try std.testing.expect(root.payload == .const_node);
+            const node = artifact.const_store.get(root.payload.const_node);
+            try std.testing.expect(node == .scalar and node.scalar == .i64);
+            return .{ .key = artifact.key.bytes, .cached = cached, .stored_before_evaluation = stored, .value = node.scalar.i64 };
+        }
+    };
+    const first_path = try tmp.dir.realPathFileAlloc(std.testing.io, "checkout-a/app.roc", gpa);
+    defer gpa.free(first_path);
+    const second_path = try tmp.dir.realPathFileAlloc(std.testing.io, "different/checkout-b/app.roc", gpa);
+    defer gpa.free(second_path);
+    const cold = try Run.run(gpa, cache, first_path);
+    try std.testing.expect(!cold.cached and !cold.stored_before_evaluation);
+    try std.testing.expectEqual(@as(i64, 3), cold.value);
+    const moved = try Run.run(gpa, cache, second_path);
+    try std.testing.expect(moved.cached and moved.stored_before_evaluation);
+    try std.testing.expectEqualSlices(u8, &cold.key, &moved.key);
+    try std.testing.expectEqual(cold.value, moved.value);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "different/checkout-b/app.roc", .data = source ++ "\nunrelated = 123.I64\n" });
+    const edited = try Run.run(gpa, cache, second_path);
+    try std.testing.expect(edited.cached and edited.stored_before_evaluation);
+    try std.testing.expectEqualSlices(u8, &cold.key, &edited.key);
+    try std.testing.expectEqual(cold.value, edited.value);
+    // Replacing an imported file at the same path changes the checked identity.
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "different/checkout-b/schema.sql", .data = "abcde" });
+    const input_changed = try Run.run(gpa, cache, second_path);
+    try std.testing.expect(!input_changed.cached and !input_changed.stored_before_evaluation);
+    try std.testing.expect(!std.mem.eql(u8, &cold.key, &input_changed.key));
+    try std.testing.expectEqual(@as(i64, 5), input_changed.value);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "different/checkout-b/Parser.roc", .data = parser ++ " + 10.I64\n" });
+    const parser_changed = try Run.run(gpa, cache, second_path);
+    try std.testing.expect(!parser_changed.cached and !parser_changed.stored_before_evaluation);
+    try std.testing.expect(!std.mem.eql(u8, &input_changed.key, &parser_changed.key));
+    try std.testing.expectEqual(@as(i64, 15), parser_changed.value);
 }

@@ -1575,6 +1575,16 @@ fn setupTestPlatforms(
         },
     }));
 
+    // A wasm host that imports the app's hosted function from the embedder
+    // with a signature that disagrees with the app's.
+    prepared_hosts_step.dependOn(buildAndCopyWasmHostObject(b, wasm_target, optimize, strip, omit_frame_pointer, .{
+        .name = "import_conflict_host",
+        .root_source_file = "test/wasm/wasm_import_conflict/wasm_host.zig",
+        .imports = host_alloc_imports,
+        .bundle_compiler_rt = false,
+        .dest_paths = &.{"test/wasm/wasm_import_conflict/platform/targets/wasm32/host.wasm"},
+    }));
+
     for (glibc_cross_targets) |cross_target| {
         if (generateGlibcStub(b, b.resolveTargetQuery(cross_target.query), cross_target.name)) |stubs| {
             prepared_hosts_step.dependOn(&stubs.step);
@@ -1678,6 +1688,11 @@ const WasmStaticLibCart = struct {
     target: []const u8 = "wasm32",
     /// Runner arguments, or null for a cart that is only built.
     run_args: ?[]const []const u8,
+    /// `ROC_WASM_SPLIT_BYTES` for the build: every procedure with more code
+    /// than this is emitted as a family of functions of at most this many
+    /// bytes each (design.md, "Wasm Function Limits"). The compiler reads it
+    /// in Debug builds, which CI's is.
+    split_bytes: ?[]const u8 = null,
 };
 
 const wasm_static_lib_carts = [_]WasmStaticLibCart{
@@ -1773,6 +1788,33 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
     .{ .app = "reserved_low_memory_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no" }, .output = "reserved_low_memory_boxy_static_lib_app.wasm", .run_args = &.{ "--expected", "20203" } },
     .{ .app = "reserved_low_memory_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "reserved_low_memory_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "20203" } },
     .{ .app = "issue_11529_top_level_boxed_function_static_lib_app.roc", .options = &.{ "--opt=dev", "--no-cache" }, .output = "issue_11529_top_level_boxed_function_static_lib_app.wasm", .run_args = &.{ "--expected", "x" } },
+    // A 64 KiB record through ten match arms stays within the engine's
+    // function limits under every strategy and level, with bulk copies and
+    // with WebAssembly 1.0's copy loops (#12785). The runner checks every
+    // function of every cart against the limits.
+    .{ .app = "issue_12785_big_record_match_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12785_big_record_match_static_lib_app.wasm", .run_args = &.{ "--expected", "1.0 4.0 9.0 21" } },
+    .{ .app = "issue_12785_big_record_match_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no" }, .output = "issue_12785_big_record_match_boxy_static_lib_app.wasm", .run_args = &.{ "--expected", "1.0 4.0 9.0 21" } },
+    .{ .app = "issue_12785_big_record_match_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12785_big_record_match_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "1.0 4.0 9.0 21" } },
+    .{ .app = "issue_12785_big_record_match_static_lib_app.roc", .options = &.{"--opt=size"}, .output = "issue_12785_big_record_match_size_static_lib_app.wasm", .run_args = &.{ "--expected", "1.0 4.0 9.0 21" } },
+    // The same programs with every procedure split into fragments of a few
+    // bytes: a split procedure computes what its direct emission computes.
+    .{ .app = "issue_12785_big_record_match_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12785_big_record_match_split_static_lib_app.wasm", .run_args = &.{ "--expected", "1.0 4.0 9.0 21" }, .split_bytes = "64" },
+    .{ .app = "issue_12785_big_record_match_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no" }, .output = "issue_12785_big_record_match_boxy_split_static_lib_app.wasm", .run_args = &.{ "--expected", "1.0 4.0 9.0 21" }, .split_bytes = "64" },
+    .{ .app = "issue_12785_big_record_match_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12785_big_record_match_v1_split_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "1.0 4.0 9.0 21" }, .split_bytes = "64" },
+    .{ .app = "builtin_routing_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "builtin_routing_split_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced" }, .split_bytes = "64" },
+    .{ .app = "rc_cleanup_model_list_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "rc_cleanup_model_list_split_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced", "--min-allocs", "2" }, .split_bytes = "64" },
+    .{ .app = "iter_recursive_concat_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no" }, .output = "iter_recursive_concat_boxy_split_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced" }, .split_bytes = "64" },
+    // A wide record read field by field in deep recursion fits the default
+    // shadow stack: a record `ref.local` shares bytes rather than copying
+    // them (#12778).
+    .{ .app = "issue_12778_wide_record_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12778_wide_record_static_lib_app.wasm", .run_args = &.{ "--expected", "51181" } },
+    .{ .app = "issue_12778_wide_record_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no" }, .output = "issue_12778_wide_record_boxy_static_lib_app.wasm", .run_args = &.{ "--expected", "51181" } },
+    .{ .app = "issue_12778_wide_record_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12778_wide_record_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "51181" } },
+    .{ .app = "issue_12778_wide_record_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12778_wide_record_split_static_lib_app.wasm", .run_args = &.{ "--expected", "51181" }, .split_bytes = "256" },
+    // Narrowing try conversions from 128-bit integers (#12782).
+    .{ .app = "issue_12782_i128_narrow_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12782_i128_narrow_static_lib_app.wasm", .run_args = &.{ "--expected", "u8=Ok(3) u16=Ok(3) i8=Ok(3) i16=Ok(3) u32=Ok(3) i64=Ok(3) neg_u8=Err(OutOfRange) neg_i8=Ok(-3) big_u8=Err(OutOfRange) big_u16=Ok(300) un_u8=Ok(3) un_i16=Ok(3)" } },
+    .{ .app = "issue_12782_i128_narrow_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12782_i128_narrow_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "u8=Ok(3) u16=Ok(3) i8=Ok(3) i16=Ok(3) u32=Ok(3) i64=Ok(3) neg_u8=Err(OutOfRange) neg_i8=Ok(-3) big_u8=Err(OutOfRange) big_u16=Ok(300) un_u8=Ok(3) un_i16=Ok(3)" } },
+    .{ .app = "issue_12782_i128_narrow_static_lib_app.roc", .options = &.{"--opt=size"}, .output = "issue_12782_i128_narrow_size_static_lib_app.wasm", .run_args = &.{ "--expected", "u8=Ok(3) u16=Ok(3) i8=Ok(3) i16=Ok(3) u32=Ok(3) i64=Ok(3) neg_u8=Err(OutOfRange) neg_i8=Ok(-3) big_u8=Err(OutOfRange) big_u16=Ok(300) un_u8=Ok(3) un_i16=Ok(3)" } },
 };
 
 pub fn build(b: *std.Build) void {
@@ -3672,6 +3714,7 @@ pub fn build(b: *std.Build) void {
         var wasm_static_lib_cart_outputs: [wasm_static_lib_carts.len]std.Build.LazyPath = undefined;
         for (wasm_static_lib_carts, &wasm_static_lib_cart_outputs) |cart, *output| {
             const built = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, cart.app, cart.options, cart.output, cart.target);
+            if (cart.split_bytes) |split_bytes| built.run.setEnvironmentVariable("ROC_WASM_SPLIT_BYTES", split_bytes);
             build_test_wasm_static_lib_runner_step.dependOn(&built.run.step);
             output.* = built.output;
         }
@@ -5854,6 +5897,19 @@ fn addMainExe(
     });
     configureBackend(embedded_digests_tool, b.graph.host);
     const embedded_digests = b.addRunArtifact(embedded_digests_tool);
+    const support_image_tool = b.addExecutable(.{
+        .name = "support_image",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/support_image.zig"),
+            .target = hostToolTarget(b, .debug),
+            .optimize = .debug,
+            .imports = &.{.{ .name = "UnitImage", .module = b.createModule(.{
+                .root_source_file = b.path("src/backend/dev/UnitImage.zig"),
+                .target = hostToolTarget(b, .debug),
+                .optimize = .debug,
+            }) }},
+        }),
+    });
     const embedded_digests_source = embedded_digests.addOutputFileArg("embedded_digests.zig");
     const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
     // `roc` embeds the archive, so strip its member names first.
@@ -6205,6 +6261,16 @@ fn addMainExe(
                 cross_boxy_runtime_obj.getEmittedBin(),
                 b.pathJoin(&.{ "targets", cross_target.name, boxy_runtime_ext }),
             );
+            // A fast dev link of a Linux x86_64 executable places the
+            // builtins and the Boxy runtime as one unit image, converted
+            // here once (src/build/support_image.zig).
+            if (cross_target.query.os_tag == .linux and cross_target.query.cpu_arch == .x86_64) {
+                const convert = b.addRunArtifact(support_image_tool);
+                const image = convert.addOutputFileArg("roc_support.rbxu");
+                convert.addFileArg(cross_builtins_extern_obj.getEmittedBin());
+                convert.addFileArg(cross_boxy_runtime_obj.getEmittedBin());
+                _ = embedded_assets.addCopyFile(image, b.pathJoin(&.{ "targets", cross_target.name, "roc_support.rbxu" }));
+            }
         }
         const copy_cross_builtins_extern = embedded_assets;
         embedded_digests.addArg(b.fmt("builtins_extern_{s}", .{cross_target.name}));

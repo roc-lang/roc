@@ -54,6 +54,7 @@ const CpuLevel = roc_target_mod.CpuLevel;
 // with 24-byte RocList struct returns on aarch64
 
 const Relocation = @import("Relocation.zig").IndexedRelocation;
+const relocation_mod = @import("Relocation.zig");
 const collections = @import("collections");
 const SymbolTable = @import("SymbolTable.zig");
 const StackPlan = lir.StackPlan;
@@ -745,6 +746,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Whether object-file entrypoints should use the synthetic default
         /// platform runtime contract.
         enable_default_platform_runtime: bool = false,
+
+        /// Whether an expect site's id is emitted as a field relative to
+        /// `expect_site_base_symbol` (a test unit's image, whose loader binds
+        /// the symbol to the first program-wide id of its sites), rather
+        /// than as the program-wide id itself.
+        relocatable_expect_sites: bool = false,
 
         /// Native execution's hosted symbol addresses; see `HostedSymbolResolver`.
         hosted_symbol_resolver: ?HostedSymbolResolver = null,
@@ -8651,7 +8658,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             pub fn statement(extra: StackPlanExtra, plan: *StackPlan, _: u32, stmt: LIR.CFStmt) Allocator.Error!void {
                 const self = extra.owner;
                 switch (stmt) {
-                    inline .set_local, .init_uninitialized => |s| {
+                    .set_local => |s| {
+                        if (s.mode != .initialize_join_param) plan.values.items[try plan.local(s.target)].mutable = true;
+                    },
+                    .init_uninitialized => |s| {
                         plan.values.items[try plan.local(s.target)].mutable = true;
                     },
                     .assign_low_level => |s| {
@@ -8708,14 +8718,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (work.items) |id| {
                 const stmt = self.store.getCFStmt(id);
                 const at = indexes.nodeOf(id).?;
-                if (stmt == .join) {
-                    // A declaration alone needs no storage. Mark only locals
-                    // present in the completed read/write inventory as mutable.
-                    const params = self.store.getLocalSpan(stmt.join.params);
-                    for (0..params.len) |i| {
-                        if (plan.localIndex(GuardedList.at(params, i))) |index| plan.values.items[index].mutable = true;
-                    }
-                }
                 if (stmt == .assign_low_level) {
                     if (OverflowFusion.findResultConsumer(self.store, id)) |fusion| {
                         // The producer emits the consumer's result early. Keep
@@ -8738,11 +8740,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const t = plan.values.items[target_index];
                 const s = plan.values.items[source];
                 if (t.definitions != 1 or s.definitions > 1 or t.mutable or s.mutable) continue;
+                // Prologue storage is already defined, and cannot become an
+                // alias. An unwritten source must be such a parameter.
+                if (self.local_locations.contains(localKey(t.local))) continue;
+                if (s.definitions == 0 and !self.local_locations.contains(localKey(s.local))) continue;
                 const rep = self.runtimeRepresentationLayoutIdx(self.localLayout(assign.target));
                 if (rep != self.runtimeRepresentationLayoutIdx(self.localLayout(assign.op.source))) continue;
                 if (rep == .f32 or rep == .f64 or self.simdKindForLayout(rep) != null) continue;
                 plan.values.items[target_index].representative = source;
             }
+            try plan.solveAliasLifetimes(indexes.nodeOf(root).?);
+            for (plan.values.items) |*value| value.size = 0;
             for (plan.values.items, 0..) |v, i| {
                 const root_index = plan.representative(@intCast(i));
                 if (root_index != i or self.local_locations.contains(localKey(v.local))) continue;
@@ -8753,7 +8761,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 };
                 plan.values.items[i].size = std.mem.alignForward(u32, size, alignment);
             }
-            try plan.solve();
+            try plan.assignSlots();
             const offsets = try self.allocator.alloc(i32, plan.slots.items.len);
             defer self.allocator.free(offsets);
             for (plan.slots.items, offsets) |slot, *offset| offset.* = self.codegen.allocStackSlot(slot.size);
@@ -20989,11 +20997,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const cond_loc = try self.emitValueLocal(expect_stmt.condition);
                             const cond_reg = try self.ensureInGeneralReg(cond_loc);
                             if (expect_stmt.site) |site| {
+                                const site_reg: ?GeneralReg = if (self.relocatable_expect_sites) reg: {
+                                    const reg = try self.allocTempGeneral();
+                                    try self.emitRelocatableExpectSite(reg, @backingInt(site));
+                                    break :reg reg;
+                                } else null;
                                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                                 defer builder.deinit();
-                                try builder.addImmArg(@backingInt(site));
+                                if (site_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(@backingInt(site));
                                 try builder.addRegArg(cond_reg);
                                 try self.callRuntimeSymbol(&builder, .roc_expect_observed);
+                                if (site_reg) |reg| self.codegen.freeGeneral(reg);
                                 self.codegen.freeGeneral(cond_reg);
                             } else {
                                 try self.emitCmpImm(cond_reg, 0);
@@ -22070,6 +22084,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call one of the host's fixed runtime symbols: by its in-process
         /// address under native execution, by relocation everywhere else.
+        /// Load `site`, a unit-local expect site id, into `dst` as an
+        /// `abs32s` field against `expect_site_base_symbol` whose bytes hold
+        /// the id.
+        fn emitRelocatableExpectSite(self: *Self, dst: GeneralReg, site: u32) Allocator.Error!void {
+            switch (isa) {
+                .x86_64 => {
+                    const start = self.codegen.currentOffset();
+                    // REX.W C7 /0 imm32: the field starts three bytes in.
+                    try self.codegen.emit.movRegImm32(dst, @intCast(site));
+                    try self.codegen.relocations.append(self.allocator, .{ .linked_data = .{
+                        .offset = @intCast(start + 3),
+                        .symbol = try self.codegen.symbols.intern(self.allocator, relocation_mod.expect_site_base_symbol, .shared),
+                        .kind = .abs32s,
+                    } });
+                },
+                .aarch64 => base.invariant("LirCodeGen invariant violated: relocatable expect sites in aarch64 code; only Linux x86_64 test units relocate them", .{}),
+            }
+        }
+
         fn callRuntimeSymbol(self: *Self, builder: *Builder, symbol: builtins.in_process_host.Symbol) Allocator.Error!void {
             switch (self.generation_mode) {
                 .native_execution => try builder.call(symbol.address()),
@@ -24574,6 +24607,35 @@ test "proc params and mutable list cells use distinct stack slots" {
     try std.testing.expect(answer_slot != end_slot);
     try std.testing.expect(appended_slot != end_slot);
     try std.testing.expect(appended_slot != answer_slot);
+}
+
+test "issue 12819: dev reads a single-definition join parameter in place" {
+    const gpa = std.testing.allocator;
+    inline for (.{ RocTarget.x64linux, RocTarget.arm64mac }) |target| {
+        var store = LirStore.init(gpa);
+        defer store.deinit();
+        var state = try TestLayoutState.init(gpa);
+        defer state.deinit();
+        const source = try addLocal(&store, .u64);
+        const joined = try addLocal(&store, .u64);
+        const alias = try addLocal(&store, .u64);
+        var next_join_point: u32 = 0;
+        const join_id = freshTestJoinPointId(&next_join_point);
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = alias } }, .test_fixture);
+        const read = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .local(joined), .next = ret } }, .test_fixture);
+        const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+        const initialize = try store.addCFStmt(.{ .set_local = .{ .target = joined, .value = source, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
+        const join = try store.addCFStmt(.{ .join = .{ .id = join_id, .params = try store.addLocalSpan(&.{joined}), .body = read, .remainder = initialize } }, .test_fixture);
+        const body = try store.addCFStmt(.{ .assign_literal = .{ .target = source, .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } }, .next = join } }, .test_fixture);
+        const proc = try addNoArgProc(&store, body, .u64);
+        var codegen = try LirCodeGen(target).init(gpa, &store, &state.layout_store, .{}, .default);
+        defer codegen.deinit();
+        try codegen.ensureStableLocationsForStmtLocals(body);
+        try std.testing.expectEqualDeep(codegen.local_locations.get(@backingInt(joined)).?, codegen.local_locations.get(@backingInt(alias)).?);
+        if (comptime host_lir_codegen_available) {
+            try std.testing.expectEqual(@as(u64, 42), try runRootU64(&store, &state.layout_store, proc, .u64));
+        }
+    }
 }
 
 test "immutable aliases share storage but aliases of mutable locals do not" {

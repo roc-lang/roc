@@ -1123,23 +1123,38 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
     }
 }
 
-/// Compose only compiler-owned Wasm objects into one relocatable object.
-/// Platform inputs are categorically excluded by the caller; sealing happens
-/// immediately after this link and before the result reaches a platform link.
+/// How `linkWasmObjectsRelocatable` composes its inputs.
+pub const RelocatableWasmOptions = struct {
+    /// Include every member of an input archive, as the final link of a
+    /// platform's inputs does.
+    whole_archive: bool = false,
+    /// Leave out debug information.
+    strip_debug: bool = false,
+};
+
+/// Compose Wasm objects into one relocatable object: the compiler-owned
+/// objects of a program, which are sealed right after and before the result
+/// reaches a platform link; or, for a fast dev link, either the compiler's
+/// support objects or a platform's host inputs alone, each converted to an
+/// image (`wasm_host_image.zig`).
 pub fn linkWasmObjectsRelocatable(
     ctx: *CliCtx,
     output_path: []const u8,
     input_paths: []const []const u8,
+    options: RelocatableWasmOptions,
 ) LinkError!void {
     if (comptime !llvm_available) return LinkError.LLVMNotAvailable;
 
-    var args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, input_paths.len + 4) catch
+    var args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, input_paths.len + 7) catch
         return LinkError.OutOfMemory;
     try args.append("wasm-ld");
     try args.append("-r");
+    if (options.strip_debug) try args.append("--strip-debug");
     try args.append("-o");
     try args.append(output_path);
+    if (options.whole_archive) try args.append("--whole-archive");
     try args.appendSlice(input_paths);
+    if (options.whole_archive) try args.append("--no-whole-archive");
 
     const outcome = try embedded_lld.link(ctx.gpa, .wasm, args.items, .{
         .can_exit_early = false,

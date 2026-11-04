@@ -22,6 +22,7 @@ const collections = @import("collections");
 const Common = @import("../common.zig");
 const Ast = @import("ast.zig");
 const Mono = @import("../monotype/ast.zig");
+const Type = @import("../monotype/type.zig");
 const WrapperBody = @import("wrapper_body.zig");
 const names = @import("check").CheckedNames;
 
@@ -45,43 +46,69 @@ pub const argument_consumers: Consumers = .initMany(&.{ .match, .call, .loop });
 /// A set of consumers.
 pub const Consumers = std.EnumSet(Consumer);
 
-/// One step from a value into a part of it. Field and tag labels are
-/// interned ids, so equal labels have equal ids.
+/// One step from a value into a part of it: the part's label within its
+/// parent and the part's own type. Field and tag labels are interned ids, so
+/// equal labels have equal ids.
+///
+/// The label names the part. The type decides where a path folds: a part
+/// whose type equals the type of a part above it sits at a recursive position
+/// of that type (a type that contains itself is recursive, whatever labels
+/// lead back to it). Labels alone cannot decide that, since unrelated types
+/// share tag and field labels.
 pub const Step = struct {
     kind: Kind,
     label: u32,
     index: u32,
+    ty: Type.TypeId,
 
     pub const Kind = enum(u32) { field, item, payload };
 
-    pub fn field(name: names.RecordFieldNameId) Step {
-        return .{ .kind = .field, .label = @backingInt(name), .index = 0 };
+    pub fn field(name: names.RecordFieldNameId, ty: Type.TypeId) Step {
+        return .{ .kind = .field, .label = @backingInt(name), .index = 0, .ty = ty };
     }
 
-    pub fn item(index: u32) Step {
-        return .{ .kind = .item, .label = 0, .index = index };
+    pub fn item(index: u32, ty: Type.TypeId) Step {
+        return .{ .kind = .item, .label = 0, .index = index, .ty = ty };
     }
 
-    pub fn payload(tag: names.TagNameId, index: u32) Step {
-        return .{ .kind = .payload, .label = @backingInt(tag), .index = index };
+    pub fn payload(tag: names.TagNameId, index: u32, ty: Type.TypeId) Step {
+        return .{ .kind = .payload, .label = @backingInt(tag), .index = index, .ty = ty };
     }
 
     pub fn eql(a: Step, b: Step) bool {
+        return a.sameLabel(b) and a.ty == b.ty;
+    }
+
+    /// Whether `a` and `b` name the same part of one value. Within a value
+    /// the label alone names a part, and a row coercion can show one part at
+    /// two types, so a read meets the part it names by label.
+    pub fn sameLabel(a: Step, b: Step) bool {
         return a.kind == b.kind and a.label == b.label and a.index == b.index;
+    }
+
+    pub fn isField(self: Step, name: names.RecordFieldNameId) bool {
+        return self.kind == .field and self.label == @backingInt(name);
+    }
+
+    pub fn isItem(self: Step, index: u32) bool {
+        return self.kind == .item and self.index == index;
+    }
+
+    pub fn isPayload(self: Step, tag: names.TagNameId, index: u32) bool {
+        return self.kind == .payload and self.label == @backingInt(tag) and self.index == index;
     }
 };
 
-/// Append `step` to a path held as steps. A value's parts recur only through
-/// a tag payload, so a path that re-enters a payload step it already contains
-/// names a recursive position, and folds to that step's first occurrence.
-/// Every path is therefore bounded by the program's labels.
+/// Append `step` to a path held as steps. A part whose type equals the type
+/// of a step already on the path sits at a recursive position of that type,
+/// so the path folds to that step. The steps of a path therefore have
+/// distinct types, and every path is bounded by the types the program's
+/// values nest.
 pub fn appendStep(allocator: Allocator, steps: *std.ArrayList(Step), step: Step) Allocator.Error!void {
-    if (step.kind == .payload) {
-        for (steps.items, 0..) |existing, index| {
-            if (existing.eql(step)) {
-                steps.shrinkRetainingCapacity(index + 1);
-                return;
-            }
+    for (steps.items, 0..) |existing, index| {
+        if (existing.ty == step.ty) {
+            steps.shrinkRetainingCapacity(index + 1);
+            return;
         }
     }
     try steps.append(allocator, step);
@@ -90,17 +117,25 @@ pub fn appendStep(allocator: Allocator, steps: *std.ArrayList(Step), step: Step)
 /// An interned path of steps; `root` is the value itself.
 pub const PathId = enum(u32) { root = 0, _ };
 
-/// Interned paths, folded as `appendStep` folds them.
+/// Interned paths, folded as `appendStep` folds them. The root is every
+/// value itself, whatever its type, so demand flows through a nominal wrap,
+/// a row coercion, or a typed boundary with its paths unchanged.
 const PathTable = struct {
     nodes: std.ArrayList(Node) = .empty,
+    /// The path each step from a parent reaches: a new node, or the ancestor
+    /// it folds to, found once when the pair is first interned.
     children: std.AutoHashMapUnmanaged(ChildKey, PathId) = .empty,
+    /// The path `under` gives each base and path it has joined.
+    joined: std.AutoHashMapUnmanaged(JoinKey, PathId) = .empty,
 
     const Node = struct { parent: PathId, step: Step, depth: u32 };
     const ChildKey = struct { parent: PathId, step: Step };
+    const JoinKey = struct { base: PathId, path: PathId };
 
     fn init(allocator: Allocator) Allocator.Error!PathTable {
         var table: PathTable = .{};
-        try table.nodes.append(allocator, .{ .parent = .root, .step = Step.item(0), .depth = 0 });
+        // The root has no step; its step is never read.
+        try table.nodes.append(allocator, .{ .parent = .root, .step = undefined, .depth = 0 });
         return table;
     }
 
@@ -108,36 +143,41 @@ const PathTable = struct {
         return self.nodes.items[@backingInt(path)];
     }
 
-    /// The ancestor-or-self of `parent` that ends in `step`, when `step` is a
-    /// payload step: the position a repeated payload step folds to.
+    /// The ancestor-or-self of `parent` whose step has `step`'s type: the
+    /// recursive position `step` folds to.
     fn folded(self: *const PathTable, parent: PathId, step: Step) ?PathId {
-        if (step.kind != .payload) return null;
         var path = parent;
         while (path != .root) : (path = self.node(path).parent) {
-            if (self.node(path).step.eql(step)) return path;
+            if (self.node(path).step.ty == step.ty) return path;
         }
         return null;
     }
 
     fn child(self: *PathTable, allocator: Allocator, parent: PathId, step: Step) Allocator.Error!PathId {
-        if (self.folded(parent, step)) |path| return path;
         const gop = try self.children.getOrPut(allocator, .{ .parent = parent, .step = step });
         if (!gop.found_existing) {
-            gop.value_ptr.* = @fromBackingInt(@intCast(self.nodes.items.len));
-            try self.nodes.append(allocator, .{ .parent = parent, .step = step, .depth = self.node(parent).depth + 1 });
+            gop.value_ptr.* = self.folded(parent, step) orelse new: {
+                const path: PathId = @fromBackingInt(@intCast(self.nodes.items.len));
+                try self.nodes.append(allocator, .{ .parent = parent, .step = step, .depth = self.node(parent).depth + 1 });
+                break :new path;
+            };
         }
         return gop.value_ptr.*;
     }
 
-    fn lookupChild(self: *const PathTable, parent: PathId, step: Step) ?PathId {
-        if (self.folded(parent, step)) |path| return path;
-        return self.children.get(.{ .parent = parent, .step = step });
-    }
-
-    fn lookup(self: *const PathTable, steps: []const Step) ?PathId {
-        var path: PathId = .root;
-        for (steps) |step| path = self.lookupChild(path, step) orelse return null;
-        return path;
+    /// `base` followed by the steps of `path`, as `concat` folds them. A
+    /// pattern places every read of the local it binds under the pattern's
+    /// prefix on each pass of the fixed point, so joins repeat and each is
+    /// interned once.
+    fn under(self: *PathTable, allocator: Allocator, base: PathId, path: PathId) Allocator.Error!PathId {
+        if (path == .root) return base;
+        if (base == .root) return path;
+        const key: JoinKey = .{ .base = base, .path = path };
+        if (self.joined.get(key)) |joined| return joined;
+        const path_node = self.node(path);
+        const result = try self.child(allocator, try self.under(allocator, base, path_node.parent), path_node.step);
+        try self.joined.put(allocator, key, result);
+        return result;
     }
 
     fn concat(self: *PathTable, allocator: Allocator, base: PathId, steps: []const Step) Allocator.Error!PathId {
@@ -160,7 +200,7 @@ const PathTable = struct {
     }
 
     /// Replace `out` with the steps of `path` below `prefix`, root first, or
-    /// return false when `prefix` is not an ancestor-or-self of `path`.
+    /// return false when `prefix` does not name an ancestor-or-self of `path`.
     fn stepsBelow(self: *const PathTable, allocator: Allocator, path: PathId, prefix: PathId, out: *std.ArrayList(Step)) Allocator.Error!bool {
         const depth = self.node(path).depth;
         const prefix_depth = self.node(prefix).depth;
@@ -173,7 +213,34 @@ const PathTable = struct {
             out.items[index] = self.node(current).step;
             current = self.node(current).parent;
         }
-        return current == prefix;
+        return self.sameParts(current, prefix);
+    }
+
+    /// Whether `a` and `b` name the same part of one value: their steps have
+    /// equal labels.
+    fn sameParts(self: *const PathTable, a: PathId, b: PathId) bool {
+        if (self.node(a).depth != self.node(b).depth) return false;
+        var x = a;
+        var y = b;
+        while (x != y) {
+            if (!self.node(x).step.sameLabel(self.node(y).step)) return false;
+            x = self.node(x).parent;
+            y = self.node(y).parent;
+        }
+        return true;
+    }
+
+    /// Whether `path` names the part at `steps`.
+    fn namesSteps(self: *const PathTable, path: PathId, steps: []const Step) bool {
+        if (self.node(path).depth != steps.len) return false;
+        var current = path;
+        var index = steps.len;
+        while (index > 0) {
+            index -= 1;
+            if (!self.node(current).step.sameLabel(steps[index])) return false;
+            current = self.node(current).parent;
+        }
+        return true;
     }
 };
 
@@ -187,8 +254,8 @@ pub const Placement = struct { value: PathId, result: PathId };
 /// What the code around a value consumes of it.
 pub const DemandSet = struct {
     /// Each read path once, in first-read order, with its consumers at the
-    /// same position. A value's distinct read paths are few, so a scan finds
-    /// a path's position.
+    /// same position. A single read scans for its path; a merge of many reads
+    /// finds each one's position through `PathMarks`.
     read_paths: std.ArrayList(PathId) = .empty,
     read_consumers: std.ArrayList(Consumers) = .empty,
     placements: std.AutoArrayHashMapUnmanaged(Placement, void) = .empty,
@@ -215,10 +282,36 @@ pub const DemandSet = struct {
         return !gop.found_existing;
     }
 
-    fn addAll(self: *DemandSet, allocator: Allocator, other: Demand) Allocator.Error!bool {
+    /// Add every read and placement of `other`. `marks` gives each of
+    /// `other`'s paths its position in `other`, so one pass over this set
+    /// finds the paths the two share, and a merge costs the sizes of the two
+    /// sets added rather than multiplied.
+    fn addAll(self: *DemandSet, allocator: Allocator, marks: *PathMarks, other: Demand) Allocator.Error!bool {
         var changed = false;
-        for (other.read_paths, other.read_consumers) |path, consumers| {
-            if (try self.addRead(allocator, path, consumers)) changed = true;
+        if (other.read_paths.len != 0) {
+            marks.claim();
+            defer marks.release();
+            for (other.read_paths, 0..) |path, index| {
+                const slot = try marks.slot(path);
+                if (slot.* != 0) Common.invariant("a demand listed one read path twice");
+                slot.* = @intCast(index + 1);
+            }
+            for (self.read_paths.items, self.read_consumers.items) |path, *existing| {
+                const mark = marks.get(path);
+                if (mark == 0) continue;
+                marks.clear(path);
+                const consumers = other.read_consumers[mark - 1];
+                if (existing.supersetOf(consumers)) continue;
+                existing.setUnion(consumers);
+                changed = true;
+            }
+            for (other.read_paths, other.read_consumers) |path, consumers| {
+                if (marks.get(path) == 0) continue;
+                marks.clear(path);
+                try self.read_paths.append(allocator, path);
+                try self.read_consumers.append(allocator, consumers);
+                changed = true;
+            }
         }
         for (other.placements) |placement| {
             if (try self.addPlacement(allocator, placement)) changed = true;
@@ -235,7 +328,77 @@ pub const DemandSet = struct {
     }
 };
 
-/// An immutable view of a `DemandSet`.
+/// One slot per path, shared by every read set of an analysis. Every slot is
+/// zero except while one merge into a read set runs, which marks the paths it
+/// meets with one more than their positions and clears them before it ends.
+const PathMarks = struct {
+    gpa: Allocator,
+    slots: std.ArrayList(u32) = .empty,
+    busy: bool = false,
+
+    fn deinit(self: *PathMarks) void {
+        self.slots.deinit(self.gpa);
+    }
+
+    fn claim(self: *PathMarks) void {
+        if (self.busy) Common.invariant("two read-set merges shared the path marks");
+        self.busy = true;
+    }
+
+    fn release(self: *PathMarks) void {
+        self.busy = false;
+    }
+
+    /// The slot of `path`, grown to cover paths interned since the last merge.
+    fn slot(self: *PathMarks, path: PathId) Allocator.Error!*u32 {
+        const raw = @backingInt(path);
+        if (raw >= self.slots.items.len) try self.slots.appendNTimes(self.gpa, 0, raw + 1 - self.slots.items.len);
+        return &self.slots.items[raw];
+    }
+
+    fn get(self: *const PathMarks, path: PathId) u32 {
+        const raw = @backingInt(path);
+        return if (raw < self.slots.items.len) self.slots.items[raw] else 0;
+    }
+
+    /// Clear the slot of a path this merge marked.
+    fn clear(self: *PathMarks, path: PathId) void {
+        self.slots.items[@backingInt(path)] = 0;
+    }
+};
+
+/// Reads collected into a new read set, each merged with an earlier read of
+/// its path through `PathMarks`. `finish` returns the set and clears the
+/// marks.
+const NewReads = struct {
+    set: DemandSet = .{},
+    marks: *PathMarks,
+    allocator: Allocator,
+
+    fn init(marks: *PathMarks, allocator: Allocator) NewReads {
+        marks.claim();
+        return .{ .marks = marks, .allocator = allocator };
+    }
+
+    fn add(self: *NewReads, path: PathId, consumers: Consumers) Allocator.Error!void {
+        const slot = try self.marks.slot(path);
+        if (slot.* != 0) {
+            self.set.read_consumers.items[slot.* - 1].setUnion(consumers);
+            return;
+        }
+        try self.set.read_paths.append(self.allocator, path);
+        try self.set.read_consumers.append(self.allocator, consumers);
+        slot.* = @intCast(self.set.read_paths.items.len);
+    }
+
+    fn finish(self: *NewReads) DemandSet {
+        for (self.set.read_paths.items) |path| self.marks.clear(path);
+        self.marks.release();
+        return self.set;
+    }
+};
+
+/// An immutable view of a `DemandSet`. It lists each read path once.
 pub const Demand = struct {
     read_paths: []const PathId,
     read_consumers: []const Consumers,
@@ -340,9 +503,8 @@ pub const Analysis = struct {
     /// Whether `fn_id` constructs, on every path that returns, a result part
     /// at `steps` that serves one of `consumers`.
     pub fn constructs(self: *const Analysis, fn_id: Ast.FnId, steps: []const Step, consumers: Consumers) bool {
-        const path = self.paths.lookup(steps) orelse return false;
         for (self.summary(fn_id).constructed) |part| {
-            if (part.path == path and part.consumers.intersectWith(consumers).count() != 0) return true;
+            if (part.consumers.intersectWith(consumers).count() != 0 and self.paths.namesSteps(part.path, steps)) return true;
         }
         return false;
     }
@@ -358,8 +520,43 @@ pub const Analysis = struct {
 /// Whether `steps` begins with every step of `prefix`.
 pub fn startsWith(steps: []const Step, prefix: []const Step) bool {
     if (prefix.len > steps.len) return false;
-    for (prefix, steps[0..prefix.len]) |a, b| if (!a.eql(b)) return false;
+    for (prefix, steps[0..prefix.len]) |a, b| if (!a.sameLabel(b)) return false;
     return true;
+}
+
+/// The steps of field access `expr_id`, each with the type of the part it
+/// reads. The last part is the access itself; each earlier part is a field of
+/// the record before it.
+fn fieldAccessSteps(allocator: Allocator, program: *const Ast.Program, expr_id: Ast.ExprId) Allocator.Error![]const Step {
+    const expr = program.getExpr(expr_id);
+    const access = expr.data.field_access;
+    const segments = program.fieldAccessSegmentSpan(access.segments);
+    var steps: std.ArrayList(Step) = .empty;
+    var parent_ty = program.getExpr(access.receiver).ty;
+    for (0..segments.len) |index| {
+        const name = GuardedList.at(segments, index).field;
+        const ty = if (index + 1 == segments.len) expr.ty else recordFieldType(&program.types, parent_ty, name);
+        try appendStep(allocator, &steps, Step.field(name, ty));
+        parent_ty = ty;
+    }
+    return steps.items;
+}
+
+/// The type of field `name` of the record `record_ty` names.
+fn recordFieldType(types: *const Type.Store, record_ty: Type.TypeId, name: names.RecordFieldNameId) Type.TypeId {
+    var current = record_ty;
+    while (true) switch (types.get(current)) {
+        .named => |named| current = (named.backing orelse Common.invariant("field access read a named type without a backing")).ty,
+        .record => |span| {
+            const fields = types.fieldSpan(span);
+            for (0..GuardedList.borrowLen(fields)) |index| {
+                const field = GuardedList.at(fields, index);
+                if (field.name == name) return field.ty;
+            }
+            Common.invariant("field access named a field its record type lacks");
+        },
+        .primitive, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("field access read a part of a non-record type"),
+    };
 }
 
 /// Analyze every function of `program` whose body `bodies` gives.
@@ -391,6 +588,7 @@ pub fn analyze(gpa: Allocator, program: *const Ast.Program, bodies: []const ?Ast
         .analysis = &analysis,
         .scratch = collections.SingleThreadArena.init(gpa),
         .callers = try gpa.alloc(std.ArrayList(Ast.FnId), bodies.len),
+        .marks = .{ .gpa = gpa },
     };
     for (builder.callers) |*list| list.* = .empty;
     defer builder.deinit();
@@ -409,6 +607,7 @@ const Builder = struct {
     scratch: collections.SingleThreadArena,
     /// Callers of each function, recorded by the demand walk.
     callers: []std.ArrayList(Ast.FnId),
+    marks: PathMarks,
     fn_id: Ast.FnId = undefined,
     locals: collections.DenseMapUnmanaged(Ast.LocalId, DemandSet) = .empty,
     locals_changed: bool = false,
@@ -438,6 +637,7 @@ const Builder = struct {
     fn deinit(self: *Builder) void {
         for (self.callers) |*list| list.deinit(self.gpa);
         self.gpa.free(self.callers);
+        self.marks.deinit();
         self.scratch.deinit();
     }
 
@@ -678,11 +878,11 @@ const Builder = struct {
         var changed = false;
         const args = self.program().typedLocalSpan(fn_.args);
         for (0..args.len) |index| {
-            if (try fn_summary.params[index].addAll(self.persistent(), self.localDemand(GuardedList.at(args, index).local))) changed = true;
+            if (try fn_summary.params[index].addAll(self.persistent(), &self.marks, self.localDemand(GuardedList.at(args, index).local))) changed = true;
         }
         const captures = self.program().typedLocalSpan(fn_.captures);
         for (0..captures.len) |index| {
-            if (try fn_summary.captures[index].addAll(self.persistent(), self.localDemand(GuardedList.at(captures, index).local))) changed = true;
+            if (try fn_summary.captures[index].addAll(self.persistent(), &self.marks, self.localDemand(GuardedList.at(captures, index).local))) changed = true;
         }
         return changed;
     }
@@ -693,8 +893,9 @@ const Builder = struct {
     }
 
     fn demandOf(self: *Builder, reads: []const Read, placements: []const Placement) Allocator.Error!Demand {
-        var set: DemandSet = .{};
-        for (reads) |read| _ = try set.addRead(self.temp(), read.path, read.consumers);
+        var new_reads = NewReads.init(&self.marks, self.temp());
+        for (reads) |read| try new_reads.add(read.path, read.consumers);
+        var set = new_reads.finish();
         for (placements) |placement| _ = try set.addPlacement(self.temp(), placement);
         return set.view();
     }
@@ -723,13 +924,13 @@ const Builder = struct {
     /// Demand on the part at `step` of a value demanded by `demand`.
     fn project(self: *Builder, demand: Demand, step_: Step) Allocator.Error!Demand {
         const paths = &self.analysis.paths;
-        var set: DemandSet = .{};
+        var new_reads = NewReads.init(&self.marks, self.temp());
         for (demand.read_paths, demand.read_consumers) |path, consumers| {
             try paths.stepsOf(self.temp(), path, &self.steps);
-            if (self.steps.items.len == 0 or !self.steps.items[0].eql(step_)) continue;
-            const below = try paths.concat(self.persistent(), .root, self.steps.items[1..]);
-            _ = try set.addRead(self.temp(), below, consumers);
+            if (self.steps.items.len == 0 or !self.steps.items[0].sameLabel(step_)) continue;
+            try new_reads.add(try paths.concat(self.persistent(), .root, self.steps.items[1..]), consumers);
         }
+        var set = new_reads.finish();
         for (demand.placements) |placement| {
             if (placement.value == .root) {
                 const result = try paths.child(self.persistent(), placement.result, step_);
@@ -737,7 +938,7 @@ const Builder = struct {
                 continue;
             }
             try paths.stepsOf(self.temp(), placement.value, &self.steps);
-            if (!self.steps.items[0].eql(step_)) continue;
+            if (!self.steps.items[0].sameLabel(step_)) continue;
             const below = try paths.concat(self.persistent(), .root, self.steps.items[1..]);
             _ = try set.addPlacement(self.temp(), .{ .value = below, .result = placement.result });
         }
@@ -748,14 +949,13 @@ const Builder = struct {
     fn underPrefix(self: *Builder, demand: Demand, prefix: []const Step) Allocator.Error!Demand {
         const paths = &self.analysis.paths;
         const base = try paths.concat(self.persistent(), .root, prefix);
-        var set: DemandSet = .{};
+        var new_reads = NewReads.init(&self.marks, self.temp());
         for (demand.read_paths, demand.read_consumers) |path, consumers| {
-            try paths.stepsOf(self.temp(), path, &self.steps);
-            _ = try set.addRead(self.temp(), try paths.concat(self.persistent(), base, self.steps.items), consumers);
+            try new_reads.add(try paths.under(self.persistent(), base, path), consumers);
         }
+        var set = new_reads.finish();
         for (demand.placements) |placement| {
-            try paths.stepsOf(self.temp(), placement.value, &self.steps);
-            _ = try set.addPlacement(self.temp(), .{ .value = try paths.concat(self.persistent(), base, self.steps.items), .result = placement.result });
+            _ = try set.addPlacement(self.temp(), .{ .value = try paths.under(self.persistent(), base, placement.value), .result = placement.result });
         }
         return set.view();
     }
@@ -763,22 +963,22 @@ const Builder = struct {
     /// Demand on the constructor operand at `step` of a value demanded by
     /// `demand`: what reads that part, and the placement itself.
     fn constructorOperand(self: *Builder, demand: Demand, step_: Step) Allocator.Error!Demand {
-        var set: DemandSet = .{};
-        _ = try set.addAll(self.temp(), try self.project(demand, step_));
-        return set.view();
+        return self.project(demand, step_);
     }
 
     /// Demand on a receiver read along `steps`, whose read part is demanded by
     /// `demand`: each record or tuple the read passes through is projected.
     fn projected(self: *Builder, demand: Demand, steps: []const Step) Allocator.Error!Demand {
         const under = try self.underPrefix(demand, steps);
-        var set: DemandSet = .{};
-        _ = try set.addAll(self.temp(), under);
+        var new_reads = NewReads.init(&self.marks, self.temp());
+        for (under.read_paths, under.read_consumers) |path, consumers| try new_reads.add(path, consumers);
         var path: PathId = .root;
         for (steps) |step_| {
-            _ = try set.addRead(self.temp(), path, Consumers.initOne(.project));
+            try new_reads.add(path, Consumers.initOne(.project));
             path = try self.analysis.paths.child(self.persistent(), path, step_);
         }
+        var set = new_reads.finish();
+        for (under.placements) |placement| _ = try set.addPlacement(self.temp(), placement);
         return set.view();
     }
 
@@ -786,15 +986,16 @@ const Builder = struct {
     /// call whose result is demanded by `call`.
     fn instantiate(self: *Builder, param: Demand, call: Demand) Allocator.Error!Demand {
         const paths = &self.analysis.paths;
-        var set: DemandSet = .{};
-        for (param.read_paths, param.read_consumers) |path, consumers| {
-            _ = try set.addRead(self.temp(), path, consumers);
-        }
+        var new_reads = NewReads.init(&self.marks, self.temp());
+        for (param.read_paths, param.read_consumers) |path, consumers| try new_reads.add(path, consumers);
         for (param.placements) |placement| {
             for (call.read_paths, call.read_consumers) |path, consumers| {
                 if (!try paths.stepsBelow(self.temp(), path, placement.result, &self.steps)) continue;
-                _ = try set.addRead(self.temp(), try paths.concat(self.persistent(), placement.value, self.steps.items), consumers);
+                try new_reads.add(try paths.concat(self.persistent(), placement.value, self.steps.items), consumers);
             }
+        }
+        var set = new_reads.finish();
+        for (param.placements) |placement| {
             for (call.placements) |outer| {
                 // The call result's part `outer.value` sits in the caller's
                 // result; the parameter's part sits in the call result.
@@ -818,13 +1019,13 @@ const Builder = struct {
         if (demand.read_paths.len == 0 and demand.placements.len == 0) return;
         const gop = try self.locals.getOrPut(self.temp(), local);
         if (!gop.found_existing) gop.value_ptr.* = .{};
-        if (try gop.value_ptr.addAll(self.temp(), demand)) self.locals_changed = true;
+        if (try gop.value_ptr.addAll(self.temp(), &self.marks, demand)) self.locals_changed = true;
     }
 
     fn recordCallDemand(self: *Builder, call: Ast.ExprId, demand: Demand) Allocator.Error!void {
         const gop = try self.analysis.call_demand.getOrPut(self.persistent(), call);
         if (!gop.found_existing) gop.value_ptr.* = .{};
-        _ = try gop.value_ptr.addAll(self.persistent(), demand);
+        _ = try gop.value_ptr.addAll(self.persistent(), &self.marks, demand);
     }
 
     /// Demand a pattern's uses place on the value it binds.
@@ -847,21 +1048,23 @@ const Builder = struct {
                 const destructs = program_.recordDestructSpan(span);
                 for (0..destructs.len) |index| {
                     const destruct = GuardedList.at(destructs, index);
-                    try self.addPatternDemand(destruct.pattern, try self.extended(prefix, Step.field(destruct.name)), out);
+                    try self.addPatternDemand(destruct.pattern, try self.extended(prefix, Step.field(destruct.name, program_.getPat(destruct.pattern).ty)), out);
                 }
             },
             .tuple => |span| {
                 _ = try out.addRead(self.temp(), try self.analysis.paths.concat(self.persistent(), .root, prefix), Consumers.initOne(.project));
                 const pats = program_.patSpan(span);
                 for (0..pats.len) |index| {
-                    try self.addPatternDemand(GuardedList.at(pats, index), try self.extended(prefix, Step.item(@intCast(index))), out);
+                    const pat = GuardedList.at(pats, index);
+                    try self.addPatternDemand(pat, try self.extended(prefix, Step.item(@intCast(index), program_.getPat(pat).ty)), out);
                 }
             },
             .tag => |tag| {
                 _ = try out.addRead(self.temp(), try self.analysis.paths.concat(self.persistent(), .root, prefix), Consumers.initOne(.match));
                 const pats = program_.patSpan(tag.payloads);
                 for (0..pats.len) |index| {
-                    try self.addPatternDemand(GuardedList.at(pats, index), try self.extended(prefix, Step.payload(tag.name, @intCast(index))), out);
+                    const pat = GuardedList.at(pats, index);
+                    try self.addPatternDemand(pat, try self.extended(prefix, Step.payload(tag.name, @intCast(index), program_.getPat(pat).ty)), out);
                 }
             },
             .nominal => |inner| try self.addPatternDemand(inner, prefix, out),
@@ -880,7 +1083,7 @@ const Builder = struct {
 
     fn addLocalUnder(self: *Builder, local: Ast.LocalId, prefix: []const Step, out: *DemandSet) Allocator.Error!void {
         const under = try self.underPrefix(self.localDemand(local), prefix);
-        _ = try out.addAll(self.temp(), under);
+        _ = try out.addAll(self.temp(), &self.marks, under);
     }
 
     fn step(self: *Builder, task: Task) Allocator.Error!void {
@@ -892,7 +1095,7 @@ const Builder = struct {
                 const local_demand = self.localDemand(into.local);
                 const demand = if (into.enters_loop) blk: {
                     var set: DemandSet = .{};
-                    _ = try set.addAll(self.temp(), local_demand);
+                    _ = try set.addAll(self.temp(), &self.marks, local_demand);
                     _ = try set.addRead(self.temp(), .root, Consumers.initOne(.loop));
                     break :blk set.view();
                 } else local_demand;
@@ -903,7 +1106,7 @@ const Builder = struct {
                 _ = try set.addRead(self.temp(), .root, Consumers.initOne(.match));
                 const branches = self.program().branchSpan(match.branches);
                 for (0..branches.len) |index| {
-                    _ = try set.addAll(self.temp(), try self.patternDemand(GuardedList.at(branches, index).pat));
+                    _ = try set.addAll(self.temp(), &self.marks, try self.patternDemand(GuardedList.at(branches, index).pat));
                 }
                 try self.push(match.scrutinee, set.view());
             },
@@ -936,30 +1139,31 @@ const Builder = struct {
             .tag => |tag| {
                 const payloads = program_.exprSpan(tag.payloads);
                 for (0..payloads.len) |index| {
-                    try self.push(GuardedList.at(payloads, index), try self.constructorOperand(demand, Step.payload(tag.name, @intCast(index))));
+                    const payload = GuardedList.at(payloads, index);
+                    try self.push(payload, try self.constructorOperand(demand, Step.payload(tag.name, @intCast(index), program_.getExpr(payload).ty)));
                 }
             },
             .record => |span| {
                 const fields = program_.fieldExprSpan(span);
                 for (0..fields.len) |index| {
                     const field = GuardedList.at(fields, index);
-                    try self.push(field.value, try self.constructorOperand(demand, Step.field(field.name)));
+                    try self.push(field.value, try self.constructorOperand(demand, Step.field(field.name, program_.getExpr(field.value).ty)));
                 }
             },
             .record_update => |update| {
                 const fields = program_.fieldExprSpan(update.fields);
                 var base: DemandSet = .{};
-                _ = try base.addAll(self.temp(), demand);
+                _ = try base.addAll(self.temp(), &self.marks, demand);
                 for (0..fields.len) |index| {
                     const field = GuardedList.at(fields, index);
-                    const field_step = Step.field(field.name);
+                    const field_step = Step.field(field.name, program_.getExpr(field.value).ty);
                     try self.push(field.value, try self.constructorOperand(demand, field_step));
                     // The update supplies this field, so the base's field is
                     // never read.
                     var read_index: usize = 0;
                     while (read_index < base.read_paths.items.len) {
                         try self.analysis.paths.stepsOf(self.temp(), base.read_paths.items[read_index], &self.steps);
-                        if (self.steps.items.len != 0 and self.steps.items[0].eql(field_step)) {
+                        if (self.steps.items.len != 0 and self.steps.items[0].sameLabel(field_step)) {
                             base.removeReadAt(read_index);
                         } else {
                             read_index += 1;
@@ -971,18 +1175,12 @@ const Builder = struct {
             .tuple => |span| {
                 const items = program_.exprSpan(span);
                 for (0..items.len) |index| {
-                    try self.push(GuardedList.at(items, index), try self.constructorOperand(demand, Step.item(@intCast(index))));
+                    const item = GuardedList.at(items, index);
+                    try self.push(item, try self.constructorOperand(demand, Step.item(@intCast(index), program_.getExpr(item).ty)));
                 }
             },
-            .field_access => |access| {
-                const segments = program_.fieldAccessSegmentSpan(access.segments);
-                var prefix: std.ArrayList(Step) = .empty;
-                for (0..segments.len) |index| {
-                    try appendStep(self.temp(), &prefix, Step.field(GuardedList.at(segments, index).field));
-                }
-                try self.push(access.receiver, try self.projected(demand, prefix.items));
-            },
-            .tuple_access => |access| try self.push(access.tuple, try self.projected(demand, &.{Step.item(access.elem_index)})),
+            .field_access => |access| try self.push(access.receiver, try self.projected(demand, try fieldAccessSteps(self.temp(), program_, expr_id))),
+            .tuple_access => |access| try self.push(access.tuple, try self.projected(demand, &.{Step.item(access.elem_index, program_.getExpr(expr_id).ty)})),
             .let_ => |let_| {
                 try self.tasks.append(self.temp(), .{ .bound = .{ .pat = let_.bind, .value = let_.value } });
                 try self.push(let_.rest, demand);
@@ -1216,8 +1414,9 @@ const Builder = struct {
 
     /// `parts` with the consumers of each path merged into one read.
     fn mergedParts(self: *Builder, parts: []const Read) Allocator.Error![]const Read {
-        var merged: DemandSet = .{};
-        for (parts) |part| _ = try merged.addRead(self.temp(), part.path, part.consumers);
+        var new_reads = NewReads.init(&self.marks, self.temp());
+        for (parts) |part| try new_reads.add(part.path, part.consumers);
+        const merged = new_reads.finish();
         const out = try self.temp().alloc(Read, merged.read_paths.items.len);
         for (out, merged.read_paths.items, merged.read_consumers.items) |*read, path, consumers| read.* = .{ .path = path, .consumers = consumers };
         return out;
@@ -1298,14 +1497,17 @@ const Builder = struct {
         if (a.diverges) return b;
         if (b.diverges) return a;
         var parts: std.ArrayList(Read) = .empty;
+        const paths = &self.analysis.paths;
         for (a.parts) |x| for (b.parts) |y| {
-            if (x.path != y.path) continue;
+            if (!paths.sameParts(x.path, y.path)) continue;
             const consumers = x.consumers.intersectWith(y.consumers);
             if (consumers.count() != 0) try parts.append(self.temp(), .{ .path = x.path, .consumers = consumers });
         };
         var passes: std.ArrayList(PassThrough) = .empty;
         for (a.passes) |x| for (b.passes) |y| {
-            if (std.meta.eql(x, y)) try passes.append(self.temp(), x);
+            if (std.meta.eql(x.slot, y.slot) and paths.sameParts(x.result, y.result) and paths.sameParts(x.value, y.value)) {
+                try passes.append(self.temp(), x);
+            }
         };
         return .{ .parts = parts.items, .passes = passes.items };
     }
@@ -1317,13 +1519,11 @@ const Builder = struct {
         const base = try paths.concat(self.persistent(), .root, prefix);
         const parts = try self.temp().alloc(Read, b.parts.len);
         for (parts, b.parts) |*out, part| {
-            try paths.stepsOf(self.temp(), part.path, &self.steps);
-            out.* = .{ .path = try paths.concat(self.persistent(), base, self.steps.items), .consumers = part.consumers };
+            out.* = .{ .path = try paths.under(self.persistent(), base, part.path), .consumers = part.consumers };
         }
         const passes = try self.temp().alloc(PassThrough, b.passes.len);
         for (passes, b.passes) |*out, pass| {
-            try paths.stepsOf(self.temp(), pass.result, &self.steps);
-            out.* = .{ .result = try paths.concat(self.persistent(), base, self.steps.items), .slot = pass.slot, .value = pass.value };
+            out.* = .{ .result = try paths.under(self.persistent(), base, pass.result), .slot = pass.slot, .value = pass.value };
         }
         return .{ .parts = parts, .passes = passes };
     }
@@ -1494,8 +1694,9 @@ const Builder = struct {
                 var result: Built = .{ .parts = try a.dupe(Read, &.{.{ .path = .root, .consumers = Consumers.initMany(&.{ .match, .loop }) }}) };
                 const payloads = program_.exprSpan(tag.payloads);
                 for (0..payloads.len) |index| {
-                    const payload = memo.get(GuardedList.at(payloads, index)).?;
-                    result = try self.builtWith(result, try self.builtUnder(payload, &.{Step.payload(tag.name, @intCast(index))}));
+                    const payload_expr = GuardedList.at(payloads, index);
+                    const payload = memo.get(payload_expr).?;
+                    result = try self.builtWith(result, try self.builtUnder(payload, &.{Step.payload(tag.name, @intCast(index), program_.getExpr(payload_expr).ty)}));
                 }
                 return result;
             },
@@ -1504,7 +1705,7 @@ const Builder = struct {
                 const fields = program_.fieldExprSpan(span);
                 for (0..fields.len) |index| {
                     const field = GuardedList.at(fields, index);
-                    result = try self.builtWith(result, try self.builtUnder(memo.get(field.value).?, &.{Step.field(field.name)}));
+                    result = try self.builtWith(result, try self.builtUnder(memo.get(field.value).?, &.{Step.field(field.name, program_.getExpr(field.value).ty)}));
                 }
                 return result;
             },
@@ -1513,7 +1714,7 @@ const Builder = struct {
                 const fields = program_.fieldExprSpan(update.fields);
                 for (0..fields.len) |index| {
                     const field = GuardedList.at(fields, index);
-                    result = try self.builtWith(result, try self.builtUnder(memo.get(field.value).?, &.{Step.field(field.name)}));
+                    result = try self.builtWith(result, try self.builtUnder(memo.get(field.value).?, &.{Step.field(field.name, program_.getExpr(field.value).ty)}));
                 }
                 return result;
             },
@@ -1521,17 +1722,13 @@ const Builder = struct {
                 var result: Built = .{ .parts = try a.dupe(Read, &.{.{ .path = .root, .consumers = Consumers.initMany(&.{ .loop, .project }) }}) };
                 const items = program_.exprSpan(span);
                 for (0..items.len) |index| {
-                    result = try self.builtWith(result, try self.builtUnder(memo.get(GuardedList.at(items, index)).?, &.{Step.item(@intCast(index))}));
+                    const item = GuardedList.at(items, index);
+                    result = try self.builtWith(result, try self.builtUnder(memo.get(item).?, &.{Step.item(@intCast(index), program_.getExpr(item).ty)}));
                 }
                 return result;
             },
-            .field_access => |access| {
-                const segments = program_.fieldAccessSegmentSpan(access.segments);
-                var steps: std.ArrayList(Step) = .empty;
-                for (0..segments.len) |index| try appendStep(a, &steps, Step.field(GuardedList.at(segments, index).field));
-                return self.builtBelow(memo.get(access.receiver).?, steps.items);
-            },
-            .tuple_access => |access| return self.builtBelow(memo.get(access.tuple).?, &.{Step.item(access.elem_index)}),
+            .field_access => |access| return self.builtBelow(memo.get(access.receiver).?, try fieldAccessSteps(a, program_, expr_id)),
+            .tuple_access => |access| return self.builtBelow(memo.get(access.tuple).?, &.{Step.item(access.elem_index, program_.getExpr(expr_id).ty)}),
             .fn_ref => return .{ .parts = try a.dupe(Read, &.{.{ .path = .root, .consumers = Consumers.initOne(.call) }}) },
             .call_proc => |call| {
                 const callee = Ast.localDirectCallee(call) orelse return .{};
@@ -1560,3 +1757,168 @@ const Builder = struct {
         }
     }
 };
+
+fn testType(raw: u32) Type.TypeId {
+    return @fromBackingInt(raw);
+}
+
+fn testTag(raw: u32) names.TagNameId {
+    return @fromBackingInt(raw);
+}
+
+fn testField(raw: u32) names.RecordFieldNameId {
+    return @fromBackingInt(raw);
+}
+
+test "a path through a recursive type folds where the type repeats, whichever variant leads back" {
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var table = try PathTable.init(allocator);
+
+    // A union whose six variants each carry the union itself.
+    const node_ty = testType(1);
+    const variants = 6;
+    var firsts: [variants]PathId = undefined;
+    for (&firsts, 0..) |*first, variant| {
+        first.* = try table.child(allocator, .root, Step.payload(testTag(@intCast(variant)), 0, node_ty));
+    }
+    for (firsts) |first| {
+        for (0..variants) |variant| {
+            const below = try table.child(allocator, first, Step.payload(testTag(@intCast(variant)), 0, node_ty));
+            try std.testing.expectEqual(first, below);
+        }
+    }
+    // The root and one node per variant, not one per ordering of variants.
+    try std.testing.expectEqual(@as(usize, variants + 1), table.nodes.items.len);
+
+    var steps: std.ArrayList(Step) = .empty;
+    try appendStep(allocator, &steps, Step.payload(testTag(2), 0, node_ty));
+    try appendStep(allocator, &steps, Step.payload(testTag(4), 0, node_ty));
+    try appendStep(allocator, &steps, Step.payload(testTag(5), 0, node_ty));
+    try std.testing.expectEqual(@as(usize, 1), steps.items.len);
+    try std.testing.expect(steps.items[0].isPayload(testTag(2), 0));
+}
+
+test "a path folds at a recursive record field, not only at a tag payload" {
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var table = try PathTable.init(allocator);
+
+    // `List := [Nil, Cons({ head : I64, rest : List })]`.
+    const list_ty = testType(1);
+    const cell_ty = testType(2);
+    const cons = try table.child(allocator, .root, Step.payload(testTag(0), 0, cell_ty));
+    const rest = try table.child(allocator, cons, Step.field(testField(0), list_ty));
+    const again = try table.child(allocator, rest, Step.payload(testTag(0), 0, cell_ty));
+    try std.testing.expectEqual(cons, again);
+    const deeper_rest = try table.child(allocator, again, Step.field(testField(0), list_ty));
+    try std.testing.expectEqual(rest, deeper_rest);
+}
+
+test "parts of unrelated types that share a tag label never fold together" {
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var table = try PathTable.init(allocator);
+
+    // `Some(state).pending.Some(cursor)`, where the state and the cursor
+    // are distinct types reached through the same `Some` label.
+    const some = testTag(0);
+    const state_ty = testType(1);
+    const pending_ty = testType(2);
+    const cursor_ty = testType(3);
+    const state = try table.child(allocator, .root, Step.payload(some, 0, state_ty));
+    const pending = try table.child(allocator, state, Step.field(testField(0), pending_ty));
+    const cursor = try table.child(allocator, pending, Step.payload(some, 0, cursor_ty));
+    try std.testing.expect(cursor != state);
+    try std.testing.expectEqual(@as(u32, 3), table.node(cursor).depth);
+
+    var steps: std.ArrayList(Step) = .empty;
+    try appendStep(allocator, &steps, Step.payload(some, 0, state_ty));
+    try appendStep(allocator, &steps, Step.field(testField(0), pending_ty));
+    try appendStep(allocator, &steps, Step.payload(some, 0, cursor_ty));
+    try std.testing.expectEqual(@as(usize, 3), steps.items.len);
+}
+
+test "a read meets the part it names across two types of that part" {
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var table = try PathTable.init(allocator);
+
+    // A field built at a narrow tag row and read at a row coercion's wider
+    // row names one part.
+    const narrow = try table.child(allocator, .root, Step.field(testField(0), testType(1)));
+    const wide = try table.child(allocator, .root, Step.field(testField(0), testType(2)));
+    try std.testing.expect(narrow != wide);
+    try std.testing.expect(table.sameParts(narrow, wide));
+    try std.testing.expect(table.namesSteps(narrow, &.{Step.field(testField(0), testType(2))}));
+    try std.testing.expect(!table.sameParts(narrow, try table.child(allocator, .root, Step.field(testField(1), testType(1)))));
+
+    const below = try table.child(allocator, wide, Step.item(0, testType(3)));
+    var steps: std.ArrayList(Step) = .empty;
+    try std.testing.expect(try table.stepsBelow(allocator, below, narrow, &steps));
+    try std.testing.expectEqual(@as(usize, 1), steps.items.len);
+    try std.testing.expect(steps.items[0].isItem(0));
+}
+
+test "joining a path under a base folds as appending its steps does" {
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var table = try PathTable.init(allocator);
+
+    const list_ty = testType(1);
+    const cell_ty = testType(2);
+    const head_ty = testType(3);
+    const cons = Step.payload(testTag(0), 0, cell_ty);
+    const rest = Step.field(testField(0), list_ty);
+    const head = Step.field(testField(1), head_ty);
+    const base = try table.concat(allocator, .root, &.{ cons, rest });
+    const path = try table.concat(allocator, .root, &.{ cons, head });
+
+    const joined = try table.under(allocator, base, path);
+    try std.testing.expectEqual(try table.concat(allocator, base, &.{ cons, head }), joined);
+    // `cons` under `rest` folds to the first `cons`, so the head read lands
+    // on the first cell's head.
+    try std.testing.expectEqual(path, joined);
+    try std.testing.expectEqual(joined, try table.under(allocator, base, path));
+    try std.testing.expectEqual(base, try table.under(allocator, base, .root));
+    try std.testing.expectEqual(path, try table.under(allocator, .root, path));
+}
+
+test "a read-set merge unions shared paths, appends new ones, and leaves the marks clear" {
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var marks: PathMarks = .{ .gpa = std.testing.allocator };
+    defer marks.deinit();
+
+    const a: PathId = @fromBackingInt(3);
+    const b: PathId = @fromBackingInt(70);
+    const c: PathId = @fromBackingInt(200);
+    const match = Consumers.initOne(.match);
+    const call = Consumers.initOne(.call);
+
+    var new_reads = NewReads.init(&marks, allocator);
+    try new_reads.add(a, match);
+    try new_reads.add(b, match);
+    try new_reads.add(a, call);
+    var set = new_reads.finish();
+    try std.testing.expectEqualSlices(PathId, &.{ a, b }, set.read_paths.items);
+    try std.testing.expect(set.read_consumers.items[0].eql(Consumers.initMany(&.{ .match, .call })));
+
+    var other: DemandSet = .{};
+    _ = try other.addRead(allocator, c, call);
+    _ = try other.addRead(allocator, b, call);
+    try std.testing.expect(try set.addAll(allocator, &marks, other.view()));
+    try std.testing.expectEqualSlices(PathId, &.{ a, b, c }, set.read_paths.items);
+    try std.testing.expect(set.read_consumers.items[1].eql(Consumers.initMany(&.{ .match, .call })));
+    try std.testing.expect(set.read_consumers.items[2].eql(call));
+    try std.testing.expect(!try set.addAll(allocator, &marks, other.view()));
+
+    for (marks.slots.items) |slot| try std.testing.expectEqual(@as(u32, 0), slot);
+    try std.testing.expect(!marks.busy);
+}

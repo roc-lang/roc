@@ -19,6 +19,7 @@ const relocation_mod = @import("Relocation.zig");
 pub const Relocation = relocation_mod.Relocation;
 pub const applyRelocations = relocation_mod.applyRelocations;
 pub const applyRelocationsWithContext = relocation_mod.applyRelocationsWithContext;
+pub const expect_site_base_symbol = relocation_mod.expect_site_base_symbol;
 pub const SymbolResolver = relocation_mod.SymbolResolver;
 pub const SymbolResolverContext = relocation_mod.SymbolResolverContext;
 pub const ValueStorage = @import("ValueStorage.zig");
@@ -55,6 +56,11 @@ pub const NativeProcCompiler = @import("NativeProcCompiler.zig");
 pub const HostSplice = if (builtin.os.tag == .freestanding) void else @import("HostSplice.zig").HostSplice;
 /// On-disk form of one module's pack of excerpts.
 pub const UnitPieces = @import("UnitPieces.zig");
+/// One unit's machine code laid out for a fast dev link.
+pub const UnitImage = @import("UnitImage.zig");
+/// Loads a unit image into this process; only a Linux x86_64 host loads
+/// the x86_64 code unit images hold.
+pub const UnitImageLoader = if (builtin.os.tag == .linux and builtin.cpu.arch == .x86_64) @import("UnitImageLoader.zig") else void;
 pub const Composition = @import("Composition.zig");
 pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").Entrypoint;
 pub const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;

@@ -169,6 +169,7 @@ fn Job(comptime CG: type) type {
             cg.borrowStackPlanIndexes(try laneStackPlanIndexes(worker));
             cg.generation_mode = source.generation_mode;
             cg.enable_default_platform_runtime = source.enable_default_platform_runtime;
+            cg.relocatable_expect_sites = source.relocatable_expect_sites;
             cg.borrowStaticDataSymbolsFrom(source);
             self.fragment = if (self.proc) |id|
                 try Excerpt.compileProcFragmentPrepared(CG, worker.allocator, &cg, id, source.store.getProcSpecs(), source.layout_store, self.data)

@@ -283,6 +283,78 @@ fn exportedU32(wasm: *const WasmInterface, name: []const u8) ?u32 {
 }
 
 /// Run a single test case.
+/// The WebAssembly JS API's implementation limits on one function, which
+/// every web engine enforces and bytebox does not: a module with a function
+/// past either does not compile in a browser.
+const max_function_body_bytes: u64 = 7_654_321;
+const max_function_locals: u64 = 50_000;
+
+fn readLeb(bytes: []const u8, cursor: *usize) error{Malformed}!u64 {
+    var result: u64 = 0;
+    var shift: u6 = 0;
+    while (true) {
+        if (cursor.* >= bytes.len or shift > 63) return error.Malformed;
+        const byte = bytes[cursor.*];
+        cursor.* += 1;
+        result |= @as(u64, byte & 0x7f) << shift;
+        if (byte & 0x80 == 0) return result;
+        shift += 7;
+    }
+}
+
+/// Why the module has a function past the limits, or null when none is.
+fn functionLimitViolation(arena: std.mem.Allocator, bytes: []const u8) ?[]const u8 {
+    if (bytes.len < 8 or !std.mem.eql(u8, bytes[0..4], "\x00asm")) return "not a wasm module";
+    var cursor: usize = 8;
+    var type_params = std.ArrayList(u64).empty;
+    var function_types = std.ArrayList(u64).empty;
+    while (cursor < bytes.len) {
+        const id = bytes[cursor];
+        cursor += 1;
+        const size = readLeb(bytes, &cursor) catch return "malformed section size";
+        const section = bytes[cursor..@min(bytes.len, cursor + size)];
+        cursor += size;
+        var at: usize = 0;
+        switch (id) {
+            1 => {
+                const count = readLeb(section, &at) catch return "malformed type section";
+                for (0..count) |_| {
+                    at += 1; // 0x60
+                    const params = readLeb(section, &at) catch return "malformed type section";
+                    at += params;
+                    const results = readLeb(section, &at) catch return "malformed type section";
+                    at += results;
+                    type_params.append(arena, params) catch return "out of memory";
+                }
+            },
+            3 => {
+                const count = readLeb(section, &at) catch return "malformed function section";
+                for (0..count) |_| function_types.append(arena, readLeb(section, &at) catch return "malformed function section") catch return "out of memory";
+            },
+            10 => {
+                const count = readLeb(section, &at) catch return "malformed code section";
+                for (0..count) |index| {
+                    const body_size = readLeb(section, &at) catch return "malformed code section";
+                    const body = section[at..@min(section.len, at + body_size)];
+                    at += body_size;
+                    var body_at: usize = 0;
+                    const groups = readLeb(body, &body_at) catch return "malformed locals declaration";
+                    var locals: u64 = if (index < function_types.items.len and function_types.items[index] < type_params.items.len) type_params.items[function_types.items[index]] else 0;
+                    for (0..groups) |_| {
+                        locals += readLeb(body, &body_at) catch return "malformed locals declaration";
+                        body_at += 1;
+                    }
+                    if (body_size > max_function_body_bytes or locals > max_function_locals) {
+                        return std.fmt.allocPrint(arena, "defined function {d} has {d} body bytes and {d} locals; the engine limits are {d} and {d}", .{ index, body_size, locals, max_function_body_bytes, max_function_locals }) catch "function past the engine limits";
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
 fn runTest(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_path: []const u8, expected_output: []const u8, options: TestOptions) TestResult {
     if (std.Io.Dir.cwd().readFileAlloc(io, wasm_path, arena, .unlimited)) |bytes| {
         std.debug.print("WASM size: {d} bytes\n", .{bytes.len});
@@ -294,6 +366,9 @@ fn runTest(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_pa
                     .message = std.fmt.allocPrint(arena, "WASM size {d} exceeded --max-bytes {d}", .{ bytes.len, max_bytes }) catch "WASM too large",
                 };
             }
+        }
+        if (functionLimitViolation(arena, bytes)) |message| {
+            return .{ .name = wasm_path, .passed = false, .message = message };
         }
     } else |_| {}
 

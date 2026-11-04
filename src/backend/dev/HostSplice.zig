@@ -124,6 +124,49 @@ pub const HostSplice = struct {
         }
     }
 
+    /// Symbolic references which this program does not define itself. These
+    /// come from emitted code, carried data and materialized callable pointers;
+    /// a LIR call walk cannot account for the latter two. The caller owns the
+    /// slice; names remain borrowed until code generation resumes.
+    pub fn externalReferences(self: *const HostSplice, codegen: *HostLirCodeGen, materialized: []const StaticDataExport) Allocator.Error![][]const u8 {
+        var code_symbols = std.StringHashMap(usize).init(self.allocator);
+        defer {
+            var keys = code_symbols.keyIterator();
+            while (keys.next()) |name| self.allocator.free(name.*);
+            code_symbols.deinit();
+        }
+        try collectCodeSymbols(self.allocator, codegen, &code_symbols);
+        var names: std.StringHashMapUnmanaged(void) = .empty;
+        defer names.deinit(self.allocator);
+        const symbols = codegen.getSymbolNames();
+        for (codegen.codegen.relocations.items) |relocation| {
+            const name = switch (relocation) {
+                .linked_function => |function| symbols[@backingInt(function.symbol)],
+                .linked_data => |data| symbols[@backingInt(data.symbol)],
+                .local_data, .retired => continue,
+            };
+            try names.put(self.allocator, name, {});
+        }
+        for (self.data.items) |item| for (item.relocations) |relocation| {
+            try names.put(self.allocator, relocation.name, {});
+        };
+        for (materialized) |item| for (item.relocations) |relocation| {
+            if (relocation.rc_helper != null or relocation.callable_capture_offset == null) continue;
+            const proc = relocation.procedure orelse continue;
+            if (codegen.compiledProcSymbol(proc) != null) continue;
+            try names.put(self.allocator, relocation.target_symbol_name, {});
+        };
+        var result = std.ArrayList([]const u8).empty;
+        errdefer result.deinit(self.allocator);
+        var keys = names.keyIterator();
+        while (keys.next()) |name| {
+            if (compilerFunction(name.*) != null or code_symbols.contains(name.*) or self.data_names.contains(name.*)) continue;
+            if (self.static_data) |layout| if (layout.symbolOffset(name.*) != null) continue;
+            try result.append(self.allocator, name.*);
+        }
+        return result.toOwnedSlice(self.allocator);
+    }
+
     /// Emit a stub for every hosted function the image names: a name that
     /// neither the compiler nor the image defines can only be the
     /// platform's, since object code is undefined in nothing else. The
@@ -479,6 +522,67 @@ test "compiler symbols keep precedence over image definitions" {
     try symbols.put("roc__pexample", 8);
     try std.testing.expectEqual(Binding.image, try binder.classify("roc__pexample"));
     try std.testing.expectEqual(@as(?usize, 4104), binder.address("roc__pexample"));
+}
+
+test "CTFE external references include carried data and frozen callbacks but exclude local definitions" {
+    if (comptime host_isa == null) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try @import("layout").Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+    // The frozen value's callback names a procedure the image never compiles.
+    const result = try store.addLocal(.{ .layout_idx = .i64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = result,
+        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .i64 } },
+        .next = ret,
+    } }, .test_fixture);
+    const uncompiled = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = lir.ProcIdentity.forTest(1),
+        .args = lir.LIR.LocalSpan.empty(),
+        .body = body,
+        .ret_layout = .i64,
+    }, .none);
+    var codegen = try HostLirCodeGen.init(allocator, &store, &layouts, .{}, .default);
+    defer codegen.deinit();
+    var splice = HostSplice.init(allocator);
+    defer splice.deinit();
+    const bytes = @as([40]u8, @splat(0));
+    try splice.addDataItems(&.{.{
+        .name = "local_data",
+        .bytes = &bytes,
+        .alignment = 8,
+        .symbol_offset = 0,
+        .relocations = &.{
+            .{ .offset = 0, .name = "carried_callback", .addend = 0, .function = true },
+            .{ .offset = 8, .name = "external_data", .addend = 0, .function = false },
+            .{ .offset = 16, .name = "local_data", .addend = 0, .function = false },
+            .{ .offset = 24, .name = "memcpy", .addend = 0, .function = true },
+            .{ .offset = 32, .name = "frozen_value", .addend = 0, .function = false },
+        },
+    }});
+    const frozen = [_]StaticDataExport{.{
+        .symbol_name = "frozen_value",
+        .bytes = bytes[0..8],
+        .alignment = 8,
+        .relocations = &.{.{
+            .offset = 0,
+            .target_symbol_name = "frozen_callback",
+            .kind = .function_pointer,
+            .callable_capture_offset = 8,
+            .procedure = uncompiled,
+        }},
+    }};
+    var layout = try StaticDataImage.Layout.plan(allocator, &frozen, .{});
+    defer layout.deinit(allocator);
+    splice.reserveStaticData(&layout);
+    const references = try splice.externalReferences(&codegen, &frozen);
+    defer allocator.free(references);
+    try std.testing.expectEqual(@as(usize, 3), references.len);
+    for ([_][]const u8{ "carried_callback", "external_data", "frozen_callback" }) |name| try std.testing.expect(containsName(references, name));
 }
 
 test "static data is placed in the mapping and stays writable" {

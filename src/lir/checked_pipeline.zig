@@ -381,6 +381,7 @@ pub const Timing = struct {
     boxy_lowering_ns: TimingCounter = .{},
     boxy_unit_codegen_ns: TimingCounter = .{},
     boxy_unit_cache_ns: TimingCounter = .{},
+    boxy_unit_restore_ns: TimingCounter = .{},
     lir_passes_ns: TimingCounter = .{},
     arc_ns: TimingCounter = .{},
 
@@ -440,6 +441,7 @@ pub const Timing = struct {
             .boxy_lowering_ns = self.boxy_lowering_ns.load(),
             .boxy_unit_codegen_ns = self.boxy_unit_codegen_ns.load(),
             .boxy_unit_cache_ns = self.boxy_unit_cache_ns.load(),
+            .boxy_unit_restore_ns = self.boxy_unit_restore_ns.load(),
             .lir_passes_ns = self.lir_passes_ns.load(),
             .arc_ns = self.arc_ns.load(),
             .monotype_diagnostics = diagnostics,
@@ -499,6 +501,7 @@ pub const Timing = struct {
         self.boxy_lowering_ns.add(snapshot_value.boxy_lowering_ns);
         self.boxy_unit_codegen_ns.add(snapshot_value.boxy_unit_codegen_ns);
         self.boxy_unit_cache_ns.add(snapshot_value.boxy_unit_cache_ns);
+        self.boxy_unit_restore_ns.add(snapshot_value.boxy_unit_restore_ns);
         self.lir_passes_ns.add(snapshot_value.lir_passes_ns);
         self.arc_ns.add(snapshot_value.arc_ns);
         self.addMonotypeDiagnostics(snapshot_value.monotype_diagnostics);
@@ -521,6 +524,7 @@ pub const Timing = struct {
             .boxy_lowering => self.boxy_lowering_ns.add(elapsed_ns),
             .boxy_unit_codegen => self.boxy_unit_codegen_ns.add(elapsed_ns),
             .boxy_unit_cache => self.boxy_unit_cache_ns.add(elapsed_ns),
+            .boxy_unit_restore => self.boxy_unit_restore_ns.add(elapsed_ns),
             .lir_passes => self.lir_passes_ns.add(elapsed_ns),
             .arc => self.arc_ns.add(elapsed_ns),
         }
@@ -671,6 +675,7 @@ pub const TimingSnapshot = struct {
     boxy_lowering_ns: u64 = 0,
     boxy_unit_codegen_ns: u64 = 0,
     boxy_unit_cache_ns: u64 = 0,
+    boxy_unit_restore_ns: u64 = 0,
     lir_passes_ns: u64 = 0,
     arc_ns: u64 = 0,
     monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
@@ -690,6 +695,9 @@ pub const TimingPhase = enum {
     boxy_unit_codegen,
     /// Encoding and filing a module unit's object in the object cache.
     boxy_unit_cache,
+    /// Reading a module unit's object from the object cache, decoding its
+    /// pieces when the caller wants them.
+    boxy_unit_restore,
     lir_passes,
     arc,
 };
@@ -1863,7 +1871,19 @@ fn finishLoweredOutput(
     var arc_roots = std.ArrayList(LIR.LirProcSpecId).empty;
     defer arc_roots.deinit(allocator);
     try arc_roots.appendSlice(allocator, lowered.lir_result.root_procs.items);
-    try arc_roots.appendSlice(allocator, lowered.lir_result.exported_procs.items);
+    // A unit's exported workers are not ARC roots: ARC solves each one's
+    // ownership signature from its body, the unit's object records it in the
+    // export interface its importers compile against (design.md "Per-Module
+    // Output"), and a root's signature would instead be pinned to the
+    // all-owned convention.
+    // The procedures something other than Roc code or the erased-call runtime
+    // enters (design.md "Deferred Erased Calls"): the roots, and every procedure frozen
+    // data holds the address of. A unit's exported workers are not among
+    // them: only Roc code in other units calls them, compiled against the
+    // `may_leave_pending` their export interface carries.
+    var entered_from_outside = std.ArrayList(LIR.LirProcSpecId).empty;
+    defer entered_from_outside.deinit(allocator);
+    try entered_from_outside.appendSlice(allocator, lowered.lir_result.root_procs.items);
     if (frozen.*) |data| {
         var seen = try allocator.alloc(bool, lowered.lir_result.store.procSpecCount());
         defer allocator.free(seen);
@@ -1871,6 +1891,7 @@ fn finishLoweredOutput(
         for (arc_roots.items) |proc| seen[@backingInt(proc)] = true;
         for (data.exports) |export_| for (export_.relocations) |relocation| {
             const proc = relocation.procedure orelse continue;
+            try entered_from_outside.append(allocator, proc);
             if (seen[@backingInt(proc)]) continue;
             seen[@backingInt(proc)] = true;
             try arc_roots.append(allocator, proc);
@@ -1888,7 +1909,7 @@ fn finishLoweredOutput(
     if (target.timing) |timing| timing.addArcParallel(arc_metrics.?.*);
     arc_timing_scope.end();
 
-    try TailDrive.run(allocator, &lowered.lir_result.store, &.{arc_roots.items});
+    try TailDrive.run(allocator, &lowered.lir_result.store, &.{entered_from_outside.items});
 
     // ARC settled every read that named a fresh form, so a fresh-form
     // procedure no read chose is now unreferenced.
