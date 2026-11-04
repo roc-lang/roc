@@ -2443,7 +2443,7 @@ A size build (`--opt=size`) selects nothing: every function the module
 defines, including the linked builtins and the private runtime, carries
 LLVM's `optsize` and `minsize` and no `inlinehint`, so LLVM's size cost model
 is the one measure of every inlining decision, exactly as it is for a C or
-Zig module built for minimum size. The five pinned leaf builtins keep
+Zig module built for minimum size. The pinned leaf builtins keep
 `alwaysinline` in every mode.
 
 LLVM call sites do not acquire `alwaysinline` from loop nesting. Nesting depth
