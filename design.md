@@ -13940,9 +13940,18 @@ locals, read from their descriptors, and each dynamic local's address is the
 region base plus its running offset. Because every descriptor a body uses is
 composed at entry, the region's size and every offset are available before the
 first body statement runs. LLVM allocates the region with one dynamically
-sized `alloca`; the dev backend adjusts the stack pointer after its fixed frame
-and keeps the region base in a frame slot; the wasm backend bumps the shadow
-stack; the interpreter allocates a buffer per activation.
+sized `alloca` and has the Boxy runtime place the locals in it, one run of
+locals sharing a descriptor per call (`roc_desc_frame_run_size`,
+`roc_desc_frame_place_run`), writing each local's address into its slot in
+one array of address slots the procedure reads at each use. The procedure
+itself stores nothing per local and holds no address in a register across its
+body: a store per local would be a stack access in the entry block, which
+LLVM's WebAssembly register stackifier handles quadratically in that block's
+uses of the frame register, and an address held from the prologue to a distant
+use is what LLVM's register allocator handles quadratically in a large body.
+The dev backend adjusts the stack pointer after its fixed frame and keeps the
+region base in a frame slot; the wasm backend bumps the shadow stack; the
+interpreter allocates a buffer per activation.
 
 Boxy lowering gives a call fresh result storage, separate from its arguments
 and captures. In return position it may forward the enclosing procedure's

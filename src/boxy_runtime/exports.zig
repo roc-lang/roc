@@ -52,33 +52,37 @@ pub fn roc_desc_site_publish(site: *compose.CompositionSite, count: u32, operand
     site.publish(cache(), composeOps(), items(usize, count, operands), result);
 }
 
-/// The bytes a procedure's frame of dynamic locals needs: each local of
-/// `descs`, in order, placed after the previous one at its own alignment.
-pub fn roc_desc_frame_size(count: u32, descs: [*]const *const TypeDesc) callconv(.c) usize {
-    var total: usize = 0;
-    for (descs[0..count]) |desc| total = frameOffset(total, desc) + desc.size;
-    return total;
+/// The end of a run of `count` dynamic locals of type `desc` placed after
+/// `offset` bytes of a procedure's frame region: the run starts at `offset`
+/// rounded up to the type's alignment, and each local takes the type's size
+/// rounded up to its alignment.
+pub fn roc_desc_frame_run_size(desc: *const TypeDesc, count: u32, offset: usize) callconv(.c) usize {
+    return frameRunStart(offset, desc) + frameStride(desc) * count;
 }
 
-/// Place a procedure's dynamic locals in `region`, measured as
-/// `roc_desc_frame_size` measures them, writing each local's address through
-/// its entry of `slots`. Compiled code keeps each address in its local's slot;
-/// computing the layout here, rather than in the procedure, leaves each slot in
-/// memory the procedure reads where it uses the local, so no address stays
-/// live in a register across the whole body.
-pub fn roc_desc_frame_place(count: u32, descs: [*]const *const TypeDesc, region: [*]u8, slots: [*]const *[*]u8) callconv(.c) void {
-    var total: usize = 0;
-    for (descs[0..count], slots[0..count]) |desc, slot| {
-        const offset = frameOffset(total, desc);
-        slot.* = region + offset;
-        total = offset + desc.size;
-    }
+/// Place a run of `count` dynamic locals of type `desc` in `region`, where
+/// `roc_desc_frame_run_size` measured it, writing each local's address to
+/// `slots[i]`, and return the run's end. A procedure places its frame as one
+/// run per descriptor, so it makes one call and names one address slot array
+/// per run rather than storing one address and one descriptor per local;
+/// those stores would each be a stack access of the procedure's entry block,
+/// which LLVM's WebAssembly register stackifier handles quadratically.
+pub fn roc_desc_frame_place_run(desc: *const TypeDesc, count: u32, region: [*]u8, offset: usize, slots: [*][*]u8) callconv(.c) usize {
+    const start = frameRunStart(offset, desc);
+    const stride = frameStride(desc);
+    for (slots[0..count], 0..) |*slot, i| slot.* = region + start + stride * i;
+    return start + stride * count;
 }
 
-/// `total` rounded up to `desc`'s alignment, a power of two.
-fn frameOffset(total: usize, desc: *const TypeDesc) usize {
+/// `offset` rounded up to `desc`'s alignment, a power of two.
+fn frameRunStart(offset: usize, desc: *const TypeDesc) usize {
     const alignment: usize = desc.alignment;
-    return (total +% alignment -% 1) & (0 -% alignment);
+    return (offset +% alignment -% 1) & (0 -% alignment);
+}
+
+/// The bytes between consecutive locals of type `desc` in a run.
+fn frameStride(desc: *const TypeDesc) usize {
+    return frameRunStart(desc.size, desc);
 }
 
 /// The C-ABI form of `compose.list`.

@@ -2556,8 +2556,9 @@ pub fn roc_builtins_native_callable_call(callable: erased_callable.CallableFnPtr
 pub fn roc_builtins_native_callable_defer(callable: erased_callable.CallableFnPtr, closure: [*]u8, args: ?[*]const u8, args_len: usize) callconv(.c) void {
     @import("native_callable.zig").deferCall(callable, closure, args, args_len);
 }
-/// Run a producer-declared chain of pending monomorphic calls.
-pub fn roc_builtins_native_callable_drive(ret: ?[*]u8) callconv(.c) void {
+/// Run a producer-declared chain of pending monomorphic calls, out of line
+/// (`native_callable.drivePending`).
+pub noinline fn roc_builtins_native_callable_drive(ret: ?[*]u8) callconv(.c) void {
     @import("native_callable.zig").drive(ret);
 }
 /// Whether this callable's caller owns the monomorphic trampoline.

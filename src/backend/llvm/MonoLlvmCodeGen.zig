@@ -357,6 +357,13 @@ pub const MonoLlvmCodeGen = struct {
     /// The frame locals of the procedure being compiled, whose `frame`
     /// dynamic locals `frame_alloc` places.
     current_frame_locals: LocalSpan = LocalSpan.empty(),
+    /// The runs of `frame` dynamic locals of the procedure being compiled
+    /// that share a descriptor, in the order `frame_slots` holds their
+    /// address slots (`allocFrameSlots`).
+    frame_runs: std.ArrayListUnmanaged(FrameRun) = .empty,
+    /// One address slot per `frame` dynamic local of the procedure being
+    /// compiled, in run order.
+    frame_slots: LlvmBuilder.Value = .none,
     /// Group storage this function allocated to enter other groups, and the
     /// function those slots belong to.
     tail_scratch_slots: std.ArrayList(?LlvmBuilder.Value) = .empty,
@@ -565,6 +572,15 @@ pub const MonoLlvmCodeGen = struct {
         }
     };
 
+    /// A run of `frame` dynamic locals sharing one descriptor local, whose
+    /// address slots are `count` consecutive entries of `frame_slots` from
+    /// `start`.
+    const FrameRun = struct {
+        desc: LocalId,
+        start: u32,
+        count: u32,
+    };
+
     const LocalSlot = struct {
         ptr: LlvmBuilder.Value,
         layout_idx: layout.Idx,
@@ -713,6 +729,7 @@ pub const MonoLlvmCodeGen = struct {
     pub fn deinit(self: *MonoLlvmCodeGen) void {
         for (self.shared_crashes.items) |*shared| shared.deinit(self.allocator);
         self.shared_crashes.deinit(self.allocator);
+        self.frame_runs.deinit(self.allocator);
         self.inline_everywhere.deinit(self.allocator);
         self.stack_check_procs.deinit(self.allocator);
         self.local_slot_storage.deinit(self.allocator);
@@ -3485,10 +3502,75 @@ pub const MonoLlvmCodeGen = struct {
             const local_id = GuardedList.at(proc_args, i);
             try self.allocProcLocalSlot(local_id);
         }
+        try self.allocFrameSlots(proc);
         const frame_locals = self.store.getLocalSpan(proc.frame_locals);
         for (0..frame_locals.len) |i| {
             const local_id = GuardedList.at(frame_locals, i);
             try self.allocProcLocalSlot(local_id);
+        }
+    }
+
+    /// Whether `local` is a `frame` dynamic local, whose address slot is an
+    /// entry of `frame_slots`.
+    fn isFrameLocal(self: *const MonoLlvmCodeGen, local: LocalId) bool {
+        const dyn = self.localDyn(local) orelse return false;
+        return dyn.storage == .frame;
+    }
+
+    /// Give the procedure's `frame` dynamic locals their address slots: one
+    /// array, in runs of locals that share a descriptor local, so
+    /// `emitDynFrameAlloc` places each run with one runtime call that writes
+    /// the run's slots itself. The procedure then makes no store per frame
+    /// local; each such store would be a stack access in its entry block,
+    /// and LLVM's WebAssembly register stackifier does work proportional to a
+    /// block's length for every use of the frame register in that block.
+    fn allocFrameSlots(self: *MonoLlvmCodeGen, proc: LirProcSpec) Error!void {
+        self.frame_runs.clearRetainingCapacity();
+        self.frame_slots = .none;
+        const frame_locals = self.store.getLocalSpan(proc.frame_locals);
+        var count: u32 = 0;
+        for (0..frame_locals.len) |i| {
+            const local = GuardedList.at(frame_locals, i);
+            if (!self.isFrameLocal(local)) continue;
+            const desc = self.localDyn(local).?.desc;
+            count += 1;
+            for (self.frame_runs.items) |*run| {
+                if (run.desc == desc) {
+                    run.count += 1;
+                    break;
+                }
+            } else try self.frame_runs.append(self.allocator, .{ .desc = desc, .start = 0, .count = 1 });
+        }
+        if (count == 0) return;
+        var start: u32 = 0;
+        for (self.frame_runs.items) |*run| {
+            run.start = start;
+            start += run.count;
+        }
+        const word = self.targetWordSize();
+        self.frame_slots = try self.dynInputArray(word, count);
+        const next = try self.allocator.alloc(u32, self.frame_runs.items.len);
+        defer self.allocator.free(next);
+        for (next, self.frame_runs.items) |*position, run| position.* = run.start;
+        for (0..frame_locals.len) |i| {
+            const local = GuardedList.at(frame_locals, i);
+            if (!self.isFrameLocal(local)) continue;
+            const desc = self.localDyn(local).?.desc;
+            const run_index = for (self.frame_runs.items, 0..) |run, index| {
+                if (run.desc == desc) break index;
+            } else unreachable; // every frame local joined a run above
+            const position = next[run_index];
+            next[run_index] += 1;
+            const local_slot = &self.local_slots[@backingInt(local)];
+            if (local_slot.allocated) continue;
+            const layout_idx = self.store.getLocal(local).layout_idx;
+            local_slot.* = .{
+                .ptr = try self.offsetPtr(self.frame_slots, position * word),
+                .layout_idx = layout_idx,
+                .size = word,
+                .alignment = self.targetPointerAlignment(),
+                .allocated = true,
+            };
         }
     }
 
@@ -11788,38 +11870,33 @@ pub const MonoLlvmCodeGen = struct {
     /// Reserve the procedure's dynamic frame region and set the address of
     /// every `frame` dynamic local. The region's size is the sum of the
     /// locals' aligned descriptor sizes; the procedure's return releases it.
-    /// Allocate the procedure's frame of dynamic locals. The Boxy runtime
-    /// measures it and writes each local's address into its slot, so the
-    /// addresses live in memory the procedure reads at each use. Computing the
-    /// offsets here would hold one address per local in a register from the
-    /// allocation to its use, which LLVM's register allocator handles
-    /// quadratically in a large generic body.
+    /// Allocate the procedure's frame of dynamic locals: one region, placed
+    /// by the Boxy runtime one run at a time (`allocFrameSlots`), which
+    /// writes each local's address into its slot. The addresses live in
+    /// memory the procedure reads at each use; computing them here would hold
+    /// one per local in a register across the body, which LLVM's register
+    /// allocator handles quadratically in a large generic body.
     fn emitDynFrameAlloc(self: *MonoLlvmCodeGen) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
+        if (self.frame_runs.items.len == 0) return;
         const ptr_ty = try self.ptrType();
         const usize_ty = self.ptrSizedIntType();
-        const locals = self.store.getLocalSpan(self.current_frame_locals);
-        var frame_count: usize = 0;
-        for (0..locals.len) |i| {
-            const dyn = self.localDyn(GuardedList.at(locals, i)) orelse continue;
-            if (dyn.storage == .frame) frame_count += 1;
-        }
         const word = self.targetWordSize();
-        const descs = try self.dynInputArray(word, frame_count);
-        const slots = try self.dynInputArray(word, frame_count);
-        var next: u32 = 0;
-        for (0..locals.len) |i| {
-            const local = GuardedList.at(locals, i);
-            const dyn = self.localDyn(local) orelse continue;
-            if (dyn.storage != .frame) continue;
-            try self.storePointer(try self.offsetPtr(descs, next * word), try self.wordValue(dyn.desc));
-            try self.storePointer(try self.offsetPtr(slots, next * word), self.slot(local).ptr);
-            next += 1;
+        var total = try self.intValue(usize_ty, 0);
+        for (self.frame_runs.items) |run| {
+            total = try self.callBoxyRuntime("roc_desc_frame_run_size", usize_ty, &.{ ptr_ty, .i32, usize_ty }, &.{ try self.wordValue(run.desc), try self.intValue(.i32, run.count), total });
         }
-        const count = try self.intValue(.i32, frame_count);
-        const total = try self.callBoxyRuntime("roc_desc_frame_size", usize_ty, &.{ .i32, ptr_ty }, &.{ count, descs });
         const region = wip.alloca(.normal, .i8, total, LlvmBuilder.Alignment.fromByteUnits(collections.max_roc_alignment.toByteUnits()), .default, "dyn_region") catch return error.OutOfMemory;
-        _ = try self.callBoxyRuntime("roc_desc_frame_place", .void, &.{ .i32, ptr_ty, ptr_ty, ptr_ty }, &.{ count, descs, region, slots });
+        var offset = try self.intValue(usize_ty, 0);
+        for (self.frame_runs.items) |run| {
+            offset = try self.callBoxyRuntime("roc_desc_frame_place_run", usize_ty, &.{ ptr_ty, .i32, ptr_ty, usize_ty, ptr_ty }, &.{
+                try self.wordValue(run.desc),
+                try self.intValue(.i32, run.count),
+                region,
+                offset,
+                try self.offsetPtr(self.frame_slots, run.start * word),
+            });
+        }
     }
 
     const DynArrayKind = enum {
