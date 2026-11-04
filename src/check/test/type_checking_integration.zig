@@ -9100,6 +9100,47 @@ test "check type - polymorphic recursion at a growing type through a local helpe
     try checkTypesModule(source, .fail, "Growing Polymorphic Recursion");
 }
 
+test "check type - polymorphic recursion at a body-local type whose context is the recursion's variable rejected" {
+    // `Local`'s method names `a`, so `Local`'s identity includes `a`: the
+    // recursive use is at `Local` wrapping `a`, the next level at `Local`
+    // wrapping that, and so on without end.
+    const source =
+        \\describe : a, U64 -> U64
+        \\describe = |x, n| {
+        \\    Local := [L].{
+        \\        size : Local -> U64
+        \\        size = |_| {
+        \\            empty : List(a)
+        \\            empty = []
+        \\            List.len(empty)
+        \\        }
+        \\    }
+        \\    _ignored = x
+        \\    if n == 0 { 0 } else { describe(Local.L, n - 1) }
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "Growing Polymorphic Recursion");
+}
+
+test "check type - polymorphic recursion at a context-free body-local type allowed" {
+    // `Local` names no enclosing type variable, so it is one type at every
+    // level and the recursion reaches finitely many types.
+    const source =
+        \\describe : a, U64 -> U64
+        \\describe = |x, n| {
+        \\    Local := [L].{
+        \\        size : Local -> U64
+        \\        size = |_| 0
+        \\    }
+        \\    _ignored = x
+        \\    if n == 0 { 0 } else { describe(Local.L, n - 1) }
+        \\}
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "describe", .expected = "a, U64 -> U64" },
+    });
+}
+
 test "check type - issue 11740 custom literal requirements in polymorphic recursion" {
     // An annotated recursive edge that instantiates a at Poly(a) would
     // require literal conversions at Poly(U8), Poly(Poly(U8)), and so on, to a

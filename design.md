@@ -4782,7 +4782,11 @@ The rule is the expansion-cycle test. The graph's nodes are the type
 variables of used schemes. Every use adds an edge from each node that its
 copy of a scheme variable contains to that scheme variable; the edge grows
 when the node sits strictly inside the copy's type (`a` in `List(a)`), and
-not when the copy is the node itself. A use is rejected exactly when one of
+not when the copy is the node itself. A body-local type contains its
+context variables like any other arguments (Body-Local Type Context), so a
+recursive use at a local type whose methods read the recursion's `a` grows
+exactly as a use at `Local(a)` would, and the test decides every context
+first. A use is rejected exactly when one of
 its growing edges lies within a strongly connected component: going around
 the cycle wraps the same variable again. The test reads settled types and
 terminates by construction; it has no depth limit or counter.
@@ -5772,7 +5776,8 @@ used at two instantiations is two types, exactly as if it had declared a
 parameter for each and every use applied it to the variable.
 
 Checking decides each such declaration's context once solving settles
-(`finalizeLocalTypeContexts`, before promotion is decided): the rigid type
+(`finalizeLocalTypeContexts`, before growing polymorphic recursion is judged
+and before promotion is decided): the rigid type
 variables of enclosing functions it depends on, in source order. That is each
 one its annotation names other than its own parameters, each one its methods
 name (a method's candidate records each enclosing rigid variable it looks up,

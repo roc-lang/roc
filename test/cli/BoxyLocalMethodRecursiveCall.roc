@@ -1,9 +1,11 @@
 BoxyLocalMethodRecursiveCall :: [].{}
 
 # A generic function passes a value of a type its body declares to a recursive
-# call of itself: the call's dictionary is a method of that type, a local
-# procedure of this body, built with this body's type variables rather than
-# the call's.
+# call of itself. The type's method reads the function's type variable `a`, so
+# the type's identity includes `a` (design.md "Body-Local Type Context"): the
+# recursive call uses `describe` at `Local` wrapping `a`, the next level at
+# `Local` wrapping that, and so on. That is growing polymorphic recursion,
+# rejected under every lowering strategy.
 
 Apples := [Apples].{
 	label : Apples -> Str

@@ -4873,26 +4873,9 @@ fn finalizePromotedLocalProcedures(self: *Self) Allocator.Error!void {
     self.promoted_local_procedures.clearRetainingCapacity();
     self.promoted_local_procedure_patterns.clearRetainingCapacity();
 
-    // A dispatch is a reference to the local procedure it selects. Its
-    // candidates are those enclosing the outermost site of its lineage, where
-    // the evidence reaching any generic body it passes through is supplied.
     var dispatch_refs: std.ArrayListUnmanaged(LocalProcedureOuterRef) = .empty;
     defer dispatch_refs.deinit(self.gpa);
-    for (self.dispatch_target_instantiations.items) |instantiation| {
-        const pattern = (try self.localProcedureTargetPattern(instantiation.target_env, instantiation.target_binding)) orelse continue;
-        var frames: ?CandidateFrames = null;
-        var current: ?Var = instantiation.constraint_fn_var;
-        while (current) |fn_var| {
-            if (self.dispatch_candidate_frames.get(fn_var)) |recorded| frames = recorded;
-            current = self.dispatchDerivationParent(fn_var);
-        }
-        const site = frames orelse continue;
-        const depth = self.local_pattern_candidate_depths.get(pattern) orelse 0;
-        if (depth >= site.len) continue;
-        for (self.dispatch_candidate_frame_patterns.items[site.start + depth .. site.start + site.len]) |candidate| {
-            try dispatch_refs.append(self.gpa, .{ .candidate = candidate, .referenced = pattern });
-        }
-    }
+    try self.appendLocalProcedureDispatchRefs(&dispatch_refs);
 
     try self.finalizeLocalTypeContexts(dispatch_refs.items);
 
@@ -4929,6 +4912,37 @@ fn finalizePromotedLocalProcedures(self: *Self) Allocator.Error!void {
     }
 
     try self.finalizeContextualLocalDispatches();
+}
+
+/// A dispatch is a reference to the local procedure it selects. Its
+/// candidates are those enclosing the outermost site of its lineage, where
+/// the evidence reaching any generic body it passes through is supplied.
+fn appendLocalProcedureDispatchRefs(self: *Self, dispatch_refs: *std.ArrayListUnmanaged(LocalProcedureOuterRef)) Allocator.Error!void {
+    for (self.dispatch_target_instantiations.items) |instantiation| {
+        const pattern = (try self.localProcedureTargetPattern(instantiation.target_env, instantiation.target_binding)) orelse continue;
+        var frames: ?CandidateFrames = null;
+        var current: ?Var = instantiation.constraint_fn_var;
+        while (current) |fn_var| {
+            if (self.dispatch_candidate_frames.get(fn_var)) |recorded| frames = recorded;
+            current = self.dispatchDerivationParent(fn_var);
+        }
+        const site = frames orelse continue;
+        const depth = self.local_pattern_candidate_depths.get(pattern) orelse 0;
+        if (depth >= site.len) continue;
+        for (self.dispatch_candidate_frame_patterns.items[site.start + depth .. site.start + site.len]) |candidate| {
+            try dispatch_refs.append(self.gpa, .{ .candidate = candidate, .referenced = pattern });
+        }
+    }
+}
+
+/// Decide every body-local type's context once dispatches have settled,
+/// for a pass that reads contexts before local procedures are promoted.
+fn settleLocalTypeContexts(self: *Self) Allocator.Error!void {
+    if (self.local_type_contexts_final) return;
+    var dispatch_refs: std.ArrayListUnmanaged(LocalProcedureOuterRef) = .empty;
+    defer dispatch_refs.deinit(self.gpa);
+    try self.appendLocalProcedureDispatchRefs(&dispatch_refs);
+    try self.finalizeLocalTypeContexts(dispatch_refs.items);
 }
 
 /// Per-declaration inputs of `finalizeLocalTypeContexts`.
@@ -11842,7 +11856,12 @@ fn appendGrowthChildren(self: *Self, content: types_mod.Content, stack: *std.Arr
         .structure => |flat| switch (flat) {
             .empty_record, .empty_tag_union => {},
             .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
-            .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+            .nominal_type => |nominal| {
+                try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal));
+                // A body-local type's context variables are hidden trailing
+                // arguments (design.md "Body-Local Type Context").
+                try stack.appendSlice(self.gpa, self.types.nominalContextVars(nominal));
+            },
             .fn_pure, .fn_effectful, .fn_unbound => |func| {
                 try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
                 try stack.append(self.gpa, func.ret);
@@ -11950,6 +11969,8 @@ const GrowthEdge = struct {
 fn rejectGrowingPolymorphicRecursion(self: *Self) Allocator.Error!void {
     if (self.growth_uses.items.len == 0) return;
     const gpa = self.gpa;
+    // A use at a body-local type also uses that type's context variables.
+    try self.settleLocalTypeContexts();
 
     var node_of = collections.DenseMap(Var, u32).init(gpa);
     defer node_of.deinit();
