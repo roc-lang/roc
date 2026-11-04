@@ -54,6 +54,7 @@ const CpuLevel = roc_target_mod.CpuLevel;
 // with 24-byte RocList struct returns on aarch64
 
 const Relocation = @import("Relocation.zig").IndexedRelocation;
+const relocation_mod = @import("Relocation.zig");
 const collections = @import("collections");
 const SymbolTable = @import("SymbolTable.zig");
 const StackPlan = lir.StackPlan;
@@ -667,6 +668,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Where the proc being compiled keeps its tail carry, when it has
         /// one (see `procCarriesTailArgs`).
         carry_slot: ?i32 = null,
+        /// The stack slot holding the address of the current procedure's
+        /// pending cell (`LirProcSpec.uses_pending_cell`).
+        pending_cell_slot: ?i32 = null,
 
         /// Stack slot where early return value is stored during deferred-prologue proc compilation.
         early_return_result_slot: ?i32 = null,
@@ -742,6 +746,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Whether object-file entrypoints should use the synthetic default
         /// platform runtime contract.
         enable_default_platform_runtime: bool = false,
+
+        /// Whether an expect site's id is emitted as a field relative to
+        /// `expect_site_base_symbol` (a test unit's image, whose loader binds
+        /// the symbol to the first program-wide id of its sites), rather
+        /// than as the program-wide id itself.
+        relocatable_expect_sites: bool = false,
 
         /// Native execution's hosted symbol addresses; see `HostedSymbolResolver`.
         hosted_symbol_resolver: ?HostedSymbolResolver = null,
@@ -8648,7 +8658,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             pub fn statement(extra: StackPlanExtra, plan: *StackPlan, _: u32, stmt: LIR.CFStmt) Allocator.Error!void {
                 const self = extra.owner;
                 switch (stmt) {
-                    inline .set_local, .init_uninitialized => |s| {
+                    .set_local => |s| {
+                        if (s.mode != .initialize_join_param) plan.values.items[try plan.local(s.target)].mutable = true;
+                    },
+                    .init_uninitialized => |s| {
                         plan.values.items[try plan.local(s.target)].mutable = true;
                     },
                     .assign_low_level => |s| {
@@ -8705,14 +8718,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (work.items) |id| {
                 const stmt = self.store.getCFStmt(id);
                 const at = indexes.nodeOf(id).?;
-                if (stmt == .join) {
-                    // A declaration alone needs no storage. Mark only locals
-                    // present in the completed read/write inventory as mutable.
-                    const params = self.store.getLocalSpan(stmt.join.params);
-                    for (0..params.len) |i| {
-                        if (plan.localIndex(GuardedList.at(params, i))) |index| plan.values.items[index].mutable = true;
-                    }
-                }
                 if (stmt == .assign_low_level) {
                     if (OverflowFusion.findResultConsumer(self.store, id)) |fusion| {
                         // The producer emits the consumer's result early. Keep
@@ -8735,11 +8740,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const t = plan.values.items[target_index];
                 const s = plan.values.items[source];
                 if (t.definitions != 1 or s.definitions > 1 or t.mutable or s.mutable) continue;
+                // Prologue storage is already defined, and cannot become an
+                // alias. An unwritten source must be such a parameter.
+                if (self.local_locations.contains(localKey(t.local))) continue;
+                if (s.definitions == 0 and !self.local_locations.contains(localKey(s.local))) continue;
                 const rep = self.runtimeRepresentationLayoutIdx(self.localLayout(assign.target));
                 if (rep != self.runtimeRepresentationLayoutIdx(self.localLayout(assign.op.source))) continue;
                 if (rep == .f32 or rep == .f64 or self.simdKindForLayout(rep) != null) continue;
                 plan.values.items[target_index].representative = source;
             }
+            try plan.solveAliasLifetimes(indexes.nodeOf(root).?);
+            for (plan.values.items) |*value| value.size = 0;
             for (plan.values.items, 0..) |v, i| {
                 const root_index = plan.representative(@intCast(i));
                 if (root_index != i or self.local_locations.contains(localKey(v.local))) continue;
@@ -8750,7 +8761,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 };
                 plan.values.items[i].size = std.mem.alignForward(u32, size, alignment);
             }
-            try plan.solve();
+            try plan.assignSlots();
             const offsets = try self.allocator.alloc(i32, plan.slots.items.len);
             defer self.allocator.free(offsets);
             for (plan.slots.items, offsets) |slot, *offset| offset.* = self.codegen.allocStackSlot(slot.size);
@@ -13962,7 +13973,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// has a dynamic parameter or result, or the target is dynamic.
         fn callIsDynamic(self: *Self, proc_id: lir.LIR.LirProcSpecId, target_local: LocalId) bool {
             const callee = self.store.getProcSpec(proc_id);
-            if (callee.dyn_result != null or self.localDyn(target_local) != null) return true;
+            if (callee.dyn_result != null or callee.takesPendingCell() or self.localDyn(target_local) != null) return true;
             const params = self.store.getLocalSpan(callee.args);
             for (0..params.len) |i| {
                 if (self.localDyn(GuardedList.at(params, i)) != null) return true;
@@ -13970,10 +13981,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return false;
         }
 
-        /// A direct call with dynamic operands. A dynamic parameter receives
-        /// the address of its argument's bytes (a dynamic argument's storage,
-        /// or a closed argument's slot); a dynamic result is written to the
-        /// target's storage, whose address follows the explicit arguments.
+        /// A direct call with dynamic operands or hidden parameters. A dynamic
+        /// parameter receives the address of its argument's bytes (a dynamic
+        /// argument's storage, or a closed argument's slot); a dynamic result
+        /// is written to the target's storage, whose address follows the
+        /// explicit arguments.
         fn generateDynCall(self: *Self, proc_id: lir.LIR.LirProcSpecId, args: LocalSpan, target_local: LocalId, drive: lir.LIR.PendingDrive) Allocator.Error!void {
             try self.spillAllVectorLocals();
             const callee = self.store.getProcSpec(proc_id);
@@ -13985,7 +13997,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .{ @backingInt(proc_id), arg_refs.len, param_refs.len },
             );
             const carries = procCarriesTailArgs(self.store, callee);
-            const count = arg_refs.len + @intFromBool(callee.dyn_result != null) + @intFromBool(carries);
+            const takes_pending = callee.takesPendingCell();
+            const count = arg_refs.len + @intFromBool(callee.dyn_result != null) + @intFromBool(carries) + @intFromBool(takes_pending);
             const arg_locs = try self.allocator.alloc(ValueLocation, count);
             defer self.allocator.free(arg_locs);
             const arg_layouts = try self.allocator.alloc(layout.Idx, count);
@@ -14031,8 +14044,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             if (carries) {
                 // An ordinary call's arguments stay in this frame: no carry.
+                const index = count - 1 - @intFromBool(takes_pending);
+                arg_layouts[index] = .opaque_ptr;
+                arg_locs[index] = .{ .immediate_i64 = 0 };
+            }
+            if (takes_pending) {
                 arg_layouts[count - 1] = .opaque_ptr;
-                arg_locs[count - 1] = .{ .immediate_i64 = 0 };
+                arg_locs[count - 1] = self.stackLocationForLayout(.opaque_ptr, self.pendingCellSlot());
             }
 
             const value_loc = if (callee.linked)
@@ -14126,6 +14144,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             if (carry_arg) |slot| {
                 try self.scratch_arg_infos.append(.{ .loc = self.stackLocationForLayout(.opaque_ptr, slot), .layout_idx = .opaque_ptr, .num_regs = 1 });
+            }
+            if (proc_spec.takesPendingCell()) {
+                // The callee leaves its pending call where this procedure's
+                // caller waits for this procedure's.
+                try self.scratch_arg_infos.append(.{ .loc = self.stackLocationForLayout(.opaque_ptr, self.pendingCellSlot()), .layout_idx = .opaque_ptr, .num_regs = 1 });
             }
             const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
 
@@ -14446,6 +14469,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitLoad(.w64, reg, reg, 0);
             try self.emitStore(.w64, frame_ptr, fn_slot, reg);
             self.codegen.freeGeneral(reg);
+            if (deferred) try builder.addMemArg(frame_ptr, self.pendingCellSlot());
             try builder.addMemArg(frame_ptr, fn_slot);
             if (deferred) {
                 try builder.addMemArg(frame_ptr, closure_ptr_slot);
@@ -14462,28 +14486,39 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return if (ret_size == 0) .{ .immediate_i64 = 0 } else self.stackLocationForLayout(runtime_ret_layout, ret_buffer_offset);
         }
 
-        /// Record in `caller_drives_slot` whether the erased-call runtime
-        /// invoked this procedure, which then makes the calls left pending
-        /// after it returns. Read before anything else can make an erased
-        /// call: the runtime's answer describes only this invocation. The
-        /// runtime names the callable it invokes by the function pointer
-        /// callable values hold, which is this procedure's address.
-        fn emitRecordCallerDrives(self: *Self, proc_id: lir.LIR.LirProcSpecId) Allocator.Error!void {
-            const slot = self.codegen.allocStackSlot(8);
-            const own_addr = try self.allocTempGeneral();
-            const own = try self.compiledProcForId(proc_id);
-            if (own.code_start == unresolved_proc_code_start)
-                try self.emitPendingProcAddress(proc_id, own_addr)
-            else
-                try self.emitInternalCodeAddress(.{ .proc = own.id }, own.code_start, own_addr);
-            try self.emitStore(.w64, frame_ptr, slot, own_addr);
-            self.codegen.freeGeneral(own_addr);
+        /// The slot holding the address of this procedure's pending cell.
+        fn pendingCellSlot(self: *const Self) i32 {
+            return self.pending_cell_slot orelse base.invariant("LIR/codegen invariant violated: a statement that can leave an erased call pending in a procedure without a pending cell", .{});
+        }
+
+        /// Give this procedure an empty pending cell in its frame. When
+        /// `invocation` holds the erased ABI's last argument and that names
+        /// the cell of the runtime that invoked this procedure, the runtime's
+        /// cell is used instead, and `caller_drives_slot` records that the
+        /// runtime makes the calls left in it.
+        fn emitOwnPendingCell(self: *Self, invocation: ?i32) Allocator.Error!void {
+            const word = @sizeOf(u64);
+            const cell = self.codegen.allocStackSlot(builtins.native_callable.pending_words * word);
+            const slot = self.codegen.allocStackSlot(word);
+            const reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadImm(reg, 0);
+            try self.emitStore(.w64, frame_ptr, cell, reg);
+            try self.emitLeaStack(reg, cell);
+            try self.emitStore(.w64, frame_ptr, slot, reg);
+            self.codegen.freeGeneral(reg);
+            self.pending_cell_slot = slot;
+            const out_slot = invocation orelse return;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
-            try builder.addMemArg(frame_ptr, slot);
-            try self.callBuiltin(&builder, .native_callable_caller_drives);
+            try builder.addMemArg(frame_ptr, out_slot);
+            try self.callBuiltin(&builder, .native_callable_caller_cell);
+            const flag_slot = self.codegen.allocStackSlot(word);
+            try self.emitStore(.w64, frame_ptr, flag_slot, ret_reg_0);
+            self.caller_drives_slot = flag_slot;
+            try self.emitCmpImm(ret_reg_0, 0);
+            const own = try self.emitJumpIfEqual();
             try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
-            self.caller_drives_slot = slot;
+            try self.codegen.patchJump(own, self.codegen.currentOffset());
         }
 
         /// Run the erased calls a callee left pending, as the tail-drive pass
@@ -14520,14 +14555,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const flag_slot = self.caller_drives_slot orelse
                     base.invariant("Dev/codegen invariant violated: procedure reads a caller-drives flag it never recorded", .{});
                 const flag_reg = try self.allocTempGeneral();
-                // The runtime returns one byte; the rest of the slot is unspecified.
-                try self.emitLoadW8(flag_reg, frame_ptr, flag_slot);
+                try self.emitLoad(.w64, flag_reg, frame_ptr, flag_slot);
                 try self.emitCmpImm(flag_reg, 0);
                 self.codegen.freeGeneral(flag_reg);
                 skip_patch = try self.emitJumpIfNotEqual();
             }
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
+            try builder.addMemArg(frame_ptr, self.pendingCellSlot());
             if (ret == .zero_sized) try builder.addImmArg(0) else try addTargetArg(&builder, ret);
             try self.callBuiltin(&builder, .native_callable_drive);
             if (skip_patch) |patch| try self.codegen.patchJump(patch, self.codegen.currentOffset());
@@ -18115,6 +18150,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try self.emitStore(.w64, frame_ptr, args_size_slot, size_reg);
                             self.codegen.freeGeneral(size_reg);
                         }
+                        try builder.addMemArg(frame_ptr, self.pendingCellSlot());
                         try builder.addMemArg(frame_ptr, fn_slot);
                         try builder.addMemArg(frame_ptr, closure_slot);
                         if (c.args) |args| {
@@ -18747,6 +18783,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_current_dyn_result = self.current_dyn_result;
             const saved_proc_has_dyn_region = self.proc_has_dyn_region;
             const saved_carry_slot = self.carry_slot;
+            const saved_pending_cell_slot = self.pending_cell_slot;
             const saved_tail_exit_patches_len = self.tail_exit_patches.items.len;
             const saved_current_proc_name = self.current_proc_name;
             const saved_current_proc_identity = self.current_proc_identity;
@@ -18772,6 +18809,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.current_dyn_result = proc.dyn_result;
             self.proc_has_dyn_region = false;
             self.carry_slot = null;
+            self.pending_cell_slot = null;
             self.current_proc_name = proc.name;
             self.current_proc_identity = proc.identity;
             self.current_proc_frame_locals = proc.frame_locals;
@@ -18850,6 +18888,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.current_dyn_result = saved_current_dyn_result;
                 self.proc_has_dyn_region = saved_proc_has_dyn_region;
                 self.carry_slot = saved_carry_slot;
+                self.pending_cell_slot = saved_pending_cell_slot;
+                self.pending_cell_slot = saved_pending_cell_slot;
                 self.tail_exit_patches.shrinkRetainingCapacity(saved_tail_exit_patches_len);
                 self.current_proc_name = saved_current_proc_name;
                 self.current_proc_identity = saved_current_proc_identity;
@@ -18868,17 +18908,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const needs_ret_ptr = self.needsInternalReturnByPointer(proc.ret_layout);
             var hot_reload_code_ref_slot: ?i32 = null;
+            // The erased ABI's last argument, saved before anything else
+            // reuses its register.
+            const invocation_slot: ?i32 = if (proc.abi != .roc and proc.reads_caller_drives) blk: {
+                const slot = self.codegen.allocStackSlot(8);
+                try self.saveIncomingPointerArg(slot, 5);
+                break :blk slot;
+            } else null;
             if (proc.abi == .erased_callable) {
                 self.ret_ptr_slot = self.codegen.allocStackSlot(8);
                 const ret_ptr_reg = self.getArgumentRegister(1);
                 try self.codegen.emitStoreStack(.w64, self.ret_ptr_slot.?, ret_ptr_reg);
                 try self.bindErasedCallableAdapterParams(proc, proc.erased_call_args orelse base.invariant("LIR/codegen invariant violated: erased-callable proc has no erased call args", .{}));
                 hot_reload_code_ref_slot = try self.emitHotReloadEnterForHostCallable();
-                if (proc.reads_caller_drives) try self.emitRecordCallerDrives(proc_id);
             } else if (proc.abi == .erased_record) {
                 try self.bindErasedRecordParams(proc);
                 hot_reload_code_ref_slot = try self.emitHotReloadEnterForHostCallable();
-                if (proc.reads_caller_drives) try self.emitRecordCallerDrives(proc_id);
             } else {
                 if (needs_ret_ptr) {
                     self.ret_ptr_slot = self.codegen.allocStackSlot(8);
@@ -18891,8 +18936,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Bind parameters to argument registers. Large returns use a hidden
                 // first argument register for the return buffer.
                 const initial_param_reg_idx: u8 = if (needs_ret_ptr) 1 else 0;
-                try self.bindProcParams(proc.args, initial_param_reg_idx, proc.dyn_result, procCarriesTailArgs(self.store, proc));
+                try self.bindProcParams(proc.args, initial_param_reg_idx, proc.dyn_result, procCarriesTailArgs(self.store, proc), proc.takesPendingCell());
             }
+            if (proc.uses_pending_cell and !proc.takesPendingCell()) try self.emitOwnPendingCell(invocation_slot);
 
             if (proc.hosted) |hosted| {
                 try self.generateCAbiProcWrapper(.{ .hosted = hosted }, proc);
@@ -19068,6 +19114,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.current_dyn_result = saved_current_dyn_result;
             self.proc_has_dyn_region = saved_proc_has_dyn_region;
             self.carry_slot = saved_carry_slot;
+            self.pending_cell_slot = saved_pending_cell_slot;
             self.ret_ptr_slot = saved_ret_ptr_slot;
             self.current_proc_name = saved_current_proc_name;
             self.current_proc_identity = saved_current_proc_identity;
@@ -19921,10 +19968,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             /// A parameter after `params`: the result storage address of a
             /// procedure whose result is dynamic.
             trailing: ?LocalId,
-            /// Whether a last hidden parameter follows: the tail carry of a
+            /// Whether a hidden parameter follows: the tail carry of a
             /// procedure that receives frame-replacing calls with dynamic
             /// arguments (see `procCarriesTailArgs`).
             carry: bool,
+            /// Whether a last hidden parameter follows: the caller's pending
+            /// cell (`LirProcSpec.takesPendingCell`).
+            pending: bool,
         ) Allocator.Error!void {
             // Incoming arguments remain live until every parameter has been
             // captured. Copy-loop temporaries must not overwrite later args.
@@ -19933,8 +19983,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (0..max_arg_regs) |index| self.codegen.markRegisterInUse(self.getArgumentRegister(@intCast(index)));
 
             const locals = self.store.getLocalSpan(params);
-            const param_count = locals.len + @intFromBool(trailing != null) + @intFromBool(carry);
-            // Null names the tail carry, which no local holds.
+            const param_count = locals.len + @intFromBool(trailing != null) + @intFromBool(carry) + @intFromBool(pending);
+            // Null names a hidden parameter no local holds.
             const ParamAt = struct {
                 locals: @TypeOf(locals),
                 trailing: ?LocalId,
@@ -20049,7 +20099,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const local = param_at.at(param_idx);
 
                 if (num_regs == 0) {
-                    try self.bindParamLocation(local, .{ .immediate_i64 = 0 });
+                    try self.setLocalLocation(localKey(local.?), .{ .immediate_i64 = 0 });
                     continue;
                 }
 
@@ -20073,7 +20123,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const stack_offset = self.codegen.allocStackSlot(@intCast(size));
                     try self.copyChunked(temp_reg, ptr_reg, 0, frame_ptr, stack_offset, size);
                     const stable_loc = self.stackLocationForLayout(self.paramLayout(local), stack_offset);
-                    try self.bindParamLocation(local, stable_loc);
+                    try self.bindParamLocation(local, stable_loc, pending and param_idx == param_count - 1);
                     continue;
                 }
 
@@ -20096,7 +20146,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, ri) * 8, arg_reg);
                     }
                     const stable_loc = self.stackLocationForLayout(self.paramLayout(local), stack_offset);
-                    try self.bindParamLocation(local, stable_loc);
+                    try self.bindParamLocation(local, stable_loc, pending and param_idx == param_count - 1);
                     reg_idx += num_regs;
                 } else {
                     const caller_base = self.callerStackArgBaseReg();
@@ -20104,7 +20154,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const stack_offset = self.codegen.allocStackSlot(@intCast(size));
                     try self.copyFromCallerStack(caller_base, stack_arg_offset, stack_offset, num_regs);
                     const stable_loc = self.stackLocationForLayout(self.paramLayout(local), stack_offset);
-                    try self.bindParamLocation(local, stable_loc);
+                    try self.bindParamLocation(local, stable_loc, pending and param_idx == param_count - 1);
                     stack_arg_offset += @as(i32, num_regs) * 8;
                     reg_idx = max_arg_regs;
                 }
@@ -20115,9 +20165,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return if (local) |l| self.localLayout(l) else .opaque_ptr;
         }
 
-        fn bindParamLocation(self: *Self, local: ?LocalId, loc: ValueLocation) Allocator.Error!void {
+        fn bindParamLocation(self: *Self, local: ?LocalId, loc: ValueLocation, is_pending_cell: bool) Allocator.Error!void {
             if (local) |l| return self.setLocalLocation(localKey(l), loc);
-            self.carry_slot = stableLocationStackOffset(loc);
+            if (is_pending_cell) {
+                self.pending_cell_slot = stableLocationStackOffset(loc);
+            } else {
+                self.carry_slot = stableLocationStackOffset(loc);
+            }
         }
 
         /// Move a value to the return register(s), using layout information for proper sizing.
@@ -20943,11 +20997,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const cond_loc = try self.emitValueLocal(expect_stmt.condition);
                             const cond_reg = try self.ensureInGeneralReg(cond_loc);
                             if (expect_stmt.site) |site| {
+                                const site_reg: ?GeneralReg = if (self.relocatable_expect_sites) reg: {
+                                    const reg = try self.allocTempGeneral();
+                                    try self.emitRelocatableExpectSite(reg, @backingInt(site));
+                                    break :reg reg;
+                                } else null;
                                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                                 defer builder.deinit();
-                                try builder.addImmArg(@backingInt(site));
+                                if (site_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(@backingInt(site));
                                 try builder.addRegArg(cond_reg);
                                 try self.callRuntimeSymbol(&builder, .roc_expect_observed);
+                                if (site_reg) |reg| self.codegen.freeGeneral(reg);
                                 self.codegen.freeGeneral(cond_reg);
                             } else {
                                 try self.emitCmpImm(cond_reg, 0);
@@ -22024,6 +22084,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call one of the host's fixed runtime symbols: by its in-process
         /// address under native execution, by relocation everywhere else.
+        /// Load `site`, a unit-local expect site id, into `dst` as an
+        /// `abs32s` field against `expect_site_base_symbol` whose bytes hold
+        /// the id.
+        fn emitRelocatableExpectSite(self: *Self, dst: GeneralReg, site: u32) Allocator.Error!void {
+            switch (isa) {
+                .x86_64 => {
+                    const start = self.codegen.currentOffset();
+                    // REX.W C7 /0 imm32: the field starts three bytes in.
+                    try self.codegen.emit.movRegImm32(dst, @intCast(site));
+                    try self.codegen.relocations.append(self.allocator, .{ .linked_data = .{
+                        .offset = @intCast(start + 3),
+                        .symbol = try self.codegen.symbols.intern(self.allocator, relocation_mod.expect_site_base_symbol, .shared),
+                        .kind = .abs32s,
+                    } });
+                },
+                .aarch64 => base.invariant("LirCodeGen invariant violated: relocatable expect sites in aarch64 code; only Linux x86_64 test units relocate them", .{}),
+            }
+        }
+
         fn callRuntimeSymbol(self: *Self, builder: *Builder, symbol: builtins.in_process_host.Symbol) Allocator.Error!void {
             switch (self.generation_mode) {
                 .native_execution => try builder.call(symbol.address()),
@@ -24518,7 +24597,7 @@ test "proc params and mutable list cells use distinct stack slots" {
         },
     }
 
-    try codegen.bindProcParams(args, 0, null, false);
+    try codegen.bindProcParams(args, 0, null, false, false);
     try codegen.ensureStableLocationsForStmtLocals(answer_stmt);
 
     const end_slot = try stackOffsetOfTestLocation(codegen.local_locations.get(@backingInt(end)).?);
@@ -24528,6 +24607,35 @@ test "proc params and mutable list cells use distinct stack slots" {
     try std.testing.expect(answer_slot != end_slot);
     try std.testing.expect(appended_slot != end_slot);
     try std.testing.expect(appended_slot != answer_slot);
+}
+
+test "issue 12819: dev reads a single-definition join parameter in place" {
+    const gpa = std.testing.allocator;
+    inline for (.{ RocTarget.x64linux, RocTarget.arm64mac }) |target| {
+        var store = LirStore.init(gpa);
+        defer store.deinit();
+        var state = try TestLayoutState.init(gpa);
+        defer state.deinit();
+        const source = try addLocal(&store, .u64);
+        const joined = try addLocal(&store, .u64);
+        const alias = try addLocal(&store, .u64);
+        var next_join_point: u32 = 0;
+        const join_id = freshTestJoinPointId(&next_join_point);
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = alias } }, .test_fixture);
+        const read = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .local(joined), .next = ret } }, .test_fixture);
+        const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+        const initialize = try store.addCFStmt(.{ .set_local = .{ .target = joined, .value = source, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
+        const join = try store.addCFStmt(.{ .join = .{ .id = join_id, .params = try store.addLocalSpan(&.{joined}), .body = read, .remainder = initialize } }, .test_fixture);
+        const body = try store.addCFStmt(.{ .assign_literal = .{ .target = source, .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } }, .next = join } }, .test_fixture);
+        const proc = try addNoArgProc(&store, body, .u64);
+        var codegen = try LirCodeGen(target).init(gpa, &store, &state.layout_store, .{}, .default);
+        defer codegen.deinit();
+        try codegen.ensureStableLocationsForStmtLocals(body);
+        try std.testing.expectEqualDeep(codegen.local_locations.get(@backingInt(joined)).?, codegen.local_locations.get(@backingInt(alias)).?);
+        if (comptime host_lir_codegen_available) {
+            try std.testing.expectEqual(@as(u64, 42), try runRootU64(&store, &state.layout_store, proc, .u64));
+        }
+    }
 }
 
 test "immutable aliases share storage but aliases of mutable locals do not" {
@@ -24631,7 +24739,7 @@ test "Windows internal proc ABI reads stack arguments after shadow space" {
     const InnerCodeGen = @TypeOf(codegen.codegen);
     codegen.codegen.stack_offset = -InnerCodeGen.CALLEE_SAVED_AREA_SIZE;
 
-    try codegen.bindProcParams(args, 0, null, false);
+    try codegen.bindProcParams(args, 0, null, false, false);
 
     _ = codegen.local_locations.get(@backingInt(list)) orelse return error.TestUnexpectedResult;
     try std.testing.expect(codegen.codegen.getCode().len > 0);
@@ -24699,7 +24807,7 @@ test "AArch64 internal proc ABI uses caller stack arg base for stack arguments" 
     const InnerCodeGen = @TypeOf(codegen.codegen);
     codegen.codegen.stack_offset = 16 + InnerCodeGen.CALLEE_SAVED_AREA_SIZE;
 
-    try codegen.bindProcParams(args, 0, null, false);
+    try codegen.bindProcParams(args, 0, null, false, false);
 
     const x28_bit = @as(u32, 1) << @backingInt(aarch64.GeneralReg.X28);
     try std.testing.expect(codegen.uses_caller_stack_arg_base);

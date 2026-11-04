@@ -348,6 +348,9 @@ pub const MonoLlvmCodeGen = struct {
     /// Where the erased-callable procedure being compiled keeps whether the
     /// erased-call runtime invoked it, when its body reads that.
     caller_drives_flag: ?LlvmBuilder.Value = null,
+    /// The address of the pending cell of the procedure being compiled
+    /// (`LirProcSpec.uses_pending_cell`).
+    pending_cell: ?LlvmBuilder.Value = null,
     /// The `result` dynamic local of the procedure being compiled, when its
     /// result is dynamic (`LirProcSpec.dyn_result`).
     current_dyn_result: ?LocalId = null,
@@ -1949,6 +1952,9 @@ pub const MonoLlvmCodeGen = struct {
         dyn_result_index: ?u32,
         /// Parameter index of the tail carry (`procCarriesTailArgs`).
         carry_index: ?u32,
+        /// Parameter index of the caller's pending cell
+        /// (`LirProcSpec.takesPendingCell`).
+        pending_index: ?u32,
         /// Parameter index of the tail group's shared argument storage, and
         /// that storage's shape, if the group passes any argument in memory.
         scratch_index: ?u32,
@@ -2011,12 +2017,17 @@ pub const MonoLlvmCodeGen = struct {
             cursor += 1;
             break :blk cursor - 1;
         } else null;
+        const pending_index: ?u32 = if (proc.takesPendingCell()) blk: {
+            cursor += 1;
+            break :blk cursor - 1;
+        } else null;
         return .{
             .lowered = lowered,
             .arg_layouts = owned,
             .args_start = args_start,
             .dyn_result_index = dyn_result_index,
             .carry_index = carry_index,
+            .pending_index = pending_index,
             .scratch_index = if (scratch.size > 0) cursor else null,
             .scratch = scratch,
             .tail_args = tail_args,
@@ -2043,9 +2054,10 @@ pub const MonoLlvmCodeGen = struct {
         @memset(offsets, 0);
         const stored = try arena.alloc(bool, lowered.args.len);
         @memset(stored, false);
-        // The dynamic result address, the tail carry, and the storage pointer
-        // follow the arguments, so their registers are reserved up front.
-        const trailing_pointers: u32 = @as(u32, @intFromBool(proc.dyn_result != null)) + @intFromBool(procCarriesTailArgs(self.store, proc));
+        // The dynamic result address, the tail carry, the pending cell, and
+        // the storage pointer follow the arguments, so their registers are
+        // reserved up front.
+        const trailing_pointers: u32 = @as(u32, @intFromBool(proc.dyn_result != null)) + @intFromBool(procCarriesTailArgs(self.store, proc)) + @intFromBool(proc.takesPendingCell());
         if (self.usesTailDrivers()) {
             // Only a signature past the wasm parameter limit takes a storage
             // pointer, which then counts against the limit too.
@@ -2165,7 +2177,8 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Where a pending frame-replacing call keeps each of its callee's
     /// arguments in the static argument storage, and where those arguments
-    /// end, which is where it keeps the callee's tail carry.
+    /// end, which is where it keeps the callee's tail carry and, a word
+    /// later, its pending cell.
     fn tailArgOffsets(self: *MonoLlvmCodeGen, arg_layouts: []const layout.Idx, offsets: ?[]u32) u32 {
         var offset: u32 = 0;
         for (arg_layouts, 0..) |arg_layout, i| {
@@ -2197,8 +2210,7 @@ pub const MonoLlvmCodeGen = struct {
             if (!isTailDriverMember(proc)) continue;
             const arg_layouts = try self.procArgLayouts(proc, .explicit);
             defer self.allocator.free(arg_layouts);
-            const carry_size: u32 = if (procCarriesTailArgs(self.store, proc)) @intCast(self.target.ptrBitWidth() / 8) else 0;
-            area_size = @max(area_size, self.tailArgOffsets(arg_layouts, null) + carry_size);
+            area_size = @max(area_size, self.tailArgOffsets(arg_layouts, null) + 2 * self.targetWordSize());
             const driver = self.tailDriverFor(proc) orelse blk: {
                 const fn_ty = builder.fnType(.void, &.{ptr_ty}, .normal) catch return error.OutOfMemory;
                 const name = builder.strtabStringFmt("{s}roc_tail_driver.{d}", .{ self.static_symbol_prefix, self.tail_drivers.items.len }) catch return error.OutOfMemory;
@@ -2325,6 +2337,10 @@ pub const MonoLlvmCodeGen = struct {
                 try param_types.append(self.allocator, ptr_ty);
                 try call_args.append(self.allocator, try self.loadPointer(try self.offsetPtr(args_ptr, carry_offset)));
             }
+            if (sig.pending_index != null) {
+                try param_types.append(self.allocator, ptr_ty);
+                try call_args.append(self.allocator, try self.loadPointer(try self.offsetPtr(args_ptr, carry_offset + self.targetWordSize())));
+            }
             if (scratch) |storage| {
                 try param_types.append(self.allocator, ptr_ty);
                 try call_args.append(self.allocator, storage);
@@ -2385,6 +2401,8 @@ pub const MonoLlvmCodeGen = struct {
             try self.storeLocalToMemory(dst, arg_local, size, self.alignmentForLayout(arg_layout));
         }
         if (carry) |storage| try self.storePointer(try self.offsetPtr(self.tail_args_ptr.?, carry_offset), storage);
+        if (proc.takesPendingCell()) try self.storePointer(try self.offsetPtr(self.tail_args_ptr.?, carry_offset + self.targetWordSize()), self.pending_cell orelse
+            llvmInvariantFmt("frame-replacing call to proc {d} without a pending cell", .{@backingInt(proc_id)}));
         try self.emitFreeCarry();
         _ = wip.store(.normal, try self.intValue(.i32, tailMemberNumber(driver, proc_id)), self.tail_pending_ptr.?, LlvmBuilder.Alignment.fromByteUnits(4)) catch return error.OutOfMemory;
         if (self.fast_ret_registers) |registers| {
@@ -2522,6 +2540,7 @@ pub const MonoLlvmCodeGen = struct {
         }
         if (sig.dyn_result_index != null) try param_types.append(self.allocator, ptr_ty);
         if (sig.carry_index != null) try param_types.append(self.allocator, ptr_ty);
+        if (sig.pending_index != null) try param_types.append(self.allocator, ptr_ty);
         if (sig.scratch_index != null) try param_types.append(self.allocator, ptr_ty);
 
         const fn_ty = builder.fnType(ret_ty, param_types.items, .normal) catch return error.OutOfMemory;
@@ -2677,6 +2696,13 @@ pub const MonoLlvmCodeGen = struct {
             try param_types.append(self.allocator, ptr_ty);
             try call_args.append(self.allocator, try self.nullPtr());
         }
+        // Whatever calls this function expects a result, so it makes the
+        // call its procedure leaves pending.
+        const pending_cell: ?LlvmBuilder.Value = if (sig.pending_index != null) try self.allocPendingCell() else null;
+        if (pending_cell) |cell| {
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, cell);
+        }
         if (scratch) |storage| {
             try param_types.append(self.allocator, ptr_ty);
             try call_args.append(self.allocator, storage);
@@ -2686,6 +2712,7 @@ pub const MonoLlvmCodeGen = struct {
             try self.storeCAbiRegisterResult(builder, sig.lowered.ret.registers, result, ret_ptr, proc.ret_layout);
         }
         try self.emitTailDrive(proc, ret_ptr);
+        if (pending_cell) |cell| try self.callBuiltinVoid(.native_callable_drive, &.{ ptr_ty, ptr_ty }, &.{ cell, ret_ptr });
         _ = wip.retVoid() catch return error.OutOfMemory;
         try self.finishCurrentWipFunction();
     }
@@ -2756,6 +2783,7 @@ pub const MonoLlvmCodeGen = struct {
         const outer_tail_scratch = self.current_tail_scratch;
         const outer_tail_group = self.current_tail_group;
         const outer_caller_drives_flag = self.caller_drives_flag;
+        const outer_pending_cell = self.pending_cell;
         const outer_dyn_result = self.current_dyn_result;
         const outer_carry = self.current_carry;
         const outer_frame_locals = self.current_frame_locals;
@@ -2773,6 +2801,7 @@ pub const MonoLlvmCodeGen = struct {
             self.current_tail_scratch = outer_tail_scratch;
             self.current_tail_group = outer_tail_group;
             self.caller_drives_flag = outer_caller_drives_flag;
+            self.pending_cell = outer_pending_cell;
             self.current_dyn_result = outer_dyn_result;
             self.current_carry = outer_carry;
             self.current_frame_locals = outer_frame_locals;
@@ -2844,16 +2873,24 @@ pub const MonoLlvmCodeGen = struct {
         else
             null;
         self.caller_drives_flag = null;
-        if (proc.reads_caller_drives) {
-            // Read before anything else can make an erased call: the
-            // runtime's answer describes only this invocation.
-            const flag_ptr = try self.allocEntryBlockSlot(.i8, 1, LlvmBuilder.Alignment.fromByteUnits(1), "caller_drives");
-            // The runtime names the callable it invokes by the function
-            // pointer callable values hold, which is this procedure's.
-            const own_fn = self.proc_registry.get(@backingInt(proc_id)) orelse return error.CompilationFailed;
-            const flag = try self.callBuiltin(.native_callable_caller_drives, .i8, &.{try self.ptrType()}, &.{own_fn.toValue(builder)});
-            _ = wip.store(.normal, flag, flag_ptr, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.OutOfMemory;
-            self.caller_drives_flag = flag_ptr;
+        self.pending_cell = null;
+        if (fast_sig) |sig| {
+            if (sig.pending_index) |index| self.pending_cell = wip.arg(index);
+        }
+        if (proc.uses_pending_cell and self.pending_cell == null) {
+            const own_cell = try self.allocPendingCell();
+            self.pending_cell = own_cell;
+            if (proc.reads_caller_drives) {
+                // A cell in the erased ABI's last argument belongs to the
+                // runtime that invoked this procedure, and makes its calls.
+                const ptr_ty = try self.ptrType();
+                const caller_cell = try self.callBuiltin(.native_callable_caller_cell, ptr_ty, &.{ptr_ty}, &.{wip.arg(5)});
+                const caller_drives = wip.icmp(.ne, caller_cell, try self.nullPtr(), "") catch return error.OutOfMemory;
+                const flag_ptr = try self.allocEntryBlockSlot(.i1, 1, LlvmBuilder.Alignment.fromByteUnits(1), "caller_drives");
+                _ = wip.store(.normal, caller_drives, flag_ptr, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.OutOfMemory;
+                self.caller_drives_flag = flag_ptr;
+                self.pending_cell = wip.select(.normal, caller_drives, caller_cell, own_cell, "") catch return error.OutOfMemory;
+            }
         }
 
         self.current_dyn_result = proc.dyn_result;
@@ -4640,10 +4677,9 @@ pub const MonoLlvmCodeGen = struct {
         return self.inline_everywhere.items.len > @backingInt(proc_id) and self.inline_everywhere.items[@backingInt(proc_id)];
     }
 
-    /// The locals whose slot addresses `emitDirectCall` passes to an
-    /// out-of-line callee, for `SlotLifetimes`: the target of a result
-    /// returned through memory, and each argument passed by pointer. An
-    /// `alwaysinline` callee is never out of line.
+    /// The local addresses passed to out-of-line procedures and explicit RC
+    /// helpers. Procedure calls follow the fast ABI; RC calls follow the same
+    /// scratch-versus-local rule as emission. No ownership is inferred here.
     const AddressedCallLocals = struct {
         codegen: *MonoLlvmCodeGen,
 
@@ -4653,8 +4689,19 @@ pub const MonoLlvmCodeGen = struct {
             return self.codegen.value_plan.storageRoot(local);
         }
 
-        pub fn appendAddressed(self: AddressedCallLocals, call: @FieldType(lir.LIR.CFStmt, "assign_call"), out: *std.ArrayList(LocalId)) AppendError!void {
+        pub fn appendAddressed(self: AddressedCallLocals, stmt: lir.LIR.CFStmt, out: *std.ArrayList(LocalId)) AppendError!void {
             const codegen = self.codegen;
+            switch (stmt) {
+                inline .incref, .decref, .decref_if_initialized, .free => |rc| {
+                    if (codegen.localDyn(rc.value) == null and rcUsesLocalSlot(codegen.layoutByteSize(codegen.localLayout(rc.value)))) {
+                        try out.append(codegen.allocator, rc.value);
+                    }
+                    return;
+                },
+                .assign_call => {},
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .dyn, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return,
+            }
+            const call = stmt.assign_call;
             if (codegen.store.stmtRowOrDefault(call.extra).replaces_frame) return;
             const proc = codegen.store.getProcSpec(call.proc);
             if (proc.hosted != null) return;
@@ -4830,6 +4877,10 @@ pub const MonoLlvmCodeGen = struct {
             try param_types.append(self.allocator, ptr_ty);
             try call_args.append(self.allocator, try self.nullPtr());
         }
+        if (sig.pending_index != null) {
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, try self.pendingCell());
+        }
         if (scratch) |storage| {
             try param_types.append(self.allocator, ptr_ty);
             try call_args.append(self.allocator, storage);
@@ -4927,6 +4978,12 @@ pub const MonoLlvmCodeGen = struct {
             try param_types.append(self.allocator, ptr_ty);
             try call_args.append(self.allocator, storage);
         }
+        if (sig.pending_index != null) {
+            // The callee leaves its pending call where this procedure's
+            // caller waits for this procedure's.
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, try self.pendingCell());
+        }
         if (sig.scratch_index != null) {
             try param_types.append(self.allocator, ptr_ty);
             try call_args.append(self.allocator, self.current_tail_scratch orelse
@@ -4981,11 +5038,24 @@ pub const MonoLlvmCodeGen = struct {
             break :blk buf;
         };
         if (deferred) {
-            try self.callBuiltinVoid(.native_callable_defer, &.{ ptr_ty, ptr_ty, ptr_ty, self.ptrSizedIntType() }, &.{ fn_ptr, closure_ptr, args_buf, try self.intValue(self.ptrSizedIntType(), self.store.getErasedCallArgsPlan(arg_plan).size) });
+            try self.callBuiltinVoid(.native_callable_defer, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, self.ptrSizedIntType() }, &.{ try self.pendingCell(), fn_ptr, closure_ptr, args_buf, try self.intValue(self.ptrSizedIntType(), self.store.getErasedCallArgsPlan(arg_plan).size) });
         } else {
             const ret_ptr = if (self.slot(target).size == 0) try self.nullPtr() else self.slot(target).ptr;
             try self.callBuiltinVoid(.native_callable_call, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{ fn_ptr, ret_ptr, args_buf, capture_ptr, reuse_ptr });
         }
+    }
+
+    /// An empty pending cell in this frame.
+    fn allocPendingCell(self: *MonoLlvmCodeGen) Error!LlvmBuilder.Value {
+        const word_size = self.targetWordSize();
+        const cell = try self.allocEntryBlockSlot(.i8, builtins.native_callable.pending_words * word_size, LlvmBuilder.Alignment.fromByteUnits(word_size), "pending_cell");
+        try self.storePointer(cell, try self.nullPtr());
+        return cell;
+    }
+
+    /// The pending cell of the procedure being compiled.
+    fn pendingCell(self: *const MonoLlvmCodeGen) Error!LlvmBuilder.Value {
+        return self.pending_cell orelse llvmInvariantFmt("a statement that can leave an erased call pending in a procedure without a pending cell", .{});
     }
 
     /// Run the erased calls a callee left pending, as the tail-drive pass
@@ -5004,8 +5074,7 @@ pub const MonoLlvmCodeGen = struct {
         if (drive == .unless_caller_drives) {
             const flag_ptr = self.caller_drives_flag orelse
                 llvmInvariantFmt("procedure reads a caller-drives flag it never recorded", .{});
-            const flag = wip.load(.normal, .i8, flag_ptr, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
-            const caller_drives = wip.icmp(.ne, flag, try self.intValue(.i8, 0), "") catch return error.OutOfMemory;
+            const caller_drives = wip.load(.normal, .i1, flag_ptr, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
             const drive_block = wip.block(0, "drive_pending") catch return error.OutOfMemory;
             done_block = wip.block(0, "pending_done") catch return error.OutOfMemory;
             _ = wip.brCond(caller_drives, done_block.?, drive_block, .none) catch return error.OutOfMemory;
@@ -5017,7 +5086,7 @@ pub const MonoLlvmCodeGen = struct {
             builder.nullValue(ptr_ty) catch return error.OutOfMemory
         else
             self.slot(target).ptr;
-        try self.callBuiltinVoid(.native_callable_drive, &.{ptr_ty}, &.{ret_ptr});
+        try self.callBuiltinVoid(.native_callable_drive, &.{ ptr_ty, ptr_ty }, &.{ try self.pendingCell(), ret_ptr });
         if (done_block) |block| {
             _ = wip.br(block) catch return error.OutOfMemory;
             wip.cursor = .{ .block = block };
@@ -12201,7 +12270,7 @@ pub const MonoLlvmCodeGen = struct {
                             try self.intValue(usize_ty, self.layoutByteSize(self.localLayout(args)))
                     else
                         try self.intValue(usize_ty, 0);
-                    try self.callBuiltinVoid(.native_callable_defer, &.{ ptr_ty, ptr_ty, ptr_ty, usize_ty }, &.{ fn_ptr, closure_ptr, args_ptr, args_len });
+                    try self.callBuiltinVoid(.native_callable_defer, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, usize_ty }, &.{ try self.pendingCell(), fn_ptr, closure_ptr, args_ptr, args_len });
                 } else {
                     const ret_ptr = if (self.localDyn(target) == null and self.layoutByteSize(self.localLayout(target)) == 0)
                         try self.nullPtr()
@@ -12436,6 +12505,10 @@ pub const MonoLlvmCodeGen = struct {
     /// wider than this pass their own slot pointer as before.
     const rc_arg_scratch_size = 64;
 
+    fn rcUsesLocalSlot(size: u32) bool {
+        return size > rc_arg_scratch_size;
+    }
+
     fn emitRcForLocal(self: *MonoLlvmCodeGen, op: layout.RcOp, local: LocalId, count: u32, atomicity: RcAtomicity) Error!void {
         const slot_v = self.slot(local);
         if (slot_v.size == 0) return;
@@ -12473,7 +12546,7 @@ pub const MonoLlvmCodeGen = struct {
         // hot iteration. Copying into a shared per-function scratch slot at
         // the call site keeps those stores next to the (usually cold) call,
         // and the helpers only read through the pointer.
-        const rc_ptr = if (slot_v.size <= rc_arg_scratch_size) blk: {
+        const rc_ptr = if (!rcUsesLocalSlot(slot_v.size)) blk: {
             if (self.rc_arg_scratch == null) {
                 self.rc_arg_scratch = try self.allocEntryBlockSlot(
                     .i8,
@@ -15388,6 +15461,148 @@ test "issue 12505: large record tuple and tag payload projections borrow storage
             // are offsets, and only the requested scalar is loaded.
             try std.testing.expect(std.mem.find(u8, function, ".fast(ptr ") != null);
             for ([_][]const u8{ "alloca", "memcpy", "store " }) |op| try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, function, op));
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, "load i64"));
+        }
+    }
+}
+
+test "issue 12819: RC helper arguments have bounded slot lifetimes" {
+    const gpa = std.testing.allocator;
+    inline for (.{ .incref, .decref, .decref_if_initialized, .free }) |kind| {
+        var store = lir.LirStore.init(gpa);
+        defer store.deinit();
+        var layouts = try layout.Store.init(gpa, .u64);
+        defer layouts.deinit();
+        var fields: [8]layout.StructField = undefined;
+        for (&fields, 0..) |*field, i| field.* = .{ .index = @intCast(i), .layout = .str };
+        const wide = try layouts.putStructFields(&fields);
+        const input = try store.addLocal(.{ .layout_idx = wide });
+        const value = try store.addLocal(.{ .layout_idx = wide });
+        const result = try store.addLocal(.{ .layout_idx = .u64 });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+        const helper: lir.LIR.RcHelper = .{ .concrete = .{
+            .op = if (kind == .decref_if_initialized) .decref else kind,
+            .layout_idx = wide,
+        } };
+        const release = try store.addCFStmt(if (kind == .decref_if_initialized)
+            .{ .decref_if_initialized = .{ .cond = result, .value = value, .data = try store.addStmtRow(lir.LIR.DecrefIfInitializedData, .{ .rc = helper }), .next = ret } }
+        else
+            @unionInit(lir.LIR.CFStmt, @tagName(kind), .{ .value = value, .rc = try store.addRcHelperRef(helper), .next = ret }), .test_fixture);
+        const body = try store.addCFStmt(.{ .set_local = .{
+            .target = value,
+            .value = input,
+            .mode = .initialize_join_param,
+            .next = release,
+        } }, .test_fixture);
+        _ = try store.addProcSpec(.{
+            .name = .fromRaw(1),
+            .identity = lir.LIR.ProcIdentity.forTest(1),
+            .args = try store.addLocalSpan(&.{ input, result }),
+            .frame_locals = try store.addLocalSpan(&.{value}),
+            .body = body,
+            .ret_layout = .u64,
+        }, .none);
+        var codegen = MonoLlvmCodeGen.init(gpa, &store);
+        defer codegen.deinit();
+        codegen.layout_store = &layouts;
+        var builder = try codegen.createBuilder("rc_slot_lifetime");
+        defer builder.deinit();
+        codegen.builder = &builder;
+        defer codegen.builder = null;
+        try codegen.compileAllProcSpecs(store.getProcSpecs());
+        var ir: std.Io.Writer.Allocating = .init(gpa);
+        defer ir.deinit();
+        try builder.print(&ir.writer);
+        const function = printedFunction(ir.written(), "roc_proc_0.fast") orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, "call void @llvm.lifetime.start"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, "call void @llvm.lifetime.end"));
+    }
+}
+
+test "issue 12819: large join parameter reads share storage" {
+    const gpa = std.testing.allocator;
+    const Shape = enum { record, tuple, tag_payload, tag_payload_struct };
+    inline for (.{ std.Target.Cpu.Arch.x86_64, .aarch64 }) |arch| {
+        inline for ([_]Shape{ .record, .tuple, .tag_payload, .tag_payload_struct }) |shape| {
+            var store = lir.LirStore.init(gpa);
+            defer store.deinit();
+            var layouts = try layout.Store.init(gpa, .u64);
+            defer layouts.deinit();
+            var fields: [64]layout.StructField = undefined;
+            for (&fields, 0..) |*field, i| field.* = .{ .index = @intCast(i), .layout = .u64 };
+            const wide = try layouts.putStructFields(&fields);
+            const wrapper = try layouts.putStructFields(&.{ .{ .index = 0, .layout = .u64 }, .{ .index = 1, .layout = wide } });
+            const outer = switch (shape) {
+                .record => wrapper,
+                .tuple => try layouts.putTuple(&.{ layouts.getLayout(.u64), layouts.getLayout(wide) }),
+                .tag_payload, .tag_payload_struct => try layouts.putTagUnion(&.{ .zst, wrapper }),
+            };
+            const input = try store.addLocal(.{ .layout_idx = outer });
+            const joined = try store.addLocal(.{ .layout_idx = outer });
+            const alias = try store.addLocal(.{ .layout_idx = outer });
+            const payload = try store.addLocal(.{ .layout_idx = wrapper });
+            const projected = try store.addLocal(.{ .layout_idx = wide });
+            const copied = try store.addLocal(.{ .layout_idx = wide });
+            const result = try store.addLocal(.{ .layout_idx = .u64 });
+            var body = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+            body = try store.addCFStmt(.{ .assign_ref = .{ .target = result, .op = lir.LIR.RefOp.field(copied, 63), .next = body } }, .test_fixture);
+            body = try store.addCFStmt(.{ .assign_ref = .{ .target = copied, .op = lir.LIR.RefOp.local(projected), .next = body } }, .test_fixture);
+            body = try store.addCFStmt(.{
+                .assign_ref = .{
+                    .target = projected,
+                    .op = switch (shape) {
+                        .record, .tuple => lir.LIR.RefOp.field(alias, 1),
+                        .tag_payload => lir.LIR.RefOp.tagPayload(alias, 1, 1, 1),
+                        .tag_payload_struct => lir.LIR.RefOp.field(payload, 1),
+                    },
+                    .next = body,
+                },
+            }, .test_fixture);
+            if (shape == .tag_payload_struct) body = try store.addCFStmt(.{ .assign_ref = .{ .target = payload, .op = lir.LIR.RefOp.tagPayloadStruct(alias, 1, 1), .next = body } }, .test_fixture);
+            body = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = lir.LIR.RefOp.local(joined), .next = body } }, .test_fixture);
+            var join_points = ValuePlan.JoinPointIds{};
+            const join_id = join_points.fresh();
+            const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+            const initialize = try store.addCFStmt(.{ .set_local = .{
+                .target = joined,
+                .value = input,
+                .mode = .initialize_join_param,
+                .next = jump,
+            } }, .test_fixture);
+            body = try store.addCFStmt(.{ .join = .{
+                .id = join_id,
+                .params = try store.addLocalSpan(&.{joined}),
+                .body = body,
+                .remainder = initialize,
+            } }, .test_fixture);
+            const proc = try store.addProcSpec(.{
+                .name = .fromRaw(1),
+                .identity = lir.LIR.ProcIdentity.forTest(1),
+                .args = try store.addLocalSpan(&.{input}),
+                .frame_locals = try store.addLocalSpan(if (shape == .tag_payload_struct) &.{ joined, alias, payload, projected, copied, result } else &.{ joined, alias, projected, copied, result }),
+                .body = body,
+                .ret_layout = .u64,
+            }, .none);
+            const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = arch, .os_tag = .linux });
+            var codegen = MonoLlvmCodeGen.initForLinkedObject(gpa, &store, target);
+            defer codegen.deinit();
+            codegen.layout_store = &layouts;
+            codegen.proc_symbol_mode = .local_index;
+            var builder = try codegen.createBuilder("aggregate_views");
+            defer builder.deinit();
+            codegen.builder = &builder;
+            defer codegen.builder = null;
+            try codegen.compileAllProcSpecs(store.getProcSpecs());
+            var ir: std.Io.Writer.Allocating = .init(gpa);
+            defer ir.deinit();
+            try builder.print(&ir.writer);
+            const name = try std.fmt.allocPrint(gpa, "roc_proc_{d}.fast", .{@backingInt(proc)});
+            defer gpa.free(name);
+            const function = printedFunction(ir.written(), name) orelse return error.TestUnexpectedResult;
+            // The join owns one snapshot. Reading it, including through chains
+            // of aggregate projections, needs no additional slots or copies.
+            try std.testing.expect(std.mem.find(u8, function, ".fast(ptr ") != null);
+            for ([_][]const u8{ "alloca", "call void @llvm.memcpy" }) |op| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, op));
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, "load i64"));
         }
     }

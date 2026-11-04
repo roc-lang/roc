@@ -166,7 +166,9 @@ pub fn run(
             },
             .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => unreachable, // only erased calls are collected as deferred
         }
-        if (drive == .unless_caller_drives) store.getProcSpecPtr(@fromBackingInt(deferred.caller)).reads_caller_drives = true;
+        const caller = store.getProcSpecPtr(@fromBackingInt(deferred.caller));
+        caller.uses_pending_cell = true;
+        if (drive == .unless_caller_drives) caller.reads_caller_drives = true;
     }
     for (direct_calls.items) |call| {
         if (!may_pend.isSet(call.callee)) continue;
@@ -177,7 +179,9 @@ pub fn run(
         // A call that runs pending calls afterwards keeps its frame to do so.
         if (drive.canDriveHere()) extra.replaces_frame = false;
         updated.extra = try store.addOptionalStmtRow(LIR.CallExtra, extra);
-        if (drive == .unless_caller_drives) store.getProcSpecPtr(@fromBackingInt(call.caller)).reads_caller_drives = true;
+        const caller = store.getProcSpecPtr(@fromBackingInt(call.caller));
+        caller.uses_pending_cell = true;
+        if (drive == .unless_caller_drives) caller.reads_caller_drives = true;
     }
 }
 
@@ -289,6 +293,12 @@ test "cached pending-call summaries propagate without a locally deferred call" {
         try std.testing.expectEqual(pending, store.getProcSpecImmediate(external).may_leave_pending);
         try std.testing.expectEqual(pending, store.getProcSpecImmediate(relay).may_leave_pending);
         try std.testing.expect(!store.getProcSpecImmediate(root).may_leave_pending);
+        // A relay passes its caller's cell on; a root waits with its own.
+        try std.testing.expectEqual(pending, store.getProcSpecImmediate(external).takesPendingCell());
+        try std.testing.expectEqual(pending, store.getProcSpecImmediate(relay).takesPendingCell());
+        try std.testing.expectEqual(pending, store.getProcSpecImmediate(relay).uses_pending_cell);
+        try std.testing.expect(!store.getProcSpecImmediate(root).takesPendingCell());
+        try std.testing.expectEqual(pending, store.getProcSpecImmediate(root).uses_pending_cell);
         try std.testing.expectEqual(if (pending) LIR.PendingDrive.handed_up else .none, store.stmtRowOrDefault(store.getCFStmtImmediate(call).assign_call.extra).drive);
         try std.testing.expectEqual(if (pending) LIR.PendingDrive.always else .none, store.stmtRowOrDefault(store.getCFStmtImmediate(root_call).assign_call.extra).drive);
     }

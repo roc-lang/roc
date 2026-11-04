@@ -1,8 +1,9 @@
 //! One program's composition from its units' pieces (design.md "Unit Pieces
 //! And Whole-Program Dead Code"): the excerpts the program's roots reach,
 //! across every unit, in the canonical order of an arranged image, with each
-//! procedure and helper defined once, by the first unit defining it, and
-//! every constant the kept code names.
+//! helper defined once, by the first unit defining it, and every constant the
+//! kept code names. A procedure's identity names one procedure, so exactly one
+//! unit defines it.
 //!
 //! The walk is exact: an excerpt is kept when a kept excerpt, an entrypoint
 //! wrapper or a host-visible constant names it. Resolving what an excerpt
@@ -106,8 +107,9 @@ pub fn compose(
     return try merge(allocator, sets, &reach, host_visible, &index);
 }
 
-/// Where every procedure and helper of the program is defined: in the first
-/// unit defining it, which every reference to it lands on.
+/// Where every procedure and helper of the program is defined: a procedure in
+/// the one unit defining it, and a helper in the first unit defining it, which
+/// every reference to it lands on.
 const Index = struct {
     by_proc: std.AutoHashMapUnmanaged(ProcIdentity, Ref) = .empty,
     /// Procedures by the leading bytes their symbol names spell.
@@ -123,7 +125,7 @@ const Index = struct {
             switch (excerpt.kind) {
                 .proc => |identity| {
                     const gop = try self.by_proc.getOrPut(allocator, identity);
-                    if (gop.found_existing) continue;
+                    if (gop.found_existing) invariant("two units define the procedure {x}", .{identity.bytes});
                     gop.value_ptr.* = ref;
                     const symbol = try self.by_symbol.getOrPut(allocator, identity.bytes[0..16].*);
                     if (!symbol.found_existing) symbol.value_ptr.* = ref;
@@ -161,8 +163,8 @@ const Index = struct {
         return self.by_name.get(name);
     }
 
-    /// The definition `excerpt`, at `ref`, stands for: a procedure's or a
-    /// helper's first definition, and any other excerpt itself.
+    /// The definition `excerpt`, at `ref`, stands for: a procedure's one
+    /// definition, a helper's first definition, and any other excerpt itself.
     fn canonical(self: *const Index, excerpt: Excerpt, ref: Ref) Ref {
         return switch (excerpt.kind) {
             .proc => |identity| self.by_proc.get(identity) orelse unreachable, // every procedure excerpt was indexed

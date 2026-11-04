@@ -842,12 +842,6 @@ const Lowerer = struct {
     result: LirProgram.Result,
     runtime_schemas: RuntimeSchemaStore,
     type_map: collections.DenseMap(SolvedType.TypeVarId, Type.TypeId),
-    /// For each Solved backing record of a nominal that declares padding, that
-    /// nominal. See `collectPaddedBackingOwners`.
-    padded_backing_owners: collections.DenseMap(SolvedType.TypeVarId, SolvedType.TypeVarId),
-    /// For each lowered padded backing record, its lowered nominal, whose
-    /// declared layout the backing takes.
-    padded_backing_nominals: collections.DenseMap(Type.TypeId, Type.TypeId),
     fn_specs: std.ArrayList(FnSpec),
     fn_entries: std.ArrayList(FnEntry),
     fn_spec_map: std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage),
@@ -1222,10 +1216,6 @@ const Lowerer = struct {
         errdefer recursive_value_capture_ids.deinit();
         try Lowerer.collectRecursiveValueLocals(&solved.lifted, &recursive_value_locals, &recursive_value_capture_ids);
 
-        var padded_backing_owners = collections.DenseMap(SolvedType.TypeVarId, SolvedType.TypeVarId).init(allocator);
-        errdefer padded_backing_owners.deinit();
-        try collectPaddedBackingOwners(solved.types.view(), &padded_backing_owners);
-
         const workspace_count = if (options.post_check_executor) |executor| executor.lane_count else 0;
         const worker_workspaces = try allocator.alloc(?FnBodyWorkspace, workspace_count);
         errdefer allocator.free(worker_workspaces);
@@ -1240,8 +1230,6 @@ const Lowerer = struct {
             .result = try LirProgram.Result.init(allocator, target_usize),
             .runtime_schemas = RuntimeSchemaStore.init(allocator),
             .type_map = collections.DenseMap(SolvedType.TypeVarId, Type.TypeId).init(allocator),
-            .padded_backing_owners = padded_backing_owners,
-            .padded_backing_nominals = collections.DenseMap(Type.TypeId, Type.TypeId).init(allocator),
             .fn_specs = .empty,
             .fn_entries = .empty,
             .fn_spec_map = std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
@@ -1458,8 +1446,6 @@ const Lowerer = struct {
         self.fn_entries.deinit(self.allocator);
         self.fn_specs.deinit(self.allocator);
         self.type_map.deinit();
-        self.padded_backing_owners.deinit();
-        self.padded_backing_nominals.deinit();
         self.types.deinit();
     }
 
@@ -4055,27 +4041,16 @@ const Lowerer = struct {
     /// Cursor states of a type lowering.
     const TypeVarCursor = struct {
         const start = 0;
-        const padded_owner = 1;
-        const callable = 2;
-        const children = 3;
+        const callable = 1;
+        const children = 2;
         /// A record field's value type, after its type.
-        const field_value = 4;
-        const named_backing = 5;
-        const named_declared_order = 6;
+        const field_value = 3;
+        const named_backing = 4;
+        const named_declared_order = 5;
     };
 
     fn finishTypeVar(self: *Lowerer, task: *TypeVarTask, content: Type.Content) Common.LowerError!TypeStep {
-        const root = task.root;
         try self.types.set(task.reserved, content);
-        const solved_content = self.solved.types.get(root);
-        if (solved_content == .named and solved_content.named.backing != null) {
-            const backing_root = self.solved.types.root(solved_content.named.backing.?.ty);
-            if (self.padded_backing_owners.get(backing_root)) |owner| {
-                if (self.solved.types.root(owner) == root) {
-                    try self.padded_backing_nominals.put(self.type_map.get(backing_root).?, task.reserved);
-                }
-            }
-        }
         return .{ .ret = .{ .ty = task.reserved } };
     }
 
@@ -4088,15 +4063,6 @@ const Lowerer = struct {
                 if (self.worker_callback) {
                     self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared type");
                 }
-                // A padded backing is lowered through its nominal, which records the
-                // backing's layout owner before anything can lay the backing out.
-                if (self.padded_backing_owners.get(root)) |owner| {
-                    if (!self.type_map.contains(self.solved.types.root(owner))) {
-                        frame.cursor = TypeVarCursor.padded_owner;
-                        return typeVarStep(owner);
-                    }
-                }
-
                 const content = self.solved.types.get(root);
                 task.reserved = try self.types.add(.zst);
                 try self.type_map.put(root, task.reserved);
@@ -4129,7 +4095,6 @@ const Lowerer = struct {
                     .list, .box, .tuple, .record, .tag_union, .named => frame.cursor = TypeVarCursor.children,
                 }
             },
-            TypeVarCursor.padded_owner => return .{ .ret = .{ .ty = self.type_map.get(task.root) orelse Common.invariant("padded nominal lowering did not lower its backing") } },
             TypeVarCursor.callable => {
                 const members = input.?.span;
                 const content = self.solved.types.get(task.root);
@@ -4460,33 +4425,6 @@ const Lowerer = struct {
             }
         }
         return .{ .ret = .{ .span = try self.types.addDeclaredFields(task.lowered.items) } };
-    }
-
-    /// Records the nominal owning each Solved backing record whose nominal
-    /// declares padding. Such a backing is the same type as every record value
-    /// constructing that nominal, so it takes the nominal's declared layout
-    /// rather than the structural one; recording the owner up front makes that
-    /// independent of the order in which types are lowered and laid out. The
-    /// nominals sharing one backing are instances of one declaration and so
-    /// share its declared order; the lowest-numbered one is the owner.
-    fn collectPaddedBackingOwners(
-        types: SolvedType.Store.View,
-        owners: *collections.DenseMap(SolvedType.TypeVarId, SolvedType.TypeVarId),
-    ) Common.LowerError!void {
-        for (types.vars, 0..) |node, index| {
-            if (node != .named) continue;
-            const named = types.named_payloads[node.named];
-            if (named.kind == .alias or named.declared_order.len == 0) continue;
-            const backing = named.backing orelse continue;
-            const backing_root = types.root(backing.ty);
-            if (types.get(backing_root) != .record) continue;
-            const has_padding = for (types.declaredFieldSpan(named.declared_order)) |entry| {
-                if (entry == .padding) break true;
-            } else false;
-            if (!has_padding) continue;
-            const entry = try owners.getOrPut(backing_root);
-            if (!entry.found_existing) entry.value_ptr.* = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-        }
     }
 
     fn stringLiteralText(self: *const Lowerer, id: Lifted.StringLiteralId) []const u8 {
@@ -13240,6 +13178,28 @@ const Lowerer = struct {
         tag_union_layout_variant: struct { target: LIR.LocalId, target_content: layout.Layout, target_index: layout.VariantIndex, source: LIR.LocalId, source_content: layout.Layout, source_index: layout.VariantIndex, next: LIR.CFStmtId },
         /// `assignNominalBoundary`
         nominal_layout: NominalLayoutConversion,
+        /// A list whose elements have another layout, element by element.
+        list: ListConversion,
+        /// A box whose payload has another layout, through a new box.
+        boxed: BoxedConversion,
+    };
+
+    const BoxedConversion = struct {
+        conversion: TypedConversion,
+        target_payload_ty: Type.TypeId,
+        source_payload_ty: Type.TypeId,
+        source_payload: LIR.LocalId = undefined,
+    };
+
+    const ListConversion = struct {
+        conversion: TypedConversion,
+        target_elem_ty: Type.TypeId,
+        source_elem_ty: Type.TypeId,
+        /// The converted body's join, and the locals its entry initializes.
+        join_id: LIR.JoinPointId = undefined,
+        params: LIR.LocalSpan = undefined,
+        count: LIR.LocalId = undefined,
+        source_elem: LIR.LocalId = undefined,
     };
 
     const NominalLayoutConversion = struct {
@@ -13482,7 +13442,89 @@ const Lowerer = struct {
             .tag_union_layout => |task| try self.stepTagUnionLayoutBoundary(where, frame, task, input),
             .tag_union_layout_variant => |task| try self.stepTagUnionLayoutVariantBoundary(where, frame, task, input),
             .nominal_layout => |task| try self.stepNominalLayoutBoundary(where, frame, task, input),
+            .list => |*task| try self.stepListBoundary(where, task, input),
+            .boxed => |*task| try self.stepBoxedBoundary(where, task, input),
         };
+    }
+
+    /// Convert a box's payload into a new box of the target's layout.
+    fn stepBoxedBoundary(self: *Lowerer, where: LowerSite, task: *BoxedConversion, input: ?(?LIR.CFStmtId)) Common.LowerError!BoundaryStep {
+        const conversion = task.conversion;
+        if (input == null) {
+            task.source_payload = try self.addTemp(task.source_payload_ty);
+            const target_payload = try self.addTemp(task.target_payload_ty);
+            return .{ .call = .{ .typed = .{
+                .target = target_payload,
+                .target_ty = task.target_payload_ty,
+                .source = task.source_payload,
+                .source_ty = task.source_payload_ty,
+                .next = try self.assignUnaryLowLevel(where, conversion.target, .box_box, target_payload, conversion.next),
+            } } };
+        }
+        return .{ .ret = try self.assignUnaryLowLevel(where, task.source_payload, .box_unbox, conversion.source, input.?.?) };
+    }
+
+    /// Convert a list element by element into a new list of the target's
+    /// layout. The body runs as a join that jumps back to itself, as a lowered
+    /// loop does, and each element converts through its own typed boundary.
+    fn stepListBoundary(self: *Lowerer, where: LowerSite, task: *ListConversion, input: ?(?LIR.CFStmtId)) Common.LowerError!BoundaryStep {
+        const conversion = task.conversion;
+        if (input == null) {
+            const target_layout = self.result.store.getLocal(conversion.target).layout_idx;
+            const index = try self.addLocalForLayout(.u64);
+            const built = try self.addLocalForLayout(target_layout);
+            task.params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{ index, built });
+            task.join_id = self.freshJoinPointId();
+            task.count = try self.addLocalForLayout(.u64);
+            task.source_elem = try self.addTemp(task.source_elem_ty);
+            const target_elem = try self.addTemp(task.target_elem_ty);
+            const one = try self.addLocalForLayout(.u64);
+            const next_index = try self.addLocalForLayout(.u64);
+            const next_built = try self.addLocalForLayout(target_layout);
+
+            var repeat = try self.result.store.addCFStmt(.{ .jump = .{ .target = task.join_id } }, where.glue());
+            repeat = try self.prependJoinParamInitializers(where, task.params, &[_]?LIR.LocalId{ next_index, next_built }, repeat);
+            repeat = try self.assignBinaryLowLevel(where, next_built, .list_append_unsafe, built, target_elem, repeat);
+            repeat = try self.assignBinaryLowLevel(where, next_index, .num_int_add_wrap, index, one, repeat);
+            repeat = try self.assignU64Literal(where, one, 1, repeat);
+            return .{ .call = .{ .typed = .{
+                .target = target_elem,
+                .target_ty = task.target_elem_ty,
+                .source = task.source_elem,
+                .source_ty = task.source_elem_ty,
+                .next = repeat,
+            } } };
+        }
+
+        const params = self.result.store.getLocalSpan(task.params);
+        const index = GuardedList.at(params, 0);
+        const built = GuardedList.at(params, 1);
+        const has_elem = try self.addLocalForLayout(.bool);
+        const converted = try self.assignBinaryLowLevel(where, task.source_elem, .list_get_unsafe, conversion.source, index, input.?.?);
+        const finished = try self.assignLocal(where, conversion.target, built, conversion.next);
+        const body = try self.assignBinaryLowLevel(
+            where,
+            has_elem,
+            .num_is_lt,
+            index,
+            task.count,
+            try self.boolSwitchNoContinuation(where, has_elem, converted, finished),
+        );
+
+        const zero = try self.addLocalForLayout(.u64);
+        const empty = try self.addLocalForLayout(self.result.store.getLocal(conversion.target).layout_idx);
+        var entry = try self.result.store.addCFStmt(.{ .jump = .{ .target = task.join_id } }, where.glue());
+        entry = try self.prependJoinParamInitializers(where, task.params, &[_]?LIR.LocalId{ zero, empty }, entry);
+        entry = try self.assignUnaryLowLevel(where, empty, .list_with_capacity, task.count, entry);
+        entry = try self.assignU64Literal(where, zero, 0, entry);
+        entry = try self.assignUnaryLowLevel(where, task.count, .list_len, conversion.source, entry);
+        self.result.store.shapes.loop = true;
+        return .{ .ret = try self.result.store.addCFStmt(.{ .join = .{
+            .id = task.join_id,
+            .params = task.params,
+            .body = body,
+            .remainder = entry,
+        } }, where.glue()) };
     }
 
     fn stepTypedBoundary(self: *Lowerer, where: LowerSite, task: TypedConversion) Common.LowerError!BoundaryStep {
@@ -13530,6 +13572,19 @@ const Lowerer = struct {
         }
         if (target_content == .tuple and source_content == .tuple) {
             return .{ .tail = .{ .fields = .{ .kind = .tuple, .target = target, .target_span = target_content.tuple, .source = source, .source_span = source_content.tuple, .next = next } } };
+        }
+        if ((target_content == .list and source_content == .list) or (target_content == .box and source_content == .box)) {
+            const target_layout = self.result.store.getLocal(target).layout_idx;
+            const source_layout = self.result.store.getLocal(source).layout_idx;
+            if (!self.layoutsShareRepresentation(target_layout, source_layout) and
+                !try self.result.layouts.acceptsAtHoles(self.allocator, source_layout, target_layout) and
+                !try self.layoutsEquivalent(target_layout, source_layout))
+            {
+                return .{ .tail = if (target_content == .list)
+                    .{ .list = .{ .conversion = task, .target_elem_ty = target_content.list, .source_elem_ty = source_content.list } }
+                else
+                    .{ .boxed = .{ .conversion = task, .target_payload_ty = target_content.box, .source_payload_ty = source_content.box } } };
+            }
         }
         if (target_content == .tag_union and source_content == .tag_union) {
             return .{ .tail = .{ .variants = .{ .kind = .tag_union, .target = target, .target_span = target_content.tag_union, .source = source, .source_span = source_content.tag_union, .next = next } } };
@@ -13790,7 +13845,7 @@ const Lowerer = struct {
             .tag_union => {
                 const target_tags = self.types.tagSpan(task.target_span);
                 const source_tag = GuardedList.at(self.types.tagSpan(task.source_span), source_index);
-                const target_index = self.tagIndexInTags(target_tags, source_tag);
+                const target_index = tagIndexInTags(target_tags, source_tag);
                 return .{
                     .kind = .tag,
                     .target = task.target,
@@ -14309,17 +14364,13 @@ const Lowerer = struct {
     /// The position of `needle` in `tags`: the same label and the same payload
     /// types, since a joined row may hold one label at two payload types
     /// (design.md "Row Joins").
-    fn tagIndexInTags(self: *Lowerer, tags: anytype, needle: Type.Tag) usize {
-        const needle_payloads = self.types.span(needle.payloads);
+    /// The position of `needle` in `tags`. A name identifies a tag within its
+    /// row: the two sides of a boundary may store its payloads differently,
+    /// which is what the boundary converts.
+    fn tagIndexInTags(tags: anytype, needle: Type.Tag) usize {
         for (0..tags.len) |index| {
             const tag = GuardedList.at(tags, index);
-            if (tag.name != needle.name or tag.checked_name != needle.checked_name) continue;
-            const payloads = self.types.span(tag.payloads);
-            if (payloads.len != needle_payloads.len) continue;
-            const same = for (0..payloads.len) |payload_index| {
-                if (GuardedList.at(payloads, payload_index) != GuardedList.at(needle_payloads, payload_index)) break false;
-            } else true;
-            if (same) return index;
+            if (tag.name == needle.name and tag.checked_name == needle.checked_name) return index;
         }
         Common.invariant("tag union boundary target type did not contain source tag");
     }
@@ -15181,11 +15232,8 @@ const Lowerer = struct {
         fn beginInput(self: *LayoutGraphBuilder, start: Type.TypeId) Common.LowerError!BuildStep {
             const lowerer = self.lowerer;
             const allocator = lowerer.allocator;
-            var ty = start;
-            while (true) {
-                if (self.local_nodes.get(ty)) |node| return .{ .input = layout.localGraphInput(node) };
-                ty = lowerer.padded_backing_nominals.get(ty) orelse break;
-            }
+            const ty = start;
+            if (self.local_nodes.get(ty)) |node| return .{ .input = layout.localGraphInput(node) };
 
             switch (lowerer.types.get(ty)) {
                 .primitive => |primitive| return .{ .input = layout.committedGraphInput(Common.primitiveLayout(primitive)) },
@@ -15230,15 +15278,15 @@ const Lowerer = struct {
                     // An unnamed field explicitly opts a nominal or opaque record
                     // into declared-order layout. Without that marker the named
                     // type reuses its structural backing layout directly.
-                    // Reserve the node first (mapping both the named type and its
-                    // backing) so a recursive backing field resolves to it.
+                    // Reserve the node first so a recursive backing field resolves
+                    // to it. The backing row keeps its own structural node: other
+                    // nominals and plain records share that row.
                     if (named.kind != .alias and named.declared_order.len != 0 and
                         lowerer.types.get(backing.ty) == .record and
                         self.declaredOrderHasPadding(named.declared_order))
                     {
                         const node = try self.graph.reserveNode(allocator);
                         try self.local_nodes.put(ty, node);
-                        try self.local_nodes.put(backing.ty, node);
                         return .{ .push = .{ .kind = .{ .declared_order = .{
                             .node = node,
                             .declared_order = named.declared_order,
@@ -16213,7 +16261,7 @@ test "layout lowering keeps opted-in nominal record declaration order" {
     try std.testing.expectEqual(@as(u32, 8), lowerer.result.layouts.getStructSize(struct_idx));
 }
 
-test "a padded nominal's backing record takes the nominal's layout even when lowered first" {
+test "a record row keeps its structural layout when a padded nominal backs onto it" {
     const allocator = std.testing.allocator;
 
     var solved = emptySolvedProgramForTest(allocator);
@@ -16250,11 +16298,13 @@ test "a padded nominal's backing record takes the nominal's layout even when low
     var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
     defer lowerer.deinit();
 
-    // A record value constructing the nominal reaches lowering before the
-    // nominal itself does; its layout is still the declared one.
+    // The row lowers first, so nothing about the nominal is known to it, and
+    // the nominal lays out its declared order regardless.
     const backing_layout = try lowerer.layoutOfType(try lowerer.lowerType(backing));
     const padded_layout = try lowerer.layoutOfType(try lowerer.lowerType(padded));
-    try std.testing.expectEqual(padded_layout, backing_layout);
+    try std.testing.expect(padded_layout != backing_layout);
+    const backing_idx = lowerer.result.layouts.getLayout(backing_layout).getStruct().idx;
+    try std.testing.expectEqual(@as(u32, 8), lowerer.result.layouts.getStructSize(backing_idx));
     const struct_idx = lowerer.result.layouts.getLayout(padded_layout).getStruct().idx;
     try std.testing.expectEqual(@as(u32, 12), lowerer.result.layouts.getStructSize(struct_idx));
     try std.testing.expectEqual(@as(u32, 0), lowerer.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
