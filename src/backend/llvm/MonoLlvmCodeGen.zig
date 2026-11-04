@@ -4682,16 +4682,19 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitSlotLifetimeMarkers(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) Error!void {
         const markers = self.slot_lifetimes.at(stmt_id);
-        if (markers.len == 0) return;
-        const wip = self.wip orelse return error.CompilationFailed;
-        const ptr_ty = try self.ptrType();
         for (markers) |marker| {
             const intrinsic: LlvmBuilder.Intrinsic = switch (marker.kind) {
                 .start => .@"lifetime.start",
                 .end => .@"lifetime.end",
             };
-            _ = wip.callIntrinsic(.normal, .none, intrinsic, &.{ptr_ty}, &.{self.slot(marker.local).ptr}, "") catch return error.OutOfMemory;
+            try self.emitLifetimeMarker(intrinsic, self.slot(marker.local).ptr);
         }
+    }
+
+    /// Mark the start or end of the lifetime of the stack slot at `ptr`.
+    fn emitLifetimeMarker(self: *MonoLlvmCodeGen, intrinsic: LlvmBuilder.Intrinsic, ptr: LlvmBuilder.Value) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        _ = wip.callIntrinsic(.normal, .none, intrinsic, &.{try self.ptrType()}, &.{ptr}, "") catch return error.OutOfMemory;
     }
 
     fn emitDirectCall(
@@ -4786,6 +4789,10 @@ pub const MonoLlvmCodeGen = struct {
         }
         const param_locals = self.store.getLocalSpan(proc.args);
         const scratch: ?LlvmBuilder.Value = if (sig.scratch_index != null) try self.tailScratchArg(proc, sig) else null;
+        // Storage for one call to a procedure outside every tail group lives
+        // only for that call, so exclusive call sites can share stack space.
+        const call_storage: ?LlvmBuilder.Value = if (proc.tail_group == null) scratch else null;
+        if (call_storage) |storage| try self.emitLifetimeMarker(.@"lifetime.start", storage);
         for (sig.lowered.args, sig.arg_layouts, 0..) |placement, arg_layout, i| {
             const arg_local = GuardedList.at(arg_locals, i);
             const dynamic_param = self.localDyn(GuardedList.at(param_locals, i)) != null;
@@ -4841,6 +4848,7 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
         if (self.tailDriverFor(proc) != null) try self.emitTailDrive(proc, target_storage orelse self.slot(target).ptr);
+        if (call_storage) |storage| try self.emitLifetimeMarker(.@"lifetime.end", storage);
     }
 
     /// A direct call whose callee returns on this procedure's behalf. Every
