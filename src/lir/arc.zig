@@ -16599,6 +16599,77 @@ test "RC complete projection after a rebind of its root keeps its own read" {
     try testing.expectEqual(wrapper, second_projection_stmt.assign_ref.op.source);
 }
 
+test "RC a parameter whose owned variant takes every unit on every return is owned by its base signature" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Repro for https://github.com/roc-lang/roc/issues/12847: the body reads
+    // its captures' only list and consumes it on every path. A borrowed base
+    // would retain the list exactly where an owned body takes it, so the
+    // base owns the position and no second body exists: a dying argument
+    // moves, and an argument used again retains at its call.
+    const captures_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = f.list_i64 },
+    });
+    const body_captures = try f.local(captures_layout);
+    const body_list = try f.local(f.list_i64);
+    const body_changed = try f.local(f.list_i64);
+    const body_ret = try f.ret(body_changed);
+    const consume = try f.assignLowLevel(body_changed, &.{body_list}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), body_ret);
+    const body_read = try f.assignRefField(body_list, body_captures, 0, consume);
+    const callee = try f.addProc(&.{body_captures}, body_read, f.list_i64);
+
+    // A caller passing its captures dying.
+    const dying_list = try f.local(f.list_i64);
+    const dying_captures = try f.local(captures_layout);
+    const dying_result = try f.local(f.list_i64);
+    const dying_ret = try f.ret(dying_result);
+    const dying_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = dying_result,
+        .proc = callee,
+        .args = try f.span(&.{dying_captures}),
+        .next = dying_ret,
+    } }, .test_fixture);
+    const dying_make = try f.assignStruct(dying_captures, &.{dying_list}, dying_call);
+    const dying_body = try f.assignList(dying_list, &.{}, dying_make);
+    const dying_caller = try f.addProc(&.{}, dying_body, f.list_i64);
+
+    // A caller passing its captures twice: the first call keeps them alive.
+    const kept_list = try f.local(f.list_i64);
+    const kept_captures = try f.local(captures_layout);
+    const first_result = try f.local(f.list_i64);
+    const second_result = try f.local(f.list_i64);
+    const kept_ret = try f.ret(second_result);
+    const second_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = second_result,
+        .proc = callee,
+        .args = try f.span(&.{kept_captures}),
+        .next = kept_ret,
+    } }, .test_fixture);
+    const first_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = first_result,
+        .proc = callee,
+        .args = try f.span(&.{kept_captures}),
+        .next = second_call,
+    } }, .test_fixture);
+    const kept_make = try f.assignStruct(kept_captures, &.{kept_list}, first_call);
+    const kept_body = try f.assignList(kept_list, &.{}, kept_make);
+    const kept_caller = try f.addProc(&.{}, kept_body, f.list_i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+    try testing.expectEqual(base_proc_count, f.store.procSpecCount());
+    try testing.expectEqual(@as(u64, 0), f.store.getProcSpecImmediate(callee).rc_borrowed_params);
+    try testing.expectEqual(callee, (try f.directCallTo(dying_caller, dying_result)).proc);
+    try testing.expectEqual(callee, (try f.directCallTo(kept_caller, first_result)).proc);
+    try testing.expectEqual(callee, (try f.directCallTo(kept_caller, second_result)).proc);
+    try f.expectRc(dying_captures, 0, 0, 0);
+    try f.expectRc(kept_captures, 1, 0, 0);
+    try testing.expectEqual(@as(usize, 0), f.countRc(body_list, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(body_captures, .incref));
+}
+
 test "RC borrowed field read takes its field at the last consuming operand" {
     for ([_]bool{ false, true }) |consumed_after| {
         try expectBorrowedReadTakesAtLastOperand(consumed_after);
