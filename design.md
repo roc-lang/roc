@@ -2438,6 +2438,14 @@ arguments, which the prologue writes, and locals in deferred string-match
 captures, which the backend materializes outside the statements that access
 them, keep their activation lifetime.
 
+The always-inline selection of wrappers and leaves is a speed-build policy.
+A size build (`--opt=size`) selects nothing: every function the module
+defines, including the linked builtins and the private runtime, carries
+LLVM's `optsize` and `minsize` and no `inlinehint`, so LLVM's size cost model
+is the one measure of every inlining decision, exactly as it is for a C or
+Zig module built for minimum size. The five pinned leaf builtins keep
+`alwaysinline` in every mode.
+
 LLVM call sites do not acquire `alwaysinline` from loop nesting. Nesting depth
 does not establish execution frequency or bound the combined body of a caller
 with many sites. Larger helpers remain ordinary calls so LLVM can simplify each
