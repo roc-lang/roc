@@ -2857,12 +2857,10 @@ test "an x86_64 Mach-O object becomes an image with its field addends" {
         0xc7, 0x05, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, // mov; the field gets 8 less the 4 trailing immediate bytes
         0xc3, 0x90,
     };
-    var pointer: [8]u8 = @splat(0);
-    std.mem.writeInt(u64, &pointer, 5, .little);
     const object = try TestMachObject.encodeX86_64(allocator, &.{
         .{ .segname = "__TEXT", .sectname = "__text", .bytes = &text, .flags = S_ATTR_PURE_INSTRUCTIONS },
         .{ .segname = "__TEXT", .sectname = "__const", .bytes = "constant", .@"align" = 3 },
-        .{ .segname = "__DATA", .sectname = "__data", .bytes = &pointer, .@"align" = 3 },
+        .{ .segname = "__DATA", .sectname = "__data", .bytes = &@as([8]u8, @splat(0)), .@"align" = 3 },
         .{ .segname = "__DATA", .sectname = "__bss", .size = 16, .@"align" = 3, .flags = S_ZEROFILL },
     }, &.{
         .{ .name = "_entry", .section = 1, .value = 0, .external = true },
@@ -2875,7 +2873,7 @@ test "an x86_64 Mach-O object becomes an image with its field addends" {
         .{ .section = 1, .offset = 14, .symbol = 3, .type = X86_64_RELOC_SIGNED_4, .pcrel = true, .addend = 4 },
         // A section-relative pointer: the field holds the address of
         // _entry + 5 in the object.
-        .{ .section = 3, .offset = 0, .symbol = 1, .external = false, .type = X86_64_RELOC_UNSIGNED, .pcrel = false, .length = 3 },
+        .{ .section = 3, .offset = 0, .symbol = 1, .external = false, .type = X86_64_RELOC_UNSIGNED, .pcrel = false, .length = 3, .addend = 5 },
     });
     defer allocator.free(object);
     const image = try build(allocator, &.{object}, .{ .keep_debug = false, .atoms = .whole });
