@@ -2102,7 +2102,7 @@ const DispatchOperand = union(enum) {
 /// for a plan at a custom literal pattern, that pattern's equality test or
 /// literal conversion.
 fn dispatchPlanSite(view: ModuleView, plan_id: static_dispatch.StaticDispatchPlanId) ExprSite {
-    const node = (try view.dispatch.plan(plan_id)).node;
+    const node = view.static_dispatch_plans.plans[@backingInt(plan_id)].node;
     return switch (view.bodies.index().nodeKind(node)) {
         .expr => ExprSite.own(view, @fromBackingInt(node)),
         .pattern => if (view.static_dispatch_plans.lookupByNode(node) == plan_id)
@@ -2234,6 +2234,16 @@ const SpecEvidence = union(enum) {
 const CheckedSpecStructuralEvidence = struct {
     view: ModuleView,
     evidence: static_dispatch.StructuralEvidence,
+    /// The content of the generated-codec contract the evidence selects.
+    codec_content: ?static_dispatch.GeneratedCodecContentDigest,
+
+    fn of(view: ModuleView, evidence: static_dispatch.StructuralEvidence) Allocator.Error!CheckedSpecStructuralEvidence {
+        const content = if (evidence.generated_codec_derivation) |id|
+            (try view.dispatch.generatedCodecs()).generated_codec_derivations[@backingInt(id)].content
+        else
+            null;
+        return .{ .view = view, .evidence = evidence, .codec_content = content };
+    }
 };
 /// `Builder.stored_codec_edges`' key: a stored codec edge and the module
 /// whose `ConstStore` holds it.
@@ -2463,8 +2473,8 @@ const SealedSubstitution = []const SealedSubstSlot;
 
 /// Whether a template's body relates anything to its interface beyond its
 /// checked root: a dispatch relation or a checked specialization relation.
-fn templateHasInterfaceRelations(view: ModuleView, template: *const checked.CheckedProcedureTemplate) bool {
-    return template.dispatch_relations.len != 0 or view.templates.specializationRelations(template).len != 0;
+fn templateHasInterfaceRelations(view: ModuleView, template: *const checked.CheckedProcedureTemplate) Allocator.Error!bool {
+    return (try view.dispatch.templateRelations(template.template_id)).relations.len != 0 or view.templates.specializationRelations(template).len != 0;
 }
 
 /// Whether a procedure template's checked function type is its complete
@@ -2689,7 +2699,7 @@ fn substitutionNodeCount(subst: SpecSubstitution) usize {
 
 /// The substitution an evidence node recorded for its target's scheme, or
 /// null for a monomorphic target.
-fn checkedTargetSubstitution(site_view: ModuleView, target_view: ModuleView, node: static_dispatch.EvidenceNode) ?CheckedTargetSubstitution {
+fn checkedTargetSubstitution(site_view: ModuleView, target_view: ModuleView, node: static_dispatch.EvidenceNode) Allocator.Error!?CheckedTargetSubstitution {
     const alias: ?TargetAlias = switch (node.instantiation) {
         .alias => .{
             .view = target_view,
@@ -2699,13 +2709,7 @@ fn checkedTargetSubstitution(site_view: ModuleView, target_view: ModuleView, nod
         .monomorphic, .callable, .derived_from_callable => null,
     };
     if (node.subst.len == 0 and alias == null) return null;
-    const table = site_view.static_dispatch_plans;
-    const start: usize = node.subst.start;
-    const len: usize = node.subst.len;
-    if (start > table.site_substitutions.len or len > table.site_substitutions.len - start) {
-        Common.invariant("checked target substitution range was outside its checked module");
-    }
-    return .{ .view = site_view, .tys = table.site_substitutions[start .. start + len], .alias = alias };
+    return .{ .view = site_view, .tys = try site_view.dispatch.substitution(node.subst), .alias = alias };
 }
 
 /// A materialized contract already names the checked targets and their nested
@@ -4207,8 +4211,7 @@ fn specEvidenceShallowEql(
 }
 
 fn codecEvidenceContent(evidence: CheckedSpecStructuralEvidence) ?static_dispatch.GeneratedCodecContentDigest {
-    const id = evidence.evidence.generated_codec_derivation orelse return null;
-    return (try evidence.view.dispatch.generatedCodecs()).generated_codec_derivations[@backingInt(id)].content;
+    return evidence.codec_content;
 }
 
 /// A codec edge is identified by its contract's content, wherever it was
@@ -11008,7 +11011,7 @@ const Builder = struct {
             // open interface needs the template's relations applied here. A
             // codec contract instantiated into this body above is part of
             // those relations' input, so they run in this body.
-            if (!try templateInterfaceIsClosed(view, &template) and templateHasInterfaceRelations(view, &template)) {
+            if (!try templateInterfaceIsClosed(view, &template) and try templateHasInterfaceRelations(view, &template)) {
                 if (codec_contract == null) {
                     if (try source_ctx.applyTemplateInterfaceRelations(
                         template_ref,
@@ -12206,7 +12209,7 @@ const Builder = struct {
                 .dispatcher_ty = dispatcher_ty,
                 .callable_ty = callable_ty,
                 .generated_codec_derivation = @fromBackingInt(@intCast(index)),
-            } };
+            }, .codec_content = contract.content };
         }
         return null;
     }
@@ -28600,10 +28603,10 @@ const BodyContext = struct {
         template: checked.CheckedProcedureTemplate,
         scope_id: ?checked.DispatchScopeId,
     ) Allocator.Error!void {
-        const span = template.dispatch_relations;
-        const refs = self.view.static_dispatch_plans.dispatch_relation_refs[span.start .. span.start + span.len];
-        const scopes = self.view.templates.dispatch_ref_scopes[span.start .. span.start + span.len];
-        const kinds = self.view.templates.dispatch_relation_kinds[span.start .. span.start + span.len];
+        const relations = try self.view.dispatch.templateRelations(template.template_id);
+        const refs = relations.relations;
+        const scopes = relations.relation_scopes;
+        const kinds = relations.relation_kinds;
         if (refs.len != scopes.len or refs.len != kinds.len) Common.invariant("checked template dispatch refs and relation metadata differed in length");
 
         // Resolve every plan in this scope before instantiating any of its type
@@ -52962,7 +52965,7 @@ const BodyContext = struct {
             },
             .structural => |evidence| .{ .structural = .{
                 .derivation = evidence.derivation,
-                .checked = .{ .view = site_view, .evidence = evidence },
+                .checked = try CheckedSpecStructuralEvidence.of(site_view, evidence),
             } },
             .unreachable_value => .unreachable_value,
             .checked_error => .checked_error,
@@ -53187,7 +53190,7 @@ const BodyContext = struct {
         frame: EvidenceTargetFrame,
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!*const SpecEvidenceTarget {
-        const substitution = checkedTargetSubstitution(site_view, frame.lookup.view, frame.node);
+        const substitution = try checkedTargetSubstitution(site_view, frame.lookup.view, frame.node);
         const nested: []const SpecEvidence = switch (frame.node.nested) {
             .resolved, .from_callable => frame.nested,
             .through_alias => blk: {
@@ -53936,7 +53939,7 @@ const BodyContext = struct {
         };
         const contract = self.directAliasScopeContract(direct.evidence) orelse return null;
         const node = (try self.view.dispatch.evidenceNode(direct.evidence));
-        return try self.aliasTargetEdge(checkedTargetSubstitution(self.view, lookup.view, node).?, contract, .body_lowering);
+        return try self.aliasTargetEdge((try checkedTargetSubstitution(self.view, lookup.view, node)).?, contract, .body_lowering);
     }
 
     /// The requirement-target contract a checked dispatch plan recorded for
@@ -54010,7 +54013,7 @@ const BodyContext = struct {
         const node = (try self.view.dispatch.evidenceNode(direct.evidence));
         switch (node.instantiation) {
             .monomorphic, .callable => return try self.dispatchTargetSubstitution(plan),
-            .alias => return try self.targetSubstitutionNodes(checkedTargetSubstitution(self.view, lookup.view, node).?),
+            .alias => return try self.targetSubstitutionNodes((try checkedTargetSubstitution(self.view, lookup.view, node)).?),
             .derived_from_callable => {},
         }
         const procedure = switch (lookup.target.kind) {
@@ -54468,7 +54471,7 @@ const BodyContext = struct {
             .monomorphic => null,
             .callable, .alias, .derived_from_callable => |callable_ty| .{ .view = self.view, .callable_ty = callable_ty },
         };
-        if (checkedTargetSubstitution(self.view, lookup.view, node)) |substitution| lookup.substitution = .{ .own_body = substitution };
+        if (try checkedTargetSubstitution(self.view, lookup.view, node)) |substitution| lookup.substitution = .{ .own_body = substitution };
         return lookup;
     }
 
