@@ -547,22 +547,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     // representatives after the solve; the borrow facts must describe them.
     try solution.adoptProjectionAliases(store.allocator, &dismantles.projection_aliases);
 
-    // Committed takes carry field uniqueness to the locals they define;
-    // the solver settled without them, so re-derive against the takes.
-    var take_stmts = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(store.allocator, store.cfStmtCount());
-    defer take_stmts.deinit(store.allocator);
-    var take_iter = dismantles.takes.keyIterator();
-    var any_take = false;
-    while (take_iter.next()) |stmt| {
-        take_stmts.set(@backingInt(stmt.*));
-        any_take = true;
-    }
-    if (any_take and options.prove_uniqueness) {
-        try arc_solve.settleUniquenessWithOptions(store.allocator, store, layouts, local_contains_refcounted, &solution, .{ .set = &take_stmts }, options.consume_dead_boxes, uniqueness_options);
-    }
-
     const base_proc_count = store.procSpecCount();
-    try recordProcedureFacts(store, &solution);
     const sources = try store.allocator.alloc(SourceCache, base_proc_count);
     defer store.allocator.free(sources);
     for (sources, 0..) |*source, index| {
@@ -588,6 +573,26 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         source_start = end;
     }
     if (!std.meta.eql(source_prefix, store.captureBodyPrefix())) arcInvariant("ARC source preparation mutated coordinator storage");
+    var projection_decisions = try CompleteProjectionDecisions.init(store.allocator, store.cfStmtCount(), sources);
+    defer projection_decisions.deinit(store.allocator);
+    inserter.projection_decisions = &projection_decisions;
+
+    // Committed takes carry field uniqueness to the locals they define;
+    // the solver settled without them, so re-derive against the takes and
+    // the complete projections emission retains.
+    var take_stmts = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(store.allocator, store.cfStmtCount());
+    defer take_stmts.deinit(store.allocator);
+    var take_iter = dismantles.takes.keyIterator();
+    var any_take = false;
+    while (take_iter.next()) |stmt| {
+        take_stmts.set(@backingInt(stmt.*));
+        any_take = true;
+    }
+    if (any_take and options.prove_uniqueness) {
+        const planned: arc_solve.PlannedTakes = .{ .takes = &take_stmts, .retaining_projections = &projection_decisions.retaining };
+        try arc_solve.settleUniquenessWithOptions(store.allocator, store, layouts, local_contains_refcounted, &solution, .{ .set = planned }, options.consume_dead_boxes, uniqueness_options);
+    }
+    try recordProcedureFacts(store, &solution);
 
     var variants = VariantTable{
         .map = std.AutoHashMap(VariantSelector, LIR.LirProcSpecId).init(store.allocator),
@@ -913,6 +918,9 @@ const SourceCache = struct {
     local_index: collections.DenseMap(LIR.LocalId, u32) = undefined,
     domain: ProcArcDomain = undefined,
     liveness: SourceLiveness = undefined,
+    /// The procedure's complete projection reads whose target every emission
+    /// binds owned, decided against the frozen liveness.
+    projection_decisions: []const CompleteProjectionDecision = &.{},
     failed: bool = false,
     completed: bool = false,
     phase: ArcTaskPhase = .source,
@@ -939,8 +947,121 @@ const SourceCache = struct {
         preparer.join_bodies = preparer.solution.joinBodiesOf(self.proc);
         try preparer.prepareSourceLiveness();
         self.liveness.freeze();
+        self.projection_decisions = try preparer.decideCompleteProjections(arena, env.scratch);
     }
 };
+
+/// Whether emission retains the projected value of one complete projection
+/// read whose target every emission binds owned: true when the root's
+/// ownership place is used after the read, so the root keeps its unit. One
+/// answer per source read contract, since an emission with an outcome
+/// convention also uses its restituted parameters at restitution boundaries.
+const CompleteProjectionDecision = struct {
+    stmt: LIR.CFStmtId,
+    retains: bool,
+    retains_restituting: bool,
+};
+
+/// Every source procedure's `CompleteProjectionDecision`s, by statement.
+/// Uniqueness settles against them and emission follows them, so the
+/// decision is made exactly once.
+const CompleteProjectionDecisions = struct {
+    decided: std.bit_set.DynamicBitSetUnmanaged = .{},
+    retains: std.bit_set.DynamicBitSetUnmanaged = .{},
+    retains_restituting: std.bit_set.DynamicBitSetUnmanaged = .{},
+    /// Retained under some contract: the projected value may have a second
+    /// owner.
+    retaining: std.bit_set.DynamicBitSetUnmanaged = .{},
+
+    fn init(allocator: Allocator, stmt_count: usize, sources: []const SourceCache) Allocator.Error!CompleteProjectionDecisions {
+        var self: CompleteProjectionDecisions = .{};
+        errdefer self.deinit(allocator);
+        self.decided = try .initEmpty(allocator, stmt_count);
+        self.retains = try .initEmpty(allocator, stmt_count);
+        self.retains_restituting = try .initEmpty(allocator, stmt_count);
+        self.retaining = try .initEmpty(allocator, stmt_count);
+        for (sources) |source| for (source.projection_decisions) |decision| {
+            const index = @backingInt(decision.stmt);
+            self.decided.set(index);
+            self.retains.setValue(index, decision.retains);
+            self.retains_restituting.setValue(index, decision.retains_restituting);
+            self.retaining.setValue(index, decision.retains or decision.retains_restituting);
+        };
+        return self;
+    }
+
+    fn deinit(self: *CompleteProjectionDecisions, allocator: Allocator) void {
+        self.decided.deinit(allocator);
+        self.retains.deinit(allocator);
+        self.retains_restituting.deinit(allocator);
+        self.retaining.deinit(allocator);
+    }
+
+    /// The decision for a read under the given signature's contract, or null
+    /// for a read whose target only some emissions bind owned.
+    fn retainsUnder(self: *const CompleteProjectionDecisions, stmt: LIR.CFStmtId, sig: arc_sig.RcSig) ?bool {
+        const index = @backingInt(stmt);
+        if (!self.decided.isSet(index)) return null;
+        return if (sig.outcomes.isEmpty()) self.retains.isSet(index) else self.retains_restituting.isSet(index);
+    }
+};
+
+/// The locals whose solved borrowed binding one emission of `source_proc`
+/// with signature `emit_sig` binds owned instead.
+fn installOwnedBindingOverrides(
+    owned_binding_override: *OwnedSet,
+    store: *const LirStore,
+    solution: *const arc_solve.Solution,
+    dismantles: *const arc_dismantle.Dismantles,
+    domain: *const ProcArcDomain,
+    source_proc: LIR.LirProcSpecId,
+    emit_sig: arc_sig.RcSig,
+) ResourceError!void {
+    // Variant parameter positions demanded owned override the solved
+    // borrowed binding for this emission only; positions the demand
+    // vector seeds unique are read through `isLocalUniqueHere`.
+    const solved_sig = solution.sigOf(source_proc);
+    const emit_params_for_overrides = store.getLocalSpan(store.getProcSpecImmediate(source_proc).args);
+    for (0..GuardedList.borrowLen(emit_params_for_overrides)) |position| {
+        const param = GuardedList.at(emit_params_for_overrides, position);
+        if (arc_sig.paramBit(position) == null) break;
+        if (solved_sig.paramMode(position) == .borrowed and emit_sig.paramMode(position) == .owned) {
+            try owned_binding_override.set(param);
+        }
+    }
+    // A recursive tail argument can borrow across frame replacement only
+    // from a borrowed entry parameter of this exact emission. Otherwise
+    // its solved carrier must materialize a unit for the mandatory owned
+    // callee variant. Re-evaluate the recorded anchor against `emit_sig`
+    // so an owned variant recursively calls the matching owned variant.
+    for (solution.tailCallsOf(source_proc)) |*tail_call| {
+        for (0..arc_sig.tracked_param_count) |position| {
+            const carrier = tail_call.carrier(position) orelse continue;
+            if (tail_call.argumentOutlivesScc(position, emit_sig)) continue;
+            try owned_binding_override.set(carrier);
+        }
+    }
+    for (domain.frame_locals) |local| {
+        if (dismantles.isTakeBinding(local)) try owned_binding_override.set(local);
+    }
+    // A projected container solved borrowed in the unconditional base
+    // signature becomes an owned binding exactly when the explicit
+    // dismantle plan says its read moves the unit of a parameter
+    // overridden to owned. This is part of the mandatory field-take
+    // variant, not optional inlining or specialization.
+    var binding_override_changed = true;
+    while (binding_override_changed) {
+        binding_override_changed = false;
+        for (domain.frame_locals) |local| {
+            if (owned_binding_override.contains(local)) continue;
+            const root = dismantles.ownedOnlyBindingRoot(local) orelse continue;
+            if (owned_binding_override.contains(root)) {
+                try owned_binding_override.set(local);
+                binding_override_changed = true;
+            }
+        }
+    }
+}
 
 /// Every pointer retained by planning refers to this fixed owner or its arena,
 /// never a worker scratch allocation or a callback stack frame.
@@ -1013,50 +1134,7 @@ const EmissionOwner = struct {
         const owned_binding_override = &self.owned_binding_override;
         inserter.owned_binding_override = owned_binding_override;
 
-        // Variant parameter positions demanded owned override the solved
-        // borrowed binding for this emission only; positions the demand
-        // vector seeds unique are read through `isLocalUniqueHere`.
-        const solved_sig = solution.sigOf(source_proc);
-        const emit_params_for_overrides = store.getLocalSpan(emit_args);
-        for (0..GuardedList.borrowLen(emit_params_for_overrides)) |position| {
-            const param = GuardedList.at(emit_params_for_overrides, position);
-            if (arc_sig.paramBit(position) == null) break;
-            if (solved_sig.paramMode(position) == .borrowed and emit_sig.paramMode(position) == .owned) {
-                try owned_binding_override.set(param);
-            }
-        }
-        // A recursive tail argument can borrow across frame replacement only
-        // from a borrowed entry parameter of this exact emission. Otherwise
-        // its solved carrier must materialize a unit for the mandatory owned
-        // callee variant. Re-evaluate the recorded anchor against `emit_sig`
-        // so an owned variant recursively calls the matching owned variant.
-        for (solution.tailCallsOf(source_proc)) |*tail_call| {
-            for (0..arc_sig.tracked_param_count) |position| {
-                const carrier = tail_call.carrier(position) orelse continue;
-                if (tail_call.argumentOutlivesScc(position, emit_sig)) continue;
-                try owned_binding_override.set(carrier);
-            }
-        }
-        for (domain.frame_locals) |local| {
-            if (dismantles.isTakeBinding(local)) try owned_binding_override.set(local);
-        }
-        // A projected container solved borrowed in the unconditional base
-        // signature becomes an owned binding exactly when the explicit
-        // dismantle plan says its read moves the unit of a parameter
-        // overridden to owned. This is part of the mandatory field-take
-        // variant, not optional inlining or specialization.
-        var binding_override_changed = true;
-        while (binding_override_changed) {
-            binding_override_changed = false;
-            for (domain.frame_locals) |local| {
-                if (owned_binding_override.contains(local)) continue;
-                const root = dismantles.ownedOnlyBindingRoot(local) orelse continue;
-                if (owned_binding_override.contains(root)) {
-                    try owned_binding_override.set(local);
-                    binding_override_changed = true;
-                }
-            }
-        }
+        try installOwnedBindingOverrides(owned_binding_override, store, solution, dismantles, domain, source_proc, emit_sig);
         domain.installOwnedOnlyResidualDomains(solution, dismantles, owned_binding_override);
 
         const join_bodies = solution.joinBodiesOf(source_proc);
@@ -1714,6 +1792,8 @@ const Inserter = struct {
     /// Field takes solved against the ownership-neutral bodies; consulted by
     /// statement id, so base and variant emissions share one solve.
     dismantles: *const arc_dismantle.Dismantles = undefined,
+    /// Complete projection reads decided at source preparation.
+    projection_decisions: *const CompleteProjectionDecisions = undefined,
     /// Temporaries synthesized while dismantling containers in the proc
     /// currently being emitted; appended to its frame locals afterward. A
     /// lane buffer grown in `lane_allocator`.
@@ -2602,6 +2682,7 @@ const Inserter = struct {
                     } else if (complete_take_root) |root| {
                         transfer = try self.transferForCompleteProjectionBind(
                             &segment.owned,
+                            segment.cursor,
                             assign.target,
                             root,
                             assign.next,
@@ -4426,22 +4507,121 @@ const Inserter = struct {
         return release_old_target;
     }
 
+    /// Decides each complete projection read of the source procedure whose
+    /// target every emission binds owned (see `CompleteProjectionDecision`),
+    /// in the base emission's binding overrides. An ownership variant only
+    /// adds overrides, each of which cuts a borrowed local out of a place
+    /// and leaves a use only where the base place already has one, so a
+    /// place unused in the base emission is unused in every variant of the
+    /// same contract. Uniqueness settles against these decisions before any
+    /// emission runs.
+    fn decideCompleteProjections(self: *Inserter, allocator: Allocator, scratch: Allocator) ResourceError![]const CompleteProjectionDecision {
+        const proc = self.current_source_proc;
+        var override_domain = self.current_domain.?.*;
+        override_domain.set_allocator = scratch;
+        var overrides = OwnedSet.init(&override_domain);
+        defer overrides.deinit();
+        const base_sig = self.solution.sigOf(proc);
+        try installOwnedBindingOverrides(&overrides, self.store, self.solution, self.dismantles, self.current_domain.?, proc, base_sig);
+        self.owned_binding_override = &overrides;
+
+        const Pending = struct { decision: CompleteProjectionDecision, next: LIR.CFStmtId, unit: LIR.LocalId };
+        var pending = std.ArrayList(Pending).empty;
+        // The parameters some restitution boundary of this procedure hands
+        // back; only their places gain uses under the outcome contract.
+        var restituted: arc_sig.ParamMask = 0;
+        for (self.solution.procStatements(proc)) |stmt| {
+            restituted |= self.solution.restitutionParamsAt(stmt);
+            const root = self.dismantles.completeTakeRoot(stmt) orelse continue;
+            const assign = self.store.getCFStmtImmediate(stmt).assign_ref;
+            if (self.isBindingBorrowed(assign.target)) continue;
+            try pending.append(scratch, .{
+                .decision = .{ .stmt = stmt, .retains = false, .retains_restituting = false },
+                .next = assign.next,
+                .unit = self.unitOf(root),
+            });
+        }
+        if (pending.items.len == 0) return &.{};
+
+        self.emission_allocator = scratch;
+        self.place_query_seen = .{};
+        self.place_query_visited = .empty;
+        self.place_query_stack = .empty;
+        self.place_query_uses = .empty;
+        // The path query follows loop edges itself and stops at a rebind of
+        // each exact place definition.
+        self.current_sig = base_sig;
+        self.current_sig.outcomes = .empty;
+        self.place_use_facts = null;
+        for (pending.items) |*entry| entry.decision.retains = try self.ownershipPlaceUsedInPath(entry.next, entry.unit);
+        // Both contracts share one statement graph, and the outcome contract
+        // adds only uses of the restituted parameters at restitution
+        // boundaries, so a read whose place holds no restituted parameter
+        // has one answer under both.
+        var restituted_places = std.ArrayList(LIR.LocalId).empty;
+        const available = self.solution.availableOutcomeSpanOf(proc);
+        if (!available.isEmpty() and restituted != 0) {
+            const params = self.store.getLocalSpan(self.store.getProcSpecImmediate(proc).args);
+            for (0..GuardedList.borrowLen(params)) |position| {
+                const bit = arc_sig.paramBit(position) orelse break;
+                if ((restituted & bit) == 0) continue;
+                try restituted_places.append(scratch, self.ownershipPlaceLeader(GuardedList.at(params, position)));
+            }
+        }
+        var any_restituting = false;
+        for (pending.items) |*entry| {
+            entry.decision.retains_restituting = entry.decision.retains;
+            if (entry.decision.retains) continue;
+            const place = self.ownershipPlaceLeader(entry.unit);
+            for (restituted_places.items) |restituted_place| {
+                if (restituted_place == place) any_restituting = true;
+            }
+        }
+        if (any_restituting) {
+            self.current_sig.outcomes = available;
+            self.place_use_facts = null;
+            for (pending.items) |*entry| {
+                if (entry.decision.retains) continue;
+                const place = self.ownershipPlaceLeader(entry.unit);
+                for (restituted_places.items) |restituted_place| {
+                    if (restituted_place != place) continue;
+                    entry.decision.retains_restituting = try self.ownershipPlaceUsedInPath(entry.next, entry.unit);
+                    break;
+                }
+            }
+        }
+        const decisions = try allocator.alloc(CompleteProjectionDecision, pending.items.len);
+        for (decisions, pending.items) |*decision, entry| decision.* = entry.decision;
+        return decisions;
+    }
+
     /// An owned read of a complete aggregate projection. If the root's unit
-    /// is present and its liveness group has no later use on this path, move
-    /// that unit into the target. Otherwise preserve the root and retain the
-    /// projected value exactly like an ordinary fresh bind.
+    /// is present and its ownership place has no later use on this path,
+    /// move that unit into the target. Otherwise preserve the root and retain
+    /// the projected value exactly like an ordinary fresh bind. A read whose
+    /// target every emission binds owned follows its decision from source
+    /// preparation; a read whose target only emissions owning the root bind
+    /// owned is decided here, in this emission's overrides.
     fn transferForCompleteProjectionBind(
         self: *Inserter,
         owned: *OwnedSet,
+        stmt: LIR.CFStmtId,
         target: LIR.LocalId,
         root: LIR.LocalId,
         next: LIR.CFStmtId,
     ) ResourceError!AliasBindTransfer {
         const release_old_target = try self.takeRebindTarget(owned, target);
         const unit = self.unitOf(root);
-        // The path query follows loop edges itself and stops at a rebind of
-        // this exact place definition.
-        const root_used = try self.ownershipPlaceUsedInPath(next, unit);
+        const root_used = if (self.projection_decisions.retainsUnder(stmt, self.current_sig)) |retains| decided: {
+            if (builtin.mode == .debug) {
+                const used_here = try self.ownershipPlaceUsedInPath(next, unit);
+                if (used_here and !retains) arcInvariant("ARC emission used a complete projection's root that source preparation decided unused");
+                if (self.current_proc == self.current_source_proc and used_here != retains) {
+                    arcInvariant("ARC base emission disagreed with its complete projection decision");
+                }
+            }
+            break :decided retains;
+        } else try self.ownershipPlaceUsedInPath(next, unit);
         const has_unit = owned.contains(unit);
         const restitution = if (root_used)
             try self.carriedRootRestitution(target, unit, next)
@@ -12241,6 +12421,35 @@ test "uniqueness: freshly built list consumed by a checked op elides the check" 
     // The list is born unique and its single unit moves into the op, so the
     // op's runtime count check on argument 0 is redundant.
     try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: an alias whose source's borrowed view is read afterwards keeps its runtime check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const view = try f.local(f.list_i64);
+    const alias = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const len = try f.local(.i64);
+
+    // elem = 5; list = []; view = list; alias = list;
+    // appended = checked_op(alias, elem); len = list_len(view); ret len
+    const ret = try f.ret(len);
+    const read_view = try f.assignLowLevel(len, &.{view}, .{}, ret);
+    const append = try f.assignLowLevel(appended, &.{ alias, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), read_view);
+    const alias_assign = try f.assignRefLocal(alias, list, append);
+    const view_assign = try f.assignRefLocal(view, list, alias_assign);
+    const list_assign = try f.assignList(list, &.{}, view_assign);
+    const body = try f.assignI64(elem, 5, list_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    // The view borrows the list's place and is read after the alias binds,
+    // so the alias holds a retained second unit of the list and the op must
+    // keep its runtime count check.
+    try testing.expectEqual(@as(usize, 1), f.countRc(alias, .incref));
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
 }
 
 test "uniqueness: a cached proc's supplied facts reach its callers" {

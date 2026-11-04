@@ -21150,7 +21150,20 @@ later alias are present in LIR, so certification does not depend on the
 dismantle side table.
 If the final read result binds owned, that read moves the unit only when the
 root unit is present and the ownership place has no later RC-bearing use on
-that path; otherwise it retains exactly as an ordinary read would. An operand
+that path; otherwise it retains exactly as an ordinary read would. For a read
+whose target every emission binds owned, whether the place is used later is
+decided once per source procedure while ARC prepares the source's liveness,
+before uniqueness settles against the committed takes: once for emissions
+without an outcome convention and once for emissions with the procedure's
+outcome convention, whose restitution boundaries use the restituted
+parameters. Uniqueness treats a read retained under either contract as giving
+the projected value a second owner, and emission follows the decision of its
+own contract. The decision uses the base emission's binding overrides. An
+ownership variant only adds overrides; each cuts a borrowed binding out of its
+lender's place and counts the cut binding's own bind as a use, which happens
+only where the base place already had a later use, so a place unused in the
+base emission is unused in every variant. A read whose target only the
+emissions owning its root bind owned is decided by each such emission. An operand
 belongs to the place exactly when its solved liveness leader is the place's
 unit local: the unit local itself and every binding the solver anchored on it
 as a borrow (pure aliases, complete and partial field or tag payload reads,
@@ -21804,8 +21817,13 @@ same local can still execute after it before the local is redefined: two
 consumes on exclusive branches never both run, and a consume whose only
 successors read other locals leaves the value unique. A transfer edge (alias
 or join) carries the unit through to its target only when no use of the
-source at all, read or consume, can execute after it; otherwise the target
-holds a second reference and has no unique birth of its own. The order is
+source's ownership place at all, read or consume, can execute after it;
+otherwise the target holds a second reference and has no unique birth of its
+own. The place is the source's liveness group, the leader and every borrowed
+local anchored on it, which is the place emission keeps alive: a borrowed
+view of the source read after the edge needs the source's allocation, so
+emission retains the transferred value. A store into an aggregate and a
+call's row edge carry an operand's unit under the same rule. The order is
 answered over the procedure's predecessor edges, following jumps through the
 procedure's joins and stopping at a redefinition of the local: the oracle
 marks backward once per local from that local's uses and answers every edge
@@ -21823,7 +21841,17 @@ edges. A field read inherits the field's uniqueness only when it is the
 committed take that moves the container's stored unit, since any other read
 retains and leaves count 2; and not when a copy holding its own unit can reach
 the take: a consuming use of the container, or a retained read of the same
-field. Takes are decided after the borrow modes, so the solver settles without
+field. A value with a second holder shares every stored field with that
+holder, and so does every container viewing its fields (an aggregate alias, a
+tag's payload view, a join parameter), so no field read through such a value
+inherits. One bit per value records this: it starts on the values with a
+holder-adding occurrence, follows the container views and every value that
+becomes dead, and each value gains it at most once, so sharing never re-runs
+the per-field propagation. A complete projection read whose root's ownership
+place is used after it is such an occurrence, since emission retains the
+projected value right after the read (see the place rule under field takes);
+the analysis reads that decision rather than re-deriving it. Takes are decided
+after the borrow modes, so the solver settles without
 them and emission re-derives uniqueness against the committed takes, settling
 the unique-return bits and the per-field unique-return mask of each signature
 to a fixpoint; a caller taking a field out of a callee's dying `Try` record
