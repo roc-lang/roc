@@ -21753,6 +21753,14 @@ const InterfaceReplayState = struct {
     buckets: InterfaceReplayBuckets = .empty,
     stack: std.ArrayList(usize) = .empty,
     current: ?usize = null,
+    /// The class each hole cell of an unfinished expansion stands for, keyed
+    /// by the cell's class root, covering `stack.items[0..hole_cell_index_len]`.
+    /// A cell in several entries keeps the lowest entry's class. Roots are
+    /// current only while the graph's `structure_epoch` equals
+    /// `hole_cell_index_epoch`; any other epoch, or a pop, empties the index.
+    hole_cell_index: std.AutoHashMapUnmanaged(NodeId, NodeId) = .empty,
+    hole_cell_index_len: usize = 0,
+    hole_cell_index_epoch: u32 = 0,
 
     fn init() InterfaceReplayState {
         return .{ .entries = .empty };
@@ -21762,6 +21770,29 @@ const InterfaceReplayState = struct {
         self.entries.deinit(allocator);
         self.stack.deinit(allocator);
         self.buckets.deinit(allocator);
+        self.hole_cell_index.deinit(allocator);
+    }
+
+    fn clearHoleCellIndex(self: *InterfaceReplayState) void {
+        self.hole_cell_index.clearRetainingCapacity();
+        self.hole_cell_index_len = 0;
+    }
+
+    /// Bring `hole_cell_index` up to date with the graph and the stack.
+    fn refreshHoleCellIndex(self: *InterfaceReplayState, allocator: Allocator, graph: *InstGraph) Allocator.Error!void {
+        if (self.hole_cell_index_epoch != graph.structure_epoch) {
+            self.clearHoleCellIndex();
+            self.hole_cell_index_epoch = graph.structure_epoch;
+        }
+        for (self.stack.items[self.hole_cell_index_len..]) |index| {
+            const unfinished = self.entries.items[index];
+            for (unfinished.hole_cells, unfinished.hole_classes) |cell, class| {
+                const stands_for = class orelse continue;
+                const entry = try self.hole_cell_index.getOrPut(allocator, graph.rootNode(cell));
+                if (!entry.found_existing) entry.value_ptr.* = stands_for;
+            }
+        }
+        self.hole_cell_index_len = self.stack.items.len;
     }
 };
 
@@ -27851,11 +27882,11 @@ const BodyContext = struct {
     /// followed through those cells to what it stands for.
     fn joinsUnfinishedExpansion(
         self: *BodyContext,
-        replay_state: *const InterfaceReplayState,
+        replay_state: *InterfaceReplayState,
         entry: InterfaceReplayEntry,
         holes: []const NodeId,
         hole_classes: []const ?NodeId,
-    ) bool {
+    ) Allocator.Error!bool {
         if (entry.hole_classes.len != hole_classes.len) return false;
         for (entry.hole_classes, entry.hole_cells, holes, hole_classes) |expanded_class, expanded_cell, hole, hole_class| {
             const expanded = expanded_class orelse {
@@ -27866,7 +27897,7 @@ const BodyContext = struct {
             var steps: usize = 0;
             while (!self.graph.sameClass(current, expanded) and !self.graph.sameClass(current, expanded_cell)) {
                 if (steps == replay_state.stack.items.len) return false;
-                current = self.unfinishedHoleCellClass(replay_state, current) orelse return false;
+                current = (try self.unfinishedHoleCellClass(replay_state, current)) orelse return false;
                 steps += 1;
             }
         }
@@ -27875,15 +27906,9 @@ const BodyContext = struct {
 
     /// The class an unfinished expansion's hole cell stands for, when `node`
     /// is such a cell.
-    fn unfinishedHoleCellClass(self: *BodyContext, replay_state: *const InterfaceReplayState, node: NodeId) ?NodeId {
-        for (replay_state.stack.items) |index| {
-            const unfinished = replay_state.entries.items[index];
-            for (unfinished.hole_cells, unfinished.hole_classes) |cell, class| {
-                const stands_for = class orelse continue;
-                if (self.graph.sameClass(node, cell)) return stands_for;
-            }
-        }
-        return null;
+    fn unfinishedHoleCellClass(self: *BodyContext, replay_state: *InterfaceReplayState, node: NodeId) Allocator.Error!?NodeId {
+        try replay_state.refreshHoleCellIndex(self.allocator, self.graph);
+        return replay_state.hole_cell_index.get(self.graph.rootNode(node));
     }
 
     fn relateInterfaceRoots(self: *BodyContext, produced: []const NodeId, requested: []const NodeId) Allocator.Error!void {
@@ -28016,7 +28041,7 @@ const BodyContext = struct {
             if (!storedConstFnEvidenceEql(entry.evidence, stored_evidence) or !try entry.request.eql(request, self.typeStore(), self.nameStore())) continue;
             // An unfinished expansion is joined only by the exact request it
             // expands; parametric holes generalize completed summaries.
-            if (entry.status != .ready and !self.joinsUnfinishedExpansion(replay_state, entry, holes.nodes, hole_classes)) continue;
+            if (entry.status != .ready and !try self.joinsUnfinishedExpansion(replay_state, entry, holes.nodes, hole_classes)) continue;
             self.builder.count("interface_replay_hits");
             switch (entry.status) {
                 .expanding, .expanded => {
@@ -28217,6 +28242,7 @@ const BodyContext = struct {
             if (lowlink == replay_index) {
                 // All members of this recursive component have contributed their
                 // constraints. Store each interface only after this fixed point.
+                replay_state.clearHoleCellIndex();
                 while (replay_state.stack.pop()) |index| {
                     const entry = &replay_state.entries.items[index];
                     var scratch = self.graph.acquireArena();
