@@ -1569,12 +1569,16 @@ pub const ConstStore = struct {
                 => false,
             };
         }
+        // Frames `0..=head` are the function's own lexical chain. Any frames
+        // after the head are a second chain, rooted right after it: the
+        // evidence of the template that declares the local procedures of
+        // another template the function reaches.
         const head = fn_value.evidence_frame_head orelse return false;
-        if (head != fn_value.evidence_frames.len - 1) return false;
+        if (head >= fn_value.evidence_frames.len) return false;
 
         var cursor: usize = 0;
         for (fn_value.evidence_frames, 0..) |frame, index| {
-            if (index == 0) {
+            if (index == 0 or index == head + 1) {
                 if (frame.scope() != .root or frame.parent != null) return false;
             } else {
                 switch (frame.scope()) {

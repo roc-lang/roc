@@ -5169,9 +5169,26 @@ const Inserter = struct {
             // after this statement; a group member appearing as another
             // operand of this same statement is still live at the op.
             if (self.groupSharesOtherOperand(locals, i, local)) continue;
+            if (self.valueHasAnotherOwnedUnit(local, owned)) continue;
             unique |= bit;
         }
         return unique;
+    }
+
+    /// True when another owned unit holds the same value as `local`. An owned
+    /// pure same-value alias whose binding retained, rather than moved, its
+    /// source's unit gives the value a second holder: both units stay owned
+    /// until one is released, so the count is above 1 even though the value
+    /// was born unique and the solver records the alias as the same value.
+    fn valueHasAnotherOwnedUnit(self: *const Inserter, local: LIR.LocalId, owned: *const OwnedSet) bool {
+        const root = self.solution.aliasRootOf(local);
+        var units = owned.iterator(.{});
+        while (units.next()) |bit_index| {
+            const other = owned.domain.resource_locals[bit_index];
+            if (other == local) continue;
+            if (self.solution.aliasRootOf(other) == root) return true;
+        }
+        return false;
     }
 
     /// True when the local's value is statically unique in the current
@@ -5970,7 +5987,7 @@ const Inserter = struct {
         sig: arc_sig.RcSig,
     ) ResourceError!?OutcomeRestitution {
         const bit = arc_sig.paramBit(position) orelse return null;
-        const refinement = try arc_solve.findOutcomeRefinement(self.emission_allocator, self.store, target, next, sig.outcomes) orelse return null;
+        const refinement = try arc_solve.findOutcomeRefinement(self.emission_allocator, self.store, target, next, sig.outcomes, .absent) orelse return null;
         const switch_stmt = self.store.getCFStmtImmediate(refinement).switch_stmt;
         const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
         const outcomes = self.solution.sigTable().outcomesOf(sig);
@@ -6031,7 +6048,7 @@ const Inserter = struct {
             self.outcomeArgumentsHaveDistinctPlaces(span, outcome_sig);
         const outcome_mask = self.outcomeRestitutableMask(outcome_sig);
         const outcome_refinement = if (outcome_places_distinct)
-            try arc_solve.findOutcomeRefinement(self.emission_allocator, self.store, target, next, outcome_sig.outcomes)
+            try arc_solve.findOutcomeRefinement(self.emission_allocator, self.store, target, next, outcome_sig.outcomes, .absent)
         else
             null;
 
@@ -14797,6 +14814,95 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
     }
     try testing.expect(remaining > 0);
     try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
+}
+
+/// A callee that hands its `List(Str)` argument back in variant
+/// `handback` and consumes it into the payload of the other variant. The
+/// caller refines the call with one switch, then switches on the same result
+/// again inside the handback arm, as ARC's own variant-specific release does,
+/// and reads the list there. Certification must replay the handback only at
+/// the refining switch: the call restitutes its argument once.
+fn checkRestitutionReplaysOnlyAtRefiningSwitch(handback: u32) (Allocator.Error || ResourceError || ArcTest.ExpectError)!void {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const try_list = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.list_str,
+    });
+    const consumed: u32 = 1 - handback;
+
+    const param = try f.local(f.list_str);
+    const choose = try f.local(.i64);
+    const changed = try f.local(f.list_str);
+    const callee_result = try f.local(try_list);
+    const consumed_ret = try f.ret(callee_result);
+    const consumed_tag = try f.assignTag(callee_result, consumed, changed, consumed_ret);
+    const mutate = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = changed,
+        .op = .list_reverse,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.RcEffect.runtimeUniqueness(1)),
+        .args = try f.span(&.{param}),
+        .next = consumed_tag,
+    } }, .test_fixture);
+    const handback_ret = try f.ret(callee_result);
+    const handback_tag = try f.assignTag(callee_result, handback, null, handback_ret);
+    const callee_body = if (handback == 1)
+        try f.switchStmt(choose, handback_tag, mutate, null)
+    else
+        try f.switchStmt(choose, mutate, handback_tag, null);
+    const callee = try f.addProc(&.{ param, choose }, callee_body, try_list);
+
+    const item = try f.local(.str);
+    const input = try f.local(f.list_str);
+    const caller_choose = try f.local(.i64);
+    const call_result = try f.local(try_list);
+    const refining = try f.local(.u8);
+    const again = try f.local(.u8);
+    const handback_value = try f.local(.i64);
+    const other_value = try f.local(.i64);
+    const consumed_value = try f.local(.i64);
+
+    // The handback arm switches on the result again and reads the list in
+    // the arm that agrees with the refining switch.
+    const read_ret = try f.ret(handback_value);
+    const read_done = try f.assignI64(handback_value, 1, read_ret);
+    const read_list = try f.expectStmt(input, read_done);
+    const other_ret = try f.ret(other_value);
+    const other_done = try f.assignI64(other_value, 2, other_ret);
+    const inner = if (handback == 1)
+        try f.switchStmt(again, read_list, other_done, null)
+    else
+        try f.switchStmt(again, other_done, read_list, null);
+    const handback_body = try f.assignDiscriminant(again, call_result, inner);
+    const consumed_caller_ret = try f.ret(consumed_value);
+    const consumed_body = try f.assignI64(consumed_value, 0, consumed_caller_ret);
+    const refine = if (handback == 1)
+        try f.switchStmt(refining, handback_body, consumed_body, null)
+    else
+        try f.switchStmt(refining, consumed_body, handback_body, null);
+    const read_refining = try f.assignDiscriminant(refining, call_result, refine);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = call_result,
+        .proc = callee,
+        .args = try f.span(&.{ input, caller_choose }),
+        .next = read_refining,
+    } }, .test_fixture);
+    const choose_value = try f.assignI64(caller_choose, 1, call);
+    const make_input = try f.assignList(input, &.{item}, choose_value);
+    const caller_body = try f.assignStr(item, "kept", make_input);
+    _ = try f.addProc(&.{}, caller_body, .i64);
+
+    // Insertion certifies every procedure it rewrites.
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+}
+
+test "RC outcome restitution replays a listed-variant handback only at the refining switch" {
+    try checkRestitutionReplaysOnlyAtRefiningSwitch(1);
+}
+
+test "RC outcome restitution replays a default-variant handback only at the refining switch" {
+    try checkRestitutionReplaysOnlyAtRefiningSwitch(0);
 }
 
 test "RC outcome restitution moves an argument alias's source unit through a match join" {
