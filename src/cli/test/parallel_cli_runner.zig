@@ -681,6 +681,7 @@ const CustomCase = enum {
     issue_12220_shared_object_cache_literals,
     issue_12564_package_from_numeral_cache,
     issue_12809_boxed_callable_warm_check,
+    issue_12853_specialize_no_then_default_build,
     issue_12693_shared_package_cache,
     issue_12701_shared_package_codec_cache,
     issue_12747_check_then_build,
@@ -3637,6 +3638,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11826: a warm dev build keeps the ARC ownership variants of the cold build", .timeout_ms = 600_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .issue_11826_cache_ownership_variants } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12241: writing to a list read from a top-level constant allocates the same in cold, warm, and uncached builds", .timeout_ms = 600_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .issue_12241_cached_constant_insert } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12294: reading a top-level list of boxed capturing closures allocates the same in cold, warm, and uncached builds", .timeout_ms = 600_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .issue_12294_cached_capturing_closures } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12853: a default build after a --specialize=no build in one cache stores a constant holding an imported closure that returns a tag", .timeout_ms = 600_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .issue_12853_specialize_no_then_default_build } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11627: cached procedure keeps its own constant after the app is edited", .timeout_ms = 600_000, .body = .{ .custom = .issue_11627_static_data_names_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "demand CTFE: runtime specialization preserves check and build diagnostics", .timeout_ms = 600_000, .body = .{ .custom = .demand_ctfe_diagnostics } },
     .{ .id = 0, .suite = .subcommands, .name = "CTFE static cache: a helper read at compile time and at runtime prints the same result uncached, cold and warm", .timeout_ms = 600_000, .body = .{ .custom = .ctfe_static_cache_runtime } },
@@ -6162,6 +6164,7 @@ fn runCustomCase(
         .issue_12220_shared_object_cache_literals => customIssue12220SharedObjectCacheLiterals(io, allocator, &env, &timer, timeout_ms),
         .issue_12564_package_from_numeral_cache => customIssue12564PackageFromNumeralCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12809_boxed_callable_warm_check => customIssue12809BoxedCallableWarmCheck(io, allocator, &env, &timer, timeout_ms),
+        .issue_12853_specialize_no_then_default_build => customIssue12853SpecializeNoThenDefaultBuild(io, allocator, &env, &timer, timeout_ms),
         .issue_12693_shared_package_cache => customIssue12693SharedPackageCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12701_shared_package_codec_cache => customIssue12701SharedPackageCodecCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12747_check_then_build => customIssue12747CheckThenBuild(io, allocator, &env, &timer, timeout_ms),
@@ -11536,6 +11539,55 @@ fn customIssue12294CachedCapturingClosures(
             return customInfraFailure(allocator, timer, "program spawn error: {}", .{err});
         if (!processSucceeded(run.term) or !std.mem.eql(u8, run.stderr, expected)) {
             const message = std.fmt.allocPrint(allocator, "the {s} build allocates when reading a top-level list of boxed capturing closures", .{build.name}) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate failure message: {}", .{err});
+            return failureFromRun(allocator, timer, run, message);
+        }
+    }
+    return null;
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/12853: `page` holds the
+// value of `Attr.island`, a closure returning a tag, declared in an imported
+// module. The `--specialize=no` build evaluates both constants and caches
+// every module. The default build on the same cache restores both modules
+// and evaluates `page` again, storing the closure's capture types into
+// `main`'s restored checked module, whose own source never names the tag.
+// Both builds must succeed, and each program must print the same output.
+fn customIssue12853SpecializeNoThenDefaultBuild(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const builds = [_]struct { name: []const u8, specialize_no: bool }{
+        .{ .name = "specialize_no", .specialize_no = true },
+        .{ .name = "default", .specialize_no = false },
+    };
+    for (builds) |build| {
+        const exe = std.fmt.allocPrint(allocator, "{s}/issue_12853_{s}", .{ env.dirs.work_dir, build.name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, exe) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+        const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+        const build_args: []const []const u8 = if (build.specialize_no) &.{ "build", "--opt=dev", "--specialize=no", out_arg } else &.{ "build", "--opt=dev", out_arg };
+        const built = runRocInEnv(io, allocator, env, build_args, "test/cli/issue_12853_specialize_no_then_default_build/main.roc", .relative, &.{}, null, build_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+        if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or
+            std.mem.find(u8, built.stderr, "panic") != null or std.mem.find(u8, built.stderr, "invariant") != null or
+            std.mem.find(u8, built.stderr, "Segmentation fault") != null)
+        {
+            const message = std.fmt.allocPrint(allocator, "the {s} build on the shared cache did not succeed", .{build.name}) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate failure message: {}", .{err});
+            return failureFromRun(allocator, timer, built, message);
+        }
+        const exe_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before running a build");
+        const run = runRawInEnv(io, allocator, env, &.{exe}, env.dirs.work_dir, "", exe_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "program spawn error: {}", .{err});
+        if (!processSucceeded(run.term) or !std.mem.eql(u8, run.stderr, "hi\n")) {
+            const message = std.fmt.allocPrint(allocator, "the {s} build's program did not print the constant-free greeting", .{build.name}) catch |err|
                 return customInfraFailure(allocator, timer, "failed to allocate failure message: {}", .{err});
             return failureFromRun(allocator, timer, run, message);
         }
