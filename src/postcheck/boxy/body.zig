@@ -312,12 +312,13 @@ const Declaration = struct {
     worker: WorkerId,
     /// The callee's scheme types, in this body's variables.
     bound: []const TypeId,
-    descs: []const LocalId,
+    /// The descriptors and literal arguments; a literal chain frame's are
+    /// composed when a procedure first reads them (`declarationWords`).
+    words: ?Words,
     /// By hidden dictionary position; null until built.
     dicts: []?LocalId,
     /// Which dictionary slots are being built.
     building: []bool,
-    literals: []const LocalId,
     source: Source,
     /// Captures holding a null word for a slot still being built.
     patches: std.ArrayList(Patch) = .empty,
@@ -333,13 +334,14 @@ const Declaration = struct {
         /// A literal chain frame's dictionaries, at its position in
         /// `alias_scopes`; `composed` is its `DeferredDictionaries.composed`,
         /// which identifies it.
-        frame: struct { position: usize, composed: [*]?LocalId },
+        frame: struct { position: usize, composed: [*]?LocalId, scope: AliasScope },
         /// A stored dictionary's declaration context: every slot is
         /// restored or is the one being composed again.
         restored,
     };
 
     const Patch = struct { closure: LocalId, index: u32, slot: u32 };
+    const Words = struct { descs: []const LocalId, literals: []const LocalId };
 };
 
 /// The scope a local procedure's function value is built in: the worker
@@ -3677,7 +3679,12 @@ pub const Builder = struct {
     /// A deferred argument is composed at each read: a read can sit in one
     /// branch of a conversion, which another branch's read must not reuse.
     fn frameLiteral(self: *Builder, position: usize, index: u32) Allocator.Error!LocalId {
-        const scope = self.alias_scopes.items[position];
+        return try self.scopeFrameLiteral(self.alias_scopes.items[position], position, index);
+    }
+
+    /// Literal argument `index` of `scope`, the frame at `position` of
+    /// `alias_scopes`, whose frames below it are in place.
+    fn scopeFrameLiteral(self: *Builder, scope: AliasScope, position: usize, index: u32) Allocator.Error!LocalId {
         const deferred = scope.deferred orelse {
             if (index >= scope.literals.len) invariant("an edge named a literal argument its scope does not have");
             return scope.literals[index];
@@ -4669,13 +4676,14 @@ pub const Builder = struct {
         const worker = try self.declaredLambdaWorker(context.worker, lambda_expr, closure_expr.ty, captures, false);
         const dicts = try self.program.arena.allocator().alloc(LocalId, context.dicts.len);
         for (dicts, 0..) |*dict, slot| dict.* = (try self.declarationDictionary(context, slot)) orelse try self.nullWord();
+        const words = try self.declarationWords(context);
         return .{
             .declaring = context.worker,
             .worker = worker,
             .bound = context.bound,
-            .descs = context.descs,
+            .descs = words.descs,
             .dicts = dicts,
-            .literals = context.literals,
+            .literals = words.literals,
             .declaration = context,
         };
     }
@@ -5482,10 +5490,9 @@ pub const Builder = struct {
         var declaration: Declaration = .{
             .worker = stored.worker,
             .bound = stored.bound,
-            .descs = descs,
+            .words = .{ .descs = descs, .literals = words[next..] },
             .dicts = dicts,
             .building = building,
-            .literals = words[next..],
             .source = .restored,
             .outer = self.declaration,
         };
@@ -5532,10 +5539,9 @@ pub const Builder = struct {
         var declaration: Declaration = .{
             .worker = owner_worker,
             .bound = owner_bound,
-            .descs = descs,
+            .words = .{ .descs = descs, .literals = literals },
             .dicts = dicts,
             .building = building,
-            .literals = literals,
             .source = .restored,
             .outer = self.declaration,
         };
@@ -6067,10 +6073,9 @@ pub const Builder = struct {
             var declaration: Declaration = .{
                 .worker = callee,
                 .bound = bound,
-                .descs = hidden[0..bound.len],
+                .words = .{ .descs = hidden[0..bound.len], .literals = literals },
                 .dicts = dicts,
                 .building = building,
-                .literals = literals,
                 .source = .{ .call = .{ .evidence = evidence, .context = self.templateParamContext(callee, bound), .owner = evidence_owner } },
                 .outer = self.declaration,
             };
@@ -6136,6 +6141,23 @@ pub const Builder = struct {
                 .value = dictionary,
             } }), .next = undefined } });
         }
+    }
+
+    /// The descriptors and literal arguments of `declaration`, composed at
+    /// the first read of a literal chain frame's.
+    fn declarationWords(self: *Builder, declaration: *Declaration) Allocator.Error!Declaration.Words {
+        if (declaration.words) |words| return words;
+        const frame = switch (declaration.source) {
+            .frame => |frame| frame,
+            .call, .restored => invariant("a call's declaration context has no descriptors or literal arguments"),
+        };
+        const arena = self.program.arena.allocator();
+        const descs = try arena.alloc(LocalId, declaration.bound.len);
+        for (declaration.bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
+        const literals = try arena.alloc(LocalId, self.program.worker(declaration.worker).literal_params);
+        for (literals, 0..) |*literal, index| literal.* = try self.scopeFrameLiteral(frame.scope, frame.position, @intCast(index));
+        declaration.words = .{ .descs = descs, .literals = literals };
+        return declaration.words.?;
     }
 
     /// The innermost declaration context of the call instances being built
@@ -7313,15 +7335,8 @@ pub const Builder = struct {
     /// instance of template worker `declaring`, built in the frame's
     /// declaration context.
     fn frameDeclarationDictionary(self: *Builder, position: usize, declaring: WorkerId, deferred: DeferredDictionaries, slot: usize) Allocator.Error!LocalId {
-        const target = self.program.worker(declaring).*;
         const context = deferred.context orelse invariant("a template frame's dictionaries have no parameter context");
         const bound = context.env.bound;
-        const descs = try self.allocator.alloc(LocalId, bound.len);
-        defer self.allocator.free(descs);
-        for (bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
-        const literals = try self.allocator.alloc(LocalId, target.literal_params);
-        defer self.allocator.free(literals);
-        for (literals, 0..) |*literal, index| literal.* = try self.frameLiteral(position, @intCast(index));
         const dicts = try self.allocator.dupe(?LocalId, deferred.composed);
         defer self.allocator.free(dicts);
         const building = try self.allocator.alloc(bool, dicts.len);
@@ -7330,11 +7345,10 @@ pub const Builder = struct {
         var declaration: Declaration = .{
             .worker = declaring,
             .bound = bound,
-            .descs = descs,
+            .words = null,
             .dicts = dicts,
             .building = building,
-            .literals = literals,
-            .source = .{ .frame = .{ .position = position, .composed = deferred.composed.ptr } },
+            .source = .{ .frame = .{ .position = position, .composed = deferred.composed.ptr, .scope = self.alias_scopes.items[position] } },
             .outer = self.declaration,
         };
         defer declaration.patches.deinit(self.allocator);
