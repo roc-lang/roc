@@ -451,6 +451,57 @@ pub const Builder = struct {
     tasks: std.ArrayList(Task) = .empty,
     region: base.Region = base.Region.zero(),
     result_local: ?LocalId = null,
+    /// An erased worker's reuse argument: the erased-callable allocation a
+    /// caller transferred to it (design.md "Destination-Passing Results
+    /// and Allocation Reuse"), owned by this body until a packing consumes
+    /// it; `reuse_available` says none has yet.
+    reuse_arg: ?LocalId = null,
+    reuse_available: bool = false,
+    /// What the transferred allocation holds, which is what this worker's
+    /// own function value holds: a dynamic capture record with its
+    /// capacity, which a dynamic packing repacks, or the closed capture
+    /// layout `static`, which a packing of that same layout repacks.
+    reuse_kind: ReuseKind = .none,
+
+    pub const ReuseKind = union(enum) { none, dynamic, static: layout.Idx };
+
+    /// The reuse argument for a packing emitted in the body, consumed:
+    /// later packings start fresh.
+    pub fn takeReuse(self: *Builder, kind: enum { dynamic, static }) ?LocalId {
+        if (!self.reuse_available or self.emitting_entry) return null;
+        switch (self.reuse_kind) {
+            .none => return null,
+            .dynamic => if (kind != .dynamic) return null,
+            .static => if (kind != .static) return null,
+        }
+        self.reuse_available = false;
+        return self.reuse_arg;
+    }
+
+    /// The reuse parameter of an erased worker: the trailing argument the
+    /// uniform erased-callable ABI passes, after the capture pointer.
+    pub fn beginReuseArg(self: *Builder, kind: ReuseKind) Allocator.Error!LocalId {
+        const reuse = try self.closedLocal(try self.erasedLayout());
+        self.reuse_arg = reuse;
+        self.reuse_kind = kind;
+        self.reuse_available = kind != .none;
+        return reuse;
+    }
+
+    /// Finish an erased worker's procedure: its arguments are `args`, then
+    /// the capture pointer and the reuse argument, which the procedure's
+    /// markers name.
+    pub fn finishErasedProc(self: *Builder, entry: CFStmtId, body_start: CFStmtId, args: []const LocalId, ret_layout: layout.Idx, capture_ptr: LocalId) Allocator.Error!void {
+        const worker = self.currentWorker().*;
+        const reuse = self.reuse_arg orelse invariant("an erased worker finished without its reuse argument");
+        const all = try std.mem.concat(self.allocator, LocalId, &.{ args, &.{ capture_ptr, reuse } });
+        defer self.allocator.free(all);
+        try self.finishProc(entry, body_start, all, ret_layout);
+        const proc = self.store.getProcSpecPtr(worker.proc);
+        proc.erased_capture_arg = capture_ptr;
+        proc.erased_reuse_arg = reuse;
+        proc.abi = .erased_record;
+    }
 
     pub fn init(program: *Program, id: WorkerId) Allocator.Error!Builder {
         const worker = program.worker(id);
@@ -1632,9 +1683,11 @@ pub const Builder = struct {
         const capture_count = worker.capture_types.len + outer_descs + captured_dicts + captured_literals;
         var capture_values: []LocalId = &.{};
         if (!try self.allClosed(worker.capture_types)) {
+            _ = try self.beginReuseArg(.dynamic);
             capture_values = try self.dynamicCaptures(worker, capture_ptr);
         } else if (capture_count != 0) {
             const capture_layout = try self.captureLayout(worker.capture_types, outer_descs, captured_dicts + captured_literals);
+            _ = try self.beginReuseArg(.{ .static = capture_layout });
             // A record of zero-sized captures has no storage to read.
             const record: ?LocalId = if (capture_layout == .zst) null else try self.closedLocal(capture_layout);
             if (record) |loaded| try self.emitEntry(.{ .assign_low_level = .{
@@ -1717,11 +1770,8 @@ pub const Builder = struct {
         try self.tail_exprs.put(self.allocator, lambda.body, {});
         try self.tasks.append(self.allocator, .{ .expr = lambda.body });
         try self.run();
-        try args.append(self.allocator, capture_ptr);
-        try self.finishProc(entry, body_start, args.items, ret_layout);
-        const proc = self.store.getProcSpecPtr(worker.proc);
-        proc.erased_capture_arg = capture_ptr;
-        proc.abi = .erased_record;
+        if (self.reuse_arg == null) _ = try self.beginReuseArg(.none);
+        try self.finishErasedProc(entry, body_start, args.items, ret_layout, capture_ptr);
     }
 
     /// An adapter's body (`WorkerKey.adapter`): each argument adapted to the
@@ -1778,11 +1828,8 @@ pub const Builder = struct {
         try self.pushValue(try self.adaptValue(result, signature.ret, worker.ret));
         try self.tasks.append(self.allocator, .ret);
         try self.run();
-        try args.append(self.allocator, capture_ptr);
-        try self.finishProc(entry, body_start, args.items, ret_layout);
-        const proc = self.store.getProcSpecPtr(worker.proc);
-        proc.erased_capture_arg = capture_ptr;
-        proc.abi = .erased_record;
+        _ = try self.beginReuseArg(.none);
+        try self.finishErasedProc(entry, body_start, args.items, ret_layout, capture_ptr);
     }
 
     /// Where two types of one value differ: nowhere; only in the tags of
@@ -2124,19 +2171,23 @@ pub const Builder = struct {
             .args = try self.store.addLocalSpan(&.{capture_ptr}),
             .next = undefined,
         } });
+        // The record's bytes are in the allocation the reuse argument
+        // holds, so reads of them count as uses of it: a packing that
+        // reuses the allocation while a read is still to come retains it,
+        // and the runtime then packs afresh.
         const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = record_desc, .storage = .view } });
-        try self.emitEntry(.{ .dyn = .{ .target = record, .data = try self.store.addStmtRow(LIR.DynOp, .{ .view = .{ .address = capture_ptr } }), .next = undefined } });
+        try self.emitEntry(.{ .dyn = .{ .target = record, .data = try self.store.addStmtRow(LIR.DynOp, .{ .view = .{ .address = capture_ptr, .owner = self.reuse_arg } }), .next = undefined } });
         const values = try self.allocator.alloc(LocalId, worker.capture_types.len + word_count);
         for (0..word_count) |index| {
             const word = try self.closedLocal(if (index < outer_descs) .opaque_ptr else try self.erasedLayout());
-            try self.emitEntry(.{ .dyn = .{ .target = word, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .field_index = @intCast(1 + index) } }), .next = undefined } });
+            try self.emitEntry(.{ .dyn = .{ .target = word, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .field_index = @intCast(capture_record_leading_words + index) } }), .next = undefined } });
             values[worker.capture_types.len + index] = word;
         }
         // The captured values' types mention only the outer scope.
         @memcpy(self.var_descs[0..outer_descs], values[worker.capture_types.len..][0..outer_descs]);
         for (worker.capture_types, 0..) |ty, index| {
             const local = try self.localOf(ty, .view);
-            try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .field_index = @intCast(1 + word_count + index) } }), .next = undefined } });
+            try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .field_index = @intCast(capture_record_leading_words + word_count + index) } }), .next = undefined } });
             values[index] = local;
         }
         return values;
@@ -2195,6 +2246,7 @@ pub const Builder = struct {
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
         const capture_ptr = try self.closedLocal(.opaque_ptr);
+        _ = try self.beginReuseArg(.none);
         const captures = if (field_layouts.len == 0) try self.allocator.alloc(LocalId, 0) else try self.loadCaptures(capture_ptr, field_layouts);
         return .{
             .entry = entry,
@@ -2439,17 +2491,13 @@ pub const Builder = struct {
     /// A crashing dictionary method: it crashes as the dispatch it stands
     /// for would.
     pub fn lowerCrashDictionary(self: *Builder, kind: lower.CrashDictionary) Allocator.Error!void {
-        const worker = self.currentWorker().*;
         const start = try self.beginErasedWorker(&.{});
         defer self.allocator.free(start.captures);
         self.var_descs = &.{};
         const body_start = try self.newHole();
         self.hole = body_start;
         try self.emitDispatchCrash(kind);
-        try self.finishProc(start.entry, body_start, &.{start.capture_ptr}, .zst);
-        const proc = self.store.getProcSpecPtr(worker.proc);
-        proc.erased_capture_arg = start.capture_ptr;
-        proc.abi = .erased_record;
+        try self.finishErasedProc(start.entry, body_start, &.{}, .zst, start.capture_ptr);
     }
 
     /// The crash of a dispatch that cannot run: a rejected one is checked-
@@ -2474,7 +2522,6 @@ pub const Builder = struct {
     };
 
     pub fn runErasedBody(self: *Builder, start: *ErasedStart, params: []const TypeId, ret: TypeId, body: ErasedBody) Allocator.Error!void {
-        const worker = self.currentWorker().*;
         var args: std.ArrayList(LocalId) = .empty;
         defer args.deinit(self.allocator);
         var record: ?LocalId = null;
@@ -2520,11 +2567,7 @@ pub const Builder = struct {
             try self.pushValue(value);
             try self.step(.ret);
         }
-        try args.append(self.allocator, start.capture_ptr);
-        try self.finishProc(start.entry, body_start, args.items, ret_layout);
-        const proc = self.store.getProcSpecPtr(worker.proc);
-        proc.erased_capture_arg = start.capture_ptr;
-        proc.abi = .erased_record;
+        try self.finishErasedProc(start.entry, body_start, args.items, ret_layout, start.capture_ptr);
     }
 
     /// The closed layout of a lambda's capture record: the captured values,
@@ -3799,10 +3842,7 @@ pub const Builder = struct {
         if (target.literal_scopes.len == 0) invariant("a literal thunk's target has no scope");
         try self.lowerLiteralChain(target.literal_scopes[0], key.literal_requirement, worker.ret);
         try self.run();
-        try self.finishProc(start.entry, body_start, &.{start.capture_ptr}, ret_layout);
-        const proc = self.store.getProcSpecPtr(worker.proc);
-        proc.erased_capture_arg = start.capture_ptr;
-        proc.abi = .erased_record;
+        try self.finishErasedProc(start.entry, body_start, &.{}, ret_layout, start.capture_ptr);
     }
 
     /// The body of a root slot thunk (`WorkerKey.root_slot`): the read of
@@ -3820,10 +3860,7 @@ pub const Builder = struct {
         try self.tasks.append(self.allocator, .ret);
         try self.pendingValueRead(key.module, key.root, worker.ret);
         try self.run();
-        try self.finishProc(start.entry, body_start, &.{start.capture_ptr}, ret_layout);
-        const proc = self.store.getProcSpecPtr(worker.proc);
-        proc.erased_capture_arg = start.capture_ptr;
-        proc.abi = .erased_record;
+        try self.finishErasedProc(start.entry, body_start, &.{}, ret_layout, start.capture_ptr);
     }
 
     /// Begin a literal chain: the frames it enters are left once the
@@ -7603,16 +7640,21 @@ pub const Builder = struct {
     }
 
     /// The descriptor of a dynamic capture record (design.md "Function
-    /// Values"): a declared-order record of its own descriptor word, the
-    /// descriptor and dictionary words, then the captured values.
+    /// Values"): a declared-order record of its own descriptor word, its
+    /// allocation's capture capacity word, the descriptor and dictionary
+    /// words, then the captured values.
     pub fn dynamicCaptureDesc(self: *Builder, capture_types: []const TypeId, word_count: usize) Allocator.Error!LocalId {
         const word = try self.opaqueWordDesc();
-        const descs = try self.allocator.alloc(LocalId, 1 + word_count + capture_types.len);
+        const descs = try self.allocator.alloc(LocalId, capture_record_leading_words + word_count + capture_types.len);
         defer self.allocator.free(descs);
-        @memset(descs[0 .. 1 + word_count], word);
-        for (descs[1 + word_count ..], capture_types) |*desc, ty| desc.* = try self.descOf(ty);
+        @memset(descs[0 .. capture_record_leading_words + word_count], word);
+        for (descs[capture_record_leading_words + word_count ..], capture_types) |*desc, ty| desc.* = try self.descOf(ty);
         return self.composedArgsDesc(descs);
     }
+
+    /// The words before a dynamic capture record's descriptor and
+    /// dictionary words: its descriptor and its capture capacity.
+    pub const capture_record_leading_words = 2;
 
     pub fn opaqueWordDesc(self: *Builder) Allocator.Error!LocalId {
         if (self.opaque_word_desc) |local| return local;
@@ -7630,11 +7672,13 @@ pub const Builder = struct {
         if (self.immortal_closures) invariant("a method override captures a value of an open type, which methods never capture");
         const record_desc = try self.dynamicCaptureDesc(capture_types, descs.len + dicts.len);
         const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = record_desc, .storage = .frame } });
-        const fields = try std.mem.concat(self.allocator, LocalId, &.{ &.{record_desc}, descs, dicts, captured });
+        // The capacity word is the runtime's to write when it packs the
+        // callable; the record carries its descriptor there until then.
+        const fields = try std.mem.concat(self.allocator, LocalId, &.{ &.{ record_desc, record_desc }, descs, dicts, captured });
         defer self.allocator.free(fields);
         try self.emitDyn(record, .{ .record = .{ .desc = record_desc, .fields = try self.store.addLocalSpan(fields) } });
         const target = try self.closedLocal(try self.erasedLayout());
-        try self.emitDyn(target, .{ .closure = .{ .proc = self.program.worker(callee).proc, .capture = record } });
+        try self.emitDyn(target, .{ .closure = .{ .proc = self.program.worker(callee).proc, .capture = record, .reuse = self.takeReuse(.dynamic) } });
         return target;
     }
 
@@ -7667,6 +7711,9 @@ pub const Builder = struct {
                 on_drop = .{ .rc_helper = .{ .op = .host_drop, .layout_idx = record_layout } };
             }
         }
+        // A transferred allocation of this worker's own closed capture
+        // layout is repacked in place when unique.
+        const reuse: ?LocalId = if (capture_layout != null and self.reuse_kind == .static and self.reuse_kind.static == capture_layout.?) self.takeReuse(.static) else null;
         try self.emitLinear(.{ .assign_packed_erased_fn = .{
             .target = target,
             .data = try self.store.addStmtRow(LIR.PackedErasedFnData, .{
@@ -7674,6 +7721,7 @@ pub const Builder = struct {
                 .capture = capture,
                 .capture_layout = capture_layout,
                 .on_drop = on_drop,
+                .reuse = reuse,
             }),
             .next = undefined,
         } });
@@ -7735,7 +7783,12 @@ pub const Builder = struct {
     /// `record` (possibly a single value), for a result of `result_ty`.
     pub fn callErased(self: *Builder, closure: LocalId, record: ?LocalId, result_ty: TypeId) Allocator.Error!LocalId {
         const target = try self.localOf(result_ty, .frame);
-        try self.emitDyn(target, .{ .call_erased = .{ .closure = closure, .args = record } });
+        // A call whose result holds one erased-callable slot transfers the
+        // callable's allocation, which the callee repacks when it packs a
+        // callable that fits it (design.md "Destination-Passing Results
+        // and Allocation Reuse").
+        const owned = try self.program.converter().erasedResultSlots(result_ty) == .single;
+        try self.emitDyn(target, .{ .call_erased = .{ .closure = closure, .args = record, .reuse_closure = owned, .reuse_source = if (owned) closure else null } });
         return target;
     }
 
@@ -8873,7 +8926,10 @@ pub const Builder = struct {
 
         self.hole = head_body;
         if (head_merge) |m| try self.enterMerge(m);
-        const step_value = try self.emitDispatch(plan.next.resolution, plan.next.callable_ty, &.{state}, step_ty);
+        const step_value = if (try self.builtinStepField(plan.next, iterator_ty)) |step_name| blk: {
+            const thunk = try self.recordFieldValue(state, iterator_ty, step_name);
+            break :blk try self.emitErasedCall(thunk.value, thunk.ty, &.{}, step_ty);
+        } else try self.emitDispatch(plan.next.resolution, plan.next.callable_ty, &.{state}, step_ty);
         const names = self.view.nameStore();
         const done = try self.program.store.internName(names.tagLabelText(plan.step_topology.done_tag));
         const skip = try self.program.store.internName(names.tagLabelText(plan.step_topology.skip_tag));
@@ -8908,6 +8964,37 @@ pub const Builder = struct {
         try self.push(.{ .push_value = rest.value });
         try self.push(.discard);
         try self.push(.{ .expr = body });
+    }
+
+    /// The step field of a `for` loop's iterator when the loop's `next`
+    /// dispatch resolves to the procedure the checker stamped
+    /// `IteratorProcedureId.next` of the pure `Iter` protocol, which is
+    /// `|iterator| (iterator.step)()`: the loop then calls the step thunk
+    /// itself, owning the iterator it dismantles, so the call transfers the
+    /// thunk's allocation to it (design.md "Iterator `for`"). Null for
+    /// every other `next`, which the loop dispatches to.
+    fn builtinStepField(self: *Builder, next: static_dispatch.IteratorDispatchCall, iterator_ty: TypeId) Allocator.Error!?types.NameId {
+        const table = self.view.view.static_dispatch_plans;
+        const node = switch (next.resolution) {
+            .direct_closed, .direct_parametric => |direct| table.evidenceNode(direct.evidence),
+            .evidence_dependent, .checked_error, .@"unreachable", .structural, .direct_pending => return null,
+        };
+        const stamp = switch (node.target.kind) {
+            .procedure => |procedure| procedure.runtime_target.iteratorProcedure(),
+            .local_proc, .structural => return null,
+        };
+        if (stamp != .next) return null;
+        const owner: static_dispatch.IteratorOwner = switch (self.program.store.get(iterator_ty)) {
+            .nominal => |nominal| switch (nominal.builtin orelse return null) {
+                .iter => .iter,
+                else => return null,
+            },
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => return null,
+        };
+        const topologies = table.iterator_topologies;
+        if (topologies.len != std.enums.values(static_dispatch.IteratorOwner).len) invariant("a checked module omitted an iterator representation topology");
+        const topology = topologies[@backingInt(owner)];
+        return try self.program.store.internName(self.view.nameStore().recordFieldLabelText(topology.step_field));
     }
 
     /// Continue at the next statement when `value` (of `ty`) holds tag

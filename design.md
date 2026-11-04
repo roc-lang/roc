@@ -14044,12 +14044,25 @@ thus carries the type knowledge of its creation site, and its worker needs no
 hidden parameters of its own: it reads them from its captures. When any
 capture is of variable type, the capture record is a dynamic record composed
 from the captures' descriptors, its first word is the capture record's
-descriptor, and the callable's `on_drop` is the shared runtime drop that reads
-that word. When every capture is of closed type, the capture record has a
-static layout and `on_drop` is the per-worker helper the backend generates for
-that layout. Zero-capture functions are static, immortal callables. The
-`out_desc` slot of the erased-callable ABI is always written null: the caller
-knows the result type's descriptor itself.
+descriptor, its second word the capture capacity of the allocation holding it
+(the record's size when the callable is first packed; an allocation repacked
+in place keeps its capacity), and the callable's `on_drop` is the shared
+runtime drop that reads the first word. When every capture is of closed type,
+the capture record has a static layout and `on_drop` is the per-worker helper
+the backend generates for that layout. Zero-capture functions are static,
+immortal callables. The `out_desc` slot of the erased-callable ABI is always
+written null: the caller knows the result type's descriptor itself.
+
+Every `.boxy` erased worker (a lambda, an adapter, a method entry, a literal
+or root thunk) takes the erased ABI's reuse argument as its last parameter,
+named by `LirProcSpec.erased_reuse_arg`, and consumes it exactly once
+(Destination-Passing Results and Allocation Reuse): the first dynamic
+closure the body packs repacks it when the worker's own closure is dynamic,
+a packing of the worker's own closed capture layout repacks it when that
+closure is closed, and otherwise ARC releases it. A worker's capture record is
+a view whose owner is that argument, so a packing that would repack the
+allocation while a later read of the captures is still to come retains it,
+and the runtime then packs afresh.
 
 An erased call passes its arguments as one record in the uniform ABI. When the
 call's argument types are closed, that record has a static layout; when they
@@ -17736,6 +17749,19 @@ A `Skip` carries only `rest`: it signals "advanced one position, produced no
 item this step," which is what keeps adapters like `keep_if` non-recursive. A
 plain source `for` loop binds nothing from it and simply continues with `rest`.
 
+`.boxy` lowering emits the same loop from the checked plan. When the plan's
+`next` dispatch resolves to the procedure the checker stamped
+`IteratorProcedureId.next` of the pure `Iter` protocol, whose definition is
+`|iterator| (iterator.step)()`, the loop calls the step thunk itself: it reads
+the step field the owner's `IteratorRepresentationTopology` names from the
+iterator it owns and makes an owned erased call of it (Destination-Passing
+Results and Allocation Reuse). The loop dismantles the dying iterator into
+that call, so the thunk receives its own allocation unique and repacks it
+with the next step's captures; an iterator over a list is then advanced
+without an allocation. The call is made where the loop matches its result, so
+no pending call is left for the loop to drive. Every other `next`, including
+`Stream.next!`, is dispatched to as the plan resolves it.
+
 No `for` node exists after Monotype IR.
 
 ## Monotype Lifted IR
@@ -20112,9 +20138,11 @@ its packed arguments, one owned reference to its closure, and the layout and
 result descriptor the statement calls with, and the procedure returns. Its
 target holds no value.
 
-Whoever awaits that procedure's result makes the pending call, releases the
-closure reference afterwards, and repeats while the call it made leaves
-another pending. The erased-call runtime does this after every erased call it
+Whoever awaits that procedure's result makes the pending call and repeats
+while the call it made leaves another pending. The pending record owns one
+reference to the closure: for an owned deferred call (`reuse_closure`), the
+driver passes that reference to the callee as its reuse input, which consumes
+it; for any other, the driver releases it after the call. The erased-call runtime does this after every erased call it
 makes, so an erased-callable procedure it invoked can simply return. Every
 other waiter is stated in LIR by the tail-drive pass (`src/lir/tail_drive.zig`),
 which runs after ARC and stamps a `PendingDrive` on each direct call whose
@@ -22232,7 +22260,28 @@ LIR lowerer records each emitted `assign_ref` target's provenance from it, and
 the resolution in `lir/erased_owner.zig` follows it. A LIR transform that
 rewrites the definitions on such a chain, as join scalarization does when it
 turns field reads into aliases, re-resolves the reuse sources of the procedures
-it changes with that resolution. Boxy lowering emits no owned erased calls.
+it changes with that resolution. Boxy lowering marks an erased call owned
+(`DynOp.call_erased.reuse_closure`, with the closure as its reuse source,
+resolved to the allocation's root after lowering) when the call's result type
+holds exactly one erased-callable slot (`types.Converter.erasedResultSlots`:
+a function type is a slot, a record's or tuple's slots add up, a tag union's
+are its largest variant's, a list of callables holds any number, a box holds
+its payload's, a nominal its backing's, and a type variable holds none). ARC
+moves the closure's unit into the call when the closure dies there and
+retains one for it otherwise; a deferred owned call's pending record carries
+the unit to the driver (Deferred Erased Calls).
+
+A `.boxy` dynamic closure's capture record carries its allocation's capture
+capacity (Function Values), so the same-size class rule above widens for
+those allocations: a `DynOp.closure` with a reuse operand repacks the
+allocation in place when it is unique (at runtime, or `reuse_unique` when ARC
+proved it) and the new record fits the recorded capacity, releasing the old
+capture through the old drop callback first and keeping the capacity; a
+shared or too small allocation is released and the callable is fresh. The
+reuse operand is always an allocation packed by `DynOp.closure`: a worker's
+own, or one such a worker handed on. A closed-capture `.boxy` closure
+repacks through `assign_packed_erased_fn` under the same-layout rule, like
+an `.lss` one.
 
 The erased ABI's capture pointer addresses the interior of the callable passed
 as the reuse ownership input. LLVM must not mark either parameter `noalias`:

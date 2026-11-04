@@ -35,8 +35,9 @@ pub const Ownership = union(enum) {
     /// The value operands are borrowed; the target is owned (or not reference
     /// counted).
     borrow_operands,
-    /// `call_erased`: the closure is borrowed, the argument record consumed,
-    /// and the result owned.
+    /// `call_erased`: the closure is borrowed, or consumed by an owned call
+    /// (`reuse_closure`), the argument record consumed, and the result
+    /// owned.
     call_erased,
 };
 
@@ -75,7 +76,7 @@ pub fn ownership(op: DynOp) Ownership {
         .list_item_addr => |elem| .{ .borrow_component = elem.list },
         .box_payload_addr => |payload| .{ .borrow_component = payload.box },
         .tag_payload_addr => |payload| .{ .borrow_component = payload.base },
-        .view => |view| .{ .borrow_component = view.address },
+        .view => |view| .{ .borrow_component = view.owner orelse view.address },
         .tag_discriminant, .eq, .hash, .inspect, .adapt => .borrow_operands,
         .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .closure => .construct,
         .call_erased => .call_erased,
@@ -237,8 +238,14 @@ pub const Operands = struct {
                 result.single(call.closure);
                 if (call.args) |args| result.single(args);
             },
-            .closure => |closure| result.single(closure.capture),
-            .view => |view| result.single(view.address),
+            .closure => |closure| {
+                result.single(closure.capture);
+                if (closure.reuse) |reuse| result.single(reuse);
+            },
+            .view => |view| {
+                result.single(view.address);
+                if (view.owner) |owner| result.single(owner);
+            },
             .adapt => |adapt| {
                 result.single(adapt.src);
                 result.single(adapt.from);
@@ -281,7 +288,10 @@ pub fn constructedValues(store: *const LirStore, allocator: std.mem.Allocator, o
         .slot_alloc => {},
         .slot_store => |slot| try out.appendSlice(allocator, &.{ slot.slot, slot.value }),
         .dict_compose => |dict| try appendSpan(store, allocator, dict.captures, out),
-        .closure => |closure| try out.append(allocator, closure.capture),
+        .closure => |closure| {
+            try out.append(allocator, closure.capture);
+            if (closure.reuse) |reuse| try out.append(allocator, reuse);
+        },
         .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .eq, .hash, .inspect, .call_erased, .view, .adapt => unreachable, // only construct operations consume value operands
     }
 }
@@ -411,11 +421,13 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
         .call_erased => |call| .{ .call_erased = .{
             .closure = try Remap.one(context, call.closure),
             .args = try Remap.opt(context, call.args),
+            .reuse_closure = call.reuse_closure,
+            .reuse_source = try Remap.opt(context, call.reuse_source),
             .deferred = call.deferred,
             .drive = call.drive,
         } },
-        .closure => |closure| .{ .closure = .{ .proc = closure.proc, .capture = try Remap.one(context, closure.capture) } },
-        .view => |view| .{ .view = .{ .address = try Remap.one(context, view.address) } },
+        .closure => |closure| .{ .closure = .{ .proc = closure.proc, .capture = try Remap.one(context, closure.capture), .reuse = try Remap.opt(context, closure.reuse), .reuse_unique = closure.reuse_unique } },
+        .view => |view| .{ .view = .{ .address = try Remap.one(context, view.address), .owner = try Remap.opt(context, view.owner) } },
         .adapt => |adapt| .{ .adapt = .{ .src = try Remap.one(context, adapt.src), .from = try Remap.one(context, adapt.from), .to = try Remap.one(context, adapt.to) } },
     };
 }

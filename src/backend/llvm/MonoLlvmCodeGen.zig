@@ -2903,13 +2903,12 @@ pub const MonoLlvmCodeGen = struct {
             self.capture_ptr_arg = wip.arg(3);
             self.reuse_ptr_arg = wip.arg(4);
         } else if (proc.abi == .erased_record) {
-            // The same public erased ABI; a `.boxy` worker takes no reuse
-            // input.
+            // The same public erased ABI.
             self.fast_ret_registers = null;
             self.ret_ptr_arg = wip.arg(1);
             self.args_ptr_arg = wip.arg(2);
             self.capture_ptr_arg = wip.arg(3);
-            self.reuse_ptr_arg = null;
+            self.reuse_ptr_arg = wip.arg(4);
         } else if (fast_sig) |sig| {
             // The fast function returns small results by value, read from
             // the returned local itself. A larger result arrives through the
@@ -5042,7 +5041,7 @@ pub const MonoLlvmCodeGen = struct {
             break :blk buf;
         };
         if (deferred) {
-            try self.callBuiltinVoid(.native_callable_defer, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, self.ptrSizedIntType() }, &.{ try self.pendingCell(), fn_ptr, closure_ptr, args_buf, try self.intValue(self.ptrSizedIntType(), self.store.getErasedCallArgsPlan(arg_plan).size) });
+            try self.callBuiltinVoid(.native_callable_defer, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, self.ptrSizedIntType(), .i8 }, &.{ try self.pendingCell(), fn_ptr, closure_ptr, args_buf, try self.intValue(self.ptrSizedIntType(), self.store.getErasedCallArgsPlan(arg_plan).size), try self.intValue(.i8, 0) });
         } else {
             const ret_ptr = if (self.slot(target).size == 0) try self.nullPtr() else self.slot(target).ptr;
             try self.callBuiltinVoid(.native_callable_call, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{ fn_ptr, ret_ptr, args_buf, capture_ptr, reuse_ptr });
@@ -12341,7 +12340,9 @@ pub const MonoLlvmCodeGen = struct {
                 const args_ptr = if (c.args) |args| try self.bytesAddress(args) else try self.nullPtr();
                 if (c.deferred) {
                     // The pending call owns the closure reference ARC
-                    // retained for it and a copy of the argument record.
+                    // moved or retained for it and a copy of the argument
+                    // record; an owned call's reference is passed on to the
+                    // callee as its reuse input.
                     const usize_ty = self.ptrSizedIntType();
                     const args_len = if (c.args) |args|
                         if (self.localDyn(args)) |dyn|
@@ -12350,26 +12351,41 @@ pub const MonoLlvmCodeGen = struct {
                             try self.intValue(usize_ty, self.layoutByteSize(self.localLayout(args)))
                     else
                         try self.intValue(usize_ty, 0);
-                    try self.callBuiltinVoid(.native_callable_defer, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, usize_ty }, &.{ try self.pendingCell(), fn_ptr, closure_ptr, args_ptr, args_len });
+                    try self.callBuiltinVoid(.native_callable_defer, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, usize_ty, .i8 }, &.{ try self.pendingCell(), fn_ptr, closure_ptr, args_ptr, args_len, try self.intValue(.i8, @intFromBool(c.reuse_closure)) });
                 } else {
                     const ret_ptr = if (self.localDyn(target) == null and self.layoutByteSize(self.localLayout(target)) == 0)
                         try self.nullPtr()
                     else
                         try self.targetAddress(target);
                     // The runtime makes every call the callee leaves pending
-                    // before it returns.
-                    try self.callBuiltinVoid(.native_callable_call, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{ fn_ptr, ret_ptr, args_ptr, capture_ptr, try self.nullPtr() });
+                    // before it returns. An owned call transfers the closure
+                    // allocation as the callee's reuse input.
+                    const reuse_ptr = if (c.reuse_closure) closure_ptr else try self.nullPtr();
+                    try self.callBuiltinVoid(.native_callable_call, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{ fn_ptr, ret_ptr, args_ptr, capture_ptr, reuse_ptr });
                 }
                 try self.emitDrivePending(c.drive, target);
             },
             .closure => |c| {
                 const worker = self.proc_registry.get(@backingInt(c.proc)) orelse return error.CompilationFailed;
-                try self.bindWord(target, try self.callBoxyRuntime("roc_desc_closure", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{
-                    worker.toValue(builder),
-                    try self.bytesAddress(c.capture),
-                    try self.nullPtr(),
-                    try self.nullPtr(),
-                }));
+                // Generated code reserves no hot-reload header before an
+                // erased callable's captures.
+                if (c.reuse) |reuse| {
+                    try self.bindWord(target, try self.callBoxyRuntime("roc_desc_closure_reuse", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, .i8, ptr_ty, ptr_ty }, &.{
+                        worker.toValue(builder),
+                        try self.bytesAddress(c.capture),
+                        try self.wordValue(reuse),
+                        try self.intValue(.i8, @intFromBool(c.reuse_unique)),
+                        try self.nullPtr(),
+                        try self.nullPtr(),
+                    }));
+                } else {
+                    try self.bindWord(target, try self.callBoxyRuntime("roc_desc_closure", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{
+                        worker.toValue(builder),
+                        try self.bytesAddress(c.capture),
+                        try self.nullPtr(),
+                        try self.nullPtr(),
+                    }));
+                }
             },
             .view => |v| try self.bindComponentAddress(target, try self.wordValue(v.address)),
             .adapt => |a| _ = try self.callBoxyRuntime("roc_desc_adapt", .void, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{
@@ -12543,8 +12559,9 @@ pub const MonoLlvmCodeGen = struct {
     /// erased-callable ABI as a `.boxy` worker receives it
     /// (`ProcAbi.erased_record`): its dynamic result is the result pointer,
     /// its one explicit parameter is the argument record (a dynamic
-    /// parameter is that record's address), and its capture parameter holds
-    /// the capture pointer.
+    /// parameter is that record's address), its capture parameter holds
+    /// the capture pointer, and its reuse parameter the transferred
+    /// allocation.
     fn bindErasedRecordParams(self: *MonoLlvmCodeGen, proc: LirProcSpec) Error!void {
         const ret_ptr = self.ret_ptr_arg orelse return error.CompilationFailed;
         const args_ptr = self.args_ptr_arg orelse return error.CompilationFailed;
@@ -12557,6 +12574,10 @@ pub const MonoLlvmCodeGen = struct {
             const param = GuardedList.at(params, i);
             if (param == capture_param) {
                 try self.storePointer(self.slot(param).ptr, capture_ptr);
+                continue;
+            }
+            if (proc.erased_reuse_arg != null and param == proc.erased_reuse_arg.?) {
+                try self.storePointer(self.slot(param).ptr, self.reuse_ptr_arg orelse return error.CompilationFailed);
                 continue;
             }
             explicit_count += 1;
