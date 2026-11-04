@@ -96,31 +96,11 @@ pub const StrParts = struct {
     }
 };
 
-/// A numeric literal: exact digit facts, the checked `from_numeral` dispatch
-/// plan when its target is not builtin, and the compile-time root that
-/// evaluates its conversion when that conversion is independent of
-/// specialization.
-pub const NumeralData = struct {
-    literal: ModuleEnv.NumeralLiteral,
-    plan: ?StaticDispatchPlanId,
-    conversion_root: ?ComptimeRootId,
-};
-
-/// A literal-only string whose target is custom or still open.
-pub const QuoteData = struct {
-    plan: ?StaticDispatchPlanId,
-    literal: Text,
-    conversion_root: ?ComptimeRootId,
-};
-
-/// Custom interpolation: the conversion (`plan`) receives the literal
-/// segments and returns the assembler, of type `assembler_ty`, which receives
-/// the interpolated values in order. `parts` alternates value, segment.
+/// A string interpolation: literal segments alternating with interpolated
+/// values. `parts` alternates value, segment.
 pub const InterpolationData = struct {
-    plan: ?StaticDispatchPlanId,
     first: ExprId,
     parts: []const ExprId,
-    assembler_ty: CheckedTypeId,
 
     pub fn segmentCount(self: InterpolationData) usize {
         return self.parts.len / 2 + 1;
@@ -137,6 +117,11 @@ pub const InterpolationData = struct {
     pub fn value(self: InterpolationData, index: usize) ExprId {
         return self.parts[2 * index];
     }
+
+    /// Every part in order: the first segment, then `parts`.
+    pub fn strParts(self: InterpolationData) StrParts {
+        return .{ .first = self.first, .rest = self.parts };
+    }
 };
 
 /// An equality that compares only a payload-free tag's discriminant: `value`
@@ -146,16 +131,23 @@ pub const TagDiscriminantEquality = struct {
     tag: canonical.TagLabelId,
 };
 
-/// The normalized shape of an expression node.
+/// The shape of an expression node, read from CIR. Facts checking and
+/// publication attached to the node are separate accessors of the reader.
 pub const ExprData = union(enum) {
-    numeral: NumeralData,
-    str_from_quote: QuoteData,
+    /// Any numeric literal (`numeralLiteral`, `numeralPlan`,
+    /// `literalConversionRoot`).
+    numeral,
+    /// A string literal's segments (`quoteIsCustom`, `quotePlan`,
+    /// `literalConversionRoot`).
+    str: []const ExprId,
     str_segment: base.StringLiteral.Idx,
-    str: StrParts,
     bytes_literal: base.StringLiteral.Idx,
-    lookup_local: struct { pattern: PatternId, resolved: ?ResolvedValueRefId },
-    lookup_external: ?ResolvedValueRefId,
-    lookup_required: ?ResolvedValueRefId,
+    /// A local lookup and the pattern it reads (`resolvedRef`).
+    lookup_local: PatternId,
+    /// An external or resolved associated lookup (`resolvedRef`).
+    lookup_external,
+    /// A platform requirement lookup (`resolvedRef`).
+    lookup_required,
     list: []const ExprId,
     empty_list,
     tuple: []const ExprId,
@@ -169,12 +161,11 @@ pub const ExprData = union(enum) {
         branches: []const CIR.Expr.IfBranch.Idx,
         final_else: ExprId,
     },
+    /// A call (`callDirectTarget`, `callFnType`).
     call: struct {
         func: ExprId,
         args: []const ExprId,
         called_via: base.CalledVia,
-        source_fn_ty_payload: CheckedTypeId,
-        direct_target: ?ResolvedValueId,
     },
     record: struct {
         fields: []const CIR.RecordField.Idx,
@@ -186,8 +177,9 @@ pub const ExprData = union(enum) {
         statements: []const StatementId,
         final_expr: ExprId,
     },
+    /// A tag application (`tagLabel` of `name`).
     tag: struct {
-        name: canonical.TagLabelId,
+        name: Ident.Idx,
         args: []const ExprId,
     },
     nominal: struct {
@@ -195,13 +187,13 @@ pub const ExprData = union(enum) {
         backing_type: CIR.Expr.NominalBackingType,
     },
     zero_argument_tag: struct {
-        closure_name: canonical.TagLabelId,
-        name: canonical.TagLabelId,
+        closure_name: Ident.Idx,
+        name: Ident.Idx,
     },
     closure: struct {
         lambda: ExprId,
         captures: []const CIR.Expr.Capture.Idx,
-        tag_name: canonical.TagLabelId,
+        tag_name: Ident.Idx,
     },
     lambda: struct {
         args: []const PatternId,
@@ -217,21 +209,25 @@ pub const ExprData = union(enum) {
         receiver: ExprId,
         segments: CIR.Expr.FieldAccessSegment.Span,
     },
-    dispatch_call: ?StaticDispatchPlanId,
+    /// A method dispatch (`dispatchPlan`).
+    dispatch_call,
+    /// A string interpolation (`interpolationIsBuiltinStr`, `dispatchPlan`,
+    /// `interpolationAssemblerType`).
     interpolation: InterpolationData,
+    /// A structural equality (`tagDiscriminantEquality`).
     structural_eq: struct {
         lhs: ExprId,
         rhs: ExprId,
         negated: bool,
-        /// Equality that compares only a payload-free tag's discriminant.
-        discriminant: ?TagDiscriminantEquality,
     },
     structural_hash: struct {
         value: ExprId,
         hasher: ExprId,
     },
-    method_eq: ?StaticDispatchPlanId,
-    type_dispatch_call: ?StaticDispatchPlanId,
+    /// An equality dispatch (`dispatchPlan`).
+    method_eq,
+    /// A type method dispatch (`dispatchPlan`).
+    type_dispatch_call,
     tuple_access: struct {
         tuple: ExprId,
         elem_index: u32,
@@ -254,14 +250,11 @@ pub const ExprData = union(enum) {
         lambda: ExprId,
         context: checked_artifact.CheckedReturnContext,
     },
-    for_: struct {
-        pattern: PatternId,
-        expr: ExprId,
-        body: ExprId,
-        plan: ?IteratorForPlanId,
-    },
+    /// A `for` expression (`iteratorForPlan`).
+    for_: ForData,
+    /// A hosted function (`externalSymbolName` of `symbol_name`).
     hosted_lambda: struct {
-        symbol_name: canonical.ExternalSymbolNameId,
+        symbol_name: Ident.Idx,
         args: []const PatternId,
     },
     run_low_level: struct {
@@ -270,12 +263,20 @@ pub const ExprData = union(enum) {
     },
 };
 
-/// The normalized shape of a pattern node.
+/// A `for` loop's binding pattern, iterable and body.
+pub const ForData = struct {
+    pattern: PatternId,
+    expr: ExprId,
+    body: ExprId,
+};
+
+/// The shape of a pattern node, read from CIR.
 pub const PatternData = union(enum) {
     assign,
     as: struct { pattern: PatternId },
+    /// A tag pattern (`tagLabel` of `name`).
     applied_tag: struct {
-        name: canonical.TagLabelId,
+        name: Ident.Idx,
         args: []const PatternId,
     },
     nominal: struct {
@@ -288,17 +289,11 @@ pub const PatternData = union(enum) {
         rest: ?checked_artifact.CheckedListRestPattern,
     },
     tuple: []const PatternId,
-    /// Any numeric literal pattern. `custom` is true when the comparison
-    /// dispatches to the pattern type's `from_numeral` and `is_eq`
-    /// (`literalPatternGuard`).
-    numeral_literal: struct {
-        literal: ModuleEnv.NumeralLiteral,
-        custom: bool,
-    },
-    str_literal: struct {
-        literal: base.StringLiteral.Idx,
-        custom: bool,
-    },
+    /// Any numeric literal pattern (`numeralLiteral`,
+    /// `literalPatternIsCustom`).
+    numeral_literal,
+    /// A string literal pattern (`literalPatternIsCustom`).
+    str_literal: base.StringLiteral.Idx,
     str_interpolation: struct {
         prefix: base.StringLiteral.Idx,
         steps: CIR.Pattern.StrPatternStep.Span,
@@ -314,11 +309,10 @@ pub const ConditionLoop = struct {
     body: ExprId,
 };
 
-/// The normalized shape of a statement node.
+/// The shape of a statement node, read from CIR.
 pub const StatementData = union(enum) {
-    /// `recursive` is true when checking recorded a reference to the
-    /// declaration's own binders from inside its expression.
-    decl: struct { pattern: PatternId, expr: ExprId, recursive: bool },
+    /// A declaration (`declIsRecursive`).
+    decl: struct { pattern: PatternId, expr: ExprId },
     /// A local function binding promoted to a procedure of its own.
     promoted_proc: struct { pattern: PatternId, expr: ExprId },
     var_: struct { pattern: PatternId, expr: ExprId },
@@ -328,12 +322,8 @@ pub const StatementData = union(enum) {
     dbg: ExprId,
     expr: ExprId,
     expect: ExprId,
-    for_: struct {
-        pattern: PatternId,
-        expr: ExprId,
-        body: ExprId,
-        plan: ?IteratorForPlanId,
-    },
+    /// A `for` statement (`iteratorForPlan`).
+    for_: ForData,
     while_: ConditionLoop,
     infinite_loop: ConditionLoop,
     breakable_loop: ConditionLoop,
@@ -487,6 +477,11 @@ pub const CheckedBodies = struct {
         return self.env.store.nodes.len();
     }
 
+    /// A node's CIR tag.
+    pub fn nodeTag(self: CheckedBodies, raw_node: u32) CIR.Node.Tag {
+        return self.env.store.nodes.fieldItem(.tag, @fromBackingInt(raw_node));
+    }
+
     fn store(self: CheckedBodies) *const can.NodeStore {
         return &self.env.store;
     }
@@ -608,49 +603,102 @@ pub const CheckedBodies = struct {
         };
     }
 
-    fn planForExpr(self: CheckedBodies, id: ExprId) ?StaticDispatchPlanId {
+    /// The dispatch plan keyed by a node: a method, type method, equality
+    /// or interpolation dispatch, or a custom literal pattern's equality.
+    /// Absent before plans exist.
+    pub fn dispatchPlan(self: CheckedBodies, raw_node: u32) ?StaticDispatchPlanId {
         const plans = self.tables.plans orelse return null;
-        return plans.lookupByNode(@backingInt(id));
+        return plans.lookupByNode(raw_node);
     }
 
-    fn resolvedRef(self: CheckedBodies, id: ExprId) ?ResolvedValueRefId {
+    /// A numeric literal's `from_numeral` plan, when its target is not
+    /// builtin. Absent before plans exist.
+    pub fn numeralPlan(self: CheckedBodies, raw_node: u32) ?StaticDispatchPlanId {
+        const plans = self.tables.plans orelse return null;
+        return plans.numeralPlanForNode(raw_node);
+    }
+
+    /// A string literal's `from_quote` plan. Absent before plans exist.
+    pub fn quotePlan(self: CheckedBodies, raw_node: u32) ?StaticDispatchPlanId {
+        const plans = self.tables.plans orelse return null;
+        return plans.quotePlanForNode(raw_node);
+    }
+
+    /// A `for` expression's or statement's iterator plan. Absent before plans
+    /// exist.
+    pub fn iteratorForPlan(self: CheckedBodies, raw_node: u32) ?IteratorForPlanId {
+        const plans = self.tables.plans orelse return null;
+        return plans.iteratorForPlanForNode(raw_node);
+    }
+
+    /// A lookup's resolved value reference. Absent before references exist.
+    pub fn resolvedRef(self: CheckedBodies, id: ExprId) ?ResolvedValueRefId {
         const refs = self.tables.refs orelse return null;
         return refs.lookupIdByExpr(id);
     }
 
-    fn retired(self: CheckedBodies, id: ExprId) bool {
+    /// A call's direct procedure target, when it has one.
+    pub fn callDirectTarget(self: CheckedBodies, id: ExprId) ?ResolvedValueId {
+        const refs = self.tables.refs orelse return null;
+        return refs.callDirectTarget(id);
+    }
+
+    /// A call's function constraint type.
+    pub fn callFnType(self: CheckedBodies, id: ExprId) CheckedTypeId {
+        const call = self.store().getExpr(id);
+        if (call != .e_call) invariant("a call type was requested for an expression that is not a call");
+        return self.typeOf(call.e_call.constraint_fn_var orelse invariant("a checked call had no function constraint type"));
+    }
+
+    /// The type of the assembler a custom interpolation's conversion returns.
+    pub fn interpolationAssemblerType(self: CheckedBodies, id: ExprId) CheckedTypeId {
+        const interpolation = self.store().getExpr(id);
+        if (interpolation != .e_interpolation) invariant("an assembler type was requested for an expression that is not an interpolation");
+        return self.typeOf(interpolation.e_interpolation.assembler_fn_var orelse invariant("a checked interpolation had no assembler type"));
+    }
+
+    /// The compile-time root that evaluates a literal's conversion, when that
+    /// conversion is independent of specialization.
+    pub fn literalConversionRoot(self: CheckedBodies, raw_node: u32) ?ComptimeRootId {
+        const roots = self.tables.roots orelse return null;
+        return roots.literalConversionRootForNode(raw_node);
+    }
+
+    /// A numeric literal expression's or pattern's exact digits.
+    pub fn numeralLiteral(self: CheckedBodies, raw_node: u32) ModuleEnv.NumeralLiteral {
+        return self.env.numeralLiteralForNode(@fromBackingInt(@intCast(raw_node))) orelse invariant("a numeral literal had no exact digits");
+    }
+
+    /// Whether lowering evaluates an expression as a runtime error because
+    /// reference resolution rejected it.
+    pub fn exprIsRetired(self: CheckedBodies, id: ExprId) bool {
         const refs = self.tables.refs orelse return false;
         return refs.exprIsRetired(id);
     }
 
-    fn conversionRoot(self: CheckedBodies, raw_node: u32) ?ComptimeRootId {
-        const roots = self.tables.roots orelse return null;
-        return roots.literalConversionRootForNode(raw_node);
+    /// Whether a declaration statement binds a recursive value.
+    pub fn declIsRecursive(self: CheckedBodies, id: StatementId) bool {
+        return self.index().isRecursiveDecl(id);
+    }
+
+    pub fn externalSymbolName(self: CheckedBodies, ident: Ident.Idx) canonical.ExternalSymbolNameId {
+        return self.names.lookupExternalSymbolIdent(&self.env.common.idents, ident) orelse invariant("a hosted symbol name was not interned");
     }
 
     pub fn exprData(self: CheckedBodies, id: ExprId) ExprData {
         // Rejected binding uses and calls of retired callees evaluate as
         // runtime errors (`ResolvedValueRefTable.retired_exprs`).
-        if (self.retired(id)) return .{ .runtime_error = .{} };
+        if (self.exprIsRetired(id)) return .{ .runtime_error = .{} };
         const node_store = self.store();
-        const raw = @backingInt(id);
         return switch (node_store.getExpr(id)) {
-            .e_num, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral => .{ .numeral = .{
-                .literal = self.env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(id)) orelse invariant("a numeral literal had no exact digits"),
-                .plan = if (self.tables.plans) |plans| plans.numeralPlanForNode(raw) else null,
-                .conversion_root = self.conversionRoot(raw),
-            } },
+            .e_num, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral => .numeral,
             .e_frac_f32, .e_frac_f64 => invariant("a float-valued literal without exact digits reached a checked body"),
             .e_str_segment => |segment| .{ .str_segment = segment.literal },
-            .e_str => |str| if (self.quoteIsCustom(ModuleEnv.nodeIdxFrom(id))) .{ .str_from_quote = .{
-                .plan = if (self.tables.plans) |plans| plans.quotePlanForNode(raw) else null,
-                .literal = .{ .quote = node_store.sliceExpr(str.span) },
-                .conversion_root = self.conversionRoot(raw),
-            } } else .{ .str = .{ .rest = node_store.sliceExpr(str.span) } },
+            .e_str => |str| .{ .str = node_store.sliceExpr(str.span) },
             .e_bytes_literal => |bytes| .{ .bytes_literal = bytes.literal },
-            .e_lookup_local => |lookup| .{ .lookup_local = .{ .pattern = lookup.pattern_idx, .resolved = self.resolvedRef(id) } },
-            .e_lookup_external, .e_lookup_associated_resolved => .{ .lookup_external = self.resolvedRef(id) },
-            .e_lookup_required => .{ .lookup_required = self.resolvedRef(id) },
+            .e_lookup_local => |lookup| .{ .lookup_local = lookup.pattern_idx },
+            .e_lookup_external, .e_lookup_associated_resolved => .lookup_external,
+            .e_lookup_required => .lookup_required,
             .e_lookup_associated_local, .e_lookup_associated => invariant("an unresolved associated lookup reached a checked body"),
             .e_list => |list| .{ .list = node_store.sliceExpr(list.elems) },
             .e_empty_list => .empty_list,
@@ -666,8 +714,6 @@ pub const CheckedBodies = struct {
                 .func = call.func,
                 .args = node_store.sliceExpr(call.args),
                 .called_via = call.called_via,
-                .source_fn_ty_payload = self.typeOf(call.constraint_fn_var orelse invariant("a checked call had no function constraint type")),
-                .direct_target = if (self.tables.refs) |refs| refs.callDirectTarget(id) else null,
             } },
             .e_record => |record| .{ .record = .{
                 .fields = node_store.sliceRecordFields(record.fields),
@@ -676,39 +722,29 @@ pub const CheckedBodies = struct {
             } },
             .e_empty_record => .empty_record,
             .e_block => |block| .{ .block = .{ .statements = node_store.sliceStatements(block.stmts), .final_expr = block.final_expr } },
-            .e_tag => |tag| .{ .tag = .{ .name = self.tagLabel(tag.name), .args = node_store.sliceExpr(tag.args) } },
+            .e_tag => |tag| .{ .tag = .{ .name = tag.name, .args = node_store.sliceExpr(tag.args) } },
             .e_nominal => |nominal| .{ .nominal = .{ .backing_expr = nominal.backing_expr, .backing_type = nominal.backing_type } },
             .e_nominal_external => |nominal| .{ .nominal = .{ .backing_expr = nominal.backing_expr, .backing_type = nominal.backing_type } },
-            .e_zero_argument_tag => |tag| .{ .zero_argument_tag = .{ .closure_name = self.tagLabel(tag.closure_name), .name = self.tagLabel(tag.name) } },
+            .e_zero_argument_tag => |tag| .{ .zero_argument_tag = .{ .closure_name = tag.closure_name, .name = tag.name } },
             .e_closure => |closure| .{ .closure = .{
                 .lambda = closure.lambda_idx,
                 .captures = node_store.sliceCaptures(closure.captures),
-                .tag_name = self.tagLabel(closure.tag_name),
+                .tag_name = closure.tag_name,
             } },
             .e_lambda => |lambda| .{ .lambda = .{ .args = node_store.slicePatterns(lambda.args), .body = lambda.body } },
             .e_binop => |binop| .{ .binop = .{ .op = binop.op, .lhs = binop.lhs, .rhs = binop.rhs } },
             .e_unary_minus => |unary| .{ .unary_minus = unary.expr },
             .e_field_access => |access| .{ .field_access = .{ .receiver = access.receiver, .segments = access.segments } },
             .e_method_call, .e_type_method_call => invariant("an ordinary method call reached a checked body"),
-            .e_dispatch_call => .{ .dispatch_call = self.planForExpr(id) },
-            .e_interpolation => |interpolation| if (self.interpolationIsBuiltinStr(id))
-                .{ .str = .{ .first = interpolation.first, .rest = node_store.sliceExpr(interpolation.parts) } }
-            else
-                .{ .interpolation = .{
-                    .plan = self.planForExpr(id),
-                    .first = interpolation.first,
-                    .parts = node_store.sliceExpr(interpolation.parts),
-                    .assembler_ty = self.typeOf(interpolation.assembler_fn_var orelse invariant("a checked interpolation had no assembler type")),
-                } },
-            .e_structural_eq => |eq| .{ .structural_eq = .{
-                .lhs = eq.lhs,
-                .rhs = eq.rhs,
-                .negated = eq.negated,
-                .discriminant = self.tagDiscriminantEquality(eq.lhs, eq.rhs),
+            .e_dispatch_call => .dispatch_call,
+            .e_interpolation => |interpolation| .{ .interpolation = .{
+                .first = interpolation.first,
+                .parts = node_store.sliceExpr(interpolation.parts),
             } },
+            .e_structural_eq => |eq| .{ .structural_eq = .{ .lhs = eq.lhs, .rhs = eq.rhs, .negated = eq.negated } },
             .e_structural_hash => |hash| .{ .structural_hash = .{ .value = hash.value, .hasher = hash.hasher } },
-            .e_method_eq => .{ .method_eq = self.planForExpr(id) },
-            .e_type_dispatch_call => .{ .type_dispatch_call = self.planForExpr(id) },
+            .e_method_eq => .method_eq,
+            .e_type_dispatch_call => .type_dispatch_call,
             .e_tuple_access => |access| .{ .tuple_access = .{ .tuple = access.tuple, .elem_index = access.elem_index } },
             .e_runtime_error => |runtime_error| .{ .runtime_error = .{ .evaluated = node_store.sliceExpr(runtime_error.evaluated) } },
             .e_crash => |crash| .{ .crash = crash.msg },
@@ -726,16 +762,8 @@ pub const CheckedBodies = struct {
                     .try_suffix => .try_suffix,
                 },
             } },
-            .e_for => |for_| .{ .for_ = .{
-                .pattern = for_.patt,
-                .expr = for_.expr,
-                .body = for_.body,
-                .plan = if (self.tables.plans) |plans| plans.iteratorForPlanForNode(raw) else null,
-            } },
-            .e_hosted_lambda => |hosted| .{ .hosted_lambda = .{
-                .symbol_name = self.names.lookupExternalSymbolIdent(&self.env.common.idents, hosted.symbol_name) orelse invariant("a hosted symbol name was not interned"),
-                .args = node_store.slicePatterns(hosted.args),
-            } },
+            .e_for => |for_| .{ .for_ = .{ .pattern = for_.patt, .expr = for_.expr, .body = for_.body } },
+            .e_hosted_lambda => |hosted| .{ .hosted_lambda = .{ .symbol_name = hosted.symbol_name, .args = node_store.slicePatterns(hosted.args) } },
             .e_run_low_level => |run| .{ .run_low_level = .{ .op = run.op, .args = node_store.sliceExpr(run.args) } },
             .e_deferred_import_ref => invariant("a deferred import reference reached a checked body"),
         };
@@ -743,8 +771,8 @@ pub const CheckedBodies = struct {
 
     /// Whether a string literal's conversion dispatches to its target's
     /// `from_quote`.
-    pub fn quoteIsCustom(self: CheckedBodies, node: CIR.Node.Idx) bool {
-        const plan = self.env.quoteDispatchPlanForNode(node) orelse return false;
+    pub fn quoteIsCustom(self: CheckedBodies, raw_node: u32) bool {
+        const plan = self.env.quoteDispatchPlanForNode(@fromBackingInt(@intCast(raw_node))) orelse return false;
         return switch (plan.dispatchResolution()) {
             .builtin_direct, .checked_error => false,
             .custom_dispatch, .specialization_dispatch => true,
@@ -755,11 +783,13 @@ pub const CheckedBodies = struct {
     /// Whether an interpolation's target is concretely the builtin `Str`, so
     /// it concatenates its parts directly. An open target can instantiate at
     /// a custom `from_interpolation` type and keeps its dispatch.
-    fn interpolationIsBuiltinStr(self: CheckedBodies, id: ExprId) bool {
+    pub fn interpolationIsBuiltinStr(self: CheckedBodies, id: ExprId) bool {
         return checked_artifact.checkedConcreteBuiltinForLiteralTarget(self.types, self.typeOfVar(ModuleEnv.varFrom(id))) == .str;
     }
 
-    fn tagDiscriminantEquality(self: CheckedBodies, lhs: ExprId, rhs: ExprId) ?TagDiscriminantEquality {
+    /// The tag a structural equality compares by discriminant alone: a
+    /// payload-free tag on either side.
+    pub fn tagDiscriminantEquality(self: CheckedBodies, lhs: ExprId, rhs: ExprId) ?TagDiscriminantEquality {
         if (self.zeroPayloadTag(rhs)) |tag| return .{ .value = lhs, .tag = self.tagLabel(tag) };
         if (self.zeroPayloadTag(lhs)) |tag| return .{ .value = rhs, .tag = self.tagLabel(tag) };
         return null;
@@ -777,7 +807,7 @@ pub const CheckedBodies = struct {
         return switch (node_store.getPattern(id)) {
             .assign, .var_assign => .assign,
             .as => |as| .{ .as = .{ .pattern = as.pattern } },
-            .applied_tag => |tag| .{ .applied_tag = .{ .name = self.tagLabel(tag.name), .args = node_store.slicePatterns(tag.args) } },
+            .applied_tag => |tag| .{ .applied_tag = .{ .name = tag.name, .args = node_store.slicePatterns(tag.args) } },
             .nominal => |nominal| .{ .nominal = .{ .backing_pattern = nominal.backing_pattern, .backing_type = nominal.backing_type } },
             .nominal_external => |nominal| .{ .nominal = .{ .backing_pattern = nominal.backing_pattern, .backing_type = nominal.backing_type } },
             .record_destructure => |record| .{ .record_destructure = node_store.sliceRecordDestructs(record.destructs) },
@@ -786,19 +816,9 @@ pub const CheckedBodies = struct {
                 .rest = if (list.rest_info) |rest| .{ .index = rest.index, .pattern = rest.pattern } else null,
             } },
             .tuple => |tuple| .{ .tuple = node_store.slicePatterns(tuple.patterns) },
-            .num_literal, .num_from_numeral_literal => .{ .numeral_literal = .{
-                .literal = self.numeralPatternLiteral(id),
-                .custom = self.literalPatternIsCustom(self.env.numeralDispatchPlanForNode(ModuleEnv.nodeIdxFrom(id))),
-            } },
-            inline .small_dec_literal, .dec_literal => |dec| .{ .numeral_literal = .{
-                .literal = self.numeralPatternLiteral(id),
-                .custom = !dec.has_suffix and self.literalPatternIsCustom(self.env.numeralDispatchPlanForNode(ModuleEnv.nodeIdxFrom(id))),
-            } },
+            .num_literal, .num_from_numeral_literal, .small_dec_literal, .dec_literal => .numeral_literal,
             .frac_f32_literal, .frac_f64_literal => invariant("a float-valued literal pattern without exact digits reached a checked body"),
-            .str_literal => |str| .{ .str_literal = .{
-                .literal = str.literal,
-                .custom = self.literalPatternIsCustom(self.env.quoteDispatchPlanForNode(ModuleEnv.nodeIdxFrom(id))),
-            } },
+            .str_literal => |str| .{ .str_literal = str.literal },
             .str_interpolation => |str| .{ .str_interpolation = .{
                 .prefix = str.prefix,
                 .steps = str.steps,
@@ -813,11 +833,19 @@ pub const CheckedBodies = struct {
         };
     }
 
-    fn numeralPatternLiteral(self: CheckedBodies, id: PatternId) ModuleEnv.NumeralLiteral {
-        return self.env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(id)) orelse invariant("a numeral literal pattern had no exact digits");
+    /// Whether a literal pattern's comparison dispatches to its type's
+    /// `from_numeral` or `from_quote` and `is_eq` (`literalPatternGuard`).
+    pub fn literalPatternIsCustom(self: CheckedBodies, id: PatternId) bool {
+        const node = ModuleEnv.nodeIdxFrom(id);
+        return switch (self.store().getPattern(id)) {
+            .num_literal, .num_from_numeral_literal => customLiteralPlan(self.env.numeralDispatchPlanForNode(node)),
+            inline .small_dec_literal, .dec_literal => |dec| !dec.has_suffix and customLiteralPlan(self.env.numeralDispatchPlanForNode(node)),
+            .str_literal => customLiteralPlan(self.env.quoteDispatchPlanForNode(node)),
+            .assign, .var_assign, .as, .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .frac_f32_literal, .frac_f64_literal, .str_interpolation, .underscore, .runtime_error, .deferred_import_ref => false,
+        };
     }
 
-    fn literalPatternIsCustom(_: CheckedBodies, plan: ?can.NodeStore.LiteralDispatchPlan) bool {
+    fn customLiteralPlan(plan: ?can.NodeStore.LiteralDispatchPlan) bool {
         const resolved = plan orelse return false;
         return switch (resolved.dispatchResolution()) {
             .builtin_direct => false,
@@ -833,8 +861,8 @@ pub const CheckedBodies = struct {
             .s_decl => |decl| blk: {
                 const module_index = self.index();
                 if (module_index.isRejectedMethodDecl(id)) break :blk .rejected_method_decl;
-                if (self.analyses.isPromotedPattern(decl.pattern)) break :blk .{ .promoted_proc = .{ .pattern = decl.pattern, .expr = decl.expr } };
-                break :blk .{ .decl = .{ .pattern = decl.pattern, .expr = decl.expr, .recursive = module_index.isRecursiveDecl(id) } };
+                if (module_index.isPromotedPattern(decl.pattern)) break :blk .{ .promoted_proc = .{ .pattern = decl.pattern, .expr = decl.expr } };
+                break :blk .{ .decl = .{ .pattern = decl.pattern, .expr = decl.expr } };
             },
             .s_var => |var_| .{ .var_ = .{ .pattern = var_.pattern_idx, .expr = var_.expr } },
             .s_var_uninitialized => |var_| .{ .var_uninitialized = .{ .pattern = var_.pattern_idx } },
@@ -843,12 +871,7 @@ pub const CheckedBodies = struct {
             .s_dbg => |dbg| .{ .dbg = dbg.expr },
             .s_expr => |expr_stmt| .{ .expr = expr_stmt.expr },
             .s_expect => |expect| .{ .expect = expect.body },
-            .s_for => |for_| .{ .for_ = .{
-                .pattern = for_.patt,
-                .expr = for_.expr,
-                .body = for_.body,
-                .plan = if (self.tables.plans) |plans| plans.iteratorForPlanForNode(@backingInt(id)) else null,
-            } },
+            .s_for => |for_| .{ .for_ = .{ .pattern = for_.patt, .expr = for_.expr, .body = for_.body } },
             .s_while => |while_| .{ .while_ = .{ .cond = while_.cond, .body = while_.body } },
             .s_infinite_loop => |loop| .{ .infinite_loop = .{ .cond = loop.cond, .body = loop.body } },
             .s_breakable_loop => |loop| .{ .breakable_loop = .{ .cond = loop.cond, .body = loop.body } },
@@ -875,18 +898,17 @@ pub const CheckedBodies = struct {
     pub fn literalConversion(self: CheckedBodies, raw_node: u32) LiteralConversion {
         const node: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node));
         const plan = self.env.store.literalDispatchPlanForNode(node) orelse invariant("a literal conversion was requested for a node with no literal dispatch plan");
-        const plans = self.tables.plans;
         return switch (plan.dispatchKind()) {
             .numeral => .{
-                .literal = .{ .numeral = self.env.numeralLiteralForNode(node) orelse invariant("a numeral literal had no exact digits") },
-                .plan = if (plans) |table| table.numeralPlanForNode(raw_node) else null,
-                .conversion_root = self.conversionRoot(raw_node),
+                .literal = .{ .numeral = self.numeralLiteral(raw_node) },
+                .plan = self.numeralPlan(raw_node),
+                .conversion_root = self.literalConversionRoot(raw_node),
                 .ty = self.typeOf(ModuleEnv.varFrom(node)),
             },
             .quote => .{
                 .literal = .{ .quote = self.quoteText(raw_node) },
-                .plan = if (plans) |table| table.quotePlanForNode(raw_node) else null,
-                .conversion_root = self.conversionRoot(raw_node),
+                .plan = self.quotePlan(raw_node),
+                .conversion_root = self.literalConversionRoot(raw_node),
                 .ty = self.typeOf(ModuleEnv.varFrom(node)),
             },
         };
@@ -896,12 +918,7 @@ pub const CheckedBodies = struct {
     /// its type's `from_numeral` or `from_quote` and `is_eq`, or null for a
     /// pattern compared directly.
     pub fn literalPatternGuard(self: CheckedBodies, pattern_id: PatternId) ?LiteralPatternGuard {
-        const custom = switch (self.patternData(pattern_id)) {
-            .numeral_literal => |literal| literal.custom,
-            .str_literal => |literal| literal.custom,
-            .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_interpolation, .underscore, .runtime_error => false,
-        };
-        if (!custom) return null;
+        if (!self.literalPatternIsCustom(pattern_id)) return null;
         const raw = @backingInt(pattern_id);
         const node = ModuleEnv.nodeIdxFrom(pattern_id);
         const plan = self.env.store.literalDispatchPlanForNode(node) orelse invariant("a custom literal pattern had no literal dispatch plan");
@@ -912,7 +929,7 @@ pub const CheckedBodies = struct {
         return .{
             .pattern = pattern_id,
             .conversion = self.literalConversion(raw),
-            .equality_plan = if (self.tables.plans) |plans| plans.lookupByNode(raw) else null,
+            .equality_plan = self.dispatchPlan(raw),
             .equality_ty = checked_artifact.checkedFunctionPayload(self.types, equality_fn_ty, "literal pattern equality").ret,
         };
     }
@@ -1039,6 +1056,11 @@ pub const CheckedBodies = struct {
         return .{ .cond = branch.cond, .body = branch.body };
     }
 
+    /// A record construction field's value expression.
+    pub fn recordFieldValue(self: CheckedBodies, id: CIR.RecordField.Idx) ExprId {
+        return self.store().getRecordField(id).value;
+    }
+
     pub fn recordField(self: CheckedBodies, id: CIR.RecordField.Idx) RecordExprField {
         const field = self.store().getRecordField(id);
         return .{ .label = self.recordFieldLabel(field.name), .value = field.value };
@@ -1070,6 +1092,11 @@ pub const CheckedBodies = struct {
             .scope_depth = source.scope_depth,
             .capture_id = checked_artifact.CaptureId.fromBinder(source.pattern_idx),
         };
+    }
+
+    /// The pattern a record destructure binds its field to.
+    pub fn recordDestructPattern(self: CheckedBodies, id: CIR.Pattern.RecordDestruct.Idx) PatternId {
+        return self.store().getRecordDestruct(id).kind.toPatternIdx();
     }
 
     pub fn recordDestruct(self: CheckedBodies, id: CIR.Pattern.RecordDestruct.Idx) RecordDestruct {

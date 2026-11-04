@@ -3229,7 +3229,7 @@ fn literalNodeConverts(bodies: anytype, node: u32, kind: LiteralConversionKind) 
             const data = bodies.exprData(@fromBackingInt(@intCast(node)));
             return switch (kind) {
                 .numeral => data == .numeral,
-                .quote => data == .str_from_quote,
+                .quote => data == .str and bodies.quoteIsCustom(node),
             };
         },
         .pattern => return bodies.literalPatternGuard(@fromBackingInt(@intCast(node))) != null,

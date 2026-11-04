@@ -1629,12 +1629,22 @@ fn SourceExprData(comptime tag: std.meta.Tag(checked_bodies.ExprData)) type {
 }
 
 /// The shape of an expression Monotype lowers: a body node's shape, or one
-/// of Monotype's own constructs.
+/// of Monotype's own constructs. A literal, dispatch, call, interpolation or
+/// `for` names the node its checked plans, references and roots are keyed
+/// by: a body expression, or a custom literal pattern for its literal
+/// conversion and its equality.
 const ExprData = union(enum) {
-    numeral: SourceExprData(.numeral),
-    str_from_quote: SourceExprData(.str_from_quote),
+    /// A numeric literal's node (`numeralLiteral`, `numeralPlan`,
+    /// `literalConversionRoot` of the body reader).
+    numeral: u32,
+    /// A string literal whose conversion dispatches to its target's
+    /// `from_quote`: its node (`quoteText`, `quotePlan`,
+    /// `literalConversionRoot`).
+    str_from_quote: u32,
     str_segment: SourceExprData(.str_segment),
-    str: SourceExprData(.str),
+    /// A string concatenated from its parts: a builtin string literal or an
+    /// interpolation whose target is the builtin `Str`.
+    str: checked_bodies.StrParts,
     bytes_literal: SourceExprData(.bytes_literal),
     lookup_local: struct { pattern: CIR.Pattern.Idx, resolved: ?ResolvedUse },
     lookup_external: ?ResolvedUse,
@@ -1644,7 +1654,7 @@ const ExprData = union(enum) {
     tuple: SourceExprData(.tuple),
     match_: Match,
     if_: SourceExprData(.if_),
-    call: SourceExprData(.call),
+    call: Call,
     record: SourceExprData(.record),
     empty_record,
     block: SourceExprData(.block),
@@ -1656,12 +1666,15 @@ const ExprData = union(enum) {
     binop: SourceExprData(.binop),
     unary_minus: SourceExprData(.unary_minus),
     field_access: SourceExprData(.field_access),
-    dispatch_call: SourceExprData(.dispatch_call),
-    interpolation: SourceExprData(.interpolation),
+    /// The node keying the dispatch plan.
+    dispatch_call: u32,
+    interpolation: Interpolation,
     structural_eq: SourceExprData(.structural_eq),
     structural_hash: SourceExprData(.structural_hash),
-    method_eq: SourceExprData(.method_eq),
-    type_dispatch_call: SourceExprData(.type_dispatch_call),
+    /// The node keying the equality plan.
+    method_eq: u32,
+    /// The node keying the dispatch plan.
+    type_dispatch_call: u32,
     tuple_access: SourceExprData(.tuple_access),
     runtime_error: SourceExprData(.runtime_error),
     crash: SourceExprData(.crash),
@@ -1672,7 +1685,7 @@ const ExprData = union(enum) {
     anno_only,
     break_,
     return_: SourceExprData(.return_),
-    for_: SourceExprData(.for_),
+    for_: ForExpr,
     hosted_lambda: SourceExprData(.hosted_lambda),
     run_low_level: SourceExprData(.run_low_level),
     /// The row coercion of a value to this expression's wider row
@@ -1681,11 +1694,18 @@ const ExprData = union(enum) {
     /// destination.
     row_coerce: struct { value: ExprSite },
 
-    fn fromSource(data: checked_bodies.ExprData) ExprData {
+    fn fromSource(view: ModuleView, id: CIR.Expr.Idx, data: checked_bodies.ExprData) ExprData {
+        const raw = @backingInt(id);
         return switch (data) {
-            .lookup_local => |lookup| .{ .lookup_local = .{ .pattern = lookup.pattern, .resolved = ResolvedUse.fromSource(lookup.resolved) } },
-            .lookup_external => |resolved| .{ .lookup_external = ResolvedUse.fromSource(resolved) },
-            .lookup_required => |resolved| .{ .lookup_required = ResolvedUse.fromSource(resolved) },
+            .numeral => .{ .numeral = raw },
+            .str => |segments| if (view.bodies.quoteIsCustom(raw)) .{ .str_from_quote = raw } else .{ .str = .{ .rest = segments } },
+            .interpolation => |interpolation| if (view.bodies.interpolationIsBuiltinStr(id))
+                .{ .str = interpolation.strParts() }
+            else
+                .{ .interpolation = .{ .node = id, .first = interpolation.first, .parts = interpolation.parts } },
+            .lookup_local => |pattern| .{ .lookup_local = .{ .pattern = pattern, .resolved = .{ .lookup = id } } },
+            .lookup_external => .{ .lookup_external = .{ .lookup = id } },
+            .lookup_required => .{ .lookup_required = .{ .lookup = id } },
             .match_ => |match| .{ .match_ = .{
                 .cond = ExprSite.read(match.cond),
                 .branches = .{ .source = match.branches },
@@ -1693,16 +1713,17 @@ const ExprData = union(enum) {
                 .skip_exhaustiveness = match.skip_exhaustiveness,
                 .site_kind = .match,
             } },
-            inline .numeral,
-            .str_from_quote,
-            .str_segment,
-            .str,
+            .call => |call| .{ .call = .{ .node = id, .func = call.func, .args = call.args, .called_via = call.called_via } },
+            .dispatch_call => .{ .dispatch_call = raw },
+            .method_eq => .{ .method_eq = raw },
+            .type_dispatch_call => .{ .type_dispatch_call = raw },
+            .for_ => |for_| .{ .for_ = .{ .node = raw, .pattern = for_.pattern, .expr = for_.expr, .body = for_.body } },
+            inline .str_segment,
             .bytes_literal,
             .list,
             .empty_list,
             .tuple,
             .if_,
-            .call,
             .record,
             .empty_record,
             .block,
@@ -1714,12 +1735,8 @@ const ExprData = union(enum) {
             .binop,
             .unary_minus,
             .field_access,
-            .dispatch_call,
-            .interpolation,
             .structural_eq,
             .structural_hash,
-            .method_eq,
-            .type_dispatch_call,
             .tuple_access,
             .runtime_error,
             .crash,
@@ -1730,12 +1747,67 @@ const ExprData = union(enum) {
             .anno_only,
             .break_,
             .return_,
-            .for_,
             .hosted_lambda,
             .run_low_level,
             => |source_payload, tag| @unionInit(ExprData, @tagName(tag), source_payload),
         };
     }
+};
+
+/// A call: its expression, which keys its direct target and its function
+/// constraint type, and its parts.
+const Call = struct {
+    node: CIR.Expr.Idx,
+    func: CIR.Expr.Idx,
+    args: []const CIR.Expr.Idx,
+    called_via: base.CalledVia,
+
+    /// The call's direct procedure target, when it has one.
+    fn directTarget(self: Call, view: ModuleView) ?checked.ResolvedValueId {
+        return view.bodies.callDirectTarget(self.node);
+    }
+
+    /// The call's function constraint type.
+    fn sourceFnTy(self: Call, view: ModuleView) checked.CheckedTypeId {
+        return view.bodies.callFnType(self.node);
+    }
+};
+
+/// A custom interpolation: its expression, which keys its conversion plan
+/// and assembler type, and its parts (`checked_bodies.InterpolationData`).
+const Interpolation = struct {
+    node: CIR.Expr.Idx,
+    first: CIR.Expr.Idx,
+    parts: []const CIR.Expr.Idx,
+
+    fn data(self: Interpolation) checked_bodies.InterpolationData {
+        return .{ .first = self.first, .parts = self.parts };
+    }
+
+    fn segmentCount(self: Interpolation) usize {
+        return self.data().segmentCount();
+    }
+
+    fn segment(self: Interpolation, index: usize) CIR.Expr.Idx {
+        return self.data().segment(index);
+    }
+
+    fn valueCount(self: Interpolation) usize {
+        return self.data().valueCount();
+    }
+
+    fn value(self: Interpolation, index: usize) CIR.Expr.Idx {
+        return self.data().value(index);
+    }
+};
+
+/// A `for` expression: its node, which keys its iterator plan, and its
+/// parts.
+const ForExpr = struct {
+    node: u32,
+    pattern: CIR.Pattern.Idx,
+    expr: CIR.Expr.Idx,
+    body: CIR.Expr.Idx,
 };
 
 /// A `match`: a source `match` expression, or the match of a hoisted
@@ -1809,12 +1881,11 @@ fn matchBranchAt(view: ModuleView, branches: MatchBranches, index: usize) MatchB
 /// result binder, or a custom literal pattern's read of its matched value.
 const ResolvedUse = union(enum) {
     source: checked.ResolvedValueRefId,
+    /// A body lookup expression, whose reference is its resolved value
+    /// reference.
+    lookup: CIR.Expr.Idx,
     hoisted_result: checked.ComptimeRootId,
     literal_value: CIR.Pattern.Idx,
-
-    fn fromSource(source: ?checked.ResolvedValueRefId) ?ResolvedUse {
-        return if (source) |id| .{ .source = id } else null;
-    }
 };
 
 /// A lookup's resolved value reference and what checking recorded with it.
@@ -1834,6 +1905,7 @@ const ResolvedRecord = struct {
 
 fn resolvedRecord(view: ModuleView, resolved: ResolvedUse) ResolvedRecord {
     switch (resolved) {
+        .lookup => |expr| return resolvedRecord(view, .{ .source = view.bodies.resolvedRef(expr) orelse Common.invariant("checked lookup had no resolved value ref") }),
         .source => |id| {
             const raw = @backingInt(id);
             if (raw >= view.resolved_refs.records.len) Common.invariant("checked lookup referenced a missing resolved value ref");
@@ -1915,11 +1987,11 @@ fn checkedExpr(view: ModuleView, ref: ExprSite) CheckedExpr {
                 };
             }
             const expr = view.bodies.expr(source);
-            return .{ .id = ref, .ty = expr.ty, .source_region = expr.source_region, .data = ExprData.fromSource(expr.data) };
+            return .{ .id = ref, .ty = expr.ty, .source_region = expr.source_region, .data = ExprData.fromSource(view, source, expr.data) };
         },
         .coerced_value => {
             const expr = view.bodies.expr(ref.node());
-            return .{ .id = ref, .ty = expr.ty, .source_region = expr.source_region, .data = ExprData.fromSource(expr.data) };
+            return .{ .id = ref, .ty = expr.ty, .source_region = expr.source_region, .data = ExprData.fromSource(view, ref.node(), expr.data) };
         },
         .hoisted_root => {
             const root = view.compile_time_roots.root(ref.root());
@@ -1968,7 +2040,7 @@ fn checkedExpr(view: ModuleView, ref: ExprSite) CheckedExpr {
         .literal_guard => {
             const pattern = ref.literalPattern();
             const guard = view.bodies.literalPatternGuard(pattern) orelse Common.invariant("a literal guard belonged to a pattern compared directly");
-            return .{ .id = ref, .ty = guard.equality_ty, .source_region = patternRegion(view, pattern), .data = .{ .method_eq = guard.equality_plan } };
+            return .{ .id = ref, .ty = guard.equality_ty, .source_region = patternRegion(view, pattern), .data = .{ .method_eq = @backingInt(pattern) } };
         },
         .literal_value => {
             const pattern = ref.literalPattern();
@@ -1983,8 +2055,8 @@ fn checkedExpr(view: ModuleView, ref: ExprSite) CheckedExpr {
                 .ty = conversion.ty,
                 .source_region = patternRegion(view, pattern),
                 .data = switch (conversion.literal) {
-                    .numeral => |literal| .{ .numeral = .{ .literal = literal, .plan = conversion.plan, .conversion_root = conversion.conversion_root } },
-                    .quote => |text| .{ .str_from_quote = .{ .plan = conversion.plan, .literal = text, .conversion_root = conversion.conversion_root } },
+                    .numeral => .{ .numeral = @backingInt(pattern) },
+                    .quote => .{ .str_from_quote = @backingInt(pattern) },
                 },
             };
         },
@@ -2055,10 +2127,9 @@ fn patternIntroducesBinder(view: ModuleView, pattern: CIR.Pattern.Idx) bool {
 
 /// The compile-time root that evaluates a literal's conversion, when its
 /// conversion is independent of specialization.
-fn literalConversionRootOf(data: ExprData) ?checked.ComptimeRootId {
+fn literalConversionRootOf(view: ModuleView, data: ExprData) ?checked.ComptimeRootId {
     return switch (data) {
-        .numeral => |numeral| numeral.conversion_root,
-        .str_from_quote => |quote| quote.conversion_root,
+        .numeral, .str_from_quote => |node| view.bodies.literalConversionRoot(node),
         .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => null,
     };
 }
@@ -4498,6 +4569,11 @@ fn recordFieldName(dest: *names.NameStore, view: ModuleView, id: names.RecordFie
 
 fn tagName(dest: *names.NameStore, view: ModuleView, id: names.TagNameId) Allocator.Error!names.TagNameId {
     return dest.internTagLabel(view.names.tagLabelText(id));
+}
+
+/// The tag name a body node names.
+fn bodyTagName(dest: *names.NameStore, view: ModuleView, ident: base.Ident.Idx) Allocator.Error!names.TagNameId {
+    return tagName(dest, view, view.bodies.tagLabel(ident));
 }
 
 /// Import one checked nominal identity. Declarations of the app module
@@ -30696,9 +30772,9 @@ const BodyContext = struct {
         }
         const next: EvidenceTask = switch (expr.data) {
             .call => |call| .{ .call_result = .{ .expr = expr_id, .checked_ret_ty = expr.ty, .call = call, .expected_ret_ty = null } },
-            .dispatch_call => |plan| .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = null, .phase = .expression_lowering } },
-            .interpolation => |interpolation| .{ .interpolation_result = .{ .maybe_plan = interpolation.plan, .expected_ret_node = null } },
-            .type_dispatch_call, .method_eq => |plan| .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = null, .phase = .expression_lowering } },
+            .dispatch_call => |plan_node| .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = self.view.bodies.dispatchPlan(plan_node), .expected_ret_node = null, .phase = .expression_lowering } },
+            .interpolation => |interpolation| .{ .interpolation_result = .{ .maybe_plan = self.view.bodies.dispatchPlan(@backingInt(interpolation.node)), .expected_ret_node = null } },
+            .type_dispatch_call, .method_eq => |plan_node| .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = self.view.bodies.dispatchPlan(plan_node), .expected_ret_node = null, .phase = .expression_lowering } },
             .field_access => |field| .{ .field_access = .{ .checked_ty = expr.ty, .access = field, .expected_ty = null } },
             .tuple_access => |access| .{ .tuple_access = .{ .checked_ty = expr.ty, .tuple = ExprSite.read(access.tuple), .elem_index = access.elem_index, .expected_ty = null } },
             .lookup_local => |lookup| return try self.finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, lookup.resolved)),
@@ -30723,7 +30799,7 @@ const BodyContext = struct {
             // A direct call's shared request interface.
             1 => {
                 const call = expr.data.call;
-                const target = call.direct_target.?;
+                const target = call.directTarget(self.view).?;
                 const fn_node = input.?.nodeValue();
                 const fn_nodes = try self.graph.functionNodes(fn_node);
                 if (try self.graph.containsGeneratedPrivate(fn_nodes.ret)) return .{ .ret = .{ .maybe_node = fn_nodes.ret } };
@@ -30732,7 +30808,7 @@ const BodyContext = struct {
                     .expr = checked_arg,
                     .target = target,
                     .call = call,
-                    .source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload),
+                    .source_fn_ty = self.directCallInstantiationSourceFnType(target, call.sourceFnTy(self.view)),
                     .fn_node = fn_node,
                 } });
             },
@@ -30751,35 +30827,35 @@ const BodyContext = struct {
         const expected_node: ?NodeId = if (expected_ty) |expected| try self.activeNodeFromType(expected) else null;
         switch (expr.data) {
             .call => |call| {
-                if (call.direct_target) |target| {
+                if (call.directTarget(self.view)) |target| {
                     frame.cursor = 1;
                     return evidenceCall(self, .{ .direct_call_request = .{
                         .expr = checked_arg,
                         .target = target,
                         .call = call,
                         .checked_ret_ty = expr.ty,
-                        .source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload),
+                        .source_fn_ty = self.directCallInstantiationSourceFnType(target, call.sourceFnTy(self.view)),
                         .expected_ret_node = expected_node,
                     } });
                 }
                 frame.cursor = 2;
                 return evidenceCall(self, .{ .call_result = .{ .expr = checked_arg, .checked_ret_ty = expr.ty, .call = call, .expected_ret_ty = expected_ty } });
             },
-            .dispatch_call => |plan| {
+            .dispatch_call => |plan_node| {
                 frame.cursor = if (expected_ty == null) 4 else 2;
-                return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } });
+                return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = self.view.bodies.dispatchPlan(plan_node), .expected_ret_node = expected_node, .phase = .expression_lowering } });
             },
             .interpolation => |interpolation| {
                 frame.cursor = if (expected_ty == null) 4 else 2;
-                return evidenceCall(self, .{ .interpolation_result = .{ .maybe_plan = interpolation.plan, .expected_ret_node = expected_node } });
+                return evidenceCall(self, .{ .interpolation_result = .{ .maybe_plan = self.view.bodies.dispatchPlan(@backingInt(interpolation.node)), .expected_ret_node = expected_node } });
             },
-            .type_dispatch_call => |plan| {
+            .type_dispatch_call => |plan_node| {
                 frame.cursor = if (expected_ty == null) 4 else 2;
-                return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } });
+                return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = self.view.bodies.dispatchPlan(plan_node), .expected_ret_node = expected_node, .phase = .expression_lowering } });
             },
-            .method_eq => |plan| {
+            .method_eq => |plan_node| {
                 frame.cursor = if (expected_ty == null) 4 else 2;
-                return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } });
+                return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = self.view.bodies.dispatchPlan(plan_node), .expected_ret_node = expected_node, .phase = .expression_lowering } });
             },
             .field_access => |field| {
                 frame.cursor = 2;
@@ -30850,7 +30926,7 @@ const BodyContext = struct {
                         task.produced_nodes = try self.allocator.alloc(NodeId, items.len);
                     },
                     .tag => |tag| {
-                        task.name = try tagName(self.nameStoreMut(), self.view, tag.name);
+                        task.name = try bodyTagName(self.nameStoreMut(), self.view, tag.name);
                         task.produced_nodes = try self.allocator.alloc(NodeId, tag.args.len);
                     },
                     .record => |record| {
@@ -31136,7 +31212,7 @@ const BodyContext = struct {
                 frame.cursor = 3;
                 return evidenceCall(self, .{ .completed_result = .{
                     .expr = task.expr,
-                    .target = call.direct_target.?,
+                    .target = call.directTarget(self.view).?,
                     .call = call,
                     .source_fn_ty = task.source_fn_ty,
                     .fn_node = input.?.nodeValue(),
@@ -31147,7 +31223,7 @@ const BodyContext = struct {
 
         const expected_ret_ty = task.expected_ret_ty;
         const checked_ret_ty = task.checked_ret_ty;
-        if (call.direct_target == null) {
+        if (call.directTarget(self.view) == null) {
             if (try self.indirectCalleeMonoType(ExprSite.read(call.func), call.args, expected_ret_ty)) |fn_ty| {
                 const ret_ty = self.functionReturnType(fn_ty);
                 if (expected_ret_ty) |expected| {
@@ -31163,7 +31239,7 @@ const BodyContext = struct {
             task.call_ctx = call_ctx;
             frame.cursor = 1;
             return evidenceCall(call_ctx, .{ .instantiate_call = .{
-                .source_fn_ty = call.source_fn_ty_payload,
+                .source_fn_ty = call.sourceFnTy(self.view),
                 .caller = self,
                 .checked_ret_ty = checked_ret_ty,
                 .checked_args = call.args,
@@ -31172,8 +31248,8 @@ const BodyContext = struct {
             } });
         }
 
-        const target = call.direct_target.?;
-        task.source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+        const target = call.directTarget(self.view).?;
+        task.source_fn_ty = self.directCallInstantiationSourceFnType(target, call.sourceFnTy(self.view));
         frame.cursor = 2;
         return evidenceCall(self, .{ .direct_call_request = .{
             .expr = task.expr,
@@ -31229,7 +31305,7 @@ const BodyContext = struct {
         const call = task.call;
         if (frame.cursor == 1) {
             var fn_node = input.?.nodeValue();
-            if (self.iteratorProcedureForResolvedTarget(call.direct_target.?)) |procedure| {
+            if (self.iteratorProcedureForResolvedTarget(call.directTarget(self.view).?)) |procedure| {
                 const public_fn_node = self.graph.requestSourceInterface(fn_node) orelse fn_node;
                 if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
                     try self.graph.registerRequestSourceInterface(private_fn_node, public_fn_node);
@@ -31241,7 +31317,7 @@ const BodyContext = struct {
             task.call_ctx = null;
             return .{ .ret = .{ .node = fn_node } };
         }
-        if (call.direct_target == null) {
+        if (call.directTarget(self.view) == null) {
             Common.invariant("direct checked call instantiation received an indirect call");
         }
         const call_ctx = try self.createCallContext();
@@ -31254,7 +31330,7 @@ const BodyContext = struct {
             .checked_args = call.args,
             .expected_ret_node = task.expected_ret_node,
             .capture_constructor_argument_evidence = try self.iteratorCallNeedsConstructorArgumentEvidence(
-                self.iteratorProcedureForResolvedTarget(call.direct_target.?),
+                self.iteratorProcedureForResolvedTarget(call.directTarget(self.view).?),
                 call.args,
             ),
         } });
@@ -31675,12 +31751,12 @@ const BodyContext = struct {
                 .lookup_local => |lookup| try self.relateLookupExprAtNode(checked_expr, lookup.resolved, expected_node),
                 .lookup_external, .lookup_required => |resolved| try self.relateLookupExprAtNode(checked_expr, resolved, expected_node),
                 .call => |call| return try self.beginRelateCall(frame, task, expr.ty, call),
-                .dispatch_call => |plan| return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } }),
-                .interpolation => |interpolation| return evidenceCall(self, .{ .interpolation_result = .{ .maybe_plan = interpolation.plan, .expected_ret_node = expected_node } }),
-                .type_dispatch_call, .method_eq => |plan| return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = expected_node, .phase = .expression_lowering } }),
+                .dispatch_call => |plan_node| return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = self.view.bodies.dispatchPlan(plan_node), .expected_ret_node = expected_node, .phase = .expression_lowering } }),
+                .interpolation => |interpolation| return evidenceCall(self, .{ .interpolation_result = .{ .maybe_plan = self.view.bodies.dispatchPlan(@backingInt(interpolation.node)), .expected_ret_node = expected_node } }),
+                .type_dispatch_call, .method_eq => |plan_node| return evidenceCall(self, .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = self.view.bodies.dispatchPlan(plan_node), .expected_ret_node = expected_node, .phase = .expression_lowering } }),
                 .field_access => |field| return evidenceCall(self, .{ .field_access = .{ .checked_ty = expr.ty, .access = field, .expected_ty = null } }),
                 .tag => |tag| {
-                    task.name = try tagName(self.nameStoreMut(), self.view, tag.name);
+                    task.name = try bodyTagName(self.nameStoreMut(), self.view, tag.name);
                     return try self.nextRelateChild(task, expr);
                 },
                 .zero_argument_tag => _ = try self.graph.tagRowNodes(expected_node),
@@ -31787,7 +31863,7 @@ const BodyContext = struct {
     /// A shareable direct call relates its shared
     /// request; any other call instantiates its callee on a call context.
     fn beginRelateCall(self: *BodyContext, frame: *EvidenceFrame, task: *RelateTask, checked_ret_ty: checked.CheckedTypeId, call: CheckedCall) Allocator.Error!EvidenceStep {
-        if (call.direct_target) |target| {
+        if (call.directTarget(self.view)) |target| {
             if (try self.directCallRequestIsShareable(target, null)) {
                 frame.cursor = 2;
                 return evidenceCall(self, .{ .direct_call_request = .{
@@ -31795,7 +31871,7 @@ const BodyContext = struct {
                     .target = target,
                     .call = call,
                     .checked_ret_ty = checked_ret_ty,
-                    .source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload),
+                    .source_fn_ty = self.directCallInstantiationSourceFnType(target, call.sourceFnTy(self.view)),
                     .expected_ret_node = null,
                 } });
             }
@@ -31803,10 +31879,10 @@ const BodyContext = struct {
         const call_ctx = try self.createCallContext();
         task.call_ctx = call_ctx;
 
-        const source_fn_ty = if (call.direct_target) |target|
-            self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload)
+        const source_fn_ty = if (call.directTarget(self.view)) |target|
+            self.directCallInstantiationSourceFnType(target, call.sourceFnTy(self.view))
         else
-            call.source_fn_ty_payload;
+            call.sourceFnTy(self.view);
         frame.cursor = 3;
         return evidenceCall(call_ctx, .{ .instantiate_call = .{
             .source_fn_ty = source_fn_ty,
@@ -31814,7 +31890,7 @@ const BodyContext = struct {
             .checked_ret_ty = checked_ret_ty,
             .checked_args = call.args,
             .expected_ret_node = null,
-            .capture_constructor_argument_evidence = if (call.direct_target) |target|
+            .capture_constructor_argument_evidence = if (call.directTarget(self.view)) |target|
                 try self.iteratorCallNeedsConstructorArgumentEvidence(
                     self.iteratorProcedureForResolvedTarget(target),
                     call.args,
@@ -31856,7 +31932,7 @@ const BodyContext = struct {
                 if (request.fn_node == task.fn_node) request.args_related = true;
             }
         }
-        if (frame.cursor == 5 and call.direct_target == null) {
+        if (frame.cursor == 5 and call.directTarget(self.view) == null) {
             frame.cursor = 6;
             return evidenceCall(self, .{ .relate = .{ .expr = ExprSite.read(call.func), .expected_node = task.fn_node } });
         }
@@ -31877,9 +31953,9 @@ const BodyContext = struct {
             // supplies the exact expected type through lowerExprAtType.
             .runtime_error => try self.unitType(),
             .call => |call| (try self.callResultMonoType(expr_id, expr.ty, call, null)) orelse try self.lowerTypeView(expr.ty),
-            .dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerTypeView(expr.ty),
-            .interpolation => |interpolation| try self.activeTypeFromNode(try self.interpolationResultTypeNode(interpolation.plan, null)),
-            .type_dispatch_call, .method_eq => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerTypeView(expr.ty),
+            .dispatch_call => |plan_node| (try self.dispatchResultMonoType(expr.ty, self.view.bodies.dispatchPlan(plan_node), null)) orelse try self.lowerTypeView(expr.ty),
+            .interpolation => |interpolation| try self.activeTypeFromNode(try self.interpolationResultTypeNode(self.view.bodies.dispatchPlan(@backingInt(interpolation.node)), null)),
+            .type_dispatch_call, .method_eq => |plan_node| (try self.dispatchResultMonoType(expr.ty, self.view.bodies.dispatchPlan(plan_node), null)) orelse try self.lowerTypeView(expr.ty),
             .lookup_local => |lookup| try self.lookupExprMonoType(expr.ty, lookup.resolved),
             .lookup_external, .lookup_required => |resolved| try self.lookupExprMonoType(expr.ty, resolved),
             .lambda => |lambda| try self.lambdaFunctionType(expr.ty, lambda),
@@ -32928,7 +33004,7 @@ const BodyContext = struct {
         switch (checkedExpr(self.view, body).data) {
             .for_ => |for_| {
                 task.stage = .loop;
-                return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(@backingInt(body.node()), for_) } }) });
+                return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(self.view, @backingInt(body.node()), for_) } }) });
             },
             .if_, .match_ => {
                 task.nested_merge_binders = try self.stateMergeBinders(try self.exprStateMergeBinders(body));
@@ -33017,7 +33093,7 @@ const BodyContext = struct {
         const checked_expr = checkedExpr(self.view, expr_id);
         if (checked_expr.data == .for_ and !try self.checkedExprDivergesInLoweredRuntime(expr_id)) {
             task.stage = .passthrough;
-            return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(@backingInt(expr_id.node()), checked_expr.data.for_) } }) });
+            return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(self.view, @backingInt(expr_id.node()), checked_expr.data.for_) } }) });
         }
         switch (checked_expr.data) {
             .if_, .match_ => {
@@ -33172,7 +33248,7 @@ const BodyContext = struct {
             },
             .for_ => |for_| {
                 task.stage = .loop;
-                return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(@backingInt(task.statement), for_) } }) });
+                return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(self.view, @backingInt(task.statement), for_) } }) });
             },
             .while_ => |loop| {
                 task.stage = .loop;
@@ -33541,7 +33617,7 @@ const BodyContext = struct {
     fn appendInterpolationOperands(
         allocator: Allocator,
         exprs: *std.ArrayList(ExprSite),
-        interpolation: checked_bodies.InterpolationData,
+        interpolation: Interpolation,
     ) Allocator.Error!void {
         try exprs.append(allocator, ExprSite.read(interpolation.first));
         for (interpolation.parts) |part| try exprs.append(allocator, ExprSite.read(part));
@@ -33641,7 +33717,7 @@ const BodyContext = struct {
                 var operands: std.ArrayList(CIR.Expr.Idx) = .empty;
                 defer operands.deinit(self.allocator);
                 if (record.ext) |ext| try operands.append(self.allocator, ext);
-                for (record.fields) |field| try operands.append(self.allocator, self.view.bodies.recordField(field).value);
+                for (record.fields) |field| try operands.append(self.allocator, self.view.bodies.recordFieldValue(field));
                 return try self.divergentOperandsStep(operands.items, ty);
             },
             .tag => |tag| return try self.divergentOperandsStep(tag.args, ty),
@@ -33670,20 +33746,20 @@ const BodyContext = struct {
                 task.finish = .{ .low_level = low_level.op };
                 return requestLowerTask(self, .{ .span = .{ .exprs = low_level.args } });
             },
-            .dispatch_call => |plan| return try self.divergentDispatchStep(plan, ty),
+            .dispatch_call => |plan_node| return try self.divergentDispatchStep(self.view.bodies.dispatchPlan(plan_node), ty),
             .interpolation => |interpolation| {
                 // A custom interpolation's conversion is a dispatch, which
                 // can crash once its operands, the segments and values, have
                 // evaluated.
-                if (interpolation.plan) |plan| return try self.divergentDispatchStep(plan, ty);
+                if (self.view.bodies.dispatchPlan(@backingInt(interpolation.node))) |plan| return try self.divergentDispatchStep(plan, ty);
                 var operands: std.ArrayList(ExprSite) = .empty;
                 defer operands.deinit(self.allocator);
                 try appendInterpolationOperands(self.allocator, &operands, interpolation);
                 return try self.divergentOperandRefsStep(operands.items, ty);
             },
-            .method_eq, .type_dispatch_call => |plan| return try self.divergentDispatchStep(plan, ty),
-            .numeral => |numeral| return try self.divergentDispatchStep(numeral.plan, ty),
-            .str_from_quote => |quote| return try self.divergentDispatchStep(quote.plan, ty),
+            .method_eq, .type_dispatch_call => |plan_node| return try self.divergentDispatchStep(self.view.bodies.dispatchPlan(plan_node), ty),
+            .numeral => |node| return try self.divergentDispatchStep(self.view.bodies.numeralPlan(node), ty),
+            .str_from_quote => |node| return try self.divergentDispatchStep(self.view.bodies.quotePlan(node), ty),
             inline .str_segment,
             .bytes_literal,
             .lookup_local,
@@ -33734,12 +33810,12 @@ const BodyContext = struct {
         loop: u32,
     };
 
-    fn checkedForLoop(loop: u32, for_: anytype) CheckedForLoop {
+    fn checkedForLoop(view: ModuleView, loop: u32, for_: anytype) CheckedForLoop {
         return .{
             .pattern = for_.pattern,
             .expr = ExprSite.read(for_.expr),
             .body = ExprSite.read(for_.body),
-            .plan = for_.plan,
+            .plan = view.bodies.iteratorForPlan(loop),
             .loop = loop,
         };
     }
@@ -34603,7 +34679,7 @@ const BodyContext = struct {
         task.slots = try self.allocator.alloc(NodeId, child_count);
         switch (task.kind) {
             .tag => |tag_name| {
-                task.name = try tagName(self.nameStoreMut(), self.view, tag_name);
+                task.name = try bodyTagName(self.nameStoreMut(), self.view, tag_name);
                 for (task.slots, 0..) |*slot, index| {
                     slot.* = try self.graph.tagConstructionPayloadNode(task.node, task.name, index);
                 }
@@ -35091,7 +35167,7 @@ const BodyContext = struct {
             .field_access => return requestLowerTask(self, .{ .field_access = .{ .expr = checked_expr, .target = .{ .node = expected_node } } }),
             .tag => |tag| return constructorStep(self, .{ .kind = .{ .tag = tag.name }, .node = expected_node, .children = tag.args }),
             .zero_argument_tag => |tag| return loweredExprStep(try self.addConstructorExprAtNode(expected_node, .{ .tag = .{
-                .name = try tagName(self.nameStoreMut(), self.view, tag.name),
+                .name = try bodyTagName(self.nameStoreMut(), self.view, tag.name),
                 .payloads = .empty(),
             } })),
             .nominal => |nominal| return constructorStep(self, .{
@@ -35116,27 +35192,24 @@ const BodyContext = struct {
             }, expected_node),
             .record => |record| return recordConstructorStep(self, checked_expr, record, expected_node),
             .call => return requestLowerTask(self, .{ .call_expr_at_node = .{ .expr = checked_expr, .expected_node = expected_node } }),
-            .numeral => |numeral| if (numeral.conversion_root) |root_id| {
+            .numeral, .str_from_quote => |node| if (self.view.bodies.literalConversionRoot(node)) |root_id| {
                 return loweredExprStep(try self.lowerLiteralConversionAtNode(checked_expr, root_id, expected_node));
             },
-            .str_from_quote => |quote| if (quote.conversion_root) |root_id| {
-                return loweredExprStep(try self.lowerLiteralConversionAtNode(checked_expr, root_id, expected_node));
-            },
-            .dispatch_call => |plan| {
+            .dispatch_call => |plan_node| {
                 try self.selectExprRepresentationAtNode(checked_expr, expected_node);
-                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = cell } });
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = self.view.bodies.dispatchPlan(plan_node), .expected_ret_cell = cell } });
             },
             .interpolation => |interpolation| {
                 try self.selectExprRepresentationAtNode(checked_expr, expected_node);
-                return requestLowerTask(self, .{ .interpolation = .{ .expr = checked_expr, .maybe_plan = interpolation.plan, .value_node = expected_node } });
+                return requestLowerTask(self, .{ .interpolation = .{ .expr = checked_expr, .maybe_plan = self.view.bodies.dispatchPlan(@backingInt(interpolation.node)), .value_node = expected_node } });
             },
-            .type_dispatch_call => |plan| {
+            .type_dispatch_call => |plan_node| {
                 try self.selectExprRepresentationAtNode(checked_expr, expected_node);
-                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = cell } });
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = self.view.bodies.dispatchPlan(plan_node), .expected_ret_cell = cell } });
             },
-            .method_eq => |plan| {
+            .method_eq => |plan_node| {
                 try self.selectExprRepresentationAtNode(checked_expr, expected_node);
-                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = cell } });
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = self.view.bodies.dispatchPlan(plan_node), .expected_ret_cell = cell } });
             },
             .block => |block| return requestLowerTask(self, .{ .block = try self.boxLowerTask(BlockTask, .{
                 .statements = block.statements,
@@ -35277,21 +35350,21 @@ const BodyContext = struct {
                     .expected_ret_ty = ty,
                 } });
             },
-            .dispatch_call => |plan| {
+            .dispatch_call => |plan_node| {
                 frame.cursor = 3;
-                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = .{ .sealed = ty } } });
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = self.view.bodies.dispatchPlan(plan_node), .expected_ret_cell = .{ .sealed = ty } } });
             },
             .interpolation => |interpolation| {
                 frame.cursor = 3;
-                return requestLowerTask(self, .{ .interpolation = .{ .expr = checked_expr, .maybe_plan = interpolation.plan, .value_node = try self.activeNodeFromType(ty) } });
+                return requestLowerTask(self, .{ .interpolation = .{ .expr = checked_expr, .maybe_plan = self.view.bodies.dispatchPlan(@backingInt(interpolation.node)), .value_node = try self.activeNodeFromType(ty) } });
             },
-            .type_dispatch_call => |plan| {
+            .type_dispatch_call => |plan_node| {
                 frame.cursor = 3;
-                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = .{ .sealed = ty } } });
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = self.view.bodies.dispatchPlan(plan_node), .expected_ret_cell = .{ .sealed = ty } } });
             },
-            .method_eq => |plan| {
+            .method_eq => |plan_node| {
                 frame.cursor = 3;
-                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = .{ .sealed = ty } } });
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = self.view.bodies.dispatchPlan(plan_node), .expected_ret_cell = .{ .sealed = ty } } });
             },
             .lookup_local => |lookup| {
                 frame.cursor = 3;
@@ -35382,7 +35455,7 @@ const BodyContext = struct {
             // requesting an active view of their still-unresolved payload.
             .numeral, .str_from_quote => {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                if (literalConversionRootOf(expr.data)) |root_id| {
+                if (literalConversionRootOf(self.view, expr.data)) |root_id| {
                     return self.exprInnerDone(task, try self.lowerLiteralConversionAtNode(expr_id, root_id, expr_node));
                 }
                 // Only an unpinned target variable takes the checked literal
@@ -35435,7 +35508,7 @@ const BodyContext = struct {
             .zero_argument_tag => |tag| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
                 return self.exprInnerDone(task, try self.addConstructorExprAtNode(expr_node, .{ .tag = .{
-                    .name = try tagName(self.nameStoreMut(), self.view, tag.name),
+                    .name = try bodyTagName(self.nameStoreMut(), self.view, tag.name),
                     .payloads = .empty(),
                 } }));
             },
@@ -35487,25 +35560,25 @@ const BodyContext = struct {
         }
         const expr_node = try self.lowerExprTypeNode(expr_id);
         switch (expr.data) {
-            .dispatch_call => |plan| {
+            .dispatch_call => |plan_node| {
                 if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return self.exprInnerDone(task, restored);
                 frame.cursor = 1;
-                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = DraftTypeCell.fromGraphNode(expr_node) } });
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = self.view.bodies.dispatchPlan(plan_node), .expected_ret_cell = DraftTypeCell.fromGraphNode(expr_node) } });
             },
             .interpolation => |interpolation| {
                 if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return self.exprInnerDone(task, restored);
                 frame.cursor = 1;
-                return requestLowerTask(self, .{ .interpolation = .{ .expr = expr_id, .maybe_plan = interpolation.plan, .value_node = expr_node } });
+                return requestLowerTask(self, .{ .interpolation = .{ .expr = expr_id, .maybe_plan = self.view.bodies.dispatchPlan(@backingInt(interpolation.node)), .value_node = expr_node } });
             },
-            .type_dispatch_call => |plan| {
+            .type_dispatch_call => |plan_node| {
                 if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return self.exprInnerDone(task, restored);
                 frame.cursor = 1;
-                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = DraftTypeCell.fromGraphNode(expr_node) } });
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = self.view.bodies.dispatchPlan(plan_node), .expected_ret_cell = DraftTypeCell.fromGraphNode(expr_node) } });
             },
-            .method_eq => |plan| {
+            .method_eq => |plan_node| {
                 if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return self.exprInnerDone(task, restored);
                 frame.cursor = 1;
-                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = DraftTypeCell.fromGraphNode(expr_node) } });
+                return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = self.view.bodies.dispatchPlan(plan_node), .expected_ret_cell = DraftTypeCell.fromGraphNode(expr_node) } });
             },
             .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
@@ -35599,13 +35672,13 @@ const BodyContext = struct {
                 if (runtime_error.evaluated.len != 0) return divergentStep(self, expr_id, .{ .at_type = ty });
                 return self.withTypeDone(task, try self.addExpr(.{ .ty = ty, .data = .{ .checked_error = try self.addStringLiteral("runtime error") } }));
             },
-            .numeral => |numeral| {
-                if (numeral.conversion_root) |root_id| return self.withTypeDone(task, try self.lowerLiteralConversionAtNode(expr_id, root_id, try self.graph.importMono(ty)));
-                return self.withTypeDone(task, try self.lowerNumeralExpr(expr_id, numeral, ty));
+            .numeral => |node| {
+                if (self.view.bodies.literalConversionRoot(node)) |root_id| return self.withTypeDone(task, try self.lowerLiteralConversionAtNode(expr_id, root_id, try self.graph.importMono(ty)));
+                return self.withTypeDone(task, try self.lowerNumeralExpr(expr_id, node, ty));
             },
-            .str_from_quote => |quote| {
-                if (quote.conversion_root) |root_id| return self.withTypeDone(task, try self.lowerLiteralConversionAtNode(expr_id, root_id, try self.graph.importMono(ty)));
-                return self.withTypeDone(task, try self.lowerQuoteExpr(expr_id, quote, ty));
+            .str_from_quote => |node| {
+                if (self.view.bodies.literalConversionRoot(node)) |root_id| return self.withTypeDone(task, try self.lowerLiteralConversionAtNode(expr_id, root_id, try self.graph.importMono(ty)));
+                return self.withTypeDone(task, try self.lowerQuoteExpr(expr_id, node, ty));
             },
             .str_segment => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
             .bytes_literal => |str| blk: {
@@ -35644,11 +35717,11 @@ const BodyContext = struct {
             .tuple => |items| return requestLowerTask(self, spanAtTypesTask(items, tupleItemSpan(self.typeStore(), ty))),
             .record => |record| return try self.beginRecordAtType(record, ty),
             .tag => |tag| {
-                const name = try tagName(self.nameStoreMut(), self.view, tag.name);
+                const name = try bodyTagName(self.nameStoreMut(), self.view, tag.name);
                 task.tag_name = name;
                 return requestLowerTask(self, spanAtTypesTask(tag.args, tagPayloadSpan(self.typeStore(), self.nameStore(), ty, name)));
             },
-            .zero_argument_tag => |tag| return self.withTypeDone(task, try self.addConstructorExpr(ty, .{ .tag = .{ .name = try tagName(self.nameStoreMut(), self.view, tag.name), .payloads = .empty() } })),
+            .zero_argument_tag => |tag| return self.withTypeDone(task, try self.addConstructorExpr(ty, .{ .tag = .{ .name = try bodyTagName(self.nameStoreMut(), self.view, tag.name), .payloads = .empty() } })),
             .nominal => |nominal| {
                 if (nominalConstructionLayer(self.typeStore(), ty)) |layer| {
                     // The nominal edge owns the complete representation even
@@ -35754,7 +35827,7 @@ const BodyContext = struct {
                     .diverges = false,
                 } });
             },
-            .for_ => |for_| return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(@backingInt(expr_id.node()), for_) } }) }),
+            .for_ => |for_| return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(self.view, @backingInt(expr_id.node()), for_) } }) }),
             .hosted_lambda => Common.invariant("hosted lambda expression reached ordinary Monotype expression lowering"),
             .run_low_level => |low_level| return requestLowerTask(self, .{ .span = .{ .exprs = low_level.args } }),
         };
@@ -36683,8 +36756,8 @@ const BodyContext = struct {
                     return divergentStep(self, operand, .{ .at_cell = task.divergent_ret_cell });
                 }
 
-                if (call.direct_target) |target| {
-                    const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+                if (call.directTarget(self.view)) |target| {
+                    const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.sourceFnTy(self.view));
                     task.iterator_procedure = self.iteratorProcedureForResolvedTarget(target);
                     const fn_node = try self.directCallRequestNode(
                         checked_expr,
@@ -36720,7 +36793,7 @@ const BodyContext = struct {
                 const call_ctx = try self.createCallContext();
                 task.call_ctx = call_ctx;
                 const fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(
-                    call.source_fn_ty_payload,
+                    call.sourceFnTy(self.view),
                     self,
                     checked_ret_ty,
                     call.args,
@@ -36751,7 +36824,7 @@ const BodyContext = struct {
             // A direct call's uninhabited-argument check.
             1 => {
                 if (input.?.maybeCallValue()) |lowered| return self.callLowerDone(task, lowered);
-                const target = call.direct_target.?;
+                const target = call.directTarget(self.view).?;
                 const fn_nodes = task.fn_nodes;
                 if (task.iterator_procedure) |procedure| {
                     if ((try self.generatedIteratorNextOperand(procedure, call.args, fn_nodes))) |iterator| {
@@ -36759,7 +36832,7 @@ const BodyContext = struct {
                         return requestLowerChild(self, iterator, DraftTypeCell.fromGraphNode(fn_nodes.args[0]));
                     }
                 }
-                const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+                const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.sourceFnTy(self.view));
                 if (self.resolvedTargetIsStrInspect(target)) {
                     frame.cursor = 2;
                     return requestLowerTask(self, .{ .prepared_span = .{ .exprs = call.args, .nodes = fn_nodes.args } });
@@ -36777,8 +36850,8 @@ const BodyContext = struct {
             // `Str.inspect`'s argument.
             2 => {
                 const args = input.?.spanValue();
-                const target = call.direct_target.?;
-                const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+                const target = call.directTarget(self.view).?;
+                const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.sourceFnTy(self.view));
                 const source_fn_key = try self.view.types.rootKey(source_fn_ty);
                 if (args.len != 1) Common.invariant("Str.inspect call did not have exactly one lowered argument");
                 const callee = try self.fnTemplateForDirectCallAtNode(target, source_fn_ty, source_fn_key, task.fn_node);
@@ -36796,7 +36869,7 @@ const BodyContext = struct {
             // A completed direct call's arguments.
             3 => {
                 const lowered_args = input.?.spanValue();
-                const captures = try self.directCallCaptureSpan(call.direct_target.?);
+                const captures = try self.directCallCaptureSpan(call.directTarget(self.view).?);
                 return self.callLowerDone(task, .{
                     .ret_ty = DraftTypeCell.fromGraphNode(task.callee_ret),
                     .data = .{ .call_proc = .{
@@ -36910,9 +36983,9 @@ const BodyContext = struct {
         call: CheckedCall,
         expected_node: NodeId,
     ) Allocator.Error!bool {
-        const target = call.direct_target orelse return false;
+        const target = call.directTarget(self.view) orelse return false;
         if (self.directCallTargetIsLocalProc(target)) return false;
-        const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+        const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.sourceFnTy(self.view));
         const declared_row = closedResultRowOrNull(self.view, source_fn_ty) orelse return false;
         const call_ret_node = try self.instNode(checkedExpr(self.view, call_expr).ty);
         return (try resultRowWideningOrNull(self.graph, declared_row, call_ret_node, expected_node)) != null;
@@ -36945,7 +37018,7 @@ const BodyContext = struct {
                 },
                 .match_ => |match| for (0..match.branches.count()) |index| try pending.append(self.allocator, .{ .expr = matchBranchAt(self.view, match.branches, index).value, .expected = demand.expected }),
                 .tag => |tag| {
-                    const name = try tagName(self.nameStoreMut(), self.view, tag.name);
+                    const name = try bodyTagName(self.nameStoreMut(), self.view, tag.name);
                     for (tag.args, 0..) |arg, index| {
                         const slot = try self.graph.tagConstructionPayloadNode(demand.expected, name, index);
                         if (self.graph.sameClass(try self.instNode(checkedExpr(self.view, ExprSite.read(arg)).ty), slot)) continue;
@@ -37433,9 +37506,9 @@ const BodyContext = struct {
         expected_ret_node: ?NodeId,
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!?LowerTask {
-        const target = call.direct_target orelse return null;
+        const target = call.directTarget(self.view) orelse return null;
         const intrinsic = self.callsiteIntrinsicForResolvedTarget(target) orelse return null;
-        const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+        const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.sourceFnTy(self.view));
         return .{ .callsite_intrinsic = .{
             .intrinsic = intrinsic,
             .checked_expr_id = checked_expr_id,
@@ -38238,7 +38311,7 @@ const BodyContext = struct {
     }
 
     fn inspectCallDemand(self: *BodyContext, call: anytype) LoweringDemand {
-        const target = call.direct_target orelse return .runtime_value;
+        const target = call.directTarget(self.view) orelse return .runtime_value;
         return if (self.resolvedTargetIsStrInspect(target)) .inspect_only else .runtime_value;
     }
 
@@ -45176,7 +45249,7 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         expected_ret_node: ?NodeId,
     ) Allocator.Error!NodeId {
-        return (try self.runEvidence(.{ .direct_call_type = .{ .expr = undefined, .target = call.direct_target orelse Common.invariant("direct checked call instantiation received an indirect call"), .call = call, .checked_ret_ty = checked_ret_ty, .source_fn_ty = source_fn_ty, .expected_ret_node = expected_ret_node } })).nodeValue();
+        return (try self.runEvidence(.{ .direct_call_type = .{ .expr = undefined, .target = call.directTarget(self.view) orelse Common.invariant("direct checked call instantiation received an indirect call"), .call = call, .checked_ret_ty = checked_ret_ty, .source_fn_ty = source_fn_ty, .expected_ret_node = expected_ret_node } })).nodeValue();
     }
 
     fn fnTemplateForDirectCallAtNode(
@@ -51035,8 +51108,8 @@ const BodyContext = struct {
     /// The checked conversion plan of a literal expression.
     fn literalConversionPlan(self: *BodyContext, expr_id: ExprSite) ?static_dispatch.StaticDispatchPlanId {
         return switch (checkedExpr(self.view, expr_id).data) {
-            .numeral => |numeral| numeral.plan,
-            .str_from_quote => |quote| quote.plan,
+            .numeral => |node| self.view.bodies.numeralPlan(node),
+            .str_from_quote => |node| self.view.bodies.quotePlan(node),
             .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("literal conversion did not point at a conversion expression"),
         };
     }
@@ -51177,14 +51250,14 @@ const BodyContext = struct {
     fn lowerNumeralExpr(
         self: *BodyContext,
         expr_id: ExprSite,
-        numeral: checked_bodies.NumeralData,
+        node: u32,
         target_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const primitive = switch (shapeContent(self.typeStore(), target_ty)) {
             .primitive => |p| p,
             .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return try self.lowerSpecializedLiteralConversion(expr_id, try self.graph.importMono(target_ty)),
         };
-        const data = (try self.numeralBits(numeral.literal, primitive)) orelse blk: {
+        const data = (try self.numeralBits(self.view.bodies.numeralLiteral(node), primitive)) orelse blk: {
             // A value that does not fit its concrete integer or Dec target (a
             // literal forced to an unrepresentable type after monomorphization;
             // checking reports these, so this is unreachable for error-free
@@ -51202,7 +51275,7 @@ const BodyContext = struct {
     fn lowerQuoteExpr(
         self: *BodyContext,
         expr_id: ExprSite,
-        quote: checked_bodies.QuoteData,
+        node: u32,
         target_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         switch (shapeContent(self.typeStore(), target_ty)) {
@@ -51216,7 +51289,7 @@ const BodyContext = struct {
                         .data = .{ .crash = try self.addStringLiteral("invalid string literal") },
                     });
                 }
-                return try self.lowerQuoteValue(expr_id.rawNode() orelse Common.invariant("a quote literal had no CIR node"), quote.literal, target_ty);
+                return try self.lowerQuoteValue(expr_id.rawNode() orelse Common.invariant("a quote literal had no CIR node"), self.view.bodies.quoteText(node), target_ty);
             },
             .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return try self.lowerSpecializedLiteralConversion(expr_id, try self.graph.importMono(target_ty)),
         }
@@ -51294,7 +51367,7 @@ const BodyContext = struct {
         for (items) |item| {
             const expr = checkedExpr(self.view, ExprSite.read(item));
             if (expr.data != .numeral) return null;
-            if (expr.data.numeral.plan != null or expr.data.numeral.conversion_root != null) return null;
+            if (self.view.bodies.numeralPlan(expr.data.numeral) != null or self.view.bodies.literalConversionRoot(expr.data.numeral) != null) return null;
         }
 
         const width = scalar.byteWidth();
@@ -51302,7 +51375,7 @@ const BodyContext = struct {
         defer self.allocator.free(bytes);
         for (items, 0..) |item, index| {
             const numeral = checkedExpr(self.view, ExprSite.read(item)).data.numeral;
-            const bits = (try self.numeralScalarBits(numeral.literal, primitive)) orelse return null;
+            const bits = (try self.numeralScalarBits(self.view.bodies.numeralLiteral(numeral), primitive)) orelse return null;
             var encoded: [16]u8 = undefined;
             switch (bits) {
                 .int => |value| std.mem.writeInt(i128, &encoded, value.toI128(), .little),
@@ -51857,8 +51930,8 @@ const BodyContext = struct {
         if (self.restoredHoistedConstEntry(expr_id) != null) return null;
         const expr = checkedExpr(self.view, expr_id);
         const plan_id = switch (expr.data) {
-            .dispatch_call => |plan| plan,
-            .type_dispatch_call, .method_eq => |plan| plan,
+            .dispatch_call => |plan_node| self.view.bodies.dispatchPlan(plan_node),
+            .type_dispatch_call, .method_eq => |plan_node| self.view.bodies.dispatchPlan(plan_node),
             // An interpolation's value is its conversion result's `Ok` payload.
             .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .interpolation, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
         } orelse return null;
@@ -60982,7 +61055,7 @@ const BodyContext = struct {
                             .sealed => |operand_ty| task.operand_ty = operand_ty,
                             .deferred => |operand_node| task.operand_node = operand_node,
                         }
-                        if (eq.discriminant) |discriminant| {
+                        if (self.view.bodies.tagDiscriminantEquality(eq.lhs, eq.rhs)) |discriminant| {
                             task.stage = .discriminant;
                             return requestLowerChild(self, ExprSite.read(discriminant.value), self.directStructuralOperandCell(task));
                         }
@@ -61002,7 +61075,7 @@ const BodyContext = struct {
             },
             .discriminant => {
                 const eq = data.structural_eq;
-                const discriminant = eq.discriminant.?;
+                const discriminant = self.view.bodies.tagDiscriminantEquality(eq.lhs, eq.rhs).?;
                 const value = input.?.exprValue();
                 if (task.operand_ty) |operand_ty| {
                     return try self.finishDirectStructural(task, try self.lowerEqualityAgainstTag(
@@ -61220,9 +61293,9 @@ const BodyContext = struct {
         const expr = checkedExpr(self.view, expr_id);
         return switch (expr.data) {
             .call => |call| try self.callResultTypeNode(expr_id, expr.ty, call, null),
-            .dispatch_call => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
-            .interpolation => |interpolation| try self.interpolationResultTypeNode(interpolation.plan, null),
-            .type_dispatch_call, .method_eq => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
+            .dispatch_call => |plan_node| try self.dispatchResultTypeNode(expr.ty, self.view.bodies.dispatchPlan(plan_node), null),
+            .interpolation => |interpolation| try self.interpolationResultTypeNode(self.view.bodies.dispatchPlan(@backingInt(interpolation.node)), null),
+            .type_dispatch_call, .method_eq => |plan_node| try self.dispatchResultTypeNode(expr.ty, self.view.bodies.dispatchPlan(plan_node), null),
             .lookup_local => |lookup| try self.lookupExprTypeNode(expr.ty, lookup.resolved),
             .lookup_external, .lookup_required => |resolved| try self.lookupExprTypeNode(expr.ty, resolved),
             .field_access => |field| try self.fieldAccessTypeNode(expr.ty, field, null),
@@ -63234,7 +63307,7 @@ const BodyContext = struct {
                     if (backing.node == node) Common.invariant("nominal tag demand guard backing did not advance");
                     return try self.queuePatternBinderVisit(pending, pattern_id, backing.node);
                 }
-                const name = try tagName(self.nameStoreMut(), self.view, tag.name);
+                const name = try bodyTagName(self.nameStoreMut(), self.view, tag.name);
                 for (tag.args, 0..) |arg, payload_index| {
                     try self.queuePatternBinderVisit(pending, arg, try self.graph.tagPayloadNode(node, name, payload_index));
                 }
@@ -63479,8 +63552,8 @@ const BodyContext = struct {
         const expr = checkedExpr(self.view, checked_value);
         return switch (expr.data) {
             .call => |call| blk: {
-                const target = call.direct_target orelse break :blk null;
-                const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+                const target = call.directTarget(self.view) orelse break :blk null;
+                const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.sourceFnTy(self.view));
                 const fn_node = try self.directCallRequestNode(
                     checked_value,
                     target,
@@ -63497,22 +63570,22 @@ const BodyContext = struct {
                 const completed = try self.completedDirectCalleeAtNode(checked_value, target, source_fn_ty, fn_node);
                 break :blk (try self.graph.functionNodes(completed.fn_node)).ret;
             },
-            .dispatch_call => |plan| try self.dispatchResultTypeNodeInPhase(
+            .dispatch_call => |plan_node| try self.dispatchResultTypeNodeInPhase(
                 expr.ty,
-                plan,
+                self.view.bodies.dispatchPlan(plan_node),
                 expected_node,
                 .expression_lowering,
             ),
-            .interpolation => |interpolation| try self.interpolationResultTypeNode(interpolation.plan, expected_node),
-            .type_dispatch_call => |plan| try self.dispatchResultTypeNodeInPhase(
+            .interpolation => |interpolation| try self.interpolationResultTypeNode(self.view.bodies.dispatchPlan(@backingInt(interpolation.node)), expected_node),
+            .type_dispatch_call => |plan_node| try self.dispatchResultTypeNodeInPhase(
                 expr.ty,
-                plan,
+                self.view.bodies.dispatchPlan(plan_node),
                 expected_node,
                 .expression_lowering,
             ),
-            .method_eq => |plan| try self.dispatchResultTypeNodeInPhase(
+            .method_eq => |plan_node| try self.dispatchResultTypeNodeInPhase(
                 expr.ty,
-                plan,
+                self.view.bodies.dispatchPlan(plan_node),
                 expected_node,
                 .expression_lowering,
             ),
@@ -64136,7 +64209,7 @@ const BodyContext = struct {
             .decl => |decl| decl,
             .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .rejected_method_decl, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => return null,
         };
-        if (!decl.recursive or self.statementDeclIsLocalProc(decl.pattern, decl.expr)) return null;
+        if (!self.view.bodies.declIsRecursive(task.statement) or self.statementDeclIsLocalProc(decl.pattern, decl.expr)) return null;
         const saved_loc = self.builder.current_loc;
         defer self.builder.current_loc = saved_loc;
         const saved_region = self.builder.current_region;
@@ -65765,7 +65838,7 @@ const BodyContext = struct {
                 }
                 return null;
             },
-            .numeral_literal => |num| try self.lowerNumeralLiteralPattern(pattern_id, num, ty),
+            .numeral_literal => try self.lowerNumeralLiteralPattern(pattern_id, ty),
             .str_literal => |str| try self.lowerStringLiteralPattern(pattern_id, str, ty),
             .str_interpolation => |str| try self.lowerStrPattern(str, ty),
             .underscore => .wildcard,
@@ -65803,7 +65876,7 @@ const BodyContext = struct {
         const pattern = self.view.bodies.pattern(pattern_id);
         switch (pattern.data) {
             .applied_tag => |tag| {
-                const name = try tagName(self.nameStoreMut(), self.view, tag.name);
+                const name = try bodyTagName(self.nameStoreMut(), self.view, tag.name);
                 try self.pushPatTypeFrame(pat_run, .{ .tag = .{ .target = target, .name = name } });
                 try self.appendPatTypeChildren(pat_run, tag.args, tagPayloadTypes(self.typeStore(), self.nameStore(), ty, name));
             },
@@ -65976,7 +66049,7 @@ const BodyContext = struct {
                     if (backing.node == node) Common.invariant("nominal tag pattern backing did not advance");
                     try self.queuePatternBinderVisit(pending, pattern_id, backing.node);
                 } else {
-                    const name = try tagName(self.nameStoreMut(), self.view, tag.name);
+                    const name = try bodyTagName(self.nameStoreMut(), self.view, tag.name);
                     for (tag.args, 0..) |arg, payload_index| {
                         try self.queuePatternBinderVisit(pending, arg, try self.graph.tagPayloadNode(node, name, payload_index));
                     }
@@ -66144,7 +66217,7 @@ const BodyContext = struct {
                     if (backing.node == representation_node) Common.invariant("nominal tag pattern shell backing did not advance");
                     return .{ .nominal = .{ .representation_node = representation_node, .pattern = pattern_id, .backing = backing.node } };
                 }
-                const name = try tagName(self.nameStoreMut(), self.view, tag.name);
+                const name = try bodyTagName(self.nameStoreMut(), self.view, tag.name);
                 const payloads = try self.allocator.alloc(DraftPatId, tag.args.len);
                 defer self.allocator.free(payloads);
                 for (tag.args, 0..) |arg, payload_index| {
@@ -66425,7 +66498,7 @@ const BodyContext = struct {
                     try self.appendPatNodeChild(pat_run, pattern_id, backing.node, in_match);
                     return null;
                 }
-                const name = try tagName(self.nameStoreMut(), self.view, tag.name);
+                const name = try bodyTagName(self.nameStoreMut(), self.view, tag.name);
                 try self.pushPatNodeFrame(pat_run, .{ .tag = .{ .cell = cell, .name = name } });
                 for (tag.args, 0..) |arg, payload_index| {
                     try self.appendPatNodeChild(pat_run, arg, try self.graph.tagPayloadNode(representation_node, name, payload_index), in_match);
@@ -66509,9 +66582,9 @@ const BodyContext = struct {
                 for (items, item_nodes) |item, item_node| try self.appendPatNodeChild(pat_run, item, item_node, in_match);
                 return null;
             },
-            .numeral_literal => |num| blk: {
+            .numeral_literal => blk: {
                 const ty = try self.activeTypeFromNode(node);
-                break :blk try self.lowerNumeralLiteralPattern(pattern_id, num, ty);
+                break :blk try self.lowerNumeralLiteralPattern(pattern_id, ty);
             },
             .str_literal => |str| blk: {
                 const ty = try self.activeTypeFromNode(node);
@@ -66561,7 +66634,7 @@ const BodyContext = struct {
                 return null;
             },
             .applied_tag => |tag| blk: {
-                const tag_name = try tagName(self.nameStoreMut(), self.view, tag.name);
+                const tag_name = try bodyTagName(self.nameStoreMut(), self.view, tag.name);
                 const ok_name = try self.nameStoreMut().internTagLabel("Ok");
                 const err_name = try self.nameStoreMut().internTagLabel("Err");
                 const present_name = try self.nameStoreMut().internTagLabel(Builder.optional_slot_present_tag);
@@ -66759,12 +66832,11 @@ const BodyContext = struct {
     fn lowerNumeralLiteralPattern(
         self: *BodyContext,
         pattern_id: CIR.Pattern.Idx,
-        numeral: anytype,
         ty: Type.TypeId,
     ) Allocator.Error!BodyPatData {
         return switch (shapeContent(self.typeStore(), ty)) {
-            .primitive => try self.numeralPatBits(numeral.literal, ty),
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => if (numeral.custom)
+            .primitive => try self.numeralPatBits(self.view.bodies.numeralLiteral(@backingInt(pattern_id)), ty),
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => if (self.view.bodies.literalPatternIsCustom(pattern_id))
                 try self.bindLiteralGuardPattern(pattern_id, ty)
             else
                 Common.invariant("custom numeral pattern had no checked conversion"),
@@ -66782,10 +66854,10 @@ const BodyContext = struct {
     ) Allocator.Error!BodyPatData {
         return switch (shapeContent(self.typeStore(), ty)) {
             .primitive => |primitive| if (primitive == .str)
-                .{ .str_lit = try self.lowerStringLiteral(str.literal) }
+                .{ .str_lit = try self.lowerStringLiteral(str) }
             else
                 try self.bindNeverMatchPattern(ty),
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => if (str.custom)
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => if (self.view.bodies.literalPatternIsCustom(pattern_id))
                 try self.bindLiteralGuardPattern(pattern_id, ty)
             else
                 Common.invariant("custom string pattern had no checked conversion"),
@@ -69578,8 +69650,8 @@ fn dispatchPlanForRuntimeExpr(view: ModuleView, expr_id: CIR.Expr.Idx) static_di
 fn dispatchPlanIdForRuntimeExpr(view: ModuleView, expr_id: CIR.Expr.Idx) static_dispatch.StaticDispatchPlanId {
     const expr = checkedExpr(view, ExprSite.read(expr_id));
     const plan_id = switch (expr.data) {
-        .dispatch_call => |maybe| maybe orelse Common.invariant("stored serialization dispatch expression had no dispatch plan"),
-        .type_dispatch_call => |maybe| maybe orelse Common.invariant("stored serialization type dispatch expression had no dispatch plan"),
+        .dispatch_call => |node| view.bodies.dispatchPlan(node) orelse Common.invariant("stored serialization dispatch expression had no dispatch plan"),
+        .type_dispatch_call => |node| view.bodies.dispatchPlan(node) orelse Common.invariant("stored serialization type dispatch expression had no dispatch plan"),
         .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored serialization runtime function did not reference a dispatch expression"),
     };
     const plan_raw = @backingInt(plan_id);

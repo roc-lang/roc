@@ -552,14 +552,13 @@ const Builder = struct {
                 };
             },
             .expr => switch (bodies.exprData(@fromBackingInt(plan.node))) {
-                .numeral => |numeral| .{ numeral.conversion_root, .{ .dependent_numeral = true } },
-                .str_from_quote => |quote| .{ quote.conversion_root, .{ .dependent_quote = true } },
+                .numeral => .{ bodies.literalConversionRoot(plan.node), .{ .dependent_numeral = true } },
+                .str => if (bodies.quoteIsCustom(plan.node)) .{ bodies.literalConversionRoot(plan.node), .{ .dependent_quote = true } } else return .{},
                 .interpolation => {
                     if (traceEnabled()) std.debug.print("ctfe-demand unbounded interpolation {s} byte={d}\n", .{ view.canonical_names.moduleNameText(view.module_identity.module_name), region.start.offset });
                     return .{ .strict = true };
                 },
                 .str_segment,
-                .str,
                 .bytes_literal,
                 .lookup_local,
                 .lookup_external,

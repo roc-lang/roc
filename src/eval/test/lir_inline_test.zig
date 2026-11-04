@@ -9397,11 +9397,11 @@ test "literal conversion ownership includes nested codec evidence" {
         for (0..bodies.nodeCount()) |raw| {
             if (bodies.index().nodeKind(@intCast(raw)) != .expr) continue;
             const expr_id: check.CheckedBodies.ExprId = @fromBackingInt(@intCast(raw));
+            const raw_expr = @backingInt(expr_id);
             const plan_id, const conversion_root = switch (bodies.exprData(expr_id)) {
-                .numeral => |numeral| .{ numeral.plan orelse continue, numeral.conversion_root },
-                .str_from_quote => |quote| .{ quote.plan orelse continue, quote.conversion_root },
+                .numeral => .{ bodies.numeralPlan(raw_expr) orelse continue, bodies.literalConversionRoot(raw_expr) },
+                .str => if (bodies.quoteIsCustom(raw_expr)) .{ bodies.quotePlan(raw_expr) orelse continue, bodies.literalConversionRoot(raw_expr) } else continue,
                 .str_segment,
-                .str,
                 .bytes_literal,
                 .lookup_local,
                 .lookup_external,

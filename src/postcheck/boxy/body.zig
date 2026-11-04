@@ -32,7 +32,7 @@ const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
 const checked = check.CheckedModule;
 const static_dispatch = check.StaticDispatchRegistry;
-const NumeralLiteral = @FieldType(bodies_mod.NumeralData, "literal");
+const NumeralLiteral = can.ModuleEnv.NumeralLiteral;
 const LIR = lir_core.LIR;
 const LirStore = lir_core.LirStore;
 const CheckedArithmetic = lir_core.CheckedArithmetic;
@@ -646,7 +646,7 @@ pub const Builder = struct {
         const destination = self.ownDestination(expr) orelse return null;
         if (destination == own) return null;
         switch (self.bodies().exprData(expr)) {
-            .block, .if_, .match_, .nominal, .dbg, .tag, .zero_argument_tag, .record, .empty_record, .tuple, .list, .empty_list, .numeral, .str_from_quote, .str_segment, .str, .interpolation, .lambda, .closure, .runtime_error, .crash, .return_ => return null,
+            .block, .if_, .match_, .nominal, .dbg, .tag, .zero_argument_tag, .record, .empty_record, .tuple, .list, .empty_list, .numeral, .str_segment, .str, .interpolation, .lambda, .closure, .runtime_error, .crash, .return_ => return null,
             .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .call, .binop, .unary_minus, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .expect_err, .expect, .ellipsis, .anno_only, .break_, .for_, .hosted_lambda, .run_low_level => {},
         }
         return try self.retagInto(own, destination);
@@ -1444,7 +1444,7 @@ pub const Builder = struct {
                             try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = message }, .checked_error = true } });
                         }
                     },
-                    .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .run_low_level => {
+                    .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .run_low_level => {
                         if (params.len != 0) invariant("a non-lambda template body has parameters");
                         try self.tasks.append(self.allocator, .ret);
                         try self.tasks.append(self.allocator, .{ .own_expr = root_expr });
@@ -1704,7 +1704,7 @@ pub const Builder = struct {
         const worker = self.currentWorker().*;
         const lambda = switch (self.bodies().exprData(lambda_expr)) {
             .lambda => |lambda| lambda,
-            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a lambda worker's expression is not a lambda"),
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a lambda worker's expression is not a lambda"),
         };
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
@@ -2795,7 +2795,7 @@ pub const Builder = struct {
                 for (elems, 0..) |*elem, index| {
                     elem.* = switch (self.bodies().exprData(interpolation.segment(index))) {
                         .str_segment => |literal| try self.strLiteral(self.bodies().text(literal)),
-                        .numeral, .str_from_quote, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("an interpolation segment is not a string segment"),
+                        .numeral, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("an interpolation segment is not a string segment"),
                     };
                 }
                 const list = try self.localOf(arg.ty, .frame);
@@ -3175,20 +3175,17 @@ pub const Builder = struct {
             .stored => |stored| return try self.pushStoredRestore(.{ .module = self.module }, stored, try self.exprType(expr_id), if (self.view.view.hoisted_constants.lookupByExpr(expr_id)) |hoisted| hoisted.root else null),
             .pending => |root| return try self.pendingValueRead(self.module, root, try self.exprType(expr_id)),
         };
+        const raw = @backingInt(expr_id);
         switch (expr.data) {
-            .numeral => |numeral| try self.lowerNumeral(.{ .expr = expr_id }, numeral.literal, numeral.plan, numeral.conversion_root),
+            .numeral => try self.lowerNumeral(.{ .expr = expr_id }, self.bodies().numeralLiteral(raw), self.bodies().numeralPlan(raw), self.bodies().literalConversionRoot(raw)),
             .str_segment => |literal| try self.pushValue(try self.strLiteral(self.bodies().text(literal))),
-            .str => |parts| {
-                try self.push(.{ .finish_str = .{ .count = @intCast(parts.len()) } });
-                var index = parts.len();
-                while (index > 0) {
-                    index -= 1;
-                    try self.push(.{ .expr = parts.at(index) });
-                }
-            },
-            .lookup_local => |lookup| try self.lowerLookupLocal(expr_id, lookup.pattern, lookup.resolved),
-            .lookup_external => |resolved| try self.lowerLookupExternal(expr_id, resolved orelse invariant("an external lookup had no resolved reference")),
-            .lookup_required => |resolved| try self.lowerLookupExternal(expr_id, resolved orelse invariant("a platform requirement lookup had no resolved reference")),
+            .str => |segments| if (self.bodies().quoteIsCustom(raw))
+                try self.lowerQuote(.{ .expr = expr_id }, .{ .quote = segments }, self.bodies().quotePlan(raw), self.bodies().literalConversionRoot(raw))
+            else
+                try self.lowerStrParts(.{ .rest = segments }),
+            .lookup_local => |pattern| try self.lowerLookupLocal(expr_id, pattern, self.bodies().resolvedRef(expr_id)),
+            .lookup_external => try self.lowerLookupExternal(expr_id, self.bodies().resolvedRef(expr_id) orelse invariant("an external lookup had no resolved reference")),
+            .lookup_required => try self.lowerLookupExternal(expr_id, self.bodies().resolvedRef(expr_id) orelse invariant("a platform requirement lookup had no resolved reference")),
             .block => |block| {
                 if (self.isTail(expr_id)) try self.tail_exprs.put(self.allocator, block.final_expr, {});
                 // A divergent statement leaves the rest of the block
@@ -3218,9 +3215,9 @@ pub const Builder = struct {
                 }
             },
             .call => |call| try self.lowerCall(expr_id, call),
-            .dispatch_call => |plan| try self.lowerDispatch(expr_id, plan orelse invariant("a dispatch call had no checked plan")),
-            .method_eq => |plan| try self.lowerDispatch(expr_id, plan orelse invariant("a method equality had no checked plan")),
-            .type_dispatch_call => |plan| try self.lowerDispatch(expr_id, plan orelse invariant("a type dispatch call had no checked plan")),
+            .dispatch_call => try self.lowerDispatch(expr_id, self.bodies().dispatchPlan(raw) orelse invariant("a dispatch call had no checked plan")),
+            .method_eq => try self.lowerDispatch(expr_id, self.bodies().dispatchPlan(raw) orelse invariant("a method equality had no checked plan")),
+            .type_dispatch_call => try self.lowerDispatch(expr_id, self.bodies().dispatchPlan(raw) orelse invariant("a type dispatch call had no checked plan")),
             .run_low_level => |run_ll| {
                 const args = run_ll.args[0 .. run_ll.args.len - run_ll.op.typeOnlyOperands()];
                 const arg_types = try self.program.arena.allocator().alloc(TypeId, args.len);
@@ -3236,7 +3233,7 @@ pub const Builder = struct {
                 var index = record.fields.len;
                 while (index > 0) {
                     index -= 1;
-                    try self.push(.{ .expr = self.bodies().recordField(record.fields[index]).value });
+                    try self.push(.{ .expr = self.bodies().recordFieldValue(record.fields[index]) });
                 }
                 // An update evaluates its base first.
                 if (record.ext) |base_expr| try self.push(.{ .expr = base_expr });
@@ -3268,7 +3265,7 @@ pub const Builder = struct {
                         try self.pushExprsReversed(tag.args);
                     },
                     .zero_argument_tag => try self.push(.{ .finish_tag_at = .{ .expr = nominal.backing_expr, .ty = try self.exprType(expr_id) } }),
-                    .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {
+                    .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {
                         // The operand is the nominal's own backing, which a
                         // padded declaration lays out differently from the
                         // operand's record row.
@@ -3280,7 +3277,7 @@ pub const Builder = struct {
             .lambda => try self.lowerClosure(expr_id, expr_id, try self.program.siteCaptures(self.module, expr_id)),
             .closure => |closure| try self.lowerClosure(expr_id, closure.lambda, try self.program.siteCaptures(self.module, expr_id)),
             .structural_eq => |eq| {
-                if (eq.discriminant) |discriminant| {
+                if (self.bodies().tagDiscriminantEquality(eq.lhs, eq.rhs)) |discriminant| {
                     try self.push(.{ .finish_discriminant_eq = .{ .value_ty = try self.valueType(discriminant.value), .tag = discriminant.tag, .negated = eq.negated } });
                     try self.push(.{ .expr = discriminant.value });
                     return;
@@ -3345,7 +3342,7 @@ pub const Builder = struct {
                 .@"and", .@"or" => try self.lowerShortCircuit(binop.op == .@"and", binop.lhs, binop.rhs),
                 .add, .sub, .mul, .div, .rem, .lt, .gt, .le, .ge, .eq, .ne, .div_trunc, .range_exclusive, .range_inclusive => invariantFmt("binary operator {s} reached Boxy lowering outside a dispatch", .{@tagName(binop.op)}),
             },
-            .for_ => |for_| try self.pushForLoop(@backingInt(expr_id), for_.pattern, for_.expr, for_.body, for_.plan),
+            .for_ => |for_| try self.pushForLoop(raw, for_.pattern, for_.expr, for_.body, self.bodies().iteratorForPlan(raw)),
             .field_access => |access| {
                 try self.push(.{ .finish_field_access = expr_id });
                 try self.push(.{ .expr = access.receiver });
@@ -3358,12 +3355,14 @@ pub const Builder = struct {
                 try self.push(.{ .finish_dbg = try self.valueType(inner) });
                 try self.push(.{ .expr = inner });
             },
-            .interpolation => |interpolation| try self.lowerInterpolation(expr_id, interpolation),
+            .interpolation => |interpolation| if (self.bodies().interpolationIsBuiltinStr(expr_id))
+                try self.lowerStrParts(interpolation.strParts())
+            else
+                try self.lowerInterpolation(expr_id),
             .expect_err => |expect_err| {
                 try self.push(.{ .finish_expect_err = .{ .expr = expr_id, .value = try self.valueType(expect_err.expr) } });
                 try self.push(.{ .expr = expect_err.expr });
             },
-            .str_from_quote => |quote| try self.lowerQuote(.{ .expr = expr_id }, quote.literal, quote.plan, quote.conversion_root),
             .return_ => |ret| {
                 // The expression itself never produces a value; its successor
                 // is unreachable.
@@ -3420,14 +3419,24 @@ pub const Builder = struct {
                     .tag_union => |value| value,
                     .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => return,
                 };
-                const name = try store.internName(self.view.nameStore().tagLabelText(tag.name));
+                const name = try store.internName(self.view.nameStore().tagLabelText(self.bodies().tagLabel(tag.name)));
                 for (store.tagSpan(tag_union.tags)) |candidate| {
                     if (candidate.name != name or candidate.payloads.len != tag.args.len) continue;
                     for (tag.args, store.span(candidate.payloads)) |arg, payload_ty| try self.destination_types.put(self.allocator, arg, payload_ty);
                     return;
                 }
             },
-            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+        }
+    }
+
+    /// A string concatenated from its parts in order.
+    fn lowerStrParts(self: *Builder, parts: bodies_mod.StrParts) Allocator.Error!void {
+        try self.push(.{ .finish_str = .{ .count = @intCast(parts.len()) } });
+        var index = parts.len();
+        while (index > 0) {
+            index -= 1;
+            try self.push(.{ .expr = parts.at(index) });
         }
     }
 
@@ -4088,10 +4097,10 @@ pub const Builder = struct {
                         return try self.lowerLiteralConversion(node, kind, conversion.plan orelse invariant("a literal literal_requirement's pattern literal has no conversion plan"), result_ty);
                     }
                     return switch (self.bodies().exprData(@fromBackingInt(node))) {
-                        .numeral => |numeral| try self.lowerLiteralConversion(node, .numeral, numeral.plan orelse invariant("a literal literal_requirement's numeral has no conversion plan"), result_ty),
-                        .str_from_quote => |quote| try self.lowerLiteralConversion(node, .quote, quote.plan orelse invariant("a literal literal_requirement's quote has no conversion plan"), result_ty),
-                        .interpolation => |interpolation| try self.lowerLiteralConversion(node, .interpolation, interpolation.plan orelse invariant("a literal literal_requirement's interpolation has no conversion plan"), result_ty),
-                        .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a literal literal_requirement's literal is not a literal expression"),
+                        .numeral => try self.lowerLiteralConversion(node, .numeral, self.bodies().numeralPlan(node) orelse invariant("a literal literal_requirement's numeral has no conversion plan"), result_ty),
+                        .str => try self.lowerLiteralConversion(node, .quote, self.bodies().quotePlan(node) orelse invariant("a literal literal_requirement's quote has no conversion plan"), result_ty),
+                        .interpolation => try self.lowerLiteralConversion(node, .interpolation, self.bodies().dispatchPlan(node) orelse invariant("a literal literal_requirement's interpolation has no conversion plan"), result_ty),
+                        .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a literal literal_requirement's literal is not a literal expression"),
                     };
                 },
                 .node, .use => {
@@ -4300,8 +4309,8 @@ pub const Builder = struct {
         }
     }
 
-    pub fn lowerInterpolation(self: *Builder, expr_id: ExprId, interpolation: bodies_mod.InterpolationData) Allocator.Error!void {
-        const plan_id = interpolation.plan orelse invariant("an interpolation has no checked conversion plan");
+    pub fn lowerInterpolation(self: *Builder, expr_id: ExprId) Allocator.Error!void {
+        const plan_id = self.bodies().dispatchPlan(@backingInt(expr_id)) orelse invariant("an interpolation has no checked conversion plan");
         const plan = self.dispatchPlan(plan_id);
         switch (plan.resolution) {
             .direct_closed, .direct_parametric, .evidence_dependent => {},
@@ -4348,7 +4357,7 @@ pub const Builder = struct {
     pub fn finishInterpolation(self: *Builder, expr_id: ExprId) Allocator.Error!void {
         const assembler = self.popValue();
         const interpolation = self.bodies().exprData(expr_id).interpolation;
-        const assembler_ty = try self.convert(interpolation.assembler_ty);
+        const assembler_ty = try self.convert(self.bodies().interpolationAssemblerType(expr_id));
         const values_ty = switch (self.program.store.get(assembler_ty)) {
             .function => |function| blk: {
                 const args = self.program.store.span(function.args);
@@ -4548,7 +4557,7 @@ pub const Builder = struct {
         const lambda_expr = switch (self.bodies().exprData(local.expr)) {
             .lambda => local.expr,
             .closure => |closure| closure.lambda,
-            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         };
         const scope_id = self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr }) orelse
             return try self.localProcValue(local);
@@ -4678,7 +4687,7 @@ pub const Builder = struct {
         const lambda_expr = switch (closure_expr.data) {
             .lambda => local.expr,
             .closure => |closure| closure.lambda,
-            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         };
         const captures = try self.program.siteCaptures(self.module, local.expr);
         var scope_worker = self.worker_id;
@@ -4762,9 +4771,7 @@ pub const Builder = struct {
                 },
                 .applied_tag => |tag| try stack.appendSlice(self.allocator, tag.args),
                 .nominal => |nominal| try stack.append(self.allocator, nominal.backing_pattern),
-                .record_destructure => |destructs| for (destructs) |destruct| switch (self.bodies().recordDestruct(destruct).kind) {
-                    .required, .sub_pattern, .rest => |sub| try stack.append(self.allocator, sub),
-                },
+                .record_destructure => |destructs| for (destructs) |destruct| try stack.append(self.allocator, self.bodies().recordDestructPattern(destruct)),
                 .list => |list| {
                     try stack.appendSlice(self.allocator, list.patterns);
                     if (list.rest) |rest| if (rest.pattern) |sub| try stack.append(self.allocator, sub);
@@ -4826,7 +4833,7 @@ pub const Builder = struct {
         // declared in, whose descriptors and dictionaries this body holds.
         switch (self.bodies().exprData(local.expr)) {
             .lambda, .closure => {},
-            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         }
         const scope_worker, const target = try self.localProcWorker(local);
         const declaring = self.program.worker(scope_worker).*;
@@ -4900,7 +4907,7 @@ pub const Builder = struct {
         const lambda_expr = switch (self.bodies().exprData(local.expr)) {
             .lambda => local.expr,
             .closure => |closure_expr| closure_expr.lambda,
-            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         };
         const outer_count = self.env.vars.len;
         const vars = try std.mem.concat(self.allocator, checked.CheckedTypeId, &.{ scheme.scheme_vars, self.env.vars });
@@ -5275,7 +5282,7 @@ pub const Builder = struct {
                 const lambda_expr = switch (expr.data) {
                     .lambda => site_expr,
                     .closure => |closure| closure.lambda,
-                    .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a stored closure's site is not a lambda or closure"),
+                    .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a stored closure's site is not a lambda or closure"),
                 };
                 const captures = try self.program.runtimeCaptures(owner_view, @backingInt(nested.site));
                 // The closure in its owner's scope (and, for a generalized
@@ -5824,10 +5831,10 @@ pub const Builder = struct {
     pub fn lowerCall(self: *Builder, expr_id: ExprId, call: @FieldType(bodies_mod.ExprData, "call")) Allocator.Error!void {
         const func = self.bodies().expr(call.func);
         const resolved: ?checked.ResolvedValueRefId = switch (func.data) {
-            .lookup_external => |r| r orelse invariant("a call's external callee was unresolved"),
-            .lookup_required => |r| r orelse invariant("a call's platform requirement callee was unresolved"),
-            .lookup_local => |lookup| lookup.resolved,
-            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
+            .lookup_external => self.bodies().resolvedRef(call.func) orelse invariant("a call's external callee was unresolved"),
+            .lookup_required => self.bodies().resolvedRef(call.func) orelse invariant("a call's platform requirement callee was unresolved"),
+            .lookup_local => self.bodies().resolvedRef(call.func),
+            .numeral, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
         };
         const callee: Callee = if (resolved) |id| switch (self.resolvedRef(id).ref) {
             inline .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc, .platform_required_proc => |ref, tag| try self.procedureUseCallee(if (tag == .platform_required_proc) ref.procedure else ref),
@@ -7656,12 +7663,11 @@ pub const Builder = struct {
     fn layoutResolvedBranch(self: *Builder, cond: ExprId, branches: []const CIR.Expr.Match.Branch.Idx) Allocator.Error!?ExprId {
         const call = switch (self.bodies().exprData(cond)) {
             .call => |call| call,
-            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         };
         const resolved = switch (self.bodies().exprData(call.func)) {
-            .lookup_external => |r| r orelse return null,
-            .lookup_local => |lookup| lookup.resolved orelse return null,
-            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
+            .lookup_external, .lookup_local => self.bodies().resolvedRef(call.func) orelse return null,
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         };
         const use = switch (self.resolvedRef(resolved).ref) {
             .top_level_proc, .imported_proc => |use| use,
@@ -7676,14 +7682,14 @@ pub const Builder = struct {
         const op = (owner.view.checked_procedure_templates.templates.items[@backingInt(template_ref.template)].provided_low_level orelse return null).layoutResolved() orelse return null;
         for (call.args) |arg| switch (self.bodies().exprData(arg)) {
             .lookup_local => {},
-            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         };
         for (branches) |branch_idx| {
             const branch = self.bodies().matchBranch(branch_idx);
             if (branch.guard != null) return null;
             for (branch.patterns) |pattern| switch (self.bodies().patternData(self.bodies().matchBranchPattern(pattern).pattern)) {
                 .underscore => {},
-                .numeral_literal => |numeral| if (numeral.custom) return null,
+                .numeral_literal => if (self.bodies().literalPatternIsCustom(self.bodies().matchBranchPattern(pattern).pattern)) return null,
                 .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_literal, .str_interpolation, .runtime_error => return null,
             };
         }
@@ -7703,8 +7709,9 @@ pub const Builder = struct {
             const branch = self.bodies().matchBranch(branch_idx);
             for (branch.patterns) |pattern| switch (self.bodies().patternData(self.bodies().matchBranchPattern(pattern).pattern)) {
                 .underscore => return branch.value,
-                .numeral_literal => |numeral| {
-                    const bits = checked.exact_numeral.intBits(self.view.view.module_env.exactNumeral(numeral.literal), .u8) orelse continue;
+                .numeral_literal => {
+                    const literal = self.bodies().numeralLiteral(@backingInt(self.bodies().matchBranchPattern(pattern).pattern));
+                    const bits = checked.exact_numeral.intBits(self.view.view.module_env.exactNumeral(literal), .u8) orelse continue;
                     const value: i128 = switch (bits) {
                         .i128 => |value| value,
                         .u128 => |value| @bitCast(value),
@@ -8034,7 +8041,7 @@ pub const Builder = struct {
         const record: @FieldType(bodies_mod.ExprData, "record") = switch (self.bodies().exprData(expr_id)) {
             .record => |record| record,
             .empty_record => .{ .fields = &.{}, .unsets = &.{}, .ext = null },
-            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a record construction is not a record expression"),
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a record construction is not a record expression"),
         };
         const ty = try self.exprType(expr_id);
         const values = try self.popValues(@intCast(record.fields.len));
@@ -8176,12 +8183,12 @@ pub const Builder = struct {
         const label, const arg_count: usize = switch (expr.data) {
             .tag => |tag| .{ tag.name, tag.args.len },
             .zero_argument_tag => |tag| .{ tag.name, 0 },
-            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable, // only tag expressions finish as tags
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable, // only tag expressions finish as tags
         };
         const ty = at_ty orelse try self.exprType(expr_id);
         const values = try self.popValues(@intCast(arg_count));
         defer self.allocator.free(values);
-        const name = try self.program.store.internName(self.view.nameStore().tagLabelText(label));
+        const name = try self.program.store.internName(self.view.nameStore().tagLabelText(self.bodies().tagLabel(label)));
         try self.pushValue(try self.buildTag(ty, name, values));
     }
 
@@ -8233,7 +8240,7 @@ pub const Builder = struct {
         const count: usize = switch (expr.data) {
             .list => |items| items.len,
             .empty_list => 0,
-            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable, // only list expressions finish as lists
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable, // only list expressions finish as lists
         };
         const ty = try self.exprType(expr_id);
         const values = try self.popValues(@intCast(count));
@@ -8483,7 +8490,7 @@ pub const Builder = struct {
                 .nominal => |nominal| try pending.append(self.allocator, .{ .pattern = nominal.backing_pattern, .value = item.value, .ty = try self.structuralType(item.ty) }),
                 .applied_tag => |tag| {
                     const ty = item.ty;
-                    const name = try self.program.store.internName(self.view.nameStore().tagLabelText(tag.name));
+                    const name = try self.program.store.internName(self.view.nameStore().tagLabelText(self.bodies().tagLabel(tag.name)));
                     if (!try self.closed(ty)) {
                         try self.testDynamicTag(ty, name, tag.args, item.value, miss, &pending);
                         continue;
@@ -8596,21 +8603,21 @@ pub const Builder = struct {
                     }
                 },
                 .list => |list| try self.testListPattern(item, list.patterns, list.rest, miss, &pending),
-                .numeral_literal => |numeral| {
-                    if (numeral.custom) {
+                .numeral_literal => {
+                    if (self.bodies().literalPatternIsCustom(item.pattern)) {
                         try self.literalPatternGuard(item, miss);
                     } else {
-                        const expected = try self.builtinNumeral(numeral.literal, item.ty);
+                        const expected = try self.builtinNumeral(self.bodies().numeralLiteral(@backingInt(item.pattern)), item.ty);
                         const matches = try self.closedLocal(.bool);
                         try self.emitLowLevel(matches, .num_is_eq, &.{ item.value, expected });
                         try self.branchOrMiss(matches, miss);
                     }
                 },
                 .str_literal => |literal| {
-                    if (literal.custom) {
+                    if (self.bodies().literalPatternIsCustom(item.pattern)) {
                         try self.literalPatternGuard(item, miss);
                     } else {
-                        const expected = try self.strLiteral(self.bodies().text(literal.literal));
+                        const expected = try self.strLiteral(self.bodies().text(literal));
                         const matches = try self.closedLocal(.bool);
                         try self.emitLowLevel(matches, .str_is_eq, &.{ item.value, expected });
                         try self.branchOrMiss(matches, miss);
@@ -8971,7 +8978,7 @@ pub const Builder = struct {
                 // A recursive value's binders get slots before its value is
                 // built, which the callables in the value capture, and the
                 // slots are filled once the value is bound.
-                if (decl.recursive) {
+                if (self.bodies().declIsRecursive(stmt_id)) {
                     try self.allocRecursiveSlots(decl.pattern);
                     try self.push(.{ .fill_recursive_slots = decl.pattern });
                 }
@@ -9015,7 +9022,7 @@ pub const Builder = struct {
             .infinite_loop, .breakable_loop => |loop| try self.lowerLoop(@backingInt(stmt_id), loop, false),
             .for_ => |for_| {
                 try self.push(.discard);
-                try self.pushForLoop(@backingInt(stmt_id), for_.pattern, for_.expr, for_.body, for_.plan);
+                try self.pushForLoop(@backingInt(stmt_id), for_.pattern, for_.expr, for_.body, self.bodies().iteratorForPlan(@backingInt(stmt_id)));
             },
             .break_ => {
                 if (self.loops.items.len == 0) invariant("a break outside every loop reached Boxy lowering");

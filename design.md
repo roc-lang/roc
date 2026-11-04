@@ -5279,7 +5279,8 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   strongly connected component of the module's call graph, never per root.
 - Per-module slots: the key index (one over source types, one over
   synthesized types), interface capabilities, the method registry view,
-  provided exports, diagnostic errors, and single-source calls.
+  provided exports, the nodes whose dispatch plan cannot run, diagnostic
+  errors, and single-source calls.
 
 A slot (`collections.OnceSlot`) is a state word with three states: empty,
 claimed and done; a claimed word also records whether a consumer is parked on
@@ -5327,33 +5328,53 @@ var-assign, as, or custom literal pattern that introduces it; a template's
 body is its root CIR expression. Nothing copies a body after checking and
 nothing rewrites a CIR node after checking.
 
-The reader answers each question from where it is recorded:
+The reader answers each question from where it is recorded, and a read
+of a node's shape costs what reading the node costs:
 
-- structure, from CIR itself: a node's normalized shape, read per call
-  (literal digits from the module's numeral digit table, a string literal's custom
-  conversion from its literal dispatch plan, an interpolation concatenated
-  directly when its type is concretely the builtin `Str`, a promoted local
-  procedure's declaration, a rejected method declaration that evaluates
-  nothing, a retired statement's evaluated expression, a payload-free tag
-  equality, captures, record destructures and field-access segments);
+- structure, from CIR itself: `exprData`, `patternData` and
+  `statementData` normalize one node's shape and do no table lookup, type
+  query, name interning or plan lookup. The only checked data that changes a
+  node's shape is answered from dense per-node columns: a retired
+  expression reads as a runtime error (the resolved value reference
+  table's retired bitset, one bit per node), and a promoted local
+  procedure's declaration and a rejected method declaration that evaluates
+  nothing are bits of the module index;
+- data attached to a node, each its own accessor called only by the
+  readers that need it: literal digits (`numeralLiteral`, from the
+  module's numeral digit table), dispatch plans (`dispatchPlan`,
+  `numeralPlan`, `quotePlan`, `iteratorForPlan`, from
+  `StaticDispatchPlanTable` keyed by node), resolved value references
+  (`resolvedRef`), calls' direct targets (`callDirectTarget`), literal
+  conversion roots (`literalConversionRoot`, from `CompileTimeRootTable`),
+  a call's function constraint type and an interpolation's assembler type
+  (`callFnType`, `interpolationAssemblerType`), tag, field and symbol
+  label ids (`tagLabel`, `recordFieldLabel`, `externalSymbolName`), a
+  payload-free tag equality (`tagDiscriminantEquality`), whether a string
+  literal converts through its target's `from_quote` (`quoteIsCustom`),
+  whether an interpolation's target is concretely the builtin `Str` so it
+  concatenates its parts directly (`interpolationIsBuiltinStr`), whether a
+  literal pattern compares through its type's conversion and `is_eq`
+  (`literalPatternIsCustom`), and whether a declaration binds a recursive
+  value (`declIsRecursive`);
 - types, from the sealed store: `typeOf` is the node's solver variable's
   checked type, or its image under the pairing's type column when the module
   is read under a platform/app pairing (`PairingTypeColumn`); `exprType` and
   `patternType` are a node's own type (a top-level definition's pattern is
   read at the definition's type); `valueType` is the type a parent reads an
   expression at;
-- checked tables by node: dispatch plans (`StaticDispatchPlanTable`
-  keyed by node), resolved value references, calls' direct targets and
-  retired expressions (resolved value references: a rejected binding use, a
-  call of a retired callee, a required lookup a pairing rejects, all read as
-  runtime errors), and literal conversion roots (`CompileTimeRootTable`);
 - the checker's per-node columns on `ModuleEnv`;
 - on-demand analyses (`BodyAnalyses`), which both lowering strategies read.
-  The module's CIR index (which nodes checked bodies reach, each node's
-  top-level unit, top-level definition patterns, rejected method
-  declarations, recursive value declarations and scheme-alias binders) is
-  built from CIR when the module's analyses are created; the analyses
-  themselves are computed on first demand.
+  The module's CIR index is built from CIR when the module's analyses are
+  created: per node, the kind of node the bodies reach it as, its
+  top-level unit and its position within that unit's nodes, and
+  declaration bits (a top-level definition's pattern, a rejected method
+  declaration, a promoted procedure's pattern, a recursive value
+  declaration and its binders, a scheme-alias binder, a field default).
+  The analyses themselves are computed on first demand. A unit's analyses
+  keep their memos in dense arrays indexed by position in the unit and
+  touch each node of the unit once per analysis; divergence is decided for
+  both inline-expect modes in one traversal, and the module's dispatch
+  nodes whose plan cannot run are one per-module bit column.
 
 A literal conversion compile-time root names its literal explicitly
 (`CompileTimeRoot.literal`, an expression or a custom literal pattern), and a

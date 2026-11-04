@@ -9385,7 +9385,7 @@ test "body analyses read state merges, divergence and inspect elision from the c
                     try testing.expect(try bodies.exprEvaluationMayBeElidedForInspect(expr));
                     saw_lambda = true;
                 },
-                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+                .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
             }
         },
         .pattern, .statement, .unreached => {},
@@ -11584,8 +11584,9 @@ pub const ResolvedValueRefTable = struct {
     /// Expressions lowering evaluates as runtime errors because reference
     /// resolution rejected them: uses of rejected bindings, calls of a
     /// callee lowering evaluates as a runtime error, and the uses and calls
-    /// those rejections propagate to through callable bindings. Ascending.
-    retired_exprs: []CIR.Expr.Idx = &.{},
+    /// those rejections propagate to through callable bindings. One bit per
+    /// node of the module, 64 nodes per word.
+    retired_exprs: []u64 = &.{},
     /// Each call that targets a directly callable procedure, with that
     /// procedure's reference, ascending by call.
     call_direct_targets: []CallDirectTarget = &.{},
@@ -11593,7 +11594,7 @@ pub const ResolvedValueRefTable = struct {
     pub const Serialized = extern struct {
         records: SerializedSlice(ResolvedValueRefRecord) = .{},
         template_refs: SerializedSlice(ResolvedValueRefId) = .{},
-        retired_exprs: SerializedSlice(CIR.Expr.Idx) = .{},
+        retired_exprs: SerializedSlice(u64) = .{},
         call_direct_targets: SerializedSlice(CallDirectTarget) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(ResolvedValueRefTable, @This());
         pub const serialize = Serde.serialize;
@@ -11681,6 +11682,7 @@ pub const ResolvedValueRefTable = struct {
 
         var table = ResolvedValueRefTable{ .records = try records.toOwnedSlice(allocator) };
         errdefer table.deinit(allocator);
+        table.retired_exprs = try retiredWords(allocator, module.nodeCount());
         try publishCallableAliasTargets(allocator, &table, callable_aliases.items);
         return table;
     }
@@ -11698,11 +11700,21 @@ pub const ResolvedValueRefTable = struct {
     /// Whether lowering evaluates `expr` as a runtime error because reference
     /// resolution rejected it.
     pub fn exprIsRetired(self: *const ResolvedValueRefTable, expr: CIR.Expr.Idx) bool {
-        return artifact_serialize.binarySearchIndexByKey(CIR.Expr.Idx, CIR.Expr.Idx, self.retired_exprs, expr, struct {
-            fn order(entry: CIR.Expr.Idx, key: CIR.Expr.Idx) std.math.Order {
-                return std.math.order(@backingInt(entry), @backingInt(key));
-            }
-        }.order) != null;
+        const raw: u32 = @backingInt(expr);
+        std.debug.assert(raw >> 6 < self.retired_exprs.len);
+        return self.retired_exprs[raw >> 6] & (@as(u64, 1) << @intCast(raw & 63)) != 0;
+    }
+
+    /// The bit-packed node words of a module with `node_count` nodes.
+    pub fn retiredWords(allocator: Allocator, node_count: usize) Allocator.Error![]u64 {
+        const words = try allocator.alloc(u64, (node_count + 63) / 64);
+        @memset(words, 0);
+        return words;
+    }
+
+    pub fn setRetired(words: []u64, expr: CIR.Expr.Idx) void {
+        const raw: u32 = @backingInt(expr);
+        words[raw >> 6] |= @as(u64, 1) << @intCast(raw & 63);
     }
 
     /// The direct procedure target of a call, if it has one.
@@ -11913,19 +11925,20 @@ fn publishRetiredExprs(
         }
     }
 
-    var retired_exprs = std.ArrayList(CIR.Expr.Idx).empty;
-    errdefer retired_exprs.deinit(allocator);
+    const retired_exprs = try ResolvedValueRefTable.retiredWords(allocator, module_index.node_kinds.len);
+    errdefer allocator.free(retired_exprs);
     var retired_iterator = retired.iterator(.{});
-    while (retired_iterator.next()) |raw| try retired_exprs.append(allocator, @fromBackingInt(@intCast(raw)));
+    while (retired_iterator.next()) |raw| ResolvedValueRefTable.setRetired(retired_exprs, @fromBackingInt(@intCast(raw)));
     var kept_targets = std.ArrayList(CallDirectTarget).empty;
     errdefer kept_targets.deinit(allocator);
     for (direct_targets.items) |entry| {
         if (!retired.isSet(@backingInt(entry.call))) try kept_targets.append(allocator, entry);
     }
+    const call_direct_targets = try kept_targets.toOwnedSlice(allocator);
     allocator.free(refs.retired_exprs);
-    refs.retired_exprs = try retired_exprs.toOwnedSlice(allocator);
+    refs.retired_exprs = retired_exprs;
     allocator.free(refs.call_direct_targets);
-    refs.call_direct_targets = try kept_targets.toOwnedSlice(allocator);
+    refs.call_direct_targets = call_direct_targets;
 }
 
 fn categorizeValueRef(
@@ -16728,11 +16741,11 @@ const CheckedTemplateRefCollector = struct {
         try self.specialization_relations.append(self.allocator, .{
             .scope = self.currentScope(),
             .data = .{ .call = .{
-                .callable_ty = call.source_fn_ty_payload,
+                .callable_ty = self.bodies.callFnType(expr_id),
                 .callee_ty = self.bodies.valueType(call.func),
                 .ret_ty = self.bodies.exprType(expr_id),
                 .args = .{ .start = start, .len = @intCast(call.args.len) },
-                .direct_target = call.direct_target,
+                .direct_target = self.bodies.callDirectTarget(expr_id),
             } },
         });
     }
@@ -16859,43 +16872,44 @@ const CheckedTemplateRefCollector = struct {
                 self.template_root_expr == expr_id or local_scheme != null,
             );
         }
+        const raw = @backingInt(expr_id);
         switch (data) {
-            .lookup_local => |lookup| {
-                if (lookup.resolved) |ref_id| try self.appendValueRef(ref_id);
-            },
-            inline .lookup_external, .lookup_required => |ref_id| {
-                if (ref_id) |id| try self.appendValueRef(id);
+            .lookup_local, .lookup_external, .lookup_required => {
+                if (bodies.resolvedRef(expr_id)) |ref_id| try self.appendValueRef(ref_id);
             },
             .dispatch_call,
             .method_eq,
             .type_dispatch_call,
-            => |plan_id| {
-                const id = plan_id orelse checkedArtifactInvariant("checked dispatch expression reached template closure collection without a static-dispatch plan", .{});
+            => {
+                const id = bodies.dispatchPlan(raw) orelse checkedArtifactInvariant("checked dispatch expression reached template closure collection without a static-dispatch plan", .{});
                 try self.appendDispatchRef(id);
                 try self.pushStaticDispatchPlanArgs(id);
             },
-            .interpolation => |interpolation| {
-                const id = interpolation.plan orelse checkedArtifactInvariant("checked interpolation expression reached template closure collection without a static-dispatch plan", .{});
+            .interpolation => |interpolation| if (bodies.interpolationIsBuiltinStr(expr_id)) {
+                const children = self.beginChildren();
+                try self.pushChild(.{ .expr = interpolation.first });
+                for (interpolation.parts) |part| try self.pushChild(.{ .expr = part });
+                self.endChildren(children);
+            } else {
+                const id = bodies.dispatchPlan(raw) orelse checkedArtifactInvariant("checked interpolation expression reached template closure collection without a static-dispatch plan", .{});
                 try self.appendDispatchRef(id);
                 try self.pushStaticDispatchPlanArgs(id);
             },
-            .numeral => |numeral| {
+            .numeral => {
                 // Builtin-targeted literals carry no plan (their bits are
                 // produced at monotype lowering); only custom conversions do.
-                if (numeral.plan) |id| {
+                if (bodies.numeralPlan(raw)) |id| {
                     try self.appendDispatchRef(id);
                     try self.pushStaticDispatchPlanArgs(id);
                 }
             },
-            .str_from_quote => |quote| {
-                const id = quote.plan orelse checkedArtifactInvariant("checked from_quote expression reached template closure collection without a dispatch plan", .{});
+            .str => |segments| if (bodies.quoteIsCustom(raw)) {
+                const id = bodies.quotePlan(raw) orelse checkedArtifactInvariant("checked from_quote expression reached template closure collection without a dispatch plan", .{});
                 try self.appendDispatchRef(id);
                 try self.pushStaticDispatchPlanArgs(id);
-            },
-            .str => |parts| {
+            } else {
                 const children = self.beginChildren();
-                var index: usize = 0;
-                while (index < parts.len()) : (index += 1) try self.pushChild(.{ .expr = parts.at(index) });
+                for (segments) |segment| try self.pushChild(.{ .expr = segment });
                 self.endChildren(children);
             },
             .list,
@@ -16927,7 +16941,7 @@ const CheckedTemplateRefCollector = struct {
                 self.endChildren(children);
             },
             .call => |call| {
-                if (call.direct_target) |target| try self.appendValueRef(target);
+                if (bodies.callDirectTarget(expr_id)) |target| try self.appendValueRef(target);
                 try self.work.append(self.allocator, .{ .call_relation = expr_id });
                 const children = self.beginChildren();
                 try self.pushChild(.{ .expr = call.func });
@@ -16937,7 +16951,7 @@ const CheckedTemplateRefCollector = struct {
             .record => |record| {
                 const children = self.beginChildren();
                 if (record.ext) |ext| try self.pushChild(.{ .expr = ext });
-                for (record.fields) |field| try self.pushChild(.{ .expr = bodies.recordField(field).value });
+                for (record.fields) |field| try self.pushChild(.{ .expr = bodies.recordFieldValue(field) });
                 self.endChildren(children);
             },
             .block => |block| {
@@ -16990,7 +17004,7 @@ const CheckedTemplateRefCollector = struct {
                 try self.pushChild(.{ .expr = ret.expr });
             },
             .for_ => |for_| {
-                const plan_id = for_.plan orelse checkedArtifactInvariant("checked for expression reached template closure collection without an iterator-for plan", .{});
+                const plan_id = bodies.iteratorForPlan(raw) orelse checkedArtifactInvariant("checked for expression reached template closure collection without an iterator-for plan", .{});
                 const children = self.beginChildren();
                 try self.pushIteratorForPlan(plan_id);
                 try self.pushChild(.{ .pattern = for_.pattern });
@@ -17119,9 +17133,7 @@ const CheckedTemplateRefCollector = struct {
             },
             .nominal => |nominal| try self.pushChild(.{ .pattern = nominal.backing_pattern }),
             .record_destructure => |destructs| {
-                for (destructs) |destruct| switch (bodies.recordDestruct(destruct).kind) {
-                    inline .required, .sub_pattern, .rest => |child| try self.pushChild(.{ .pattern = child }),
-                };
+                for (destructs) |destruct| try self.pushChild(.{ .pattern = bodies.recordDestructPattern(destruct) });
             },
             .list => |list| {
                 for (list.patterns) |child| try self.pushChild(.{ .pattern = child });
@@ -17138,8 +17150,7 @@ const CheckedTemplateRefCollector = struct {
                     if (bodies.strPatternStep(str.steps, offset).capture) |capture| try self.pushChild(.{ .pattern = capture });
                 }
             },
-            .numeral_literal => |literal| if (literal.custom) try self.pushChild(.{ .literal_pattern = pattern_id }),
-            .str_literal => |literal| if (literal.custom) try self.pushChild(.{ .literal_pattern = pattern_id }),
+            .numeral_literal, .str_literal => if (bodies.literalPatternIsCustom(pattern_id)) try self.pushChild(.{ .literal_pattern = pattern_id }),
             .assign,
             .underscore,
             .runtime_error,
@@ -17178,7 +17189,7 @@ const CheckedTemplateRefCollector = struct {
                 try self.pushChild(.{ .expr = ret.expr });
             },
             .for_ => |for_| {
-                const plan_id = for_.plan orelse checkedArtifactInvariant("checked for statement reached template closure collection without an iterator-for plan", .{});
+                const plan_id = self.bodies.iteratorForPlan(@backingInt(statement_id)) orelse checkedArtifactInvariant("checked for statement reached template closure collection without an iterator-for plan", .{});
                 try self.pushIteratorForPlan(plan_id);
                 try self.pushChild(.{ .pattern = for_.pattern });
                 try self.pushChild(.{ .expr = for_.expr });
@@ -18246,9 +18257,10 @@ const NestedProcSiteBuilder = struct {
                 for (lambda.args) |arg| try self.pushPattern(arg, owner);
                 try self.pushExpr(lambda.body, owner);
             },
-            .str => |parts| {
-                var index: usize = 0;
-                while (index < parts.len()) : (index += 1) try self.pushExpr(parts.at(index), owner);
+            .str => |segments| if (bodies.quoteIsCustom(@backingInt(expr_id))) {
+                try self.pushStaticDispatchPlanArgs(bodies.quotePlan(@backingInt(expr_id)) orelse checkedArtifactInvariant("checked from_quote expression reached nested procedure site collection without a dispatch plan", .{}), owner);
+            } else {
+                for (segments) |segment| try self.pushExpr(segment, owner);
             },
             .list,
             .tuple,
@@ -18278,7 +18290,7 @@ const NestedProcSiteBuilder = struct {
             },
             .record => |record| {
                 if (record.ext) |ext| try self.pushExpr(ext, owner);
-                for (record.fields) |field| try self.pushExpr(bodies.recordField(field).value, owner);
+                for (record.fields) |field| try self.pushExpr(bodies.recordFieldValue(field), owner);
             },
             .block => |block| {
                 for (block.statements) |statement| try self.pushWork(.{ .statement = .{ .id = statement, .owner = owner } });
@@ -18305,10 +18317,14 @@ const NestedProcSiteBuilder = struct {
             .dispatch_call,
             .method_eq,
             .type_dispatch_call,
-            => |plan_id| try self.pushStaticDispatchPlanArgs(plan_id orelse checkedArtifactInvariant("checked dispatch expression reached nested procedure site collection without a static-dispatch plan", .{}), owner),
-            .interpolation => |interpolation| try self.pushStaticDispatchPlanArgs(interpolation.plan orelse checkedArtifactInvariant("checked interpolation expression reached nested procedure site collection without a static-dispatch plan", .{}), owner),
-            .numeral => |numeral| if (numeral.plan) |plan_id| try self.pushStaticDispatchPlanArgs(plan_id, owner),
-            .str_from_quote => |quote| try self.pushStaticDispatchPlanArgs(quote.plan orelse checkedArtifactInvariant("checked from_quote expression reached nested procedure site collection without a dispatch plan", .{}), owner),
+            => try self.pushStaticDispatchPlanArgs(bodies.dispatchPlan(@backingInt(expr_id)) orelse checkedArtifactInvariant("checked dispatch expression reached nested procedure site collection without a static-dispatch plan", .{}), owner),
+            .interpolation => |interpolation| if (bodies.interpolationIsBuiltinStr(expr_id)) {
+                try self.pushExpr(interpolation.first, owner);
+                for (interpolation.parts) |part| try self.pushExpr(part, owner);
+            } else {
+                try self.pushStaticDispatchPlanArgs(bodies.dispatchPlan(@backingInt(expr_id)) orelse checkedArtifactInvariant("checked interpolation expression reached nested procedure site collection without a static-dispatch plan", .{}), owner);
+            },
+            .numeral => if (bodies.numeralPlan(@backingInt(expr_id))) |plan_id| try self.pushStaticDispatchPlanArgs(plan_id, owner),
             .structural_eq => |eq| {
                 try self.pushExpr(eq.lhs, owner);
                 try self.pushExpr(eq.rhs, owner);
@@ -18411,9 +18427,7 @@ const NestedProcSiteBuilder = struct {
             },
             .nominal => |nominal| try self.pushPattern(nominal.backing_pattern, owner),
             .record_destructure => |destructs| {
-                for (destructs) |destruct| switch (bodies.recordDestruct(destruct).kind) {
-                    inline .required, .sub_pattern, .rest => |child| try self.pushPattern(child, owner),
-                };
+                for (destructs) |destruct| try self.pushPattern(bodies.recordDestructPattern(destruct), owner);
             },
             .list => |list| {
                 for (list.patterns) |child| try self.pushPattern(child, owner);
@@ -20505,10 +20519,11 @@ fn publishLiteralConversionRoots(
         const node = literal.node_idx;
         const literal_node: LiteralNode = switch (bodies.index().nodeKind(node)) {
             .expr => switch (bodies.exprData(@fromBackingInt(@intCast(node)))) {
-                .numeral, .str_from_quote => .{ .expr = @fromBackingInt(@intCast(node)) },
+                .numeral => .{ .expr = @fromBackingInt(@intCast(node)) },
+                .str => if (bodies.quoteIsCustom(node)) .{ .expr = @fromBackingInt(@intCast(node)) } else continue,
                 // Diagnostic recovery retired the conversion.
                 .runtime_error => continue,
-                .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => continue,
+                .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => continue,
             },
             .pattern => if (bodies.literalPatternGuard(@fromBackingInt(@intCast(node))) == null) continue else .{ .pattern = @fromBackingInt(@intCast(node)) },
             .statement, .unreached => continue,
@@ -20741,9 +20756,9 @@ fn publishLiteralArgumentRoots(
             // interpolation.
             const ty = switch (kind) {
                 .interpolation => blk: {
-                    const data = bodies.exprData(@fromBackingInt(@intCast(plan.node)));
-                    if (data != .interpolation) checkedArtifactInvariant("a literal conversion plan's expression is not a literal", .{});
-                    break :blk data.interpolation.assembler_ty;
+                    const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(plan.node));
+                    if (bodies.exprData(expr) != .interpolation) checkedArtifactInvariant("a literal conversion plan's expression is not a literal", .{});
+                    break :blk bodies.interpolationAssemblerType(expr);
                 },
                 .numeral, .quote => bodies.literalConversion(plan.node).ty,
             };
@@ -22704,14 +22719,13 @@ pub fn pairCheckedPlatform(
     {
         const platform_analyses = platform.body_analyses orelse checkedArtifactInvariant("a platform was paired before its body analyses were attached", .{});
         const env = platform.moduleEnvConst();
-        var retired = std.ArrayList(CIR.Expr.Idx).empty;
-        try retired.appendSlice(session, platform.resolved_value_refs.retired_exprs);
+        const retired = try session.dupe(u64, platform.resolved_value_refs.retired_exprs);
         var direct_targets = std.ArrayList(CallDirectTarget).empty;
         for (platform.resolved_value_refs.call_direct_targets) |entry| try direct_targets.append(session, entry);
         for (result.resolved_value_refs.records) |record| {
             if (record.ref != .platform_required_checked_error) continue;
             if (env.store.getExpr(record.expr) != .e_lookup_required) continue;
-            if (!platform.resolved_value_refs.exprIsRetired(record.expr)) try retired.append(session, record.expr);
+            ResolvedValueRefTable.setRetired(retired, record.expr);
         }
         for (platform_analyses.index.node_kinds, 0..) |kind, raw| {
             if (kind != .expr) continue;
@@ -22749,12 +22763,7 @@ pub fn pairCheckedPlatform(
                 _ = direct_targets.orderedRemove(index);
             }
         }
-        std.mem.sort(CIR.Expr.Idx, retired.items, {}, struct {
-            fn lessThan(_: void, left: CIR.Expr.Idx, right: CIR.Expr.Idx) bool {
-                return @backingInt(left) < @backingInt(right);
-            }
-        }.lessThan);
-        result.resolved_value_refs.retired_exprs = try retired.toOwnedSlice(session);
+        result.resolved_value_refs.retired_exprs = retired;
         result.resolved_value_refs.call_direct_targets = try direct_targets.toOwnedSlice(session);
         result.body_analyses = try BodyAnalyses.create(platform_analyses.allocator, platform_analyses.io, env, platform.checked_procedure_templates.promoted);
     }
@@ -24739,17 +24748,15 @@ const TemplateDemandPass = struct {
             .break_,
             => {},
             .ellipsis, .anno_only, .hosted_lambda => self.raiseEverything(),
-            .numeral => |numeral| {
+            .numeral => {
                 try self.raiseMentions(ty, .full);
-                if (numeral.plan) |plan| try self.visitInspectingPlan(plan);
+                if (bodies.numeralPlan(@backingInt(id))) |plan| try self.visitInspectingPlan(plan);
             },
-            .str_from_quote => |quote| {
+            .str => |segments| if (bodies.quoteIsCustom(@backingInt(id))) {
                 try self.raiseMentions(ty, .full);
-                if (quote.plan) |plan| try self.visitInspectingPlan(plan);
-            },
-            .str => |parts| {
-                var index: usize = 0;
-                while (index < parts.len()) : (index += 1) try self.pushExpr(parts.at(index), .value);
+                if (bodies.quotePlan(@backingInt(id))) |plan| try self.visitInspectingPlan(plan);
+            } else {
+                try self.pushExprs(segments, .value);
             },
             .list, .tuple => |items| try self.pushExprs(items, .value),
             .match_ => |match| {
@@ -24769,10 +24776,10 @@ const TemplateDemandPass = struct {
                 }
                 try self.pushExpr(if_.final_else, .value);
             },
-            .call => |call| try self.visitCall(call),
+            .call => |call| try self.visitCall(id, call),
             .record => |record| {
                 if (record.ext) |ext| try self.pushExpr(ext, .value);
-                for (record.fields) |field| try self.pushExpr(bodies.recordField(field).value, .value);
+                for (record.fields) |field| try self.pushExpr(bodies.recordFieldValue(field), .value);
             },
             .block => |block| {
                 for (block.statements) |statement| try self.work.append(self.allocator, .{ .statement = statement });
@@ -24806,15 +24813,18 @@ const TemplateDemandPass = struct {
             },
             .field_access => |field| try self.pushExpr(field.receiver, .value),
             .tuple_access => |access| try self.pushExpr(access.tuple, .value),
-            .dispatch_call, .type_dispatch_call => |plan_id| {
-                const plan = plan_id orelse return self.raiseEverything();
+            .dispatch_call, .type_dispatch_call => {
+                const plan = bodies.dispatchPlan(@backingInt(id)) orelse return self.raiseEverything();
                 try self.visitDispatchPlan(plan);
             },
-            .method_eq => |plan_id| {
-                const plan = plan_id orelse return self.raiseEverything();
+            .method_eq => {
+                const plan = bodies.dispatchPlan(@backingInt(id)) orelse return self.raiseEverything();
                 try self.visitInspectingPlan(plan);
             },
-            .interpolation => |interpolation| {
+            .interpolation => |interpolation| if (bodies.interpolationIsBuiltinStr(id)) {
+                try self.pushExpr(interpolation.first, .value);
+                try self.pushExprs(interpolation.parts, .value);
+            } else {
                 var value_index: usize = 0;
                 while (value_index < interpolation.valueCount()) : (value_index += 1) {
                     try self.raiseMentions(bodies.valueType(interpolation.value(value_index)), .full);
@@ -24934,9 +24944,7 @@ const TemplateDemandPass = struct {
             },
             .record_destructure => |destructs| {
                 try self.raiseMentions(pattern_ty, .layout);
-                for (destructs) |destruct| switch (bodies.recordDestruct(destruct).kind) {
-                    inline .required, .sub_pattern, .rest => |child| try self.pushPattern(child, .binding),
-                };
+                for (destructs) |destruct| try self.pushPattern(bodies.recordDestructPattern(destruct), .binding);
             },
             .list => |list| {
                 try self.raiseMentions(pattern_ty, .layout);
@@ -24970,8 +24978,8 @@ const TemplateDemandPass = struct {
         if (guard.conversion.plan) |plan| try self.visitInspectingPlan(plan);
     }
 
-    fn visitCall(self: *TemplateDemandPass, call: anytype) Allocator.Error!void {
-        if (call.direct_target) |target| {
+    fn visitCall(self: *TemplateDemandPass, call_expr: CIR.Expr.Idx, call: anytype) Allocator.Error!void {
+        if (self.bodies.callDirectTarget(call_expr)) |target| {
             if (try self.directCallTemplate(target)) |callee| {
                 if (self.static_dispatch_plans.siteSubstitution(call.func)) |subst| {
                     if (try self.relateCall(callee, subst)) {
@@ -25697,10 +25705,7 @@ fn checkedExprContains(
         .expr => |expr_id| {
             if (needle == .expr and needle.expr == expr_id) return true;
             switch (bodies.exprData(expr_id)) {
-                .str => |parts| {
-                    var index: usize = 0;
-                    while (index < parts.len()) : (index += 1) try pending.append(allocator, .{ .expr = parts.at(index) });
-                },
+                .str => |segments| if (!bodies.quoteIsCustom(@backingInt(expr_id))) for (segments) |segment| try pending.append(allocator, .{ .expr = segment }),
                 .list, .tuple => |items| for (items) |item| try pending.append(allocator, .{ .expr = item }),
                 .match_ => |match| {
                     try pending.append(allocator, .{ .expr = match.cond });
@@ -25727,7 +25732,7 @@ fn checkedExprContains(
                 },
                 .record => |record| {
                     if (record.ext) |ext| try pending.append(allocator, .{ .expr = ext });
-                    for (record.fields) |field| try pending.append(allocator, .{ .expr = bodies.recordField(field).value });
+                    for (record.fields) |field| try pending.append(allocator, .{ .expr = bodies.recordFieldValue(field) });
                 },
                 .block => |block| {
                     for (block.statements) |statement| try pending.append(allocator, .{ .statement = statement });
@@ -25769,7 +25774,6 @@ fn checkedExprContains(
                 .run_low_level => |run| for (run.args) |arg| try pending.append(allocator, .{ .expr = arg }),
                 .hosted_lambda => |hosted| if (patterns) for (hosted.args) |arg| try pending.append(allocator, .{ .pattern = arg }),
                 .numeral,
-                .str_from_quote,
                 .str_segment,
                 .bytes_literal,
                 .lookup_local,
@@ -25835,9 +25839,7 @@ fn checkedExprContains(
                 .applied_tag => |tag| for (tag.args) |arg| try pending.append(allocator, .{ .pattern = arg }),
                 .nominal => |nominal| try pending.append(allocator, .{ .pattern = nominal.backing_pattern }),
                 .record_destructure => |destructs| for (destructs) |destruct| {
-                    try pending.append(allocator, .{ .pattern = switch (bodies.recordDestruct(destruct).kind) {
-                        inline .required, .sub_pattern, .rest => |required| required,
-                    } });
+                    try pending.append(allocator, .{ .pattern = bodies.recordDestructPattern(destruct) });
                 },
                 .list => |list| {
                     for (list.patterns) |child| try pending.append(allocator, .{ .pattern = child });
@@ -30328,21 +30330,20 @@ pub const CheckedModuleArtifact = struct {
             const node: u32 = @intCast(raw);
             switch (kind) {
                 .expr => {
-                    const expr_failure: ?DispatchEvidenceFailure = switch (checked.exprData(@fromBackingInt(@intCast(node)))) {
-                        .dispatch_call => |plan| dispatchPlanFailure(table, plan, node, true),
-                        .type_dispatch_call => |plan| dispatchPlanFailure(table, plan, node, true),
-                        .method_eq => |plan| dispatchPlanFailure(table, plan, node, true),
-                        .interpolation => |interpolation| dispatchPlanFailure(table, interpolation.plan, node, true),
-                        .numeral => |numeral| dispatchPlanFailure(table, numeral.plan, node, false),
-                        .str_from_quote => |quote| dispatchPlanFailure(table, quote.plan, node, false),
-                        .for_ => |for_| iteratorPlanFailure(table, for_.plan, node),
-                        .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level => null,
+                    const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(node));
+                    const expr_failure: ?DispatchEvidenceFailure = switch (checked.exprData(expr)) {
+                        .dispatch_call, .type_dispatch_call, .method_eq => dispatchPlanFailure(table, checked.dispatchPlan(node), node, true),
+                        .interpolation => if (checked.interpolationIsBuiltinStr(expr)) null else dispatchPlanFailure(table, checked.dispatchPlan(node), node, true),
+                        .numeral => dispatchPlanFailure(table, checked.numeralPlan(node), node, false),
+                        .str => if (checked.quoteIsCustom(node)) dispatchPlanFailure(table, checked.quotePlan(node), node, false) else null,
+                        .for_ => iteratorPlanFailure(table, checked.iteratorForPlan(node), node),
+                        .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level => null,
                     };
                     if (expr_failure) |failure| return failure;
                 },
                 .statement => {
                     const data = checked.statementData(@fromBackingInt(@intCast(node)));
-                    if (data == .for_) if (iteratorPlanFailure(table, data.for_.plan, node)) |failure| return failure;
+                    if (data == .for_) if (iteratorPlanFailure(table, checked.iteratorForPlan(node), node)) |failure| return failure;
                 },
                 .pattern, .unreached => {},
             }
@@ -35383,8 +35384,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xD4, 0x67, 0x28, 0x09, 0x0B, 0x8A, 0xF0, 0x60, 0x4F, 0xCE, 0x23, 0x86, 0x1F, 0x05, 0xFC, 0x02,
-        0xF4, 0x97, 0xD0, 0xBB, 0x8E, 0x9E, 0xC5, 0x70, 0xB2, 0x55, 0xD5, 0xC8, 0xA6, 0x5C, 0x83, 0x8D,
+        0xB8, 0x7E, 0xFD, 0x61, 0x26, 0x54, 0x90, 0x0E, 0x55, 0xA2, 0xD7, 0xFE, 0x37, 0xCE, 0xF3, 0x44,
+        0xB1, 0x3A, 0x54, 0x4A, 0xEB, 0xFA, 0xD4, 0xDE, 0x18, 0x8A, 0x77, 0x37, 0x6D, 0x6C, 0x88, 0x7A,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

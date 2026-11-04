@@ -145,8 +145,8 @@ pub const Ctx = struct {
             .applied_tag => .tag,
             // A builtin numeral's kind of number is its occurrence's: an
             // integer one switches, any other compares (`intSwitchValue`).
-            .numeral_literal => |numeral| if (numeral.custom) .guarded_lit else .int_lit,
-            .str_literal => |literal| if (literal.custom) .guarded_lit else .str_lit,
+            .numeral_literal => if (self.b.bodies().literalPatternIsCustom(pat)) .guarded_lit else .int_lit,
+            .str_literal => if (self.b.bodies().literalPatternIsCustom(pat)) .guarded_lit else .str_lit,
             .str_interpolation => .str_pattern,
             .runtime_error => invariant("an erroneous pattern reached Boxy match lowering"),
         };
@@ -270,7 +270,7 @@ pub const Ctx = struct {
 
     pub fn tagVariant(self: Ctx, pat: PatternId, ty: types.TypeId) Allocator.Error!layout.VariantIndex {
         const tag = self.patternData(pat).applied_tag;
-        const name = try self.store().internName(self.b.view.nameStore().tagLabelText(tag.name));
+        const name = try self.store().internName(self.b.view.nameStore().tagLabelText(self.b.bodies().tagLabel(tag.name)));
         if (try self.isBool(ty)) return @intFromBool(std.mem.eql(u8, self.store().nameText(name), "True"));
         const structural = try self.b.structuralType(ty);
         if (try self.b.closed(structural)) {
@@ -359,7 +359,7 @@ pub const Ctx = struct {
 
     /// The exact numeral a builtin numeral pattern names.
     fn exactNumeral(self: Ctx, pat: PatternId) checked.exact_numeral.Exact {
-        return self.b.view.view.module_env.exactNumeral(self.patternData(pat).numeral_literal.literal);
+        return self.b.view.view.module_env.exactNumeral(self.b.bodies().numeralLiteral(@backingInt(pat)));
     }
 
     /// An integer pattern's value at its primitive, as a two's complement
@@ -383,7 +383,7 @@ pub const Ctx = struct {
             // A numeral matched where a body knows its number type only by
             // descriptor, or through its checked conversion guard, is
             // identified by its exact value.
-            .numeral_literal => |numeral| if (numeral.custom or !try self.b.closed(try self.b.structuralType(ty))) try self.exactKey(pat) else switch (self.literalPrimitive(ty)) {
+            .numeral_literal => if (self.b.bodies().literalPatternIsCustom(pat) or !try self.b.closed(try self.b.structuralType(ty))) try self.exactKey(pat) else switch (self.literalPrimitive(ty)) {
                 .dec => @bitCast((try checked.exact_numeral.decBits(self.arena(), self.exactNumeral(pat))) orelse
                     invariant("a numeral pattern does not fit its Dec type")),
                 // IEEE `==`: +0.0 and -0.0 are one constructor.
@@ -397,7 +397,7 @@ pub const Ctx = struct {
                 },
                 .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => @bitCast(self.intValue(pat, ty) orelse invariant("a numeral pattern does not fit its integer type")),
             },
-            .str_literal => |literal| try self.strShapeKey(self.b.bodies().text(literal.literal), null, .exact),
+            .str_literal => |literal| try self.strShapeKey(self.b.bodies().text(literal), null, .exact),
             .str_interpolation => |str| try self.strShapeKey(self.b.bodies().text(str.prefix), str.steps, str.end),
             .list => |list| list.patterns.len,
             .assign, .underscore, .as, .record_destructure, .tuple, .nominal, .runtime_error => invariant("a constructor key was asked of a pattern with no constructor"),
@@ -447,7 +447,7 @@ pub const Ctx = struct {
     }
 
     pub fn intSwitchValue(self: Ctx, pat: PatternId, ty: types.TypeId) ?u64 {
-        if (self.patternData(pat) != .numeral_literal or self.patternData(pat).numeral_literal.custom) return null;
+        if (self.patternData(pat) != .numeral_literal or self.b.bodies().literalPatternIsCustom(pat)) return null;
         const value = self.intValue(pat, ty) orelse return null;
         // A narrow signed condition switches only on sign-bit-clear values,
         // where every executor's widening agrees.
@@ -645,7 +645,7 @@ pub const Ctx = struct {
     pub fn tagNameTest(self: Ctx, source: LIR.LocalId, ty: types.TypeId, pat: PatternId, on_match: LIR.CFStmtId, on_miss: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         const union_ty = try self.b.structuralType(ty);
         const tag = self.patternData(pat).applied_tag;
-        const name = try self.store().internName(self.b.view.nameStore().tagLabelText(tag.name));
+        const name = try self.store().internName(self.b.view.nameStore().tagLabelText(self.b.bodies().tagLabel(tag.name)));
         const start = try self.b.beginBackward();
         const desc = try self.b.descOf(union_ty);
         const actual = try self.b.closedLocal(.u32);
@@ -685,10 +685,10 @@ pub const Ctx = struct {
         const start = try self.b.beginBackward();
         const matches = try self.b.closedLocal(.bool);
         switch (self.patternData(pat)) {
-            .numeral_literal => |numeral| {
+            .numeral_literal => {
                 const structural = try self.b.structuralType(ty);
                 if (try self.b.closed(structural)) {
-                    const expected = try self.b.builtinNumeral(numeral.literal, structural);
+                    const expected = try self.b.builtinNumeral(self.b.bodies().numeralLiteral(@backingInt(pat)), structural);
                     try self.b.emitLowLevel(matches, .num_is_eq, &.{ source, expected });
                 } else {
                     // A numeral matched at a type the body knows only by its
@@ -699,7 +699,7 @@ pub const Ctx = struct {
                 }
             },
             .str_literal => |literal| {
-                const expected = try self.b.strLiteral(self.b.bodies().text(literal.literal));
+                const expected = try self.b.strLiteral(self.b.bodies().text(literal));
                 try self.b.emitLowLevel(matches, .str_is_eq, &.{ source, expected });
             },
             .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_interpolation, .underscore, .runtime_error => invariant("an equality arm was asked of a non-literal pattern"),
@@ -730,7 +730,7 @@ pub const Ctx = struct {
     pub fn buildStrArm(self: Ctx, pat: PatternId, capture_locals: []const ?LIR.LocalId, on_match: LIR.CFStmtId) Allocator.Error!LIR.StrMatchArm {
         return switch (self.patternData(pat)) {
             .str_literal => |literal| .{
-                .prefix = try self.lirStr(literal.literal),
+                .prefix = try self.lirStr(literal),
                 .steps = try self.b.store.addStrMatchSteps(&.{}),
                 .end = .exact,
                 .on_match = on_match,

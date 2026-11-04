@@ -93,7 +93,7 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     try expectContains(lower_call, "if (try self.indirectCalleeMonoType(ExprSite.read(call.func), call.args, expected_ret_ty)) |fn_ty| {");
     try expectContains(lower_call, "const fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(");
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerExprType(call.func)") == null);
-    try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerType(call.source_fn_ty_payload)") == null);
+    try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerType(call.sourceFnTy(self.view))") == null);
 
     try expectContains(type_node_step, ".lookup_required => |resolved| return try self.finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, resolved))");
     try expectContains(lower_expr_at_type, ".lookup_required => |resolved| {\n                frame.cursor = 3;\n                return try self.lookupExprAtTypeStep(expr.ty, resolved, ty);");
@@ -527,7 +527,7 @@ test "Monotype gates divergent relations and crash dispatches before type instan
     const divergent_call = sourceSliceBetween(
         lower_source,
         "if (try self.divergentCallOperand(call)) |operand| {",
-        "if (call.direct_target) |target| {",
+        "if (call.directTarget(self.view)) |target| {",
     );
     try expectContains(divergent_call, "divergentStep(self, operand, .{ .at_cell = task.divergent_ret_cell })");
     try expectNotContains(divergent_call, "lowerTypeView");
