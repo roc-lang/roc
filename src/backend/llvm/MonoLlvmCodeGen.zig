@@ -12652,7 +12652,15 @@ pub const MonoLlvmCodeGen = struct {
                 // trees into hot callers such as generated parsers. This does not
                 // mark ordinary decrefs as cold; it only preserves the explicit RC
                 // helper boundary that LIR ARC already selected.
-                try attrs.addFnAttr(.@"noinline", builder);
+                //
+                // A tag union's helper holds no teardown of its own: it reads
+                // the discriminant and calls the variant's helper, which stays
+                // out of line. Inlined, a release under a `match` branch that
+                // already knows the variant folds to that variant's release,
+                // or to nothing.
+                if (self.layouts().rcHelperPlan(helper_key) != .tag_union) {
+                    try attrs.addFnAttr(.@"noinline", builder);
+                }
             },
         }
         func.setAttributes(attrs.finish(builder) catch return error.OutOfMemory, builder);
@@ -15257,6 +15265,41 @@ test "static-data slots with constant images are internal constants and function
     const callable = builder.variables.items[builder.variables.items.len - 1];
     try std.testing.expectEqual(.external, callable.global.ptrConst(&builder).linkage);
     try std.testing.expect(callable.init == .no_init);
+}
+
+fn rcHelperIsNoinline(codegen: *MonoLlvmCodeGen, builder: *const LlvmBuilder, helper_key: layout.RcHelperKey) MonoLlvmCodeGen.Error!bool {
+    const func = try codegen.declareRefcountedRcHelper(helper_key, .atomic);
+    const attributes = func.ptrConst(builder).attributes.func(builder);
+    for (attributes.slice(builder)) |attribute| {
+        if (attribute.getKind(builder) == .@"noinline") return true;
+    }
+    return false;
+}
+
+test "a tag union's release dispatch is inlinable and its variants' teardown stays out of line" {
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const list_layout = try layouts.insertList(.str);
+    const union_layout = try layouts.putTagUnion(&.{ .u64, list_layout });
+    const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .x86_64, .os_tag = .linux });
+    var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, target);
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    var builder = try codegen.createBuilder("rc_helper_inlining");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    defer codegen.builder = null;
+
+    // The union's helper only reads the discriminant and calls the variant's
+    // helper, so a release under a `match` branch can fold to that variant.
+    try std.testing.expect(layouts.rcHelperPlan(.{ .op = .decref, .layout_idx = union_layout }) == .tag_union);
+    try std.testing.expect(!try rcHelperIsNoinline(&codegen, &builder, .{ .op = .decref, .layout_idx = union_layout }));
+    try std.testing.expect(!try rcHelperIsNoinline(&codegen, &builder, .{ .op = .free, .layout_idx = union_layout }));
+    try std.testing.expect(try rcHelperIsNoinline(&codegen, &builder, .{ .op = .decref, .layout_idx = list_layout }));
+    try std.testing.expect(try rcHelperIsNoinline(&codegen, &builder, .{ .op = .decref, .layout_idx = .str }));
 }
 
 test "frozen relocation offsets are bounded before host indexing for either target width" {
