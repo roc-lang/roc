@@ -167,6 +167,7 @@ pub const HostJob = struct {
     /// Look the Mach-O host up once the provides' layouts are known, after
     /// the job ran. The host's segments go into the output on a hit.
     pub fn lookupMacho(self: *HostJob, provides: []const HostPrelink.Provide) void {
+        if (comptime builtin.os.tag != .macos) unreachable; // fastDevLinkApplies selects a Mach-O fast dev link only on macOS hosts
         std.debug.assert(self.thread == null and self.outcome == .hashed);
         self.key = self.keyFor(provides);
         self.lookup();
