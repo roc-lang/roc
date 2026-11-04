@@ -4091,8 +4091,8 @@ pub const Builder = struct {
         }
         // A `Str` literal with the builtin assembler: its parts written
         // once by `str_from_parts`, the empty segments left out, no list
-        // and no assembler (a spike: the parts are bounded by the stack
-        // array the interpreter keeps).
+        // and no assembler (at most 16 values, so the parts fit the
+        // interpreter's array).
         if (interpolation.values.len <= 16) {
             const dispatcher = self.program.store.get(try self.convert(plan.dispatcher_ty));
             const dispatcher_is_str = switch (dispatcher) {

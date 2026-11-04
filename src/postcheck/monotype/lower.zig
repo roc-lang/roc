@@ -34992,10 +34992,10 @@ const BodyContext = struct {
                 task.values_ty = try self.activeTypeFromNode((try self.graph.functionNodes(task.assembler_node)).args[0]);
                 frame.cursor = 2;
                 // A `Str` literal with the builtin assembler: its parts are
-                // written once by `str_from_parts` (a spike; at most 16
-                // values, the interpreter's bound), the empty segments left
-                // out, no values list and no assembler call. The segments
-                // and values lower together, in order.
+                // written once by `str_from_parts` (at most 16 values, so
+                // the parts fit the interpreter's array), the empty
+                // segments left out, no values list and no assembler call.
+                // The segments and values lower together, in order.
                 const result_is_str = switch (try self.graph.content(task.value_node)) {
                     .primitive => |primitive| primitive == .str,
                     .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => false,
@@ -37433,18 +37433,18 @@ const BodyContext = struct {
     }
 
     /// The most parts `str_from_parts` takes: the interpreter keeps them in
-    /// a stack array of this size (a spike's bound).
+    /// a stack array of this size. A longer literal concatenates.
     const str_from_parts_max = 33;
 
     fn stepStr(self: *BodyContext, task: *StrTask, input: ?LowerResult) Allocator.Error!LowerStep {
         const str_ty = try self.primitiveType(.str);
         if (input) |lowered| {
-            // A spike: the segments and values are gathered and written once
-            // by `str_from_parts`, where a chain of `str_concat` was built;
-            // an empty literal segment writes nothing and is left out.
+            // The segments and values are gathered and written once by
+            // `str_from_parts` (the lengths summed, one string); an empty
+            // literal segment writes nothing and is left out.
             const empty_segment = switch (self.view.bodies.expr(task.segments[task.index]).data) {
                 .str_segment => |literal| self.view.bodies.stringLiteral(literal).len == 0,
-                else => false,
+                .pending, .numeral, .str_from_quote, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => false,
             };
             if (!empty_segment) try task.parts.append(self.allocator, lowered.exprValue());
             task.index += 1;

@@ -1504,6 +1504,49 @@ pub fn strJoinWith(
     }
 }
 
+/// An interpolated literal's parts written once: the lengths summed, one
+/// small or heap string, each part copied in and then released, since the
+/// op consumes every part. An empty part writes nothing.
+pub fn strFromParts(parts: []RocStr, roc_ops: *RocOps) RocStr {
+    const list = RocListStr{ .list_elements = parts.ptr, .list_length = parts.len, .list_capacity_or_alloc_ptr = parts.len };
+    const result = strJoinWith(list, RocStr.empty(), roc_ops);
+    for (parts) |part| part.decref(roc_ops);
+    return result;
+}
+
+test "strFromParts: small, big and empty parts, none and one" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    var small = [_]RocStr{ RocStr.fromSliceSmall("12"), RocStr.fromSliceSmall("."), RocStr.fromSliceSmall("05") };
+    const small_result = strFromParts(&small, ops);
+    defer small_result.decref(ops);
+    try std.testing.expect(small_result.isSmallStr());
+    try std.testing.expectEqualStrings("12.05", small_result.asSlice());
+
+    const big_text = "abcdefghijklmnopqrstuvwxyz0123456789";
+    var big = [_]RocStr{ RocStr.fromSlice(big_text, ops), RocStr.fromSliceSmall(""), RocStr.fromSliceSmall("-"), RocStr.fromSlice(big_text, ops) };
+    const big_result = strFromParts(&big, ops);
+    defer big_result.decref(ops);
+    try std.testing.expect(!big_result.isSmallStr());
+    try std.testing.expectEqualStrings(big_text ++ "-" ++ big_text, big_result.asSlice());
+
+    var crossing = [_]RocStr{ RocStr.fromSliceSmall("12345678901"), RocStr.fromSliceSmall("123456789012"), RocStr.fromSliceSmall("x") };
+    const crossing_result = strFromParts(&crossing, ops);
+    defer crossing_result.decref(ops);
+    try std.testing.expect(!crossing_result.isSmallStr());
+    try std.testing.expectEqualStrings("12345678901123456789012x", crossing_result.asSlice());
+
+    var none = [_]RocStr{};
+    const none_result = strFromParts(&none, ops);
+    try std.testing.expectEqualStrings("", none_result.asSlice());
+
+    var one = [_]RocStr{RocStr.fromSliceSmall("only")};
+    const one_result = strFromParts(&one, ops);
+    try std.testing.expectEqualStrings("only", one_result.asSlice());
+}
+
 /// Byte length of `strs` joined by a separator. Saturates so an impossible
 /// size reaches the allocation guard instead of wrapping to a buffer the
 /// copies overrun. `strs` must not be empty.

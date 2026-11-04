@@ -12277,7 +12277,24 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.strOp(.str_split_on)));
             try self.emitFpOffset(result_offset);
         },
-        .str_from_parts => wasmInvariantFmt("str_from_parts: not lowered for wasm in this spike", .{}),
+        .str_from_parts => {
+            // str_from_parts(parts...) -> Str: the parts copied into one
+            // stack region, the builtin given its address and their count.
+            const count: u32 = @intCast(args.len);
+            const region = try self.allocStackMemory(count * roc_str_size, wasm_word_size);
+            try self.emitFpOffset(region);
+            const region_local = try self.emitSetNewLocal(.i32);
+            for (0..count) |i| {
+                const part = try self.emitProcLocalToNewLocal(GuardedList.at(args, i), .i32);
+                try self.emitMemCopy(region_local, @intCast(i * roc_str_size), part, roc_str_size);
+            }
+            const result_offset = try self.allocStackMemory(roc_str_size, wasm_word_size);
+            try self.emitFpOffset(result_offset);
+            try self.emitLocalGet(region_local);
+            try self.emitI32Const(@intCast(count));
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.strOp(.str_from_parts)));
+            try self.emitFpOffset(result_offset);
+        },
         .str_join_with => {
             const a = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
             const b = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
