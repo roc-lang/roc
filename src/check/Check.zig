@@ -11654,10 +11654,8 @@ fn recordGrowthUseOfInstance(
     var def_name: ?Ident.Idx = null;
     if (expr) |expr_idx| {
         region = self.cir.store.getExprRegion(expr_idx);
-        switch (self.cir.store.getExpr(expr_idx)) {
-            .e_lookup_local => |lookup| def_name = self.getPatternIdent(lookup.pattern_idx),
-            else => {},
-        }
+        const used = self.cir.store.getExpr(expr_idx);
+        if (used == .e_lookup_local) def_name = self.getPatternIdent(used.e_lookup_local.pattern_idx);
     } else {
         region = self.getRegionAt(use_var);
     }
