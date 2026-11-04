@@ -687,6 +687,24 @@ pending_predeclared_use_relations: std.ArrayListUnmanaged(PendingPredeclaredUseR
 /// Backing storage for `PendingPredeclaredUseRelation.fresh`. Reclaimed once
 /// no relation is pending.
 predeclared_relation_vars: std.ArrayListUnmanaged(Var) = .empty,
+/// The deepest rank at which a body has made a recursive use (a use of a
+/// definition that has not generalized yet, or of a scheme in
+/// `growth_scheme_vars`) since a generalization boundary at that rank last
+/// closed. Every open boundary at or below this rank encloses such a use, so
+/// a boundary closing at or below it publishes its scheme's variables in
+/// `growth_scheme_vars` (design.md "Growing Polymorphic Recursion").
+growth_use_rank: u32 = 0,
+/// The generalized identity variables, by raw `Var`, of every scheme whose
+/// body made a recursive use. Only a use of such a scheme can lie on a
+/// recursion cycle, so only those uses record a `GrowthUse`.
+growth_scheme_vars: std.DynamicBitSetUnmanaged = .{},
+/// Every use that can lie on a recursion cycle, with its substitution in
+/// `growth_use_pairs`. Judged once by `rejectGrowingPolymorphicRecursion`,
+/// after every definition is checked: whether a use's substitution wraps a
+/// cycle variable in structure is a fact about the settled types.
+growth_uses: std.ArrayListUnmanaged(GrowthUse) = .empty,
+/// Backing storage for `GrowthUse.pairs`.
+growth_use_pairs: std.ArrayListUnmanaged(GrowthUsePair) = .empty,
 /// The block-local (`s_decl`) analogue of `predeclared_scheme_vars`, keyed by
 /// pattern and live only while the local def is in flight (entries are
 /// removed when the statement finishes). The value is the def's annotation,
@@ -1752,6 +1770,10 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .waiting_predeclared_dispatch_uses = .boundary,
     .pending_predeclared_use_relations = .boundary,
     .predeclared_relation_vars = .keyed,
+    .growth_use_rank = .boundary,
+    .growth_scheme_vars = .keyed,
+    .growth_uses = .settled,
+    .growth_use_pairs = .settled,
     .predeclared_local_annotations = .lexical,
     .hole_shared_schemes = .keyed,
     .hole_shared_vars = .keyed,
@@ -2445,6 +2467,8 @@ const InstantiationEvidence = union(enum) {
     nested_function_use: CIR.Expr.Idx,
     dispatch_target: struct {
         node_idx: u32,
+        /// The dispatching expression, when the dispatch has one.
+        expr: ?CIR.Expr.Idx = null,
         constraint_fn_var: Var,
         /// Derived-shape validation preserves a shared receiver's original
         /// callable requirement until that receiver grounds.
@@ -3259,6 +3283,26 @@ const PredeclaredUseSite = struct {
     use_var: Var,
     region: Region,
     def_name: ?Ident.Idx,
+};
+
+/// One use that can lie on a recursion cycle: the substitution it applies to
+/// the used scheme's variables, judged by `rejectGrowingPolymorphicRecursion`.
+const GrowthUse = struct {
+    /// The using expression, when the use has one of its own.
+    expr: ?CIR.Expr.Idx,
+    /// The use's instance of the used scheme.
+    use_var: Var,
+    region: Region,
+    def_name: ?Ident.Idx,
+    /// This use's pairs in `growth_use_pairs`.
+    pairs_start: u32,
+    pairs_len: u32,
+};
+
+/// One variable of a used scheme and this use's copy of it.
+const GrowthUsePair = struct {
+    scheme_var: Var,
+    copy: Var,
 };
 
 /// A use of a predeclared scheme waiting for its binding to publish its own
@@ -11088,6 +11132,14 @@ fn instantiateVarHelpFromScheme(
             );
         }
     }
+    if (self.growth_scheme_vars.bit_length != 0 and instantiator.var_map.count() > 0) {
+        const use_expr: ?CIR.Expr.Idx = switch (evidence) {
+            .value_use, .nested_function_use => |expr| expr,
+            .dispatch_target => |site| site.expr,
+            .none => var_context.instantiation_expr,
+        };
+        try self.recordGrowthUseOfInstance(instantiator.var_map, instantiated_var, use_expr, env);
+    }
     for (self.scratch_deferred_callables.items) |deferred| {
         try self.fillInRegionsThrough(deferred.placeholder);
         self.setRegionAt(deferred.placeholder, switch (region_behavior) {
@@ -11459,8 +11511,343 @@ fn setLocalValueBindersProcessing(self: *Self, pattern: CIR.Pattern.Idx, process
     }
 }
 
-fn recordRecursiveReference(self: *Self, node_idx: u32, scheme_root: Var) std.mem.Allocator.Error!void {
+fn recordRecursiveReference(self: *Self, node_idx: u32, scheme_root: Var, env: *Env) std.mem.Allocator.Error!void {
+    self.noteRecursiveUse(env);
     try self.recordSharedSchemeUse(node_idx, .recursive_reference, 0, scheme_root);
+}
+
+// growing polymorphic recursion (design.md "Growing Polymorphic Recursion") //
+
+/// Note that the body being checked made a recursive use: every
+/// generalization boundary open at the current rank encloses it.
+fn noteRecursiveUse(self: *Self, env: *Env) void {
+    self.growth_use_rank = @max(self.growth_use_rank, @backingInt(env.rank()));
+}
+
+/// Whether the generalization boundary at the current rank encloses a
+/// recursive use. Call after the boundary generalizes and before
+/// `leaveGrowthBoundary`.
+fn growthBoundaryMadeRecursiveUse(self: *const Self, env: *Env) bool {
+    return @backingInt(env.rank()) <= self.growth_use_rank;
+}
+
+/// Close the growth bookkeeping of the boundary at the current rank, just
+/// before its rank is popped.
+fn leaveGrowthBoundary(self: *Self, env: *Env) void {
+    self.growth_use_rank = @min(self.growth_use_rank, @backingInt(env.rank()) - 1);
+}
+
+/// Publish the generalized identity variables of a scheme whose body made a
+/// recursive use, so that every later use of the scheme records its
+/// substitution.
+fn publishGrowthSchemeVars(self: *Self, interface: Var) Allocator.Error!void {
+    var stack: std.ArrayList(Var) = .empty;
+    defer stack.deinit(self.gpa);
+    var seen = collections.DenseMap(Var, void).init(self.gpa);
+    defer seen.deinit();
+    try stack.append(self.gpa, interface);
+    while (stack.pop()) |pending| {
+        const resolved = self.types.resolveVar(pending);
+        const entry = try seen.getOrPut(resolved.var_);
+        if (entry.found_existing) continue;
+        if (resolved.desc.rank == .generalized and canonical_type_keys.isIdentityVariable(resolved.desc)) {
+            const raw: usize = @backingInt(resolved.var_);
+            if (raw >= self.growth_scheme_vars.bit_length) {
+                try self.growth_scheme_vars.resize(self.gpa, @max(raw + 1, self.growth_scheme_vars.bit_length * 2), false);
+            }
+            self.growth_scheme_vars.set(raw);
+        }
+        try self.appendGrowthChildren(resolved.desc.content, &stack);
+    }
+}
+
+fn isGrowthSchemeVar(self: *const Self, resolved_var: Var) bool {
+    const raw: usize = @backingInt(resolved_var);
+    return raw < self.growth_scheme_vars.bit_length and self.growth_scheme_vars.isSet(raw);
+}
+
+/// The types directly inside a type, as instantiation copies them. A
+/// variable's static-dispatch constraints are not part of its type: a
+/// constraint mentions its own receiver, which would otherwise appear to sit
+/// inside itself.
+fn appendGrowthChildren(self: *Self, content: types_mod.Content, stack: *std.ArrayList(Var)) Allocator.Error!void {
+    switch (content) {
+        .err, .field_presence, .flex, .rigid => {},
+        .alias => |alias| {
+            try stack.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+            try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+        },
+        .structure => |flat| switch (flat) {
+            .empty_record, .empty_tag_union => {},
+            .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+            .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                try stack.append(self.gpa, func.ret);
+            },
+            .record => |record| {
+                for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                    try stack.append(self.gpa, presence.typeVar());
+                }
+                try stack.append(self.gpa, record.ext);
+            },
+            .tag_union => |tag_union| {
+                for (self.types.getTagsSlice(tag_union.tags).items(.args)) |args| {
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(args));
+                }
+                try stack.append(self.gpa, tag_union.ext);
+            },
+        },
+    }
+}
+
+/// Record one use's substitution: each scheme variable paired with this
+/// use's copy of it.
+fn recordGrowthUse(
+    self: *Self,
+    expr: ?CIR.Expr.Idx,
+    use_var: Var,
+    region: Region,
+    def_name: ?Ident.Idx,
+    scheme_vars: []const Var,
+    copies: []const Var,
+) Allocator.Error!void {
+    std.debug.assert(scheme_vars.len == copies.len);
+    const pairs_start: u32 = @intCast(self.growth_use_pairs.items.len);
+    try self.growth_use_pairs.ensureUnusedCapacity(self.gpa, scheme_vars.len);
+    for (scheme_vars, copies) |scheme_var, copy| {
+        self.growth_use_pairs.appendAssumeCapacity(.{ .scheme_var = scheme_var, .copy = copy });
+    }
+    try self.growth_uses.append(self.gpa, .{
+        .expr = expr,
+        .use_var = use_var,
+        .region = region,
+        .def_name = def_name,
+        .pairs_start = pairs_start,
+        .pairs_len = @intCast(scheme_vars.len),
+    });
+}
+
+/// Record an instantiation's substitution for the variables of a scheme
+/// whose body made a recursive use. Instances of every other scheme record
+/// nothing.
+fn recordGrowthUseOfInstance(
+    self: *Self,
+    var_map: anytype,
+    use_var: Var,
+    expr: ?CIR.Expr.Idx,
+    env: *Env,
+) Allocator.Error!void {
+    const pairs_start: u32 = @intCast(self.growth_use_pairs.items.len);
+    var iterator = var_map.iterator();
+    while (iterator.next()) |entry| {
+        const scheme_var = self.types.resolveVar(entry.key_ptr.*).var_;
+        if (!self.isGrowthSchemeVar(scheme_var)) continue;
+        try self.growth_use_pairs.append(self.gpa, .{ .scheme_var = scheme_var, .copy = entry.value_ptr.* });
+    }
+    const pairs_len: u32 = @intCast(self.growth_use_pairs.items.len - pairs_start);
+    if (pairs_len == 0) return;
+    // A use of a scheme whose body made a recursive use can close a cycle
+    // back to that body, so it is a recursive use in turn.
+    self.noteRecursiveUse(env);
+    var region: Region = undefined;
+    var def_name: ?Ident.Idx = null;
+    if (expr) |expr_idx| {
+        region = self.cir.store.getExprRegion(expr_idx);
+        const used = self.cir.store.getExpr(expr_idx);
+        if (used == .e_lookup_local) def_name = self.getPatternIdent(used.e_lookup_local.pattern_idx);
+    } else {
+        region = self.getRegionAt(use_var);
+    }
+    try self.growth_uses.append(self.gpa, .{
+        .expr = expr,
+        .use_var = use_var,
+        .region = region,
+        .def_name = def_name,
+        .pairs_start = pairs_start,
+        .pairs_len = pairs_len,
+    });
+}
+
+const GrowthEdge = struct {
+    from: u32,
+    to: u32,
+    growing: bool,
+    use: u32,
+};
+
+/// Reject every use that would make the recursion it lies on grow its types
+/// forever (design.md "Growing Polymorphic Recursion"). The graph's nodes are
+/// the variables of used schemes. Each recorded use adds an edge from every
+/// node its copy's settled type contains to the scheme variable it copies; the
+/// edge grows when the node sits strictly inside that type. A use is rejected
+/// exactly when one of its growing edges joins two nodes of one strongly
+/// connected component: following the cycle back to that edge wraps the same
+/// variable again, so specialization would never finish. The pass is linear in
+/// the recorded uses and the sizes of their copies' types.
+fn rejectGrowingPolymorphicRecursion(self: *Self) Allocator.Error!void {
+    if (self.growth_uses.items.len == 0) return;
+    const gpa = self.gpa;
+
+    var node_of = collections.DenseMap(Var, u32).init(gpa);
+    defer node_of.deinit();
+    for (self.growth_use_pairs.items) |pair| {
+        const resolved = self.types.resolveVar(pair.scheme_var);
+        if (!canonical_type_keys.isIdentityVariable(resolved.desc)) continue;
+        const entry = try node_of.getOrPut(resolved.var_);
+        if (!entry.found_existing) entry.value_ptr.* = @intCast(node_of.count() - 1);
+    }
+    const node_count: u32 = @intCast(node_of.count());
+    if (node_count == 0) return;
+
+    var edges: std.ArrayList(GrowthEdge) = .empty;
+    defer edges.deinit(gpa);
+    var stack: std.ArrayList(Var) = .empty;
+    defer stack.deinit(gpa);
+    // The pair index (plus one) that last visited each type, so each copy's
+    // type is walked once without clearing the map between copies.
+    var visited_by = collections.DenseMap(Var, u32).init(gpa);
+    defer visited_by.deinit();
+    var any_growing = false;
+    for (self.growth_uses.items, 0..) |use, use_index| {
+        for (self.growth_use_pairs.items[use.pairs_start..][0..use.pairs_len], use.pairs_start..) |pair, pair_index| {
+            const to = node_of.get(self.types.resolveVar(pair.scheme_var).var_) orelse continue;
+            const root = self.types.resolveVar(pair.copy);
+            if (node_of.get(root.var_)) |from| {
+                try edges.append(gpa, .{ .from = from, .to = to, .growing = false, .use = @intCast(use_index) });
+            }
+            const visit_mark: u32 = @intCast(pair_index + 1);
+            try visited_by.put(root.var_, visit_mark);
+            stack.clearRetainingCapacity();
+            try self.appendGrowthChildren(root.desc.content, &stack);
+            while (stack.pop()) |pending| {
+                const resolved = self.types.resolveVar(pending);
+                const entry = try visited_by.getOrPut(resolved.var_);
+                if (entry.found_existing and entry.value_ptr.* == visit_mark) continue;
+                entry.value_ptr.* = visit_mark;
+                if (node_of.get(resolved.var_)) |from| {
+                    try edges.append(gpa, .{ .from = from, .to = to, .growing = true, .use = @intCast(use_index) });
+                    any_growing = true;
+                }
+                try self.appendGrowthChildren(resolved.desc.content, &stack);
+            }
+        }
+    }
+    if (!any_growing) return;
+
+    // Adjacency in compressed rows: node n's successors are
+    // `targets[offsets[n]..offsets[n + 1]]`.
+    const offsets = try gpa.alloc(u32, node_count + 1);
+    defer gpa.free(offsets);
+    @memset(offsets, 0);
+    for (edges.items) |edge| offsets[edge.from + 1] += 1;
+    for (1..offsets.len) |i| offsets[i] += offsets[i - 1];
+    const targets = try gpa.alloc(u32, edges.items.len);
+    defer gpa.free(targets);
+    const fill = try gpa.dupe(u32, offsets[0..node_count]);
+    defer gpa.free(fill);
+    for (edges.items) |edge| {
+        targets[fill[edge.from]] = edge.to;
+        fill[edge.from] += 1;
+    }
+
+    const component = try self.growthComponents(offsets, targets);
+    defer gpa.free(component);
+
+    var rejected = try std.DynamicBitSetUnmanaged.initEmpty(gpa, self.growth_uses.items.len);
+    defer rejected.deinit(gpa);
+    for (edges.items) |edge| {
+        if (edge.growing and component[edge.from] == component[edge.to]) rejected.set(edge.use);
+    }
+    var reported_exprs = collections.DenseMap(CIR.Expr.Idx, void).init(gpa);
+    defer reported_exprs.deinit();
+    var rejected_uses = rejected.iterator(.{});
+    while (rejected_uses.next()) |use_index| {
+        const use = self.growth_uses.items[use_index];
+        if (use.expr) |expr_idx| {
+            const entry = try reported_exprs.getOrPut(expr_idx);
+            if (entry.found_existing) continue;
+        }
+        _ = try self.problems.appendProblem(.{ .growing_polymorphic_recursion = .{
+            .region = use.region,
+            .def_name = use.def_name,
+            .use_snapshot = try self.snapshotVarForError(use.use_var),
+        } });
+        if (use.expr) |expr_idx| {
+            try self.markErroneousValueExpr(expr_idx);
+        } else {
+            try self.markErroneous(use.use_var);
+        }
+    }
+}
+
+/// The strongly connected component of every node of a graph in compressed
+/// rows (Tarjan's algorithm, iterative).
+fn growthComponents(self: *Self, offsets: []const u32, targets: []const u32) Allocator.Error![]u32 {
+    const gpa = self.gpa;
+    const node_count = offsets.len - 1;
+    const unvisited = std.math.maxInt(u32);
+    const component = try gpa.alloc(u32, node_count);
+    errdefer gpa.free(component);
+    @memset(component, unvisited);
+    const index = try gpa.alloc(u32, node_count);
+    defer gpa.free(index);
+    @memset(index, unvisited);
+    const low = try gpa.alloc(u32, node_count);
+    defer gpa.free(low);
+    var on_stack = try std.DynamicBitSetUnmanaged.initEmpty(gpa, node_count);
+    defer on_stack.deinit(gpa);
+    var component_stack: std.ArrayList(u32) = .empty;
+    defer component_stack.deinit(gpa);
+    const Frame = struct { node: u32, next_edge: u32 };
+    var frames: std.ArrayList(Frame) = .empty;
+    defer frames.deinit(gpa);
+
+    var next_index: u32 = 0;
+    var next_component: u32 = 0;
+    for (0..node_count) |start_usize| {
+        const start: u32 = @intCast(start_usize);
+        if (index[start] != unvisited) continue;
+        index[start] = next_index;
+        low[start] = next_index;
+        next_index += 1;
+        try component_stack.append(gpa, start);
+        on_stack.set(start);
+        try frames.append(gpa, .{ .node = start, .next_edge = offsets[start] });
+        while (frames.items.len > 0) {
+            const top = &frames.items[frames.items.len - 1];
+            const node = top.node;
+            if (top.next_edge < offsets[node + 1]) {
+                const successor = targets[top.next_edge];
+                top.next_edge += 1;
+                if (index[successor] == unvisited) {
+                    index[successor] = next_index;
+                    low[successor] = next_index;
+                    next_index += 1;
+                    try component_stack.append(gpa, successor);
+                    on_stack.set(successor);
+                    try frames.append(gpa, .{ .node = successor, .next_edge = offsets[successor] });
+                } else if (on_stack.isSet(successor)) {
+                    low[node] = @min(low[node], index[successor]);
+                }
+                continue;
+            }
+            _ = frames.pop();
+            if (frames.items.len > 0) {
+                const parent = frames.items[frames.items.len - 1].node;
+                low[parent] = @min(low[parent], low[node]);
+            }
+            if (low[node] == index[node]) {
+                while (component_stack.pop()) |member| {
+                    on_stack.unset(member);
+                    component[member] = next_component;
+                    if (member == node) break;
+                }
+                next_component += 1;
+            }
+        }
+    }
+    return component;
 }
 
 // regions //
@@ -19263,6 +19650,7 @@ fn predeclareAnnotationSchemeHelp(
     // reports them against the def.
     try self.deduplicateGeneralizedDispatchRequirements(scheme_var, null, env);
     try self.publishBindingScheme(scheme_var);
+    self.leaveGrowthBoundary(env);
     env.var_pool.popRank();
 
     self.truncateProblems(problems_len);
@@ -19436,8 +19824,11 @@ fn staticDispatchConstraintsOf(content: types_mod.Content) StaticDispatchConstra
 
 /// Capture, from the instantiation just performed into `var_map`, this use's
 /// copy of every predeclared identity slot followed by the copy of every
-/// slot's static-dispatch callable, in slot and constraint order.
-fn appendPredeclaredUseFreshVars(self: *Self, annotation_idx: CIR.Annotation.Idx) Allocator.Error!VarRange {
+/// slot's static-dispatch callable, in slot and constraint order. A use of a
+/// predeclared scheme reaches a definition that has not generalized yet, so
+/// it is a recursive use.
+fn appendPredeclaredUseFreshVars(self: *Self, annotation_idx: CIR.Annotation.Idx, env: *Env) Allocator.Error!VarRange {
+    self.noteRecursiveUse(env);
     const predeclared = try self.predeclaredSchemeSlots(annotation_idx);
     const start: u32 = @intCast(self.predeclared_use_fresh_vars.items.len);
     for (predeclared) |slot_var| {
@@ -19560,7 +19951,7 @@ fn recordInFlightPredeclaredSchemeUse(
 ) Allocator.Error!void {
     const fresh_start = self.predeclared_use_fresh_vars.items.len;
     defer self.predeclared_use_fresh_vars.shrinkRetainingCapacity(fresh_start);
-    const use_copies = try self.appendPredeclaredUseFreshVars(annotation_idx);
+    const use_copies = try self.appendPredeclaredUseFreshVars(annotation_idx, env);
     self.scratch_evidence_pairs.clearRetainingCapacity();
     try self.appendPredeclaredUsePairs(annotation_idx, use_copies.slice(self.predeclared_use_fresh_vars.items));
     try self.writePredeclaredSchemeUse(annotation_idx, slot, node_idx, slot_data, scheme_root, policy);
@@ -19691,6 +20082,14 @@ fn relatePredeclaredUse(
             return;
         }
     }
+    try self.recordGrowthUse(
+        if (site.node_idx != 0) @as(CIR.Expr.Idx, @fromBackingInt(site.node_idx)) else null,
+        site.use_var,
+        site.region,
+        site.def_name,
+        body,
+        use_copies[0..body.len],
+    );
 }
 
 /// The type a use's copy of one predeclared slot must have, given what the
@@ -19784,7 +20183,7 @@ fn recordPredeclaredDispatchUse(
         .constraint_fn_var = constraint_fn_var,
         .scheme_root = scheme_root,
         .record_policy = policy,
-        .fresh = try self.appendPredeclaredUseFreshVars(annotation_idx),
+        .fresh = try self.appendPredeclaredUseFreshVars(annotation_idx, env),
         .site = site,
     });
 }
@@ -20410,6 +20809,9 @@ fn finishRecursiveGroupBoundary(self: *Self, defs: []const CIR.Def.Idx, member_r
     self.unify_scratch.clearPersistentOpenings();
     try self.linkDeferredUsesFrom(env.rank());
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+    if (self.growthBoundaryMadeRecursiveUse(env)) {
+        for (member_roots) |root| try self.publishGrowthSchemeVars(root.interface);
+    }
     try self.captureEscapedSchemeDispatchRequirements(member_roots, env);
     for (defs) |member_def_idx| {
         const member_def = self.cir.store.getDef(member_def_idx);
@@ -20426,6 +20828,7 @@ fn finishRecursiveGroupBoundary(self: *Self, defs: []const CIR.Def.Idx, member_r
     try self.retireStructurallyPublishedTypeSchemeRequirements(member_roots, env);
     try self.activateSchemeDeferredCodecConstraints(member_roots, env);
     try self.judgeAmbiguityCandidatesAtGeneralizationMultiRoot(member_roots);
+    self.leaveGrowthBoundary(env);
     env.var_pool.popRank();
 }
 
@@ -20705,6 +21108,7 @@ fn resolveLocalDispatchTargetByStatus(
             // or a suspended ancestor at its boundary): the binding-group
             // recursion rule—link monomorphically to the def's in-flight RHS
             // var, which lives in the frame that generalizes it.
+            self.noteRecursiveUse(env);
             return .{ .in_flight_rhs = ModuleEnv.varFrom(def.expr) };
         },
         .processed => {
@@ -20719,6 +21123,7 @@ fn resolveLocalDispatchTargetByStatus(
                 try self.deferDispatchObligationForUncheckedTarget(deferred_constraint, constraint, def_idx, env);
                 return .waiting;
             }
+            self.noteRecursiveUse(env);
             return .def_var;
         },
     }
@@ -20983,7 +21388,7 @@ fn instantiatePendingPredeclaredSchemeUse(
     // The use is recorded only by the replay, against the def's own scheme;
     // this instantiation keeps just its copies of the predeclared slots.
     const instantiated = try self.instantiateBindingVar(scheme_var, env, .use_last_var, .none);
-    const use_copies = try self.appendPredeclaredUseFreshVars(self.cir.store.getDef(target_def).annotation.?);
+    const use_copies = try self.appendPredeclaredUseFreshVars(self.cir.store.getDef(target_def).annotation.?, env);
     _ = try self.unify(use_var, instantiated, env);
 
     // Pending predeclared uses are only minted while a group frame is open.
@@ -27652,6 +28057,7 @@ const ExprCheckFrame = struct {
             self.hoist_frame_open = false;
         }
         if (self.rank_pushed) {
+            checker.leaveGrowthBoundary(env);
             env.var_pool.popRank();
         }
         checker.active_scheme_root = self.previous_active_scheme_root;
@@ -27819,6 +28225,7 @@ const ExprCheckFrame = struct {
         checker.unify_scratch.clearPersistentOpenings();
         try checker.linkDeferredUsesFrom(env.rank());
         try checker.generalizer.generalize(checker.gpa, &env.var_pool, env.rank());
+        if (checker.growthBoundaryMadeRecursiveUse(env)) try checker.publishGrowthSchemeVars(self.expr_var);
         try checker.captureEscapedSchemeDispatchRequirements(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }}, env);
         try checker.deduplicateGeneralizedDispatchRequirements(
             self.expr_var_raw,
@@ -28571,6 +28978,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                                 try self.recordRecursiveReference(
                                     @backingInt(expr_idx),
                                     ModuleEnv.varFrom(processing_def.def_idx),
+                                    env,
                                 );
                             }
                             break :blk;
@@ -28605,6 +29013,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                             try self.recordRecursiveReference(
                                 @backingInt(expr_idx),
                                 ModuleEnv.varFrom(processing_def.def_idx),
+                                env,
                             );
                             break :blk;
                         }
@@ -28640,6 +29049,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                             try self.recordRecursiveReference(
                                 @backingInt(expr_idx),
                                 ModuleEnv.varFrom(processing_def.def_idx),
+                                env,
                             );
                             break :blk;
                         }
@@ -28671,6 +29081,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                         try self.recordRecursiveReference(
                             @backingInt(expr_idx),
                             ModuleEnv.varFrom(processing_def.def_idx),
+                            env,
                         );
                         break :blk;
                     },
@@ -28702,6 +29113,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                                 try self.recordRecursiveReference(
                                     @backingInt(expr_idx),
                                     ModuleEnv.varFrom(processing_def.def_idx),
+                                    env,
                                 );
                                 break :blk;
                             }
@@ -28790,6 +29202,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                     try self.recordRecursiveReference(
                         @backingInt(expr_idx),
                         pat_var,
+                        env,
                     );
                     break :blk;
                 }
@@ -28807,6 +29220,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                 try self.recordRecursiveReference(
                     @backingInt(expr_idx),
                     pat_var,
+                    env,
                 );
                 break :blk;
             }
@@ -28854,6 +29268,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                         try self.recordRecursiveReference(
                             @backingInt(expr_idx),
                             ModuleEnv.varFrom(processing_def.def_idx),
+                            env,
                         );
                     }
                 }
@@ -30447,6 +30862,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 self.unify_scratch.clearPersistentOpenings();
                 try self.linkDeferredUsesFrom(env.rank());
                 try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+                if (self.growthBoundaryMadeRecursiveUse(env)) try self.publishGrowthSchemeVars(decl_pattern_var);
                 try self.captureEscapedSchemeDispatchRequirements(&.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }}, env);
                 try self.deduplicateGeneralizedDispatchRequirements(decl_pattern_var, decl_pattern_var, env);
                 try self.publishBindingScheme(decl_pattern_var);
@@ -30461,6 +30877,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                     .interface = decl_pattern_var,
                 }}, env);
                 try self.judgeAmbiguityCandidatesAtGeneralization(.{ .owner = decl_pattern_var, .interface = decl_pattern_var });
+                self.leaveGrowthBoundary(env);
                 env.var_pool.popRank();
                 self.active_scheme_root = decl.saved_active_scheme_root;
             }
@@ -37608,6 +38025,8 @@ const Probe = struct {
     pending_tuple_accesses_len: usize,
     scheme_uses_len: usize,
     scheme_use_pairs_len: usize,
+    growth_uses_len: usize,
+    growth_use_pairs_len: usize,
     waiting_predeclared_dispatch_uses_len: usize,
     generated_codec_derivations_len: usize,
     generated_codec_calls_len: usize,
@@ -37676,6 +38095,8 @@ const Probe = struct {
             }
         }
         self.check.cir.scheme_use_pairs.items.shrinkRetainingCapacity(self.scheme_use_pairs_len);
+        self.check.growth_uses.shrinkRetainingCapacity(self.growth_uses_len);
+        self.check.growth_use_pairs.shrinkRetainingCapacity(self.growth_use_pairs_len);
         // A dispatch edge the probe selected is rolled back with
         // `dispatch_target_instantiations` below, so its waiting record goes
         // too. Its fresh-var range stays allocated until the next reclaim.
@@ -37800,6 +38221,8 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .pending_tuple_accesses_len = pending_tuple_accesses_len,
         .scheme_uses_len = scheme_uses_len,
         .scheme_use_pairs_len = scheme_use_pairs_len,
+        .growth_uses_len = self.growth_uses.items.len,
+        .growth_use_pairs_len = self.growth_use_pairs.items.len,
         .waiting_predeclared_dispatch_uses_len = waiting_predeclared_dispatch_uses_len,
         .generated_codec_derivations_len = generated_codec_derivations_len,
         .generated_codec_calls_len = generated_codec_calls_len,
@@ -39527,6 +39950,7 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
         }
     }
     try self.settleDispatchRepeats(env);
+    try self.rejectGrowingPolymorphicRecursion();
 
     switch (scope) {
         .module => {
@@ -46527,6 +46951,7 @@ fn instantiateDispatchTargetMethodVar(
         null;
     const evidence: InstantiationEvidence = .{ .dispatch_target = .{
         .node_idx = if (constraintIntroExpr(constraint)) |expr| @backingInt(expr) else 0,
+        .expr = constraintIntroExpr(constraint),
         .constraint_fn_var = constraint.fn_var,
         .records_scheme_use = predeclared_annotation == null,
     } };
@@ -58789,6 +59214,7 @@ fn checkFlexVarConstraintCompatibility(
 
             const method_var = try self.instantiateVar(imported_scheme, env, .{ .explicit = region }, .{ .dispatch_target = .{
                 .node_idx = if (constraintIntroExpr(constraint)) |expr| @backingInt(expr) else 0,
+                .expr = constraintIntroExpr(constraint),
                 .constraint_fn_var = constraint.fn_var,
             } });
 
