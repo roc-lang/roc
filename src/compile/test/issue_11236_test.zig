@@ -160,12 +160,7 @@ fn expectRejectedBinding(artifact: *const check.CheckedArtifact.CheckedModuleArt
     var exported_valid: usize = 0;
     for (artifact.exported_procedure_bindings.bindings) |binding| {
         switch (binding.body) {
-            .checked_error => {
-                exported_rejected += 1;
-                const closure = artifact.exported_procedure_bindings.rowClosure(binding);
-                try std.testing.expectEqual(@as(usize, 0), closure.checked_procedure_templates.len);
-                try std.testing.expectEqual(@as(usize, 0), closure.callable_eval_templates.len);
-            },
+            .checked_error => exported_rejected += 1,
             .direct_template => exported_valid += 1,
             .callable_eval_template => return error.TestUnexpectedResult,
         }

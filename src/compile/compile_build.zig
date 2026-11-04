@@ -3402,7 +3402,9 @@ pub const BuildEnv = struct {
         var artifacts = std.ArrayList(*const check.CheckedArtifact.CheckedModuleArtifact).empty;
         errdefer artifacts.deinit(allocator);
         const builtin_artifact = &self.builtin_modules.checked_artifact;
-        for (root_artifact.lowering_visibility.module_ids) |key| {
+        const coord = self.coordinator orelse
+            base.invariant("build env invariant violated: visible artifacts requested before a build", .{});
+        for ((try root_artifact.loweringVisibility(coord.moduleResolver())).module_ids) |key| {
             if (checkedArtifactKeysEqual(key, root_artifact.key.digest())) continue;
             if (checkedArtifactKeysEqual(key, builtin_artifact.key.digest())) continue;
             const artifact = self.artifactByKey(key) orelse continue;
@@ -3432,6 +3434,11 @@ pub const BuildEnv = struct {
         root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     ) Allocator.Error![]check.CheckedArtifact.ImportedModuleView {
         return self.builtCoordinator().collectRelationArtifactViews(allocator, root_artifact);
+    }
+
+    /// A resolver over every checked module of the build.
+    pub fn moduleResolver(self: *BuildEnv) check.CheckedArtifact.ModuleResolver {
+        return self.builtCoordinator().moduleResolver();
     }
 
     fn builtCoordinator(self: *BuildEnv) *Coordinator {

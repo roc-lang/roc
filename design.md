@@ -5285,6 +5285,22 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   synthesized types), interface capabilities, the method registry view,
   provided exports, the nodes whose dispatch plan cannot run, diagnostic
   errors, and single-source calls.
+- Per-module slots of `check.ModuleAnalyses`
+  (`src/check/module_analyses.zig`), which every checked module owns:
+  the template closures of the module's export rows (`exportClosures`),
+  the modules a consumer of its public API reads
+  (`publicApiDependencies`: the owners of the types its exports,
+  requirement signatures, exposed type declarations and binding scheme
+  codec requirements name, and the modules its export closures reach),
+  and the modules lowering its roots reads (`loweringVisibility`: its
+  direct imports, its public API dependencies, the owners of its root
+  types, the modules its roots, exports and platform requirement
+  bindings reach, and their public API dependencies). A platform/app
+  pairing has analyses of its own; its export closures and public API
+  dependencies are its platform's. A constant's closure follows the
+  template its compile-time root evaluates whether or not evaluation has
+  stored the constant's value, so the result is the same before and after
+  evaluation.
 
 A slot (`collections.OnceSlot`) is a state word with three states: empty,
 claimed and done; a claimed word also records whether a consumer is parked on
@@ -5321,6 +5337,12 @@ and `unreachable` in release builds:
 There is no scheduling edge between modules. A module's analyses are never
 ordered after its importers, nothing waits for demand to flow top-down, and
 the read path takes no lock.
+
+An analysis that reads modules other than its own finds them through the
+`ModuleResolver` its consumer passes: publication's imports, a build's
+coordinator, or a list of available modules. Every resolver resolves every
+module of the build, so the result does not depend on which consumer
+computed it.
 
 ### Lowering Reads Bodies From The Canonical IR
 

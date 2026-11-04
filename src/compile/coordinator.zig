@@ -1633,7 +1633,7 @@ const BoxyObjects = struct {
     /// importers' evaluations may need it.
     fn moduleCompleted(context: *anyopaque, module: *const Artifact) Error!void {
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
-        if (self.waiting.contains(module.key.bytes) or self.linkNeeds(module)) try self.offer(module);
+        if (self.waiting.contains(module.key.bytes) or try self.linkNeeds(module)) try self.offer(module);
     }
 
     fn viewsOf(self: *BoxyObjects, module: *const Artifact) Allocator.Error![]const CheckedArtifact.ImportedModuleView {
@@ -1874,8 +1874,8 @@ const BoxyObjects = struct {
     /// Whether this compilation links `artifact`'s object as the scheduler
     /// builds it. A run links nothing, and a build of another target links
     /// objects of its own.
-    fn linkNeeds(self: *const BoxyObjects, artifact: *const Artifact) bool {
-        return self.lowering.links and self.coordinator.rootSees(artifact);
+    fn linkNeeds(self: *const BoxyObjects, artifact: *const Artifact) Allocator.Error!bool {
+        return self.lowering.links and try self.coordinator.rootSees(artifact);
     }
 
     /// Fix the link's module names now that checking has named every module
@@ -1917,7 +1917,7 @@ const BoxyObjects = struct {
         while (locations.next()) |location| {
             const artifact = location.module().checkedArtifact().?;
             if (self.records.contains(artifact.key.bytes) or self.units.contains(artifact.key.bytes)) continue;
-            if (self.waiting.contains(artifact.key.bytes) or self.linkNeeds(artifact)) try self.offer(artifact);
+            if (self.waiting.contains(artifact.key.bytes) or try self.linkNeeds(artifact)) try self.offer(artifact);
         }
     }
 
@@ -2803,7 +2803,7 @@ pub const Coordinator = struct {
 
         try appendImportedArtifactViewIfMissing(&views, allocator, root_artifact.key, &self.builtin_modules.checked_artifact);
 
-        for (root_artifact.lowering_visibility.module_ids) |key| {
+        for ((try root_artifact.loweringVisibility(self.moduleResolver())).module_ids) |key| {
             if (rootRelationContainsArtifact(root_artifact, key)) continue;
             try self.appendPublicApiDependencyViewByKey(&views, allocator, root_artifact, key);
         }
@@ -2846,7 +2846,7 @@ pub const Coordinator = struct {
                 try pending.append(allocator, check.CheckedArtifact.importedView(artifact));
             }
 
-            for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
+            for ((try view.publicApiDependencies(self.moduleResolver())).type_owner_artifacts) |dependency_key| {
                 const artifact = self.checkedArtifactByKey(dependency_key) orelse base.invariant("compile.coordinator missing type-owner dependency checked artifact", .{});
                 try pending.append(allocator, check.CheckedArtifact.importedView(artifact));
             }
@@ -3213,6 +3213,17 @@ pub const Coordinator = struct {
             .module => .module,
             .malformed => .malformed,
         };
+    }
+
+    /// A resolver over every checked module of the build.
+    pub fn moduleResolver(self: *Coordinator) CheckedArtifact.ModuleResolver {
+        return .{ .context = self, .resolve_fn = resolveModule };
+    }
+
+    fn resolveModule(context: *const anyopaque, key: CheckedArtifact.ModuleId) ?CheckedArtifact.ImportedModuleView {
+        const self: *Coordinator = @ptrCast(@alignCast(@constCast(context)));
+        const artifact = self.checkedArtifactByKey(key) orelse return null;
+        return CheckedArtifact.importedView(artifact);
     }
 
     pub fn checkedArtifactByKey(
@@ -4693,8 +4704,13 @@ pub const Coordinator = struct {
             synthesized_keys.destroy();
             return null;
         };
+        const module_analyses = CheckedArtifact.ModuleAnalyses.create(platform_keys.allocator, platform_keys.io, platform) catch {
+            body_analyses.destroy();
+            synthesized_keys.destroy();
+            return null;
+        };
         installed = true;
-        return header.install(platform, arena, synthesized_keys, body_analyses);
+        return header.install(platform, arena, synthesized_keys, body_analyses, module_analyses);
     }
 
     /// Write `artifact`'s checked entry. This reads none of the module's
@@ -4939,6 +4955,12 @@ pub const Coordinator = struct {
         };
         var body_analyses_owned = true;
         defer if (body_analyses_owned) body_analyses.destroy();
+        const module_analyses = check.CheckedArtifact.ModuleAnalyses.create(module_alloc, self.roc_ctx.std_io, null) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
+        var module_analyses_owned = true;
+        defer if (module_analyses_owned) module_analyses.destroy();
 
         // Transform E: the artifact's sub-stores alias `artifact_buffer` and the
         // freshly relocated env is injected as its storage. Cross-artifact
@@ -4964,9 +4986,11 @@ pub const Coordinator = struct {
         );
         artifact_ptr.checked_types.attachSealedTypes(cached_env, sealed_keys, synthesized_keys);
         artifact_ptr.body_analyses = body_analyses;
+        artifact_ptr.module_analyses = module_analyses;
         sealed_keys_owned = false;
         synthesized_keys_owned = false;
         body_analyses_owned = false;
+        module_analyses_owned = false;
         entry_owned = false;
         source_owned = false;
         cached_env_owned = false;
@@ -6067,10 +6091,10 @@ pub const Coordinator = struct {
     /// Whether the program's root sees `artifact` (its lowering
     /// visibility), which is what its link needs the object of. The root
     /// itself is the root unit, under its own key.
-    fn rootSees(self: *Coordinator, artifact: *const CheckedArtifact.CheckedModuleArtifact) bool {
+    fn rootSees(self: *Coordinator, artifact: *const CheckedArtifact.CheckedModuleArtifact) Allocator.Error!bool {
         if (!self.checked_program) return false;
         const root = self.executableRootCheckedArtifact();
-        for (root.lowering_visibility.module_ids) |key| {
+        for ((try root.loweringVisibility(self.moduleResolver())).module_ids) |key| {
             if (std.mem.eql(u8, &key.bytes, &artifact.key.bytes)) return true;
         }
         return false;

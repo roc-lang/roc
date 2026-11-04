@@ -279,7 +279,8 @@ fn appendCheckOwnerEnvPublicDependencies(
     seen_public_dependencies: *std.AutoHashMap(CheckedArtifact.CheckedModuleDigest, void),
     view: CheckedArtifact.ImportedModuleView,
 ) Allocator.Error!void {
-    for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
+    const resolver_views = CheckedArtifact.CheckedImportViews{ .current_owner = view.key.digest(), .direct = &.{}, .available = available_artifacts };
+    for ((try view.publicApiDependencies(resolver_views.resolver())).type_owner_artifacts) |dependency_key| {
         const entry = try seen_public_dependencies.getOrPut(dependency_key);
         if (entry.found_existing) continue;
         entry.value_ptr.* = {};
