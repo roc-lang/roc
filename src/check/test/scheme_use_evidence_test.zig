@@ -180,7 +180,7 @@ fn assertBuiltinIterExtremum(
         // branch exists to establish.
         try std.testing.expect(body_use_count >= 2);
 
-        const plan = artifact.static_dispatch_plans.plans[entry.val];
+        const plan = try artifact.dispatch().plan(@fromBackingInt(entry.val));
         switch (plan.resolution) {
             .evidence_dependent => |resolution| {
                 try std.testing.expect(resolution.independent_callable);
