@@ -591,7 +591,7 @@ reads that distinction, or anything else, back out of the spelling:
 | --- | --- | --- |
 | `roc__d{N}` | the value owner `N` holds | program |
 | `roc__d{N}_{k}` | the `k`th further node (from 1) of owner `N`'s value | program |
-| `roc__h{hash}` | a datum named by content: a string literal's backing or a carried constant | shared |
+| `roc__h{hash}` | a datum named by content: a string literal's backing, a carried constant, or a constant a wasm unit defines for itself (`UnitCompile.contentNamedStaticData`) | shared |
 | `roc__p{hash}` | a procedure, by its `ProcIdentity` | shared |
 | `roc__p{hash}.{k}` | the `k`th fragment function (from 1) of a procedure's wasm code ("Wasm Function Limits") | shared |
 
@@ -24706,9 +24706,14 @@ field that holds zero, so placing a body never changes its length. Each
 function and segment is an atom whose sites are its edges; with stack
 checks, each function also records the frame facts `StackRoom` fills a
 check's room from. Nothing is merged into a unit: what other code defines
-is an import with the signature the call uses. Bodies keep the one
-position-independent form every wasm object Roc emits uses, so one image
-serves every output kind.
+is an import with the signature the call uses. The constants the program
+named for itself (the nodes of its descriptors, dictionaries, names and
+carried values) are defined weak under content names and referenced by
+name (`UnitCompile.contentNamedStaticData`, `CodeExcerpt.ContentNames`), so
+a link keeps one copy of a constant several units carry; the slots the
+unit's code names, mutable constants and host-visible constants keep the
+program's names. Bodies keep the one position-independent form every wasm
+object Roc emits uses, so one image serves every output kind.
 
 **Wasm fast dev link.** Such a build on a Linux host links its output by
 composing images, with no LLD on the module path (`wasm_link.zig`). Two
