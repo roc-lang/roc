@@ -147,13 +147,13 @@ pub const ModuleAnalyses = struct {
         return self.lowering_visibility.getOrCompute(self.io, Allocator.Error, Request{ .analyses = self, .owner = owner, .resolver = resolver }, Request.loweringVisibility);
     }
 
-    fn slots(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*DispatchSlots {
-        return self.dispatch_slots.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.slots);
+    fn dispatchSlots(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*DispatchSlots {
+        return self.dispatch_slots.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.createSlots);
     }
 
     /// The schema of procedure template `template`.
     pub fn templateSchema(self: *ModuleAnalyses, dispatch: CheckedDispatch, template: canonical.CheckedProcedureTemplateId) Allocator.Error!*const SchemeAnalysis {
-        const all = try self.slots(dispatch);
+        const all = try self.dispatchSlots(dispatch);
         const raw = @backingInt(template);
         if (raw >= all.template_schemas.len) return &checked_artifact.empty_scheme_analysis;
         return all.template_schemas[raw].getOrCompute(self.io, Allocator.Error, TemplateRequest{ .analyses = self, .dispatch = dispatch, .template = template }, TemplateRequest.schema);
@@ -161,13 +161,13 @@ pub const ModuleAnalyses = struct {
 
     /// The schema of generalized local scope `scope`.
     pub fn scopeSchema(self: *ModuleAnalyses, dispatch: CheckedDispatch, scope: DispatchScopeId) Allocator.Error!*const SchemeAnalysis {
-        const all = try self.slots(dispatch);
+        const all = try self.dispatchSlots(dispatch);
         return all.scope_schemas[@backingInt(scope)].getOrCompute(self.io, Allocator.Error, ScopeRequest{ .analyses = self, .dispatch = dispatch, .scope = scope }, ScopeRequest.schema);
     }
 
     /// The dispatch resolution of procedure template `template`.
     pub fn templateDispatch(self: *ModuleAnalyses, dispatch: CheckedDispatch, template: canonical.CheckedProcedureTemplateId) Allocator.Error!*const TemplateDispatch {
-        const all = try self.slots(dispatch);
+        const all = try self.dispatchSlots(dispatch);
         const raw = @backingInt(template);
         if (raw >= all.template_dispatch.len) return &checked_artifact.empty_template_dispatch;
         return all.template_dispatch[raw].getOrCompute(self.io, Allocator.Error, TemplateRequest{ .analyses = self, .dispatch = dispatch, .template = template }, TemplateRequest.dispatchResolution);
@@ -176,7 +176,7 @@ pub const ModuleAnalyses = struct {
     /// How procedure template `template`'s plans relate to its
     /// specialization.
     pub fn templateDispatchRelations(self: *ModuleAnalyses, dispatch: CheckedDispatch, template: canonical.CheckedProcedureTemplateId) Allocator.Error!*const TemplateDispatchRelations {
-        const all = try self.slots(dispatch);
+        const all = try self.dispatchSlots(dispatch);
         const raw = @backingInt(template);
         if (raw >= all.template_relations.len) return &checked_artifact.empty_template_relations;
         return all.template_relations[raw].getOrCompute(self.io, Allocator.Error, TemplateRequest{ .analyses = self, .dispatch = dispatch, .template = template }, TemplateRequest.relations);
@@ -225,7 +225,7 @@ pub const ModuleAnalyses = struct {
     /// The evidence of use site `site`: the first template in template order
     /// that resolved it, otherwise the module's; null when no analysis
     /// recorded evidence for it.
-    pub fn siteEvidence(self: *ModuleAnalyses, dispatch: CheckedDispatch, site: u32) Allocator.Error!?struct { entry: static_dispatch.SiteEvidenceEntry, owner: static_dispatch.EvidenceOwner } {
+    pub fn siteEvidence(self: *ModuleAnalyses, dispatch: CheckedDispatch, site: u32) Allocator.Error!?checked_artifact.SiteEvidenceLookup {
         const index = try self.dispatchIndex(dispatch);
         for (index.siteTemplates(site)) |reach| {
             const template: canonical.CheckedProcedureTemplateId = @fromBackingInt(reach.template);
@@ -235,26 +235,11 @@ pub const ModuleAnalyses = struct {
         return null;
     }
 
-    /// The evidence pool of an analysis that has completed.
-    pub fn completedPool(self: *ModuleAnalyses, owner: static_dispatch.EvidenceOwner) *const static_dispatch.EvidencePool {
-        const missing = "evidence was read from an analysis that had not completed";
-        return switch (owner) {
-            .module => &(self.module_dispatch.peek() orelse checked_artifact.checkedArtifactInvariant(missing, .{})).pool,
-            .platform_requirements => &(self.platform_root_evidence.peek() orelse checked_artifact.checkedArtifactInvariant(missing, .{})).pool,
-            _ => blk: {
-                const all = self.dispatch_slots.peek() orelse checked_artifact.checkedArtifactInvariant(missing, .{});
-                const raw = @backingInt(owner.template().?);
-                if (raw >= all.template_dispatch.len) break :blk &checked_artifact.empty_template_dispatch.pool;
-                break :blk &(all.template_dispatch[raw].peek() orelse checked_artifact.checkedArtifactInvariant(missing, .{})).pool;
-            },
-        };
-    }
-
     const DispatchRequest = struct {
         analyses: *ModuleAnalyses,
         dispatch: CheckedDispatch,
 
-        fn slots(request: DispatchRequest) Allocator.Error!*DispatchSlots {
+        fn createSlots(request: DispatchRequest) Allocator.Error!*DispatchSlots {
             const source = request.dispatch.source;
             return DispatchSlots.create(
                 request.analyses.allocator,

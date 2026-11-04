@@ -429,6 +429,8 @@ pub const Tables = struct {
     exported_defs: []const CIR.Def.Idx = &.{},
     /// The pairing's types for a platform read under a platform/app pairing.
     pairing_types: ?*const checked_artifact.PairingTypeColumn = null,
+    /// The reader over the module's dispatch resolution.
+    dispatch: ?checked_artifact.CheckedDispatch = null,
 };
 
 /// The value a custom literal pattern converts its literal to before

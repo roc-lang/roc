@@ -3156,7 +3156,7 @@ pub fn builtinOwnerForCheckedBuiltin(builtin: anytype) BuiltinOwner {
 /// Public `lookupCheckedMethodTarget` declaration: exact callable-or-structural
 /// registry lookup in the local registry, then the imported views.
 pub fn lookupCheckedMethodTarget(
-    names: *canonical.CanonicalNameStore,
+    names: *const canonical.CanonicalNameStore,
     local_method_registry: *const MethodRegistry,
     imported_views: anytype,
     owner: MethodOwner,
