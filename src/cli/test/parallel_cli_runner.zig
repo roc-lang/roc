@@ -706,6 +706,7 @@ const CustomCase = enum {
     issue_12741_wasm_generic_tail_calls_dev,
     issue_12741_wasm_generic_tail_calls_size,
     issue_12741_wasm_generic_tail_calls_speed,
+    issue_12848_wasm_shared_helper_emitted_once_size,
     boxy_recursive_method_dispatch_wasm_dev,
     boxy_recursive_method_dispatch_wasm_size,
     boxy_padded_records_wasm_dev,
@@ -4534,6 +4535,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12769: wasm32 object packs offer no entry past the parameter limit (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_12769_wasm_object_entry_parameter_limit } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_dev } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_size } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12848: a helper with many callers is emitted once on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .issue_12848_wasm_shared_helper_emitted_once_size } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12741: generic tail calls run in constant stack on wasm32 (speed)", .timeout_ms = 600_000, .backend = .speed, .body = .{ .custom = .issue_12741_wasm_generic_tail_calls_speed } },
     .{ .id = 0, .suite = .subcommands, .name = "Boxy composes the dictionaries of a method whose scheme requires itself on wasm32 (dev)", .timeout_ms = 600_000, .backend = .dev, .body = .{ .custom = .boxy_recursive_method_dispatch_wasm_dev } },
     .{ .id = 0, .suite = .subcommands, .name = "Boxy composes the dictionaries of a method whose scheme requires itself on wasm32 (size)", .timeout_ms = 600_000, .backend = .size, .body = .{ .custom = .boxy_recursive_method_dispatch_wasm_size } },
@@ -6191,6 +6193,7 @@ fn runCustomCase(
         .issue_12769_wasm_object_entry_parameter_limit => customIssue12769WasmObjectEntryParameterLimit(io, allocator, &env, &timer, timeout_ms),
         .issue_12741_wasm_generic_tail_calls_dev => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=dev"),
         .issue_12741_wasm_generic_tail_calls_size => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=size"),
+        .issue_12848_wasm_shared_helper_emitted_once_size => customIssue12848WasmSharedHelperEmittedOnce(io, allocator, &env, &timer, timeout_ms),
         .issue_12741_wasm_generic_tail_calls_speed => customIssue12741WasmGenericTailCalls(io, allocator, &env, &timer, timeout_ms, "--opt=speed"),
         .boxy_recursive_method_dispatch_wasm_dev => customBoxyRecursiveMethodDispatchWasm(io, allocator, &env, &timer, timeout_ms, "--opt=dev"),
         .boxy_recursive_method_dispatch_wasm_size => customBoxyRecursiveMethodDispatchWasm(io, allocator, &env, &timer, timeout_ms, "--opt=size"),
@@ -13126,6 +13129,69 @@ fn customIssue12741WasmGenericTailCalls(
         return customFailure(allocator, timer, "failed to read the generic tail call module's allocation counts: {}", .{err});
     if (outstanding != 1) {
         return customFailure(allocator, timer, "generic tail call wasm left {d} allocations outstanding, not just its result", .{outstanding});
+    }
+    return null;
+}
+
+/// Under `--opt=size`, a helper with many callers is emitted once and
+/// called, so a program's code does not grow by a copy of the helper per
+/// caller. Both fixtures define the same four-append helper `put_u32`, which
+/// adds the marker constant 987654321 (0x3ADE68B1, whose signed LEB128
+/// encoding is `b1 d1 f9 d6 03`); every emitted copy of the helper carries
+/// that encoding once, so counting it in the final wasm module counts the
+/// copies. The module with sixteen callers must hold no more copies than the
+/// module with one.
+fn customIssue12848WasmSharedHelperEmittedOnce(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const marker_leb128 = [_]u8{ 0xb1, 0xd1, 0xf9, 0xd6, 0x03 };
+    // Each caller appends one tag byte and the helper's four bytes, and the
+    // program returns the length of the list.
+    const programs = [_]struct { roc_file: []const u8, output_name: []const u8, callers: []const u8, result: []const u8 }{
+        .{ .roc_file = "test/wasm/issue_12848_shared_helper_1_caller_app.roc", .output_name = "shared-helper-1-caller.wasm", .callers = "one caller", .result = "5" },
+        .{ .roc_file = "test/wasm/issue_12848_shared_helper_16_callers_app.roc", .output_name = "shared-helper-16-callers.wasm", .callers = "sixteen callers", .result = "80" },
+    };
+    var copies: [programs.len]usize = undefined;
+    for (programs, 0..) |program, i| {
+        const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, program.output_name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate wasm output path: {}", .{err});
+        defer allocator.free(output_path);
+        const output_arg = outputArg(allocator, output_path) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate wasm output argument: {}", .{err});
+        defer allocator.free(output_arg);
+
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "build", "--target=wasm32", "--opt=size", "--no-cache", output_arg },
+            .roc_file = program.roc_file,
+            .exit = .success,
+            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+            .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+        })) |failure| return failure;
+        if (validateWasmOutput(io, allocator, timer, output_path)) |failure| return failure;
+
+        const wasm_bytes = std.Io.Dir.cwd().readFileAlloc(io, output_path, allocator, .unlimited) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read wasm output {s}: {}", .{ output_path, err });
+        defer allocator.free(wasm_bytes);
+        copies[i] = std.mem.count(u8, wasm_bytes, &marker_leb128);
+
+        var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
+            return customFailure(allocator, timer, "failed to load the shared helper wasm module with {s}: {}", .{ program.callers, err });
+        defer wasm.deinit();
+        const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
+            return customFailure(allocator, timer, "shared helper wasm execution with {s} failed: {}", .{ program.callers, err });
+        if (!std.mem.eql(u8, result, program.result)) {
+            return customFailure(allocator, timer, "shared helper wasm with {s} returned \"{s}\", expected \"{s}\"", .{ program.callers, result, program.result });
+        }
+    }
+    if (copies[0] == 0) {
+        return customFailure(allocator, timer, "the module with one caller holds no copy of the helper's marker constant", .{});
+    }
+    if (copies[1] > copies[0]) {
+        return customFailure(allocator, timer, "--opt=size emitted {d} copies of the helper for sixteen callers but {d} for one caller: the helper must be emitted once and called", .{ copies[1], copies[0] });
     }
     return null;
 }
