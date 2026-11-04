@@ -241,7 +241,7 @@ pub fn contentDigests(gpa: Allocator, std_io: std.Io, paths: []const []const u8,
     defer gpa.free(inputs);
     @memset(inputs, .{});
     defer for (inputs) |input| {
-        if (input.bytes.len != 0) std.posix.munmap(input.bytes);
+        if (input.bytes.len != 0) link_output.unmapReadOnly(input.bytes);
         if (input.file) |file| file.close(std_io);
     };
     var chunk_count: usize = 0;
