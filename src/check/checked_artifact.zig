@@ -13453,6 +13453,7 @@ pub const SiteEvidenceLookup = struct {
     owner: static_dispatch.EvidenceOwner,
 };
 
+/// One plan's resolution within an analysis's result, keyed by plan.
 pub const PlanResolutionEntry = struct {
     plan: u32,
     resolution: static_dispatch.PlanResolution,
@@ -13466,6 +13467,7 @@ pub const PlanResolutionEntry = struct {
     }
 };
 
+/// One iterator plan's resolution within an analysis's result, keyed by plan.
 pub const IteratorPlanResolutionEntry = struct {
     plan: u32,
     resolution: static_dispatch.IteratorPlanResolution,
@@ -17019,6 +17021,7 @@ pub const empty_template_dispatch: TemplateDispatch = .{
     .deferred_sites = &.{},
 };
 
+/// The relations of a template whose body reaches no dispatch plan.
 pub const empty_template_relations: TemplateDispatchRelations = .{
     .direct = &.{},
     .relations = &.{},
@@ -18776,7 +18779,6 @@ pub const CheckedProcedureTemplateTable = struct {
         return self.demand_pool[template.demands.start .. template.demands.start + template.demands.len];
     }
 
-
     /// The template's literal requirements (design.md "Literal Arguments").
     pub fn templateLiteralRequirements(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const LiteralRequirement {
         return self.literal_requirements_pool[template.literal_requirements.start .. template.literal_requirements.start + template.literal_requirements.len];
@@ -18803,7 +18805,6 @@ pub const CheckedProcedureTemplateTable = struct {
         const found = artifact_serialize.binarySearchByKey(LiteralEdgeEntry, u64, entries, key, literalEdgeEntryOrder) orelse return &.{};
         return self.literal_edge_args_pool[found.args.start .. found.args.start + found.args.len];
     }
-
 
     pub fn specializationRelations(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const SpecializationInterfaceRelation {
         const span = template.specialization_interface_relations;
@@ -30636,7 +30637,6 @@ pub const CheckedModuleArtifact = struct {
                 }
             }
         }
-
 
         for (self.root_requests.requests, 0..) |request, i| {
             std.debug.assert(request.order == i);

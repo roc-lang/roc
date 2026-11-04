@@ -23,6 +23,7 @@ const OwnedCheckedModule = struct {
     owned_source: ?[]u8 = null,
 };
 
+/// One module of a `Modules` set: its environment and how the set owns it.
 pub const ModuleData = struct {
     env: *ModuleEnv,
     top_level_defs_by_ident: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx) = .{},

@@ -1518,8 +1518,8 @@ pub const EvidenceOwner = enum(u32) {
 
     pub fn forTemplate(template_id: canonical.CheckedProcedureTemplateId) EvidenceOwner {
         const raw = @backingInt(template_id);
-        std.debug.assert(raw < @intFromEnum(EvidenceOwner.platform_requirements));
-        return @enumFromInt(raw);
+        std.debug.assert(raw < @backingInt(EvidenceOwner.platform_requirements));
+        return @fromBackingInt(@intCast(raw));
     }
 
     /// The template whose resolution owns the pool, or null for a
@@ -1527,7 +1527,7 @@ pub const EvidenceOwner = enum(u32) {
     pub fn template(self: EvidenceOwner) ?canonical.CheckedProcedureTemplateId {
         return switch (self) {
             .module, .platform_requirements => null,
-            _ => @fromBackingInt(@intFromEnum(self)),
+            _ => @fromBackingInt(@backingInt(self)),
         };
     }
 };
@@ -2841,6 +2841,7 @@ pub const StaticDispatchPlanTable = struct {
     }
 };
 
+/// Orders site evidence entries by their CIR node for binary search.
 pub fn siteEvidenceOrder(e: SiteEvidenceEntry, key: u32) std.math.Order {
     return std.math.order(e.key, key);
 }
