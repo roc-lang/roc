@@ -1418,7 +1418,7 @@ pub const SmallWords = [3]usize;
 const word_bits = @bitSizeOf(usize);
 const WordShift = std.math.Log2Int(usize);
 
-// The word arithmetic below (`concatSmall`, `concatShort`) puts a string's
+// The word arithmetic below (`concatSmall`) puts a string's
 // first byte in the lowest bits of its first word, which holds only where the
 // target is little-endian. A big-endian target fails here instead of
 // scrambling every small concat.
@@ -1443,91 +1443,71 @@ pub inline fn smallFromWords(words: SmallWords) RocStr {
     };
 }
 
-/// The low `bit_count` bits of `words`, every bit above them zero.
-inline fn smallMasked(words: SmallWords, bit_count: usize) SmallWords {
-    std.debug.assert(bit_count <= 3 * word_bits);
-    var masked: SmallWords = undefined;
-    inline for (0..3) |index| {
-        const below = index * word_bits;
-        masked[index] = if (bit_count >= below + word_bits)
-            words[index]
-        else if (bit_count <= below)
-            0
-        else
-            words[index] & ((@as(usize, 1) << @intCast(bit_count - below)) - 1);
-    }
-    return masked;
+const DoubleWord = @Int(.unsigned, 2 * word_bits);
+const DoubleWordShift = std.math.Log2Int(DoubleWord);
+
+comptime {
+    std.debug.assert(SMALL_STRING_SIZE == 3 * @sizeOf(usize));
 }
 
-/// `words` shifted up by `bit_count` bits, the bits shifted past the top
-/// dropped. Each word shift is chosen among the three, never indexed.
-inline fn smallShiftedUp(words: SmallWords, bit_count: usize) SmallWords {
-    std.debug.assert(bit_count < 3 * word_bits);
-    const word_shift = bit_count / word_bits;
-    const bit_shift: WordShift = @intCast(bit_count % word_bits);
-    var shifted: [3]SmallWords = undefined;
-    inline for (0..3) |by| {
-        inline for (0..3) |index| {
-            const word: usize = if (index >= by) words[index - by] else 0;
-            const below: usize = if (index >= by + 1) words[index - by - 1] else 0;
-            // `below >> (word_bits - bit_shift)`, zero when `bit_shift` is zero.
-            shifted[by][index] = (word << bit_shift) | ((below >> 1) >> (word_bits - 1 - bit_shift));
-        }
-    }
-    return switch (word_shift) {
-        0 => shifted[0],
-        1 => shifted[1],
-        2 => shifted[2],
-        else => unreachable, // bit_count < 3 * word_bits, asserted above
-    };
-}
-
-/// Two small strings whose result is small: each masked to its bytes, the
-/// second shifted up by the first's length, the flag byte set. All of it in
-/// whole words, so the result's words forward from the stores that made
-/// them; no byte copies, and no wide load waiting on narrow stores. Inline,
-/// so the caller's small path keeps the words in registers.
+/// Two small strings whose result is small, in whole words, with little
+/// enough code to inline at every call site: the first masked to its length,
+/// the second shifted up by it, and the result masked once to its own
+/// length, which also clears whatever of the second lay past its length (its
+/// flag byte too). Each shift is of the first two words as one integer of
+/// twice their width, which a target does in registers; the masks come from
+/// a table. No byte copies, and no wide load waiting on narrow stores.
 pub inline fn concatSmall(arg1: RocStr, arg2: RocStr, combined_length: usize) RocStr {
     std.debug.assert(arg1.isSmallStr() and arg2.isSmallStr());
     std.debug.assert(combined_length < SMALL_STRING_SIZE);
-    const first = smallMasked(smallWords(arg1), arg1.len() * 8);
-    const second = smallShiftedUp(smallMasked(smallWords(arg2), arg2.len() * 8), arg1.len() * 8);
+    const first = smallWords(arg1);
+    const first_mask = smallMask(arg1.len());
+    const second = smallShiftedUpBytes(smallWords(arg2), arg1.len());
+    const result_mask = smallMask(combined_length);
     var words: SmallWords = undefined;
-    inline for (0..3) |index| words[index] = first[index] | second[index];
+    inline for (0..3) |index| {
+        words[index] = ((first[index] & first_mask[index]) | second[index]) & result_mask[index];
+    }
     words[2] |= @as(usize, RocStr.smallStrFlagByte(combined_length)) << (word_bits - 8);
     return smallFromWords(words);
 }
 
-/// The bytes a result of `concatShort` may hold: its first two words, less
-/// one byte so no shift reaches their width.
-pub const SHORT_CONCAT_LENGTH_MAX = 2 * @sizeOf(usize) - 1;
-const DoubleWord = @Int(.unsigned, 2 * word_bits);
-const DoubleWordShift = std.math.Log2Int(DoubleWord);
-
-/// Two small strings whose result fits in the first two words, as
-/// `concatSmall` makes it, with less code: the two words as one integer of
-/// twice their width, which a target shifts by a run-time amount in
-/// registers (unlike three words), and a third word that is only the flag
-/// byte. Small enough to inline at every call site.
-pub inline fn concatShort(arg1: RocStr, arg2: RocStr, combined_length: usize) RocStr {
-    std.debug.assert(arg1.isSmallStr() and arg2.isSmallStr());
-    std.debug.assert(combined_length <= SHORT_CONCAT_LENGTH_MAX);
-    const first_bits: DoubleWordShift = @intCast(arg1.len() * 8);
-    const second_bits: DoubleWordShift = @intCast(arg2.len() * 8);
-    const one: DoubleWord = 1;
-    const first = shortWords(arg1) & ((one << first_bits) - 1);
-    const second = shortWords(arg2) & ((one << second_bits) - 1);
-    const joined = first | (second << first_bits);
-    return .{
-        .bytes = @ptrFromInt(@as(usize, @truncate(joined))),
-        .capacity_or_alloc_ptr = @truncate(joined >> word_bits),
-        .length = @as(usize, RocStr.smallStrFlagByte(combined_length)) << (word_bits - 8),
-    };
+/// The words of a small string whose first `length` bytes are all ones and
+/// the rest zero. A table, so a mask at an inlined call site is three loads
+/// of read-only data rather than shifts and selects (code LLVM weighs
+/// against inlining).
+inline fn smallMask(length: usize) SmallWords {
+    std.debug.assert(length < SMALL_STRING_SIZE);
+    return small_masks[length];
 }
 
-/// A small string's first two words as one integer, its first byte lowest.
-inline fn shortWords(string: RocStr) DoubleWord {
-    return @as(DoubleWord, @intFromPtr(string.bytes)) | (@as(DoubleWord, string.capacity_or_alloc_ptr) << word_bits);
+const small_masks: [SMALL_STRING_SIZE]SmallWords = blk: {
+    var masks: [SMALL_STRING_SIZE]SmallWords = undefined;
+    for (&masks, 0..) |*mask, length| {
+        var bytes: [SMALL_STRING_SIZE]u8 = @splat(0);
+        for (bytes[0..length]) |*byte| byte.* = 0xff;
+        mask.* = @bitCast(bytes);
+    }
+    break :blk masks;
+};
+
+/// `words` shifted up by `byte_count` bytes, what passes the top dropped. A
+/// shift of less than a word moves all three, the third by a funnel from
+/// the second; a longer one leaves the third word's bytes past the top, so
+/// the first two shifted as one integer, a word up, are all that remain.
+inline fn smallShiftedUpBytes(words: SmallWords, byte_count: usize) SmallWords {
+    std.debug.assert(byte_count < SMALL_STRING_SIZE);
+    const word_bytes = @sizeOf(usize);
+    const within_first_word = byte_count < word_bytes;
+    const first_two = @as(DoubleWord, words[0]) | (@as(DoubleWord, words[1]) << word_bits);
+    const two_bits: DoubleWordShift = @intCast(8 * (byte_count - @as(usize, if (within_first_word) 0 else word_bytes)));
+    const shifted = first_two << two_bits;
+    const low: usize = @truncate(shifted);
+    const high: usize = @truncate(shifted >> word_bits);
+    // `words[1] >> (word_bits - word_bits_shift)`, zero when the shift is zero.
+    const word_bits_shift: WordShift = @intCast(8 * (byte_count % word_bytes));
+    const third = (words[2] << word_bits_shift) | ((words[1] >> 1) >> (word_bits - 1 - word_bits_shift));
+    return if (within_first_word) .{ low, high, third } else .{ 0, low, high };
 }
 
 /// Str.contains
@@ -3914,8 +3894,8 @@ test "RocStr.concat: a small first argument and every length, small and big resu
 }
 
 test "RocStr.concat: a small string's first byte is its first word's lowest" {
-    // The layout the word arithmetic of `concatSmall` and `concatShort`
-    // relies on, checked from memory on the target the tests run on: each
+    // The layout the word arithmetic of `concatSmall` relies on, checked
+    // from memory on the target the tests run on: each
     // byte of the string at its place in the words, the flag byte the last
     // word's highest.
     const text = "abcdefghijklmnopqrstuvw";
@@ -3930,29 +3910,30 @@ test "RocStr.concat: a small string's first byte is its first word's lowest" {
     try std.testing.expectEqual(RocStr.smallStrFlagByte(SMALL_STRING_SIZE - 1), flag);
 }
 
-test "RocStr.concat: concatShort is concatSmall for every pair of lengths it takes" {
+test "RocStr.concat: concatSmall for every pair of lengths with a small result" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
     const roc_ops = test_env.getOps();
     const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    // Both arguments cut short from full small strings, so each keeps its old
-    // bytes past its length and its flag byte says the cut length: the result
-    // must carry neither.
+    // Both arguments cut short from full small strings: each keeps its old
+    // bytes past its length, and its flag byte says the cut length. The
+    // result must carry neither.
     const first_full = RocStr.fromSliceSmall(letters[0 .. SMALL_STRING_SIZE - 1]);
     const second_full = RocStr.fromSliceSmall(letters[letters.len - (SMALL_STRING_SIZE - 1) ..]);
-    for (0..SHORT_CONCAT_LENGTH_MAX + 1) |first_length| {
-        for (0..SHORT_CONCAT_LENGTH_MAX + 1 - first_length) |second_length| {
+    for (0..SMALL_STRING_SIZE) |first_length| {
+        for (0..SMALL_STRING_SIZE - first_length) |second_length| {
             const first = substringUnsafe(first_full, 0, first_length, roc_ops);
             const second = substringUnsafe(second_full, 0, second_length, roc_ops);
             try std.testing.expect(first.isSmallStr() and second.isSmallStr());
             const combined_length = first_length + second_length;
-            const short = concatShort(first, second, combined_length);
-            const small = concatSmall(first, second, combined_length);
-            try std.testing.expectEqualSlices(u8, std.mem.asBytes(&small), std.mem.asBytes(&short));
-            var expected: [SHORT_CONCAT_LENGTH_MAX]u8 = undefined;
+            const result = concatSmall(first, second, combined_length);
+            var expected: [SMALL_STRING_SIZE - 1]u8 = undefined;
             @memcpy(expected[0..first_length], letters[0..first_length]);
             @memcpy(expected[first_length..][0..second_length], second_full.asSlice()[0..second_length]);
-            try std.testing.expect(short.eqlSlice(expected[0..combined_length]));
+            // Byte for byte the small string fromSliceSmall makes: the bytes,
+            // zeros past them, the flag byte with the length.
+            const canonical = RocStr.fromSliceSmall(expected[0..combined_length]);
+            try std.testing.expectEqualSlices(u8, std.mem.asBytes(&canonical), std.mem.asBytes(&result));
         }
     }
 }
