@@ -52,6 +52,39 @@ pub fn roc_desc_site_publish(site: *compose.CompositionSite, count: u32, operand
     site.publish(cache(), composeOps(), items(usize, count, operands), result);
 }
 
+/// The end of a run of `count` dynamic locals of type `desc` placed after
+/// `offset` bytes of a procedure's frame region: the run starts at `offset`
+/// rounded up to the type's alignment, and each local takes the type's size
+/// rounded up to its alignment.
+pub fn roc_desc_frame_run_size(desc: *const TypeDesc, count: u32, offset: usize) callconv(.c) usize {
+    return frameRunStart(offset, desc) + frameStride(desc) * count;
+}
+
+/// Place a run of `count` dynamic locals of type `desc` in `region`, where
+/// `roc_desc_frame_run_size` measured it, writing each local's address to
+/// `slots[i]`, and return the run's end. A procedure places its frame as one
+/// run per descriptor, so it makes one call and names one address slot array
+/// per run rather than storing one address and one descriptor per local;
+/// those stores would each be a stack access of the procedure's entry block,
+/// which LLVM's WebAssembly register stackifier handles quadratically.
+pub fn roc_desc_frame_place_run(desc: *const TypeDesc, count: u32, region: [*]u8, offset: usize, slots: [*][*]u8) callconv(.c) usize {
+    const start = frameRunStart(offset, desc);
+    const stride = frameStride(desc);
+    for (slots[0..count], 0..) |*slot, i| slot.* = region + start + stride * i;
+    return start + stride * count;
+}
+
+/// `offset` rounded up to `desc`'s alignment, a power of two.
+fn frameRunStart(offset: usize, desc: *const TypeDesc) usize {
+    const alignment: usize = desc.alignment;
+    return (offset +% alignment -% 1) & (0 -% alignment);
+}
+
+/// The bytes between consecutive locals of type `desc` in a run.
+fn frameStride(desc: *const TypeDesc) usize {
+    return frameRunStart(desc.size, desc);
+}
+
 /// The C-ABI form of `compose.list`.
 pub fn roc_desc_list(elem: *const TypeDesc) callconv(.c) *const TypeDesc {
     return compose.list(cache(), composeOps(), elem);

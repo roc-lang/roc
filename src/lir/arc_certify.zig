@@ -1003,6 +1003,12 @@ const ValueInfo = struct {
     /// direct call result. Empty for every other value.
     call_outcomes: arc_sig.OutcomeSpan = .empty,
     call_restitution: []const RestitutionReceipt = &.{},
+    /// The one switch that refines a direct call result's outcome
+    /// (`arc_solve.findOutcomeRefinement`), or null when nothing refines it.
+    /// Only that switch replays the call's restitution: the call restitutes
+    /// its arguments once, and a later switch on the same result decides
+    /// nothing about them.
+    call_refinement: ?LIR.CFStmtId = null,
 };
 
 /// One exact ownership state along a control-flow path. Forks share all
@@ -4508,6 +4514,7 @@ const Certifier = struct {
         // here, so the claim crosses the join on the container instead of a
         // negative balance failing below.
         try self.settleNegativeClaims(state);
+        try self.addUnclaimedSelectionCarriers(state);
 
         // Every bound value's lowest carrier names provenance anchors.
         self.repr_scratch.clearRetainingCapacity();
@@ -4758,6 +4765,43 @@ const Certifier = struct {
             };
             const holds_unit = state.balanceOf(value) != 0 and !try self.claimsSpendUnit(state, value);
             if (!reaches_carried and !(holds_unit and self.payloadChainStoresOwnership(state, value))) continue;
+            var link = self.values.items[value].payload_source;
+            while (link != no_value and !self.carrier_scratch.contains(link)) : (link = self.values.items[link].payload_source) {
+                const carrier = self.repr_scratch.get(link) orelse continue;
+                try self.provenance_carrier_scratch.put(carrier, {});
+                try self.relevant_bound_scratch.append(self.allocator, carrier);
+                try self.carrier_scratch.put(link, carrier);
+            }
+        }
+        if (self.relevant_bound_scratch.items.len != relevant_len) {
+            std.mem.sort(u32, self.relevant_bound_scratch.items, {}, std.sort.asc(u32));
+        }
+    }
+
+    /// A relevant selection that holds no unit and reaches no carried
+    /// container claims its stored unit before quotienting. When a sibling's
+    /// take already claimed part of that unit, as when a record's `name` is
+    /// released on one branch and its `value` is read after the join, the
+    /// claim is unavailable and the rest of the unit stays with the container,
+    /// which the selection's later reads still need. Every carrier on the
+    /// selection's chain then joins the relevant bound positions, exactly as
+    /// for a selection that holds a unit of its own.
+    fn addUnclaimedSelectionCarriers(self: *Certifier, state: *const State) Allocator.Error!void {
+        const relevant_len = self.relevant_bound_scratch.items.len;
+        for (0..relevant_len) |index| {
+            const value = state.valueAtDense(self.relevant_bound_scratch.items[index]);
+            if (value == no_value or self.values.items[value].payload_source == no_value) continue;
+            if (!self.holdsNoOwnership(state, value)) continue;
+            if (!self.payloadChainStoresOwnership(state, value)) continue;
+            var reaches_carried = false;
+            var probe = self.values.items[value].payload_source;
+            while (probe != no_value) : (probe = self.values.items[probe].payload_source) {
+                if (self.carrier_scratch.contains(probe)) {
+                    reaches_carried = true;
+                    break;
+                }
+            }
+            if (reaches_carried) continue;
             var link = self.values.items[value].payload_source;
             while (link != no_value and !self.carrier_scratch.contains(link)) : (link = self.values.items[link].payload_source) {
                 const carrier = self.repr_scratch.get(link) orelse continue;
@@ -5499,7 +5543,7 @@ const Certifier = struct {
                     cursor = init.next;
                 },
                 .assign_call => |assign| {
-                    try self.applyCall(&state, assign.target, self.sigs.get(assign.proc), assign.args);
+                    try self.applyCall(&state, assign.target, self.sigs.get(assign.proc), assign.args, assign.next);
                     cursor = assign.next;
                 },
                 .assign_call_erased => |assign_stmt| {
@@ -5515,7 +5559,7 @@ const Certifier = struct {
                         try self.requireLive(&state, reuse_source)
                     else
                         no_value;
-                    try self.applyCall(&state, assign_stmt.target, arc_sig.RcSig.all_owned, assign.args);
+                    try self.applyCall(&state, assign_stmt.target, arc_sig.RcSig.all_owned, assign.args, assign_stmt.next);
                     if (assign.reuse_source) |reuse_source| try self.consumeUnit(&state, reuse_value, reuse_source);
                     cursor = assign_stmt.next;
                 },
@@ -5667,7 +5711,11 @@ const Certifier = struct {
                 .switch_stmt => |switch_stmt| {
                     _ = try self.requireLive(&state, switch_stmt.cond);
                     const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
-                    const outcome_result = state.outcomeDiscriminant(switch_stmt.cond);
+                    // Only the call's refining switch replays its restitution.
+                    const outcome_result = if (state.outcomeDiscriminant(switch_stmt.cond)) |result|
+                        if (self.values.items[result].call_refinement == cursor) result else null
+                    else
+                        null;
                     // A switch on a container's discriminant: arms for other
                     // variants are infeasible once the variant is proven, and
                     // an arm proves its variant where nothing did before.
@@ -6229,6 +6277,7 @@ const Certifier = struct {
         target: LIR.LocalId,
         callee_sig: arc_sig.RcSig,
         args: LIR.LocalSpan,
+        next: LIR.CFStmtId,
     ) CertifyError!void {
         const arg_locals = self.store.getLocalSpan(args);
         const outcomes = self.sigs.outcomesOf(callee_sig);
@@ -6332,9 +6381,11 @@ const Certifier = struct {
                 RestitutionReceipt,
                 receipts_buffer[0..receipt_len],
             );
+            const refinement = try arc_solve.findOutcomeRefinement(self.allocator, self.store, target, next, callee_sig.outcomes, .skipped);
             const info = &self.values.items[target_value];
             info.call_outcomes = callee_sig.outcomes;
             info.call_restitution = receipts;
+            info.call_refinement = refinement;
         }
     }
 

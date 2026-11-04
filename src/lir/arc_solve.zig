@@ -423,6 +423,19 @@ pub const Solution = struct {
         return @fromBackingInt(@intCast(cursor));
     }
 
+    /// The first local of `local`'s chain of pure same-value aliases: the
+    /// binding every alias in the chain names the value of.
+    pub fn aliasRootOf(self: *const Solution, local: LIR.LocalId) LIR.LocalId {
+        var cursor = @backingInt(local);
+        var steps: usize = 0;
+        while (cursor < self.alias_source.len and self.alias_source[cursor] != no_local) {
+            cursor = self.alias_source[cursor];
+            steps += 1;
+            if (steps > self.alias_source.len) solveInvariant("ARC alias-source chain contained a cycle");
+        }
+        return @fromBackingInt(@intCast(cursor));
+    }
+
     /// The local a solved-borrowed local borrows its value through, or null
     /// for owned bindings and borrowed parameters.
     pub fn borrowSourceOf(self: *const Solution, local: LIR.LocalId) ?LIR.LocalId {
@@ -1375,6 +1388,12 @@ const OutcomeBitAccum = struct {
     present_on_all_paths: bool,
 };
 
+/// Whether RC statements may lie between a call and the switch that refines
+/// its outcome. Insertion and field dismantling read the program before ARC
+/// places any; certification reads it after, where RC bookkeeping may sit
+/// anywhere on the way and changes nothing about which switch refines.
+pub const RefinementRcStatements = enum { absent, skipped };
+
 /// The switch that refines a direct call's outcome, when the result-control
 /// relation is explicit in LIR: starting at `next`, the call result `target`
 /// passes through pure same-value aliases and join declarations (a join
@@ -1388,6 +1407,7 @@ pub fn findOutcomeRefinement(
     target: LIR.LocalId,
     next: LIR.CFStmtId,
     outcomes: arc_sig.OutcomeSpan,
+    rc_statements: RefinementRcStatements,
 ) SolveError!?LIR.CFStmtId {
     if (outcomes.isEmpty()) return null;
     var aliases = std.ArrayList(LIR.LocalId).empty;
@@ -1425,6 +1445,10 @@ pub fn findOutcomeRefinement(
                 const refined = discriminant orelse return null;
                 return if (switch_stmt.cond == refined) cursor else null;
             },
+            inline .incref, .decref, .decref_if_initialized, .free => |rc| switch (rc_statements) {
+                .absent => return null,
+                .skipped => cursor = rc.next,
+            },
             .init_uninitialized,
             .assign_literal,
             .assign_call,
@@ -1442,10 +1466,6 @@ pub fn findOutcomeRefinement(
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .incref,
-            .decref,
-            .decref_if_initialized,
-            .free,
             .switch_initialized_payload,
             .str_match,
             .str_match_set,

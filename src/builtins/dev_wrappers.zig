@@ -2574,8 +2574,9 @@ pub fn roc_builtins_native_callable_call(callable: erased_callable.CallableFnPtr
 pub fn roc_builtins_native_callable_defer(pending: *native_callable.Pending, callable: erased_callable.CallableFnPtr, closure: [*]u8, args: ?[*]const u8, args_len: usize) callconv(.c) void {
     native_callable.deferCall(pending, callable, closure, args, args_len);
 }
-/// Run a producer-declared chain of pending monomorphic calls.
-pub fn roc_builtins_native_callable_drive(pending: *native_callable.Pending, ret: ?[*]u8) callconv(.c) void {
+/// Run a producer-declared chain of pending monomorphic calls, out of line
+/// (`native_callable.drivePending`).
+pub noinline fn roc_builtins_native_callable_drive(pending: *native_callable.Pending, ret: ?[*]u8) callconv(.c) void {
     native_callable.drive(pending, ret);
 }
 /// The trampoline's pending cell, when the trampoline invoked this callable.
