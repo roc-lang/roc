@@ -3269,9 +3269,6 @@ Builtin :: [].{
 
 		## Returns an iterator that yields the given item first, followed by
 		## everything the given iterator yields.
-		##
-		## The compiler uses this to assemble the iterator it passes to
-		## `from_interpolation` when checking an interpolated string literal.
 		## ```roc
 		## expect Iter.fold([2, 3].iter().prepended(1), [], |acc, item| acc.append(item)) == [1, 2, 3]
 		## ```
@@ -3328,6 +3325,9 @@ Builtin :: [].{
 
 		## Returns an iterator that yields everything from the given iterator,
 		## followed by the given item.
+		##
+		## The compiler builds the iterator it passes to a `from_interpolation`
+		## assembler with this, appending each interpolated value in order.
 		## ```roc
 		## expect Iter.fold([1.I64, 2].iter().append(3), [], |acc, item| acc.append(item)) == [1, 2, 3]
 		## ```
