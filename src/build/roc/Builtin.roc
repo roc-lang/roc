@@ -4790,16 +4790,16 @@ Builtin :: [].{
 		## ```
 		keep_until : List(item), (item -> Bool) -> List(item)
 		keep_until = |items, predicate| {
-		  var $result = List.reserve([], items.len())
-		  for item in items {
-		  	    if predicate(item) == False {
-		  	        $result = list_append_unsafe($result,item)
-		  	    } else return $result
-		  }
-		  $result
+			var $result = List.reserve([], items.len())
+			for item in items {
+				if predicate(item) == False {
+					$result = list_append_unsafe($result, item)
+				} else return $result
+			}
+			$result
 		}
 
-        ## Run the given function on each item and keep every item
+		## Run the given function on each item and keep every item
 		## until the function returns `Bool.False`.
 		## ```roc
 		## expect [1, 2, 3].keep_while(|item| item == 1) |> List.is_eq([1])
@@ -4808,13 +4808,13 @@ Builtin :: [].{
 		## ```
 		keep_while : List(item), (item -> Bool) -> List(item)
 		keep_while = |items, predicate| {
-		  var $result = List.reserve([], items.len())
-		  for item in items {
-		  	    if predicate(item) {
-		  	        $result = list_append_unsafe($result,item)
-		  	    } else return $result
-		  }
-		  $result  
+			var $result = List.reserve([], items.len())
+			for item in items {
+				if predicate(item) {
+					$result = list_append_unsafe($result, item)
+				} else return $result
+			}
+			$result
 		}
 
 		## Run the given function on each item of a list, and return a list of
