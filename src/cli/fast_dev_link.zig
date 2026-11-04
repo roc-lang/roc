@@ -1,5 +1,6 @@
-//! A fast dev link: `roc build --opt=dev --specialize=no` of a Linux
-//! x86_64, macOS arm64 or Windows executable, linked by copying the
+//! A fast dev link: `roc build --opt=dev --specialize=no` of an executable
+//! for any 64-bit x86 or ARM target (ELF for Linux and the BSDs, Mach-O,
+//! COFF), linked by copying the
 //! pre-linked host (`host_prelink.zig`, `macho/HostPrelink.zig`,
 //! `coff/HostPrelink.zig`) and patching the program's unit images in after
 //! it (`patch_link.zig`, `macho/PatchLink.zig`, `coff/PatchLink.zig`)
@@ -308,8 +309,8 @@ pub const PrelinkError = linker.LinkError || host_prelink.FinishError || HostPre
 pub fn prelink(ctx: *CliCtx, spec: *const HostSpec, key: [32]u8, manager: *CacheManager, scratch_dir: []const u8, provides: []const host_prelink.Provide) PrelinkError![]align(16) u8 {
     const arm64 = spec.target.toCpuArch() == .aarch64;
     const object = switch (spec.format) {
-        .elf => try host_prelink.linkObject(ctx.gpa, spec.provides),
-        .macho => try HostPrelink.linkObject(ctx.gpa, provides, spec.keep),
+        .elf => try host_prelink.linkObject(ctx.gpa, arm64, spec.provides),
+        .macho => try HostPrelink.linkObject(ctx.gpa, arm64, provides, spec.keep),
         .coff => try CoffHostPrelink.linkObject(ctx.gpa, arm64, provides, spec.keep),
     };
     defer ctx.gpa.free(object);
@@ -320,8 +321,8 @@ pub fn prelink(ctx: *CliCtx, spec: *const HostSpec, key: [32]u8, manager: *Cache
         .elf => try linker.link(ctx, .{
             .target_format = .elf,
             .target_abi = spec.link_abi,
-            .target_os = .linux,
-            .target_arch = .x86_64,
+            .target_os = spec.target.toOsTag(),
+            .target_arch = spec.target.toCpuArch(),
             .output_path = exe_path,
             .output_kind = .exe,
             .lazy_platform_archives = true,
@@ -338,7 +339,7 @@ pub fn prelink(ctx: *CliCtx, spec: *const HostSpec, key: [32]u8, manager: *Cache
             // reports it when the app imports it.
             var extra_args: std.ArrayList([]const u8) = .empty;
             defer extra_args.deinit(ctx.gpa);
-            try extra_args.appendSlice(ctx.gpa, &.{ "-headerpad", headerpad_arg, "-S", "-no_fixup_chains" });
+            try extra_args.appendSlice(ctx.gpa, &.{ "-headerpad", headerpad_arg, "-S", "-no_fixup_chains", "-adhoc_codesign" });
             for (spec.keep) |name| {
                 try extra_args.append(ctx.gpa, "-U");
                 try extra_args.append(ctx.gpa, try std.fmt.allocPrint(ctx.arena, "_{s}", .{name}));
@@ -347,7 +348,7 @@ pub fn prelink(ctx: *CliCtx, spec: *const HostSpec, key: [32]u8, manager: *Cache
                 .target_format = .macho,
                 .target_abi = spec.link_abi,
                 .target_os = .macos,
-                .target_arch = .aarch64,
+                .target_arch = spec.target.toCpuArch(),
                 .output_path = exe_path,
                 .output_kind = .exe,
                 .lazy_platform_archives = true,

@@ -1,4 +1,5 @@
-//! The pre-linked host of a fast dev link of a macOS arm64 executable.
+//! The pre-linked host of a fast dev link of a macOS executable, arm64 or
+//! x86_64.
 //!
 //! A platform's host is linked once, with the embedded LLD flags of a macOS
 //! link plus `-no_fixup_chains` and a header pad for the app's load
@@ -35,10 +36,16 @@ pub const Provide = host_prelink.Provide;
 /// A procedure window: ADRP, ADD, BR and a trap.
 pub const procedure_window = host_prelink.procedure_window;
 const window_align = host_prelink.window_align;
-/// A trampoline: one `B`.
-pub const trampoline_size: u64 = 4;
-/// The segment page of an arm64 macOS executable.
-pub const page_size: u64 = 0x4000;
+/// The bytes of a trampoline: one `B` on arm64, a `jmp rel32` and three
+/// traps on x86_64.
+pub fn trampolineSize(arm64: bool) u64 {
+    return if (arm64) 4 else 8;
+}
+/// The segment page of a macOS executable: 16 KiB on arm64, 4 KiB on
+/// x86_64.
+pub fn pageSize(arm64: bool) u64 {
+    return if (arm64) 0x4000 else 0x1000;
+}
 /// The load commands a patch link adds: the text segment with one section,
 /// the data segment with two, the debug segment with three.
 pub const app_load_commands: u32 = (72 + 80) + (72 + 2 * 80) + (72 + 3 * 80);
@@ -48,9 +55,10 @@ pub const headerpad: u32 = 0x1000;
 const prov_section = "__roc_prov";
 const tramp_section = "__roc_tramp";
 
-/// The generated object of a host link. `provides` and `keep` must be sorted
-/// and distinct.
-pub fn linkObject(allocator: Allocator, provides: []const Provide, keep: []const []const u8) Allocator.Error![]u8 {
+/// The generated object of a host link, for arm64 or x86_64. `provides` and
+/// `keep` must be sorted and distinct.
+pub fn linkObject(allocator: Allocator, arm64: bool, provides: []const Provide, keep: []const []const u8) Allocator.Error![]u8 {
+    const trampoline_size = trampolineSize(arm64);
     var procedures: u32 = 0;
     var data_size: u64 = 0;
     for (provides) |provide| switch (provide.kind) {
@@ -73,7 +81,7 @@ pub fn linkObject(allocator: Allocator, provides: []const Provide, keep: []const
         text_prov_ordinal = @intCast(section_count);
     }
     if (tramp_size != 0) {
-        specs[section_count] = .{ .segname = "__TEXT", .sectname = tramp_section, .size = tramp_size, .flags = code_flags, .@"align" = 2 };
+        specs[section_count] = .{ .segname = "__TEXT", .sectname = tramp_section, .size = tramp_size, .flags = code_flags, .@"align" = if (arm64) 2 else 3 };
         section_count += 1;
         tramp_ordinal = @intCast(section_count);
     }
@@ -111,8 +119,8 @@ pub fn linkObject(allocator: Allocator, provides: []const Provide, keep: []const
     try out.appendNTimes(allocator, 0, strtab_offset);
     const bytes = out.items;
     std.mem.writeInt(u32, bytes[0..4], macho.MH_MAGIC_64, .little);
-    std.mem.writeInt(u32, bytes[4..8], macho.CPU_TYPE_ARM64, .little);
-    std.mem.writeInt(u32, bytes[8..12], 0, .little);
+    std.mem.writeInt(u32, bytes[4..8], if (arm64) macho.CPU_TYPE_ARM64 else macho.CPU_TYPE_X86_64, .little);
+    std.mem.writeInt(u32, bytes[8..12], if (arm64) 0 else cpu_subtype_x86_64_all, .little);
     std.mem.writeInt(u32, bytes[12..16], macho.MH_OBJECT, .little);
     std.mem.writeInt(u32, bytes[16..20], 4, .little);
     std.mem.writeInt(u32, bytes[20..24], @intCast(commands_size), .little);
@@ -166,20 +174,35 @@ pub fn linkObject(allocator: Allocator, provides: []const Provide, keep: []const
     at += build_version_size;
     std.debug.assert(at == contents_offset);
 
-    // Windows trap until a build fills them; trampolines branch.
+    // Windows trap until a build fills them; trampolines branch, each
+    // through a branch relocation to its kept symbol.
     if (text_prov_ordinal != 0) {
         const start = contents_offset + addrs[text_prov_ordinal - 1];
-        var word: usize = 0;
-        while (word < text_prov_size) : (word += 4) std.mem.writeInt(u32, bytes[start + word ..][0..4], brk_instruction, .little);
+        if (arm64) {
+            var word: usize = 0;
+            while (word < text_prov_size) : (word += 4) std.mem.writeInt(u32, bytes[start + word ..][0..4], brk_instruction, .little);
+        } else {
+            @memset(bytes[start..][0..@intCast(text_prov_size)], int3_instruction);
+        }
     }
     if (tramp_ordinal != 0) {
         const start = contents_offset + addrs[tramp_ordinal - 1];
         for (0..keep.len) |index| {
-            std.mem.writeInt(u32, bytes[start + index * 4 ..][0..4], b_instruction, .little);
+            const trampoline = bytes[start + index * @as(usize, @intCast(trampoline_size)) ..][0..@intCast(trampoline_size)];
+            const field_offset: u32 = if (arm64) 0 else 1;
+            if (arm64) {
+                std.mem.writeInt(u32, trampoline[0..4], b_instruction, .little);
+            } else {
+                trampoline[0] = jmp_rel32_opcode;
+                @memset(trampoline[1..5], 0);
+                @memset(trampoline[5..8], int3_instruction);
+            }
             const reloc = bytes[reloc_offset + index * 8 ..][0..8];
-            std.mem.writeInt(u32, reloc[0..4], @intCast(index * 4), .little);
+            std.mem.writeInt(u32, reloc[0..4], @intCast(index * trampoline_size + field_offset), .little);
             const symbolnum: u32 = @intCast(provides.len + index);
-            const info: u32 = symbolnum | (1 << 24) | (2 << 25) | (1 << 27) | (@as(u32, arm64_reloc_branch26) << 28);
+            // Pc-relative, 4 bytes, external; `ARM64_RELOC_BRANCH26` and
+            // `X86_64_RELOC_BRANCH` share the type number.
+            const info: u32 = symbolnum | (1 << 24) | (2 << 25) | (1 << 27) | (@as(u32, reloc_branch) << 28);
             std.mem.writeInt(u32, reloc[4..8], info, .little);
         }
     }
@@ -226,7 +249,10 @@ pub fn linkObject(allocator: Allocator, provides: []const Provide, keep: []const
 
 const brk_instruction: u32 = 0xd420_0000;
 const b_instruction: u32 = 0x1400_0000;
-const arm64_reloc_branch26: u32 = 2;
+const int3_instruction: u8 = 0xcc;
+const jmp_rel32_opcode: u8 = 0xe9;
+const reloc_branch: u32 = 2;
+const cpu_subtype_x86_64_all: u32 = 3;
 const macho_platform_macos: u32 = 1;
 const macos_11: u32 = 0x000b_0000;
 
@@ -313,6 +339,8 @@ pub fn finish(allocator: Allocator, exe: []const u8, provides: []const Provide, 
     if (@as(u64, signature.dataoff) + signature.datasize != exe.len) return error.UnexpectedHostLayout;
     if (image.chained_fixups or image.dyld_info == null or image.symtab == null or image.dysymtab == null) return error.UnexpectedHostLayout;
     const host_size: u64 = signature.dataoff;
+    const page_size = pageSize(image.arm64);
+    const trampoline_size = trampolineSize(image.arm64);
     const linkedit = image.segments[image.linkedit];
     if (linkedit.fileoff % page_size != 0 or linkedit.fileoff > host_size) return error.UnexpectedHostLayout;
     // Every __LINKEDIT piece lies before the signature.
@@ -483,6 +511,9 @@ pub const View = struct {
 
     pub fn init(bytes: []align(16) const u8) ReadError!View {
         if (bytes.len < @sizeOf(Trailer) or bytes.len % 16 != 0) return error.InvalidRecord;
+        const cputype = std.mem.readInt(u32, bytes[4..8], .little);
+        if (cputype != macho.CPU_TYPE_ARM64 and cputype != macho.CPU_TYPE_X86_64) return error.InvalidRecord;
+        const page_size = pageSize(cputype == macho.CPU_TYPE_ARM64);
         const trailer_offset = std.mem.alignBackward(usize, bytes.len - @sizeOf(Trailer), 16);
         const trailer = std.mem.bytesToValue(Trailer, bytes[trailer_offset..][0..@sizeOf(Trailer)]);
         if (!std.mem.eql(u8, &trailer.magic, &magic) or trailer.version != format_version) return error.InvalidRecord;
@@ -518,7 +549,11 @@ pub const View = struct {
     pub fn name(self: View, offset: u32) []const u8 {
         return std.mem.sliceTo(self.bytes[@intCast(self.trailer.strings_offset + offset)..], 0);
     }
-    /// The SHA-256 of each `page_size` page of `segments()`.
+    /// Whether the host is an arm64 executable rather than an x86_64 one.
+    pub fn arm64(self: View) bool {
+        return std.mem.readInt(u32, self.bytes[4..8], .little) == macho.CPU_TYPE_ARM64;
+    }
+    /// The SHA-256 of each page (`pageSize`) of `segments()`.
     pub fn pageHashes(self: View) []const [32]u8 {
         const start: [*]const [32]u8 = @ptrCast(self.bytes.ptr + self.trailer.page_hashes_offset);
         return start[0..self.trailer.page_hash_count];
@@ -543,6 +578,8 @@ pub const View = struct {
 /// The load commands of a Mach-O arm64 executable the patch link rewrites.
 pub const Executable = struct {
     header: Header,
+    /// An arm64 executable, else an x86_64 one.
+    arm64: bool,
     segments: []const Segment,
     sections: []const Section,
     /// Indices into `segments`.
@@ -623,12 +660,14 @@ pub const Executable = struct {
 
         pub fn parse(self: *Parsed, bytes: []const u8) ParseError!Executable {
             if (bytes.len < 32 or std.mem.readInt(u32, bytes[0..4], .little) != macho.MH_MAGIC_64) return error.InvalidExecutable;
-            if (std.mem.readInt(u32, bytes[4..8], .little) != macho.CPU_TYPE_ARM64 or std.mem.readInt(u32, bytes[12..16], .little) != macho.MH_EXECUTE) return error.InvalidExecutable;
+            const cputype = std.mem.readInt(u32, bytes[4..8], .little);
+            if ((cputype != macho.CPU_TYPE_ARM64 and cputype != macho.CPU_TYPE_X86_64) or std.mem.readInt(u32, bytes[12..16], .little) != macho.MH_EXECUTE) return error.InvalidExecutable;
             const ncmds = std.mem.readInt(u32, bytes[16..20], .little);
             const sizeofcmds = std.mem.readInt(u32, bytes[20..24], .little);
             if (32 + @as(u64, sizeofcmds) > bytes.len) return error.InvalidExecutable;
             var exe: Executable = .{
                 .header = .{ .ncmds = ncmds, .sizeofcmds = sizeofcmds, .flags = std.mem.readInt(u32, bytes[24..28], .little) },
+                .arm64 = cputype == macho.CPU_TYPE_ARM64,
                 .segments = &.{},
                 .sections = &.{},
                 .text = 0,
@@ -800,7 +839,7 @@ fn findSorted(list: []const []const u8, wanted: []const u8) ?usize {
 test "the host link object defines windows and trampolines" {
     const UnitImage = @import("backend").dev.UnitImage;
     const allocator = std.testing.allocator;
-    const object = try linkObject(allocator, &.{
+    const object = try linkObject(allocator, true, &.{
         .{ .name = "roc_config", .kind = .data, .size = 24 },
         .{ .name = "roc_main_for_host", .kind = .procedure, .size = 0 },
     }, &.{ "memcpy", "roc_alloc" });
@@ -824,6 +863,23 @@ test "the host link object defines windows and trampolines" {
     try std.testing.expectEqual(@as(u32, 20), view.importSites(view.imports()[1])[0].offset);
     try std.testing.expectEqual(brk_instruction, std.mem.readInt(u32, view.block()[0..4], .little));
     try std.testing.expectEqual(b_instruction, std.mem.readInt(u32, view.block()[16..20], .little));
+
+    // On x86_64 the windows trap with int3, the trampolines jump.
+    const x86_object = try linkObject(allocator, false, &.{
+        .{ .name = "roc_main_for_host", .kind = .procedure, .size = 0 },
+    }, &.{ "memcpy", "roc_alloc" });
+    defer allocator.free(x86_object);
+    const x86_image = try UnitImage.build(allocator, &.{x86_object}, .{ .keep_debug = false, .atoms = .whole });
+    defer allocator.free(x86_image);
+    const x86_view = try UnitImage.View.init(x86_image);
+    try std.testing.expectEqual(int3_instruction, x86_view.block()[0]);
+    try std.testing.expectEqual(jmp_rel32_opcode, x86_view.block()[16]);
+    try std.testing.expectEqual(int3_instruction, x86_view.block()[21]);
+    try std.testing.expectEqual(jmp_rel32_opcode, x86_view.block()[24]);
+    const alloc_site = x86_view.importSites(x86_view.imports()[1])[0];
+    try std.testing.expectEqual(@backingInt(UnitImage.SiteKind.pc32), alloc_site.kind);
+    try std.testing.expectEqual(@as(u32, 25), alloc_site.offset);
+    try std.testing.expectEqual(@as(i64, -4), alloc_site.addend);
 }
 
 test "a host record round-trips its trailer" {

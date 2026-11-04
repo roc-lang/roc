@@ -31,6 +31,7 @@ const backend = @import("backend");
 const HostPrelink = @import("HostPrelink.zig");
 const unit_walk = @import("../unit_walk.zig");
 const fanout = @import("../patch_fanout.zig");
+const jump_window = @import("../jump_window.zig");
 const link_output = @import("../link_output.zig");
 const patch_link = @import("../patch_link.zig");
 
@@ -167,6 +168,11 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         text_size = std.mem.alignForward(u64, text_size, block_align);
         places[index].block = text_rva + text_size;
         text_size += view.block().len;
+        if (arm64) {
+            text_size = std.mem.alignForward(u64, text_size, 4);
+            places[index].veneers = text_rva + text_size;
+            text_size += view.imports().len * jump_window.veneer_size;
+        }
     }
     const text_index = try addSection(gpa, &sections, text_section_name, text_rva, text_size, text_size, IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ);
     const data_rva = sections.items[text_index].end();
@@ -495,6 +501,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     defer copies.deinit(gpa);
     for (copy_batches) |batch| try copies.append(gpa, .{ .context = &context, .work = .{ .copies = batch } });
     for (symbol_ranges.items) |range| try copies.append(gpa, .{ .context = &context, .work = .{ .symbols = range } });
+    if (arm64) for (order.items) |index| try copies.append(gpa, .{ .context = &context, .work = .{ .veneers = index } });
     var patches: std.ArrayList(Task) = .empty;
     defer patches.deinit(gpa);
     for (site_ranges.items) |range| try patches.append(gpa, .{ .context = &context, .work = .{ .sites = range } });
@@ -514,7 +521,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         const region: UnitImage.Region = @fromBackingInt(symbol.region);
         const address = places[found.image].base(region) + symbol.value;
         switch (@as(HostPrelink.ProvideKind, @fromBackingInt(@intCast(provide.kind)))) {
-            .procedure => writeJump(arm64, window[0..16], exe.image_base + provide.rva, exe.image_base + address),
+            .procedure => jump_window.writeJump(arm64, window[0..16], exe.image_base + provide.rva, exe.image_base + address),
             .data => switch (region) {
                 .block, .data => {
                     const size: usize = @intCast(@min(symbol.size, provide.size));
@@ -593,6 +600,8 @@ const no_symbol: u32 = std.math.maxInt(u32);
 /// Where an image's regions land, as image-relative addresses.
 const Place = struct {
     block: u64 = 0,
+    /// On arm64, the image's veneers, one per import in import order.
+    veneers: u64 = 0,
     data: u64 = 0,
     bss: u64 = 0,
     pdata: u64 = 0,
@@ -711,24 +720,6 @@ fn sortEntries(entries: []u8, entry_size: u64) void {
     };
     const size: usize = @intCast(entry_size);
     std.sort.pdqContext(0, entries.len / size, Sorter{ .bytes = entries, .size = size });
-}
-
-/// A procedure window: a jump from `window_address` to `target`, then
-/// traps. On arm64 the window is ADRP, ADD, BR x16 and BRK.
-fn writeJump(arm64: bool, window: *[16]u8, window_address: u64, target: u64) void {
-    if (!arm64) {
-        window[0] = 0xe9;
-        std.mem.writeInt(i32, window[1..5], @intCast(@as(i64, @intCast(target)) - @as(i64, @intCast(window_address + 5))), .little);
-        @memset(window[5..], 0xcc);
-        return;
-    }
-    std.mem.writeInt(u32, window[0..4], 0x9000_0010, .little);
-    std.mem.writeInt(u32, window[4..8], 0x9100_0210, .little);
-    std.mem.writeInt(u32, window[8..12], 0xd61f_0200, .little);
-    std.mem.writeInt(u32, window[12..16], 0xd420_0000, .little);
-    // The app region is within 4 GiB of the host.
-    if (!UnitImage.applySite(window[0..4], .page21, @intCast(target), window_address)) base.invariant("fast dev link invariant violated: a provide window cannot reach its procedure", .{});
-    if (!UnitImage.applySite(window[4..8], .pageoff12, @intCast(target), window_address + 4)) unreachable; // an ADD takes any low bits
 }
 
 /// Write the link's build id into the host's CodeView debug entry, whose
@@ -879,6 +870,8 @@ const Task = struct {
         copies: []const fanout.Copy,
         symbols: fanout.Range,
         sites: fanout.Range,
+        /// The veneers of one placed image.
+        veneers: u32,
     },
     sites: u64 = 0,
     bytes: u64 = 0,
@@ -889,8 +882,19 @@ const Task = struct {
             .copies => |list| self.bytes += fanout.runCopies(self.context.out, list),
             .symbols => |range| self.writeSymbols(range),
             .sites => |range| self.applySites(range),
+            .veneers => |image| self.writeVeneers(image),
         }
         return opaque_task;
+    }
+
+    fn writeVeneers(self: *Task, image: u32) void {
+        const context = self.context;
+        const place = context.places[image];
+        for (context.resolved[image], 0..) |target, import| {
+            const address = place.veneers + import * jump_window.veneer_size;
+            jump_window.writeVeneer(context.out[@intCast(context.fileOffsetOf(address))..][0..jump_window.veneer_size], context.image_base + address, context.image_base + target);
+        }
+        self.bytes = context.resolved[image].len * jump_window.veneer_size;
     }
 
     fn writeSymbols(self: *Task, range: fanout.Range) void {
@@ -942,7 +946,8 @@ const Task = struct {
             const kind: UnitImage.SiteKind = @fromBackingInt(site.kind);
             const out = context.regionOut(place, view, region);
             const field = out[site.offset..][0..@intCast(UnitImage.kindWidth(kind))];
-            const target = if (site.target_region == UnitImage.import_target) addresses[site.target] else place.base(@fromBackingInt(site.target_region));
+            const imported = site.target_region == UnitImage.import_target;
+            const target = if (imported) addresses[site.target] else place.base(@fromBackingInt(site.target_region));
             // Every address in the link is image relative: a relative
             // field or an image-relative one takes it as is, an absolute
             // field of an address adds the image base, and a field naming
@@ -951,10 +956,17 @@ const Task = struct {
                 .abs64, .abs32, .abs32s => targetIsAddress(site),
                 .pc32, .branch26, .page21, .pageoff12, .rva32 => false,
             };
-            const value = @as(i64, @intCast(target)) + site.addend + @as(i64, if (absolute) @intCast(context.image_base) else 0);
-            // The layout keeps the app region within reach of the host and
-            // of itself, and debug sections within 32-bit offsets.
-            if (!UnitImage.applySite(field, kind, value, place.base(region) + site.offset)) {
+            const site_address = place.base(region) + site.offset;
+            var value = @as(i64, @intCast(target)) + site.addend + @as(i64, if (absolute) @intCast(context.image_base) else 0);
+            // A branch to an import beyond its reach takes the import's
+            // veneer; the layout keeps the app region within reach of the
+            // host and of itself for every other kind, and debug sections
+            // within 32-bit offsets.
+            if (kind == .branch26 and imported and !jump_window.branchReaches(site_address, @intCast(value))) {
+                if (site.addend != 0) base.invariant("fast dev link invariant violated: a veneered branch has an addend", .{});
+                value = @intCast(place.veneers + site.target * jump_window.veneer_size);
+            }
+            if (!UnitImage.applySite(field, kind, value, site_address)) {
                 base.invariant("fast dev link invariant violated: a patch site's value does not fit its field", .{});
             }
         }
@@ -1004,17 +1016,4 @@ test "function table entries sort by address" {
     try std.testing.expectEqual(@as(u32, 7), std.mem.readInt(u32, entries[4..8], .little));
     try std.testing.expectEqual(@as(u32, 0x2000), std.mem.readInt(u32, entries[12..16], .little));
     try std.testing.expectEqual(@as(u32, 0x3000), std.mem.readInt(u32, entries[24..28], .little));
-}
-
-test "a procedure window jumps to its procedure" {
-    var window: [16]u8 = undefined;
-    writeJump(false, &window, 0x1_4000_2000, 0x1_4001_0000);
-    try std.testing.expectEqual(@as(u8, 0xe9), window[0]);
-    try std.testing.expectEqual(@as(i32, 0x1_0000 - 0x2000 - 5), std.mem.readInt(i32, window[1..5], .little));
-    try std.testing.expectEqual(@as(u8, 0xcc), window[5]);
-    writeJump(true, &window, 0x1_4000_2000, 0x1_4001_0010);
-    // ADRP x16 to page 0x10000 from page 0x2000: 14 pages, immlo 2, immhi 3.
-    try std.testing.expectEqual(@as(u32, 0x9000_0010 | (2 << 29) | (3 << 5)), std.mem.readInt(u32, window[0..4], .little));
-    try std.testing.expectEqual(@as(u32, 0x9100_0210 | (0x10 << 10)), std.mem.readInt(u32, window[4..8], .little));
-    try std.testing.expectEqual(@as(u32, 0xd61f_0200), std.mem.readInt(u32, window[8..12], .little));
 }

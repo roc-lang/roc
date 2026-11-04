@@ -337,7 +337,8 @@ pub const ObjectFileCompiler = struct {
         /// from the start of its text), owned by the caller, when non-null.
         code_locations: ?*[]const u8,
     ) CompilationError![]align(UnitImage.alignment.toByteUnits()) u8 {
-        std.debug.assert((target.toOsTag() == .linux and target.toCpuArch() == .x86_64) or (target.toOsTag() == .macos and target.toCpuArch() == .aarch64) or (target.toOsTag() == .windows and (target.toCpuArch() == .x86_64 or target.toCpuArch() == .aarch64)));
+        std.debug.assert(target.toCpuArch() == .x86_64 or target.toCpuArch() == .aarch64);
+        std.debug.assert(@import("mod.zig").imageOs(target.toOsTag()));
         var patched: PatchedRefs = .{};
         defer patched.deinit(self.allocator);
         var composed = try self.composeObject(&.{pieces}, target, .{

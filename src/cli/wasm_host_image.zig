@@ -26,12 +26,12 @@
 //! settled only after checking. A miss converts on the main thread when the
 //! link needs the image.
 const std = @import("std");
-const builtin = @import("builtin");
 const build_options = @import("build_options");
 const compile = @import("compile");
 const backend = @import("backend");
 const linker = @import("linker.zig");
 const fast_dev_link = @import("fast_dev_link.zig");
+const link_output = @import("link_output.zig");
 const CliCtx = @import("CliCtx.zig").CliCtx;
 const RocTarget = @import("target.zig").RocTarget;
 
@@ -127,8 +127,7 @@ pub const Hit = struct {
     mapping: []align(std.heap.page_size_min) const u8,
 
     fn deinit(self: *Hit) void {
-        if (comptime builtin.os.tag != .linux) unreachable; // only a Linux host's job maps a record
-        std.posix.munmap(self.mapping);
+        link_output.unmapReadOnly(self.mapping);
         self.artifact.deinit();
     }
 };
@@ -179,7 +178,6 @@ pub const ImageJob = struct {
     }
 
     fn run(self: *ImageJob) void {
-        if (comptime builtin.os.tag != .linux) unreachable; // wasmFastLinkApplies selects the wasm fast dev link only on Linux hosts
         const hash_started = now(self.std_io);
         for (self.spec.support_objects, &self.support_keys, [_]bool{ false, true }) |objects, *key, stack_checks| {
             const object_digests = self.gpa.alloc([32]u8, objects.len) catch return self.fail(error.OutOfMemory);
@@ -228,8 +226,7 @@ pub const ImageJob = struct {
             return .miss;
         };
         _ = WasmUnitImage.View.init(mapping) catch {
-            if (comptime builtin.os.tag != .linux) unreachable; // only a Linux host's job maps a record
-            std.posix.munmap(mapping);
+            link_output.unmapReadOnly(mapping);
             artifact.deinit();
             return .miss;
         };

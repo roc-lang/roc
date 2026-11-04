@@ -1257,7 +1257,8 @@ const Object = struct {
 fn parseElf(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildError!Object {
     if (bytes.len < 64) return error.InvalidObject;
     if (bytes[4] != 2 or bytes[5] != 1) return error.InvalidObject;
-    if (readU16(bytes, 16) != ET_REL or readU16(bytes, 18) != EM_X86_64) return error.InvalidObject;
+    const machine = readU16(bytes, 18);
+    if (readU16(bytes, 16) != ET_REL or (machine != EM_X86_64 and machine != EM_AARCH64)) return error.InvalidObject;
     const shoff = readU64(bytes, 40);
     const shentsize = readU16(bytes, 58);
     const shnum = readU16(bytes, 60);
@@ -1361,16 +1362,7 @@ fn parseElf(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildErr
             try relocs.append(arena, .{
                 .section = section.info,
                 .offset = readU64(entries, at),
-                .kind = if (r_type == R_X86_64_64)
-                    .abs64
-                else if (r_type == R_X86_64_PC32 or r_type == R_X86_64_PLT32)
-                    .pc32
-                else if (r_type == R_X86_64_32)
-                    .abs32
-                else if (r_type == R_X86_64_32S)
-                    .abs32s
-                else
-                    return error.UnsupportedRelocation,
+                .kind = if (machine == EM_AARCH64) try classifyAarch64Reloc(r_type) else try classifyX86_64Reloc(r_type),
                 .symbol = r_sym,
                 .addend = @bitCast(readU64(entries, at + 16)),
             });
@@ -1379,10 +1371,35 @@ fn parseElf(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildErr
     return .{ .sections = sections, .symbols = symbols, .relocs = relocs.items, .text_section = text_section };
 }
 
+fn classifyX86_64Reloc(r_type: u32) BuildError!RelocKind {
+    if (r_type == R_X86_64_64) return .abs64;
+    if (r_type == R_X86_64_PC32 or r_type == R_X86_64_PLT32) return .pc32;
+    if (r_type == R_X86_64_32) return .abs32;
+    if (r_type == R_X86_64_32S) return .abs32s;
+    return error.UnsupportedRelocation;
+}
+
+/// The AArch64 relocations Zig-compiled objects carry: absolute words, the
+/// position-relative words of jump tables and unwind tables, calls and
+/// tail calls, page pairs with an add or a scaled load or store, and loads
+/// through the global offset table.
+fn classifyAarch64Reloc(r_type: u32) BuildError!RelocKind {
+    if (r_type == R_AARCH64_ABS64) return .abs64;
+    if (r_type == R_AARCH64_ABS32) return .abs32;
+    if (r_type == R_AARCH64_PREL32) return .pc32;
+    if (r_type == R_AARCH64_CALL26 or r_type == R_AARCH64_JUMP26) return .branch26;
+    if (r_type == R_AARCH64_ADR_PREL_PG_HI21) return .page21;
+    if (r_type == R_AARCH64_ADD_ABS_LO12_NC or r_type == R_AARCH64_LDST8_ABS_LO12_NC or r_type == R_AARCH64_LDST16_ABS_LO12_NC or r_type == R_AARCH64_LDST32_ABS_LO12_NC or r_type == R_AARCH64_LDST64_ABS_LO12_NC or r_type == R_AARCH64_LDST128_ABS_LO12_NC) return .pageoff12;
+    if (r_type == R_AARCH64_ADR_GOT_PAGE) return .got_load_page21;
+    if (r_type == R_AARCH64_LD64_GOT_LO12_NC) return .got_load_pageoff12;
+    return error.UnsupportedRelocation;
+}
+
 fn classifyElf(name: []const u8, section_type: u32, flags: u64, addralign: u64, options: BuildOptions) BuildError!SectionClass {
     const consumed = section_type == SHT_NULL or section_type == SHT_SYMTAB or section_type == SHT_STRTAB or section_type == SHT_RELA;
-    // Unwind tables and the address-significance table are not placed.
-    const dropped = section_type == SHT_X86_64_UNWIND or section_type == SHT_LLVM_ADDRSIG;
+    // Unwind tables (typed on x86_64, named on AArch64) and the
+    // address-significance table are not placed.
+    const dropped = section_type == SHT_X86_64_UNWIND or section_type == SHT_LLVM_ADDRSIG or std.mem.eql(u8, name, ".eh_frame");
     if (consumed or dropped) return .skip;
     if (flags & SHF_TLS != 0) return error.UnsupportedSection;
     if (flags & SHF_ALLOC != 0) {
@@ -1404,12 +1421,14 @@ fn classifyElf(name: []const u8, section_type: u32, flags: u64, addralign: u64, 
     return error.UnsupportedSection;
 }
 
-/// A Mach-O arm64 relocatable object. Section addresses are one object-wide
-/// address space, which a symbol's value and a section-relative
+/// A Mach-O relocatable object, arm64 or x86_64. Section addresses are one
+/// object-wide address space, which a symbol's value and a section-relative
 /// relocation's field are in.
 fn parseMachO(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildError!Object {
     if (bytes.len < 32) return error.InvalidObject;
-    if (readU32(bytes, 4) != CPU_TYPE_ARM64 or readU32(bytes, 12) != MH_OBJECT) return error.InvalidObject;
+    const cputype = readU32(bytes, 4);
+    if ((cputype != CPU_TYPE_ARM64 and cputype != CPU_TYPE_X86_64) or readU32(bytes, 12) != MH_OBJECT) return error.InvalidObject;
+    const x86_64 = cputype == CPU_TYPE_X86_64;
     const ncmds = readU32(bytes, 16);
     const sizeofcmds = readU32(bytes, 20);
     if (32 + @as(u64, sizeofcmds) > bytes.len) return error.InvalidObject;
@@ -1553,7 +1572,7 @@ fn parseMachO(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildE
             const r_length = (r_info >> 25) & 3;
             const r_extern = (r_info >> 27) & 1 != 0;
             const r_type = r_info >> 28;
-            if (r_type == ARM64_RELOC_ADDEND) {
+            if (!x86_64 and r_type == ARM64_RELOC_ADDEND) {
                 if (pending_addend != null) return error.InvalidObject;
                 // The addend is the 24-bit symbol number, sign extended.
                 pending_addend = @as(i24, @bitCast(@as(u24, @intCast(r_symbolnum))));
@@ -1561,12 +1580,22 @@ fn parseMachO(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildE
             }
             const addend_before = pending_addend;
             pending_addend = null;
+            // An x86_64 field is relative to its own end: the stored
+            // displacement counts from four bytes past the field, and a
+            // `SIGNED_n` kind's field is followed by `n` more instruction
+            // bytes the assembler already subtracted from it.
+            const x86_pcrel = x86_64 and (r_type == X86_64_RELOC_SIGNED or r_type == X86_64_RELOC_BRANCH or r_type == X86_64_RELOC_SIGNED_1 or r_type == X86_64_RELOC_SIGNED_2 or r_type == X86_64_RELOC_SIGNED_4);
+            const x86_trailing: i64 = if (r_type == X86_64_RELOC_SIGNED_1) 1 else if (r_type == X86_64_RELOC_SIGNED_2) 2 else if (r_type == X86_64_RELOC_SIGNED_4) 4 else 0;
             const kind: RelocKind = if (r_type == ARM64_RELOC_UNSIGNED)
                 (if (r_pcrel) return error.UnsupportedRelocation else switch (r_length) {
                     3 => .abs64,
                     2 => .abs32,
                     else => return error.UnsupportedRelocation,
                 })
+            else if (x86_pcrel)
+                (if (r_pcrel) .pc32 else return error.UnsupportedRelocation)
+            else if (x86_64)
+                return error.UnsupportedRelocation
             else if (r_type == ARM64_RELOC_BRANCH26)
                 .branch26
             else if (r_type == ARM64_RELOC_PAGE21)
@@ -1591,18 +1620,21 @@ fn parseMachO(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildE
                 addend = switch (kind) {
                     .abs64 => @bitCast(readU64(field, 0)),
                     .abs32 => readU32(field, 0),
-                    .pc32, .abs32s, .branch26, .page21, .pageoff12, .rva32, .got_load_page21, .got_load_pageoff12 => addend_before orelse 0,
+                    .pc32 => if (x86_pcrel) @as(i64, @as(i32, @bitCast(readU32(field, 0)))) - 4 else addend_before orelse 0,
+                    .abs32s, .branch26, .page21, .pageoff12, .rva32, .got_load_page21, .got_load_pageoff12 => addend_before orelse 0,
                 };
                 if (addend_before != null and (kind == .abs64 or kind == .abs32)) return error.InvalidObject;
             } else {
                 // The field holds the target's address in the object's
-                // address space.
-                if (kind != .abs64 and kind != .abs32) return error.UnsupportedRelocation;
+                // address space: as is for an absolute word, relative to
+                // the end of the instruction for an x86_64 displacement.
+                if (kind != .abs64 and kind != .abs32 and !x86_pcrel) return error.UnsupportedRelocation;
                 if (r_symbolnum == 0 or r_symbolnum > raw.items.len) return error.InvalidObject;
                 if (addend_before != null) return error.InvalidObject;
                 symbol = nsyms + r_symbolnum - 1;
-                const address: i64 = if (kind == .abs64) @bitCast(readU64(field, 0)) else readU32(field, 0);
-                addend = address - @as(i64, @intCast(raw.items[r_symbolnum - 1].addr));
+                const field_address: i64 = @intCast(section.addr + r_address);
+                const address: i64 = if (kind == .abs64) @bitCast(readU64(field, 0)) else if (kind == .abs32) readU32(field, 0) else @as(i64, @as(i32, @bitCast(readU32(field, 0)))) + field_address + 4 + x86_trailing;
+                addend = address - @as(i64, @intCast(raw.items[r_symbolnum - 1].addr)) - (if (x86_pcrel) @as(i64, 4) else 0);
             }
             try relocs.append(arena, .{ .section = @intCast(section_index), .offset = r_address, .kind = kind, .symbol = symbol, .addend = addend });
         }
@@ -1954,6 +1986,7 @@ fn readU64(bytes: []const u8, at: usize) u64 {
 
 const ET_REL = 1;
 const EM_X86_64 = 62;
+const EM_AARCH64 = 183;
 const SHT_NULL = 0;
 const SHT_PROGBITS = 1;
 const SHT_SYMTAB = 2;
@@ -1985,6 +2018,20 @@ const R_X86_64_PC32 = 2;
 const R_X86_64_PLT32 = 4;
 const R_X86_64_32 = 10;
 const R_X86_64_32S = 11;
+const R_AARCH64_ABS64 = 257;
+const R_AARCH64_ABS32 = 258;
+const R_AARCH64_PREL32 = 261;
+const R_AARCH64_ADR_PREL_PG_HI21 = 275;
+const R_AARCH64_ADD_ABS_LO12_NC = 277;
+const R_AARCH64_LDST8_ABS_LO12_NC = 278;
+const R_AARCH64_JUMP26 = 282;
+const R_AARCH64_CALL26 = 283;
+const R_AARCH64_LDST16_ABS_LO12_NC = 284;
+const R_AARCH64_LDST32_ABS_LO12_NC = 285;
+const R_AARCH64_LDST64_ABS_LO12_NC = 286;
+const R_AARCH64_LDST128_ABS_LO12_NC = 299;
+const R_AARCH64_ADR_GOT_PAGE = 311;
+const R_AARCH64_LD64_GOT_LO12_NC = 312;
 
 const IMAGE_FILE_MACHINE_AMD64 = 0x8664;
 const IMAGE_FILE_MACHINE_ARM64 = 0xaa64;
@@ -2031,6 +2078,8 @@ const MH_MAGIC_64 = 0xfeedfacf;
 const MH_OBJECT = 1;
 const CPU_TYPE_ARM64 = 0x0100000c;
 const CPU_SUBTYPE_ARM64_ALL = 0;
+const CPU_TYPE_X86_64 = 0x01000007;
+const CPU_SUBTYPE_X86_64_ALL = 3;
 const LC_SEGMENT_64 = 0x19;
 const LC_SYMTAB = 0x2;
 const SECTION_TYPE = 0xff;
@@ -2058,6 +2107,12 @@ const ARM64_RELOC_PAGEOFF12 = 4;
 const ARM64_RELOC_GOT_LOAD_PAGE21 = 5;
 const ARM64_RELOC_GOT_LOAD_PAGEOFF12 = 6;
 const ARM64_RELOC_ADDEND = 10;
+const X86_64_RELOC_UNSIGNED = 0;
+const X86_64_RELOC_SIGNED = 1;
+const X86_64_RELOC_BRANCH = 2;
+const X86_64_RELOC_SIGNED_1 = 6;
+const X86_64_RELOC_SIGNED_2 = 7;
+const X86_64_RELOC_SIGNED_4 = 8;
 
 /// A minimal x86_64 relocatable object for tests: sections and symbols
 /// given as data, encoded the way an assembler lays them out.
@@ -2092,6 +2147,15 @@ pub const TestObject = struct {
     };
 
     pub fn encode(allocator: Allocator, sections: []const TestSection, symbols: []const TestSymbol, relocations: []const TestRelocation) Allocator.Error![]u8 {
+        return encodeMachine(allocator, EM_X86_64, sections, symbols, relocations);
+    }
+
+    /// `encode` for an AArch64 object.
+    pub fn encodeAarch64(allocator: Allocator, sections: []const TestSection, symbols: []const TestSymbol, relocations: []const TestRelocation) Allocator.Error![]u8 {
+        return encodeMachine(allocator, EM_AARCH64, sections, symbols, relocations);
+    }
+
+    fn encodeMachine(allocator: Allocator, machine: u16, sections: []const TestSection, symbols: []const TestSymbol, relocations: []const TestRelocation) Allocator.Error![]u8 {
         var out: std.ArrayList(u8) = .empty;
         errdefer out.deinit(allocator);
         try out.appendNTimes(allocator, 0, 64);
@@ -2197,7 +2261,7 @@ pub const TestObject = struct {
         header[5] = 1;
         header[6] = 1;
         std.mem.writeInt(u16, header[16..18], ET_REL, .little);
-        std.mem.writeInt(u16, header[18..20], EM_X86_64, .little);
+        std.mem.writeInt(u16, header[18..20], machine, .little);
         std.mem.writeInt(u32, header[20..24], 1, .little);
         std.mem.writeInt(u64, header[40..48], shoff, .little);
         std.mem.writeInt(u16, header[52..54], 64, .little);
@@ -2252,6 +2316,16 @@ pub const TestMachObject = struct {
     };
 
     pub fn encode(allocator: Allocator, sections: []const TestSection, symbols: []const TestSymbol, relocations: []const TestRelocation) Allocator.Error![]u8 {
+        return encodeCpu(allocator, CPU_TYPE_ARM64, sections, symbols, relocations);
+    }
+
+    /// `encode` for an x86_64 object, whose relocations carry their
+    /// addends in their fields.
+    pub fn encodeX86_64(allocator: Allocator, sections: []const TestSection, symbols: []const TestSymbol, relocations: []const TestRelocation) Allocator.Error![]u8 {
+        return encodeCpu(allocator, CPU_TYPE_X86_64, sections, symbols, relocations);
+    }
+
+    fn encodeCpu(allocator: Allocator, cputype: u32, sections: []const TestSection, symbols: []const TestSymbol, relocations: []const TestRelocation) Allocator.Error![]u8 {
         var out: std.ArrayList(u8) = .empty;
         errdefer out.deinit(allocator);
         const header_size: usize = 32;
@@ -2300,7 +2374,7 @@ pub const TestMachObject = struct {
             nreloc.* = 0;
             for (relocations) |relocation| {
                 if (relocation.section != section_index) continue;
-                const instruction_kind = relocation.type != ARM64_RELOC_UNSIGNED;
+                const instruction_kind = cputype == CPU_TYPE_ARM64 and relocation.type != ARM64_RELOC_UNSIGNED;
                 if (instruction_kind and relocation.addend != 0) {
                     try appendReloc(allocator, &reloc_bytes, relocation.offset, @intCast(@as(u24, @bitCast(@as(i24, @intCast(relocation.addend))))), false, 2, false, ARM64_RELOC_ADDEND);
                     nreloc.* += 1;
@@ -2346,8 +2420,8 @@ pub const TestMachObject = struct {
         // Header.
         try out.appendNTimes(allocator, 0, header_size);
         std.mem.writeInt(u32, out.items[0..4], MH_MAGIC_64, .little);
-        std.mem.writeInt(u32, out.items[4..8], CPU_TYPE_ARM64, .little);
-        std.mem.writeInt(u32, out.items[8..12], CPU_SUBTYPE_ARM64_ALL, .little);
+        std.mem.writeInt(u32, out.items[4..8], cputype, .little);
+        std.mem.writeInt(u32, out.items[8..12], if (cputype == CPU_TYPE_ARM64) CPU_SUBTYPE_ARM64_ALL else CPU_SUBTYPE_X86_64_ALL, .little);
         std.mem.writeInt(u32, out.items[12..16], MH_OBJECT, .little);
         std.mem.writeInt(u32, out.items[16..20], 2, .little);
         std.mem.writeInt(u32, out.items[20..24], @intCast(segment_size + symtab_size), .little);
@@ -2718,6 +2792,117 @@ test "an arm64 COFF object keeps its instruction addends" {
     try std.testing.expectEqual(@backingInt(Region.data), local[1].target_region);
     try std.testing.expectEqual(@backingInt(Region.pdata), local[2].region);
     try std.testing.expectEqual(@backingInt(Region.xdata), local[3].target_region);
+}
+
+test "an AArch64 ELF object becomes an image with its explicit addends" {
+    const allocator = std.testing.allocator;
+    // entry: bl roc_alloc; adrp/add x16, table + 4; adrp/ldr x16, counter + 8; ret
+    const text = words(&.{ bl_instruction, adrp_x16, add_x16_x16, adrp_x16, ldr_x16_x16, ret_instruction });
+    // A jump table entry: entry, relative to itself; the unwind table is
+    // dropped with its relative word.
+    const rodata = "constant" ++ "\x00\x00\x00\x00";
+    const object = try TestObject.encodeAarch64(allocator, &.{
+        .{ .name = ".text", .flags = SHF_ALLOC | SHF_EXECINSTR, .bytes = &text },
+        .{ .name = ".rodata", .flags = SHF_ALLOC, .bytes = rodata, .addralign = 8 },
+        .{ .name = ".data", .flags = SHF_ALLOC | SHF_WRITE, .bytes = &@as([16]u8, @splat(0)), .addralign = 8 },
+        .{ .name = ".eh_frame", .flags = SHF_ALLOC, .bytes = &@as([8]u8, @splat(0)), .addralign = 8 },
+    }, &.{
+        .{ .name = "entry", .section = 1, .value = 0, .size = 24, .global = true, .func = true },
+        .{ .name = "roc_alloc", .section = 0, .global = true },
+        .{ .name = "table", .section = 2, .value = 0, .size = 8 },
+        .{ .name = "counter", .section = 3, .value = 0, .size = 16 },
+    }, &.{
+        .{ .section = 1, .offset = 0, .symbol = 2, .type = R_AARCH64_CALL26, .addend = 0 },
+        .{ .section = 1, .offset = 4, .symbol = 3, .type = R_AARCH64_ADR_PREL_PG_HI21, .addend = 4 },
+        .{ .section = 1, .offset = 8, .symbol = 3, .type = R_AARCH64_ADD_ABS_LO12_NC, .addend = 4 },
+        .{ .section = 1, .offset = 12, .symbol = 4, .type = R_AARCH64_ADR_PREL_PG_HI21, .addend = 8 },
+        .{ .section = 1, .offset = 16, .symbol = 4, .type = R_AARCH64_LDST64_ABS_LO12_NC, .addend = 8 },
+        .{ .section = 2, .offset = 8, .symbol = 1, .type = R_AARCH64_PREL32, .addend = 0 },
+        .{ .section = 4, .offset = 0, .symbol = 1, .type = R_AARCH64_PREL32, .addend = 0 },
+    });
+    defer allocator.free(object);
+    const image = try build(allocator, &.{object}, .{ .keep_debug = false, .atoms = .whole });
+    defer allocator.free(image);
+    const view = try View.init(image);
+    try std.testing.expectEqual(@as(u32, 24), view.textSize());
+    try std.testing.expectEqual(@as(usize, 36), view.block().len);
+    try std.testing.expectEqualStrings("constant", view.block()[24..32]);
+    // table + 4 in the block: same page, low bits 28.
+    try std.testing.expectEqual(adrp_x16, std.mem.readInt(u32, view.block()[4..8], .little));
+    try std.testing.expectEqual(add_x16_x16 | (28 << 10), std.mem.readInt(u32, view.block()[8..12], .little));
+    // The jump table entry at 32 reaches entry at 0.
+    try std.testing.expectEqual(@as(i32, -32), std.mem.readInt(i32, view.block()[32..36], .little));
+    const branch = view.importSites(view.imports()[0]);
+    try std.testing.expectEqualStrings("roc_alloc", view.name(view.imports()[0].name));
+    try std.testing.expectEqual(@backingInt(SiteKind.branch26), branch[0].kind);
+    try std.testing.expectEqual(@as(i64, 0), branch[0].addend);
+    // counter + 8 in the data: a page site and a scaled offset site, each
+    // with the explicit addend.
+    const local = view.localSites();
+    try std.testing.expectEqual(@as(usize, 2), local.len);
+    try std.testing.expectEqual(@backingInt(SiteKind.page21), local[0].kind);
+    try std.testing.expectEqual(@as(i64, 8), local[0].addend);
+    try std.testing.expectEqual(@backingInt(Region.data), local[0].target_region);
+    try std.testing.expectEqual(@backingInt(SiteKind.pageoff12), local[1].kind);
+    try std.testing.expectEqual(@as(i64, 8), local[1].addend);
+    try std.testing.expectEqual(@as(u32, 16), local[1].offset);
+}
+
+test "an x86_64 Mach-O object becomes an image with its field addends" {
+    const allocator = std.testing.allocator;
+    // _entry: call _roc_alloc; lea rax, [rip + _table + 4]; mov dword ptr [rip + _counter + 8], 7; ret
+    const text = [_]u8{
+        0xe8, 0x00, 0x00, 0x00, 0x00, // call, the field counting from its end
+        0x48, 0x8d, 0x05, 0x00, 0x00, 0x00, 0x00, // lea; the encoder stores the addend 4 in the field
+        0xc7, 0x05, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, // mov; the field gets 8 less the 4 trailing immediate bytes
+        0xc3, 0x90,
+    };
+    var pointer: [8]u8 = @splat(0);
+    std.mem.writeInt(u64, &pointer, 5, .little);
+    const object = try TestMachObject.encodeX86_64(allocator, &.{
+        .{ .segname = "__TEXT", .sectname = "__text", .bytes = &text, .flags = S_ATTR_PURE_INSTRUCTIONS },
+        .{ .segname = "__TEXT", .sectname = "__const", .bytes = "constant", .@"align" = 3 },
+        .{ .segname = "__DATA", .sectname = "__data", .bytes = &pointer, .@"align" = 3 },
+        .{ .segname = "__DATA", .sectname = "__bss", .size = 16, .@"align" = 3, .flags = S_ZEROFILL },
+    }, &.{
+        .{ .name = "_entry", .section = 1, .value = 0, .external = true },
+        .{ .name = "_table", .section = 2, .value = 0 },
+        .{ .name = "_counter", .section = 4, .value = 0, .external = true },
+        .{ .name = "_roc_alloc", .section = 0, .external = true },
+    }, &.{
+        .{ .section = 1, .offset = 1, .symbol = 4, .type = X86_64_RELOC_BRANCH, .pcrel = true },
+        .{ .section = 1, .offset = 8, .symbol = 2, .type = X86_64_RELOC_SIGNED, .pcrel = true, .addend = 4 },
+        .{ .section = 1, .offset = 14, .symbol = 3, .type = X86_64_RELOC_SIGNED_4, .pcrel = true, .addend = 4 },
+        // A section-relative pointer: the field holds the address of
+        // _entry + 5 in the object.
+        .{ .section = 3, .offset = 0, .symbol = 1, .external = false, .type = X86_64_RELOC_UNSIGNED, .pcrel = false, .length = 3 },
+    });
+    defer allocator.free(object);
+    const image = try build(allocator, &.{object}, .{ .keep_debug = false, .atoms = .whole });
+    defer allocator.free(image);
+    const view = try View.init(image);
+    try std.testing.expectEqual(@as(u32, 24), view.textSize());
+    try std.testing.expectEqualStrings("constant", view.block()[24..32]);
+    // lea's displacement at 8 reaches _table + 4 at 28 from the end of
+    // the instruction at 12.
+    try std.testing.expectEqual(@as(i32, 16), std.mem.readInt(i32, view.block()[8..12], .little));
+    // The call's import site counts from the end of its field.
+    const branch = view.importSites(view.imports()[0]);
+    try std.testing.expectEqualStrings("roc_alloc", view.name(view.imports()[0].name));
+    try std.testing.expectEqual(@backingInt(SiteKind.pc32), branch[0].kind);
+    try std.testing.expectEqual(@as(u32, 1), branch[0].offset);
+    try std.testing.expectEqual(@as(i64, -4), branch[0].addend);
+    // The store's displacement reaches _counter + 8 past its immediate,
+    // and the pointer holds _entry + 5.
+    const local = view.localSites();
+    try std.testing.expectEqual(@as(usize, 2), local.len);
+    try std.testing.expectEqual(@backingInt(SiteKind.pc32), local[0].kind);
+    try std.testing.expectEqual(@as(u32, 14), local[0].offset);
+    try std.testing.expectEqual(@as(i64, 0), local[0].addend);
+    try std.testing.expectEqual(@backingInt(Region.bss), local[0].target_region);
+    try std.testing.expectEqual(@backingInt(SiteKind.abs64), local[1].kind);
+    try std.testing.expectEqual(@as(i64, 5), local[1].addend);
+    try std.testing.expectEqual(@backingInt(Region.block), local[1].target_region);
 }
 
 test "an image-relative site holds the value it is given" {

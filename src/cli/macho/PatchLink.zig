@@ -1,4 +1,5 @@
-//! The patch link of a fast dev link of a macOS arm64 executable: the
+//! The patch link of a fast dev link of a macOS executable, arm64 or
+//! x86_64: the
 //! executable is the pre-linked host's mapped segments (`HostPrelink.zig`)
 //! followed by the app region, made of the unit images
 //! (`backend.dev.UnitImage`) the program reaches and the support image,
@@ -28,6 +29,7 @@ const macho = std.macho;
 const HostPrelink = @import("HostPrelink.zig");
 const unit_walk = @import("../unit_walk.zig");
 const fanout = @import("../patch_fanout.zig");
+const jump_window = @import("../jump_window.zig");
 const link_output = @import("../link_output.zig");
 const patch_link = @import("../patch_link.zig");
 
@@ -35,7 +37,6 @@ const Allocator = std.mem.Allocator;
 const UnitImage = backend.dev.UnitImage;
 const Executor = base.post_check_task_executor.Executor;
 
-const page_size: u64 = HostPrelink.page_size;
 const block_align: u64 = UnitImage.page_size;
 const nlist_size = 16;
 const segment_command_size = 72;
@@ -116,6 +117,8 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
 
     // Layout: the app's text after the host's segments, its data after
     // that, the debug segment, then __LINKEDIT.
+    const arm64 = host.arm64();
+    const page_size = HostPrelink.pageSize(arm64);
     const places = try gpa.alloc(Place, images.items.len);
     defer gpa.free(places);
     @memset(places, .{});
@@ -127,6 +130,11 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         rx_size = std.mem.alignForward(u64, rx_size, block_align);
         places[index].block = text_vmaddr + rx_size;
         rx_size += view.block().len;
+        if (arm64) {
+            rx_size = std.mem.alignForward(u64, rx_size, 4);
+            places[index].veneers = text_vmaddr + rx_size;
+            rx_size += view.imports().len * jump_window.veneer_size;
+        }
     }
     const text_segment_size = std.mem.alignForward(u64, rx_size, page_size);
     const data_fileoff = text_fileoff + text_segment_size;
@@ -372,6 +380,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         .signature_offset = signature_offset,
         .hashes_offset = signature_offset + signature_header_size,
         .host_page_hashes = host.pageHashes(),
+        .page_size = page_size,
         .dirty_pages_end = exe.first_content,
         .dirty_ranges = &.{},
     };
@@ -427,6 +436,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     defer copies.deinit(gpa);
     for (copy_batches) |batch| try copies.append(gpa, .{ .context = &context, .work = .{ .copies = batch } });
     for (symbol_ranges.items) |range| try copies.append(gpa, .{ .context = &context, .work = .{ .symbols = range } });
+    if (arm64) for (order.items) |index| try copies.append(gpa, .{ .context = &context, .work = .{ .veneers = index } });
     var patches: std.ArrayList(Task) = .empty;
     defer patches.deinit(gpa);
     for (site_ranges.items) |range| try patches.append(gpa, .{ .context = &context, .work = .{ .sites = range } });
@@ -449,7 +459,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         const region: UnitImage.Region = @fromBackingInt(symbol.region);
         const address = places[found.image].base(region) + symbol.value;
         switch (@as(HostPrelink.ProvideKind, @fromBackingInt(@intCast(provide.kind)))) {
-            .procedure => writeLongJump(window[0..16], provide.vaddr, address),
+            .procedure => jump_window.writeJump(arm64, window[0..16], provide.vaddr, address),
             .data => switch (region) {
                 .block, .data => {
                     const size: usize = @intCast(@min(symbol.size, provide.size));
@@ -507,6 +517,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         .strtab_size = strtab_size,
         .signature_offset = signature_offset,
         .signature_size = signature_size,
+        .page_size = page_size,
     });
 
     // The signature: the host's page hashes where the page is as it was,
@@ -520,7 +531,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     defer hashes.deinit(gpa);
     for (hash_ranges.items) |range| try hashes.append(gpa, .{ .context = &hash_context, .work = .{ .hashes = range } });
     try fanout.runTasks(gpa, executor, Task, hashes.items);
-    writeSignatureHeader(mapped[@intCast(signature_offset)..][0..signature_header_size], @intCast(signature_offset), page_count, host_text.fileoff, host_text.filesize);
+    writeSignatureHeader(mapped[@intCast(signature_offset)..][0..signature_header_size], @intCast(signature_offset), page_count, page_size, host_text.fileoff, host_text.filesize);
     timing.finalize_ns = elapsed(std_io, finalize_started);
     const unmap_started = now(std_io);
     output.unmap(mapped);
@@ -541,6 +552,8 @@ const no_symbol: u32 = std.math.maxInt(u32);
 
 const Place = struct {
     block: u64 = 0,
+    /// On arm64, the image's veneers, one per import in import order.
+    veneers: u64 = 0,
     data: u64 = 0,
     bss: u64 = 0,
     /// Offsets of the image's fragments in the output debug sections:
@@ -703,17 +716,6 @@ const Tail = struct {
     }
 };
 
-/// `ADRP x16, target; ADD x16, x16, target; BR x16; BRK #0`.
-fn writeLongJump(window: *[16]u8, window_address: u64, target: u64) void {
-    std.mem.writeInt(u32, window[0..4], 0x9000_0010, .little);
-    std.mem.writeInt(u32, window[4..8], 0x9100_0210, .little);
-    std.mem.writeInt(u32, window[8..12], 0xd61f_0200, .little);
-    std.mem.writeInt(u32, window[12..16], 0xd420_0000, .little);
-    // The app region is within 4 GiB of the host.
-    if (!UnitImage.applySite(window[0..4], .page21, @intCast(target), window_address)) base.invariant("fast dev link invariant violated: a provide window cannot reach its procedure", .{});
-    if (!UnitImage.applySite(window[4..8], .pageoff12, @intCast(target), window_address + 4)) unreachable; // an ADD takes any low bits
-}
-
 const Context = struct {
     out: []u8,
     images: []const ImageInput,
@@ -734,6 +736,8 @@ const Context = struct {
     /// Where the code directory's page hashes start.
     hashes_offset: u64,
     host_page_hashes: []const [32]u8,
+    /// The host's segment page (`HostPrelink.pageSize`).
+    page_size: u64,
     /// The load commands end here; pages before it are rehashed.
     dirty_pages_end: u64,
     /// File ranges the link wrote inside the host's segments.
@@ -764,8 +768,8 @@ const Context = struct {
     /// the link left as they were.
     fn pageUnchanged(self: *const Context, page: u64) bool {
         if (page >= self.host_page_hashes.len) return false;
-        const start = page * page_size;
-        const end = start + page_size;
+        const start = page * self.page_size;
+        const end = start + self.page_size;
         if (start < self.dirty_pages_end) return false;
         for (self.dirty_ranges) |range| {
             if (range[0] < end and range[1] > start) return false;
@@ -782,6 +786,8 @@ const Task = struct {
         sites: fanout.Range,
         /// A range of the output's pages to hash.
         hashes: fanout.Range,
+        /// The veneers of one placed image.
+        veneers: u32,
     },
     sites: u64 = 0,
     bytes: u64 = 0,
@@ -793,8 +799,19 @@ const Task = struct {
             .symbols => |range| self.writeSymbols(range),
             .sites => |range| self.applySites(range),
             .hashes => |range| self.hashPages(range),
+            .veneers => |image| self.writeVeneers(image),
         }
         return opaque_task;
+    }
+
+    fn writeVeneers(self: *Task, image: u32) void {
+        const context = self.context;
+        const place = context.places[image];
+        for (context.resolved[image], 0..) |target, import| {
+            const address = place.veneers + import * jump_window.veneer_size;
+            jump_window.writeVeneer(context.out[@intCast(context.fileOffsetOf(address))..][0..jump_window.veneer_size], address, target);
+        }
+        self.bytes = context.resolved[image].len * jump_window.veneer_size;
     }
 
     fn writeSymbols(self: *Task, range: fanout.Range) void {
@@ -847,11 +864,19 @@ const Task = struct {
                     continue;
                 }
             }
-            const target = if (site.target_region == UnitImage.import_target) addresses[site.target] else place.base(@fromBackingInt(site.target_region));
-            const value = @as(i64, @intCast(target)) + site.addend;
-            // The layout keeps the app region within page reach of the
-            // host and of itself, and debug sections within 32-bit offsets.
-            if (!UnitImage.applySite(field, kind, value, place.base(region) + site.offset)) {
+            const imported = site.target_region == UnitImage.import_target;
+            const target = if (imported) addresses[site.target] else place.base(@fromBackingInt(site.target_region));
+            const site_address = place.base(region) + site.offset;
+            var value = @as(i64, @intCast(target)) + site.addend;
+            // A branch to an import beyond its reach takes the import's
+            // veneer; the layout keeps the app region within page reach of
+            // the host and of itself for every other kind, and debug
+            // sections within 32-bit offsets.
+            if (kind == .branch26 and imported and !jump_window.branchReaches(site_address, @intCast(value))) {
+                if (site.addend != 0) base.invariant("fast dev link invariant violated: a veneered branch has an addend", .{});
+                value = @intCast(place.veneers + site.target * jump_window.veneer_size);
+            }
+            if (!UnitImage.applySite(field, kind, value, site_address)) {
                 base.invariant("fast dev link invariant violated: a patch site's value does not fit its field", .{});
             }
         }
@@ -866,8 +891,8 @@ const Task = struct {
                 @memcpy(slot, &context.host_page_hashes[page]);
                 continue;
             }
-            const start = page * page_size;
-            const end = @min(start + page_size, context.signature_offset);
+            const start = page * context.page_size;
+            const end = @min(start + context.page_size, context.signature_offset);
             std.crypto.hash.sha2.Sha256.hash(context.out[@intCast(start)..@intCast(end)], slot, .{});
         }
         self.bytes = range.count * 32;
@@ -880,7 +905,7 @@ const signature_identifier = "roc";
 const code_directory_size = 88;
 const signature_header_size: u64 = 12 + 8 + code_directory_size + signature_identifier.len + 1;
 
-fn writeSignatureHeader(out: *[signature_header_size]u8, code_limit: u32, page_count: u64, text_fileoff: u64, text_filesize: u64) void {
+fn writeSignatureHeader(out: *[signature_header_size]u8, code_limit: u32, page_count: u64, page_size: u64, text_fileoff: u64, text_filesize: u64) void {
     const total: u32 = @intCast(signature_header_size + page_count * 32);
     std.mem.writeInt(u32, out[0..4], macho.CSMAGIC_EMBEDDED_SIGNATURE, .big);
     std.mem.writeInt(u32, out[4..8], total, .big);
@@ -949,6 +974,8 @@ const Layout = struct {
     strtab_size: u64,
     signature_offset: u64,
     signature_size: u64,
+    /// The host's segment page (`HostPrelink.pageSize`).
+    page_size: u64,
 };
 
 /// The three segment commands the link adds before `__LINKEDIT`'s.
@@ -984,7 +1011,7 @@ fn rewriteLoadCommands(out: []u8, exe: HostPrelink.Executable, layout: Layout) v
     const shift: Shift = .{ .insertion = linkedit_command };
     const linkedit = shift.of(linkedit_command);
     std.mem.writeInt(u64, out[linkedit + 24 ..][0..8], layout.linkedit_vmaddr, .little);
-    std.mem.writeInt(u64, out[linkedit + 32 ..][0..8], std.mem.alignForward(u64, layout.linkedit_filesize, page_size), .little);
+    std.mem.writeInt(u64, out[linkedit + 32 ..][0..8], std.mem.alignForward(u64, layout.linkedit_filesize, layout.page_size), .little);
     std.mem.writeInt(u64, out[linkedit + 40 ..][0..8], layout.linkedit_fileoff, .little);
     std.mem.writeInt(u64, out[linkedit + 48 ..][0..8], layout.linkedit_filesize, .little);
     const symtab = shift.of(exe.symtab.?.command_offset);
@@ -1084,17 +1111,9 @@ test "a dyld opcode stream ends at its DONE, not at its padding" {
     try std.testing.expectEqualSlices(u8, &.{}, withoutDone(&.{}, .rebase));
 }
 
-test "a long jump window reaches its target" {
-    var window: [16]u8 = undefined;
-    writeLongJump(&window, 0x1000_4000, 0x1004_5678);
-    // ADRP x16: 0x41 pages forward; ADD x16, x16, #0x678.
-    try std.testing.expectEqual(@as(u32, 0x9000_0010 | ((0x41 & 3) << 29) | ((0x41 >> 2) << 5)), std.mem.readInt(u32, window[0..4], .little));
-    try std.testing.expectEqual(@as(u32, 0x9100_0210 | (0x678 << 10)), std.mem.readInt(u32, window[4..8], .little));
-}
-
 test "the signature header describes its code directory" {
     var header: [signature_header_size]u8 = undefined;
-    writeSignatureHeader(&header, 0x2_0000, 8, 0, 0x4000);
+    writeSignatureHeader(&header, 0x2_0000, 8, 0x4000, 0, 0x4000);
     try std.testing.expectEqual(macho.CSMAGIC_EMBEDDED_SIGNATURE, std.mem.readInt(u32, header[0..4], .big));
     try std.testing.expectEqual(@as(u32, @intCast(signature_header_size + 8 * 32)), std.mem.readInt(u32, header[4..8], .big));
     try std.testing.expectEqual(@as(u32, 8), std.mem.readInt(u32, header[48..52], .big));

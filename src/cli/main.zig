@@ -651,16 +651,16 @@ const EmbeddedTargetObjects = struct {
         return objects;
     }
 
-    /// A generic Linux target uses the native builtins and its glibc twin's
-    /// default platform.
+    /// A generic Linux target uses the native builtins, and its glibc twin's
+    /// default platform and support image: the image's builtins and Boxy
+    /// runtime are the twin's, compiled for the same architecture and
+    /// operating system and calling no libc, like the native ones.
     fn linuxAlias(comptime glibc: EmbeddedTargetObjects) EmbeddedTargetObjects {
         var objects = glibc;
         objects.builtins_extern = native.builtins_extern;
         objects.builtins_extern_digest = native.builtins_extern_digest;
         objects.boxy_runtime = native.boxy_runtime;
         objects.boxy_runtime_digest = native.boxy_runtime_digest;
-        // The glibc twin's support image holds its own builtins, not these.
-        objects.support_image = null;
         return objects;
     }
 
@@ -11159,12 +11159,11 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
 /// compiler embeds.
 fn fastDevLinkFormat(target: RocTarget) ?fast_dev_link.Format {
     return switch (target) {
-        .x64musl, .x64glibc => .elf,
-        .arm64mac => .macho,
+        .x64musl, .x64glibc, .x64linux, .x64elf, .x64freebsd, .x64openbsd, .x64netbsd => .elf,
+        .x64v1musl, .x64v1glibc, .x64v1linux, .x64v1elf, .x64v1freebsd, .x64v1openbsd, .x64v1netbsd => .elf,
+        .arm64musl, .arm64glibc, .arm64linux, .arm64v1musl, .arm64v1glibc, .arm64v1linux => .elf,
+        .arm64mac, .x64mac, .x64v1mac => .macho,
         .x64win, .x64mingw, .arm64win, .arm64mingw, .x64v1win, .x64v1mingw, .arm64v1win, .arm64v1mingw => .coff,
-        .x64mac, .x64freebsd, .x64openbsd, .x64netbsd, .x64linux, .x64elf => null,
-        .x64v1mac, .x64v1freebsd, .x64v1openbsd, .x64v1netbsd, .x64v1musl, .x64v1glibc, .x64v1linux, .x64v1elf => null,
-        .arm64linux, .arm64musl, .arm64glibc, .arm64v1linux, .arm64v1musl, .arm64v1glibc => null,
         .arm32linux, .arm32musl, .wasm32, .wasm32v1 => null,
     };
 }
@@ -11218,10 +11217,9 @@ const WasmUnits = struct {
 
 /// Whether a build links its wasm output by composing images instead of
 /// with LLD (`wasm_link.zig`): a build whose wasm units apply
-/// (`wasmUnitsApply`) on a Linux host, whose system calls the output file
-/// uses, for any output: a module (`exe` or `shared`) or an archive.
+/// (`wasmUnitsApply`), on any compiler host, for any output: a module
+/// (`exe` or `shared`) or an archive.
 fn wasmFastLinkApplies(target: RocTarget, args: cli_args.BuildArgs) bool {
-    if (comptime builtin.target.os.tag != .linux) return false;
     if (args.synthetic_default_platform) return false;
     return wasmUnitsApply(target, args);
 }

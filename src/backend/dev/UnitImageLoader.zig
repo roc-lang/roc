@@ -300,16 +300,13 @@ fn writeStub(bytes: *[stub_size]u8, target: usize) void {
     bytes[14..16].* = .{ 0xcc, 0xcc };
 }
 
-/// Publish newly written instructions before they run.
+/// Publish newly written instructions before they run, through compiler-rt's
+/// cache maintenance for the host.
 fn flushInstructionCache(memory: []const u8) void {
-    if (comptime builtin.os.tag == .macos) {
-        sys_icache_invalidate(memory.ptr, memory.len);
-    } else {
-        unreachable; // arm64 images are loaded only on a macOS compiler
-    }
+    __clear_cache(memory.ptr, memory.ptr + memory.len);
 }
 
-extern "c" fn sys_icache_invalidate(start: [*]const u8, len: usize) void;
+extern fn __clear_cache(start: [*]const u8, end: [*]const u8) callconv(.c) void;
 
 /// An address below this binary's code, a preference for where the image
 /// lands so its calls into the compiler reach it directly. The kernel may

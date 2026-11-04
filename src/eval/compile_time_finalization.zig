@@ -7374,9 +7374,11 @@ test "compile-time finalization declarations are referenced" {
 /// references that import: demand must follow the data relocation.
 fn ctfeSelectionTestImage(allocator: Allocator, name: []const u8, pointer: []const u8, imported: ?[]const u8, weak: bool) backend.dev.UnitImage.BuildError![]align(16) u8 {
     const Image = backend.dev.UnitImage;
+    // mov w0, #42; ret, or mov eax, 42; ret.
+    const arm64_text = [_]u8{ 0x40, 0x05, 0x80, 0x52, 0xc0, 0x03, 0x5f, 0xd6 };
+    const x86_64_text = [_]u8{ 0xb8, 42, 0, 0, 0, 0xc3, 0x90, 0x90 };
+    const text: []const u8 = if (builtin.cpu.arch == .aarch64) &arm64_text else &x86_64_text;
     const object = if (builtin.os.tag == .macos) macho: {
-        // mov w0, #42; ret
-        const text = [_]u8{ 0x40, 0x05, 0x80, 0x52, 0xc0, 0x03, 0x5f, 0xd6 };
         const name_z = try std.fmt.allocPrint(allocator, "_{s}", .{name});
         defer allocator.free(name_z);
         const pointer_z = try std.fmt.allocPrint(allocator, "_{s}", .{pointer});
@@ -7388,15 +7390,15 @@ fn ctfeSelectionTestImage(allocator: Allocator, name: []const u8, pointer: []con
             .{ .name = pointer_z, .section = 2, .value = 0, .external = true },
             .{ .name = imported_z, .section = 0, .external = true, .weak_ref = weak },
         };
-        // `ARM64_RELOC_UNSIGNED`, an 8-byte pointer.
+        // `ARM64_RELOC_UNSIGNED` or `X86_64_RELOC_UNSIGNED`, an 8-byte pointer.
         const relocations = [_]Image.TestMachObject.TestRelocation{.{ .section = 2, .offset = 0, .symbol = 3, .type = 0, .pcrel = false, .length = 3 }};
-        break :macho try Image.TestMachObject.encode(allocator, &.{
-            .{ .segname = "__TEXT", .sectname = "__text", .bytes = &text, .flags = 0x8000_0000 },
+        const encode = if (builtin.cpu.arch == .aarch64) Image.TestMachObject.encode else Image.TestMachObject.encodeX86_64;
+        break :macho try encode(allocator, &.{
+            .{ .segname = "__TEXT", .sectname = "__text", .bytes = text, .flags = 0x8000_0000 },
             .{ .segname = "__DATA", .sectname = "__data", .bytes = &@as([8]u8, @splat(0)), .@"align" = 3 },
             .{ .segname = "__DATA", .sectname = "__bss", .size = 8, .@"align" = 3, .flags = 1 },
         }, symbols[0..if (imported != null) 3 else 2], if (imported != null) &relocations else &.{});
     } else if (builtin.os.tag == .windows) coff: {
-        const text: []const u8 = if (builtin.cpu.arch == .aarch64) &.{ 0x40, 0x05, 0x80, 0x52, 0xc0, 0x03, 0x5f, 0xd6 } else &.{ 0xb8, 42, 0, 0, 0, 0xc3, 0x90, 0x90 };
         // A weak reference is a weak external whose tag is undefined too.
         const symbols = [_]Image.TestCoffObject.TestSymbol{
             .{ .name = name, .section = 1, .value = 0, .function = true },
@@ -7418,9 +7420,11 @@ fn ctfeSelectionTestImage(allocator: Allocator, name: []const u8, pointer: []con
             .{ .name = pointer, .section = 2, .size = 8, .global = true },
             .{ .name = imported orelse name, .section = 0, .global = true, .func = true, .weak = weak },
         };
-        const relocations = [_]Image.TestObject.TestRelocation{.{ .section = 2, .offset = 0, .symbol = 3, .type = 1, .addend = 0 }};
-        break :elf try Image.TestObject.encode(allocator, &.{
-            .{ .name = ".text", .flags = 6, .bytes = &.{ 0xb8, 42, 0, 0, 0, 0xc3 } },
+        // `R_AARCH64_ABS64` or `R_X86_64_64`.
+        const relocations = [_]Image.TestObject.TestRelocation{.{ .section = 2, .offset = 0, .symbol = 3, .type = if (builtin.cpu.arch == .aarch64) 257 else 1, .addend = 0 }};
+        const encode = if (builtin.cpu.arch == .aarch64) Image.TestObject.encodeAarch64 else Image.TestObject.encode;
+        break :elf try encode(allocator, &.{
+            .{ .name = ".text", .flags = 6, .bytes = text },
             .{ .name = ".data", .flags = 3, .bytes = &@as([8]u8, @splat(0)), .addralign = 8 },
             .{ .name = ".bss", .type = 8, .flags = 3, .size = 8, .addralign = 8 },
         }, symbols[0..if (imported != null) 3 else 2], if (imported != null) &relocations else &.{});

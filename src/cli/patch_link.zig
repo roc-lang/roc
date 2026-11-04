@@ -1,4 +1,5 @@
-//! The patch link of a fast dev link (Linux x86_64 executables): the
+//! The patch link of a fast dev link of an ELF executable (Linux or a BSD,
+//! x86_64 or AArch64): the
 //! executable is the pre-linked host's bytes (`host_prelink.zig`) followed
 //! by the app region, made of the unit images (`backend.dev.UnitImage`) the
 //! program reaches and the support image, placed at addresses that are a
@@ -6,10 +7,12 @@
 //!
 //! The app region is two segments: one read-and-execute segment holding
 //! the `provides` windows and every image's code block (text, then its
-//! read-only data), and one read-write segment holding every image's data
-//! and zero-fill. Every reference left in an image is a patch site the link
-//! fills; an import resolves first inside the app region, then against the
-//! host's kept symbols. Debug information and symbols are appended after
+//! read-only data, then on AArch64 a veneer per import, `jump_window`), and
+//! one read-write segment holding every image's data and zero-fill. Every
+//! reference left in an image is a patch site the link fills; an import
+//! resolves first inside the app region, then against the host's kept
+//! symbols, and an AArch64 branch that cannot reach its import takes the
+//! import's veneer. Debug information and symbols are appended after
 //! the segments, with the host's own, under a rebuilt section header table.
 //!
 //! The output file is written through a shared mapping, one task per image
@@ -25,12 +28,17 @@ const host_prelink = @import("host_prelink.zig");
 const unit_walk = @import("unit_walk.zig");
 const fanout = @import("patch_fanout.zig");
 const link_output = @import("link_output.zig");
+const jump_window = @import("jump_window.zig");
 
 const Allocator = std.mem.Allocator;
 const UnitImage = backend.dev.UnitImage;
 const Executor = base.post_check_task_executor.Executor;
 
 const page_size: u64 = 4096;
+/// An AArch64 kernel may run with 4, 16 or 64 KiB pages; a segment boundary
+/// congruent modulo 64 KiB loads under any of them, as LLD's own AArch64
+/// layout does.
+const aarch64_segment_align: u64 = 65536;
 const sym_size = 24;
 const PT_LOAD = 1;
 const PF_X = 1;
@@ -148,6 +156,8 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
 
     // Layout.
     const host = inputs.host;
+    const arm64 = host.arm64();
+    const segment_align: u64 = if (arm64) aarch64_segment_align else page_size;
     const host_size = host.host().len;
     const provide_count = host.provideCount();
     const host_symtab: ?host_prelink.SectionHeader = if (host.header.symtab_index != 0) host.section(host.header.symtab_index) else null;
@@ -157,7 +167,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     var app_strings: u64 = 0;
     for (order.items) |index| app_strings += images.items[index].view.strings().len;
     if (host_strtab) |strtab| std.debug.assert(strtab.offset + strtab.size == host_size);
-    const app_offset = std.mem.alignForward(u64, host_size + (if (host_strtab != null) app_strings else 0), page_size);
+    const app_offset = std.mem.alignForward(u64, host_size + (if (host_strtab != null) app_strings else 0), segment_align);
     const places = try gpa.alloc(Place, images.items.len);
     defer gpa.free(places);
     @memset(places, .{});
@@ -167,8 +177,13 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         rx_size = std.mem.alignForward(u64, rx_size, page_size);
         places[index].block = host_prelink.app_base + rx_size;
         rx_size += view.block().len;
+        if (arm64) {
+            rx_size = std.mem.alignForward(u64, rx_size, 4);
+            places[index].veneers = host_prelink.app_base + rx_size;
+            rx_size += view.imports().len * jump_window.veneer_size;
+        }
     }
-    const rw_offset = std.mem.alignForward(u64, app_offset + rx_size, page_size);
+    const rw_offset = std.mem.alignForward(u64, app_offset + rx_size, segment_align);
     const rw_base = host_prelink.app_base + (rw_offset - app_offset);
     var rw_file_size: u64 = 0;
     for (order.items) |index| {
@@ -254,9 +269,9 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     defer headers.deinit(gpa);
     for (0..host.header.shnum) |index| try headers.append(gpa, host.section(@intCast(index)));
     const text_index: u32 = @intCast(headers.items.len);
-    try headers.append(gpa, .{ .name = try addName(gpa, &names, ".text.roc"), .type = SHT_PROGBITS, .flags = SHF_ALLOC | SHF_EXECINSTR, .addr = host_prelink.app_base, .offset = app_offset, .size = rx_size, .link = 0, .info = 0, .addralign = page_size, .entsize = 0 });
+    try headers.append(gpa, .{ .name = try addName(gpa, &names, ".text.roc"), .type = SHT_PROGBITS, .flags = SHF_ALLOC | SHF_EXECINSTR, .addr = host_prelink.app_base, .offset = app_offset, .size = rx_size, .link = 0, .info = 0, .addralign = segment_align, .entsize = 0 });
     const data_index: u32 = @intCast(headers.items.len);
-    try headers.append(gpa, .{ .name = try addName(gpa, &names, ".data.roc"), .type = SHT_PROGBITS, .flags = SHF_ALLOC | SHF_WRITE, .addr = rw_base, .offset = rw_offset, .size = rw_file_size, .link = 0, .info = 0, .addralign = page_size, .entsize = 0 });
+    try headers.append(gpa, .{ .name = try addName(gpa, &names, ".data.roc"), .type = SHT_PROGBITS, .flags = SHF_ALLOC | SHF_WRITE, .addr = rw_base, .offset = rw_offset, .size = rw_file_size, .link = 0, .info = 0, .addralign = segment_align, .entsize = 0 });
     const bss_index: u32 = @intCast(headers.items.len);
     try headers.append(gpa, .{ .name = try addName(gpa, &names, ".bss.roc"), .type = SHT_NOBITS, .flags = SHF_ALLOC | SHF_WRITE, .addr = rw_base + rw_file_size, .offset = rw_offset + rw_file_size, .size = rw_mem_size - rw_file_size, .link = 0, .info = 0, .addralign = 16, .entsize = 0 });
     const debug_names = [_][]const u8{ ".debug_abbrev", ".debug_info", ".debug_line" };
@@ -397,6 +412,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     defer copies.deinit(gpa);
     for (copy_batches) |batch| try copies.append(gpa, .{ .context = &context, .work = .{ .copies = batch } });
     for (symbol_ranges.items) |range| try copies.append(gpa, .{ .context = &context, .work = .{ .symbols = range } });
+    if (arm64) for (order.items) |index| try copies.append(gpa, .{ .context = &context, .work = .{ .veneers = index } });
     var patches: std.ArrayList(Task) = .empty;
     defer patches.deinit(gpa);
     for (site_ranges.items) |range| try patches.append(gpa, .{ .context = &context, .work = .{ .sites = range } });
@@ -416,8 +432,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         const region: UnitImage.Region = @fromBackingInt(symbol.region);
         const address = places[found.image].base(region) + symbol.value;
         if (@as(UnitImage.SymbolType, @fromBackingInt(symbol.type)) == .func) {
-            window_bytes[0] = 0xe9;
-            std.mem.writeInt(i32, window_bytes[1..5], @intCast(@as(i64, @intCast(address)) - @as(i64, @intCast(window + 5))), .little);
+            jump_window.writeJump(arm64, window_bytes[0..16], window, address);
             continue;
         }
         switch (region) {
@@ -432,8 +447,8 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         }
     }
     const phdrs = mapped[@intCast(host.header.phdr_offset)..][0 .. host.header.phnum * 56];
-    writeLoad(phdrs[host.header.first_spare * 56 ..][0..56], app_offset, host_prelink.app_base, rx_size, rx_size, PF_R | PF_X);
-    if (rw_mem_size != 0) writeLoad(phdrs[(host.header.first_spare + 1) * 56 ..][0..56], rw_offset, rw_base, rw_file_size, rw_mem_size, PF_R | PF_W);
+    writeLoad(phdrs[host.header.first_spare * 56 ..][0..56], app_offset, host_prelink.app_base, rx_size, rx_size, PF_R | PF_X, segment_align);
+    if (rw_mem_size != 0) writeLoad(phdrs[(host.header.first_spare + 1) * 56 ..][0..56], rw_offset, rw_base, rw_file_size, rw_mem_size, PF_R | PF_W, segment_align);
     var build_id = std.crypto.hash.sha2.Sha256.init(.{});
     build_id.update("roc-fast-dev-link-build-id-v1");
     build_id.update(&host.header.host_digest);
@@ -466,6 +481,8 @@ const no_symbol: u32 = std.math.maxInt(u32);
 
 const Place = struct {
     block: u64 = 0,
+    /// On AArch64, the image's veneers, one per import in import order.
+    veneers: u64 = 0,
     data: u64 = 0,
     bss: u64 = 0,
     /// Offsets of the image's fragments in the output debug sections:
@@ -537,6 +554,8 @@ const Task = struct {
         copies: []const fanout.Copy,
         symbols: Range,
         sites: Range,
+        /// The veneers of one placed image.
+        veneers: u32,
     },
     sites: u64 = 0,
     bytes: u64 = 0,
@@ -547,8 +566,19 @@ const Task = struct {
             .copies => |list| self.bytes += fanout.runCopies(self.context.out, list),
             .symbols => |range| self.writeSymbols(range),
             .sites => |range| self.applySites(range),
+            .veneers => |image| self.writeVeneers(image),
         }
         return opaque_task;
+    }
+
+    fn writeVeneers(self: *Task, image: u32) void {
+        const context = self.context;
+        const place = context.places[image];
+        for (context.resolved[image], 0..) |target, import| {
+            const address = place.veneers + import * jump_window.veneer_size;
+            jump_window.writeVeneer(context.out[@intCast(context.fileOffsetOf(address))..][0..jump_window.veneer_size], address, target);
+        }
+        self.bytes = context.resolved[image].len * jump_window.veneer_size;
     }
 
     fn writeSymbols(self: *Task, range: Range) void {
@@ -595,15 +625,23 @@ const Task = struct {
         const atoms_reached = context.reached_atoms[range.image];
         for (view.sites()[range.first..][0..range.count]) |site| {
             if (site.atom != UnitImage.no_atom and !atoms_reached[site.atom]) continue;
-            const target = if (site.target_region == UnitImage.import_target) addresses[site.target] else place.base(@fromBackingInt(site.target_region));
             const region: UnitImage.Region = @fromBackingInt(site.region);
             const kind: UnitImage.SiteKind = @fromBackingInt(site.kind);
+            const site_address = place.base(region) + site.offset;
             const out = context.regionOut(place, view, region);
             const field = out[site.offset..][0..@intCast(UnitImage.kindWidth(kind))];
-            const value = @as(i64, @intCast(target)) + site.addend;
-            // The layout keeps the app region within 32-bit reach of the
-            // host and of itself, and debug sections within 32-bit offsets.
-            if (!UnitImage.applySite(field, kind, value, place.base(region) + site.offset)) {
+            const imported = site.target_region == UnitImage.import_target;
+            const target = if (imported) addresses[site.target] else place.base(@fromBackingInt(site.target_region));
+            var value = @as(i64, @intCast(target)) + site.addend;
+            // A branch to an import beyond its reach takes the import's
+            // veneer; the app region is within reach of the host and of
+            // itself for every other kind, and debug sections within 32-bit
+            // offsets.
+            if (kind == .branch26 and imported and !jump_window.branchReaches(site_address, @intCast(value))) {
+                if (site.addend != 0) base.invariant("fast dev link invariant violated: a veneered branch has an addend", .{});
+                value = @intCast(place.veneers + site.target * jump_window.veneer_size);
+            }
+            if (!UnitImage.applySite(field, kind, value, site_address)) {
                 base.invariant("fast dev link invariant violated: a patch site's value does not fit its field", .{});
             }
         }
@@ -611,7 +649,7 @@ const Task = struct {
     }
 };
 
-fn writeLoad(entry: *[56]u8, offset: u64, vaddr: u64, filesz: u64, memsz: u64, flags: u32) void {
+fn writeLoad(entry: *[56]u8, offset: u64, vaddr: u64, filesz: u64, memsz: u64, flags: u32, alignment: u64) void {
     std.mem.writeInt(u32, entry[0..4], PT_LOAD, .little);
     std.mem.writeInt(u32, entry[4..8], flags, .little);
     std.mem.writeInt(u64, entry[8..16], offset, .little);
@@ -619,7 +657,7 @@ fn writeLoad(entry: *[56]u8, offset: u64, vaddr: u64, filesz: u64, memsz: u64, f
     std.mem.writeInt(u64, entry[24..32], vaddr, .little);
     std.mem.writeInt(u64, entry[32..40], filesz, .little);
     std.mem.writeInt(u64, entry[40..48], memsz, .little);
-    std.mem.writeInt(u64, entry[48..56], page_size, .little);
+    std.mem.writeInt(u64, entry[48..56], alignment, .little);
 }
 
 fn hostBytes(host: host_prelink.View, offset: u64, size: u64) []const u8 {

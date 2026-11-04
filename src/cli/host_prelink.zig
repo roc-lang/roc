@@ -1,4 +1,5 @@
-//! The pre-linked host of a fast dev link (Linux x86_64 executables).
+//! The pre-linked host of a fast dev link of an ELF executable: Linux or a
+//! BSD, x86_64 or AArch64.
 //!
 //! A platform's host is linked once, with the existing embedded LLD flags,
 //! from the platform's link inputs plus one generated object, and filed in
@@ -85,8 +86,8 @@ const reserve_section_name = ".roc_phdrs";
 
 /// The generated object of a host link: the reserved program header table
 /// and an absolute definition of every name in `provides`, which must be
-/// sorted and distinct.
-pub fn linkObject(allocator: Allocator, provides: []const []const u8) Allocator.Error![]u8 {
+/// sorted and distinct. `arm64` selects the AArch64 machine over x86_64.
+pub fn linkObject(allocator: Allocator, arm64: bool, provides: []const []const u8) Allocator.Error![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     try out.appendNTimes(allocator, 0, 64);
@@ -150,7 +151,7 @@ pub fn linkObject(allocator: Allocator, provides: []const []const u8) Allocator.
     ehdr[5] = 1;
     ehdr[6] = 1;
     std.mem.writeInt(u16, ehdr[16..18], ET_REL, .little);
-    std.mem.writeInt(u16, ehdr[18..20], EM_X86_64, .little);
+    std.mem.writeInt(u16, ehdr[18..20], if (arm64) EM_AARCH64 else EM_X86_64, .little);
     std.mem.writeInt(u32, ehdr[20..24], 1, .little);
     std.mem.writeInt(u64, ehdr[40..48], shoff, .little);
     std.mem.writeInt(u16, ehdr[52..54], 64, .little);
@@ -299,7 +300,8 @@ pub const FinishError = Allocator.Error || error{
 /// one the host defines.
 pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, keep: []const []const u8) FinishError![]align(16) u8 {
     if (exe.len < 64 or !std.mem.eql(u8, exe[0..4], "\x7fELF") or exe[4] != 2 or exe[5] != 1) return error.UnexpectedHostLayout;
-    if (readU16(exe, 16) != ET_EXEC or readU16(exe, 18) != EM_X86_64) return error.UnexpectedHostLayout;
+    const machine = readU16(exe, 18);
+    if (readU16(exe, 16) != ET_EXEC or (machine != EM_X86_64 and machine != EM_AARCH64)) return error.UnexpectedHostLayout;
     const phoff = readU64(exe, 32);
     const shoff = readU64(exe, 40);
     const phentsize = readU16(exe, 54);
@@ -537,7 +539,15 @@ pub const View = struct {
         if (header.sht_offset % 8 != 0 or header.sht_offset + @as(u64, header.shnum) * 64 > bytes.len) return error.InvalidRecord;
         if (header.build_id_offset + header.build_id_size > header.host_size) return error.InvalidRecord;
         if (header.host_end_vaddr > app_base) return error.InvalidRecord;
+        if (header.host_size < 64) return error.InvalidRecord;
+        const machine = readU16(bytes[host_offset..], 18);
+        if (machine != EM_X86_64 and machine != EM_AARCH64) return error.InvalidRecord;
         return .{ .bytes = bytes, .header = header };
+    }
+
+    /// Whether the host is an AArch64 executable rather than an x86_64 one.
+    pub fn arm64(self: View) bool {
+        return readU16(self.host(), 18) == EM_AARCH64;
     }
 
     /// The host executable's bytes, ending with its string table when it
@@ -657,6 +667,7 @@ const PT_PHDR = 6;
 const ET_REL = 1;
 const ET_EXEC = 2;
 const EM_X86_64 = 62;
+const EM_AARCH64 = 183;
 const SHT_PROGBITS = 1;
 const SHT_SYMTAB = 2;
 const SHT_STRTAB = 3;
@@ -672,8 +683,9 @@ const STV_HIDDEN = 2;
 
 test "the host link object defines each provide at its window" {
     const allocator = std.testing.allocator;
-    const object = try linkObject(allocator, &.{ "roc_answer", "roc_main" });
+    const object = try linkObject(allocator, false, &.{ "roc_answer", "roc_main" });
     defer allocator.free(object);
+    try std.testing.expectEqual(@as(u16, EM_X86_64), readU16(object, 18));
     try std.testing.expectEqual(@as(u16, 5), readU16(object, 60));
     const shoff = readU64(object, 40);
     const symtab: usize = @intCast(shoff + 2 * 64);
@@ -681,6 +693,10 @@ test "the host link object defines each provide at its window" {
     try std.testing.expectEqual(@as(usize, 3 * 24), entries.len);
     try std.testing.expectEqual(provideAddress(1), readU64(entries, 2 * 24 + 8));
     try std.testing.expectEqual(@as(u16, SHN_ABS), readU16(entries, 24 + 6));
+    const aarch64 = try linkObject(allocator, true, &.{ "roc_answer", "roc_main" });
+    defer allocator.free(aarch64);
+    try std.testing.expectEqual(@as(u16, EM_AARCH64), readU16(aarch64, 18));
+    try std.testing.expectEqualSlices(u8, object[20..], aarch64[20..]);
 }
 
 test "a host key is a function of contents, not of where they are" {

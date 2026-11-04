@@ -23058,7 +23058,8 @@ from the procedures and entrypoints actually emitted for execution.
 ### Unit-Image Test Execution
 
 A `roc test --opt=dev --specialize=no` with a cache on a compiler whose
-host loads unit images (Linux x86_64, macOS arm64, Windows) runs its
+host loads unit images (every 64-bit x86 or ARM host, `UnitImageLoader`)
+runs its
 execution subset from test units loaded into the compiler's own process,
 not from one program lowered for the subset; the
 choice is the same switch on optimization, strategy, cache presence and host
@@ -24682,11 +24683,13 @@ qualified source names.
 
 ## Fast Dev Link
 
-A `roc build --opt=dev --specialize=no` with a cache of a Linux x86_64, macOS
-arm64 or Windows (x86_64 or arm64) executable links its executable without
-composing a program object and without LLD, whatever host the compiler runs
-on: the link is a function of the target's format, and the compiler host only
-supplies the system calls the output file is written with (`link_output`).
+A `roc build --opt=dev --specialize=no` with a cache of an executable for any
+64-bit x86 or ARM target (Linux, the BSDs, macOS and Windows; every target
+with a dev backend other than wasm, whose link is below) links its executable
+without composing a program object and without LLD, whatever host the
+compiler runs on: the link is a function of the target's format (ELF, Mach-O
+or COFF, `fastDevLinkFormat`), and the compiler host only supplies the system
+calls the output file is written with (`link_output`).
 The per-build work after the edited module's code exists is a function of
 that module and of the output's size, never of the program's module count or
 the host's size. Every other target, output kind and `--no-cache` composes a
@@ -24703,10 +24706,11 @@ image is built; what remains is a patch site: an import of another image or
 of the host, or a reference whose distance depends on where the linker places
 the image's regions. A site's kind is the field's encoding, x86_64's
 (`abs64`, `pc32`, `abs32`, `abs32s`) or arm64's (`abs64`, `branch26`,
-`page21`, `pageoff12`), and the block is placed page aligned, so an arm64
-page-relative reference inside the block resolves at build time like an
-x86_64 displacement. The image is built from the unit's relocatable object
-in the target's format, ELF or Mach-O, and names its symbols by their C
+`page21`, `pageoff12`), plus Windows's image-relative `rva32`, and the block
+is placed page aligned, so an arm64 page-relative reference inside the block
+resolves at build time like an x86_64 displacement. The image is built from
+the unit's relocatable object in the target's format, ELF, Mach-O or COFF
+for either instruction set, and names its symbols by their C
 names (a Mach-O name without its underscore), so images, hosted symbols and
 provides read the same on every target. A load through the global offset
 table reads a slot the image keeps in its writable data, one per referenced
@@ -24753,8 +24757,8 @@ unit's code names, mutable constants and host-visible constants keep the
 program's names. Bodies keep the one position-independent form every wasm
 object Roc emits uses, so one image serves every output kind.
 
-**Wasm fast dev link.** Such a build on a Linux host links its output by
-composing images, with no LLD on the module path (`wasm_link.zig`). Two
+**Wasm fast dev link.** Such a build, on any compiler host, links its output
+by composing images, with no LLD on the module path (`wasm_link.zig`). Two
 images join the units, each converted once from a `wasm-ld -r` composition
 (`backend.wasm.ObjectImage`) and filed under the `prelinked_host` family as
 a wasm record (`wasm_host_image.zig`): the support image (compiler-rt, the
@@ -24800,22 +24804,24 @@ one cache entry per host (`host_prelink`, `macho/HostPrelink`,
 `coff/HostPrelink`, family `prelinked_host`). The generated object defines
 every `provides` symbol as a window the host's references resolve to at
 prelink time, which each build fills in: a jump to the entry wrapper for a
-procedure, the value's bytes for a data symbol. On Linux the windows are
-absolute addresses at a fixed place in the app region, and a provided value
-larger than its window is a reported build error. On macOS and Windows the
+procedure, the value's bytes for a data symbol. In an ELF host (Linux and
+the BSDs) the windows are absolute addresses at a fixed place in the app
+region, and a provided value larger than its window is a reported build
+error. On macOS and Windows the
 windows are sections of the host itself, a procedure's 16 bytes of code for a
 long jump and a value's layout size of writable data, where the pointers in
 the copied value can be relocated; which provides are procedures and how
 large the values are is part of the host's key, read from the program's
 images, so those hosts' lookups wait for them and nothing is ever too large.
-The object also reserves what the patch link appends: on Linux room in the
-host's first segment for a program header table with spare entries, on macOS
+The object also reserves what the patch link appends: in an ELF host room
+in the host's first segment for a program header table with spare entries, on macOS
 a header pad for the app's segment load commands; on Windows the prelink's
 page file alignment leaves the header page room for the app's section
 headers. The host link keeps exactly the symbols the app region may import:
 the platform's hosted symbols, the fixed runtime set and the support image's
-imports. On Linux it keeps them with `-u`; on macOS the generated object
-branches to each of them from a trampoline, which keeps it in the link and
+imports. An ELF host keeps them with `-u`; on macOS the generated object
+branches to each of them from a trampoline (a `B` on arm64, a `jmp` on
+x86_64), which keeps it in the link and
 gives a symbol a dylib defines an in-image address, with every kept symbol
 left to dynamic lookup (`-U`) so a host lacking one still links and the side
 table lists it as absent; on Windows `/include` keeps each one and gives a
@@ -24871,7 +24877,25 @@ backend's Mach-O writer keeps its pointer-bearing read-only data in
 unslid address and every reference across the host boundary is
 page-relative or rebased; the app region must lie within 4 GiB of the
 host's text, LLD's own limit for arm64 code, and a program beyond it is the
-reported dev-program-too-large error.
+reported dev-program-too-large error. An x86_64 Mach-O host has 4 KiB
+segment pages where an arm64 one has 16 KiB (`HostPrelink.pageSize`), and
+is linked with an ad hoc signature as an arm64 one is by default.
+
+An ELF link of an AArch64 executable places its two segments on 64 KiB
+boundaries, which load under a kernel of 4, 16 or 64 KiB pages, as LLD's
+own AArch64 layout does; the images inside a segment stay page aligned.
+
+Every link of arm64 code gives each placed image one veneer per import
+(`jump_window.zig`: `ADRP`, `ADD`, `BR x16`, reaching 4 GiB) after its
+block, written by the image's own task. A `B` or `BL` site to an import
+within its 128 MiB reach takes the import's address; one beyond it takes
+the veneer. In an ELF link the app region sits a fixed 1 GiB from the host,
+so every branch from the app into the host is veneered; in a Mach-O or COFF
+link the app follows the host and a veneer is taken only past 128 MiB. The
+dev backend's own code reaches other images through its page-relative stubs
+and never through a veneer; only the Zig-compiled support image branches to
+its imports directly. A procedure window holds the same sequence and a trap
+(`BRK`), or on x86_64 a `jmp rel32` and `int3`s.
 
 A Windows link appends sections after the host's loaded ones: `.roctext`,
 read-and-execute, holding every placed image's code block; `.rocdata`,
@@ -25082,7 +25106,7 @@ holds a reference to it for the rest of the session once it accepts it, which
 keeps that image's code, data, and Boxy runtime alive.
 
 A `--specialize=no` dev run with a cache on a host whose units carry unit
-images (Linux x86_64, macOS arm64, Windows) composes its `RunImage` from
+images (every 64-bit x86 or ARM host) composes its `RunImage` from
 unit images (Fast Dev Link) instead of lowering and
 compiling the whole program, for the first generation and every rebuild
 alike (`unitImageRunApplies`; every other run lowers the whole program).
