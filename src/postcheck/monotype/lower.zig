@@ -32217,6 +32217,10 @@ const BodyContext = struct {
         assembler_node: NodeId = undefined,
         assembler: DraftExprId = undefined,
         values_ty: Type.TypeId = undefined,
+        /// The literal's type is `Str`: its segments and values are written
+        /// once by `str_from_parts` (a `StrTask` over them interleaved), and
+        /// the assembler is not called.
+        write_once: bool = false,
     };
 
     /// A call-site intrinsic whose arguments lower as child tasks, in
@@ -32284,14 +32288,19 @@ const BodyContext = struct {
         lhs: DraftExprId = undefined,
     };
 
-    /// A string whose segments lower as child tasks, concatenated in order.
+    /// A `Str` literal whose segments and values lower as child tasks and
+    /// are written once, in order, by `str_from_parts`.
     const StrTask = struct {
         segments: []const checked.CheckedExprId,
         /// The cell the string's expression is built at; without one the
         /// task produces the string's expression data.
         cell: ?DraftTypeCell = null,
+        /// `segments` was allocated for this task (an interpolation's
+        /// segments and values interleaved) and is freed with it.
+        owned_segments: bool = false,
         index: usize = 0,
-        out: DraftExprId = undefined,
+        /// The lowered segments and values, the empty segments left out.
+        parts: std.ArrayList(DraftExprId) = .empty,
     };
 
     /// A field access whose receiver lowers as a child task, so nested
@@ -34822,6 +34831,7 @@ const BodyContext = struct {
                 task.prior = &.{};
             },
             .span, .prepared_span, .span_at_types, .list_span => |*task| self.releaseSpanTask(task),
+            .str => |*task| self.releaseStrTask(task),
             .constructor => |*task| self.releaseConstructorTask(task),
             .block => |task| {
                 self.releaseBlockTask(task);
@@ -34855,7 +34865,7 @@ const BodyContext = struct {
                 self.destroyLowerTaskBox(task);
             },
             .materialize => |*task| self.releaseMaterializeTask(task),
-            .branch_body, .return_value, .inspected, .divergent, .field_access, .str, .direct_structural, .inspect_only => {},
+            .branch_body, .return_value, .inspected, .divergent, .field_access, .direct_structural, .inspect_only => {},
             .scheme_alias => |*task| self.restoreSchemeAliasScope(task),
             .callsite_intrinsic => |*task| {
                 self.allocator.free(task.args);
@@ -34985,11 +34995,32 @@ const BodyContext = struct {
                     .interpolation => |value| value,
                     .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation lowering referenced a non-interpolation expression"),
                 };
-                task.values_ty = try self.activeTypeFromNode((try self.graph.functionNodes(task.assembler_node)).args[0]);
                 frame.cursor = 2;
+                // A `Str` literal: its segments and values are written once
+                // by `str_from_parts`, exactly as a literal the checker
+                // already proved to be `Str` is, and the assembler is not
+                // called. Its segments and values lower interleaved, in
+                // order, each at `Str`.
+                const result_is_str = switch (try self.graph.content(task.value_node)) {
+                    .primitive => |primitive| primitive == .str,
+                    .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => false,
+                };
+                if (result_is_str) {
+                    var operands: std.ArrayList(checked.CheckedExprId) = .empty;
+                    errdefer operands.deinit(self.allocator);
+                    try appendInterpolationOperands(self.allocator, &operands, interpolation);
+                    task.write_once = true;
+                    return requestLowerTask(self, .{ .str = .{
+                        .segments = try operands.toOwnedSlice(self.allocator),
+                        .cell = DraftTypeCell.fromGraphNode(task.value_node),
+                        .owned_segments = true,
+                    } });
+                }
+                task.values_ty = try self.activeTypeFromNode((try self.graph.functionNodes(task.assembler_node)).args[0]);
                 return requestLowerTask(self, .{ .list_span = .{ .exprs = interpolation.values, .list_ty = task.values_ty } });
             },
             else => {
+                if (task.write_once) return loweredExprStep(input.?.exprValue());
                 const values = try self.addExpr(.{ .ty = task.values_ty, .data = .{ .list = input.?.spanValue() } });
                 return loweredExprStep(try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(task.value_node), .{ .call_value = .{
                     .callee = task.assembler,
@@ -37396,24 +37427,38 @@ const BodyContext = struct {
     fn stepStr(self: *BodyContext, task: *StrTask, input: ?LowerResult) Allocator.Error!LowerStep {
         const str_ty = try self.primitiveType(.str);
         if (input) |lowered| {
-            task.out = if (task.index == 0)
-                lowered.exprValue()
-            else
-                try self.concatExpr(task.out, lowered.exprValue(), str_ty);
+            // An empty literal segment writes nothing: it is not a part.
+            if (!self.view.bodies.isEmptyStrSegment(task.segments[task.index])) {
+                try task.parts.append(self.allocator, lowered.exprValue());
+            }
             task.index += 1;
-        } else if (task.segments.len == 0) {
-            return try self.finishStr(task, try self.stringExpr("", str_ty));
         }
         if (task.index < task.segments.len) {
             return requestLowerChild(self, task.segments[task.index], .{ .sealed = str_ty });
         }
-        return try self.finishStr(task, task.out);
+        const parts = task.parts.items;
+        const value = switch (parts.len) {
+            0 => try self.stringExpr("", str_ty),
+            1 => parts[0],
+            else => try self.lowLevelExpr(.str_from_parts, parts, str_ty),
+        };
+        return try self.finishStr(task, value);
     }
 
-    fn finishStr(self: *BodyContext, task: *const StrTask, value: DraftExprId) Allocator.Error!LowerStep {
+    fn finishStr(self: *BodyContext, task: *StrTask, value: DraftExprId) Allocator.Error!LowerStep {
         const data: BodyExprData = .{ .nominal = value };
-        const cell = task.cell orelse return .{ .ret = .{ .data = data } };
-        return loweredExprStep(try self.addExprWithTypeCell(cell, data));
+        const cell = task.cell;
+        self.releaseStrTask(task);
+        if (cell) |ty| return loweredExprStep(try self.addExprWithTypeCell(ty, data));
+        return .{ .ret = .{ .data = data } };
+    }
+
+    fn releaseStrTask(self: *BodyContext, task: *StrTask) void {
+        task.parts.deinit(self.allocator);
+        task.parts = .empty;
+        if (task.owned_segments) self.allocator.free(task.segments);
+        task.owned_segments = false;
+        task.segments = &.{};
     }
 
     fn lowerStringLiteral(self: *BodyContext, id: checked.CheckedStringLiteralId) Allocator.Error!DraftStringLiteralId {

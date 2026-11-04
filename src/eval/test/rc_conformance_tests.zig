@@ -215,6 +215,26 @@ const cases = [_]Case{
         ,
     },
     .{
+        // An interpolated literal writes its parts once into a fresh string
+        // and borrows every part: a shared heap part keeps its count, and a
+        // part used again after the literal is still live.
+        .name = "interpolated literals write their parts once",
+        .source =
+        \\{
+        \\    shared = Str.concat("a string long enough to need the heap ", "plus a tail")
+        \\    holder = [shared, shared]
+        \\    small = Str.concat("ab", "c")
+        \\    joined = "<${shared}|${small}>${shared}"
+        \\    tiny = "${small}${small}"
+        \\    Str.count_utf8_bytes(joined)
+        \\        + Str.count_utf8_bytes(tiny)
+        \\        + Str.count_utf8_bytes(shared)
+        \\        + Str.count_utf8_bytes(small)
+        \\        + List.len(holder)
+        \\}
+        ,
+    },
+    .{
         // Concatenating nothing onto a value is the path where a
         // copy-on-write op can hand back its argument without either copying
         // it or checking whether anyone else holds it.

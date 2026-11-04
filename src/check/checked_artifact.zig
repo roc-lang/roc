@@ -11801,6 +11801,16 @@ pub const CheckedBodyStoreView = struct {
         return self.string_bytes[range.start .. range.start + range.len];
     }
 
+    /// Whether `expr_id` is a literal string segment with no bytes. Such a
+    /// segment writes nothing into the string it is part of, so a lowering
+    /// that writes a literal's parts once leaves it out.
+    pub fn isEmptyStrSegment(self: CheckedBodyStoreView, expr_id: CheckedExprId) bool {
+        return switch (self.expr(expr_id).data) {
+            .str_segment => |literal| self.stringLiteral(literal).len == 0,
+            .pending, .numeral, .str_from_quote, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => false,
+        };
+    }
+
     pub fn exprDiverges(self: CheckedBodyStoreView, expr_id: CheckedExprId, mode: InlineExpectMode) bool {
         const raw = @backingInt(expr_id);
         if (raw >= self.stored_exprs.len) checkedArtifactInvariant("checked body view divergence referenced a missing expression", .{});

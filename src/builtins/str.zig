@@ -1513,6 +1513,58 @@ fn joinedLength(strs: []const RocStr, separator_len: usize) usize {
     return total +| separator_len *| (strs.len - 1);
 }
 
+/// An interpolated literal's parts written once: the lengths summed, one
+/// small or heap string allocated, each part copied in. Every part is
+/// borrowed. The length saturates so an impossible total reaches the
+/// allocation guard instead of wrapping to a buffer the copies overrun.
+pub fn strFromParts(parts: []const RocStr, roc_ops: *RocOps) RocStr {
+    var total: usize = 0;
+    for (parts) |part| total +|= part.len();
+    var result = RocStr.allocate(total, roc_ops);
+    const dest = result.asU8ptrMut();
+    var offset: usize = 0;
+    for (parts) |part| {
+        part.memcpy(dest + offset);
+        offset += part.len();
+    }
+    return result;
+}
+
+test "strFromParts: small, big and empty parts, none and one" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    const small = [_]RocStr{ RocStr.fromSliceSmall("12"), RocStr.fromSliceSmall("."), RocStr.fromSliceSmall("05") };
+    const small_result = strFromParts(&small, ops);
+    defer small_result.decref(ops);
+    try std.testing.expect(small_result.isSmallStr());
+    try std.testing.expectEqualStrings("12.05", small_result.asSlice());
+
+    const big_text = "abcdefghijklmnopqrstuvwxyz0123456789";
+    const big = [_]RocStr{ RocStr.fromSlice(big_text, ops), RocStr.fromSliceSmall(""), RocStr.fromSliceSmall("-"), RocStr.fromSlice(big_text, ops) };
+    defer for (big) |part| part.decref(ops);
+    const big_result = strFromParts(&big, ops);
+    defer big_result.decref(ops);
+    try std.testing.expect(!big_result.isSmallStr());
+    try std.testing.expectEqualStrings(big_text ++ "-" ++ big_text, big_result.asSlice());
+
+    const crossing = [_]RocStr{ RocStr.fromSliceSmall("12345678901"), RocStr.fromSliceSmall("123456789012"), RocStr.fromSliceSmall("x") };
+    const crossing_result = strFromParts(&crossing, ops);
+    defer crossing_result.decref(ops);
+    try std.testing.expect(!crossing_result.isSmallStr());
+    try std.testing.expectEqualStrings("12345678901123456789012x", crossing_result.asSlice());
+
+    const none = [_]RocStr{};
+    const none_result = strFromParts(&none, ops);
+    try std.testing.expect(none_result.isSmallStr());
+    try std.testing.expectEqualStrings("", none_result.asSlice());
+
+    const one = [_]RocStr{RocStr.fromSliceSmall("only")};
+    const one_result = strFromParts(&one, ops);
+    try std.testing.expectEqualStrings("only", one_result.asSlice());
+}
+
 /// Str.toUtf8 - converts a string to a list of UTF-8 bytes.
 ///
 /// ## Ownership
