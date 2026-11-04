@@ -5140,7 +5140,7 @@ pub const Coordinator = struct {
         if (module_time > self.module_time_max_ns) self.module_time_max_ns = module_time;
         self.module_time_sum_ns += module_time;
 
-        installPlatformRequirementSurface(mod);
+        try installPlatformRequirementSurface(mod);
 
         self.cache_hits += 1;
         const module_id = pkg.getModuleId(mod.name) orelse return;
@@ -5154,12 +5154,12 @@ pub const Coordinator = struct {
     /// artifact, so the checker input and the cache key can never disagree.
     /// A platform whose check failed publishes no artifact and installs no
     /// surface; its own diagnostics gate the build instead.
-    fn installPlatformRequirementSurface(mod: *ModuleState) void {
+    fn installPlatformRequirementSurface(mod: *ModuleState) Allocator.Error!void {
         const env = mod.moduleEnv() orelse return;
         if (moduleKindTag(env.module_kind) != .platform) return;
         if (env.requires_types.items.items.len == 0) return;
         const artifact = mod.checkedArtifact() orelse return;
-        const context = artifact.platformRequirementContextKey();
+        const context = try artifact.platformRequirementContextKey();
         mod.platform_requirement_surface = .{
             .env = env,
             .context = context,
@@ -5984,7 +5984,7 @@ pub const Coordinator = struct {
         if (module_time > self.module_time_max_ns) self.module_time_max_ns = module_time;
         self.module_time_sum_ns += module_time;
 
-        installPlatformRequirementSurface(mod);
+        try installPlatformRequirementSurface(mod);
 
         // Update compile stats
         mod.checked_artifacts_published += 1;

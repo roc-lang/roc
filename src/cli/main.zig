@@ -1769,12 +1769,12 @@ fn checkedInterpreterHostIdentity(
     entrypoint_names: []const []const u8,
     target_usize: base.target.TargetUsize,
     hosted_table: CheckedHostedTable,
-) [32]u8 {
+) std.mem.Allocator.Error![32]u8 {
     var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-checked-host-interface-v3");
     updateHashU32(&hasher, @backingInt(target_usize));
 
-    const declarations_hash = root_artifact.platform_required_declarations.identityHash(&root_artifact.canonical_names);
+    const declarations_hash = try root_artifact.platform_required_declarations.identityHash(&root_artifact.canonical_names, root_artifact.typesView());
     hasher.update(&declarations_hash);
     updatePlatformAppRelationIdentity(&hasher, root_artifact);
     updateHostBoundaryIdentity(&hasher, root_metadata);
@@ -6173,7 +6173,7 @@ fn lowerDiscoveredLir(
         imported_artifacts,
         relation_artifacts,
     );
-    const interface_identity = checkedInterpreterHostIdentity(
+    const interface_identity = try checkedInterpreterHostIdentity(
         root_artifact,
         lowered.lir_result.root_metadata.items,
         entrypoint_names,

@@ -24068,7 +24068,8 @@ pub const PlatformRequiredDeclaration = struct {
     module_idx: u32,
     requires_idx: u32,
     platform_name: canonical.ExportNameId,
-    declared_source_ty: canonical.CanonicalTypeSchemeKey,
+    /// The declared type's annotation; its scheme key is computed when an
+    /// identity needs it (`PlatformRequiredDeclarationTable.identityHash`).
     type_anno: CIR.TypeAnno.Idx,
     for_clause_aliases_hash: [32]u8,
 };
@@ -24104,16 +24105,12 @@ pub const PlatformRequiredDeclarationTable = struct {
         const required_types = module_env.requires_types.items.items;
         const declarations = try allocator.alloc(PlatformRequiredDeclaration, required_types.len);
         errdefer allocator.free(declarations);
-        var scheme_writer = canonical_type_keys.SchemeWriter.init(allocator, &module_env.types, module_env);
-        defer scheme_writer.deinit();
-
         for (required_types, 0..) |required_type, i| {
             declarations[i] = .{
                 .id = @fromBackingInt(@intCast(@as(u32, @intCast(i)))),
                 .module_idx = module_idx,
                 .requires_idx = @intCast(i),
                 .platform_name = try names.internExportIdent(module_env.getIdentStoreConst(), required_type.ident),
-                .declared_source_ty = try scheme_writer.fromVar(ModuleEnv.varFrom(required_type.type_anno)),
                 .type_anno = required_type.type_anno,
                 .for_clause_aliases_hash = hashRequiredTypeForClauseAliases(module_env, required_type),
             };
@@ -24141,17 +24138,23 @@ pub const PlatformRequiredDeclarationTable = struct {
         return self.declarations[raw];
     }
 
+    /// The declarations' identity: each one's name, the scheme key of its
+    /// declared type in `types` (the platform's checked types), and its
+    /// for-clause aliases.
     pub fn identityHash(
         self: *const PlatformRequiredDeclarationTable,
         names: *const canonical.CanonicalNameStore,
-    ) [32]u8 {
+        type_view: CheckedTypeStoreView,
+    ) Allocator.Error![32]u8 {
         var hasher = base.Sha256.init(.{});
         hashByteSlice(&hasher, "platform_required_declarations");
         hashU32(&hasher, @intCast(self.declarations.len));
         for (self.declarations) |declaration| {
             hashU32(&hasher, declaration.requires_idx);
             hashByteSlice(&hasher, names.exportNameText(declaration.platform_name));
-            hasher.update(&declaration.declared_source_ty.bytes);
+            const declared = type_view.sourceTypeRoot(ModuleEnv.varFrom(declaration.type_anno)) orelse
+                checkedArtifactInvariant("a platform requirement's declared type was not published", .{});
+            hasher.update(&canonical_type_keys.schemeKeyForType(try type_view.rootKey(declared)).bytes);
             hasher.update(&declaration.for_clause_aliases_hash);
         }
         return hasher.finalResult();
@@ -24386,9 +24389,10 @@ const PlatformRelationTypeSubstitutions = struct {
         relation: ?PlatformAppRelation,
     ) Allocator.Error!PlatformRelationTypeSubstitutions {
         const active_relation = relation orelse return .{};
-        validatePlatformAppRelationForModule(
+        try validatePlatformAppRelationForModule(
             module_identity,
             names,
+            checked_types.view(),
             declarations,
             active_relation,
         );
@@ -24566,9 +24570,10 @@ pub const PlatformRequirementRelationTable = struct {
         relation: ?PlatformAppRelation,
     ) Allocator.Error!PlatformRequirementRelationTable {
         const active_relation = relation orelse return .{};
-        validatePlatformAppRelationForModule(
+        try validatePlatformAppRelationForModule(
             module_identity,
             names,
+            checked_types.view(),
             declarations,
             active_relation,
         );
@@ -24836,14 +24841,16 @@ pub const PlatformRequiredBindingTable = struct {
         allocator: Allocator,
         module_identity: ModuleIdentity,
         names: *const canonical.CanonicalNameStore,
+        type_view: CheckedTypeStoreView,
         declarations: *const PlatformRequiredDeclarationTable,
         relations: *const PlatformRequirementRelationTable,
         relation: ?PlatformAppRelation,
     ) Allocator.Error!PlatformRequiredBindingTable {
         const active_relation = relation orelse return .{};
-        validatePlatformAppRelationForModule(
+        try validatePlatformAppRelationForModule(
             module_identity,
             names,
+            type_view,
             declarations,
             active_relation,
         );
@@ -25003,24 +25010,28 @@ pub const PlatformRequiredBindingTable = struct {
 fn validatePlatformAppRelationForModule(
     module_identity: ModuleIdentity,
     names: *const canonical.CanonicalNameStore,
+    type_view: CheckedTypeStoreView,
     declarations: *const PlatformRequiredDeclarationTable,
     active_relation: PlatformAppRelation,
-) void {
+) Allocator.Error!void {
     if (active_relation.platform_module_idx != module_identity.module_idx) {
         base.invariant(
             "checked artifact invariant violated: platform/app relation belongs to module {d}, not platform module {d}",
             .{ active_relation.platform_module_idx, module_identity.module_idx },
         );
     }
-    const expected_requirement_context = PlatformRequirementContextKey.compute(
-        module_identity,
-        declarations.identityHash(names),
-    );
-    if (!std.meta.eql(active_relation.requirement_context.bytes, expected_requirement_context.bytes)) {
-        base.invariant(
-            "checked artifact invariant violated: platform/app relation requirement context does not match the current platform requirement declarations",
-            .{},
+    // Debug builds check the relation was built against these declarations.
+    if (builtin.mode == .debug) {
+        const expected_requirement_context = PlatformRequirementContextKey.compute(
+            module_identity,
+            try declarations.identityHash(names, type_view),
         );
+        if (!std.meta.eql(active_relation.requirement_context.bytes, expected_requirement_context.bytes)) {
+            base.invariant(
+                "checked artifact invariant violated: platform/app relation requirement context does not match the current platform requirement declarations",
+                .{},
+            );
+        }
     }
     const expected_key = PlatformAppRelationKey.compute(
         active_relation.app_artifact,
@@ -27470,10 +27481,10 @@ fn copyPlatformRequiredValueUse(
 }
 
 /// Public `platformRequirementContextKey` function.
-pub fn platformRequirementContextKey(artifact: *const CheckedModuleArtifact) PlatformRequirementContextKey {
+pub fn platformRequirementContextKey(artifact: *const CheckedModuleArtifact) Allocator.Error!PlatformRequirementContextKey {
     return PlatformRequirementContextKey.compute(
         artifact.module_identity,
-        artifact.platform_required_declarations.identityHash(&artifact.canonical_names),
+        try artifact.platform_required_declarations.identityHash(&artifact.canonical_names, artifact.typesView()),
     );
 }
 
@@ -27889,12 +27900,12 @@ pub fn pairCheckedPlatform(
     const platform_types = platform.typesView();
     const type_keys = try session.alloc(canonical.CanonicalTypeKey, platform.platform_type_inputs.requirements.len);
     for (platform.platform_type_inputs.requirements, type_keys) |required, *key| key.* = (try platform_types.rootKey(required.root));
-    const relation = try buildPlatformAppRelationFromDeclarations(session, platform.module_identity.module_idx, platform.platformRequirementContextKey(), platform.platform_required_declarations.declarations, type_keys, app);
+    const relation = try buildPlatformAppRelationFromDeclarations(session, platform.module_identity.module_idx, try platform.platformRequirementContextKey(), platform.platform_required_declarations.declarations, type_keys, app);
     result.checking_context_identity.platform_app_relation = relation.key;
     const relations = [_]ImportedModuleView{importedView(app)};
     var substitutions = try PlatformRelationTypeSubstitutions.fromRelation(session, result.module_identity, &result.canonical_names, &result.checked_types, &result.platform_required_declarations, &result.platform_type_inputs, &relations, relation);
     result.platform_requirement_relations = try PlatformRequirementRelationTable.fromRelation(session, result.module_identity, &result.canonical_names, &result.checked_types, &result.platform_required_declarations, &relations, relation);
-    result.platform_required_bindings = try PlatformRequiredBindingTable.fromRelation(session, result.module_identity, &result.canonical_names, &result.platform_required_declarations, &result.platform_requirement_relations, relation);
+    result.platform_required_bindings = try PlatformRequiredBindingTable.fromRelation(session, result.module_identity, &result.canonical_names, result.checked_types.view(), &result.platform_required_declarations, &result.platform_requirement_relations, relation);
     result.resolved_value_refs.records = try session.dupe(ResolvedValueRefRecord, platform.resolved_value_refs.records);
     for (result.resolved_value_refs.records) |*record| {
         if (record.ref == .platform_required_declaration) {
@@ -28468,7 +28479,6 @@ pub const PlatformRepresentationCapability = struct {
     id: PlatformRepresentationCapabilityId,
     requirement: PlatformRequiredDeclarationId,
     platform_name: canonical.ExportNameId,
-    declared_source_ty: canonical.CanonicalTypeSchemeKey,
 };
 
 /// Public `ExportedNominalRepresentation` declaration.
@@ -28653,7 +28663,6 @@ pub const ModuleInterfaceCapabilities = struct {
                 .id = @fromBackingInt(@intCast(@as(u32, @intCast(platform_index)))),
                 .requirement = declaration.id,
                 .platform_name = declaration.platform_name,
-                .declared_source_ty = declaration.declared_source_ty,
             };
         }
 
@@ -34858,10 +34867,10 @@ pub const CheckedModuleArtifact = struct {
         return self.module_env.envConst();
     }
 
-    pub fn platformRequirementContextKey(self: *const CheckedModuleArtifact) PlatformRequirementContextKey {
+    pub fn platformRequirementContextKey(self: *const CheckedModuleArtifact) Allocator.Error!PlatformRequirementContextKey {
         return PlatformRequirementContextKey.compute(
             self.module_identity,
-            self.platform_required_declarations.identityHash(&self.canonical_names),
+            try self.platform_required_declarations.identityHash(&self.canonical_names, self.typesView()),
         );
     }
 
@@ -38546,6 +38555,7 @@ pub fn publishFromTypedModule(
         allocator,
         module_identity,
         &canonical_names,
+        checked_types.view(),
         &platform_required_declarations,
         &platform_requirement_relations,
         inputs.platform_app_relation,
@@ -41354,8 +41364,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x2E, 0x74, 0x7C, 0x64, 0xA3, 0x9E, 0xBB, 0xAE, 0xF9, 0x85, 0x6A, 0xDB, 0xB8, 0xE9, 0xC9, 0x5C,
-        0xAF, 0x4F, 0x76, 0x90, 0xC8, 0x4D, 0xE1, 0xDC, 0xAE, 0x32, 0x7D, 0x63, 0x55, 0xFD, 0xBD, 0xF7,
+        0x01, 0x74, 0xEB, 0x94, 0xCA, 0x9D, 0x80, 0x21, 0xDF, 0x51, 0x5D, 0x36, 0x56, 0xDF, 0xBD, 0x2D,
+        0x2A, 0x11, 0x81, 0x10, 0xB7, 0x83, 0xA0, 0xF8, 0x6D, 0x4B, 0xF2, 0xD2, 0xFB, 0xEB, 0x97, 0x2D,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
