@@ -30384,9 +30384,11 @@ pub const CheckedModuleArtifact = struct {
                 self.module_env = undefined;
             }
             // Synthesized types created on demand live in columns the type
-            // store copied out of the buffer; every other column still
-            // aliases it.
+            // store copied out of the buffer, and names interned on demand
+            // in interners the name store copied out of it; every other
+            // column still aliases the buffer.
             self.checked_types.deinit(allocator);
+            self.canonical_names.deinit();
             if (!self.serialized_backing_is_static) {
                 // `deserialize` allocated `backing` with the same gpa it recorded in
                 // `canonical_names.allocator`, and every teardown site passes that

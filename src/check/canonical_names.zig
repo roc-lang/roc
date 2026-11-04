@@ -243,8 +243,10 @@ pub const CanonicalNameStore = struct {
     proc_base_by_key: std.StringHashMap(ProcBaseKeyRef),
     /// Build-only scratch buffer for proc-base key encoding. NOT serialized.
     scratch_key: std.ArrayList(u8) = .empty,
-    /// True for a store reconstructed from a serialized buffer: its interners
-    /// and `proc_bases` point into buffer-owned memory and must not be freed.
+    /// True for a store reconstructed from a serialized buffer: `proc_bases`
+    /// points into buffer-owned memory and must not be freed. Its interners
+    /// also start buffer-backed, and the first new name interned into one
+    /// copies it into owned memory, which `deinit` frees.
     serialized: bool = false,
     /// Query-only facade; its owner retains every allocation and must remain
     /// alive and unmodified until all borrowed readers have finished.
@@ -326,19 +328,18 @@ pub const CanonicalNameStore = struct {
         }
         if (self.record_field_text_rank) |cache| cache.destroy();
         if (self.tag_text_rank) |cache| cache.destroy();
-        if (!self.serialized) {
-            // Interners no-op their own free when frozen, but `proc_bases` is a
-            // plain SafeList with no frozen flag, so guard the whole owned set.
-            self.module_names.deinit(self.allocator);
-            self.module_identities.deinit(self.allocator);
-            self.type_names.deinit(self.allocator);
-            self.method_names.deinit(self.allocator);
-            self.record_field_labels.deinit(self.allocator);
-            self.tag_labels.deinit(self.allocator);
-            self.export_names.deinit(self.allocator);
-            self.external_symbol_names.deinit(self.allocator);
-            self.proc_bases.deinit(self.allocator);
-        }
+        // Interners no-op their own free while frozen and free the copy a
+        // later insert made; `proc_bases` is a plain SafeList with no frozen
+        // flag, so it alone is guarded.
+        self.module_names.deinit(self.allocator);
+        self.module_identities.deinit(self.allocator);
+        self.type_names.deinit(self.allocator);
+        self.method_names.deinit(self.allocator);
+        self.record_field_labels.deinit(self.allocator);
+        self.tag_labels.deinit(self.allocator);
+        self.export_names.deinit(self.allocator);
+        self.external_symbol_names.deinit(self.allocator);
+        if (!self.serialized) self.proc_bases.deinit(self.allocator);
         // Build-only fields are always heap-owned (empty on a frozen store).
         freeStringHashMapKeys(ProcBaseKeyRef, &self.proc_base_by_key, self.allocator);
         self.proc_base_by_key.deinit();
@@ -470,7 +471,14 @@ pub const CanonicalNameStore = struct {
     /// Insert into one of this store's interners. A store that retains
     /// superseded backings first reserves room for the text and its end offset, so
     /// the insert never moves interned names a prefix view may be reading.
+    /// Intern `text` into `interner`. A buffer-backed interner of a loaded
+    /// store answers a name it already holds in place and is copied into
+    /// owned memory by the first name it does not.
     fn insertName(self: *CanonicalNameStore, interner: *NameInterner, text: []const u8) Allocator.Error!u32 {
+        if (!interner.supports_inserts) {
+            if (interner.lookup(text)) |id| return id;
+            try interner.enableRuntimeInserts(self.allocator);
+        }
         if (self.superseded) |superseded| {
             _ = try superseded.ensureUnusedCapacity(u8, &interner.bytes.items, self.allocator, text.len);
             _ = try superseded.ensureUnusedCapacity(u32, &interner.ends.items, self.allocator, 1);
