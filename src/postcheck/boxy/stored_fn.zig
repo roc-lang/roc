@@ -121,7 +121,9 @@ pub const Retained = struct {
     }
 
     /// Read the function value of the proc `proc` whose capture record is at
-    /// `capture`, as `composition` composed its descriptors.
+    /// `capture`, as `composition` composed its descriptors. `resolver`
+    /// reads an erased callable's proc and capture record from its pointer
+    /// (`resolve(context, ptr)`).
     pub fn describe(
         self: *Retained,
         allocator: Allocator,
@@ -129,6 +131,7 @@ pub const Retained = struct {
         proc: LIR.LirProcSpecId,
         capture: [*]u8,
         composition: *InProcessState,
+        resolver: anytype,
     ) Allocator.Error!Described {
         const program = self.program;
         program.result = result.*;
@@ -136,27 +139,8 @@ pub const Retained = struct {
         const worker_id = self.workers.get(result.store.getProcSpec(proc).identity) orelse
             invariant("a stored function value's code is no worker of its program");
         const shape = captureShape(program, worker_id);
-        const open = !try allClosed(program, shape.values);
-        const word_count = shape.descs + shape.dicts;
-
-        // Where each capture is: a closed record's order is values, then
-        // words; a dynamic record's is its own descriptor, words, then values.
-        const offsets = try allocator.alloc(u32, shape.values.len + word_count);
+        const offsets = try captureOffsets(program, allocator, shape, capture);
         defer allocator.free(offsets);
-        if (open) {
-            const record_desc: *const TypeDesc = @ptrCast(@alignCast(readWord(capture)));
-            for (0..word_count) |index| offsets[shape.values.len + index] = record_desc.fieldOffset(@intCast(1 + index));
-            for (0..shape.values.len) |index| offsets[index] = record_desc.fieldOffset(@intCast(1 + word_count + index));
-        } else if (offsets.len != 0) {
-            const record = try closedRecordLayout(program, shape);
-            if (record != .zst) {
-                const layouts = &program.result.layouts;
-                const struct_idx = layouts.getLayout(record).getStruct().idx;
-                for (offsets, 0..) |*offset, index| offset.* = layouts.getStructFieldOffsetByOriginalIndex(struct_idx, @intCast(index));
-            } else {
-                @memset(offsets, 0);
-            }
-        }
 
         const bound = try allocator.alloc(TypeId, shape.descs);
         defer allocator.free(bound);
@@ -176,8 +160,33 @@ pub const Retained = struct {
             .method_entry => |target| try program.dictionaryCapturesItself(target, bound),
             .lambda, .adapter, .structural, .structural_map, .crash_dictionary, .literal_thunk, .root_slot, .codec, .template, .default, .root, .static_data, .convert => false,
         };
-        try recipe.bytes.append(allocator, @intFromBool(rebuilt));
-        if (rebuilt) return .{ .recipe = try recipe.finish(), .captures = &.{} };
+        if (rebuilt) {
+            try recipe.bytes.append(allocator, @backingInt(Rebuild.from_types));
+            return .{ .recipe = try recipe.finish(), .captures = &.{} };
+        }
+        // A generated codec's constructor whose local procedures were built
+        // from their declaring body's declaration context captures, through
+        // them, the dictionary that holds it. It is stored as its declaring
+        // body's instance, less those dictionaries, and composed again.
+        if (try self.declarationCycle(allocator, worker_id, shape, capture, offsets, composition, resolver)) |cycle| {
+            defer allocator.free(cycle.self_slots);
+            defer allocator.free(cycle.words);
+            try recipe.bytes.append(allocator, @backingInt(Rebuild.from_declaration));
+            try recipe.worker(cycle.declaring);
+            try recipe.typeSpan(cycle.bound);
+            try recipe.word(@intCast(cycle.self_slots.len));
+            for (cycle.self_slots) |slot| try recipe.word(slot);
+            const dictionary_ty = try program.anyFunction();
+            const captures = try allocator.alloc(Capture, cycle.words.len);
+            errdefer allocator.free(captures);
+            for (captures, cycle.words) |*slot, ptr| slot.* = .{
+                .plan = try const_schema.constPlanOf(program, dictionary_ty),
+                .layout_idx = try program.result.layouts.insertErasedCallable(),
+                .ptr = ptr,
+            };
+            return .{ .recipe = try recipe.finish(), .captures = captures };
+        }
+        try recipe.bytes.append(allocator, @backingInt(Rebuild.none));
 
         const captures = try allocator.alloc(Capture, shape.values.len + shape.dicts);
         errdefer allocator.free(captures);
@@ -198,6 +207,113 @@ pub const Retained = struct {
             };
         }
         return .{ .recipe = try recipe.finish(), .captures = captures };
+    }
+
+    /// A generated codec constructor's cycle through its declaring body's
+    /// declaration context: the declaring template, its scheme's types,
+    /// which of its dictionary slots lead back to the constructor, and where
+    /// its other dictionaries and its literal arguments are, in order.
+    const DeclarationCycle = struct {
+        declaring: WorkerId,
+        bound: []const TypeId,
+        self_slots: []const u32,
+        words: []const [*]u8,
+    };
+
+    /// The declaration cycle of the constructor `worker_id` whose capture
+    /// record (of `shape`, at `offsets`) is at `capture`, when its local
+    /// procedures' function values capture a dictionary leading back to it.
+    fn declarationCycle(self: *Retained, allocator: Allocator, worker_id: WorkerId, shape: CaptureShape, capture: [*]u8, offsets: []const u32, composition: *InProcessState, resolver: anytype) Allocator.Error!?DeclarationCycle {
+        const program = self.program;
+        switch (program.worker(worker_id).key) {
+            .codec => |index| if (program.codec.pieces.items[index].kind != .constructor) return null,
+            .template, .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .crash_dictionary, .literal_thunk, .root_slot, .root, .static_data, .convert => return null,
+        }
+        // The constructor's values are its local procedures' function values.
+        var found: ?DeclarationCycle = null;
+        errdefer if (found) |cycle| {
+            allocator.free(cycle.self_slots);
+            allocator.free(cycle.words);
+        };
+        for (offsets[0..shape.values.len]) |offset| {
+            const method = resolver.resolve(resolver.context, @ptrCast(@constCast(readWord(capture + offset)))) catch
+                invariant("a stored codec constructor's local procedure value could not be read");
+            const method_worker_id = self.workers.get(program.result.store.getProcSpec(method.proc).identity) orelse
+                invariant("a stored codec constructor's local procedure value is no worker of its program");
+            const method_worker = program.worker(method_worker_id).*;
+            const declaring = switch (method_worker.key) {
+                .lambda => |key| key.outer,
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .crash_dictionary, .literal_thunk, .root_slot, .codec, .root, .static_data, .convert => invariant("a codec constructor's local procedure value is no lambda"),
+            };
+            const declaring_worker = program.worker(declaring).*;
+            if (declaring_worker.key != .template) continue;
+            const method_shape = captureShape(program, method_worker_id);
+            const method_offsets = try captureOffsets(program, allocator, method_shape, method.capture_ptr);
+            defer allocator.free(method_offsets);
+            const words = method_offsets[method_shape.values.len..];
+            const dict_count = declaring_worker.dictionary_params.len;
+            const literal_count = declaring_worker.literal_params;
+            const dicts_end = method_shape.descs + method_worker.capturedDictionaryCount();
+            const dict_words = words[dicts_end - dict_count .. dicts_end];
+            const literal_words = words[words.len - literal_count ..];
+            var self_slots: std.ArrayList(u32) = .empty;
+            defer self_slots.deinit(allocator);
+            for (dict_words, 0..) |word_offset, slot| {
+                if (try self.reaches(allocator, method.capture_ptr + word_offset, capture, resolver)) try self_slots.append(allocator, @intCast(slot));
+            }
+            if (self_slots.items.len == 0) continue;
+            if (found) |cycle| {
+                if (cycle.declaring != declaring) invariant("a codec constructor's local procedures cycle through two declaring bodies");
+                continue;
+            }
+            const bound = try program.arena.allocator().alloc(TypeId, declaring_worker.scheme_vars.len);
+            for (bound, words[0..bound.len]) |*ty, word_offset| {
+                ty.* = try self.descType(@ptrCast(@alignCast(readWord(method.capture_ptr + word_offset))), composition);
+            }
+            var kept: std.ArrayList([*]u8) = .empty;
+            errdefer kept.deinit(allocator);
+            for (dict_words, 0..) |word_offset, slot| {
+                if (std.mem.findScalar(u32, self_slots.items, @intCast(slot)) != null) continue;
+                try kept.append(allocator, method.capture_ptr + word_offset);
+            }
+            for (literal_words) |word_offset| try kept.append(allocator, method.capture_ptr + word_offset);
+            found = .{
+                .declaring = declaring,
+                .bound = bound,
+                .self_slots = try self_slots.toOwnedSlice(allocator),
+                .words = try kept.toOwnedSlice(allocator),
+            };
+        }
+        return found;
+    }
+
+    /// Whether the erased callable whose pointer is at `at` is, or captures
+    /// through its function values and dictionaries, the one whose capture
+    /// record is at `target`.
+    fn reaches(self: *Retained, allocator: Allocator, at: [*]u8, target: [*]u8, resolver: anytype) Allocator.Error!bool {
+        const program = self.program;
+        var visited: std.AutoHashMapUnmanaged(usize, void) = .empty;
+        defer visited.deinit(allocator);
+        var pending: std.ArrayList(usize) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, @intFromPtr(readWord(at)));
+        while (pending.pop()) |ptr| {
+            if (ptr == 0) continue;
+            if ((try visited.getOrPut(allocator, ptr)).found_existing) continue;
+            const resolved = resolver.resolve(resolver.context, @ptrFromInt(ptr)) catch
+                invariant("a stored dictionary's capture could not be read");
+            if (resolved.capture_ptr == target) return true;
+            const worker_id = self.workers.get(program.result.store.getProcSpec(resolved.proc).identity) orelse
+                invariant("a stored dictionary's capture is no worker of its program");
+            const shape = captureShape(program, worker_id);
+            const offsets = try captureOffsets(program, allocator, shape, resolved.capture_ptr);
+            defer allocator.free(offsets);
+            for (shape.values, offsets[0..shape.values.len]) |ty, offset| {
+                if (program.store.get(ty) == .function) try pending.append(allocator, @intFromPtr(readWord(resolved.capture_ptr + offset)));
+            }
+            for (offsets[shape.values.len + shape.descs ..]) |offset| try pending.append(allocator, @intFromPtr(readWord(resolved.capture_ptr + offset)));
+        }
+        return false;
     }
 
     /// A closed type `desc` describes (`LIR.DynOp.desc_note`): the noted type
@@ -227,6 +343,42 @@ pub fn retain(allocator: Allocator, program: *Program) Allocator.Error!*Retained
         try retained.workers.put(allocator, program.result.store.getProcSpec(worker.proc).identity, @fromBackingInt(@intCast(index)));
     }
     return retained;
+}
+
+/// How a stored function's recipe says it is restored.
+const Rebuild = enum(u8) {
+    /// From its stored captures.
+    none,
+    /// A dictionary composed again from its types alone.
+    from_types,
+    /// A generated codec constructor composed again in its declaring body's
+    /// declaration context (`Retained.DeclarationCycle`), whose other
+    /// dictionaries and literal arguments are its stored captures.
+    from_declaration,
+};
+
+/// Where each capture of a worker of `shape` is in its capture record at
+/// `capture`: a closed record's order is values, then words; a dynamic
+/// record's is its own descriptor, words, then values.
+fn captureOffsets(program: *Program, allocator: Allocator, shape: CaptureShape, capture: [*]u8) Allocator.Error![]u32 {
+    const word_count = shape.descs + shape.dicts;
+    const offsets = try allocator.alloc(u32, shape.values.len + word_count);
+    errdefer allocator.free(offsets);
+    if (!try allClosed(program, shape.values)) {
+        const record_desc: *const TypeDesc = @ptrCast(@alignCast(readWord(capture)));
+        for (0..word_count) |index| offsets[shape.values.len + index] = record_desc.fieldOffset(@intCast(1 + index));
+        for (0..shape.values.len) |index| offsets[index] = record_desc.fieldOffset(@intCast(1 + word_count + index));
+    } else if (offsets.len != 0) {
+        const record = try closedRecordLayout(program, shape);
+        if (record != .zst) {
+            const layouts = &program.result.layouts;
+            const struct_idx = layouts.getLayout(record).getStruct().idx;
+            for (offsets, 0..) |*offset, index| offset.* = layouts.getStructFieldOffsetByOriginalIndex(struct_idx, @intCast(index));
+        } else {
+            @memset(offsets, 0);
+        }
+    }
+    return offsets;
 }
 
 fn readWord(ptr: [*]const u8) *const anyopaque {
@@ -778,6 +930,16 @@ pub const Decoded = struct {
     bound: []const TypeId,
     /// A dictionary composed again from `bound`, with no stored captures.
     rebuilt: bool,
+    /// A generated codec constructor composed again in its declaring body's
+    /// declaration context, whose dictionaries other than `self_slots` and
+    /// whose literal arguments are the stored captures.
+    declaration: ?Declaration = null,
+
+    pub const Declaration = struct {
+        worker: WorkerId,
+        bound: []const TypeId,
+        self_slots: []const u32,
+    };
 };
 
 /// Read a stored function's recipe.
@@ -788,5 +950,16 @@ pub fn decode(b: *body.Builder, recipe: []const u8) Allocator.Error!Decoded {
     defer b.allocator.free(decoder.table);
     const worker = try decoder.worker();
     const bound = try decoder.typeSpan();
-    return .{ .worker = worker, .bound = bound, .rebuilt = decoder.byte() != 0 };
+    const rebuild: Rebuild = @fromBackingInt(decoder.byte());
+    return switch (rebuild) {
+        .none => .{ .worker = worker, .bound = bound, .rebuilt = false },
+        .from_types => .{ .worker = worker, .bound = bound, .rebuilt = true },
+        .from_declaration => blk: {
+            const declaring = try decoder.worker();
+            const declaring_bound = try decoder.typeSpan();
+            const self_slots = try b.program.arena.allocator().alloc(u32, decoder.word());
+            for (self_slots) |*slot| slot.* = decoder.word();
+            break :blk .{ .worker = worker, .bound = bound, .rebuilt = false, .declaration = .{ .worker = declaring, .bound = declaring_bound, .self_slots = self_slots } };
+        },
+    };
 }
