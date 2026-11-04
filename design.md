@@ -2019,29 +2019,52 @@ This split follows the selected strategy, never a failed specialization attempt.
 
 Compile-time evaluation runs the compile-time roots, and the literal roots
 that specializations register. Checking already gave every literal whose
-conversion is closed a compile-time root of its own, so a runtime body
+conversion is closed a compile-time root of its own, and every literal whose
+conversion depends on its instance a `literal_argument` root at each closed
+type a checked instantiation fixes it to ("Literal Arguments"), which every
+compilation evaluates and stores in its module. A runtime body therefore
 matters to compile-time evaluation only where specializing it registers a
-literal root: a conversion that depends on its instance, a custom
-interpolation, or a conversion root no evaluation requests. Specializing the
-rest of the runtime program, or lowering any of it for execution, is runtime
-work, and compile-time evaluation without an LSS runtime consumer to
-continue its program does none of it. Its program roots are *discovery
-roots*, specialized only to find those literal roots.
+literal root: a conversion that depends on its instance at an instantiation
+checking records no edge for (a program root's, a platform's call of the
+app's procedure, a method dispatch selects by type, a stored function value,
+a target derived from a function's type), a custom interpolation, or a
+conversion root no evaluation requests. A specialization that converts a
+literal at the closed type of a stored `literal_argument` root restores that
+root's value instead of registering a literal root. Specializing the rest of
+the runtime program, or lowering any of it for execution, is runtime work,
+and compile-time evaluation without an LSS runtime consumer to continue its
+program does none of it. Its program roots are *discovery roots*,
+specialized only to find those literal roots. A warm compilation of
+unchanged modules therefore specializes nothing to convert their literals:
+their roots' values, `literal_argument` roots' among them, come from the
+checked-module cache under either strategy.
 
 Which bodies can register a literal root is decided from explicit checked
 data (`postcheck.LiteralDemand`), per checked procedure template. The
 analysis is a graph over templates, the checked types their bodies use,
 nominal types, and the builtin types, with each node carrying flags for what
-it can contribute to a literal root. A template's own flags are *strict*
-when its body has a custom interpolation, or a literal whose conversion root
-no evaluation of this compilation requests and whose payload is not stored,
-or a read of a constant that is neither stored nor evaluated (its
-computation lowers in place); *dependent numeral* (*quote*) when its body has
-a numeral (quote) whose conversion depends on its instance. A nominal's own
-flags are *custom numeral* (*quote*) when it has a `from_numeral`
-(`from_quote`) method of its own. A template reaches the templates its
+it can contribute to a literal root. A literal whose conversion depends on
+its instance is a literal requirement of its own scheme (its template's, or
+a generalized local function's), and contributes nothing through the
+references and plans that instantiate that scheme: those are the
+instantiations checking records, each of which converts it in a
+`literal_argument` root or forwards it to the instantiating scheme's literal
+requirements. A template's own flags are *strict* when its body has a custom
+interpolation that is not such a requirement, or a literal whose conversion
+root no evaluation of this compilation requests and whose payload is not
+stored; *dependent numeral* (*quote*) when its body has a numeral (quote)
+whose conversion depends on its instance and that is not such a
+requirement. An instantiation checking records no edge for contributes the
+dependent kinds of the instantiated template's literal requirements (an
+interpolation's is *strict*): a program root's to the root's flags, a
+platform requirement's use of the app's procedure to the using template's,
+and a method a nominal or the builtin types reach by name to that type's. A
+nominal's own flags are *custom numeral* (*quote*) when it has a
+`from_numeral` (`from_quote`) method of its own. A template reaches the templates its
 resolved value references and its direct dispatch plans (with their nested
-evidence) select, and the types of its signature, references, and plans. A
+evidence) select, the entry templates of the constants it reads whose
+values are neither stored nor evaluated (a read lowers their computation in
+place), and the types of its signature, references, and plans. A
 type reaches its component types and the nominals it names. A nominal, and
 the builtin types, reach the procedures of their methods whose names
 dispatch can select by type rather than by an explicit plan: names of
@@ -13953,20 +13976,47 @@ strategy).
   other root's, and a runtime program converts the literal where the value
   is needed. This keeps a `.boxy` program's literal rejections identical to
   a specialized program's: every conversion a program reaches is run at
-  compile time, at the type it is reached at.
-- A literal argument root is the `.boxy` evaluator's. A `.boxy` compilation
-  evaluates it like any pending root of its modules, in dependency order:
-  the request scheduler (`CompileTimeRequestScheduler`) and the finalizer's
-  completion state walk the scheme a root's edge instantiates and treat a
-  template's `literal_argument_demand` as reads, so each root completes
-  before any root whose evaluation calls through it. A `.lss` compilation
-  converts each literal in the specialization that fixes its type and never
-  reads these roots, so it leaves them `unevaluated`, exactly as it leaves a
-  root it does not demand: a later `.boxy` compilation reopens the checked
-  module and evaluates them (`hasUnevaluatedRequests` takes the strategy).
-  The one checked module no compilation reopens, the baked Builtin, is
-  completed at its bake (`Options.complete_baked_module`), whose `.lss` finalization hands
-  these roots to the `.boxy` evaluator.
+  compile time, at the type it is reached at. A rejection is reported in the
+  module of the root whose evaluation rejected the literal: at the literal
+  when the literal is that module's own, and otherwise at the root, naming
+  the literal as the failure's origin. The report stays with the module
+  whose stored result holds the failure, so a compilation that restores the
+  result from the checked-module cache reports it again without converting
+  the literal again.
+- A literal argument root is the `.boxy` evaluator's, and every compilation
+  evaluates it like any pending root of its modules, under either strategy,
+  so a checked module holds the same values whichever strategy completed
+  it. A `.boxy` compilation evaluates it in dependency order: the request
+  scheduler (`CompileTimeRequestScheduler`) and the finalizer's completion
+  state walk the scheme a root's edge instantiates and treat a template's
+  `literal_argument_demand` as reads, so each root completes before any root
+  whose evaluation calls through it. A `.lss` compilation hands these roots
+  to the `.boxy` evaluator (`evaluateLiteralArgumentRoots`): those whose
+  evaluation reads no value of another pending root (other than one of
+  these) complete before its Solved program is specialized, and the rest
+  once that program's roots have, each with every pending root whose value
+  it reads that the Solved program did not demand. A module's own
+  finalization outside a program session (the baked Builtin's among them)
+  hands each batch's literal argument roots to the `.boxy` evaluator the
+  same way.
+- A specialization converts a literal where its type first becomes
+  concrete, which is where some module's literal argument root converts it
+  when checking recorded that instantiation, so every root for one literal
+  and one closed type holds the value the specialization's conversion would
+  produce. Monotype indexes the stored literal argument roots of the
+  program's modules by literal (`LiteralArgumentRootIndex`), and a
+  specialization converting a literal whose node's type is closed restores
+  the value of the root whose type's Monotype is that type
+  (`restoredLiteralArgument`) instead of registering a literal root. A debug
+  compiler asserts that every root for the literal at that type stored the
+  same value. A root whose conversion failed reported the failure in its
+  module and stores it; the specialization restores it as a failure already
+  reported (it lowers as reached checked-error code does), so a compile-time
+  root that reads it reports nothing more, as a `.boxy` read of a failed
+  root's value reports nothing more. Compile-time discovery accordingly specializes a body for a
+  literal whose conversion depends on its instance only where an
+  instantiation checking records no edge for reaches it ("Demand-Driven
+  Compile-Time Specialization").
 
 Lowering gives every worker one hidden parameter per literal requirement of its own
 scheme, after its dictionaries (`Worker.literal_params`, in literal requirement
@@ -14269,9 +14319,8 @@ built. `roc
 check` accepts `--opt` and ignores it; it honors `--specialize`, because the
 strategy selects the compile-time evaluator that completes the module's
 roots. The checked module itself names no strategy: both evaluators store
-the same values, and the one kind of root only the `.boxy` evaluator reads
-(a literal argument root, "Literal Arguments") a `.lss` check leaves
-unevaluated for a `.boxy` compilation to complete, so a module checked under
+the same values, and every compilation hands a literal argument root
+("Literal Arguments") to the `.boxy` evaluator, so a module checked under
 one strategy is served to the other.
 
 The per-module Boxy cache is exactly as simple as the checked-module cache,
@@ -14634,9 +14683,10 @@ evaluates the root itself and neither strategy reads the other's function
 values.
 
 A literal in a generic body converts at the first instantiation that fixes
-its type, under either strategy: as a literal root of the specialization
-under `.lss`, as a literal argument root of the instantiating module under
-`.boxy`. A `.boxy` compile-time program converts its literals exactly as a
+its type, under either strategy: as a literal argument root of the
+instantiating module where checking recorded the instantiation, which both
+strategies evaluate, and otherwise as a literal root of the specialization
+under `.lss` or a literal thunk under `.boxy`. A `.boxy` compile-time program converts its literals exactly as a
 runtime program does, through its literal arguments and dictionaries, so the
 evaluator runs no discovery pass and no literal table exists: a literal
 rejection, a conversion's effects, and a dormant-code diagnostic are the
