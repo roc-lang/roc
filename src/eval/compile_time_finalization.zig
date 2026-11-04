@@ -101,11 +101,6 @@ pub const Options = struct {
     /// dependency-ordered stages; `.boxy` lowers each dependency level as a
     /// Boxy program (design.md "Caching Under `.boxy`").
     strategy: base.SpecializationStrategy = .lss,
-    /// Evaluate the roots the other strategy's evaluator owns as well: a
-    /// literal argument root under `.lss` (design.md "Literal Arguments").
-    /// Set for an artifact no later compilation reopens, the baked Builtin,
-    /// which must be complete for either strategy's programs.
-    complete_baked_module: bool = false,
     /// The cached module objects a `.boxy` evaluation links a module's
     /// compile-time program against (`BoxyObjectSource`), when this
     /// compilation has a cache to keep them in.
@@ -923,7 +918,8 @@ pub fn finalizeProgram(
         finalizationInvariant("program roots omitted their checked owners");
     if (unfiltered_options.strategy == .boxy) return finalizeProgramBoxy(allocator, modules, lowering_modules, unfiltered_program_roots, runtime_roots, runtime_target, unfiltered_options);
     // A literal argument root is the `.boxy` evaluator's: a Solved program
-    // neither specializes nor discovers through it (design.md "Literal
+    // neither specializes nor discovers through it, and the `.boxy`
+    // evaluator evaluates it here as under `.boxy` (design.md "Literal
     // Arguments").
     const program_roots = try solvedRootRequests(allocator, modules, lowering_modules.root.module.key.digest(), unfiltered_program_roots);
     defer freeSolvedRootRequests(allocator, program_roots, unfiltered_program_roots);
@@ -942,8 +938,14 @@ pub fn finalizeProgram(
     const owned_runtime_roots = try cloneRootRequests(allocator, runtime_roots);
     errdefer deinitRootRequests(allocator, owned_runtime_roots);
 
+    // The literal argument roots that read no value the Solved program
+    // computes complete first, so the specialization restores their values
+    // wherever it converts their literals at their types; the rest complete
+    // once that program's roots have.
+    try evaluateLiteralArgumentRoots(allocator, modules, lowering_modules, options, &debug_events, .independent);
     var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, runtime_target, options, &debug_events, lss_runtime, demand_driven, null);
     errdefer specialized.deinit();
+    try evaluateLiteralArgumentRoots(allocator, modules, lowering_modules, options, &debug_events, .remaining);
     var runtime_stages: ProgramSession.RuntimeStages = .evaluation;
     errdefer switch (runtime_stages) {
         .evaluation => {},
@@ -1032,6 +1034,95 @@ pub fn finalizeProgram(
     };
 }
 
+/// Which pending literal argument roots `evaluateLiteralArgumentRoots`
+/// evaluates.
+const LiteralArgumentPhase = enum {
+    /// Those whose evaluation reads no value of another pending root, other
+    /// than one of these.
+    independent,
+    /// Every one still pending, with every pending root whose value one
+    /// reads: a root the Solved program did not demand.
+    remaining,
+};
+
+/// Evaluate the pending literal argument roots of a Solved compilation's
+/// modules with the `.boxy` evaluator, which owns them under either strategy
+/// (design.md "Literal Arguments"), and store their values in their modules.
+fn evaluateLiteralArgumentRoots(
+    allocator: Allocator,
+    modules: []const ProgramModule,
+    lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
+    options: Options,
+    debug_events: *DebugEvents,
+    phase: LiteralArgumentPhase,
+) FinalizeError!void {
+    // The pending roots of the first artifact of each checked identity;
+    // another artifact of the same identity repeats its results.
+    var pending = std.ArrayList(checked_root_graph.Root).empty;
+    defer pending.deinit(allocator);
+    var any_literal = false;
+    var canonical_modules = std.AutoHashMapUnmanaged([32]u8, void).empty;
+    defer canonical_modules.deinit(allocator);
+    for (modules, 0..) |entry, index| {
+        const entry_key = try canonical_modules.getOrPut(allocator, entry.module.key.digest().bytes);
+        if (entry_key.found_existing) continue;
+        for (entry.module.root_requests.compile_time_requests) |request| {
+            const root_id = compileTimeRootForRequest(entry.module, request);
+            const root = entry.module.compile_time_roots.root(root_id);
+            if (root.payload != .pending) continue;
+            if (root.kind == .literal_argument) any_literal = true;
+            try pending.append(allocator, .{ .module = @intCast(index), .root = root_id, .request = request });
+        }
+    }
+    if (!any_literal) return;
+
+    const artifacts = try allocator.alloc(*checked.CheckedModuleArtifact, modules.len);
+    defer allocator.free(artifacts);
+    for (modules, artifacts) |entry, *artifact| artifact.* = entry.module;
+    var graph = try checked_root_graph.build(allocator, artifacts, pending.items);
+    defer graph.deinit(allocator);
+    const chosen = try allocator.alloc(bool, pending.items.len);
+    defer allocator.free(chosen);
+    for (pending.items, chosen) |root, *flag| flag.* = artifacts[root.module].compile_time_roots.root(root.root).kind == .literal_argument;
+    switch (phase) {
+        // A root waits for the Solved program when its evaluation reads a
+        // value that program computes, directly or through another literal
+        // argument root.
+        .independent => {
+            var changed = true;
+            while (changed) {
+                changed = false;
+                for (graph.deps, chosen) |deps, *flag| {
+                    if (!flag.*) continue;
+                    for (deps) |dep| if (!chosen[dep]) {
+                        flag.* = false;
+                        changed = true;
+                        break;
+                    };
+                }
+            }
+        },
+        .remaining => {
+            var work = std.ArrayList(u32).empty;
+            defer work.deinit(allocator);
+            for (chosen, 0..) |flag, ordinal| if (flag) try work.append(allocator, @intCast(ordinal));
+            while (work.pop()) |ordinal| for (graph.deps[ordinal]) |dep| {
+                if (chosen[dep]) continue;
+                chosen[dep] = true;
+                try work.append(allocator, dep);
+            };
+        },
+    }
+    var selected = std.ArrayList(checked_root_graph.Root).empty;
+    defer selected.deinit(allocator);
+    for (pending.items, chosen) |root, flag| if (flag) try selected.append(allocator, root);
+    if (selected.items.len == 0) return;
+    try evaluateRootsBoxy(allocator, modules, lowering_modules, selected.items, options, debug_events);
+    for (modules) |entry| {
+        if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
+    }
+}
+
 /// Report destinations for a specialization whose literal roots an earlier
 /// evaluation of the same program already reported: each destination's
 /// module, with no store to report to.
@@ -1095,8 +1186,9 @@ fn specializeAndEvaluate(
             // evaluated are read from its store like any other module's.
             const root_id = compileTimeRootForRequest(entry.module, request);
             if (entry.module.compile_time_roots.root(root_id).payload != .pending) continue;
-            // A literal argument root is the `.boxy` evaluator's (design.md
-            // "Literal Arguments").
+            // A literal argument root is the `.boxy` evaluator's, which
+            // evaluates it beside this program (design.md "Literal
+            // Arguments").
             if (entry.module.compile_time_roots.root(root_id).kind == .literal_argument) continue;
             if (root_filter) |filter| if (!filter.contains(.{ .module = entry.module.key.digest().bytes, .root = root_id })) continue;
             try requests.append(allocator, request);
@@ -3724,15 +3816,6 @@ fn finalize(
 
         for (requests, 0..) |request, request_index| {
             const root_id = state.rootIdForRequestIndex(request_index);
-            // A literal argument root is the `.boxy` evaluator's: a Solved
-            // compilation leaves it for a `.boxy` compilation to evaluate
-            // when it reopens the artifact, as it leaves any root it does
-            // not demand (design.md "Literal Arguments").
-            if (options.strategy == .lss and !options.complete_baked_module and module.compile_time_roots.root(root_id).kind == .literal_argument) {
-                module.compile_time_roots.fillPayload(root_id, .unevaluated);
-                state.markDone(root_id);
-                continue;
-            }
             if (!try state.dependenciesComplete(request)) {
                 if (batch_requests.items.len == 0) {
                     finalizationInvariantFmt("compile-time root request order placed root #{d} ({s}) before root #{?d} it depends on", .{ @backingInt(root_id), @tagName(module.compile_time_roots.root(root_id).kind), if (state.blocked_on) |blocked| @backingInt(blocked) else null });
@@ -4594,8 +4677,15 @@ fn reportEmbeddedFailure(
             };
         },
     } else if (failedLiteralRejection(lir_result, failed_at.meaning)) |site| {
-        // A rejected literal is reported at the literal, in its own module,
-        // wherever its conversion ran (design.md "Literal Arguments").
+        // A rejected literal of the root's own module is reported at the
+        // literal, wherever its conversion ran (design.md "Literal
+        // Arguments"). A literal of another module is reported at the root,
+        // naming the literal as the origin: the root's result holds the
+        // failure, so the report stays with that result, which a later
+        // compilation restores without converting the literal again.
+        if (!artifactMatches(loweredModuleOfKey(lir_result, failed_at.meaning.?.literal_rejection.module), module.key)) {
+            return try reportForeignLiteralRejection(maybe_problem_store, module, root_region, owners, site, message);
+        }
         if (!owners.report_sites) return .reported_elsewhere;
         try reportLiteralRejection(owners, site, message);
         return .reported;
@@ -4618,6 +4708,43 @@ fn reportEmbeddedFailure(
             .region = site.region,
             .origin = try comptimeFailureOrigin(store, site),
         } });
+    }
+    return .reported;
+}
+
+/// Report, in a checked root's own module, the rejection of a literal of
+/// another module that the root's evaluation converted: at the root, naming
+/// the literal as the failure's origin.
+fn reportForeignLiteralRejection(
+    maybe_problem_store: ?*check.problem.Store,
+    module: *const checked.CheckedModuleArtifact,
+    root_region: base.Region,
+    owners: *const ModuleOwners,
+    site: lir.LIR.LiteralRejectionSite,
+    message: []const u8,
+) FinalizeError!EmbeddedReport {
+    const store = maybe_problem_store orelse return .reported_elsewhere;
+    var targets = try owners.reportTargets(site.owner);
+    const literal_module = (targets.nextTarget() orelse finalizationInvariant("a rejected literal's module has no checked module data")).module;
+    const literal_env = literal_module.moduleEnvConst();
+    const info = literal_env.calcRegionInfo(literal_module.checked_bodies.expr(@fromBackingInt(@intCast(site.checked_expr))).source_region);
+    const env = module.moduleEnvConst();
+    const bare_name_collides = if (env.common.idents.lookup(base.Ident.for_text(literal_env.module_name))) |display_ident|
+        display_ident.eql(env.display_module_name_idx)
+    else
+        false;
+    const failure_site: ComptimeFailureSite = .{ .region = root_region, .foreign = .{
+        .module_name = if (bare_name_collides) literal_env.qualifiedModuleName() else literal_env.module_name,
+        .line = info.start_line_idx + 1,
+        .column = info.start_col_idx + 1,
+    } };
+    if (literalRejectionReported(store, site.kind, failure_site.region)) return .reported;
+    const message_idx = try store.putExtraString(message);
+    const origin = try comptimeFailureOrigin(store, failure_site);
+    switch (site.kind) {
+        .numeral => _ = try store.appendProblem(.{ .comptime_invalid_numeral = .{ .message = message_idx, .region = failure_site.region, .origin = origin } }),
+        .quote => _ = try store.appendProblem(.{ .comptime_invalid_quote = .{ .message = message_idx, .region = failure_site.region, .origin = origin } }),
+        .interpolation => _ = try store.appendProblem(.{ .comptime_invalid_interpolation = .{ .message = message_idx, .region = failure_site.region, .origin = origin } }),
     }
     return .reported;
 }

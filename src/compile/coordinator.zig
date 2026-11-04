@@ -3965,13 +3965,12 @@ pub const Coordinator = struct {
         return manager.config.enabled;
     }
 
-    /// The roots a compilation under `strategy` has yet to evaluate; a
-    /// `.lss` compilation never evaluates a literal argument root.
+    /// The roots a compilation under `strategy` has yet to evaluate
+    /// (`CheckedModuleArtifact.hasUnevaluatedRequests`).
     fn unevaluatedRequestCount(artifact: *const CheckedArtifact.CheckedModuleArtifact, strategy: base.SpecializationStrategy) usize {
         var count: usize = 0;
         for (artifact.root_requests.compile_time_requests) |request| {
             const root = request.compile_time_root orelse continue;
-            if (strategy == .lss and artifact.compile_time_roots.root(root).kind == .literal_argument) continue;
             if (strategy == .boxy and artifact.compile_time_roots.root(root).boxy_value != null) continue;
             if (artifact.compile_time_roots.root(root).payload == .unevaluated or
                 artifact.compile_time_roots.root(root).payload == .pending) count += 1;
@@ -3981,7 +3980,11 @@ pub const Coordinator = struct {
 
     /// Report destinations for checked modules whose finalization completed
     /// in an earlier compilation. A literal such a module owns can still be
-    /// rejected by a specialization this program makes of it; the report
+    /// rejected by a specialization this program makes of it where no
+    /// literal argument root of any module converts it at that type: an
+    /// instantiation checking records no edge for, such as a platform's call
+    /// of the app's procedure, a stored function value, or a target derived
+    /// from a function's type (design.md "Literal Arguments"). The report
     /// joins that module's reports without touching its cached result, since
     /// every compilation that makes the specialization evaluates it again.
     ///

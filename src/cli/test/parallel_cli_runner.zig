@@ -10102,12 +10102,14 @@ fn customNativeBuildExcerptRoundTrip(
     });
 }
 
-/// A literal that only a specialization made by the app converts, inside a
+/// A literal that only an instantiation made by the app converts, inside a
 /// module an earlier build cached clean, is converted at compile time and
-/// reported on every build: with the object cache on and off, from a
-/// compile-time constant that reads it (reported where the constant is,
-/// naming the literal), and from code that only runs at runtime (reported at
-/// the literal).
+/// reported on every build: with the object cache on and off, whether a
+/// compile-time constant reads it or only code that runs at runtime does.
+/// The app's instantiation converts it in a literal argument root of the app,
+/// which reports the rejection where the app instantiates the literal's
+/// function, naming the literal: the app's cached result holds the failure,
+/// so its report stays with the app (design.md "Literal Arguments").
 fn customLiteralRootRejectedEveryBuild(
     io: std.Io,
     allocator: Allocator,
@@ -10123,12 +10125,12 @@ fn customLiteralRootRejectedEveryBuild(
     const builds = [_]Build{
         // Caches Query clean: nothing in this app specializes its literal.
         .{ .roc_file = "test/cli/literal_root_rejected/Clean.roc", .reported_at = null },
-        .{ .roc_file = "test/cli/literal_root_rejected/Rejecting.roc", .reported_at = "Rejecting.roc" },
-        .{ .roc_file = "test/cli/literal_root_rejected/Rejecting.roc", .reported_at = "Rejecting.roc" },
-        .{ .roc_file = "test/cli/literal_root_rejected/Rejecting.roc", .no_cache = true, .reported_at = "Rejecting.roc" },
-        .{ .roc_file = "test/cli/literal_root_rejected/RejectingAtRuntime.roc", .reported_at = "Query.roc" },
-        .{ .roc_file = "test/cli/literal_root_rejected/RejectingAtRuntime.roc", .reported_at = "Query.roc" },
-        .{ .roc_file = "test/cli/literal_root_rejected/RejectingAtRuntime.roc", .no_cache = true, .reported_at = "Query.roc" },
+        .{ .roc_file = "test/cli/literal_root_rejected/Rejecting.roc", .reported_at = "Rejecting.roc:10:10" },
+        .{ .roc_file = "test/cli/literal_root_rejected/Rejecting.roc", .reported_at = "Rejecting.roc:10:10" },
+        .{ .roc_file = "test/cli/literal_root_rejected/Rejecting.roc", .no_cache = true, .reported_at = "Rejecting.roc:10:10" },
+        .{ .roc_file = "test/cli/literal_root_rejected/RejectingAtRuntime.roc", .reported_at = "RejectingAtRuntime.roc:11:10" },
+        .{ .roc_file = "test/cli/literal_root_rejected/RejectingAtRuntime.roc", .reported_at = "RejectingAtRuntime.roc:11:10" },
+        .{ .roc_file = "test/cli/literal_root_rejected/RejectingAtRuntime.roc", .no_cache = true, .reported_at = "RejectingAtRuntime.roc:11:10" },
     };
     for (builds) |build| {
         const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
