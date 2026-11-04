@@ -12,14 +12,16 @@
 //! the entry wrapper; a data symbol's window is the value's layout size in
 //! `.rocpval`, which each build fills with the value's bytes and base
 //! relocations for the pointers in it. Which provides are procedures, and
-//! how large the values are, is part of the host's key. Every symbol the
-//! app region may import (`keep`) is named to the link with `/include`,
-//! which keeps its definition, pulls its archive member in, and gives a
-//! symbol a DLL exports its import thunk; one nothing defines is left
-//! unresolved (`/force:unresolved`), so the host links, and the side table
-//! lists it as absent: an app importing it gets the missing-host-symbols
-//! error. The page file alignment leaves the header page room for the
-//! section headers the patch link appends.
+//! how large the values are, is part of the host's key. The object also
+//! names every symbol the app region may import (`keep`) as an undefined
+//! external, and the link names each with `/include`: LLD then pulls the
+//! symbol's archive member in, gives a symbol a DLL exports its import
+//! thunk, keeps the definition live, and writes it to the executable's
+//! symbol table, which lists only the symbols the link's objects name. One
+//! nothing defines is left unresolved (`/force:unresolved`), so the host
+//! links, and the side table lists it as absent: an app importing it gets
+//! the missing-host-symbols error. The page file alignment leaves the
+//! header page room for the section headers the patch link appends.
 const std = @import("std");
 const host_prelink = @import("../host_prelink.zig");
 const Allocator = std.mem.Allocator;
@@ -53,8 +55,8 @@ const coff_section_header_size = 40;
 const coff_symbol_size = 18;
 
 /// The generated object of a host link, for an x86_64 or arm64 host.
-/// `provides` must be sorted by name and distinct.
-pub fn linkObject(allocator: Allocator, arm64: bool, provides: []const Provide) Allocator.Error![]u8 {
+/// `provides` and `keep` must be sorted by name and distinct.
+pub fn linkObject(allocator: Allocator, arm64: bool, provides: []const Provide, keep: []const []const u8) Allocator.Error![]u8 {
     var procedures: u32 = 0;
     var value_size: u64 = 0;
     for (provides) |provide| switch (provide.kind) {
@@ -94,7 +96,7 @@ pub fn linkObject(allocator: Allocator, arm64: bool, provides: []const Provide) 
     std.mem.writeInt(u16, bytes[0..2], if (arm64) IMAGE_FILE_MACHINE_ARM64 else IMAGE_FILE_MACHINE_AMD64, .little);
     std.mem.writeInt(u16, bytes[2..4], @intCast(sections.len), .little);
     std.mem.writeInt(u32, bytes[8..12], @intCast(symtab_offset), .little);
-    std.mem.writeInt(u32, bytes[12..16], @intCast(provides.len), .little);
+    std.mem.writeInt(u32, bytes[12..16], @intCast(provides.len + keep.len), .little);
     for (sections, 0..) |section, index| {
         const header = bytes[coff_header_size + index * coff_section_header_size ..][0..coff_section_header_size];
         @memcpy(header[0..section.name.len], section.name);
@@ -113,7 +115,8 @@ pub fn linkObject(allocator: Allocator, arm64: bool, provides: []const Provide) 
         }
     }
 
-    // Symbols: the provides as defined externals, in order.
+    // Symbols: the provides as defined externals, then the kept names as
+    // undefined ones.
     var strtab: std.ArrayList(u8) = .empty;
     defer strtab.deinit(allocator);
     try strtab.appendNTimes(allocator, 0, 4);
@@ -121,13 +124,7 @@ pub fn linkObject(allocator: Allocator, arm64: bool, provides: []const Provide) 
     var value_at: u64 = 0;
     for (provides) |provide| {
         var entry: [coff_symbol_size]u8 = @splat(0);
-        if (provide.name.len <= 8) {
-            @memcpy(entry[0..provide.name.len], provide.name);
-        } else {
-            std.mem.writeInt(u32, entry[4..8], @intCast(strtab.items.len), .little);
-            try strtab.appendSlice(allocator, provide.name);
-            try strtab.append(allocator, 0);
-        }
+        try writeSymbolName(allocator, &entry, &strtab, provide.name);
         switch (provide.kind) {
             .procedure => {
                 std.mem.writeInt(u32, entry[8..12], @intCast(procedure_at), .little);
@@ -144,9 +141,27 @@ pub fn linkObject(allocator: Allocator, arm64: bool, provides: []const Provide) 
         entry[16] = IMAGE_SYM_CLASS_EXTERNAL;
         try out.appendSlice(allocator, &entry);
     }
+    for (keep) |name| {
+        var entry: [coff_symbol_size]u8 = @splat(0);
+        try writeSymbolName(allocator, &entry, &strtab, name);
+        entry[16] = IMAGE_SYM_CLASS_EXTERNAL;
+        try out.appendSlice(allocator, &entry);
+    }
     std.mem.writeInt(u32, strtab.items[0..4], @intCast(strtab.items.len), .little);
     try out.appendSlice(allocator, strtab.items);
     return try out.toOwnedSlice(allocator);
+}
+
+/// A symbol's name in its entry: inline when short, else in the string
+/// table.
+fn writeSymbolName(allocator: Allocator, entry: *[coff_symbol_size]u8, strtab: *std.ArrayList(u8), name: []const u8) Allocator.Error!void {
+    if (name.len <= 8) {
+        @memcpy(entry[0..name.len], name);
+        return;
+    }
+    std.mem.writeInt(u32, entry[4..8], @intCast(strtab.items.len), .little);
+    try strtab.appendSlice(allocator, name);
+    try strtab.append(allocator, 0);
 }
 
 const brk_instruction: u32 = 0xd420_0000;
@@ -215,12 +230,14 @@ pub fn finish(allocator: Allocator, exe: []const u8, provides: []const Provide, 
     const image = parsed.parse(exe) catch return error.UnexpectedHostLayout;
     if (image.file_alignment != page_size or image.section_alignment != page_size) return error.UnexpectedHostLayout;
     if (image.symtab_offset == 0) return error.UnexpectedHostLayout;
-    // The symbol table and its strings end the file, after every section.
+    // The symbol table and its strings end the file, after every section,
+    // with only the file alignment's padding after them.
     if (image.symtab_offset < image.sectionsEnd()) return error.UnexpectedHostLayout;
     const strtab_offset = image.symtab_offset + image.symbol_count * coff_symbol_size;
     if (strtab_offset + 4 > exe.len) return error.UnexpectedHostLayout;
     const strtab_size = std.mem.readInt(u32, exe[strtab_offset..][0..4], .little);
-    if (strtab_size < 4 or strtab_offset + strtab_size != exe.len) return error.UnexpectedHostLayout;
+    if (strtab_size < 4 or strtab_offset + strtab_size > exe.len) return error.UnexpectedHostLayout;
+    if (exe.len - (strtab_offset + strtab_size) >= page_size) return error.UnexpectedHostLayout;
     const strtab = exe[strtab_offset..][0..strtab_size];
 
     // The windows, where LLD placed the sections.
@@ -561,7 +578,8 @@ test "the generated object defines each provide in its window section" {
         .{ .name = "roc__main_for_host_1_exposed_generic", .kind = .procedure, .size = 0 },
         .{ .name = "roc__value", .kind = .data, .size = 24 },
     };
-    const object = try linkObject(allocator, false, &provides);
+    const keep = [_][]const u8{ "VirtualAlloc", "memcpy" };
+    const object = try linkObject(allocator, false, &provides, &keep);
     defer allocator.free(object);
     try std.testing.expectEqual(IMAGE_FILE_MACHINE_AMD64, std.mem.readInt(u16, object[0..2], .little));
     try std.testing.expectEqual(@as(u16, 2), std.mem.readInt(u16, object[2..4], .little));
@@ -575,16 +593,21 @@ test "the generated object defines each provide in its window section" {
     const windows = std.mem.readInt(u32, first[20..24], .little);
     try std.testing.expectEqual(int3_instruction, object[windows]);
     const symtab = std.mem.readInt(u32, object[8..12], .little);
-    try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, object[12..16], .little));
+    try std.testing.expectEqual(@as(u32, 4), std.mem.readInt(u32, object[12..16], .little));
     const procedure = object[symtab..][0..coff_symbol_size];
     try std.testing.expectEqual(@as(u16, 1), std.mem.readInt(u16, procedure[12..14], .little));
     try std.testing.expectEqual(IMAGE_SYM_DTYPE_FUNCTION, std.mem.readInt(u16, procedure[14..16], .little));
-    const strtab = object[symtab + 2 * coff_symbol_size ..];
+    const strtab = object[symtab + 4 * coff_symbol_size ..];
     try std.testing.expectEqualStrings("roc__main_for_host_1_exposed_generic", try symbolName(procedure[0..8], strtab));
     const value = object[symtab + coff_symbol_size ..][0..coff_symbol_size];
     try std.testing.expectEqual(@as(u16, 2), std.mem.readInt(u16, value[12..14], .little));
     try std.testing.expectEqualStrings("roc__value", try symbolName(value[0..8], strtab));
-    const arm = try linkObject(allocator, true, &provides);
+    // The kept names are undefined externals.
+    const kept = object[symtab + 2 * coff_symbol_size ..][0..coff_symbol_size];
+    try std.testing.expectEqualStrings("VirtualAlloc", try symbolName(kept[0..8], strtab));
+    try std.testing.expectEqual(@as(u16, 0), std.mem.readInt(u16, kept[12..14], .little));
+    try std.testing.expectEqual(IMAGE_SYM_CLASS_EXTERNAL, kept[16]);
+    const arm = try linkObject(allocator, true, &provides, &keep);
     defer allocator.free(arm);
     try std.testing.expectEqual(IMAGE_FILE_MACHINE_ARM64, std.mem.readInt(u16, arm[0..2], .little));
     try std.testing.expectEqual(brk_instruction, std.mem.readInt(u32, arm[windows..][0..4], .little));

@@ -310,7 +310,7 @@ pub fn prelink(ctx: *CliCtx, spec: *const HostSpec, key: [32]u8, manager: *Cache
     const object = switch (spec.format) {
         .elf => try host_prelink.linkObject(ctx.gpa, spec.provides),
         .macho => try HostPrelink.linkObject(ctx.gpa, provides, spec.keep),
-        .coff => try CoffHostPrelink.linkObject(ctx.gpa, arm64, provides),
+        .coff => try CoffHostPrelink.linkObject(ctx.gpa, arm64, provides, spec.keep),
     };
     defer ctx.gpa.free(object);
     const object_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, if (spec.format == .coff) "roc_fast_dev_host.obj" else "roc_fast_dev_host.o" });

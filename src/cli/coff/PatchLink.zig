@@ -374,7 +374,30 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     const symtab_offset = file_at;
     const symbol_count = exe.symbol_count + app_symbol_count;
     const strtab_offset = symtab_offset + symbol_count * symbol_size;
-    const strtab_size = host_strtab.len + app_strings;
+    // Section names longer than the header's field: a host debug section
+    // keeps its string table reference, a new one gets its name appended.
+    var long_names: std.ArrayList(u8) = .empty;
+    defer long_names.deinit(gpa);
+    for (sections.items) |*section| {
+        if (section.name.len <= 8) {
+            @memcpy(section.header_name[0..section.name.len], section.name);
+            continue;
+        }
+        const host_index = for (debug_section_names, debug_host_index) |name, host_index| {
+            if (std.mem.eql(u8, section.name, name)) break host_index;
+        } else null;
+        if (host_index) |index| {
+            @memcpy(&section.header_name, host.host()[exe.section_headers_offset + index * section_header_size ..][0..8]);
+            continue;
+        }
+        const offset = host_strtab.len + app_strings + long_names.items.len;
+        section.header_name[0] = '/';
+        _ = std.fmt.printInt(section.header_name[1..], offset, 10, .lower, .{});
+        try long_names.appendSlice(gpa, section.name);
+        try long_names.append(gpa, 0);
+    }
+    const long_names_offset = host_strtab.len + app_strings;
+    const strtab_size = long_names_offset + long_names.items.len;
     const file_size = strtab_offset + strtab_size;
     if (file_size > std.math.maxInt(u32)) return error.ProgramTooLarge;
 
@@ -534,6 +557,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     const digest = build_id.finalResult();
     writeBuildId(mapped, host, exe, file_shift, digest[0..16]);
     writeHeaders(mapped, exe, .{
+        .host_section_headers = host.host()[exe.section_headers_offset..][0 .. exe.sections.len * section_header_size],
         .file_shift = file_shift,
         .size_of_headers = size_of_headers,
         .section_count = section_count,
@@ -547,6 +571,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         .relocation_rva = relocation_rva,
         .relocation_size = relocation_blocks.items.len,
     });
+    @memcpy(mapped[@intCast(strtab_offset + long_names_offset)..][0..long_names.items.len], long_names.items);
     std.mem.writeInt(u32, mapped[@intCast(strtab_offset)..][0..4], @intCast(strtab_size), .little);
     timing.finalize_ns = elapsed(std_io, finalize_started);
     const unmap_started = now(std_io);
@@ -597,6 +622,9 @@ const Place = struct {
 /// A section the link appends.
 const OutSection = struct {
     name: []const u8,
+    /// The header's name field: the name inline when it fits, else a
+    /// string table reference.
+    header_name: [8]u8 = @splat(0),
     rva: u64,
     virtual_size: u64,
     /// The bytes the file holds; the rest of the virtual size is zero.
@@ -722,6 +750,8 @@ fn writeBuildId(out: []u8, host: HostPrelink.View, exe: HostPrelink.Executable, 
 }
 
 const HeaderLayout = struct {
+    /// The host's section header table, as it was.
+    host_section_headers: []const u8,
     file_shift: u64,
     size_of_headers: u64,
     section_count: u16,
@@ -750,23 +780,21 @@ fn writeHeaders(out: []u8, exe: HostPrelink.Executable, layout: HeaderLayout) vo
     var size_of_uninitialized: u64 = 0;
     const headers = out[exe.section_headers_offset..][0 .. @as(usize, layout.section_count) * section_header_size];
     @memset(headers, 0);
-    for (exe.sections, layout.host_number) |section, number| {
+    for (exe.sections, layout.host_number, 0..) |section, number, index| {
         const entry = headers[(number - 1) * section_header_size ..][0..section_header_size];
         const kept_in_place = for (debug_section_names) |name| {
             if (std.mem.eql(u8, section.name, name)) break false;
         } else true;
         if (!kept_in_place) continue;
         const raw_offset = if (section.raw_size == 0) 0 else section.raw_offset + layout.file_shift;
-        writeSectionHeader(entry, out[exe.section_headers_offset + (number - 1) * section_header_size ..][0..8], section.rva, section.virtual_size, section.raw_size, raw_offset, section.characteristics);
+        writeSectionHeader(entry, layout.host_section_headers[index * section_header_size ..][0..8], section.rva, section.virtual_size, section.raw_size, raw_offset, section.characteristics);
         countSection(section.characteristics, section.virtual_size, section.raw_size, &size_of_code, &size_of_initialized, &size_of_uninitialized);
     }
     _ = &size_of_code;
     for (layout.sections, 0..) |section, index| {
         const number = layout.section_count - layout.sections.len + index;
         const entry = headers[number * section_header_size ..][0..section_header_size];
-        var name: [8]u8 = @splat(0);
-        @memcpy(name[0..section.name.len], section.name);
-        writeSectionHeader(entry, &name, section.rva, section.virtual_size, section.rawSize(), section.raw_offset, section.characteristics);
+        writeSectionHeader(entry, &section.header_name, section.rva, section.virtual_size, section.rawSize(), section.raw_offset, section.characteristics);
         countSection(section.characteristics, section.virtual_size, section.rawSize(), &size_of_code, &size_of_initialized, &size_of_uninitialized);
     }
     std.mem.writeInt(u32, optional[4..8], @intCast(size_of_code), .little);
