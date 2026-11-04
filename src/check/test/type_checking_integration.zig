@@ -1089,6 +1089,54 @@ test "check type - record - opt - destructure of optional field binds Try" {
     );
 }
 
+test "check type - record - opt - nested destructure of optional field binds Try" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record : { outer : { n ?: Str } }
+        \\my_record = { outer: {} }
+        \\
+        \\use_it = {
+        \\    { outer: { n } } = my_record
+        \\    n
+        \\}
+    ;
+    // A record pattern means the same thing nested as it does on its own:
+    // the inner pattern checks against the outer field's value, whose `n` is
+    // optional, so `n` binds `Try(Str, [MissingField])`.
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_it" } },
+        \\Try(Str, [MissingField])
+    );
+}
+
+test "check type - record - opt - nested destructure of optional field in a parameter binds Try" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\inner : { outer : { n ?: Str } } -> Try(Str, [MissingField])
+        \\inner = |{ outer: { n } }| n
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "inner" } },
+        \\{ outer: { n ?: Str } } -> Try(Str, [MissingField])
+    );
+}
+
+test "check type - record - opt - nested destructure of still-flex base pins required" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record = { outer: { n: "hi" } }
+        \\
+        \\use_it = {
+        \\    { outer: { n } } = my_record
+        \\    n
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_it" } },
+        \\Str
+    );
+}
+
 test "check type - record - opt - destructure of required sibling unchanged" {
     const source =
         \\main! = |_| {}

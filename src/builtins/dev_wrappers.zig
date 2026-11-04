@@ -13,6 +13,7 @@ const list = @import("list.zig");
 const num = @import("num.zig");
 const utils = @import("utils.zig");
 const erased_callable = @import("erased_callable.zig");
+const native_callable = @import("native_callable.zig");
 const rc_callback_abi = @import("rc_callback_abi.zig");
 const dec = @import("dec.zig");
 const hash = @import("hash.zig");
@@ -280,6 +281,23 @@ pub fn roc_builtins_str_to_utf8(out: *RocList, str_bytes: ?[*]u8, str_len: usize
 /// update mode is forwarded to the builtin's uniqueness check; `.InPlace`
 /// skips it.
 pub fn roc_builtins_str_concat(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, update_mode: utils.UpdateMode) callconv(.c) void {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    // Two small strings into a small one: small enough here to inline at
+    // every call site where this bitcode is merged into the app's module, so
+    // a chain of them stays in registers. Everything else out of line, its
+    // fields passed in registers.
+    if (a.isSmallStr() and b.isSmallStr()) {
+        const combined_length = a.len() + b.len();
+        if (combined_length < @sizeOf(RocStr)) {
+            out.* = str.concatSmall(a, b, combined_length);
+            return;
+        }
+    }
+    strConcatOutOfLine(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, update_mode);
+}
+
+noinline fn strConcatOutOfLine(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, update_mode: utils.UpdateMode) void {
     const roc_ops = in_process_host.ops();
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
@@ -2556,17 +2574,17 @@ test "numeric prefix Str and List(U8) wrappers agree on generated inputs" {
 
 /// Invoke a monomorphic callable using its exact LIR ABI.
 pub fn roc_builtins_native_callable_call(callable: erased_callable.CallableFnPtr, ret: ?[*]u8, args: ?[*]const u8, capture: ?[*]u8, reuse: ?[*]u8) callconv(.c) void {
-    @import("native_callable.zig").call(callable, ret, args, capture, reuse);
+    native_callable.call(callable, ret, args, capture, reuse);
 }
-/// Transfer ARC's deferred call to the monomorphic trampoline.
-pub fn roc_builtins_native_callable_defer(callable: erased_callable.CallableFnPtr, closure: [*]u8, args: ?[*]const u8, args_len: usize) callconv(.c) void {
-    @import("native_callable.zig").deferCall(callable, closure, args, args_len);
+/// Transfer ARC's deferred call to the waiter's pending cell.
+pub fn roc_builtins_native_callable_defer(pending: *native_callable.Pending, callable: erased_callable.CallableFnPtr, closure: [*]u8, args: ?[*]const u8, args_len: usize) callconv(.c) void {
+    native_callable.deferCall(pending, callable, closure, args, args_len);
 }
 /// Run a producer-declared chain of pending monomorphic calls.
-pub fn roc_builtins_native_callable_drive(ret: ?[*]u8) callconv(.c) void {
-    @import("native_callable.zig").drive(ret);
+pub fn roc_builtins_native_callable_drive(pending: *native_callable.Pending, ret: ?[*]u8) callconv(.c) void {
+    native_callable.drive(pending, ret);
 }
-/// Whether this callable's caller owns the monomorphic trampoline.
-pub fn roc_builtins_native_callable_caller_drives(callee: erased_callable.CallableFnPtr) callconv(.c) u8 {
-    return @import("native_callable.zig").callerDrives(callee);
+/// The trampoline's pending cell, when the trampoline invoked this callable.
+pub fn roc_builtins_native_callable_caller_cell(out: ?*anyopaque) callconv(.c) ?*native_callable.Pending {
+    return native_callable.callerCell(out);
 }

@@ -765,6 +765,51 @@ test "tag lookup finds every member of sorted composed and nominal descriptors" 
     }
 }
 
+test "adapting re-tags a row holding False and True to and from Bool by name" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    const name_false = name("False");
+    const name_true = name("True");
+    const name_maybe = name("Maybe");
+    const just_false = compose.tagUnion(&env.cache, ops, &.{.{ .name = &name_false, .payload_count = 0, .payloads = &.{} }});
+    const just_true = compose.tagUnion(&env.cache, ops, &.{.{ .name = &name_true, .payload_count = 0, .payloads = &.{} }});
+    const wider = compose.tagUnion(&env.cache, ops, &.{
+        .{ .name = &name_false, .payload_count = 0, .payloads = &.{} },
+        .{ .name = &name_maybe, .payload_count = 0, .payloads = &.{} },
+        .{ .name = &name_true, .payload_count = 0, .payloads = &.{} },
+    });
+    const bool_nominal = compose.nominal(&env.cache, ops, compose.boolDesc(), &name_point, null, false);
+
+    // A row's own discriminant is not Bool's byte: its tags sort around others.
+    for ([_]struct { from: *const TypeDesc, tag: *const Name, byte: u8 }{
+        .{ .from = just_false, .tag = &name_false, .byte = 0 },
+        .{ .from = just_true, .tag = &name_true, .byte = 1 },
+        .{ .from = wider, .tag = &name_false, .byte = 0 },
+        .{ .from = wider, .tag = &name_true, .byte = 1 },
+    }) |case| {
+        var source: Slot = .{};
+        compiled.buildTag(case.from, case.tag, source.ptr(), &.{}, ops);
+        for ([_]*const TypeDesc{ compose.boolDesc(), bool_nominal }) |to| {
+            var target: Slot = .{};
+            target.bytes[0] = 0xff;
+            compiled.adapt(case.from, to, target.ptr(), source.ptr(), ops);
+            try testing.expectEqual(case.byte, target.bytes[0]);
+        }
+    }
+
+    for ([_]struct { tag: *const Name, byte: u8 }{
+        .{ .tag = &name_false, .byte = 0 },
+        .{ .tag = &name_true, .byte = 1 },
+    }) |case| {
+        var source: Slot = .{};
+        source.bytes[0] = case.byte;
+        var target: Slot = .{};
+        compiled.adapt(compose.boolDesc(), wider, target.ptr(), source.ptr(), ops);
+        try testing.expectEqual(compiled.tagDiscriminantOf(wider, case.tag, ops), compiled.tagDiscriminant(wider, target.ptr(), ops));
+    }
+}
+
 test "single-payload tag construction initializes the exact byte image and releases boxed payloads" {
     var env = Env.init();
     defer env.deinit();

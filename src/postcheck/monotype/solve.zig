@@ -2041,10 +2041,16 @@ const NodePairContext = struct {
 
 const NodePairSet = std.HashMap(NodePair, void, NodePairContext, std.hash_map.default_max_load_percentage);
 
+/// What one entry of the nominal backing table instantiates: a declaration's
+/// backing, or its unnamed field at `component - 1`, which recurses through its
+/// nominal as a backing does.
 const NominalBackingDeclaration = struct {
     module_bytes: [32]u8,
     declaration_id: u32,
+    component: u32 = backing_component,
 };
+
+const backing_component: u32 = 0;
 
 /// Exact iterator construction identity. Argument roots are maintained by
 /// union_, while declaration and callable evidence are producer-owned data.
@@ -2163,7 +2169,7 @@ const NominalBackingKeyHasher = struct {
     fn init(declaration: NominalBackingDeclaration, arity: usize) NominalBackingKeyHasher {
         const module_word = std.mem.readInt(u64, declaration.module_bytes[0..8], .little);
         const declaration_word = (@as(u64, declaration.declaration_id) << 32) | @as(u64, @as(u32, @truncate(arity)));
-        return .{ .state = mix(module_word ^ declaration_word) };
+        return .{ .state = mix(mix(module_word ^ declaration_word) ^ declaration.component) };
     }
 
     fn add(self: *NominalBackingKeyHasher, arg: NodeId) void {
@@ -2183,7 +2189,8 @@ const NominalBackingKeyHasher = struct {
 
 fn nominalBackingDeclarationsEqual(left: NominalBackingDeclaration, right: NominalBackingDeclaration) bool {
     return std.mem.eql(u8, left.module_bytes[0..], right.module_bytes[0..]) and
-        left.declaration_id == right.declaration_id;
+        left.declaration_id == right.declaration_id and
+        left.component == right.component;
 }
 
 /// The structural key stored in one nominal backing instance: its declaration
@@ -4101,13 +4108,47 @@ pub const InstGraph = struct {
         declaration_id: u32,
         args: []const NodeId,
     ) ?NodeId {
+        return self.nominalComponentNode(.{ .module_bytes = module_bytes, .declaration_id = declaration_id }, args);
+    }
+
+    pub fn putNominalBackingNode(
+        self: *InstGraph,
+        module_bytes: [32]u8,
+        declaration_id: u32,
+        args: []const NodeId,
+        node: NodeId,
+    ) Allocator.Error!void {
+        try self.putNominalComponentNode(.{ .module_bytes = module_bytes, .declaration_id = declaration_id }, args, node);
+    }
+
+    /// The instantiation of a declaration's unnamed field `padding_index` at
+    /// `args`, or its placeholder while that instantiation is underway.
+    pub fn nominalPaddingNode(
+        self: *InstGraph,
+        module_bytes: [32]u8,
+        declaration_id: u32,
+        padding_index: u32,
+        args: []const NodeId,
+    ) ?NodeId {
+        return self.nominalComponentNode(.{ .module_bytes = module_bytes, .declaration_id = declaration_id, .component = padding_index + 1 }, args);
+    }
+
+    pub fn putNominalPaddingNode(
+        self: *InstGraph,
+        module_bytes: [32]u8,
+        declaration_id: u32,
+        padding_index: u32,
+        args: []const NodeId,
+        node: NodeId,
+    ) Allocator.Error!void {
+        try self.putNominalComponentNode(.{ .module_bytes = module_bytes, .declaration_id = declaration_id, .component = padding_index + 1 }, args, node);
+    }
+
+    fn nominalComponentNode(self: *InstGraph, declaration: NominalBackingDeclaration, args: []const NodeId) ?NodeId {
         self.countDiagnostic("nominal_backing_lookups");
         const instance_id = self.nominal_backing_index.getAdapted(
             NominalBackingLookup{
-                .declaration = .{
-                    .module_bytes = module_bytes,
-                    .declaration_id = declaration_id,
-                },
+                .declaration = declaration,
                 .args = args,
             },
             NominalBackingLookupContext{ .graph = self },
@@ -4118,18 +4159,8 @@ pub const InstGraph = struct {
         return instance.node;
     }
 
-    pub fn putNominalBackingNode(
-        self: *InstGraph,
-        module_bytes: [32]u8,
-        declaration_id: u32,
-        args: []const NodeId,
-        node: NodeId,
-    ) Allocator.Error!void {
+    fn putNominalComponentNode(self: *InstGraph, declaration: NominalBackingDeclaration, args: []const NodeId, node: NodeId) Allocator.Error!void {
         self.requireRelationProduction();
-        const declaration = NominalBackingDeclaration{
-            .module_bytes = module_bytes,
-            .declaration_id = declaration_id,
-        };
         const stored_args = try self.arena().alloc(NodeId, args.len);
         for (stored_args, args) |*stored, arg| {
             stored.* = self.find(arg);
@@ -13953,14 +13984,26 @@ test "nominal backing index rekeys root tuples and merges collisions" {
     const empty_backing = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
     try graph.putNominalBackingNode(module_bytes, 3, &.{}, empty_backing);
     try std.testing.expectEqual(empty_backing, graph.nominalBackingNode(module_bytes, 3, &.{}).?);
+
+    // Each unnamed field of a declaration has an entry of its own, beside its
+    // backing's and at its arguments.
+    try std.testing.expect(graph.nominalPaddingNode(module_bytes, 3, 0, &.{}) == null);
+    const first_padding = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const second_padding = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    try graph.putNominalPaddingNode(module_bytes, 3, 0, &.{}, first_padding);
+    try graph.putNominalPaddingNode(module_bytes, 3, 1, &.{}, second_padding);
+    try std.testing.expectEqual(first_padding, graph.nominalPaddingNode(module_bytes, 3, 0, &.{}).?);
+    try std.testing.expectEqual(second_padding, graph.nominalPaddingNode(module_bytes, 3, 1, &.{}).?);
+    try std.testing.expectEqual(empty_backing, graph.nominalBackingNode(module_bytes, 3, &.{}).?);
+    try std.testing.expect(graph.nominalPaddingNode(module_bytes, 3, 0, &.{a}) == null);
     try expectNominalBackingIndexConsistent(graph);
 
     var active_instances: usize = 0;
     for (graph.nominal_backing_instances.items) |instance| {
         if (instance.active) active_instances += 1;
     }
-    try std.testing.expectEqual(@as(usize, 3), active_instances);
-    try std.testing.expectEqual(@as(u32, 3), graph.nominal_backing_index.count());
+    try std.testing.expectEqual(@as(usize, 5), active_instances);
+    try std.testing.expectEqual(@as(u32, 5), graph.nominal_backing_index.count());
 }
 
 test "related named instances reuse exact backing witnesses" {

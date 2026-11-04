@@ -35,9 +35,7 @@ pub const BuiltinModules = @import("BuiltinModules.zig").BuiltinModules;
 pub const CompileTimeFinalization = @import("compile_time_finalization.zig");
 pub const checked_root_graph = @import("checked_root_graph.zig");
 /// Reuse of compile-time values across edits of a module.
-pub const CompileTimeReuse = @import("compile_time_reuse.zig");
 /// Literal values persisted across compilations of one program.
-pub const LiteralValues = @import("literal_values.zig");
 /// Compiler-owned RocOps environment for compile-time evaluation
 pub const CompilerHost = @import("compiler_host.zig");
 /// Dev-backend RocOps environment for native compile-time evaluation
@@ -118,8 +116,6 @@ test "eval tests" {
     std.testing.refAllDecls(@import("interpreter.zig"));
     std.testing.refAllDecls(@import("host_trampoline.zig"));
     std.testing.refAllDecls(@import("compile_time_finalization.zig"));
-    std.testing.refAllDecls(@import("compile_time_reuse.zig"));
-    std.testing.refAllDecls(@import("literal_values.zig"));
     std.testing.refAllDecls(@import("compiler_host.zig"));
     std.testing.refAllDecls(@import("compile_time_host.zig"));
     std.testing.refAllDecls(@import("const_store_writer.zig"));

@@ -642,7 +642,7 @@ fn pieceWorker(program: *Program, module: ModuleIndex, piece: Piece, params: []c
     const id: WorkerId = @fromBackingInt(@intCast(program.workers.items.len));
     const proc = try program.result.store.addProcSpec(.{
         .name = program.result.store.freshSyntheticSymbol(),
-        .identity = LIR.ProcIdentity.programLocal("boxy.codec", @backingInt(id)),
+        .identity = program.programLocalIdentity("boxy.codec", @backingInt(id)),
         .emission_unit = .isolated,
         .args = .empty(),
         .ret_layout = .zst,

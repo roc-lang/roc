@@ -336,6 +336,22 @@ pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]con
             stack.push(.{ .from = f, .to = t.child.?, .src = work.src, .dst = work.dst }, ops);
             continue;
         }
+        // Bool is the union `[False, True]` with its discriminant for a value,
+        // and a row holding those tags re-tags to and from it by name.
+        if (f.kind == .tag_union and t.kind == .bool) {
+            const source = &f.variants()[f.readDiscriminant(work.src)];
+            work.dst[0] = @intFromBool(std.mem.eql(u8, source.name.text(), "True"));
+            continue;
+        }
+        if (f.kind == .bool and t.kind == .tag_union) {
+            const tag: []const u8 = if (work.src[0] != 0) "True" else "False";
+            const target = for (t.variants()) |*candidate| {
+                if (std.mem.eql(u8, candidate.name.text(), tag)) break candidate;
+            } else invariant(ops, "a re-tagged variant is not in its destination's row");
+            @memset(work.dst[0..t.size], 0);
+            writeDiscriminant(t, work.dst, target.discriminant);
+            continue;
+        }
         if (f.kind != t.kind) invariant(ops, "adapted descriptors describe different kinds of value");
         switch (t.kind) {
             .zst, .scalar, .str, .bool, .erased_callable => {

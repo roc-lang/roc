@@ -32,14 +32,15 @@ pub const Var = enum {
     fresh_type_analysis,
     /// Print every compile-time demand decision.
     ctfe_demand_trace,
-    /// Print what each module's compile-time evaluation reused, verified, and stored.
-    ctfe_reuse_trace,
     /// Check every object compile against one assembled from its artifacts.
     dev_excerpt_roundtrip,
     /// Append one record to the named file per in-process LLVM object compile.
     test_llvm_object_compile_count_file,
     /// Print deterministic work counters for one test command.
     test_command_work,
+    /// Write the bytes of a dev run's first run image, as published and
+    /// before the shim loads it, to the named file.
+    dump_run_image,
     /// Check that the sealed type view renders every published source type
     /// root exactly as checked type publication does.
     verify_sealed_type_view,
@@ -47,6 +48,9 @@ pub const Var = enum {
     /// family of functions of at most this many bytes of code each, so every
     /// program exercises wasm function splitting.
     wasm_split_bytes,
+    /// Write every wasm unit image a wasm build restores or builds into the
+    /// named directory, one file per unit named by its unit key.
+    dump_wasm_unit_images,
 
     /// The variable's name in the environment.
     pub fn envName(comptime self: Var) [:0]const u8 {
@@ -59,12 +63,13 @@ pub const Var = enum {
             .lambda_solve_stats => "ROC_LAMBDA_SOLVE_STATS",
             .fresh_type_analysis => "ROC_FRESH_TYPE_ANALYSIS",
             .ctfe_demand_trace => "ROC_CTFE_DEMAND_TRACE",
-            .ctfe_reuse_trace => "ROC_CTFE_REUSE_TRACE",
             .dev_excerpt_roundtrip => "ROC_DEV_EXCERPT_ROUNDTRIP",
             .test_llvm_object_compile_count_file => "ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE",
             .test_command_work => "ROC_TEST_COMMAND_WORK",
+            .dump_run_image => "ROC_DUMP_RUN_IMAGE",
             .verify_sealed_type_view => "ROC_VERIFY_SEALED_TYPE_VIEW",
             .wasm_split_bytes => "ROC_WASM_SPLIT_BYTES",
+            .dump_wasm_unit_images => "ROC_DUMP_WASM_UNIT_IMAGES",
         };
     }
 };

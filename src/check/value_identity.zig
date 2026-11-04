@@ -129,13 +129,6 @@ pub const ModuleIdentities = struct {
     definitions: []DefinitionIdentity,
     report_sites: []TestReportSite,
     declarations: []DeclarationIdentity,
-    reuse_types: []ReuseTypeIdentity,
-};
-
-/// Exact checked type identity for relocating stored nominal occurrences.
-pub const ReuseTypeIdentity = extern struct {
-    ty: CheckedTypeId,
-    identity: [32]u8,
 };
 
 /// Hash the checked producer's actual operand, including generated literals.
@@ -244,28 +237,8 @@ pub fn compute(allocator: Allocator, inputs: Inputs) Allocator.Error!ModuleIdent
     }
     const report_sites = if (inputs.test_dependencies) try state.reportSites() else try allocator.alloc(TestReportSite, 0);
     errdefer allocator.free(report_sites);
-    var reuse_types = std.ArrayList(ReuseTypeIdentity).empty;
-    errdefer reuse_types.deinit(allocator);
-    if (inputs.test_dependencies) {
-        for (0..inputs.types.payloadCount()) |index| {
-            const ty: CheckedTypeId = @fromBackingInt(@as(u32, @intCast(index)));
-            switch (inputs.types.payload(ty)) {
-                .nominal, .alias => {
-                    var hash = Sha256.init(.{});
-                    hashTag(&hash, "roc.relocatable-type.v1");
-                    hash.update(&value_context);
-                    hash.update(&try state.type_walk.digest(ty));
-                    try reuse_types.append(allocator, .{ .ty = ty, .identity = hash.finalResult() });
-                },
-                .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => {},
-            }
-        }
-    }
-    const owned_reuse_types = try reuse_types.toOwnedSlice(allocator);
-    errdefer allocator.free(owned_reuse_types);
     const owned_definitions = try definitions.toOwnedSlice(allocator);
     return .{
-        .reuse_types = owned_reuse_types,
         .report_sites = report_sites,
         .declarations = declarations,
         .context = value_context,
