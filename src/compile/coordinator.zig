@@ -8629,7 +8629,7 @@ fn compileForReuseWithStrategy(allocator: Allocator, cache_dir: []const u8, app_
     for (app.compile_time_roots.roots) |root| {
         const def = switch (root.source) {
             .def => |def| def,
-            .hoisted, .expr, .statement, .required_binding => continue,
+            .hoisted, .expr, .statement, .required_binding, .literal => continue,
         };
         const pattern = env.store.getPattern(env.store.getDef(def).pattern);
         if (pattern != .assign) continue;

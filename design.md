@@ -2269,7 +2269,7 @@ those a cache entry left unevaluated.
 No persistent compiler cache may use a source file's filesystem path, checkout
 root, package directory, or workspace-qualified display name as identity or as
 an index selecting previous results. Hashing such a path does not make the
-identity content-addressed. Source-authored import names remain semantic inputs;
+identity content-addressed. Source-authored import names remain checking inputs;
 filesystem paths remain available for discovery and current-workspace reporting.
 Cached unit expect-site tables name source modules by explicit content-derived
 unit-link identities, never by filesystem placement. Distinct modules sharing a
@@ -2287,7 +2287,7 @@ certificate is persisted under a source placement.
 
 Restoration preserves every root's explicit state. A cached root that was never
 demanded remains unevaluated; a command that newly demands it evaluates it and
-may publish the more complete entry under the same checked identity. Stored
+may write the more complete entry under the same checked identity. Stored
 root reads still name exact checked modules and roots, and stored debug
 observations replay in the ordinary demand order. A cache hit must not suppress
 required diagnostics or evaluate roots that the command does not demand.
@@ -14512,7 +14512,7 @@ parallel.
 With `--specialize=no`, every command writes what `roc check` writes, and
 `roc build` adds its remaining module objects, as does a dev run whose run
 image is composed from unit images (Hot Loading For Default Dev-Shim Runs),
-which also files its root unit and the host executable it launches.
+which also files its root unit and the host executable binary it launches.
 Checked module and pairing entries, the canonicalized
 module cache, and the evaluation output `roc check` produces
 (`ConstStore` constants) are written exactly as `roc check` writes them.
@@ -23054,7 +23054,7 @@ procedure is emitted again split (`split_mode`):
   the procedure's value, so it has no code to return and every code is a
   label of its own.
 - A fragment is an entity of the body that outlined it
-  (`BodyArtifact.Entity.fragment`), so the body worker names it by a deferred
+  (a body entity's `fragment` case), so the body worker names it by a deferred
   operand and the owner creates its function when it commits the body, in
   entity order like an RC helper, named after the procedure
   (`roc__p{hash}.{k}`, a local hidden symbol). It has no frame or stack-bound
@@ -23363,7 +23363,7 @@ program's sites per module, so the reporting merge is unchanged.
 
 The command builds a test unit for each planned module and everything they
 import, restored from the per-module cache or lowered and filed there. As
-in a composed run, an app's program is rooted at its executable root, the
+in a composed run, an app's program is rooted at its program root, the
 platform module paired with the app: the app is a library unit like every
 module without platform requirements, and when a planned module has
 platform requirements, those modules lower together in a root unit keyed as
@@ -24825,8 +24825,8 @@ qualified source names.
 
 ## Fast Dev Link
 
-A `roc build --opt=dev --specialize=no` of a Linux x86_64 executable, by a
-compiler running on Linux with a cache, links its executable without composing a program object and without
+A `roc build --opt=dev --specialize=no` of a Linux x86_64 executable binary, by a
+compiler running on Linux with a cache, links its executable binary without composing a program object and without
 LLD. The per-build work after the edited module's code exists is a function
 of that module and of the output's size, never of the program's module count
 or the host's size. Every other target, output kind and `--no-cache` composes
@@ -24851,7 +24851,7 @@ library unit's cache entry files the image's `CodeLocations` beside it, so
 compile-time evaluation loads the image itself into the compiler's process
 and reports failures in it without composing anything (Compile-Time
 Evaluation Strategy). The table stays out of the image so the link's placement and build id are a
-function of code alone. Cached source tables contain semantic module names
+function of code alone. Cached source tables contain source module names
 and content-derived module identities, never workspace-qualified display names.
 Compile-time failure locations and test units' expect sites bind those
 identities to the current compilation's source environments before reporting.
@@ -24873,7 +24873,7 @@ functions, other units' exports, the position-independent base globals),
 and every index or address in a body or segment as a site over a padded
 field that holds zero, so placing a body never changes its length. Each
 function and segment is an atom whose sites are its edges; with stack
-checks, each function also records the frame facts `StackRoom` fills a
+checks, each function also records the frame data `StackRoom` fills a
 check's room from. Nothing is merged into a unit: what other code defines
 is an import with the signature the call uses. The constants the program
 named for itself (the nodes of its descriptors, dictionaries, names and
@@ -24915,7 +24915,7 @@ may not start zeroed), as one active data segment, and the table holds every
 reached function a table site names. Every section's size is known before a
 byte is written; bodies and segments are copied and patched in place in
 parallel tasks, and with stack checks `StackRoom.programRooms` fills each
-check's room from the images' frame facts over the composed call graph. A
+check's room from the images' frame data over the composed call graph. A
 name section is written only with `--debug` (no DWARF). Engine limits,
 undefined platform exports, conflicting embedder imports, memory settings
 the program does not fit and parameter counts past the engine limit are CLI
@@ -25182,7 +25182,7 @@ fixed distance from the code that reads them, so a composed image's static
 data cannot outlive its code separately: the image records that its static
 data must live as long as its code, has no static pool chunk, and an
 accepted one stays loaded for the rest of the session, as an image whose
-static data names its code does. Because the host executable of such a run
+static data names its code does. Because the host executable binary of such a run
 links no compiler-owned code, it is cached by the checked host identity and
 the link inputs, and the root program is lowered for it only when that
 cache misses.
