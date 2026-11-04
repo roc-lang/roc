@@ -11625,7 +11625,6 @@ pub const MonoLlvmCodeGen = struct {
     const BoxyTypeDesc = boxy_runtime.TypeDesc;
     const BoxyListOp = boxy_runtime.compiled.ListOp;
     const desc_size_offset: u32 = @offsetOf(BoxyTypeDesc, "size");
-    const desc_alignment_offset: u32 = @offsetOf(BoxyTypeDesc, "alignment");
 
     /// The layouts of the Boxy runtime's `extern` structs on a target whose
     /// words are `word` bytes: `compose.FieldInput`, `compose.VariantInput`,
