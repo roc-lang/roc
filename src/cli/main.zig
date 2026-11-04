@@ -186,6 +186,10 @@ comptime {
         std.testing.refAllDecls(@import("builder.zig"));
         std.testing.refAllDecls(@import("host_symbols.zig"));
         std.testing.refAllDecls(host_prelink);
+        std.testing.refAllDecls(macho_host_prelink);
+        std.testing.refAllDecls(macho_patch_link);
+        std.testing.refAllDecls(@import("patch_fanout.zig"));
+        std.testing.refAllDecls(@import("link_output.zig"));
         std.testing.refAllDecls(@import("test/platform_config.zig"));
         std.testing.refAllDecls(@import("ReplLine.zig"));
         std.testing.refAllDecls(@import("ReplSession.zig"));
@@ -196,7 +200,10 @@ const linker = @import("linker.zig");
 const fast_dev_link = @import("fast_dev_link.zig");
 const host_prelink = @import("host_prelink.zig");
 const patch_link = @import("patch_link.zig");
+const macho_host_prelink = @import("macho/HostPrelink.zig");
+const macho_patch_link = @import("macho/PatchLink.zig");
 const run_image_link = @import("run_image_link.zig");
+const unit_walk = @import("unit_walk.zig");
 const builder = @import("builder.zig");
 const llvm_codegen = @import("llvm_codegen");
 
@@ -609,7 +616,7 @@ const EmbeddedTargetObjects = struct {
         };
         objects.boxy_runtime = embedded(dir ++ "roc_boxy_runtime" ++ ext);
         objects.boxy_runtime_digest = embeddedBlake3("boxy_runtime_" ++ name);
-        if (target.toOsTag() == .linux and target.toCpuArch() == .x86_64) {
+        if (fastDevLinkFormat(target) != null) {
             objects.support_image = embedded(dir ++ "roc_support.rbxu");
         }
         if (target.toCpuArch() == .wasm32) {
@@ -11071,12 +11078,26 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
 }
 
+/// The format a fast dev link of `target`'s executables patches, for the
+/// targets whose units carry unit images and whose support image the
+/// compiler embeds.
+fn fastDevLinkFormat(target: RocTarget) ?fast_dev_link.Format {
+    return switch (target) {
+        .x64musl, .x64glibc => .elf,
+        .arm64mac => .macho,
+        .x64mac, .x64win, .x64mingw, .x64freebsd, .x64openbsd, .x64netbsd, .x64linux, .x64elf => null,
+        .x64v1mac, .x64v1win, .x64v1mingw, .x64v1freebsd, .x64v1openbsd, .x64v1netbsd, .x64v1musl, .x64v1glibc, .x64v1linux, .x64v1elf => null,
+        .arm64win, .arm64mingw, .arm64linux, .arm64musl, .arm64glibc, .arm64v1win, .arm64v1mingw, .arm64v1linux, .arm64v1musl, .arm64v1glibc => null,
+        .arm32linux, .arm32musl, .wasm32, .wasm32v1 => null,
+    };
+}
+
 /// Whether `roc build` links its executable with a fast dev link
-/// (`fast_dev_link.zig`): a `.boxy` dev build of a Linux x86_64 executable.
+/// (`fast_dev_link.zig`): a `.boxy` dev build of a Linux x86_64 executable
+/// on a Linux compiler, or of a macOS arm64 executable on a macOS compiler,
+/// whose output file the link writes through the host's own system calls.
 /// Every other combination composes a program object and links it with LLD.
 fn fastDevLinkApplies(target: RocTarget, link_type: roc_target.OutputKind, args: cli_args.BuildArgs) bool {
-    // The fast dev link writes its output through Linux system calls.
-    if (comptime builtin.target.os.tag != .linux) return false;
     if (args.opt != .dev or currentRuntimeSpecializationStrategy(args.specialization_strategy) != .boxy) return false;
     // The fast dev link reads unit images and the pre-linked host from the
     // cache; without one, a build composes and links with LLD as before
@@ -11090,12 +11111,9 @@ fn fastDevLinkApplies(target: RocTarget, link_type: roc_target.OutputKind, args:
         .shared, .archive => false,
     };
     if (!executable) return false;
-    return switch (target) {
-        .x64musl, .x64glibc => true,
-        .x64mac, .x64win, .x64mingw, .x64freebsd, .x64openbsd, .x64netbsd, .x64linux, .x64elf => false,
-        .x64v1mac, .x64v1win, .x64v1mingw, .x64v1freebsd, .x64v1openbsd, .x64v1netbsd, .x64v1musl, .x64v1glibc, .x64v1linux, .x64v1elf => false,
-        .arm64mac, .arm64win, .arm64mingw, .arm64linux, .arm64musl, .arm64glibc, .arm64v1win, .arm64v1mingw, .arm64v1linux, .arm64v1musl, .arm64v1glibc => false,
-        .arm32linux, .arm32musl, .wasm32, .wasm32v1 => false,
+    return switch (fastDevLinkFormat(target) orelse return false) {
+        .elf => builtin.target.os.tag == .linux,
+        .macho => builtin.target.os.tag == .macos,
     };
 }
 
@@ -11143,6 +11161,7 @@ const FastDevLink = struct {
 
         self.* = .{
             .spec = .{
+                .format = fastDevLinkFormat(target) orelse unreachable, // fastDevLinkApplies chose the target
                 .target = target,
                 .link_abi = buildLinkAbi(target, args.synthetic_default_platform),
                 .platform_files_pre = link_inputs.platform_files_pre,
@@ -11177,6 +11196,32 @@ const FastDevLink = struct {
         return self;
     }
 
+    /// Each `provides` symbol's kind and layout size, as the program's
+    /// images define it: what a Mach-O host's windows are sized by.
+    fn provideLayouts(
+        self: *FastDevLink,
+        ctx: *CliCtx,
+        support_view: backend.dev.UnitImage.View,
+        units: []const patch_link.ImageInput,
+    ) CliMainError![]const macho_host_prelink.Provide {
+        var images: std.ArrayList(unit_walk.ImageInput) = .empty;
+        defer images.deinit(ctx.gpa);
+        try images.append(ctx.gpa, .{ .view = support_view });
+        try images.appendSlice(ctx.gpa, units);
+        var exports = try unit_walk.collectExports(ctx.gpa, images.items);
+        defer exports.deinit(ctx.gpa);
+        const out = try ctx.arena.alloc(macho_host_prelink.Provide, self.spec.provides.len);
+        for (self.spec.provides, out) |name, *provide| {
+            // The checked program defines every `provides` symbol (the
+            // checker rejects an app that lacks one).
+            const found = exports.get(name) orelse base.invariant("roc build invariant violated: no unit image defines the provided symbol {s}", .{name});
+            const symbol = images.items[found.image].view.symbols()[found.symbol];
+            const procedure = @as(backend.dev.UnitImage.SymbolType, @fromBackingInt(symbol.type)) == .func;
+            provide.* = .{ .name = name, .kind = if (procedure) .procedure else .data, .size = if (procedure) 0 else symbol.size };
+        }
+        return out;
+    }
+
     fn deinit(self: *FastDevLink, gpa: Allocator) void {
         self.job.deinit();
         if (!self.published) self.output.discard();
@@ -11204,8 +11249,25 @@ const FastDevLink = struct {
         var prelink_ns: u64 = 0;
         var owned_record: ?[]align(16) u8 = null;
         defer if (owned_record) |record| ctx.gpa.free(record);
-        const host_view: host_prelink.View = switch (self.job.outcome) {
-            .pending => unreachable, // waiting joined the job, which always records an outcome
+
+        const units = try ctx.gpa.alloc(patch_link.ImageInput, library.images.len + 1);
+        defer ctx.gpa.free(units);
+        for (library.images, units[0..library.images.len]) |image, *unit| {
+            unit.* = .{ .view = backend.dev.UnitImage.View.init(image) catch base.invariant("roc build invariant violated: a unit image does not read", .{}) };
+        }
+        units[library.images.len] = .{ .view = backend.dev.UnitImage.View.init(root_image) catch base.invariant("roc build invariant violated: the root unit image does not read", .{}) };
+        const support_view = backend.dev.UnitImage.View.init(self.support) catch
+            unreachable; // `start` read this image
+
+        // A Mach-O host's key covers the provides' kinds and layout sizes,
+        // which the images tell; its lookup waits for them.
+        var provides: []const macho_host_prelink.Provide = &.{};
+        if (self.spec.format == .macho) {
+            provides = try self.provideLayouts(ctx, support_view, units);
+            if (self.job.outcome == .hashed) self.job.lookupMacho(provides);
+        }
+        const record_bytes: []align(16) const u8 = switch (self.job.outcome) {
+            .pending, .hashed => unreachable, // waiting joined the job, which always records an outcome, and a Mach-O lookup followed
             .unreadable_input => |path| {
                 reporter.fail();
                 std.log.err("Reading the platform link input {s} failed", .{path});
@@ -11218,10 +11280,10 @@ const FastDevLink = struct {
                     else => |file_err| ctx.fail(.{ .file_write_failed = .{ .path = self.output.dest, .err = file_err } }),
                 };
             },
-            .hit => |hit| host_prelink.View.init(hit.mapping) catch unreachable, // the job admitted the record it reports
+            .hit => |hit| hit.mapping,
             .miss => miss: {
                 const started = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
-                const record = fast_dev_link.prelink(ctx, &self.spec, self.job.key, self.job.manager, scratch_dir) catch |err| {
+                const record = fast_dev_link.prelink(ctx, &self.spec, self.job.key, self.job.manager, scratch_dir, provides) catch |err| {
                     reporter.fail();
                     return switch (err) {
                         error.OutOfMemory => error.OutOfMemory,
@@ -11233,8 +11295,11 @@ const FastDevLink = struct {
                     };
                 };
                 owned_record = record;
-                const view = host_prelink.View.init(record) catch base.invariant("roc build invariant violated: a host record this build made does not read", .{});
-                self.output.writeStart(view.host()) catch |err| {
+                const host_start: []const u8 = switch (self.spec.format) {
+                    .elf => (host_prelink.View.init(record) catch base.invariant("roc build invariant violated: a host record this build made does not read", .{})).host(),
+                    .macho => (macho_host_prelink.View.init(record) catch base.invariant("roc build invariant violated: a host record this build made does not read", .{})).segments(),
+                };
+                self.output.writeStart(host_start) catch |err| {
                     reporter.fail();
                     return switch (err) {
                         error.OutOfMemory => error.OutOfMemory,
@@ -11242,27 +11307,29 @@ const FastDevLink = struct {
                     };
                 };
                 prelink_ns = @intCast(@max(0, std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - started));
-                break :miss view;
+                break :miss record;
             },
         };
 
-        const units = try ctx.gpa.alloc(patch_link.ImageInput, library.images.len + 1);
-        defer ctx.gpa.free(units);
-        for (library.images, units[0..library.images.len]) |image, *unit| {
-            unit.* = .{ .view = backend.dev.UnitImage.View.init(image) catch base.invariant("roc build invariant violated: a unit image does not read", .{}) };
-        }
-        units[library.images.len] = .{ .view = backend.dev.UnitImage.View.init(root_image) catch base.invariant("roc build invariant violated: the root unit image does not read", .{}) };
-        const support_view = backend.dev.UnitImage.View.init(self.support) catch
-            unreachable; // `start` read this image
         var timing: patch_link.Timing = .{};
         var outcome: patch_link.Outcome = .{};
-        patch_link.link(ctx.gpa, ctx.arena, ctx.io.std_io, .{
-            .host = host_view,
-            .support = .{ .view = support_view },
-            .units = units,
-            .root = library.images.len,
-            .host_required = self.spec.host_required,
-        }, &self.output, build_env.postCheckExecutor(), &timing, &outcome) catch |err| {
+        const linked: patch_link.LinkError!void = switch (self.spec.format) {
+            .elf => patch_link.link(ctx.gpa, ctx.arena, ctx.io.std_io, .{
+                .host = host_prelink.View.init(record_bytes) catch unreachable, // the job or the prelink admitted the record
+                .support = .{ .view = support_view },
+                .units = units,
+                .root = library.images.len,
+                .host_required = self.spec.host_required,
+            }, &self.output, build_env.postCheckExecutor(), &timing, &outcome),
+            .macho => macho_patch_link.link(ctx.gpa, ctx.arena, ctx.io.std_io, .{
+                .host = macho_host_prelink.View.init(record_bytes) catch unreachable, // the job or the prelink admitted the record
+                .support = .{ .view = support_view },
+                .units = units,
+                .root = library.images.len,
+                .host_required = self.spec.host_required,
+            }, &self.output, build_env.postCheckExecutor(), &timing, &outcome),
+        };
+        linked catch |err| {
             reporter.fail();
             return switch (err) {
                 error.OutOfMemory => error.OutOfMemory,

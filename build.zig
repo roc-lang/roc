@@ -6251,10 +6251,12 @@ fn addMainExe(
                 cross_boxy_runtime_obj.getEmittedBin(),
                 b.pathJoin(&.{ "targets", cross_target.name, boxy_runtime_ext }),
             );
-            // A fast dev link of a Linux x86_64 executable places the
-            // builtins and the Boxy runtime as one unit image, converted
-            // here once (src/build/support_image.zig).
-            if (cross_target.query.os_tag == .linux and cross_target.query.cpu_arch == .x86_64) {
+            // A fast dev link of a Linux x86_64 or macOS arm64 executable
+            // places the builtins and the Boxy runtime as one unit image,
+            // converted here once (src/build/support_image.zig).
+            const fast_dev_link_target = (cross_target.query.os_tag == .linux and cross_target.query.cpu_arch == .x86_64) or
+                (cross_target.query.os_tag == .macos and cross_target.query.cpu_arch == .aarch64);
+            if (fast_dev_link_target) {
                 const convert = b.addRunArtifact(support_image_tool);
                 const image = convert.addOutputFileArg("roc_support.rbxu");
                 convert.addFileArg(cross_builtins_extern_obj.getEmittedBin());

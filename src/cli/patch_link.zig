@@ -23,10 +23,11 @@ const base = @import("base");
 const backend = @import("backend");
 const host_prelink = @import("host_prelink.zig");
 const unit_walk = @import("unit_walk.zig");
+const fanout = @import("patch_fanout.zig");
+const link_output = @import("link_output.zig");
 
 const Allocator = std.mem.Allocator;
 const UnitImage = backend.dev.UnitImage;
-const linux = std.os.linux;
 const Executor = base.post_check_task_executor.Executor;
 
 const page_size: u64 = 4096;
@@ -352,12 +353,12 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         .reached_atoms = reached_atoms,
         .symbol_slots = symbol_slots,
     };
-    var copy_list: std.ArrayList(Copy) = .empty;
+    var copy_list: std.ArrayList(fanout.Copy) = .empty;
     defer copy_list.deinit(gpa);
-    var copies: std.ArrayList(Task) = .empty;
-    defer copies.deinit(gpa);
-    var patches: std.ArrayList(Task) = .empty;
-    defer patches.deinit(gpa);
+    var symbol_ranges: std.ArrayList(fanout.Range) = .empty;
+    defer symbol_ranges.deinit(gpa);
+    var site_ranges: std.ArrayList(fanout.Range) = .empty;
+    defer site_ranges.deinit(gpa);
     for (order.items) |index| {
         const view = images.items[index].view;
         const place = places[index];
@@ -373,33 +374,34 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
             const first = view.atomRange(atom).start;
             while (atom < atoms_reached.len and atoms_reached[atom]) atom += 1;
             const end = view.atomRange(atom - 1).end;
-            try addCopies(gpa, &copy_list, view.block()[first..end], context.fileOffsetOf(place.block) + first);
+            try fanout.addCopies(gpa, &copy_list, view.block()[first..end], context.fileOffsetOf(place.block) + first);
         }
-        if (view.data().len != 0) try addCopies(gpa, &copy_list, view.data(), context.fileOffsetOf(place.data));
+        if (view.data().len != 0) try fanout.addCopies(gpa, &copy_list, view.data(), context.fileOffsetOf(place.data));
         for ([_]UnitImage.Region{ .debug_abbrev, .debug_info, .debug_line }, 0..) |region, slot| {
-            try addCopies(gpa, &copy_list, view.regionBytes(region), debug_offsets[slot] + place.debug[slot]);
+            try fanout.addCopies(gpa, &copy_list, view.regionBytes(region), debug_offsets[slot] + place.debug[slot]);
         }
-        try addCopies(gpa, &copy_list, view.strings(), strtab_offset + place.strings);
-        try addRanges(gpa, &copies, &context, .symbols, index, view.symbols().len);
-        try addRanges(gpa, &patches, &context, .sites, index, view.sites().len);
+        try fanout.addCopies(gpa, &copy_list, view.strings(), strtab_offset + place.strings);
+        try fanout.addRanges(gpa, &symbol_ranges, index, view.symbols().len);
+        try fanout.addRanges(gpa, &site_ranges, index, view.sites().len);
     }
-    if (host_symtab) |symtab| try addCopies(gpa, &copy_list, hostBytes(host, symtab.offset + sym_size, symtab.size -| sym_size), symtab_offset + (1 + app_symbol_count) * sym_size);
+    if (host_symtab) |symtab| try fanout.addCopies(gpa, &copy_list, hostBytes(host, symtab.offset + sym_size, symtab.size -| sym_size), symtab_offset + (1 + app_symbol_count) * sym_size);
     for (debug_host_index, 0..) |host_index, slot| {
-        if (host_index != 0) try addCopies(gpa, &copy_list, hostBytes(host, host.section(host_index).offset, host.section(host_index).size), debug_offsets[slot]);
+        if (host_index != 0) try fanout.addCopies(gpa, &copy_list, hostBytes(host, host.section(host_index).offset, host.section(host_index).size), debug_offsets[slot]);
     }
     // Copies in tasks of about `copy_chunk` bytes each, however many
-    // pieces that takes.
-    var batch_first: usize = 0;
-    var batch_bytes: usize = 0;
-    for (copy_list.items, 0..) |copy, at| {
-        batch_bytes += copy.from.len;
-        if (batch_bytes < copy_chunk and at + 1 < copy_list.items.len) continue;
-        try copies.append(gpa, .{ .context = &context, .work = .{ .copies = copy_list.items[batch_first .. at + 1] } });
-        batch_first = at + 1;
-        batch_bytes = 0;
-    }
-    try runTasks(gpa, executor, copies.items);
-    try runTasks(gpa, executor, patches.items);
+    // pieces that takes, with the symbol entries; then every patch site,
+    // which writes into bytes the first wave copied.
+    const copy_batches = try fanout.batches(gpa, copy_list.items);
+    defer gpa.free(copy_batches);
+    var copies: std.ArrayList(Task) = .empty;
+    defer copies.deinit(gpa);
+    for (copy_batches) |batch| try copies.append(gpa, .{ .context = &context, .work = .{ .copies = batch } });
+    for (symbol_ranges.items) |range| try copies.append(gpa, .{ .context = &context, .work = .{ .symbols = range } });
+    var patches: std.ArrayList(Task) = .empty;
+    defer patches.deinit(gpa);
+    for (site_ranges.items) |range| try patches.append(gpa, .{ .context = &context, .work = .{ .sites = range } });
+    try fanout.runTasks(gpa, executor, Task, copies.items);
+    try fanout.runTasks(gpa, executor, Task, patches.items);
     for (copies.items) |task| timing.bytes_written += task.bytes;
     for (patches.items) |task| timing.sites_patched += task.sites;
     timing.fan_out_ns = elapsed(std_io, fan_out_started);
@@ -524,54 +526,22 @@ const Context = struct {
     }
 };
 
-/// The most bytes one copy task moves.
-const copy_chunk: usize = 256 * 1024;
-/// The most sites or symbols one task handles.
-const entry_chunk: u32 = 8192;
-
-/// One run of bytes to copy into the output.
-const Copy = struct { from: []const u8, to: u64 };
-
-/// Add the copy of `from` to output offset `to`, in pieces of at most
-/// `copy_chunk` bytes.
-fn addCopies(gpa: Allocator, list: *std.ArrayList(Copy), from: []const u8, to: u64) Allocator.Error!void {
-    var at: usize = 0;
-    while (at < from.len) : (at += copy_chunk) {
-        const len = @min(copy_chunk, from.len - at);
-        try list.append(gpa, .{ .from = from[at..][0..len], .to = to + at });
-    }
-}
-
-fn addRanges(gpa: Allocator, tasks: *std.ArrayList(Task), context: *const Context, comptime kind: enum { symbols, sites }, image: u32, count: usize) Allocator.Error!void {
-    var first: u32 = 0;
-    while (first < count) : (first += entry_chunk) {
-        const range: Range = .{ .image = image, .first = first, .count = @min(entry_chunk, @as(u32, @intCast(count)) - first) };
-        try tasks.append(gpa, .{ .context = context, .work = switch (kind) {
-            .symbols => .{ .symbols = range },
-            .sites => .{ .sites = range },
-        } });
-    }
-}
-
-const Range = struct { image: u32, first: u32, count: u32 };
+const Range = fanout.Range;
 
 const Task = struct {
     context: *const Context,
     work: union(enum) {
-        copies: []const Copy,
+        copies: []const fanout.Copy,
         symbols: Range,
         sites: Range,
     },
     sites: u64 = 0,
     bytes: u64 = 0,
 
-    fn run(opaque_task: *anyopaque, _: base.post_check_task_executor.Worker) ?*anyopaque {
+    pub fn run(opaque_task: *anyopaque, _: base.post_check_task_executor.Worker) ?*anyopaque {
         const self: *Task = @ptrCast(@alignCast(opaque_task));
         switch (self.work) {
-            .copies => |list| for (list) |copy| {
-                @memcpy(self.context.out[@intCast(copy.to)..][0..copy.from.len], copy.from);
-                self.bytes += copy.from.len;
-            },
+            .copies => |list| self.bytes += fanout.runCopies(self.context.out, list),
             .symbols => |range| self.writeSymbols(range),
             .sites => |range| self.applySites(range),
         }
@@ -637,19 +607,6 @@ const Task = struct {
     }
 };
 
-fn runTasks(gpa: Allocator, executor: ?Executor, tasks: []Task) Allocator.Error!void {
-    const pool = executor orelse {
-        for (tasks) |*task| _ = Task.run(task, .{ .id = 0, .allocator = gpa, .scratch = gpa, .lane_state = undefined });
-        return;
-    };
-    const work = try gpa.alloc(base.post_check_task_executor.Task, tasks.len);
-    defer gpa.free(work);
-    for (tasks, work, 0..) |*task, *item, index| item.* = .{ .id = index, .context = task, .run = Task.run };
-    const completions = try gpa.alloc(base.post_check_task_executor.Completion, tasks.len);
-    defer gpa.free(completions);
-    try pool.run(work, completions);
-}
-
 fn writeLoad(entry: *[56]u8, offset: u64, vaddr: u64, filesz: u64, memsz: u64, flags: u32) void {
     std.mem.writeInt(u32, entry[0..4], PT_LOAD, .little);
     std.mem.writeInt(u32, entry[4..8], flags, .little);
@@ -680,133 +637,4 @@ fn elapsed(std_io: std.Io, started: i96) u64 {
     return @intCast(@max(0, now(std_io) - started));
 }
 
-/// The output executable, created before the build's compile work as an
-/// anonymous file in the destination directory and given its name only when
-/// it is complete (plan "Output file lifecycle"). On a filesystem without
-/// anonymous files, a named temporary file beside the destination takes its
-/// place; the bytes written are the same.
-pub const OutputFile = struct {
-    fd: linux.fd_t,
-    /// The destination path, NUL-terminated.
-    dest: [:0]const u8,
-    /// The temporary name the file is linked under before the rename.
-    temp: [:0]const u8,
-    /// Whether the file already has `temp` as its name.
-    named: bool,
-    size: u64 = 0,
-
-    pub const Error = Allocator.Error || error{ AccessDenied, NoSpaceLeft, FileNotFound, Unexpected };
-
-    fn failure(errno: linux.E) Error {
-        if (errno == .ACCES or errno == .PERM or errno == .ROFS) return error.AccessDenied;
-        if (errno == .NOSPC or errno == .DQUOT) return error.NoSpaceLeft;
-        if (errno == .NOENT or errno == .NOTDIR) return error.FileNotFound;
-        return error.Unexpected;
-    }
-
-    /// Create the output for `dest_path`. Fails when the destination
-    /// directory cannot hold it.
-    pub fn create(arena: Allocator, dest_path: []const u8) Error!OutputFile {
-        const dir = std.fs.path.dirname(dest_path) orelse ".";
-        const dir_z = try arena.dupeSentinel(u8, dir, 0);
-        const dest = try arena.dupeSentinel(u8, dest_path, 0);
-        const temp = try std.fmt.allocPrintSentinel(arena, "{s}{s}.{s}.{d}.roc-link", .{ if (std.fs.path.dirname(dest_path) == null) "" else dir, if (std.fs.path.dirname(dest_path) == null) "" else "/", std.fs.path.basename(dest_path), linux.getpid() }, 0);
-        const anonymous = linux.openat(linux.AT.FDCWD, dir_z, .{ .ACCMODE = .RDWR, .TMPFILE = true, .DIRECTORY = true, .CLOEXEC = true }, 0o777);
-        const anonymous_errno = linux.errno(anonymous);
-        if (anonymous_errno == .SUCCESS) return .{ .fd = @intCast(anonymous), .dest = dest, .temp = temp, .named = false };
-        // Without anonymous files on this filesystem, a named file stands in.
-        if (anonymous_errno != .OPNOTSUPP and anonymous_errno != .ISDIR) return failure(anonymous_errno);
-        const named = linux.openat(linux.AT.FDCWD, temp, .{ .ACCMODE = .RDWR, .CREAT = true, .TRUNC = true, .CLOEXEC = true }, 0o777);
-        if (linux.errno(named) != .SUCCESS) return failure(linux.errno(named));
-        return .{ .fd = @intCast(named), .dest = dest, .temp = temp, .named = true };
-    }
-
-    /// Copy `bytes`, which are `source`'s contents at `offset`, to the start
-    /// of the output. Within one filesystem the kernel copies the file
-    /// range itself (a reflink where the filesystem shares blocks); across
-    /// filesystems, or on one without the operation, the bytes are written
-    /// from `bytes`. The output holds the same bytes either way.
-    pub fn copyFrom(self: *OutputFile, source: linux.fd_t, offset: u64, bytes: []const u8) Error!void {
-        var in_offset: i64 = @intCast(offset);
-        var out_offset: i64 = 0;
-        var remaining = bytes.len;
-        while (remaining != 0) {
-            const rc = linux.copy_file_range(source, &in_offset, self.fd, &out_offset, @min(remaining, 1 << 30), 0);
-            const errno = linux.errno(rc);
-            if (errno == .INTR) continue;
-            if (errno == .XDEV or errno == .OPNOTSUPP or errno == .INVAL) {
-                const done: usize = @intCast(out_offset);
-                return self.writeAt(bytes[done..], done);
-            }
-            if (errno != .SUCCESS) return failure(errno);
-            if (rc == 0) return error.Unexpected;
-            remaining -= rc;
-        }
-        self.size = @max(self.size, bytes.len);
-    }
-
-    /// Write `bytes` at the start of the output.
-    pub fn writeStart(self: *OutputFile, bytes: []const u8) Error!void {
-        return self.writeAt(bytes, 0);
-    }
-
-    fn writeAt(self: *OutputFile, bytes: []const u8, at: usize) Error!void {
-        var written: usize = 0;
-        while (written < bytes.len) {
-            const rc = linux.pwrite(self.fd, bytes.ptr + written, bytes.len - written, @intCast(at + written));
-            const errno = linux.errno(rc);
-            if (errno == .INTR) continue;
-            if (errno != .SUCCESS) return failure(errno);
-            written += rc;
-        }
-        self.size = @max(self.size, at + bytes.len);
-    }
-
-    fn resize(self: *OutputFile, size: u64) Error!void {
-        const rc = linux.ftruncate(self.fd, @intCast(size));
-        if (linux.errno(rc) != .SUCCESS) return failure(linux.errno(rc));
-        self.size = size;
-    }
-
-    fn map(self: *OutputFile, size: u64) Error![]u8 {
-        const rc = linux.mmap(null, @intCast(size), .{ .READ = true, .WRITE = true }, .{ .TYPE = .SHARED }, self.fd, 0);
-        if (linux.errno(rc) != .SUCCESS) return failure(linux.errno(rc));
-        const start: [*]u8 = @ptrFromInt(rc);
-        return start[0..@intCast(size)];
-    }
-
-    fn unmap(_: *OutputFile, bytes: []u8) void {
-        _ = linux.munmap(bytes.ptr, bytes.len);
-    }
-
-    /// Give the complete output its destination name.
-    pub fn publish(self: *OutputFile, arena: Allocator) Error!void {
-        if (!self.named) {
-            const proc_path = try std.fmt.allocPrintSentinel(arena, "/proc/self/fd/{d}", .{self.fd}, 0);
-            while (true) {
-                const rc = linux.linkat(linux.AT.FDCWD, proc_path, linux.AT.FDCWD, self.temp, linux.AT.SYMLINK_FOLLOW);
-                const errno = linux.errno(rc);
-                if (errno == .SUCCESS) break;
-                if (errno == .INTR) continue;
-                if (errno != .EXIST) return failure(errno);
-                // A temporary name a killed build left behind.
-                const unlinked = linux.unlinkat(linux.AT.FDCWD, self.temp, 0);
-                if (linux.errno(unlinked) != .SUCCESS) return failure(linux.errno(unlinked));
-            }
-            self.named = true;
-        }
-        const renamed = linux.renameat(linux.AT.FDCWD, self.temp, linux.AT.FDCWD, self.dest);
-        if (linux.errno(renamed) != .SUCCESS) return failure(linux.errno(renamed));
-        self.named = false;
-        _ = linux.close(self.fd);
-        self.fd = -1;
-    }
-
-    /// Release an output that will not be published.
-    pub fn discard(self: *OutputFile) void {
-        if (self.fd < 0) return;
-        _ = linux.close(self.fd);
-        self.fd = -1;
-        if (self.named) _ = linux.unlinkat(linux.AT.FDCWD, self.temp, 0);
-    }
-};
+pub const OutputFile = link_output.OutputFile;

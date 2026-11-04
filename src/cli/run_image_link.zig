@@ -215,6 +215,7 @@ pub fn plan(gpa: Allocator, std_io: std.Io, inputs: Inputs) PlanError!Plan {
                 switch (kind) {
                     .abs64, .pc32 => host_counts[symbol] += 1,
                     .abs32, .abs32s => base.invariant("run image invariant violated: a unit image holds a 32-bit absolute host address", .{}),
+                    .branch26, .page21, .pageoff12 => base.invariant("run image invariant violated: an x86_64 unit image holds an arm64 site", .{}),
                 }
                 continue;
             }
@@ -222,6 +223,7 @@ pub fn plan(gpa: Allocator, std_io: std.Io, inputs: Inputs) PlanError!Plan {
                 .abs64 => rebase_count += 1,
                 .pc32 => {},
                 .abs32, .abs32s => base.invariant("run image invariant violated: a unit image holds a 32-bit absolute address, which the image's mapping cannot reach", .{}),
+                .branch26, .page21, .pageoff12 => base.invariant("run image invariant violated: an x86_64 unit image holds an arm64 site", .{}),
             }
         }
     }
@@ -373,7 +375,7 @@ pub fn write(self: *const Plan, std_io: std.Io, inputs: Inputs, composed: RunIma
                         .kind = @backingInt(switch (kind) {
                             .pc32 => RunImage.HostSiteKind.pc32,
                             .abs64 => RunImage.HostSiteKind.abs64,
-                            .abs32, .abs32s => unreachable, // `plan` rejected 32-bit absolute host sites
+                            .abs32, .abs32s, .branch26, .page21, .pageoff12 => unreachable, // `plan` rejected every other host site kind
                         }),
                     };
                     site_cursors[slot] += 1;
@@ -392,7 +394,7 @@ pub fn write(self: *const Plan, std_io: std.Io, inputs: Inputs, composed: RunIma
                     composed.rebases[rebase_cursor] = .{ .offset = site_offset, .value = @bitCast(value) };
                     rebase_cursor += 1;
                 },
-                .abs32, .abs32s => unreachable, // `plan` rejected 32-bit absolute sites
+                .abs32, .abs32s, .branch26, .page21, .pageoff12 => unreachable, // `plan` rejected every other site kind
             }
         }
     }

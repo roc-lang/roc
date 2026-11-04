@@ -25,6 +25,7 @@
 //! of a path (`key`).
 const std = @import("std");
 const build_options = @import("build_options");
+const MachoHostPrelink = @import("macho/HostPrelink.zig");
 const Allocator = std.mem.Allocator;
 
 /// The address the app region starts at. The host must end below it, and
@@ -134,11 +135,17 @@ pub fn linkObject(allocator: Allocator, provides: []const []const u8) Allocator.
 
 /// Everything a pre-linked host is a function of, as content.
 pub const KeyInput = struct {
+    /// The record format the host is filed in (`format_version` here, or
+    /// the Mach-O record's).
+    record_version: u32,
     target: []const u8,
     /// The link ABI the host links with (`linker.TargetAbi`).
     link_abi: []const u8,
     /// Sorted, distinct.
     provides: []const []const u8,
+    /// For a Mach-O host, each provide's kind and layout size, in the
+    /// provides' order; empty for an ELF host, whose windows are fixed.
+    provide_layouts: []const MachoHostPrelink.Provide = &.{},
     /// The symbols kept for the app region; sorted, distinct.
     keep: []const []const u8,
     /// The platform's link items as its header names them, relative to its
@@ -156,7 +163,7 @@ pub fn key(input: KeyInput) [32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update("roc-prelinked-host-v1");
     hasher.update(&build_options.compiler_compatibility_hash);
-    hashU64(&hasher, format_version);
+    hashU64(&hasher, input.record_version);
     hashU64(&hasher, app_base);
     hashU64(&hasher, provide_window);
     hashU64(&hasher, phdr_capacity);
@@ -164,6 +171,11 @@ pub fn key(input: KeyInput) [32]u8 {
     hashBytes(&hasher, input.target);
     hashBytes(&hasher, input.link_abi);
     hashList(&hasher, input.provides);
+    hashU64(&hasher, input.provide_layouts.len);
+    for (input.provide_layouts) |layout| {
+        hasher.update(&.{@intFromEnum(layout.kind)});
+        hashU64(&hasher, layout.size);
+    }
     hashList(&hasher, input.keep);
     hashList(&hasher, input.link_items);
     if (input.bundle_hash) |bundle| {
@@ -645,7 +657,7 @@ test "the host link object defines each provide at its window" {
 }
 
 test "a host key is a function of contents, not of where they are" {
-    const input: KeyInput = .{ .target = "x64musl", .link_abi = "musl", .provides = &.{"roc_main"}, .keep = &.{"roc_alloc"}, .link_items = &.{ "crt1.o", "libhost.a" }, .bundle_hash = null, .input_digests = &.{ @splat(1), @splat(2) } };
+    const input: KeyInput = .{ .record_version = format_version, .target = "x64musl", .link_abi = "musl", .provides = &.{"roc_main"}, .keep = &.{"roc_alloc"}, .link_items = &.{ "crt1.o", "libhost.a" }, .bundle_hash = null, .input_digests = &.{ @splat(1), @splat(2) } };
     const baseline = key(input);
     try std.testing.expectEqual(baseline, key(input));
     var changed = input;
@@ -654,4 +666,7 @@ test "a host key is a function of contents, not of where they are" {
     var bundled = input;
     bundled.bundle_hash = "abc";
     try std.testing.expect(!std.mem.eql(u8, &baseline, &key(bundled)));
+    var sized = input;
+    sized.provide_layouts = &.{.{ .name = "roc_main", .kind = .procedure, .size = 0 }};
+    try std.testing.expect(!std.mem.eql(u8, &baseline, &key(sized)));
 }

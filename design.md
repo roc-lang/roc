@@ -14532,8 +14532,8 @@ worker a session has a task queued, and the session's owner takes completions
 it already has without waiting while checking continues. A platform module with
 requirements has no object of its own, so a module importing one runs as the
 whole program. How an object is loaded depends only on the compiler's host,
-never on what a load finds: a Linux x86_64 host, whose units carry unit
-images (Fast Dev Link), registers available images in imports-first order and
+never on what a load finds: a Linux x86_64 or macOS arm64 host, whose units
+carry unit images (Fast Dev Link), registers available images in imports-first order and
 loads only the whole images required by an evaluator's emitted relocations,
 including carried data and frozen callable pointers, and their transitive image
 imports. These are explicit producer records, not a reconstruction from LIR
@@ -14543,8 +14543,8 @@ code and data, binds its imports once (the compiler's own functions, then the
 registered image providers, then the hosted-call trap), and fills its patch sites;
 every other host composes the unit's pieces into a relocatable object and
 loads that. Either way an object holds every procedure of its unit. A
-Linux x86_64 compilation therefore decodes a unit's pieces only for a link
-that composes them. Each object is filed with its `CodeLocations`: its line table,
+compilation on a host that loads images therefore decodes a unit's pieces
+only for a link that composes them. Each object is filed with its `CodeLocations`: its line table,
 failure sites and source files (Compile-Time Failure Sites), beside its
 unit image where it has one. A failure in an
 object's code is therefore found and reported exactly as one in a whole
@@ -24650,13 +24650,14 @@ qualified source names.
 ## Fast Dev Link
 
 A `roc build --opt=dev --specialize=no` of a Linux x86_64 executable, by a
-compiler running on Linux with a cache, links its executable without composing a program object and without
-LLD. The per-build work after the edited module's code exists is a function
-of that module and of the output's size, never of the program's module count
-or the host's size. Every other target, output kind and `--no-cache` composes
-a program object and links it with LLD; the choice is a switch on target,
-output kind and cache presence (`fastDevLinkApplies`), never a reaction to a
-failure.
+compiler running on Linux with a cache, or of a macOS arm64 executable, by a
+compiler running on macOS with a cache, links its executable without
+composing a program object and without LLD. The per-build work after the
+edited module's code exists is a function of that module and of the output's
+size, never of the program's module count or the host's size. Every other
+target, output kind and `--no-cache` composes a program object and links it
+with LLD; the choice is a switch on target, host, output kind and cache
+presence (`fastDevLinkApplies`), never a reaction to a failure.
 
 **Unit images.** A `.boxy` unit's cache entry (`boxy_object_cache`) carries,
 beside its pieces, a unit image (`backend.dev.UnitImage`): the unit's text
@@ -24665,13 +24666,22 @@ size, its symbols, its patch sites, its DWARF fragments and its content
 digest. Every reference the unit's own placement decides is resolved when the
 image is built; what remains is a patch site: an import of another image or
 of the host, or a reference whose distance depends on where the linker places
-the image's regions. The image is a pure function of the unit (Per-Module
-Output), so two builds of a unit write identical images. The block divides
-into atoms, one per symbol start, each recording what it references; a link
-writes only the atoms the program reaches and leaves the rest as zero holes.
-The compiler's builtins and Boxy runtime objects are converted once, in Roc's
-own build graph, into a support image of the same format and embedded. A
-library unit's cache entry files the image's `CodeLocations` beside it, so
+the image's regions. A site's kind is the field's encoding, x86_64's
+(`abs64`, `pc32`, `abs32`, `abs32s`) or arm64's (`abs64`, `branch26`,
+`page21`, `pageoff12`), and the block is placed page aligned, so an arm64
+page-relative reference inside the block resolves at build time like an
+x86_64 displacement. The image is built from the unit's relocatable object
+in the target's format, ELF or Mach-O, and names its symbols by their C
+names (a Mach-O name without its underscore), so images, hosted symbols and
+provides read the same on every target. A load through the global offset
+table reads a slot the image keeps in its writable data, one per referenced
+symbol. The image is a pure function of the unit (Per-Module Output), so two
+builds of a unit write identical images. The block divides into atoms, one
+per symbol start, each recording what it references; a link writes only the
+atoms the program reaches and leaves the rest as zero holes. The compiler's
+builtins and Boxy runtime objects are converted once, in Roc's own build
+graph, into a support image of the same format and embedded. A library
+unit's cache entry files the image's `CodeLocations` beside it, so
 compile-time evaluation loads the image itself into the compiler's process
 and reports failures in it without composing anything (Compile-Time
 Evaluation Strategy). The table stays out of the image so the link's placement and build id are a
@@ -24682,22 +24692,36 @@ identities to the current compilation's source environments before reporting.
 
 **Pre-linked host.** A platform's host is linked once with the existing LLD
 flags from the platform's link inputs plus one generated object, and filed as
-one cache entry per host (`host_prelink`, family `prelinked_host`). The
-generated object defines every `provides` symbol as an absolute address in a
-fixed window of the app region, so the host's references to the app resolve
-at prelink time to bytes each build fills in: a jump to the entry wrapper for
-a procedure, the value's bytes for a data symbol. A provided value larger than
-its window is a reported build error. The object also reserves room in the
-host's first segment for a program header table with spare entries, which
-the post-processing fills. The host link keeps (`-u`) exactly the symbols the
-app region may import: the platform's hosted symbols, the fixed runtime set
-and the support image's imports. The host's key is a function of contents
-only (compiler compatibility, target, link ABI, the provides and kept symbol
-lists, the link item names, and the bundle hash or per-file content digests
-of the inputs); it never contains a path, so checkouts at different paths
-share the entry. Reserved room in the host holds only what the platform or
-target fixes the count of; anything whose size depends on the app is
-appended after the host.
+one cache entry per host (`host_prelink`, `macho/HostPrelink`, family
+`prelinked_host`). The generated object defines every `provides` symbol as a
+window the host's references resolve to at prelink time, which each build
+fills in: a jump to the entry wrapper for a procedure, the value's bytes for
+a data symbol. On Linux the windows are absolute addresses at a fixed place
+in the app region, and a provided value larger than its window is a reported
+build error. On macOS the windows are sections of the host itself, a
+procedure's 16 bytes in `__TEXT` for a long jump and a value's layout size in
+`__DATA`, where the pointers in the copied value can be rebased; which
+provides are procedures and how large the values are is part of the host's
+key, read from the program's images, so the Mach-O host's lookup waits for
+them and nothing is ever too large. The object also reserves what the patch
+link appends: on Linux room in the host's first segment for a program header
+table with spare entries, on macOS a header pad for the app's segment load
+commands. The host link keeps exactly the symbols the app region may import:
+the platform's hosted symbols, the fixed runtime set and the support image's
+imports. On Linux it keeps them with `-u`; on macOS the generated object
+branches to each of them from a trampoline, which keeps it in the link and
+gives a symbol a dylib defines an in-image address, with every kept symbol
+left to dynamic lookup (`-U`) so a host lacking one still links and the side
+table lists it as absent. The host's key is a function of contents only
+(compiler compatibility, record format, target, link ABI, the provides and
+kept symbol lists, the provides' layouts, the link item names, and the
+bundle hash or per-file content digests of the inputs); it never contains a
+path, so checkouts at different paths share the entry. Reserved room in the
+host holds only what the platform or target fixes the count of; anything
+whose size depends on the app is appended after the host. A Mach-O host is
+linked with classic dyld info (`-no_fixup_chains`), whose rebase and bind
+opcode streams the patch link extends, and its record puts the host first,
+so an output on the same APFS volume as the cache begins as a clone of it.
 
 **Sealed boundary.** Compiler-owned code (generated procedures, builtins,
 Boxy runtime, helpers) is part of the app region and local in the output;
@@ -24721,6 +24745,24 @@ every region an image owns is disjoint from every other image's, so the
 workers never write the same bytes. Output bytes are a function of the host's
 content, the images' content and nothing else: not of cache state, worker
 count, checkout path or the compiler's build mode.
+
+A Mach-O link places the app's code in a read-execute `__ROC_TEXT` segment
+and its data in a read-write `__ROC_DATA` segment after the host's mapped
+segments, then a `__DWARF` segment the loader never maps, then a rebuilt
+`__LINKEDIT`: the host's dyld opcodes with a rebase for every absolute word
+the app holds and a bind for every one that holds a dylib symbol's address,
+the host's other tables as they were, the app's symbols inserted among the
+host's locals with the indirect symbol table moved past them, and an ad hoc
+signature last. The signature hashes every page of the file, taking the
+host's pages from hashes the record filed with it and hashing only the load
+commands, the windows, the app and `__LINKEDIT`. An absolute word in code
+cannot be rebased, so the image builder admits none in the block; the dev
+backend's Mach-O writer keeps its pointer-bearing read-only data in
+`__DATA`. The executable is position independent, so every placement is an
+unslid address and every reference across the host boundary is
+page-relative or rebased; the app region must lie within 4 GiB of the
+host's text, LLD's own limit for arm64 code, and a program beyond it is the
+reported dev-program-too-large error.
 
 ## Watch Mode For Check And Test
 

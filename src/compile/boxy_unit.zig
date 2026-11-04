@@ -54,7 +54,11 @@ pub const Unit = struct {
 /// a fast dev link serves. Every entry for such a target holds one,
 /// whichever command wrote it.
 pub fn producesImage(target: roc_target.RocTarget) bool {
-    return target.toOsTag() == .linux and target.toCpuArch() == .x86_64;
+    return switch (target.toOsTag()) {
+        .linux => target.toCpuArch() == .x86_64,
+        .macos => target.toCpuArch() == .aarch64,
+        else => false,
+    };
 }
 
 /// A unit image's bytes, its code locations, and what keeps them alive.
