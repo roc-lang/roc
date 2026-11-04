@@ -249,6 +249,27 @@ const max_wrapper_inline_stmts: usize = 32;
 const max_leaf_inline_stmts: usize = 400;
 
 /// Lowers statement-only LIR procedures to LLVM bitcode.
+/// One crash block a function shares among the checked operations that fail
+/// with one message. A framed block reads each site's source frames from
+/// phis whose operands accumulate as sites branch to it.
+const SharedCrash = struct {
+    wip: *const LlvmBuilder.WipFunction,
+    msg: []const u8,
+    framed: bool,
+    block: LlvmBuilder.Function.Block.Index,
+    frames_ptr_phi: ?LlvmBuilder.WipFunction.WipPhi = null,
+    frames_len_phi: ?LlvmBuilder.WipFunction.WipPhi = null,
+    frames_ptrs: std.ArrayListUnmanaged(LlvmBuilder.Value) = .empty,
+    frames_lens: std.ArrayListUnmanaged(LlvmBuilder.Value) = .empty,
+    from_blocks: std.ArrayListUnmanaged(LlvmBuilder.Function.Block.Index) = .empty,
+
+    fn deinit(self: *SharedCrash, allocator: std.mem.Allocator) void {
+        self.frames_ptrs.deinit(allocator);
+        self.frames_lens.deinit(allocator);
+        self.from_blocks.deinit(allocator);
+    }
+};
+
 pub const MonoLlvmCodeGen = struct {
     pub const Entrypoint = struct {
         symbol_name: []const u8,
@@ -450,6 +471,9 @@ pub const MonoLlvmCodeGen = struct {
     /// materializing one changes the map.
     deferred_str_capture_scratch: std.ArrayList(LocalId) = .empty,
     string_counter: u32 = 0,
+    /// The crash block each function under construction shares among its
+    /// checked operations that fail with one message (`emitCrashIf`).
+    shared_crashes: std.ArrayListUnmanaged(SharedCrash) = .empty,
     /// When true the module is built with DWARF debug info: a compile unit,
     /// one subprogram per proc, and per-statement line locations from the
     /// LIR store's source-location tables.
@@ -687,6 +711,8 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Releases backend-owned scratch maps.
     pub fn deinit(self: *MonoLlvmCodeGen) void {
+        for (self.shared_crashes.items) |*shared| shared.deinit(self.allocator);
+        self.shared_crashes.deinit(self.allocator);
         self.inline_everywhere.deinit(self.allocator);
         self.stack_check_procs.deinit(self.allocator);
         self.local_slot_storage.deinit(self.allocator);
@@ -8786,14 +8812,70 @@ pub const MonoLlvmCodeGen = struct {
         }, "") catch return error.OutOfMemory;
     }
 
+    /// Crash with `msg` when `condition` holds. Every checked operation of a
+    /// function that fails with one message branches to one shared crash
+    /// block; a site's source frames reach it as phi operands. A crash block
+    /// per operation would give each its own call site, and LLVM's live-range
+    /// analysis is quadratic in such a chain of blocks.
     fn emitCrashIf(self: *MonoLlvmCodeGen, condition: LlvmBuilder.Value, msg: []const u8) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
+        const frames = try self.defaultPlatformCrashFrames();
+        const shared_index = try self.sharedCrash(msg, frames != null);
         const ok_block = wip.block(0, "checked_ok") catch return error.OutOfMemory;
-        const crash_block = wip.block(0, "checked_crash") catch return error.OutOfMemory;
-        _ = wip.brCond(condition, crash_block, ok_block, .else_likely) catch return error.OutOfMemory;
-        wip.cursor = .{ .block = crash_block };
-        try self.emitCrashBytes(msg);
+        const from_block = wip.cursor.block;
+        _ = wip.brCond(condition, self.shared_crashes.items[shared_index].block, ok_block, .else_likely) catch return error.OutOfMemory;
+        if (frames) |site_frames| {
+            const shared = &self.shared_crashes.items[shared_index];
+            try shared.frames_ptrs.append(self.allocator, site_frames.ptr);
+            try shared.frames_lens.append(self.allocator, site_frames.len);
+            try shared.from_blocks.append(self.allocator, from_block);
+        }
         wip.cursor = .{ .block = ok_block };
+    }
+
+    /// The index in `shared_crashes` of the current function's crash block for
+    /// `msg`, built on first use. A framed block reads its frames from phis
+    /// that `finishSharedCrashes` completes once every branch into it exists.
+    fn sharedCrash(self: *MonoLlvmCodeGen, msg: []const u8, framed: bool) Error!usize {
+        const builder, const wip = try self.builderAndWip();
+        for (self.shared_crashes.items, 0..) |shared, index| {
+            if (shared.wip == wip and shared.framed == framed and std.mem.eql(u8, shared.msg, msg)) return index;
+        }
+        const saved_cursor = wip.cursor;
+        defer wip.cursor = saved_cursor;
+        const block = wip.block(0, "checked_crash") catch return error.OutOfMemory;
+        wip.cursor = .{ .block = block };
+        var entry: SharedCrash = .{ .wip = wip, .msg = msg, .framed = framed, .block = block };
+        const msg_bytes = try self.staticBytes(msg);
+        const msg_len = builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory;
+        if (framed) {
+            entry.frames_ptr_phi = wip.openPhi(try self.ptrType(), "") catch return error.OutOfMemory;
+            entry.frames_len_phi = wip.openPhi(self.ptrSizedIntType(), "") catch return error.OutOfMemory;
+            try self.emitDefaultPlatformCrashCall(msg_bytes, msg_len, entry.frames_ptr_phi.?.toValue(), entry.frames_len_phi.?.toValue());
+        } else {
+            try self.emitStaticRocOpsMessageCall(.crashed, msg);
+        }
+        try self.emitCrashTerminator();
+        try self.shared_crashes.append(self.allocator, entry);
+        return self.shared_crashes.items.len - 1;
+    }
+
+    /// Complete the frames phis of the current function's shared crash
+    /// blocks and forget them.
+    fn finishSharedCrashes(self: *MonoLlvmCodeGen) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        var index: usize = 0;
+        while (index < self.shared_crashes.items.len) {
+            var shared = &self.shared_crashes.items[index];
+            if (shared.wip != wip) {
+                index += 1;
+                continue;
+            }
+            if (shared.frames_ptr_phi) |phi| phi.finishOpen(shared.frames_ptrs.items, shared.from_blocks.items, wip) catch return error.OutOfMemory;
+            if (shared.frames_len_phi) |phi| phi.finishOpen(shared.frames_lens.items, shared.from_blocks.items, wip) catch return error.OutOfMemory;
+            shared.deinit(self.allocator);
+            _ = self.shared_crashes.swapRemove(index);
+        }
     }
 
     /// End the block after a call that hands a crash to the host. The host
@@ -8858,12 +8940,42 @@ pub const MonoLlvmCodeGen = struct {
         msg_bytes: LlvmBuilder.Value,
         msg_len: LlvmBuilder.Value,
     ) Error!bool {
-        if (!self.enable_default_platform_diagnostics) return false;
-        const stmt_id = self.current_source_stmt orelse return false;
-        var scope_id = self.store.stmtInlineScope(stmt_id);
-        if (scope_id == lir.LIR.InlineScopeId.none) return false;
+        const frames = try self.defaultPlatformCrashFrames() orelse return false;
+        try self.emitDefaultPlatformCrashCall(msg_bytes, msg_len, frames.ptr, frames.len);
+        return true;
+    }
 
+    /// Hand a crash and its source frames to the default platform.
+    fn emitDefaultPlatformCrashCall(
+        self: *MonoLlvmCodeGen,
+        msg_bytes: LlvmBuilder.Value,
+        msg_len: LlvmBuilder.Value,
+        frames_ptr: LlvmBuilder.Value,
+        frames_len: LlvmBuilder.Value,
+    ) Error!void {
         const builder, const wip = try self.builderAndWip();
+        const ptr_ty = try self.ptrType();
+        const usize_ty = self.ptrSizedIntType();
+        const fn_ty = builder.fnType(.void, &.{ ptr_ty, usize_ty, ptr_ty, usize_ty }, .normal) catch return error.OutOfMemory;
+        const callback = try self.declareExternSymbol(shim_symbols.roc_default_crashed_with_frames, fn_ty);
+        _ = wip.call(.normal, .ccc, .none, fn_ty, callback.toValue(builder), &.{
+            msg_bytes,
+            msg_len,
+            frames_ptr,
+            frames_len,
+        }, "") catch return error.OutOfMemory;
+    }
+
+    /// The source frames the default platform reports for a crash at the
+    /// current statement: a constant global and its length, or null when the
+    /// statement carries no inline scope or diagnostics are off.
+    fn defaultPlatformCrashFrames(self: *MonoLlvmCodeGen) Error!?struct { ptr: LlvmBuilder.Value, len: LlvmBuilder.Value } {
+        if (!self.enable_default_platform_diagnostics) return null;
+        const stmt_id = self.current_source_stmt orelse return null;
+        var scope_id = self.store.stmtInlineScope(stmt_id);
+        if (scope_id == lir.LIR.InlineScopeId.none) return null;
+
+        const builder = self.builder orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
         const usize_ty = self.ptrSizedIntType();
         const frame_ty = builder.structType(.normal, &.{ ptr_ty, usize_ty, ptr_ty, usize_ty, .i32, .i32 }) catch return error.OutOfMemory;
@@ -8886,15 +8998,10 @@ pub const MonoLlvmCodeGen = struct {
         frames_var.setMutability(.constant, builder);
         frames_var.setInitializer(builder.arrayConst(frames_ty, frames.items) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
 
-        const fn_ty = builder.fnType(.void, &.{ ptr_ty, usize_ty, ptr_ty, usize_ty }, .normal) catch return error.OutOfMemory;
-        const callback = try self.declareExternSymbol(shim_symbols.roc_default_crashed_with_frames, fn_ty);
-        _ = wip.call(.normal, .ccc, .none, fn_ty, callback.toValue(builder), &.{
-            msg_bytes,
-            msg_len,
-            frames_var.toValue(builder),
-            builder.intValue(usize_ty, frames.items.len) catch return error.OutOfMemory,
-        }, "") catch return error.OutOfMemory;
-        return true;
+        return .{
+            .ptr = frames_var.toValue(builder),
+            .len = builder.intValue(usize_ty, frames.items.len) catch return error.OutOfMemory,
+        };
     }
 
     fn defaultPlatformSourceFrameConst(
@@ -14509,6 +14616,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn finishCurrentWipFunction(self: *MonoLlvmCodeGen) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
+        try self.finishSharedCrashes();
 
         for (wip.blocks.items, 0..) |*block, block_idx| {
             if (block.instructions.items.len == 0 or !block.instructions.items[block.instructions.items.len - 1].isTerminatorWip(wip)) {
