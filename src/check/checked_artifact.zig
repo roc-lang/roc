@@ -5572,10 +5572,10 @@ pub const CheckedTypeStore = struct {
         self.scheme_by_root.deinit(allocator);
         self.projected_imports.deinit(allocator);
         if (self.synthesized_keys) |keys| keys.destroy();
-        if (!self.serialized) {
-            inline for (@typeInfo(BorrowedColumn).@"enum".field_names) |field_name| {
-                if (!self.borrowed_columns.contains(@field(BorrowedColumn, field_name))) @field(self, field_name).deinit(allocator);
-            }
+        // A borrowed column aliases a pairing's platform or a loaded store's
+        // backing buffer; only a column the store came to own is freed.
+        inline for (@typeInfo(BorrowedColumn).@"enum".field_names) |field_name| {
+            if (!self.borrowed_columns.contains(@field(BorrowedColumn, field_name))) @field(self, field_name).deinit(allocator);
         }
         self.* = .{};
     }
@@ -5613,7 +5613,16 @@ pub const CheckedTypeStore = struct {
 
         const Serde = artifact_serialize.SliceStoreSerde(CheckedTypeStore, @This());
         pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
+
+        /// A loaded store's columns alias the backing buffer, so every
+        /// column starts borrowed: the first synthesized type appended to a
+        /// column copies it into owned memory (`ownColumn`), exactly as a
+        /// pairing's columns do.
+        pub fn deserialize(self: *const Serialized, base_addr: usize) CheckedTypeStore {
+            var store = Serde.deserialize(self, base_addr);
+            store.borrowed_columns = std.EnumSet(BorrowedColumn).full;
+            return store;
+        }
     };
 
     /// Clone `source` with every formal replaced by its actual. Each cloned
@@ -30415,6 +30424,10 @@ pub const CheckedModuleArtifact = struct {
             } else {
                 self.module_env = undefined;
             }
+            // Synthesized types created on demand live in columns the type
+            // store copied out of the buffer; every other column still
+            // aliases it.
+            self.checked_types.deinit(allocator);
             if (!self.serialized_backing_is_static) {
                 // `deserialize` allocated `backing` with the same gpa it recorded in
                 // `canonical_names.allocator`, and every teardown site passes that
@@ -34106,7 +34119,7 @@ fn expectAllSliceStoreRoundTrips(comptime Store: type) artifact_serialize.TestEr
     var store: Store = .{};
     inline for (@typeInfo(Store).@"struct".field_names) |field_name| {
         // A nested store round-trips through its own `Serialized` form.
-        if (comptime @hasDecl(@FieldType(Store, field_name), "Serialized")) continue;
+        if (comptime @typeInfo(@FieldType(Store, field_name)) == .@"struct" and @hasDecl(@FieldType(Store, field_name), "Serialized")) continue;
         const slice = comptime isSliceField(@FieldType(Store, field_name));
         const Elem = std.meta.Child(if (slice) @FieldType(Store, field_name) else @FieldType(@FieldType(Store, field_name), "items"));
         // Give lists spare capacity to prove serialization only writes live rows.
