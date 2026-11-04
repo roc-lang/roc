@@ -23057,9 +23057,10 @@ from the procedures and entrypoints actually emitted for execution.
 
 ### Unit-Image Test Execution
 
-A `roc test --opt=dev --specialize=no` with a cache on a Linux x86_64
-compiler runs its execution subset from test units loaded into the
-compiler's own process, not from one program lowered for the subset; the
+A `roc test --opt=dev --specialize=no` with a cache on a compiler whose
+host loads unit images (Linux x86_64, macOS arm64, Windows) runs its
+execution subset from test units loaded into the compiler's own process,
+not from one program lowered for the subset; the
 choice is the same switch on optimization, strategy, cache presence and host
 as a composed dev run (`unitImageTestApplies`, `unitImageRunApplies`), never
 a reaction to a failure. A default app keeps the shared program, as it
@@ -25078,8 +25079,9 @@ with such an entry records that its static data references code, and the shim
 holds a reference to it for the rest of the session once it accepts it, which
 keeps that image's code, data, and Boxy runtime alive.
 
-A `--specialize=no` dev run with a cache on a Linux x86_64 host composes
-its `RunImage` from unit images (Fast Dev Link) instead of lowering and
+A `--specialize=no` dev run with a cache on a host whose units carry unit
+images (Linux x86_64, macOS arm64, Windows) composes its `RunImage` from
+unit images (Fast Dev Link) instead of lowering and
 compiling the whole program, for the first generation and every rebuild
 alike (`unitImageRunApplies`; every other run lowers the whole program).
 Library units are restored from the per-module cache or built and filed

@@ -357,6 +357,18 @@ fn applyComposedRelocations(view: *const RunImage.ProgramView) LoadDevProgramErr
                 const field = try composedField(view, site.offset, 8);
                 std.mem.writeInt(u64, field[0..8], @bitCast(@as(i64, @intCast(address)) + site.addend), .little);
             },
+            .branch26 => {
+                const field = try composedField(view, site.offset, 4);
+                if (!backend.dev.UnitImage.applySite(field, .branch26, stub_address + site.addend, @intFromPtr(field.ptr))) return error.BranchOutOfRange;
+            },
+            .page21 => {
+                const field = try composedField(view, site.offset, 4);
+                if (!backend.dev.UnitImage.applySite(field, .page21, stub_address + site.addend, @intFromPtr(field.ptr))) return error.BranchOutOfRange;
+            },
+            .pageoff12 => {
+                const field = try composedField(view, site.offset, 4);
+                if (!backend.dev.UnitImage.applySite(field, .pageoff12, stub_address + site.addend, @intFromPtr(field.ptr))) return error.BranchOutOfRange;
+            },
         };
     }
     for (view.rebases) |rebase| {

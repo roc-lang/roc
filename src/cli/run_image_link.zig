@@ -216,17 +216,17 @@ pub fn plan(gpa: Allocator, std_io: std.Io, inputs: Inputs) PlanError!Plan {
             const kind: UnitImage.SiteKind = @fromBackingInt(site.kind);
             if (hostTarget(state, site)) |symbol| {
                 switch (kind) {
-                    .abs64, .pc32 => host_counts[symbol] += 1,
+                    .abs64, .pc32, .branch26, .page21, .pageoff12 => host_counts[symbol] += 1,
                     .abs32, .abs32s => base.invariant("run image invariant violated: a unit image holds a 32-bit absolute host address", .{}),
-                    .branch26, .page21, .pageoff12, .rva32 => base.invariant("run image invariant violated: a Linux x86_64 unit image holds another target's site kind", .{}),
+                    .rva32 => base.invariant("run image invariant violated: a unit image holds an image-relative host address", .{}),
                 }
                 continue;
             }
             switch (kind) {
                 .abs64 => rebase_count += 1,
-                .pc32 => {},
+                .pc32, .branch26, .page21, .pageoff12 => {},
                 .abs32, .abs32s => base.invariant("run image invariant violated: a unit image holds a 32-bit absolute address, which the image's mapping cannot reach", .{}),
-                .branch26, .page21, .pageoff12, .rva32 => base.invariant("run image invariant violated: a Linux x86_64 unit image holds another target's site kind", .{}),
+                .rva32 => base.invariant("run image invariant violated: a unit image holds an image-relative address, which a run image has no base for", .{}),
             }
         }
     }
@@ -378,7 +378,10 @@ pub fn write(self: *const Plan, std_io: std.Io, inputs: Inputs, composed: RunIma
                         .kind = @backingInt(switch (kind) {
                             .pc32 => RunImage.HostSiteKind.pc32,
                             .abs64 => RunImage.HostSiteKind.abs64,
-                            .abs32, .abs32s, .branch26, .page21, .pageoff12, .rva32 => unreachable, // `plan` rejected every other host site kind
+                            .branch26 => RunImage.HostSiteKind.branch26,
+                            .page21 => RunImage.HostSiteKind.page21,
+                            .pageoff12 => RunImage.HostSiteKind.pageoff12,
+                            .abs32, .abs32s, .rva32 => unreachable, // `plan` rejected every other host site kind
                         }),
                     };
                     site_cursors[slot] += 1;
@@ -389,15 +392,18 @@ pub fn write(self: *const Plan, std_io: std.Io, inputs: Inputs, composed: RunIma
             } else regionBase(place, writable_base, @fromBackingInt(site.target_region));
             const value = @as(i64, @intCast(target_offset)) + site.addend;
             switch (kind) {
-                .pc32 => if (!UnitImage.applySite(field, .pc32, value, site_offset)) {
-                    base.invariant("run image invariant violated: a displacement inside the image does not fit 32 bits", .{});
+                // The image's code and data lie within 32 bits of each
+                // other, and the code is page aligned, so offsets from its
+                // start relocate like addresses.
+                .pc32, .branch26, .page21, .pageoff12 => if (!UnitImage.applySite(field, kind, value, site_offset)) {
+                    base.invariant("run image invariant violated: a displacement inside the image does not fit its field", .{});
                 },
                 .abs64 => {
                     std.mem.writeInt(u64, field[0..8], @bitCast(value), .little);
                     composed.rebases[rebase_cursor] = .{ .offset = site_offset, .value = @bitCast(value) };
                     rebase_cursor += 1;
                 },
-                .abs32, .abs32s, .branch26, .page21, .pageoff12, .rva32 => unreachable, // `plan` rejected every other site kind
+                .abs32, .abs32s, .rva32 => unreachable, // `plan` rejected every other site kind
             }
         }
     }
@@ -443,10 +449,12 @@ fn clearPages(composed: RunImage.Composed) error{ClearFailed}!void {
         @intFromPtr(composed.code.ptr) + composed.code.len;
     const end = std.mem.alignForward(usize, end_address, page);
     const pages: [*]align(std.heap.page_size_min) u8 = @ptrFromInt(start);
-    if (comptime builtin.os.tag != .linux) {
-        unreachable; // unitImageRunApplies selects composed runs only on Linux x86_64 hosts
-    } else {
+    // Linux punches the pages out of the mapping's file; elsewhere they are
+    // written as zeros.
+    if (comptime builtin.os.tag == .linux) {
         std.posix.madvise(pages, end - start, std.posix.MADV.REMOVE) catch return error.ClearFailed;
+    } else {
+        @memset(pages[0 .. end - start], 0);
     }
 }
 

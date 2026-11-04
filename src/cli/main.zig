@@ -6633,20 +6633,16 @@ fn unitImageRunApplies(opt: cli_args.OptLevel, no_cache: bool, strategy: base.Sp
     if (opt != .dev or strategy != .boxy) return false;
     // A run without a cache neither reads nor files unit images.
     if (no_cache) return false;
-    if (comptime !(builtin.target.os.tag == .linux and builtin.target.cpu.arch == .x86_64)) return false;
+    // The hosts whose units carry images are the hosts whose shim composes
+    // them.
+    if (comptime backend.dev.UnitImageLoader == void) return false;
     return unitImageTarget(target);
 }
 
-/// Whether `target`'s programs can be built from unit images: a Linux
-/// x86_64 target whose support image the compiler embeds.
+/// Whether `target`'s programs can be built from unit images: a target
+/// with a fast dev link format, whose support image the compiler embeds.
 fn unitImageTarget(target: RocTarget) bool {
-    return switch (target) {
-        .x64musl, .x64glibc => true,
-        .x64mac, .x64win, .x64mingw, .x64freebsd, .x64openbsd, .x64netbsd, .x64linux, .x64elf => false,
-        .x64v1mac, .x64v1win, .x64v1mingw, .x64v1freebsd, .x64v1openbsd, .x64v1netbsd, .x64v1musl, .x64v1glibc, .x64v1linux, .x64v1elf => false,
-        .arm64mac, .arm64win, .arm64mingw, .arm64linux, .arm64musl, .arm64glibc, .arm64v1win, .arm64v1mingw, .arm64v1linux, .arm64v1musl, .arm64v1glibc => false,
-        .arm32linux, .arm32musl, .wasm32, .wasm32v1 => false,
-    };
+    return fastDevLinkFormat(target) != null;
 }
 
 /// What a dev run composed from unit images lowers against: the export
@@ -6950,7 +6946,7 @@ fn writeComposedRunImage(
     hot_reload_allocation: ?HotReloadImageAllocation,
 ) CliMainError!DevRunImagePublication {
     if (comptime !backend.host_lir_codegen_available) {
-        unreachable; // `unitImageRunApplies` selects composed runs only on Linux x86_64 hosts
+        unreachable; // `unitImageRunApplies` selects composed runs only on hosts whose units carry images
     } else {
         if (!devShimTargetCompatible(units.target, backend.HostLirCodeGen.roc_target)) {
             return rejectRunTargetNotExecutable(ctx, units.target);
@@ -15367,7 +15363,7 @@ fn unitImageTestApplies(opt: cli_args.OptLevel, no_cache: bool, strategy: base.S
 }
 
 /// Whether this compiler can load test units' images into its own process.
-const unit_image_tests_supported = builtin.target.os.tag == .linux and builtin.target.cpu.arch == .x86_64;
+const unit_image_tests_supported = backend.dev.UnitImageLoader != void;
 
 /// A test root's wrapper in a test unit, by its module and its index among
 /// the module's test roots.
@@ -15466,23 +15462,44 @@ const UnitImageTestProgram = struct {
     }
 
     /// Bind every one of `names` the units call to a stub that reports the
-    /// call as a crash, as a hosted call in an in-process test does.
+    /// call as a crash, as a hosted call in an in-process test does. The
+    /// stub calls `roc_crashed(message, length)` in the host's own calling
+    /// convention and traps after it.
     fn bindHostedStubs(self: *UnitImageTestProgram, arena: Allocator, names: []const []const u8) CliMainError!void {
         if (names.len == 0) return;
-        // sub rsp, 8; mov rdi, message; mov rsi, length; mov rax, crashed;
-        // call rax; ud2
-        const stub_size = 4 + 10 + 10 + 10 + 2 + 2;
+        const stub_size: usize = if (builtin.cpu.arch == .aarch64) 15 * 4 else 4 + 10 + 10 + 10 + 2 + 2;
+        const crashed = @import("builtins").in_process_host.Symbol.roc_crashed.address();
         const code = try arena.alloc(u8, names.len * stub_size);
         for (names, 0..) |name, index| {
             const message = try std.fmt.allocPrint(arena, "hosted function `{s}` is not available while evaluating at compile time", .{name});
             const stub = code[index * stub_size ..][0..stub_size];
-            stub[0..4].* = .{ 0x48, 0x83, 0xec, 0x08 };
-            stub[4..6].* = .{ 0x48, 0xbf };
+            if (builtin.cpu.arch == .aarch64) {
+                // movz/movk x0, message; movz/movk x1, length; movz/movk
+                // x16, crashed; blr x16; brk #0
+                var word: usize = 0;
+                for ([_]u64{ @intFromPtr(message.ptr), message.len, crashed }, [_]u32{ 0, 1, 16 }) |value, register| {
+                    for (0..4) |quarter| {
+                        const imm: u32 = @truncate(value >> @intCast(quarter * 16));
+                        const opcode: u32 = if (quarter == 0) 0xd280_0000 else 0xf280_0000;
+                        std.mem.writeInt(u32, stub[word * 4 ..][0..4], opcode | (@as(u32, @intCast(quarter)) << 21) | (imm << 5) | register, .little);
+                        word += 1;
+                    }
+                }
+                std.mem.writeInt(u32, stub[word * 4 ..][0..4], 0xd63f_0200, .little);
+                std.mem.writeInt(u32, stub[(word + 1) * 4 ..][0..4], 0xd420_0000, .little);
+                continue;
+            }
+            // sub rsp, 8 (or 40 for the Windows shadow space); mov (rdi or
+            // rcx), message; mov (rsi or rdx), length; mov rax, crashed;
+            // call rax; ud2
+            const win64 = builtin.os.tag == .windows;
+            stub[0..4].* = .{ 0x48, 0x83, 0xec, if (win64) 0x28 else 0x08 };
+            stub[4..6].* = .{ 0x48, if (win64) 0xb9 else 0xbf };
             std.mem.writeInt(u64, stub[6..14], @intFromPtr(message.ptr), .little);
-            stub[14..16].* = .{ 0x48, 0xbe };
+            stub[14..16].* = .{ 0x48, if (win64) 0xba else 0xbe };
             std.mem.writeInt(u64, stub[16..24], message.len, .little);
             stub[24..26].* = .{ 0x48, 0xb8 };
-            std.mem.writeInt(u64, stub[26..34], @import("builtins").in_process_host.Symbol.roc_crashed.address(), .little);
+            std.mem.writeInt(u64, stub[26..34], crashed, .little);
             stub[34..36].* = .{ 0xff, 0xd0 };
             stub[36..38].* = .{ 0x0f, 0x0b };
         }
@@ -15507,7 +15524,7 @@ fn prepareUnitImageTests(
     reporter: *progress.Reporter,
     test_plan: *const CliTestPlan,
 ) CliMainError!UnitImageTestProgram {
-    if (comptime !unit_image_tests_supported) unreachable; // unitImageTestApplies holds only on a Linux x86_64 compiler
+    if (comptime !unit_image_tests_supported) unreachable; // unitImageTestApplies holds only on a compiler that loads unit images
     const Artifact = check.CheckedArtifact.CheckedModuleArtifact;
     const target = RocTarget.detectNative();
     var program: UnitImageTestProgram = .{ .gpa = ctx.gpa, .tables = RunUnitTables.init(ctx) };

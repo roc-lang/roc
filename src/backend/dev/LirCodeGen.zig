@@ -22084,9 +22084,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call one of the host's fixed runtime symbols: by its in-process
         /// address under native execution, by relocation everywhere else.
-        /// Load `site`, a unit-local expect site id, into `dst` as an
-        /// `abs32s` field against `expect_site_base_symbol` whose bytes hold
-        /// the id.
+        /// Load `site`, a unit-local expect site id, into `dst` as a field
+        /// against `expect_site_base_symbol` whose bytes hold the id: an
+        /// `abs32s` immediate on x86_64, an `abs64_field` literal in the
+        /// instruction stream on arm64.
         fn emitRelocatableExpectSite(self: *Self, dst: GeneralReg, site: u32) Allocator.Error!void {
             switch (isa) {
                 .x86_64 => {
@@ -22099,7 +22100,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .kind = .abs32s,
                     } });
                 },
-                .aarch64 => base.invariant("LirCodeGen invariant violated: relocatable expect sites in aarch64 code; only Linux x86_64 test units relocate them", .{}),
+                .aarch64 => {
+                    const start = self.codegen.currentOffset();
+                    // ldr dst, #8; b #12; .quad site
+                    try self.codegen.emit.ldrLiteral64(dst, 8);
+                    try self.codegen.emit.b(12);
+                    try self.codegen.emit.literal64(site);
+                    try self.codegen.relocations.append(self.allocator, .{ .linked_data = .{
+                        .offset = @intCast(start + 8),
+                        .symbol = try self.codegen.symbols.intern(self.allocator, relocation_mod.expect_site_base_symbol, .shared),
+                        .kind = .abs64_field,
+                    } });
+                },
             }
         }
 
