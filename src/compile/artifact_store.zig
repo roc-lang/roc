@@ -1,4 +1,4 @@
-//! Direct file storage for checked modules and Boxy objects.
+//! Direct file storage for checked modules, Boxy objects and Boxy test outcomes.
 //! Each identity names one file. Writers stage complete bytes beside it and
 //! atomically rename them into place; readers own an open file or mapping.
 
@@ -15,11 +15,14 @@ pub const format_directory = "files-v1";
 pub const Family = enum {
     checked,
     canonicalized,
-    placement,
-    literals,
     pairing,
-    local_discovery,
     boxy_object,
+    /// One module's `roc test` outcomes under `--specialize=no`.
+    test_outcomes,
+    /// A platform host linked once for fast dev links of its executables.
+    prelinked_host,
+    /// The host executable a composed `.boxy` dev run launches.
+    run_host,
 };
 
 /// Explicit producer identity for one file.

@@ -2950,30 +2950,43 @@ fn copySchemeDispatchRequirements(
         // Instantiation grows the type store but not `type_schemes`; copy
         // the record before doing either copy operation.
         const requirement = self.type_schemes.items[scheme_idx].dispatch_requirements.items[requirement_idx];
-        // A generated codec requirement's receiver is copied as a scheme of
-        // its own, whose reachability its callable's copy depends on.
-        const deferred_slots = instantiator.deferred_slots;
-        if (requirement.deferred_generated_codec) instantiator.deferred_slots = null;
-        defer instantiator.deferred_slots = deferred_slots;
-        const receiver_var = if (requirement.deferred_generated_codec)
-            try instantiator.instantiateTypeScheme(requirement.receiver_var)
-        else
-            try instantiator.instantiateVar(requirement.receiver_var);
-        if (skip_shared_receiver_copies and
-            self.types.resolveVar(receiver_var).var_ == self.types.resolveVar(requirement.receiver_var).var_)
-        {
-            continue;
+        if (try self.copySchemeDispatchRequirement(requirement, instantiator, skip_shared_receiver_copies)) |copy| {
+            try out.append(self.gpa, copy);
         }
-        const constraint = try instantiator.instantiateStaticDispatchConstraint(requirement.constraint, true);
-        try out.append(self.gpa, .{
-            .scheme_receiver_var = requirement.receiver_var,
-            .receiver_var = receiver_var,
-            .scheme_fn_var = requirement.constraint.fn_var,
-            .constraint = constraint,
-            .deferred_generated_codec = requirement.deferred_generated_codec,
-            .structural_origin = self.substitutedStructuralOrigin(requirement.structural_origin, instantiator.var_map),
-        });
     }
+}
+
+/// One requirement's copy under `instantiator`'s current var_map, or null when
+/// `skip_shared_receiver_copies` leaves it on its original relation.
+fn copySchemeDispatchRequirement(
+    self: *Self,
+    requirement: SchemeDispatchRequirement,
+    instantiator: *Instantiator,
+    skip_shared_receiver_copies: bool,
+) std.mem.Allocator.Error!?InstantiatedSchemeDispatchRequirement {
+    // A generated codec requirement's receiver is copied as a scheme of
+    // its own, whose reachability its callable's copy depends on.
+    const deferred_slots = instantiator.deferred_slots;
+    if (requirement.deferred_generated_codec) instantiator.deferred_slots = null;
+    defer instantiator.deferred_slots = deferred_slots;
+    const receiver_var = if (requirement.deferred_generated_codec)
+        try instantiator.instantiateTypeScheme(requirement.receiver_var)
+    else
+        try instantiator.instantiateVar(requirement.receiver_var);
+    if (skip_shared_receiver_copies and
+        self.types.resolveVar(receiver_var).var_ == self.types.resolveVar(requirement.receiver_var).var_)
+    {
+        return null;
+    }
+    const constraint = try instantiator.instantiateStaticDispatchConstraint(requirement.constraint, true);
+    return .{
+        .scheme_receiver_var = requirement.receiver_var,
+        .receiver_var = receiver_var,
+        .scheme_fn_var = requirement.constraint.fn_var,
+        .constraint = constraint,
+        .deferred_generated_codec = requirement.deferred_generated_codec,
+        .structural_origin = self.substitutedStructuralOrigin(requirement.structural_origin, instantiator.var_map),
+    };
 }
 
 /// Append the (scheme var -> fresh var) evidence substitutions contributed by
@@ -9252,9 +9265,10 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
     if (slots.items.len == 0) return;
     const slot_count = slots.items.len;
 
-    // Collect every local-declaration mention inside each backing template.
-    // The walk stays within the mentioning declaration's own template: a
-    // mentioned declaration's backing belongs to its own slot's analysis.
+    // Collect every local-declaration mention inside each backing template
+    // and each unnamed field, which instantiates with the backing. The walk
+    // stays within the mentioning declaration's own template: a mentioned
+    // declaration's backing belongs to its own slot's analysis.
     var mentions: std.ArrayListUnmanaged(NominalDeclMention) = .empty;
     defer mentions.deinit(self.gpa);
     var walk_stack: std.ArrayListUnmanaged(Var) = .empty;
@@ -9268,6 +9282,7 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
         visited.clearRetainingCapacity();
         walk_stack.clearRetainingCapacity();
         try walk_stack.append(self.gpa, decl.backing);
+        try self.appendUnnamedFieldVars(&walk_stack, decl);
         while (walk_stack.pop()) |var_| {
             const root = self.types.resolveVar(var_);
             if (visited.contains(root.var_)) continue;
@@ -9462,6 +9477,24 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
         if (reported[edge.owner_slot]) continue;
         reported[edge.owner_slot] = true;
         try self.reportGrowingNominalDecl(slots.items[edge.owner_slot]);
+    }
+}
+
+/// Append the type of each unnamed field of `decl`. Those fields stay out of
+/// the backing row, so only the declaration's annotation names them.
+fn appendUnnamedFieldVars(self: *Self, stack: *std.ArrayListUnmanaged(Var), decl: types_mod.NominalDecl) std.mem.Allocator.Error!void {
+    const statement_idx: CIR.Statement.Idx = @fromBackingInt(decl.statement());
+    var anno_idx = self.cir.store.getStatement(statement_idx).s_nominal_decl.anno;
+    const record = while (true) {
+        switch (self.cir.store.getTypeAnno(anno_idx)) {
+            .parens => |parens| anno_idx = parens.anno,
+            .record => |record| break record,
+            .apply, .rigid_var, .rigid_var_lookup, .underscore, .lookup, .tag_union, .tag, .tuple, .@"fn", .malformed => return,
+        }
+    };
+    for (self.cir.store.sliceAnnoRecordFields(record.fields)) |field_idx| {
+        const field = self.cir.store.getAnnoRecordField(field_idx);
+        if (field.is_unnamed) try stack.append(self.gpa, ModuleEnv.varFrom(field.ty));
     }
 }
 
@@ -20352,7 +20385,7 @@ fn finishRecursiveGroupBoundary(self: *Self, defs: []const CIR.Def.Idx, member_r
     }
     try self.retireNonGeneralizedTypeSchemes(member_roots);
     try self.retireStructurallyPublishedTypeSchemeRequirements(member_roots, env);
-    try self.activateSchemeDeferredCodecConstraints(member_roots);
+    try self.activateSchemeDeferredCodecConstraints(member_roots, env);
     try self.judgeAmbiguityCandidatesAtGeneralizationMultiRoot(member_roots);
     env.var_pool.popRank();
 }
@@ -27762,7 +27795,7 @@ const ExprCheckFrame = struct {
         try checker.activateSchemeDeferredCodecConstraints(&.{.{
             .owner = self.expr_var_raw,
             .interface = self.expr_var,
-        }});
+        }}, env);
         // The scheme's vars froze at generalized rank: judge this def's
         // dispatch-constrained receivers now, while the judgment is a
         // local question about one scheme (see
@@ -30387,7 +30420,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 try self.activateSchemeDeferredCodecConstraints(&.{.{
                     .owner = decl_pattern_var,
                     .interface = decl_pattern_var,
-                }});
+                }}, env);
                 try self.judgeAmbiguityCandidatesAtGeneralization(.{ .owner = decl_pattern_var, .interface = decl_pattern_var });
                 env.var_pool.popRank();
                 self.active_scheme_root = decl.saved_active_scheme_root;
@@ -38091,72 +38124,98 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
 /// and rejects the construct that owns the pattern through
 /// `rejectPatternFailureOwner`.
 fn judgeRecordDestructBinds(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    var retained: usize = 0;
-    var index: usize = 0;
-    while (index < self.pending_record_destructs.items.len) : (index += 1) {
-        const pending = self.pending_record_destructs.items[index];
-        const resolved = self.types.resolveVar(pending.presence_var);
-        const bound_var = switch (resolved.desc.content) {
-            .field_presence => |field_presence| switch (field_presence) {
-                .required, .defaulted => pending.payload_var,
-                .optional => blk: {
-                    const missing_err_var = try self.makeFieldMissingTag(env, pending.region);
-                    break :blk try self.freshFromContent(
-                        try self.mkTryContent(pending.payload_var, missing_err_var),
-                        env,
-                        pending.region,
-                    );
-                },
-            },
-            .flex => blk: {
-                // A still-flex kind commits to `required` only at a
-                // commitment point that OWNS the var: the boundary's
-                // generalize call is about to promote exactly the vars at
-                // (or above) the current rank. A lower-ranked presence var
-                // belongs to an enclosing scope still mid-inference—a
-                // nested boundary (an annotation predeclare or inner
-                // lambda fired while checking the destructure's own RHS)
-                // must not pin it before the destructure statement's own
-                // unification has run. The entry stays pending for the
-                // scope that owns it (finalize as the monomorphic
-                // backstop, where every remaining non-generalized var is
-                // at rank). Whichever binding the owner makes relates the
-                // binder's type to the field's value at the owner's rank,
-                // so everything that type holds stays at that rank and no
-                // boundary nested inside the owner quantifies it first.
-                if (@backingInt(resolved.desc.rank) < @backingInt(env.rank())) {
-                    try self.pinReachableVarsAtRank(pending.binder_var, resolved.desc.rank, env);
+    while (true) {
+        // Bind every destructure whose field kind is decided. A binding
+        // relates a nested record pattern to the field's value, which can
+        // decide the kinds of that pattern's own fields, so repeat until a
+        // pass binds nothing.
+        var bound_any = true;
+        while (bound_any) {
+            bound_any = false;
+            var retained: usize = 0;
+            var index: usize = 0;
+            while (index < self.pending_record_destructs.items.len) : (index += 1) {
+                const pending = self.pending_record_destructs.items[index];
+                if (self.types.resolveVar(pending.presence_var).desc.content == .flex) {
                     self.pending_record_destructs.items[retained] = pending;
                     retained += 1;
                     continue;
                 }
-                const required_var = try self.freshFromContent(
-                    .{ .field_presence = .required },
+                try self.bindRecordDestruct(pending, env);
+                bound_any = true;
+            }
+            self.pending_record_destructs.shrinkRetainingCapacity(retained);
+        }
+        // A still-flex kind commits to `required` only at a commitment point
+        // that OWNS the var: the boundary's generalize call is about to
+        // promote exactly the vars at (or above) the current rank. Commit one
+        // at a time, latest first: a record pattern's fields are queued after
+        // the patterns nested in them, so an enclosing field commits, and its
+        // binding can decide a nested pattern's kinds, before any nested
+        // field defaults to `required`.
+        const owned = owned: {
+            var index = self.pending_record_destructs.items.len;
+            while (index > 0) {
+                index -= 1;
+                const pending = self.pending_record_destructs.items[index];
+                if (@backingInt(self.types.resolveVar(pending.presence_var).desc.rank) >= @backingInt(env.rank())) break :owned pending;
+            }
+            break :owned null;
+        } orelse break;
+        const required_var = try self.freshFromContent(
+            .{ .field_presence = .required },
+            env,
+            owned.region,
+        );
+        _ = try self.unify(owned.presence_var, required_var, env);
+    }
+    // A lower-ranked presence var belongs to an enclosing scope still
+    // mid-inference—a nested boundary (an annotation predeclare or inner
+    // lambda fired while checking the destructure's own RHS) must not pin it
+    // before the destructure statement's own unification has run. The entry
+    // stays pending for the scope that owns it (finalize as the monomorphic
+    // backstop, where every remaining non-generalized var is at rank).
+    // Whichever binding the owner makes relates the binder's type to the
+    // field's value at the owner's rank, so everything that type holds stays
+    // at that rank and no boundary nested inside the owner quantifies it
+    // first.
+    for (self.pending_record_destructs.items) |pending| {
+        try self.pinReachableVarsAtRank(pending.binder_var, self.types.resolveVar(pending.presence_var).desc.rank, env);
+    }
+}
+
+/// Bind one destructure's binder by its decided field kind.
+fn bindRecordDestruct(self: *Self, pending: PendingRecordDestruct, env: *Env) std.mem.Allocator.Error!void {
+    const bound_var = switch (self.types.resolveVar(pending.presence_var).desc.content) {
+        .field_presence => |field_presence| switch (field_presence) {
+            .required, .defaulted => pending.payload_var,
+            .optional => blk: {
+                const missing_err_var = try self.makeFieldMissingTag(env, pending.region);
+                break :blk try self.freshFromContent(
+                    try self.mkTryContent(pending.payload_var, missing_err_var),
                     env,
                     pending.region,
                 );
-                _ = try self.unify(pending.presence_var, required_var, env);
-                break :blk pending.payload_var;
             },
-            // `.err` and other poisoned contents: the kind mismatch was
-            // already reported; the binder still describes the payload.
-            .rigid, .alias, .structure, .err => pending.payload_var,
-        };
-        // The binder relation belongs to the destructure pattern. The payload
-        // is the destructured record's own field type, and the binder's class
-        // is shared with every use of the name, so a rejection reports here,
-        // poisons neither operand, and rejects the construct that owns the
-        // pattern.
-        const result = try self.runUnify(pending.binder_var, bound_var, env, .{
-            .context = .record_destructure,
-            .on_mismatch = .write_no_report,
-        });
-        if (!result.isAccepted()) {
-            _ = try self.appendTypeMismatch(pending.binder_var, bound_var, self.mismatchContext(.record_destructure, bound_var));
-            try self.rejectPatternFailureOwner(pending.failure_owner);
-        }
+        },
+        .flex => unreachable, // judgeRecordDestructBinds binds only entries whose kind is decided
+        // `.err` and other poisoned contents: the kind mismatch was
+        // already reported; the binder still describes the payload.
+        .rigid, .alias, .structure, .err => pending.payload_var,
+    };
+    // The binder relation belongs to the destructure pattern. The payload
+    // is the destructured record's own field type, and the binder's class
+    // is shared with every use of the name, so a rejection reports here,
+    // poisons neither operand, and rejects the construct that owns the
+    // pattern.
+    const result = try self.runUnify(pending.binder_var, bound_var, env, .{
+        .context = .record_destructure,
+        .on_mismatch = .write_no_report,
+    });
+    if (!result.isAccepted()) {
+        _ = try self.appendTypeMismatch(pending.binder_var, bound_var, self.mismatchContext(.record_destructure, bound_var));
+        try self.rejectPatternFailureOwner(pending.failure_owner);
     }
-    self.pending_record_destructs.shrinkRetainingCapacity(retained);
 }
 
 /// Kind defaulting as a checker pass (design.md "Field Kinds"): commit every
@@ -41565,6 +41624,7 @@ fn retireNonGeneralizedTypeSchemes(self: *Self, roots: []const BoundaryRoot) All
 fn activateSchemeDeferredCodecConstraints(
     self: *Self,
     roots: []const BoundaryRoot,
+    env: *Env,
 ) Allocator.Error!void {
     for (roots) |root| {
         const scheme_idx = self.typeSchemeIndexForRoot(root.owner) orelse continue;
@@ -41578,6 +41638,7 @@ fn activateSchemeDeferredCodecConstraints(
             {
                 requirement.pristine_codec_is_scheme_only = true;
                 requirement.validates_final_instance = true;
+                try self.copyRelationToEnclosingScope(requirement.*, env);
             }
             if (!requirement.pristine_codec_is_scheme_only) continue;
             std.debug.assert(requirement.deferred_generated_codec);
@@ -41585,6 +41646,50 @@ fn activateSchemeDeferredCodecConstraints(
             try self.scheme_deferred_codec_constraint_fns.put(self.gpa, fn_root, {});
         }
     }
+}
+
+/// What a template relation says about a variable of an enclosing scope holds
+/// of that scope's values whether or not anything uses the definition, so the
+/// scope receives one copy of the relation, made as a use's would be: its
+/// variables quantified here are fresh, the enclosing scope's stay shared. A
+/// definition nothing uses has no other way to reach the enclosing scheme,
+/// whose uses validate the copy at their own types.
+fn copyRelationToEnclosingScope(
+    self: *Self,
+    requirement: SchemeDispatchRequirement,
+    env: *Env,
+) Allocator.Error!void {
+    const rank = env.rank();
+    var relation_vars = collections.DenseMap(Var, void).init(self.gpa);
+    defer relation_vars.deinit();
+    try self.collectReachableVars(requirement.receiver_var, &relation_vars);
+    try self.collectReachableVars(requirement.constraint.fn_var, &relation_vars);
+    if (!self.refinableVarsEscapeRank(&relation_vars, rank)) return;
+
+    self.var_map.clearRetainingCapacity();
+    var instantiator = self.baseInstantiator(@fromBackingInt(@backingInt(rank) - 1), .fresh_flex);
+    instantiator.polarity_var_behavior = .close;
+    const copy = (try self.copySchemeDispatchRequirement(requirement, &instantiator, false)) orelse
+        unreachable; // skip_shared_receiver_copies is false, so every requirement is copied
+    const region = self.getRegionAt(requirement.receiver_var);
+    const context: InstantiatedVarContext = .{
+        .records_scheme_use = false,
+        .target_fn_var = null,
+        .registers_use = false,
+        .instantiation_expr = requirement.failure_expr,
+        .group_index = self.currentGroupIndex(),
+        .region_behavior = .{ .explicit = region },
+        .root_region = region,
+        .deferred = null,
+    };
+    var copied = instantiator.var_map.iterator();
+    while (copied.next()) |entry| {
+        try self.registerInstantiatedVar(entry.key_ptr.*, entry.value_ptr.*, instantiator.var_map, context, .value, env);
+    }
+    const saved_source = self.instantiation_source_expr;
+    defer self.instantiation_source_expr = saved_source;
+    self.instantiation_source_expr = requirement.failure_expr;
+    try self.registerInstantiatedSchemeRequirement(copy, requirement.failure_expr, null, .value, env);
 }
 
 fn schemeDefersGeneratedCodecConstraint(self: *const Self, fn_var: Var) bool {

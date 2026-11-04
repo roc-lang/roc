@@ -494,6 +494,9 @@ pub const BoolRootEvalResult = struct {
     events: []BoolRootEvent,
     /// Sparse source-site observations owned by this invocation.
     expect_observations: []ExpectObservation = &.{},
+    /// The crash is a caught stack overflow: how deep this root got depended
+    /// on the executing thread's stack, which no outcome identity records.
+    stack_overflowed: bool = false,
 };
 
 /// The uncombined counts contributed by one root to an inline expect site.
@@ -2524,10 +2527,9 @@ pub fn devEvalSharedBoolRootModulesWithOptions(allocator: Allocator, modules: []
                 const i = call_cursor;
                 call_cursor += 1;
                 calls[i] = .{
-                    .store = store,
-                    .layouts = layouts,
+                    .shape = .{ .layouts = layouts, .arg_layouts = root.arg_layouts, .ret_layout = root.ret_layout },
+                    .composes = store.runtime_contract == .boxy,
                     .target = .{ .dev = .{ .executable = &executable, .entry_offset = entry_offsets[i] } },
-                    .root = root,
                     .expect_site_count = partition.expect_site_count,
                     .expect_site_base = expect_site_base,
                 };
@@ -2557,9 +2559,8 @@ fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsiz
 
 fn callBoolRoot(
     allocator: Allocator,
-    layouts: *const LayoutStore,
+    shape: ?BoolRootShape,
     target: BoolRootCallTarget,
-    root: BoolRoot,
     call_index: usize,
     event_callback: ?BoolRootEventCallback,
     expect_passed: []u64,
@@ -2583,10 +2584,10 @@ fn callBoolRoot(
     runtime_env.resetAllocationTracker();
     runtime_env.setExpectCounters(expect_passed, expect_failed);
 
-    const arg_buffer = try InspectedRun.zeroedEntrypointArgBuffer(allocator, layouts, root.arg_layouts);
+    const arg_buffer = if (shape) |frame| try InspectedRun.zeroedEntrypointArgBuffer(allocator, frame.layouts, frame.arg_layouts) else null;
     defer if (arg_buffer) |buf| allocator.free(buf);
 
-    const ret_buf = try boolRootRetBuffer(allocator, layouts, root.ret_layout);
+    const ret_buf = if (shape) |frame| try boolRootRetBuffer(allocator, frame.layouts, frame.ret_layout) else try zeroedBoolBuffer(allocator);
     defer allocator.free(ret_buf);
 
     // Both backends record a crash at code checking rejected through the
@@ -2613,6 +2614,11 @@ fn callBoolRoot(
                     @ptrCast(ret_buf.ptr),
                     if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
                 );
+            },
+            .unit_image => |entry| {
+                // Unit-image code records the `?` region like Dev-JIT code.
+                _ = builtins.in_process_host.takeExpectErrRegion();
+                entry(ret_buf.ptr, if (arg_buffer) |buf| @ptrCast(buf.ptr) else null);
             },
         }
     }
@@ -2644,6 +2650,7 @@ fn callBoolRoot(
     return .{
         .outcome = outcome,
         .events = events,
+        .stack_overflowed = runtime_env.stack_overflowed,
     };
 }
 
@@ -2660,16 +2667,87 @@ const BoolRootCallTarget = union(enum) {
     /// A symbol in an object produced by the LLVM backend and loaded in-process.
     llvm: LlvmBoolRootEntryFn,
     dev: DevBoolRootEntry,
+    /// A test root's wrapper exported by a test unit's image loaded
+    /// in-process (`UnitImageBoolRoot`).
+    unit_image: UnitImageBoolRootEntryFn,
+};
+
+/// What sizes a root's argument and result buffers.
+const BoolRootShape = struct {
+    layouts: *const LayoutStore,
+    arg_layouts: []const LayoutIdx,
+    ret_layout: LayoutIdx,
 };
 
 const BoolRootCall = struct {
-    store: *const lir.LirStore,
-    layouts: *const LayoutStore,
+    /// Null for a root of a unit image, which takes no arguments and
+    /// returns a `Bool`.
+    shape: ?BoolRootShape,
+    /// Whether the root's code composes Boxy descriptors at run time, so
+    /// the batch's workers enter a `BoxyInProcessState`.
+    composes: bool,
     target: BoolRootCallTarget,
-    root: BoolRoot,
     expect_site_base: usize = 0,
     expect_site_count: usize = 0,
 };
+
+/// The `(ret_ptr, args_ptr)` wrapper a test unit exports for a test root.
+pub const UnitImageBoolRootEntryFn = *const fn ([*]u8, ?*anyopaque) callconv(.c) void;
+
+/// One test root of a loaded test unit's image.
+pub const UnitImageBoolRoot = struct {
+    entry: UnitImageBoolRootEntryFn,
+};
+
+/// The roots of one planned module, run from loaded test units' images.
+/// Every partition counts into its own copy of the program's sites.
+pub const UnitImageBoolRootModule = struct {
+    roots: []const UnitImageBoolRoot,
+};
+
+/// Run test roots exported by test units' images that the caller loaded
+/// in-process (design.md "Unit-Image Test Execution"). `expect_site_count`
+/// is the number of program-wide expect sites: every loaded image's sites,
+/// each image's starting at the base its `roc__expect_site_base` binds to.
+/// Each module partition counts into its own copy of them, as
+/// `devEvalSharedBoolRootModules` partitions a shared program's.
+pub fn runUnitImageBoolRootModules(allocator: Allocator, modules: []const UnitImageBoolRootModule, expect_site_count: usize, timing: ?*DevBoolRootTiming, max_workers: ?usize) Error!BoolRootEvalBatch {
+    var root_count: usize = 0;
+    for (modules) |module| root_count += module.roots.len;
+    const calls = try allocator.alloc(BoolRootCall, root_count);
+    defer allocator.free(calls);
+    var cursor: usize = 0;
+    var expect_site_base: usize = 0;
+    for (modules) |module| {
+        for (module.roots) |root| {
+            calls[cursor] = .{
+                .shape = null,
+                .composes = true,
+                .target = .{ .unit_image = root.entry },
+                .expect_site_base = expect_site_base,
+                .expect_site_count = expect_site_count,
+            };
+            cursor += 1;
+        }
+        expect_site_base = std.math.add(usize, expect_site_base, expect_site_count) catch return error.OutOfMemory;
+    }
+    const started_ns = if (timing) |timings| timings.start() else 0;
+    const batch = runBoolRootCalls(allocator, calls, max_workers, null, null);
+    if (timing) |timings| {
+        timings.finish(started_ns, .root_execution);
+        if (batch) |_| {
+            timings.snapshot_value.root_execution_count += calls.len;
+        } else |_| {}
+    }
+    return batch;
+}
+
+/// A zeroed buffer for a `Bool` result.
+fn zeroedBoolBuffer(allocator: Allocator) Error![]align(collections.max_roc_alignment.toByteUnits()) u8 {
+    const ret_buf = try allocator.alignedAlloc(u8, collections.max_roc_alignment, 1);
+    ret_buf[0] = 0;
+    return ret_buf;
+}
 
 const BoolRootWorkerState = struct {
     allocator: Allocator,
@@ -2711,9 +2789,8 @@ fn boolRootWorker(args: *BoolRootWorkerArgs) void {
         const expect_end = expect_start + call.expect_site_count;
         state.results[index] = callBoolRoot(
             state.allocator,
-            call.layouts,
+            call.shape,
             call.target,
-            call.root,
             index,
             state.event_callback,
             state.worker_expect_passed[expect_start..expect_end],
@@ -2804,7 +2881,7 @@ fn runBoolRootCalls(
     // The batch is one program: every call runs its code, so what the calls
     // compose lives until the batch is done.
     var composes = false;
-    for (calls) |call| composes = composes or call.store.runtime_contract == .boxy;
+    for (calls) |call| composes = composes or call.composes;
     const composition = if (composes) try BoxyInProcessState.create(allocator) else null;
     defer if (composition) |owned| owned.destroy();
 
@@ -3079,10 +3156,9 @@ pub fn llvmEvalBoolRootModules(
     for (modules) |module| {
         for (module.roots) |root| {
             calls[call_index] = .{
-                .store = module.store,
-                .layouts = module.layouts,
+                .shape = .{ .layouts = module.layouts, .arg_layouts = root.arg_layouts, .ret_layout = root.ret_layout },
+                .composes = module.store.runtime_contract == .boxy,
                 .target = .{ .llvm = lib.lookup(LlvmBoolRootEntryFn, root.symbol_name) orelse return error.LlvmBackendUnavailable },
-                .root = root,
                 .expect_site_base = expect_site_base,
                 .expect_site_count = module.expect_site_count,
             };

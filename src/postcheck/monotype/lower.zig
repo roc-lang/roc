@@ -306,7 +306,7 @@ pub const Options = struct {
     /// the compile-time roots the program demands (design.md "Demand-Driven
     /// Compile-Time Evaluation").
     demand_driven_comptime_roots: bool = false,
-    validated_comptime_roots: ?*const std.AutoHashMapUnmanaged(EntryRoot, void) = null,
+    validate_all_comptime_roots: bool = false,
     /// With `comptime_value_reads`, receives the compile-time roots the
     /// program demands and the checked roots each of its compile-time roots
     /// reads.
@@ -315,16 +315,6 @@ pub const Options = struct {
     /// whose completed value the specialization reads. The consumer that
     /// asks for this evaluates every literal root the program registers.
     literal_roots: bool = false,
-    /// With `literal_roots`, the literal values an earlier compilation of the
-    /// program stored: a literal root whose value identity names one restores
-    /// it instead of running its conversion (design.md "Compile-Time Value
-    /// Reuse Across Edits"). Literal roots carry value identities exactly
-    /// when this is set.
-    literal_values: ?Common.LiteralValueLookup = null,
-    /// With `literal_values`, keep each restored literal root's conversion as
-    /// a literal root of its own, which evaluation runs to verify the stored
-    /// value.
-    verify_literal_values: bool = false,
     /// Whether an interface request may replay a completed summary instead of
     /// expanding its callee's relations. A replay is a faithful stand-in for a
     /// fresh expansion, so this never changes the lowered program. Always on
@@ -357,16 +347,11 @@ pub const ComptimeDemand = struct {
     /// of them became program roots.
     declared_root_count: usize = 0,
     /// Each literal root of the program, by id: the checked roots its
-    /// definition reads, directly or through the code it reaches, its value
-    /// identity, and how the program evaluates it.
+    /// definition reads, directly or through the code it reaches.
     literals: []LiteralRootDemand = &.{},
 
     pub const LiteralRootDemand = struct {
         reads: Common.Span(EntryRoot),
-        /// Names the root's value across compilations; null when nothing
-        /// can name it (design.md "Compile-Time Value Reuse Across Edits").
-        identity: ?[32]u8,
-        reuse: Common.LiteralRootReuse,
     };
 
     pub fn rootReads(self: *const ComptimeDemand, index: usize) []const EntryRoot {
@@ -900,18 +885,6 @@ const DeclaredRoot = struct {
     /// read to reach and runs for its effects, so the program demands it
     /// outright.
     validation: bool,
-};
-
-/// A program literal root's value identity and how the program evaluates it.
-const LiteralReuseRow = struct {
-    identity: ?[32]u8 = null,
-    reuse: Common.LiteralRootReuse = .converted,
-};
-
-/// A compile-time root's site within the module whose checked key it holds.
-const LiteralReadSite = struct {
-    module: [32]u8,
-    site: [32]u8,
 };
 
 /// A committed expression that stands for a compile-time root's value
@@ -5465,21 +5438,6 @@ const Builder = struct {
     static_data_literals: bool,
     comptime_value_reads: bool,
     literal_roots: bool,
-    /// See `Options.literal_values`. Coordinator-only.
-    literal_values: ?Common.LiteralValueLookup = null,
-    verify_literal_values: bool = false,
-    /// Each program literal root's value identity and reuse, by id, for the
-    /// literal roots `settleLiteralRoots` has seen.
-    literal_reuse: std.ArrayList(LiteralReuseRow) = .empty,
-    /// The program's literal value context, once computed; see
-    /// `literalProgramContext`.
-    literal_program_context: ??[32]u8 = null,
-    interface_program_context: ??[32]u8 = null,
-    /// See `literalTopModules`; outer null until computed.
-    literal_top_modules: ??std.AutoHashMapUnmanaged([32]u8, [32]u8) = null,
-    /// Top-level statements of each top module whose types a literal value
-    /// identity named, by module key.
-    literal_top_statements: std.AutoHashMapUnmanaged([32]u8, collections.DenseMap(can.CIR.Statement.Idx, void)) = .empty,
     /// Reflexive import closures of the lowering input's modules by module
     /// key, each a sorted slice of the keys of the input's modules it reaches
     /// (design.md "Occurrence scope").
@@ -5493,19 +5451,11 @@ const Builder = struct {
     closed_occurrences: ClosedOccurrenceIndex = .{},
     borrowed_closed_occurrences: ?*const ClosedOccurrenceIndex = null,
 
-    /// Compile-time roots by module and site, for the modules whose roots a
-    /// stored literal value's reads were looked up in.
-    literal_read_sites: std.AutoHashMapUnmanaged(LiteralReadSite, u32) = .empty,
-    literal_read_site_modules: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
-    /// The view each restored literal value is read through: the literal
-    /// value store's const store, under a key naming it apart from every
-    /// module.
-    literal_store_view: ?*ModuleViewData = null,
     replay_interface_summaries: base.TestSwitch(true),
     declared_comptime_roots: DeclaredComptimeRoots,
     borrowed_comptime_roots: ?*const DeclaredComptimeRoots = null,
     demand_driven_comptime_roots: bool,
-    validated_comptime_roots: ?*const std.AutoHashMapUnmanaged(EntryRoot, void),
+    validate_all_comptime_roots: bool,
     comptime_demand_out: ?*ComptimeDemand,
     /// Every declared compile-time root, in request order.
     declared_roots: std.ArrayList(DeclaredRoot) = .empty,
@@ -5802,12 +5752,10 @@ const Builder = struct {
             .static_data_literals = options.static_data_literals,
             .comptime_value_reads = options.comptime_value_reads,
             .literal_roots = options.literal_roots,
-            .literal_values = if (options.literal_roots) options.literal_values else null,
-            .verify_literal_values = options.verify_literal_values,
             .replay_interface_summaries = options.replay_interface_summaries,
             .declared_comptime_roots = DeclaredComptimeRoots.init(allocator),
             .demand_driven_comptime_roots = options.demand_driven_comptime_roots,
-            .validated_comptime_roots = options.validated_comptime_roots,
+            .validate_all_comptime_roots = options.validate_all_comptime_roots,
             .comptime_demand_out = options.comptime_demand_out,
             .post_check_executor = options.post_check_executor,
             .timing = options.timing,
@@ -6065,17 +6013,9 @@ const Builder = struct {
         self.deferred_roots.deinit(self.allocator);
         self.root_value_reads.deinit(self.allocator);
         self.comptime_demand.deinit(self.allocator);
-        self.literal_reuse.deinit(self.allocator);
-        if (self.literal_top_modules) |*known| if (known.*) |*map| map.deinit(self.allocator);
-        var top_statements = self.literal_top_statements.valueIterator();
-        while (top_statements.next()) |statements| statements.deinit();
-        self.literal_top_statements.deinit(self.allocator);
         self.deinitModuleClosures();
         self.closed_occurrence_representatives.deinit(self.allocator);
         self.closed_occurrences.deinit(self.allocator);
-        self.literal_read_sites.deinit(self.allocator);
-        self.literal_read_site_modules.deinit(self.allocator);
-        if (self.literal_store_view) |view| self.allocator.destroy(view);
         self.module_index.deinit();
         self.module_identity_index.deinit(self.allocator);
         self.spec_job_task_buffers.deinit(self.allocator);
@@ -6729,7 +6669,6 @@ const Builder = struct {
     /// body; it is not a root, and reachability drops it from every consumer.
     fn orderComptimeRoots(self: *Builder) Allocator.Error!void {
         if (!self.comptime_value_reads) return;
-        try self.settleLiteralRoots();
         const state = &self.comptime_demand;
         const view = self.program.view();
         try state.index(self.allocator, self, view);
@@ -6771,14 +6710,11 @@ const Builder = struct {
         const literal_view = self.program.view();
         const literals = try self.allocator.alloc(ComptimeDemand.LiteralRootDemand, literal_view.literal_roots.len);
         output.literals = literals;
-        for (literal_view.literal_roots, literals, 0..) |root, *literal, index| {
+        for (literal_view.literal_roots, literals) |root, *literal| {
             const start = reads.items.len;
             for (try state.rootReads(self.allocator, literal_view, ComptimeDemandState.defItem(root.def))) |read| try reads.append(self.allocator, state.roots.items[read]);
-            const row: LiteralReuseRow = if (index < self.literal_reuse.items.len) self.literal_reuse.items[index] else .{};
             literal.* = .{
                 .reads = .{ .start = @intCast(start), .len = @intCast(reads.items.len - start) },
-                .identity = row.identity,
-                .reuse = row.reuse,
             };
         }
         output.root_reads = try root_reads.toOwnedSlice(self.allocator);
@@ -6786,446 +6722,6 @@ const Builder = struct {
         output.stored = try state.storedRoots(self.allocator);
         output.declared_root_count = self.declared_roots.items.len;
         if (self.comptime_demand_out) |out| out.* = output else output.deinit();
-    }
-
-    /// Give every literal root committed since the last call its value
-    /// identity, and restore the value of each one the literal value store
-    /// holds whose reads still have the value identities they had, so the
-    /// program runs no conversion for it (design.md "Compile-Time Value
-    /// Reuse Across Edits"). The restored root's definition becomes the
-    /// value's restore expression, under an identity naming the stored value,
-    /// so every read of the root and its representation evidence call it.
-    /// With `verify_literal_values`, the conversion stays the definition of a
-    /// literal root of its own that evaluation compares with the stored value.
-    fn settleLiteralRoots(self: *Builder) Allocator.Error!void {
-        const store = self.literal_values orelse return;
-        var index = self.literal_reuse.items.len;
-        while (index < self.program.literal_roots.len()) : (index += 1) {
-            if (index < self.literal_reuse.items.len) continue;
-            const id: Common.LiteralRootId = @fromBackingInt(@intCast(index));
-            const identity = try self.literalValueIdentity(id);
-            try self.literal_reuse.append(self.allocator, .{ .identity = identity });
-            const known = identity orelse continue;
-            const hit = store.lookup(known) orelse continue;
-            if (!try self.literalValueReadsApply(hit.reads)) continue;
-            try self.restoreLiteralRoot(id, known, hit);
-        }
-    }
-
-    fn restoreLiteralRoot(self: *Builder, id: Common.LiteralRootId, identity: [32]u8, hit: Common.LiteralValueHit) Allocator.Error!void {
-        const root = self.program.literal_roots.get(@backingInt(id));
-        const conversion = self.program.getDef(root.def);
-        if (self.verify_literal_values) {
-            var kept = conversion;
-            kept.symbol = self.symbols.fresh();
-            const kept_def = try self.program.addDef(kept);
-            const verifier = try self.program.addLiteralRoot(.{ .def = kept_def, .module = root.module, .site = root.site });
-            if (@backingInt(verifier) != self.literal_reuse.items.len) Common.invariant("literal root verifier was not the next literal root");
-            try self.literal_reuse.append(self.allocator, .{ .identity = identity, .reuse = .{ .verifies = id } });
-        }
-        const destination = ProgramTypeDestination.begin(self);
-        defer destination.end();
-        const saved_graph = self.active_graph;
-        const saved_draft = self.active_body_draft;
-        self.active_graph = null;
-        self.active_body_draft = null;
-        defer {
-            self.active_graph = saved_graph;
-            self.active_body_draft = saved_draft;
-        }
-        const owner = self.moduleForId(root.module);
-        const body = try runConstRestore(self, try self.literalStoreView(hit.store), owner, hit.root, conversion.ret, null);
-        for (hit.reads) |read| {
-            const current = self.literalValueReadRoot(read) orelse Common.invariant("an applied literal value read a root it no longer names");
-            try self.recordRestoredRootRead(body, current.module, current.root);
-        }
-        var restored = conversion;
-        restored.body = .{ .roc = body };
-        restored.root_identity = literalRestoreIdentity(identity);
-        self.program.setDef(root.def, restored);
-        self.literal_reuse.items[@backingInt(id)].reuse = .restored;
-    }
-
-    /// The view a stored literal value restores through: the literal value
-    /// store's const store under a key derived from it, so its blobs and
-    /// restore cache entries are named apart from every module's constants.
-    /// Restoring a value holding no function reads nothing else of a view.
-    fn literalStoreView(self: *Builder, store: *const check.ConstStore.ConstStore) Allocator.Error!ModuleView {
-        if (self.literal_store_view) |view| {
-            if (view.const_store != store) Common.invariant("one lowering restored literal values from two stores");
-            return view;
-        }
-        const view = try self.allocator.create(ModuleViewData);
-        view.* = self.rootModuleView().*;
-        view.const_store = store;
-        var hasher = TypeDigestHasher.init();
-        hasher.update("roc.monotype.literal-value-store.v1");
-        hasher.update(&view.key.bytes);
-        view.key = .{ .bytes = hasher.finalResult() };
-        view.code_generation_key = null;
-        self.literal_store_view = view;
-        return view;
-    }
-
-    /// The identity of a definition restoring the stored value of a literal
-    /// root whose value identity is `identity`.
-    fn literalRestoreIdentity(identity: [32]u8) names.TypeDigest {
-        var hasher = TypeDigestHasher.init();
-        hasher.update("roc.monotype.literal-value-restore.v1");
-        hasher.update(&identity);
-        return .{ .bytes = hasher.finalResult() };
-    }
-
-    /// Whether every root a stored literal value read is still named by its
-    /// site and still has the value identity it had.
-    fn literalValueReadsApply(self: *Builder, reads: []const Common.LiteralValueRead) Allocator.Error!bool {
-        for (reads) |read| {
-            const view = self.literalValueReadModule(read) orelse return false;
-            try self.indexLiteralReadSites(view);
-            if (self.literalValueReadRoot(read) == null) return false;
-        }
-        return true;
-    }
-
-    fn literalValueReadModule(self: *Builder, read: Common.LiteralValueRead) ?ModuleView {
-        if (!read.in_top_module) return self.moduleForKeyBytes(read.module);
-        const top = self.literal_top_modules.?.?;
-        var it = top.iterator();
-        while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.value_ptr, &read.module)) return self.moduleForKeyBytes(entry.key_ptr.*);
-        }
-        return null;
-    }
-
-    /// The current root a stored literal value's read names, once its
-    /// module's sites are indexed.
-    fn literalValueReadRoot(self: *Builder, read: Common.LiteralValueRead) ?EntryRoot {
-        const view = self.literalValueReadModule(read) orelse return null;
-        const raw = self.literal_read_sites.get(.{ .module = view.key.bytes, .site = read.site }) orelse return null;
-        const identity = view.compile_time_root_identities.rows[raw];
-        if (!std.mem.eql(u8, &identity.value, &read.value)) return null;
-        return .{ .module = view.key, .root = @fromBackingInt(raw) };
-    }
-
-    fn indexLiteralReadSites(self: *Builder, view: ModuleView) Allocator.Error!void {
-        const entry = try self.literal_read_site_modules.getOrPut(self.allocator, view.key.bytes);
-        if (entry.found_existing) return;
-        for (view.compile_time_root_identities.rows, 0..) |identity, raw| {
-            const site = try self.literal_read_sites.getOrPut(self.allocator, .{ .module = view.key.bytes, .site = identity.site });
-            if (!site.found_existing) site.value_ptr.* = @intCast(raw);
-        }
-    }
-
-    /// The modules of the lowering no other module of it imports, by key,
-    /// each with its value context. Their keys change with every edit of
-    /// their source, so literal value identities name them by value context;
-    /// every other module's key is named by an importer's value context too,
-    /// so its key names it. Null when a top module has no value context.
-    fn literalTopModules(self: *Builder) Allocator.Error!?*const std.AutoHashMapUnmanaged([32]u8, [32]u8) {
-        if (self.literal_top_modules) |*known| return if (known.*) |*map| map else null;
-        var imported = std.AutoHashMapUnmanaged([32]u8, void).empty;
-        defer imported.deinit(self.allocator);
-        for (self.root_view.direct_import_module_keys) |key| try imported.put(self.allocator, key.bytes, {});
-        for (self.modules.imports) |view| for (view.direct_import_module_keys) |key| try imported.put(self.allocator, key.bytes, {});
-        for (self.modules.root.relation_modules) |view| for (view.direct_import_module_keys) |key| try imported.put(self.allocator, key.bytes, {});
-        var top = std.AutoHashMapUnmanaged([32]u8, [32]u8).empty;
-        errdefer top.deinit(self.allocator);
-        for (self.moduleViews()) |*view| {
-            if (imported.contains(view.key.bytes)) continue;
-            const context = view.compile_time_root_identities.valueContext() orelse {
-                top.deinit(self.allocator);
-                self.literal_top_modules = @as(?std.AutoHashMapUnmanaged([32]u8, [32]u8), null);
-                return null;
-            };
-            try top.put(self.allocator, view.key.bytes, context);
-        }
-        self.literal_top_modules = top;
-        return &self.literal_top_modules.?.?;
-    }
-
-    /// Everything a per-program literal root's value can depend on beyond
-    /// the literal and its type: each module of the lowering, a top module
-    /// (`literalTopModules`) by its value context and every other module by
-    /// its checked key, and the identity of every definition a top module
-    /// exports for a platform requirement that code reachable from a
-    /// module's methods, or from an imported module's exports, looks up.
-    /// Null when a top module has no value context.
-    fn literalProgramContext(self: *Builder) Allocator.Error!?[32]u8 {
-        return self.programValueContext(true);
-    }
-
-    fn programValueContext(self: *Builder, comptime include_export_requires: bool) Allocator.Error!?[32]u8 {
-        const cached = if (include_export_requires) &self.literal_program_context else &self.interface_program_context;
-        if (cached.*) |known| return known;
-        const top = (try self.literalTopModules()) orelse {
-            cached.* = @as(?[32]u8, null);
-            return null;
-        };
-        var names_list = std.ArrayList([33]u8).empty;
-        defer names_list.deinit(self.allocator);
-        // Workers borrow module views, not the coordinator's output tables.
-        // Persistent interfaces must name the same input set in both domains.
-        const module_count = if (include_export_requires) self.program.view().lowering_modules.len else self.moduleViews().len;
-        for (0..module_count) |index| {
-            const key = if (include_export_requires) self.program.view().lowering_modules[index].bytes else self.moduleViews()[index].key.bytes;
-            var name: [33]u8 = undefined;
-            if (top.get(key)) |context| {
-                name[0] = 1;
-                name[1..].* = context;
-            } else {
-                name[0] = 0;
-                name[1..].* = key;
-            }
-            try names_list.append(self.allocator, name);
-        }
-        std.mem.sort([33]u8, names_list.items, {}, struct {
-            fn lessThan(_: void, a: [33]u8, b: [33]u8) bool {
-                return std.mem.order(u8, &a, &b) == .lt;
-            }
-        }.lessThan);
-        // Code reachable from a module's methods, or from an imported
-        // module's exports, can look up platform requirements, which run
-        // definitions a top module exports and no value context covers:
-        // those definitions' identities.
-        var required = std.ArrayList([64]u8).empty;
-        defer required.deinit(self.allocator);
-        for (self.moduleViews()) |*requirer| {
-            const identities = requirer.compile_time_root_identities;
-            const export_requires = if (!include_export_requires or top.contains(requirer.key.bytes)) &[_][32]u8{} else identities.export_requires;
-            for ([_][]const [32]u8{ identities.method_requires, export_requires }) |requirements| for (requirements) |name| {
-                var providers = top.keyIterator();
-                while (providers.next()) |provider_key| {
-                    const provider = self.moduleForKeyBytes(provider_key.*) orelse Common.invariant("a top module of the lowering had no view");
-                    for (provider.compile_time_root_identities.exports) |exported| {
-                        if (!std.mem.eql(u8, &exported.name, &name)) continue;
-                        var pair: [64]u8 = undefined;
-                        pair[0..32].* = exported.name;
-                        pair[32..].* = exported.value;
-                        try required.append(self.allocator, pair);
-                    }
-                }
-            };
-        }
-        std.mem.sort([64]u8, required.items, {}, struct {
-            fn lessThan(_: void, a: [64]u8, b: [64]u8) bool {
-                return std.mem.order(u8, &a, &b) == .lt;
-            }
-        }.lessThan);
-        var hasher = TypeDigestHasher.init();
-        hasher.update(if (include_export_requires) "roc.literal-value.program-context.v1" else "roc.interface-method-context.v1");
-        hashU32(&hasher, @intCast(names_list.items.len));
-        for (names_list.items) |name| hasher.update(&name);
-        hashU32(&hasher, @intCast(required.items.len));
-        for (required.items) |pair| hasher.update(&pair);
-        const digest = hasher.finalResult();
-        cached.* = @as(?[32]u8, digest);
-        return digest;
-    }
-
-    /// The value identity of a literal root: the program context, the
-    /// literal's module (a top module by its value context, any other by key
-    /// and expression), its kind and source bytes, and its type. Null when
-    /// its type holds a function or names something no edit-stable identity
-    /// covers.
-    fn literalValueIdentity(self: *Builder, id: Common.LiteralRootId) Allocator.Error!?[32]u8 {
-        const context = (try self.literalProgramContext()) orelse return null;
-        const top = (try self.literalTopModules()).?;
-        const root = self.program.literal_roots.get(@backingInt(id));
-        const def = self.program.getDef(root.def);
-        const type_digest = (try self.literalTypeDigest(def.ret)) orelse return null;
-        const view = self.moduleForId(root.module);
-        const region = view.bodies.expr(@fromBackingInt(root.site.checked_expr)).source_region;
-        const text = view.module_env.getSourceAll()[region.start.offset..region.end.offset];
-        var hasher = TypeDigestHasher.init();
-        hasher.update("roc.literal-value.identity.v1");
-        hasher.update(&context);
-        if (top.get(root.module.bytes)) |module_context| {
-            hasher.update("top-module");
-            hasher.update(&module_context);
-        } else {
-            hasher.update("module");
-            hasher.update(&root.module.bytes);
-            hashU32(&hasher, root.site.checked_expr);
-        }
-        hasher.update(@tagName(root.site.kind));
-        hashU32(&hasher, @intCast(text.len));
-        hasher.update(text);
-        hasher.update(&type_digest);
-        return hasher.finalResult();
-    }
-
-    /// A digest of a literal root's type that every compilation of the
-    /// program with the same program context computes alike: the root
-    /// module's own types named by their top-level declaration, every other
-    /// type by its declaring module and declaration. Null for a type holding
-    /// a function or an erased value, or naming a root-module type or field
-    /// default that is not a top-level declaration.
-    fn literalTypeDigest(self: *Builder, root_ty: Type.TypeId) Allocator.Error!?[32]u8 {
-        const types = self.program.types.view();
-        const program_names = &self.program.names;
-        const top = (try self.literalTopModules()).?;
-        var visited = collections.DenseMap(Type.TypeId, u32).init(self.allocator);
-        defer visited.deinit();
-        var stack = std.ArrayList(Type.TypeId).empty;
-        defer stack.deinit(self.allocator);
-        var children = std.ArrayList(Type.TypeId).empty;
-        defer children.deinit(self.allocator);
-        var hasher = TypeDigestHasher.init();
-        hasher.update("roc.literal-value.type.v1");
-        try stack.append(self.allocator, root_ty);
-        var next_position: u32 = 0;
-        while (stack.pop()) |ty| {
-            if (visited.get(ty)) |position| {
-                hasher.update("seen");
-                hashU32(&hasher, position);
-                continue;
-            }
-            try visited.put(ty, next_position);
-            next_position += 1;
-            children.clearRetainingCapacity();
-            switch (types.get(ty)) {
-                .func, .erased => return null,
-                .zst => hasher.update("zst"),
-                .hole => Common.invariant("a demand hole reached a literal root's type"),
-                .primitive => |primitive| {
-                    hasher.update("primitive");
-                    hasher.update(@tagName(primitive));
-                },
-                .list => |elem| {
-                    hasher.update("list");
-                    try children.append(self.allocator, elem);
-                },
-                .box => |payload| {
-                    hasher.update("box");
-                    try children.append(self.allocator, payload);
-                },
-                .tuple => |items| {
-                    hasher.update("tuple");
-                    try children.appendSlice(self.allocator, types.span(items));
-                },
-                .record => |fields| {
-                    hasher.update("record");
-                    for (types.fieldSpan(fields)) |field| {
-                        if (field.kind_state != .resolved) return null;
-                        const label = program_names.recordFieldLabelText(field.name);
-                        hashU32(&hasher, @intCast(label.len));
-                        hasher.update(label);
-                        if (field.default) |default| {
-                            const module = program_names.moduleIdentityBytes(default.module);
-                            const declaring = self.moduleForIdentityHash(module) orelse return null;
-                            if (top.contains(declaring.key.bytes)) return null;
-                            hasher.update("default");
-                            hasher.update(module);
-                            hashU32(&hasher, default.expr_node);
-                        }
-                        try children.append(self.allocator, field.ty);
-                        if (field.value_ty.get()) |value_ty| {
-                            hasher.update("value-type");
-                            try children.append(self.allocator, value_ty);
-                        }
-                    }
-                },
-                .tag_union => |tags| {
-                    hasher.update("tag-union");
-                    for (types.tagSpan(tags)) |tag| {
-                        for ([_][]const u8{ program_names.tagLabelText(tag.name), program_names.tagLabelText(tag.checked_name) }) |label| {
-                            hashU32(&hasher, @intCast(label.len));
-                            hasher.update(label);
-                        }
-                        hashU32(&hasher, @intCast(types.span(tag.payloads).len));
-                        try children.appendSlice(self.allocator, types.span(tag.payloads));
-                    }
-                },
-                .named => |named| {
-                    hasher.update("named");
-                    const module = program_names.moduleIdentityBytes(named.def.module);
-                    const type_name = program_names.typeNameText(named.def.type_name);
-                    if (top.get(named.named_type.module.bytes)) |module_context| {
-                        const statement = named.def.source_decl orelse return null;
-                        const declaring = self.moduleForKeyBytes(named.named_type.module.bytes) orelse return null;
-                        const text = (try self.literalTopStatementText(declaring, statement)) orelse return null;
-                        hasher.update("top-module");
-                        hasher.update(&module_context);
-                        hashU32(&hasher, @intCast(text.len));
-                        hasher.update(text);
-                        // The conversion runs the type's methods as the
-                        // evidence of its requirements.
-                        var methods = std.ArrayList([32]u8).empty;
-                        defer methods.deinit(self.allocator);
-                        for (declaring.module_env.method_defs.entries.items) |method| {
-                            if (@backingInt(method.key.owner) != statement) continue;
-                            const identity = declaring.compile_time_root_identities.definitionIdentity(method.value.def_idx) orelse return null;
-                            try methods.append(self.allocator, identity);
-                        }
-                        std.mem.sort([32]u8, methods.items, {}, struct {
-                            fn lessThan(_: void, a: [32]u8, b: [32]u8) bool {
-                                return std.mem.order(u8, &a, &b) == .lt;
-                            }
-                        }.lessThan);
-                        hasher.update("methods");
-                        hashU32(&hasher, @intCast(methods.items.len));
-                        for (methods.items) |identity| hasher.update(&identity);
-                    } else {
-                        hasher.update(&named.named_type.module.bytes);
-                        hasher.update(module);
-                        hashU32(&hasher, named.def.source_decl orelse std.math.maxInt(u32));
-                    }
-                    hashU32(&hasher, @intCast(type_name.len));
-                    hasher.update(type_name);
-                    if (named.def.generated) |generated| {
-                        hasher.update("generated");
-                        hasher.update(&generated.bytes);
-                    }
-                    hasher.update(@tagName(named.def.iterator_representation));
-                    hasher.update(@tagName(named.def.iterator_kind));
-                    hashU32(&hasher, named.def.iterator_depth);
-                    hasher.update(@tagName(named.kind));
-                    if (named.builtin_owner) |owner| hasher.update(@tagName(owner));
-                    hashU32(&hasher, @intCast(types.span(named.args).len));
-                    try children.appendSlice(self.allocator, types.span(named.args));
-                    for (types.declaredFieldSpan(named.declared_order)) |declared| switch (declared) {
-                        .named => |label| {
-                            const text = program_names.recordFieldLabelText(label);
-                            hasher.update("declared");
-                            hashU32(&hasher, @intCast(text.len));
-                            hasher.update(text);
-                        },
-                        .padding => |padding| {
-                            hasher.update("padding");
-                            try children.append(self.allocator, padding);
-                        },
-                    };
-                    if (named.backing) |backing| {
-                        hasher.update("backing");
-                        hasher.update(@tagName(backing.use));
-                        hasher.update(@tagName(backing.authority));
-                        try children.append(self.allocator, backing.ty);
-                    }
-                },
-            }
-            hashU32(&hasher, @intCast(children.items.len));
-            var child_index = children.items.len;
-            while (child_index > 0) {
-                child_index -= 1;
-                try stack.append(self.allocator, children.items[child_index]);
-            }
-        }
-        return hasher.finalResult();
-    }
-
-    /// The source of a top-level statement of a top module, or null when
-    /// `statement` is not one.
-    fn literalTopStatementText(self: *Builder, view: ModuleView, statement: u32) Allocator.Error!?[]const u8 {
-        const env = view.module_env;
-        const entry = try self.literal_top_statements.getOrPut(self.allocator, view.key.bytes);
-        if (!entry.found_existing) {
-            entry.value_ptr.* = collections.DenseMap(can.CIR.Statement.Idx, void).init(self.allocator);
-            for (env.store.sliceStatements(env.all_statements)) |idx| try entry.value_ptr.put(idx, {});
-        }
-        const statement_idx: can.CIR.Statement.Idx = @fromBackingInt(statement);
-        if (!entry.value_ptr.contains(statement_idx)) return null;
-        const region = env.store.getStatementRegion(statement_idx);
-        return env.getSourceAll()[region.start.offset..region.end.offset];
     }
 
     fn finishUndemandedRoot(self: *Builder, job: PendingSpecJob) Allocator.Error!void {
@@ -7310,10 +6806,7 @@ const Builder = struct {
                 try self.declared_roots.append(self.allocator, .{
                     .request = request,
                     .source_module = source_module,
-                    .validation = if (self.validated_comptime_roots) |validated|
-                        !validated.contains(key)
-                    else
-                        source_view.compile_time_roots.root(root_id).kind == .hoisted_validation,
+                    .validation = self.validate_all_comptime_roots or source_view.compile_time_roots.root(root_id).kind == .hoisted_validation,
                 });
                 if (!self.demand_driven_comptime_roots) _ = try self.prepareDeclaredRoot(ordinal, &fn_tys[i]);
             }
@@ -9323,7 +8816,6 @@ const Builder = struct {
     /// drain.
     fn advanceComptimeDemand(self: *Builder) Allocator.Error!bool {
         if (!self.demand_driven_comptime_roots) return false;
-        try self.settleLiteralRoots();
         const state = &self.comptime_demand;
         var view = self.program.view();
         try state.index(self.allocator, self, view);
@@ -15765,7 +15257,6 @@ const Builder = struct {
         verifyDraftTemplateSpecsResolved(body_draft);
         try self.finalizeDraftNestedSpecs(body_draft, body_ids);
         self.markDiscoveryFns(body_draft, commit_extent);
-        try self.settleLiteralRoots();
         var returned_ids = body_ids;
         returned_ids.fn_slots = &.{};
         returned_ids.fn_demand_shaped = &.{};
@@ -15828,7 +15319,6 @@ const Builder = struct {
         verifyDraftTemplateSpecsResolved(body_draft);
         try self.finalizeDraftNestedSpecs(body_draft, body_ids);
         self.markDiscoveryFns(body_draft, commit_extent);
-        try self.settleLiteralRoots();
         var returned_ids = body_ids;
         returned_ids.fn_slots = &.{};
         returned_ids.fn_demand_shaped = &.{};
@@ -27268,11 +26758,17 @@ const BodyContext = struct {
 
     /// A nominal instance's declared field order. Its padding types
     /// instantiate in the declaring view, with the declaration's formals bound
-    /// to this instance's argument nodes, exactly as its backing instantiates.
+    /// to this instance's argument nodes, exactly as its backing instantiates,
+    /// and terminate as it does: every padding type registers its placeholder
+    /// before any of them expands, so a recursive mention of this instance
+    /// finds them all. `padding_nodes` holds one node per padding type, and
+    /// `pending` the indices of those this task expands.
     const InstDeclaredOrderTask = struct {
         nominal: checked.CheckedNominalType,
         args: []NodeId,
         lookup: Builder.NominalDeclLookup = undefined,
+        padding_nodes: []NodeId = &.{},
+        pending: []u32 = &.{},
         /// The view and instantiation context the declaring module replaced.
         outer: ?struct { view: ModuleView, instantiation: TypeInstantiationContext } = null,
         scope: ?*InstantiatingNodeMap = null,
@@ -27290,13 +26786,34 @@ const BodyContext = struct {
             const fields = task.lookup.declaration.declaredRecordFields(task.lookup.view.types);
             if (fields.len == 0) return .{ .ret = .{ .declared_order = &.{} } };
             if (task.lookup.padding_field_tys.len == 0) return .{ .ret = .{ .declared_order = try self.instDeclaredOrderEntries(task, &.{}) } };
+            const padding_tys = task.lookup.padding_field_tys;
+            const module_bytes = task.lookup.view.key.bytes;
+            const declaration_id: u32 = @backingInt(task.lookup.declaration.id);
+            task.padding_nodes = try self.graph.arena().alloc(NodeId, padding_tys.len);
+            const pending = try self.graph.arena().alloc(u32, padding_tys.len);
+            var pending_count: usize = 0;
+            for (task.padding_nodes, 0..) |*node, index| {
+                const padding_index: u32 = @intCast(index);
+                if (self.graph.nominalPaddingNode(module_bytes, declaration_id, padding_index, task.args)) |cached| {
+                    node.* = cached;
+                    continue;
+                }
+                node.* = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+                try self.graph.putNominalPaddingNode(module_bytes, declaration_id, padding_index, task.args, node.*);
+                pending[pending_count] = padding_index;
+                pending_count += 1;
+            }
+            if (pending_count == 0) return .{ .ret = .{ .declared_order = try self.instDeclaredOrderEntries(task, task.padding_nodes) } };
+            task.pending = pending[0..pending_count];
             frame.cursor = 1;
             try self.enterDeclScopes(task, task.lookup.view, task.lookup.declaration, task.args);
-            return instSliceStep(task.lookup.padding_field_tys);
+            return instNodeStep(padding_tys[task.pending[0]]);
         }
-        const padding_nodes = input.?.get(.nodes);
+        try self.graph.unify(task.padding_nodes[task.pending[frame.index]], input.?.get(.node));
+        frame.index += 1;
+        if (frame.index < task.pending.len) return instNodeStep(task.lookup.padding_field_tys[task.pending[frame.index]]);
         self.leaveDeclBackingScopes(task);
-        return .{ .ret = .{ .declared_order = try self.instDeclaredOrderEntries(task, padding_nodes) } };
+        return .{ .ret = .{ .declared_order = try self.instDeclaredOrderEntries(task, task.padding_nodes) } };
     }
 
     fn instDeclaredOrderEntries(self: *BodyContext, task: *InstDeclaredOrderTask, padding_nodes: []const NodeId) Allocator.Error![]InstDeclaredField {
@@ -64476,9 +63993,7 @@ const BodyContext = struct {
         // materialized statement-EXPRESSION route scopes its internal binds
         // to that expression (the lift capture analysis is lexical), which
         // would leave later statements reading free locals.
-        if (!self.recordDestructsNeedExplicitRest(destructs) and
-            !try self.recordDestructsHaveOptionalField(self.view.bodies.pattern(pattern).ty, destructs))
-        {
+        if (!try self.recordPatternNeedsFieldStatements(pattern)) {
             self.restoreSourceLocation(&task.statement_saved);
             return null;
         }
@@ -64636,15 +64151,66 @@ const BodyContext = struct {
         }
     }
 
-    fn appendRecordRestPatternStatements(
-        self: *BodyContext,
+    /// Whether binding record pattern `root` as a statement needs per-field
+    /// `let` statements: it, or a record pattern nested in one of its fields,
+    /// has an explicit rest binder or an optional field. A nested record
+    /// pattern means what it means on its own, so it expands the same way.
+    fn recordPatternNeedsFieldStatements(self: *BodyContext, root: checked.CheckedPatternId) Allocator.Error!bool {
+        var pending: std.ArrayListUnmanaged(checked.CheckedPatternId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |pattern_id| {
+            const pattern = self.view.bodies.pattern(pattern_id);
+            const destructs = switch (pattern.data) {
+                .record_destructure => |destructs| destructs,
+                .pending, .assign, .as, .applied_tag, .nominal, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => continue,
+            };
+            if (self.recordDestructsNeedExplicitRest(destructs) or try self.recordDestructsHaveOptionalField(pattern.ty, destructs)) return true;
+            for (destructs) |destruct| switch (destruct.kind) {
+                .required, .sub_pattern => |child| try pending.append(self.allocator, child),
+                .rest => {},
+            };
+        }
+        return false;
+    }
+
+    const RecordFieldStatementsFrame = struct {
         value: DraftExprId,
         value_node: NodeId,
         record_checked_ty: checked.CheckedTypeId,
         destructs: []const checked.CheckedRecordDestruct,
+    };
+
+    fn appendRecordRestPatternStatements(
+        self: *BodyContext,
+        root_value: DraftExprId,
+        root_value_node: NodeId,
+        root_record_checked_ty: checked.CheckedTypeId,
+        root_destructs: []const checked.CheckedRecordDestruct,
         lowered: *LoweredStatements,
         comptime_site: ?DraftComptimeSiteId,
     ) Allocator.Error!void {
+        var frames: std.ArrayListUnmanaged(RecordFieldStatementsFrame) = .empty;
+        defer frames.deinit(self.allocator);
+        try frames.append(self.allocator, .{ .value = root_value, .value_node = root_value_node, .record_checked_ty = root_record_checked_ty, .destructs = root_destructs });
+        while (frames.pop()) |frame| try self.appendRecordFieldStatements(frame, &frames, lowered, comptime_site);
+    }
+
+    /// The statements binding one record pattern's fields. A field whose
+    /// sub-pattern is itself a record pattern needing per-field statements is
+    /// bound to a local and queued as a frame of its own, so its binders stay
+    /// in scope for the rest of the block too.
+    fn appendRecordFieldStatements(
+        self: *BodyContext,
+        frame: RecordFieldStatementsFrame,
+        frames: *std.ArrayListUnmanaged(RecordFieldStatementsFrame),
+        lowered: *LoweredStatements,
+        comptime_site: ?DraftComptimeSiteId,
+    ) Allocator.Error!void {
+        const value = frame.value;
+        const value_node = frame.value_node;
+        const record_checked_ty = frame.record_checked_ty;
+        const destructs = frame.destructs;
         for (destructs) |destruct| {
             switch (destruct.kind) {
                 .required, .sub_pattern => |child| {
@@ -64668,6 +64234,21 @@ const BodyContext = struct {
                             .value = try_value,
                             .comptime_site = if (try self.patternCanMiss(child)) comptime_site else null,
                         } }));
+                        continue;
+                    }
+                    const child_pattern = self.view.bodies.pattern(child);
+                    if (child_pattern.data == .record_destructure and try self.recordPatternNeedsFieldStatements(child)) {
+                        const field_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), field_cell, null);
+                        try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
+                            .pat = try self.addPatWithTypeCell(field_cell, .{ .bind = field_local }),
+                            .value = field_value,
+                        } }));
+                        try frames.append(self.allocator, .{
+                            .value = try self.addExprWithTypeCell(field_cell, .{ .local = field_local }),
+                            .value_node = field_node,
+                            .record_checked_ty = child_pattern.ty,
+                            .destructs = child_pattern.data.record_destructure,
+                        });
                         continue;
                     }
                     try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{

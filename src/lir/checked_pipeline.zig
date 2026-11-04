@@ -26,11 +26,6 @@ pub const CompletedScalarValues = postcheck.ComptimeScalarValues.CompletedScalar
 pub const CompletedErasedMembers = postcheck.CompletedErasedMembers;
 /// Which runtime specializations compile-time evaluation must lower.
 pub const LiteralDemand = postcheck.LiteralDemand;
-/// See `postcheck.Common.LiteralValueLookup`.
-pub const LiteralValueLookup = postcheck.Common.LiteralValueLookup;
-pub const LiteralValueHit = postcheck.Common.LiteralValueHit;
-pub const LiteralValueRead = postcheck.Common.LiteralValueRead;
-pub const LiteralRootReuse = postcheck.Common.LiteralRootReuse;
 const TagReachability = @import("tag_reachability.zig");
 const ReachableProcs = @import("reachable_procs.zig");
 const DebugPrint = @import("debug_print.zig");
@@ -182,9 +177,8 @@ pub const TargetConfig = struct {
     /// compile-time roots it demands (design.md "Demand-Driven Compile-Time
     /// Evaluation").
     demand_driven_comptime_roots: bool = false,
-    /// A test/check command still validates every initializer. A prior silent
-    /// successful validation permits deferring its value until a reader needs it.
-    validated_comptime_roots: ?*const std.AutoHashMapUnmanaged(ComptimeDemandRoot, void) = null,
+    /// Test/check commands validate all pending initializers, even without readers.
+    validate_all_comptime_roots: bool = false,
     /// For `.boxy`: the module whose object this lowering emits, with every
     /// other module's worker an imported symbol (design.md "Per-Module
     /// Output"); null lowers everything the roots reach as one program.
@@ -195,15 +189,11 @@ pub const TargetConfig = struct {
     /// With `boxy_compile_time`, the roots hold function values
     /// (`postcheck.Boxy.Lower.Input.stored_functions`).
     boxy_stored_functions: bool = false,
+    /// The consumer reads composition sites
+    /// (`postcheck.Boxy.Lower.Input.composition_sites`).
+    boxy_composition_sites: bool = true,
     /// The compilation session evaluates the program's literal roots.
     literal_roots: bool = false,
-    /// With `literal_roots`, the literal values an earlier compilation of the
-    /// program stored, which literal roots restore instead of converting
-    /// (design.md "Compile-Time Value Reuse Across Edits").
-    literal_values: ?postcheck.Common.LiteralValueLookup = null,
-    /// With `literal_values`, keep each restored literal root's conversion as
-    /// a literal root that evaluation runs to verify the stored value.
-    verify_literal_values: bool = false,
     inline_mode: InlineMode = .none,
     /// Optional ARC mode specialization belongs to the consumer's optimization
     /// policy, independently of whether source wrappers are inlined.
@@ -391,6 +381,7 @@ pub const Timing = struct {
     boxy_lowering_ns: TimingCounter = .{},
     boxy_unit_codegen_ns: TimingCounter = .{},
     boxy_unit_cache_ns: TimingCounter = .{},
+    boxy_unit_restore_ns: TimingCounter = .{},
     lir_passes_ns: TimingCounter = .{},
     arc_ns: TimingCounter = .{},
 
@@ -450,6 +441,7 @@ pub const Timing = struct {
             .boxy_lowering_ns = self.boxy_lowering_ns.load(),
             .boxy_unit_codegen_ns = self.boxy_unit_codegen_ns.load(),
             .boxy_unit_cache_ns = self.boxy_unit_cache_ns.load(),
+            .boxy_unit_restore_ns = self.boxy_unit_restore_ns.load(),
             .lir_passes_ns = self.lir_passes_ns.load(),
             .arc_ns = self.arc_ns.load(),
             .monotype_diagnostics = diagnostics,
@@ -509,6 +501,7 @@ pub const Timing = struct {
         self.boxy_lowering_ns.add(snapshot_value.boxy_lowering_ns);
         self.boxy_unit_codegen_ns.add(snapshot_value.boxy_unit_codegen_ns);
         self.boxy_unit_cache_ns.add(snapshot_value.boxy_unit_cache_ns);
+        self.boxy_unit_restore_ns.add(snapshot_value.boxy_unit_restore_ns);
         self.lir_passes_ns.add(snapshot_value.lir_passes_ns);
         self.arc_ns.add(snapshot_value.arc_ns);
         self.addMonotypeDiagnostics(snapshot_value.monotype_diagnostics);
@@ -531,6 +524,7 @@ pub const Timing = struct {
             .boxy_lowering => self.boxy_lowering_ns.add(elapsed_ns),
             .boxy_unit_codegen => self.boxy_unit_codegen_ns.add(elapsed_ns),
             .boxy_unit_cache => self.boxy_unit_cache_ns.add(elapsed_ns),
+            .boxy_unit_restore => self.boxy_unit_restore_ns.add(elapsed_ns),
             .lir_passes => self.lir_passes_ns.add(elapsed_ns),
             .arc => self.arc_ns.add(elapsed_ns),
         }
@@ -681,6 +675,7 @@ pub const TimingSnapshot = struct {
     boxy_lowering_ns: u64 = 0,
     boxy_unit_codegen_ns: u64 = 0,
     boxy_unit_cache_ns: u64 = 0,
+    boxy_unit_restore_ns: u64 = 0,
     lir_passes_ns: u64 = 0,
     arc_ns: u64 = 0,
     monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
@@ -700,6 +695,9 @@ pub const TimingPhase = enum {
     boxy_unit_codegen,
     /// Encoding and filing a module unit's object in the object cache.
     boxy_unit_cache,
+    /// Reading a module unit's object from the object cache, decoding its
+    /// pieces when the caller wants them.
+    boxy_unit_restore,
     lir_passes,
     arc,
 };
@@ -1465,11 +1463,9 @@ pub fn prepareCheckedModulesMonotype(
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
                 .demand_driven_comptime_roots = target.demand_driven_comptime_roots,
-                .validated_comptime_roots = target.validated_comptime_roots,
+                .validate_all_comptime_roots = target.validate_all_comptime_roots,
                 .comptime_demand_out = if (target.comptime_value_reads) &comptime_demand else null,
                 .literal_roots = target.literal_roots,
-                .literal_values = target.literal_values,
-                .verify_literal_values = target.verify_literal_values,
                 .replay_interface_summaries = target.replay_interface_summaries,
                 .target_usize = target.target_usize,
                 .inline_expects = if (target.comptime_value_reads) .shared else switch (target.inline_expects) {
@@ -1496,10 +1492,9 @@ pub fn prepareCheckedModulesMonotype(
         const omitted: u32 = @intCast(roots.requests.len - root_count);
         for (test_plan_metadata) |*metadata| metadata.request_index -= omitted;
     }
-    // The validation set is borrowed only by Monotype production, never by
-    // its retained consumers after the coordinator's finalization returns.
+    // Initializer validation belongs to finalization, not the retained runtime consumer.
     var retained_target = target;
-    retained_target.validated_comptime_roots = null;
+    retained_target.validate_all_comptime_roots = false;
     return .{
         .allocator = allocator,
         .program = mono,
@@ -1881,7 +1876,19 @@ fn finishLoweredOutput(
     var arc_roots = std.ArrayList(LIR.LirProcSpecId).empty;
     defer arc_roots.deinit(allocator);
     try arc_roots.appendSlice(allocator, lowered.lir_result.root_procs.items);
-    try arc_roots.appendSlice(allocator, lowered.lir_result.exported_procs.items);
+    // A unit's exported workers are not ARC roots: ARC solves each one's
+    // ownership signature from its body, the unit's object records it in the
+    // export interface its importers compile against (design.md "Per-Module
+    // Output"), and a root's signature would instead be pinned to the
+    // all-owned convention.
+    // The procedures something other than Roc code or the erased-call runtime
+    // enters (design.md "Deferred Erased Calls"): the roots, and every procedure frozen
+    // data holds the address of. A unit's exported workers are not among
+    // them: only Roc code in other units calls them, compiled against the
+    // `may_leave_pending` their export interface carries.
+    var entered_from_outside = std.ArrayList(LIR.LirProcSpecId).empty;
+    defer entered_from_outside.deinit(allocator);
+    try entered_from_outside.appendSlice(allocator, lowered.lir_result.root_procs.items);
     if (frozen.*) |data| {
         var seen = try allocator.alloc(bool, lowered.lir_result.store.procSpecCount());
         defer allocator.free(seen);
@@ -1889,6 +1896,7 @@ fn finishLoweredOutput(
         for (arc_roots.items) |proc| seen[@backingInt(proc)] = true;
         for (data.exports) |export_| for (export_.relocations) |relocation| {
             const proc = relocation.procedure orelse continue;
+            try entered_from_outside.append(allocator, proc);
             if (seen[@backingInt(proc)]) continue;
             seen[@backingInt(proc)] = true;
             try arc_roots.append(allocator, proc);
@@ -1906,7 +1914,7 @@ fn finishLoweredOutput(
     if (target.timing) |timing| timing.addArcParallel(arc_metrics.?.*);
     arc_timing_scope.end();
 
-    try TailDrive.run(allocator, &lowered.lir_result.store, &.{arc_roots.items});
+    try TailDrive.run(allocator, &lowered.lir_result.store, &.{entered_from_outside.items});
 
     // ARC settled every read that named a fresh form, so a fresh-form
     // procedure no read chose is now unreferenced.
@@ -1983,6 +1991,7 @@ pub const PreparedBoxy = struct {
             .host_boundary_digests = target.host_boundary_digests,
             .compile_time = target.boxy_compile_time,
             .stored_functions = target.boxy_stored_functions,
+            .composition_sites = target.boxy_composition_sites,
             .unit = if (target.boxy_unit) |unit| .{ .module = unit } else .program,
         });
         boxy_timing_scope.end();

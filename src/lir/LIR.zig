@@ -1898,8 +1898,14 @@ pub const LirProcSpec = struct {
     /// `unless_caller_drives` statement: its entry records whether the
     /// erased-call runtime made the call.
     reads_caller_drives: bool = false,
+    /// Set by the tail-drive pass on a procedure with a statement that defers
+    /// an erased call or makes a call that can leave one pending. The
+    /// procedure has a pending cell: its caller's (`takesPendingCell`), the
+    /// runtime's, or one in its own frame.
+    uses_pending_cell: bool = false,
     /// Producer-owned tail-drive summary. Cached bodies retain this fact so
-    /// callers make a pending erased call before reading its result.
+    /// callers make a pending erased call before reading its result, and
+    /// pass the cell it goes in (`takesPendingCell`).
     may_leave_pending: bool = false,
     /// Tail-recursion rewrite applied by the TRMC pass, if any.
     tail_transform: TailTransform = .none,
@@ -1938,6 +1944,14 @@ pub const LirProcSpec = struct {
     /// reference count in it would never run: ARC sees it as having none.
     pub fn arcBody(self: *const LirProcSpec) ?CFStmtId {
         return if (self.is_static_initializer) null else self.body;
+    }
+
+    /// Whether direct calls pass this procedure the cell it leaves a pending
+    /// call in, as a hidden parameter after every other. Only Roc code calls
+    /// such a procedure. One anything else can enter makes its own pending
+    /// calls, and an erased-callable one reads the cell from its invocation.
+    pub fn takesPendingCell(self: LirProcSpec) bool {
+        return self.abi == .roc and self.may_leave_pending;
     }
 };
 

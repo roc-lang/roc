@@ -1575,6 +1575,16 @@ fn setupTestPlatforms(
         },
     }));
 
+    // A wasm host that imports the app's hosted function from the embedder
+    // with a signature that disagrees with the app's.
+    prepared_hosts_step.dependOn(buildAndCopyWasmHostObject(b, wasm_target, optimize, strip, omit_frame_pointer, .{
+        .name = "import_conflict_host",
+        .root_source_file = "test/wasm/wasm_import_conflict/wasm_host.zig",
+        .imports = host_alloc_imports,
+        .bundle_compiler_rt = false,
+        .dest_paths = &.{"test/wasm/wasm_import_conflict/platform/targets/wasm32/host.wasm"},
+    }));
+
     for (glibc_cross_targets) |cross_target| {
         if (generateGlibcStub(b, b.resolveTargetQuery(cross_target.query), cross_target.name)) |stubs| {
             prepared_hosts_step.dependOn(&stubs.step);
@@ -5891,6 +5901,19 @@ fn addMainExe(
     });
     configureBackend(embedded_digests_tool, b.graph.host);
     const embedded_digests = b.addRunArtifact(embedded_digests_tool);
+    const support_image_tool = b.addExecutable(.{
+        .name = "support_image",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/support_image.zig"),
+            .target = hostToolTarget(b, .debug),
+            .optimize = .debug,
+            .imports = &.{.{ .name = "UnitImage", .module = b.createModule(.{
+                .root_source_file = b.path("src/backend/dev/UnitImage.zig"),
+                .target = hostToolTarget(b, .debug),
+                .optimize = .debug,
+            }) }},
+        }),
+    });
     const embedded_digests_source = embedded_digests.addOutputFileArg("embedded_digests.zig");
     const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
     // `roc` embeds the archive, so strip its member names first.
@@ -6242,6 +6265,16 @@ fn addMainExe(
                 cross_boxy_runtime_obj.getEmittedBin(),
                 b.pathJoin(&.{ "targets", cross_target.name, boxy_runtime_ext }),
             );
+            // A fast dev link of a Linux x86_64 executable places the
+            // builtins and the Boxy runtime as one unit image, converted
+            // here once (src/build/support_image.zig).
+            if (cross_target.query.os_tag == .linux and cross_target.query.cpu_arch == .x86_64) {
+                const convert = b.addRunArtifact(support_image_tool);
+                const image = convert.addOutputFileArg("roc_support.rbxu");
+                convert.addFileArg(cross_builtins_extern_obj.getEmittedBin());
+                convert.addFileArg(cross_boxy_runtime_obj.getEmittedBin());
+                _ = embedded_assets.addCopyFile(image, b.pathJoin(&.{ "targets", cross_target.name, "roc_support.rbxu" }));
+            }
         }
         const copy_cross_builtins_extern = embedded_assets;
         embedded_digests.addArg(b.fmt("builtins_extern_{s}", .{cross_target.name}));
