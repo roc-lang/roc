@@ -60,7 +60,7 @@ pub const UnitPieces = @import("UnitPieces.zig");
 pub const UnitImage = @import("UnitImage.zig");
 /// Loads a unit image into this process; only a Linux x86_64 host loads
 /// the x86_64 code unit images hold.
-pub const UnitImageLoader = if ((builtin.os.tag == .linux and builtin.cpu.arch == .x86_64) or (builtin.os.tag == .macos and builtin.cpu.arch == .aarch64)) @import("UnitImageLoader.zig") else void;
+pub const UnitImageLoader = if ((builtin.os.tag == .linux and builtin.cpu.arch == .x86_64) or (builtin.os.tag == .macos and builtin.cpu.arch == .aarch64) or (builtin.os.tag == .windows and (builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .aarch64))) @import("UnitImageLoader.zig") else void;
 pub const Composition = @import("Composition.zig");
 pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").Entrypoint;
 pub const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;

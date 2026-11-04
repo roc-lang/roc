@@ -218,7 +218,7 @@ pub fn plan(gpa: Allocator, std_io: std.Io, inputs: Inputs) PlanError!Plan {
                 switch (kind) {
                     .abs64, .pc32 => host_counts[symbol] += 1,
                     .abs32, .abs32s => base.invariant("run image invariant violated: a unit image holds a 32-bit absolute host address", .{}),
-                    .branch26, .page21, .pageoff12 => base.invariant("run image invariant violated: an x86_64 unit image holds an arm64 site", .{}),
+                    .branch26, .page21, .pageoff12, .rva32 => base.invariant("run image invariant violated: a Linux x86_64 unit image holds another target's site kind", .{}),
                 }
                 continue;
             }
@@ -226,7 +226,7 @@ pub fn plan(gpa: Allocator, std_io: std.Io, inputs: Inputs) PlanError!Plan {
                 .abs64 => rebase_count += 1,
                 .pc32 => {},
                 .abs32, .abs32s => base.invariant("run image invariant violated: a unit image holds a 32-bit absolute address, which the image's mapping cannot reach", .{}),
-                .branch26, .page21, .pageoff12 => base.invariant("run image invariant violated: an x86_64 unit image holds an arm64 site", .{}),
+                .branch26, .page21, .pageoff12, .rva32 => base.invariant("run image invariant violated: a Linux x86_64 unit image holds another target's site kind", .{}),
             }
         }
     }
@@ -362,7 +362,7 @@ pub fn write(self: *const Plan, std_io: std.Io, inputs: Inputs, composed: RunIma
             const field = switch (region) {
                 .block => composed.code[@intCast(place.block + site.offset)..][0..@intCast(UnitImage.kindWidth(kind))],
                 .data => composed.writable[@intCast(place.data + site.offset)..][0..@intCast(UnitImage.kindWidth(kind))],
-                .bss, .debug_line, .debug_info, .debug_abbrev => unreachable, // a placed site is a field with bytes: in the block or the data
+                .bss, .debug_line, .debug_info, .debug_abbrev, .pdata, .xdata => unreachable, // a placed site is a field with bytes: in the block or the data
             };
             timing.sites_patched += 1;
             const target_offset: u64 = if (site.target_region == UnitImage.import_target) switch (state.targets[site.target]) {
@@ -378,7 +378,7 @@ pub fn write(self: *const Plan, std_io: std.Io, inputs: Inputs, composed: RunIma
                         .kind = @backingInt(switch (kind) {
                             .pc32 => RunImage.HostSiteKind.pc32,
                             .abs64 => RunImage.HostSiteKind.abs64,
-                            .abs32, .abs32s, .branch26, .page21, .pageoff12 => unreachable, // `plan` rejected every other host site kind
+                            .abs32, .abs32s, .branch26, .page21, .pageoff12, .rva32 => unreachable, // `plan` rejected every other host site kind
                         }),
                     };
                     site_cursors[slot] += 1;
@@ -397,7 +397,7 @@ pub fn write(self: *const Plan, std_io: std.Io, inputs: Inputs, composed: RunIma
                     composed.rebases[rebase_cursor] = .{ .offset = site_offset, .value = @bitCast(value) };
                     rebase_cursor += 1;
                 },
-                .abs32, .abs32s, .branch26, .page21, .pageoff12 => unreachable, // `plan` rejected every other site kind
+                .abs32, .abs32s, .branch26, .page21, .pageoff12, .rva32 => unreachable, // `plan` rejected every other site kind
             }
         }
     }
@@ -428,7 +428,7 @@ fn regionBase(place: Place, writable_base: u64, region: UnitImage.Region) u64 {
         .block => place.block,
         .data => writable_base + place.data,
         .bss => writable_base + place.bss,
-        .debug_line, .debug_info, .debug_abbrev => unreachable, // debug fragments are never placed in a run image
+        .debug_line, .debug_info, .debug_abbrev, .pdata, .xdata => unreachable, // debug fragments and unwind regions are never placed in a run image
     };
 }
 

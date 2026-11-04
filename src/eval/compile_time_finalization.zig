@@ -1275,8 +1275,9 @@ pub const ExportInterfaces = lir.CheckedPipeline.BoxyExportInterfaces;
 pub const ModuleNames = lir.CheckedPipeline.BoxyModuleNames;
 
 /// How a cached module's code reaches this process for compile-time
-/// evaluation. A Linux x86_64 or macOS arm64 host, whose module units
-/// carry unit images (`compile.boxy_unit.producesImage`), loads each unit's
+/// evaluation. A host whose module units carry unit images
+/// (`compile.boxy_unit.producesImage`: Linux x86_64, macOS arm64, Windows
+/// x86_64 or arm64) loads each unit's
 /// image as the cache holds it; every other host composes the unit's pieces
 /// into a relocatable object and loads that.
 pub const BoxyObjectCode = enum { image, pieces };

@@ -188,6 +188,8 @@ comptime {
         std.testing.refAllDecls(host_prelink);
         std.testing.refAllDecls(macho_host_prelink);
         std.testing.refAllDecls(macho_patch_link);
+        std.testing.refAllDecls(coff_host_prelink);
+        std.testing.refAllDecls(coff_patch_link);
         std.testing.refAllDecls(@import("patch_fanout.zig"));
         std.testing.refAllDecls(@import("link_output.zig"));
         std.testing.refAllDecls(wasm_link);
@@ -204,6 +206,8 @@ const host_prelink = @import("host_prelink.zig");
 const patch_link = @import("patch_link.zig");
 const macho_host_prelink = @import("macho/HostPrelink.zig");
 const macho_patch_link = @import("macho/PatchLink.zig");
+const coff_host_prelink = @import("coff/HostPrelink.zig");
+const coff_patch_link = @import("coff/PatchLink.zig");
 const wasm_link = @import("wasm_link.zig");
 const wasm_host_image = @import("wasm_host_image.zig");
 const run_image_link = @import("run_image_link.zig");
@@ -11155,18 +11159,19 @@ fn fastDevLinkFormat(target: RocTarget) ?fast_dev_link.Format {
     return switch (target) {
         .x64musl, .x64glibc => .elf,
         .arm64mac => .macho,
-        .x64mac, .x64win, .x64mingw, .x64freebsd, .x64openbsd, .x64netbsd, .x64linux, .x64elf => null,
-        .x64v1mac, .x64v1win, .x64v1mingw, .x64v1freebsd, .x64v1openbsd, .x64v1netbsd, .x64v1musl, .x64v1glibc, .x64v1linux, .x64v1elf => null,
-        .arm64win, .arm64mingw, .arm64linux, .arm64musl, .arm64glibc, .arm64v1win, .arm64v1mingw, .arm64v1linux, .arm64v1musl, .arm64v1glibc => null,
+        .x64win, .x64mingw, .arm64win, .arm64mingw, .x64v1win, .x64v1mingw, .arm64v1win, .arm64v1mingw => .coff,
+        .x64mac, .x64freebsd, .x64openbsd, .x64netbsd, .x64linux, .x64elf => null,
+        .x64v1mac, .x64v1freebsd, .x64v1openbsd, .x64v1netbsd, .x64v1musl, .x64v1glibc, .x64v1linux, .x64v1elf => null,
+        .arm64linux, .arm64musl, .arm64glibc, .arm64v1linux, .arm64v1musl, .arm64v1glibc => null,
         .arm32linux, .arm32musl, .wasm32, .wasm32v1 => null,
     };
 }
 
 /// Whether `roc build` links its executable with a fast dev link
-/// (`fast_dev_link.zig`): a `.boxy` dev build of a Linux x86_64 executable
-/// on a Linux compiler, or of a macOS arm64 executable on a macOS compiler,
-/// whose output file the link writes through the host's own system calls.
-/// Every other combination composes a program object and links it with LLD.
+/// (`fast_dev_link.zig`): a `.boxy` dev build of an executable for a target
+/// with a fast dev link format, on any compiler host, whose output file the
+/// link writes through the host's own system calls. Every other combination
+/// composes a program object and links it with LLD.
 fn fastDevLinkApplies(target: RocTarget, link_type: roc_target.OutputKind, args: cli_args.BuildArgs) bool {
     if (args.opt != .dev or currentRuntimeSpecializationStrategy(args.specialization_strategy) != .boxy) return false;
     // The fast dev link reads unit images and the pre-linked host from the
@@ -11181,10 +11186,7 @@ fn fastDevLinkApplies(target: RocTarget, link_type: roc_target.OutputKind, args:
         .shared, .archive => false,
     };
     if (!executable) return false;
-    return switch (fastDevLinkFormat(target) orelse return false) {
-        .elf => builtin.target.os.tag == .linux,
-        .macho => builtin.target.os.tag == .macos,
-    };
+    return fastDevLinkFormat(target) != null;
 }
 
 /// Whether a build lowers and files per-module wasm units for its wasm
@@ -11748,20 +11750,20 @@ const FastDevLink = struct {
     }
 
     /// Each `provides` symbol's kind and layout size, as the program's
-    /// images define it: what a Mach-O host's windows are sized by.
+    /// images define it: what a Mach-O or COFF host's windows are sized by.
     fn provideLayouts(
         self: *FastDevLink,
         ctx: *CliCtx,
         support_view: backend.dev.UnitImage.View,
         units: []const patch_link.ImageInput,
-    ) CliMainError![]const macho_host_prelink.Provide {
+    ) CliMainError![]const host_prelink.Provide {
         var images: std.ArrayList(unit_walk.ImageInput) = .empty;
         defer images.deinit(ctx.gpa);
         try images.append(ctx.gpa, .{ .view = support_view });
         try images.appendSlice(ctx.gpa, units);
         var exports = try unit_walk.collectExports(ctx.gpa, images.items);
         defer exports.deinit(ctx.gpa);
-        const out = try ctx.arena.alloc(macho_host_prelink.Provide, self.spec.provides.len);
+        const out = try ctx.arena.alloc(host_prelink.Provide, self.spec.provides.len);
         for (self.spec.provides, out) |name, *provide| {
             // The checked program defines every `provides` symbol (the
             // checker rejects an app that lacks one).
@@ -11810,15 +11812,15 @@ const FastDevLink = struct {
         const support_view = backend.dev.UnitImage.View.init(self.support) catch
             unreachable; // `start` read this image
 
-        // A Mach-O host's key covers the provides' kinds and layout sizes,
-        // which the images tell; its lookup waits for them.
-        var provides: []const macho_host_prelink.Provide = &.{};
-        if (self.spec.format == .macho) {
+        // A Mach-O or COFF host's key covers the provides' kinds and layout
+        // sizes, which the images tell; its lookup waits for them.
+        var provides: []const host_prelink.Provide = &.{};
+        if (self.spec.format == .macho or self.spec.format == .coff) {
             provides = try self.provideLayouts(ctx, support_view, units);
-            if (self.job.outcome == .hashed) self.job.lookupMacho(provides);
+            if (self.job.outcome == .hashed) self.job.lookupWithLayouts(provides);
         }
         const record_bytes: []align(16) const u8 = switch (self.job.outcome) {
-            .pending, .hashed => unreachable, // waiting joined the job, which always records an outcome, and a Mach-O lookup followed
+            .pending, .hashed => unreachable, // waiting joined the job, which always records an outcome, and a lookup by layouts followed
             .unreadable_input => |path| {
                 reporter.fail();
                 std.log.err("Reading the platform link input {s} failed", .{path});
@@ -11849,6 +11851,7 @@ const FastDevLink = struct {
                 const host_start: []const u8 = switch (self.spec.format) {
                     .elf => (host_prelink.View.init(record) catch base.invariant("roc build invariant violated: a host record this build made does not read", .{})).host(),
                     .macho => (macho_host_prelink.View.init(record) catch base.invariant("roc build invariant violated: a host record this build made does not read", .{})).segments(),
+                    .coff => (coff_host_prelink.View.init(record) catch base.invariant("roc build invariant violated: a host record this build made does not read", .{})).sections(),
                 };
                 self.output.writeStart(host_start) catch |err| {
                     reporter.fail();
@@ -11874,6 +11877,13 @@ const FastDevLink = struct {
             }, &self.output, build_env.postCheckExecutor(), &timing, &outcome),
             .macho => macho_patch_link.link(ctx.gpa, ctx.arena, ctx.io.std_io, .{
                 .host = macho_host_prelink.View.init(record_bytes) catch unreachable, // the job or the prelink admitted the record
+                .support = .{ .view = support_view },
+                .units = units,
+                .root = library.images.len,
+                .host_required = self.spec.host_required,
+            }, &self.output, build_env.postCheckExecutor(), &timing, &outcome),
+            .coff => coff_patch_link.link(ctx.gpa, ctx.arena, ctx.io.std_io, .{
+                .host = coff_host_prelink.View.init(record_bytes) catch unreachable, // the job or the prelink admitted the record
                 .support = .{ .view = support_view },
                 .units = units,
                 .root = library.images.len,
@@ -11969,9 +11979,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
     try prepareBuildOutput(ctx, final_output_path);
 
-    // A Linux x86_64 dev executable of a `.boxy` program is linked by a fast
-    // dev link, whose output file and host job start before any compile
-    // work.
+    // A dev executable of a `.boxy` program for a target with a fast dev
+    // link format is linked by a fast dev link, whose output file and host
+    // job start before any compile work.
     const fast_link: ?*FastDevLink = if (fastDevLinkApplies(target, link_type, args))
         try FastDevLink.start(ctx, args, &build_env, platform_dir, target, final_output_path)
     else

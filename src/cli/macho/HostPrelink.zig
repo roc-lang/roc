@@ -26,32 +26,15 @@
 //! The record puts the host first, so an output file on the same APFS
 //! volume as the cache can begin as a clone of it.
 const std = @import("std");
+const host_prelink = @import("../host_prelink.zig");
 const Allocator = std.mem.Allocator;
 const macho = std.macho;
 
-/// Whether a `provides` symbol is a procedure or a value.
-pub const ProvideKind = enum(u8) { procedure = 0, data = 1 };
-
-/// One `provides` symbol of the platform, as the host link places it.
-pub const Provide = struct {
-    /// The C name, without the Mach-O underscore.
-    name: []const u8,
-    kind: ProvideKind,
-    /// A data symbol's layout size; 0 for a procedure.
-    size: u64,
-
-    /// The bytes the symbol's window takes.
-    pub fn windowSize(self: Provide) u64 {
-        return switch (self.kind) {
-            .procedure => procedure_window,
-            .data => std.mem.alignForward(u64, self.size, window_align),
-        };
-    }
-};
-
+pub const ProvideKind = host_prelink.ProvideKind;
+pub const Provide = host_prelink.Provide;
 /// A procedure window: ADRP, ADD, BR and a trap.
-pub const procedure_window: u64 = 16;
-const window_align: u64 = 16;
+pub const procedure_window = host_prelink.procedure_window;
+const window_align = host_prelink.window_align;
 /// A trampoline: one `B`.
 pub const trampoline_size: u64 = 4;
 /// The segment page of an arm64 macOS executable.

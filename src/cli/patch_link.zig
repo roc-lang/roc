@@ -428,6 +428,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
             // Zero-fill: the window is already zero.
             .bss => {},
             .debug_line, .debug_info, .debug_abbrev => unreachable, // image symbols live only in allocated regions
+            .pdata, .xdata => unreachable, // an ELF image carries no unwind regions
         }
     }
     const phdrs = mapped[@intCast(host.header.phdr_offset)..][0 .. host.header.phnum * 56];
@@ -479,6 +480,7 @@ const Place = struct {
             .block => self.block,
             .data => self.data,
             .bss => self.bss,
+            .pdata, .xdata => unreachable, // an ELF image carries no unwind regions
             .debug_abbrev => self.debug[0],
             .debug_info => self.debug[1],
             .debug_line => self.debug[2],
@@ -519,6 +521,7 @@ const Context = struct {
             .block => self.out[@intCast(self.fileOffsetOf(place.block))..][0..len],
             .data => self.out[@intCast(self.fileOffsetOf(place.data))..][0..len],
             .bss => &.{},
+            .pdata, .xdata => unreachable, // an ELF image carries no unwind regions
             .debug_abbrev => self.out[@intCast(self.debug_offsets[0] + place.debug[0])..][0..len],
             .debug_info => self.out[@intCast(self.debug_offsets[1] + place.debug[1])..][0..len],
             .debug_line => self.out[@intCast(self.debug_offsets[2] + place.debug[2])..][0..len],
@@ -575,6 +578,7 @@ const Task = struct {
                     .data => 1,
                     .bss => 2,
                     .debug_line, .debug_info, .debug_abbrev => unreachable, // image symbols live only in allocated regions
+                    .pdata, .xdata => unreachable, // an ELF image carries no unwind regions
                 }
             ]), .little);
             std.mem.writeInt(u64, entry[8..16], place.base(region) + symbol.value, .little);

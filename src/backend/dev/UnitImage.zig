@@ -12,7 +12,10 @@
 //! built, so placing a unit never touches them.
 //!
 //! Images are built from relocatable objects (`build`): x86_64 ELF objects
-//! for Linux, arm64 Mach-O objects for macOS. The inputs are a unit's
+//! for Linux, arm64 Mach-O objects for macOS, x86_64 and arm64 COFF objects
+//! for Windows. A COFF object's unwind tables (`.pdata` entries and their
+//! `.xdata`) are kept as regions of their own, which a link places in the
+//! executable's exception directory. The inputs are a unit's
 //! single-unit object, or the compiler's embedded support objects (the
 //! builtins and the Boxy runtime), which form one image together. The
 //! encoding is a pure function of the input bytes: fixed-width
@@ -21,7 +24,8 @@
 //!
 //! Symbol names are the C names: a Mach-O object's leading underscore is
 //! removed, so an image's imports and exports read the same on every
-//! target.
+//! target. A COFF weak external that aliases a default definition is that
+//! definition under the weak name.
 //!
 //! This file depends on `std` alone, so Roc's build graph can convert the
 //! support objects with it.
@@ -30,7 +34,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RBXU".*;
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 4;
+pub const format_version: u32 = 5;
 /// Alignment of the code block inside an image, and of every region the
 /// linker places.
 pub const page_size: u32 = 4096;
@@ -44,12 +48,17 @@ pub const Region = enum(u8) {
     debug_line = 3,
     debug_info = 4,
     debug_abbrev = 5,
+    /// A COFF object's `.pdata`: the function table entries the
+    /// executable's exception directory lists.
+    pdata = 6,
+    /// A COFF object's `.xdata`: the unwind information the entries name.
+    xdata = 7,
 
     /// Whether the region is mapped into the executable's address space.
     /// A debug region's addresses are offsets in its output section.
     pub fn isAllocated(self: Region) bool {
         return switch (self) {
-            .block, .data, .bss => true,
+            .block, .data, .bss, .pdata, .xdata => true,
             .debug_line, .debug_info, .debug_abbrev => false,
         };
     }
@@ -76,12 +85,16 @@ pub const SiteKind = enum(u8) {
     /// The low 12 bits of the target in an arm64 `ADD` or load/store
     /// immediate, scaled by the access width (`ARM64_RELOC_PAGEOFF12`).
     pageoff12 = 6,
+    /// A 32-bit address relative to the executable's image base
+    /// (`IMAGE_REL_AMD64_ADDR32NB`, `IMAGE_REL_ARM64_ADDR32NB`); the link
+    /// gives `applySite` the relative value.
+    rva32 = 7,
 
     /// Whether the field encodes a distance from its own address.
     pub fn isPcRelative(self: SiteKind) bool {
         return switch (self) {
             .pc32, .branch26, .page21 => true,
-            .abs64, .abs32, .abs32s, .pageoff12 => false,
+            .abs64, .abs32, .abs32s, .pageoff12, .rva32 => false,
         };
     }
 };
@@ -181,6 +194,10 @@ const Header = extern struct {
     debug_info_size: u32,
     debug_abbrev_offset: u32,
     debug_abbrev_size: u32,
+    pdata_offset: u32,
+    pdata_size: u32,
+    xdata_offset: u32,
+    xdata_size: u32,
     /// The block's atoms: the start offset of each, ascending, the first
     /// at 0; an atom runs to the next one's start or the block's end.
     atoms_offset: u32,
@@ -230,6 +247,8 @@ pub const View = struct {
         try checkRange(bytes.len, header.debug_line_offset, header.debug_line_size, 1);
         try checkRange(bytes.len, header.debug_info_offset, header.debug_info_size, 1);
         try checkRange(bytes.len, header.debug_abbrev_offset, header.debug_abbrev_size, 1);
+        try checkRange(bytes.len, header.pdata_offset, header.pdata_size, 1);
+        try checkRange(bytes.len, header.xdata_offset, header.xdata_size, 1);
         try checkRange(bytes.len, header.atoms_offset, header.atom_count, @sizeOf(u32));
         try checkRange(bytes.len, header.symbol_atoms_offset, header.symbol_count, @sizeOf(u32));
         try checkRange(bytes.len, header.edge_starts_offset, header.atom_count + 1, @sizeOf(u32));
@@ -308,6 +327,14 @@ pub const View = struct {
     pub fn debugAbbrev(self: View) []const u8 {
         return self.bytes[self.header.debug_abbrev_offset..][0..self.header.debug_abbrev_size];
     }
+    /// The function table entries of a COFF image, empty for any other.
+    pub fn pdata(self: View) []const u8 {
+        return self.bytes[self.header.pdata_offset..][0..self.header.pdata_size];
+    }
+    /// The unwind information of a COFF image, empty for any other.
+    pub fn xdata(self: View) []const u8 {
+        return self.bytes[self.header.xdata_offset..][0..self.header.xdata_size];
+    }
     /// The start offsets of the block's atoms, ascending.
     pub fn atoms(self: View) []const u32 {
         return table(u32, self.bytes, self.header.atoms_offset, self.header.atom_count);
@@ -341,6 +368,8 @@ pub const View = struct {
             .debug_line => self.debugLine(),
             .debug_info => self.debugInfo(),
             .debug_abbrev => self.debugAbbrev(),
+            .pdata => self.pdata(),
+            .xdata => self.xdata(),
         };
     }
 
@@ -453,6 +482,7 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
     var bss_size: u64 = 0;
     var bss_align: u64 = 8;
     var debug_sizes = [_]u64{ 0, 0, 0 };
+    var unwind_sizes = [_]u64{ 0, 0 };
     for (parsed, places) |object, object_places| {
         for (object.sections, 0..) |section, index| {
             if (section.class != .text) continue;
@@ -488,6 +518,8 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
                 .debug_line => placeDebug(&object_places[index], &debug_sizes[0], .debug_line, section.size),
                 .debug_info => placeDebug(&object_places[index], &debug_sizes[1], .debug_info, section.size),
                 .debug_abbrev => placeDebug(&object_places[index], &debug_sizes[2], .debug_abbrev, section.size),
+                .pdata => placeAligned(&object_places[index], &unwind_sizes[0], .pdata, section.size, 4),
+                .xdata => placeAligned(&object_places[index], &unwind_sizes[1], .xdata, section.size, section.addralign),
             }
         }
     }
@@ -502,6 +534,7 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
     if (block_align > page_size or data_align > page_size or bss_align > page_size) return error.UnsupportedSection;
     const limit = std.math.maxInt(u32);
     if (block_size > limit or data_size > limit or bss_size > limit or debug_sizes[0] > limit or debug_sizes[1] > limit or debug_sizes[2] > limit) return error.ImageTooLarge;
+    if (unwind_sizes[0] > limit or unwind_sizes[1] > limit) return error.ImageTooLarge;
 
     const block_bytes = try arena.alloc(u8, @intCast(block_size));
     @memset(block_bytes, 0);
@@ -509,6 +542,11 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
     @memset(data_bytes, 0);
     var debug_bytes: [3][]u8 = undefined;
     for (&debug_bytes, debug_sizes) |*slot, size| {
+        slot.* = try arena.alloc(u8, @intCast(size));
+        @memset(slot.*, 0);
+    }
+    var unwind_bytes: [2][]u8 = undefined;
+    for (&unwind_bytes, unwind_sizes) |*slot, size| {
         slot.* = try arena.alloc(u8, @intCast(size));
         @memset(slot.*, 0);
     }
@@ -523,6 +561,8 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
                 .debug_line => debug_bytes[0],
                 .debug_info => debug_bytes[1],
                 .debug_abbrev => debug_bytes[2],
+                .pdata => unwind_bytes[0],
+                .xdata => unwind_bytes[1],
             };
             @memcpy(destination[@intCast(place.offset)..][0..section.bytes.len], section.bytes);
         }
@@ -644,7 +684,7 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
                     try sites.noteEdge(site_place, site_offset, target, symbol);
                     try sites.add(site_place, site_offset, kind, slot_definition, "", false, reloc.addend);
                 },
-                .abs64, .pc32, .abs32, .abs32s, .branch26, .page21, .pageoff12 => {
+                .abs64, .pc32, .abs32, .abs32s, .branch26, .page21, .pageoff12, .rva32 => {
                     const kind = reloc.kind.siteKind();
                     if (reloc.offset + kindWidth(kind) > site_section.size) return error.InvalidObject;
                     const site_offset = site_place.offset + reloc.offset;
@@ -760,6 +800,8 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
     const debug_line_offset = layout.reserve(debug_bytes[0].len, 8);
     const debug_info_offset = layout.reserve(debug_bytes[1].len, 8);
     const debug_abbrev_offset = layout.reserve(debug_bytes[2].len, 8);
+    const pdata_offset = layout.reserve(unwind_bytes[0].len, 8);
+    const xdata_offset = layout.reserve(unwind_bytes[1].len, 8);
     const atoms_offset = layout.reserve(atom_list.starts.len * @sizeOf(u32), 8);
     const symbol_atoms_offset = layout.reserve(symbol_atoms.len * @sizeOf(u32), 8);
     const edge_starts_offset = layout.reserve(edge_starts.len * @sizeOf(u32), 8);
@@ -799,6 +841,10 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
         .debug_info_size = @intCast(debug_bytes[1].len),
         .debug_abbrev_offset = debug_abbrev_offset,
         .debug_abbrev_size = @intCast(debug_bytes[2].len),
+        .pdata_offset = pdata_offset,
+        .pdata_size = @intCast(unwind_bytes[0].len),
+        .xdata_offset = xdata_offset,
+        .xdata_size = @intCast(unwind_bytes[1].len),
         .atoms_offset = atoms_offset,
         .atom_count = @intCast(atom_list.starts.len),
         .symbol_atoms_offset = symbol_atoms_offset,
@@ -821,6 +867,8 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
     @memcpy(out[debug_line_offset..][0..debug_bytes[0].len], debug_bytes[0]);
     @memcpy(out[debug_info_offset..][0..debug_bytes[1].len], debug_bytes[1]);
     @memcpy(out[debug_abbrev_offset..][0..debug_bytes[2].len], debug_bytes[2]);
+    @memcpy(out[pdata_offset..][0..unwind_bytes[0].len], unwind_bytes[0]);
+    @memcpy(out[xdata_offset..][0..unwind_bytes[1].len], unwind_bytes[1]);
     @memcpy(out[atoms_offset..][0 .. atom_list.starts.len * @sizeOf(u32)], std.mem.sliceAsBytes(atom_list.starts));
     @memcpy(out[symbol_atoms_offset..][0 .. symbol_atoms.len * @sizeOf(u32)], std.mem.sliceAsBytes(symbol_atoms));
     @memcpy(out[edge_starts_offset..][0 .. edge_starts.len * @sizeOf(u32)], std.mem.sliceAsBytes(edge_starts));
@@ -836,16 +884,21 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
 pub fn kindWidth(kind: SiteKind) u64 {
     return switch (kind) {
         .abs64 => 8,
-        .pc32, .abs32, .abs32s, .branch26, .page21, .pageoff12 => 4,
+        .pc32, .abs32, .abs32s, .branch26, .page21, .pageoff12, .rva32 => 4,
     };
 }
 
 /// Write `target + addend` into `field` as `kind` encodes it, where the
 /// field sits at address `site_address` (used by the pc-relative kinds).
-/// Returns false when the value does not fit the field.
+/// For `rva32` the value is the target's image-relative address. Returns
+/// false when the value does not fit the field.
 pub fn applySite(field: []u8, kind: SiteKind, target_plus_addend: i64, site_address: u64) bool {
     switch (kind) {
         .abs64 => std.mem.writeInt(u64, field[0..8], @bitCast(target_plus_addend), .little),
+        .rva32 => {
+            const narrow = std.math.cast(u32, target_plus_addend) orelse return false;
+            std.mem.writeInt(u32, field[0..4], narrow, .little);
+        },
         .pc32 => {
             const value = target_plus_addend - @as(i64, @intCast(site_address));
             const narrow = std.math.cast(i32, value) orelse return false;
@@ -941,6 +994,11 @@ fn placeDebug(place: *?Place, size: *u64, region: Region, section_size: u64) voi
     size.* += section_size;
 }
 
+fn placeAligned(place: *?Place, size: *u64, region: Region, section_size: u64, addralign: u64) void {
+    size.* = std.mem.alignForward(u64, size.*, addralign);
+    placeDebug(place, size, region, section_size);
+}
+
 const Definition = struct {
     object: u32,
     symbol: u32,
@@ -988,7 +1046,9 @@ const Sites = struct {
                 switch (site_place.region) {
                     .block => try self.edge_pairs.append(self.arena, .{ .from = site_atom, .to = to }),
                     .data => try self.root_atoms.append(self.arena, to),
-                    .bss, .debug_line, .debug_info, .debug_abbrev => {},
+                    // An unwind entry names its function without reaching
+                    // it: a link keeps the entries of the atoms it places.
+                    .bss, .debug_line, .debug_info, .debug_abbrev, .pdata, .xdata => {},
                 }
             }
         } else if (site_place.region.isAllocated()) {
@@ -1082,7 +1142,26 @@ const Layout = struct {
 };
 
 /// What a section of an input object is to the image.
-const SectionClass = enum { skip, text, rodata, data, bss, debug_line, debug_info, debug_abbrev };
+const SectionClass = enum {
+    skip,
+    text,
+    rodata,
+    data,
+    bss,
+    debug_line,
+    debug_info,
+    debug_abbrev,
+    pdata,
+    xdata,
+
+    /// Whether the section's bytes are mapped into the executable.
+    fn isAllocated(self: SectionClass) bool {
+        return switch (self) {
+            .text, .rodata, .data, .bss, .pdata, .xdata => true,
+            .skip, .debug_line, .debug_info, .debug_abbrev => false,
+        };
+    }
+};
 
 /// An input object's section, classified.
 const Section = struct {
@@ -1125,6 +1204,7 @@ const RelocKind = enum {
     branch26,
     page21,
     pageoff12,
+    rva32,
     got_load_page21,
     got_load_pageoff12,
 
@@ -1137,6 +1217,7 @@ const RelocKind = enum {
             .branch26 => .branch26,
             .page21 => .page21,
             .pageoff12 => .pageoff12,
+            .rva32 => .rva32,
             .got_load_page21, .got_load_pageoff12 => unreachable, // read through a slot, never a site of their own
         };
     }
@@ -1167,6 +1248,8 @@ const Object = struct {
         if (bytes.len < 4) return error.InvalidObject;
         if (std.mem.eql(u8, bytes[0..4], "\x7fELF")) return parseElf(arena, bytes, options);
         if (readU32(bytes, 0) == MH_MAGIC_64) return parseMachO(arena, bytes, options);
+        const machine = readU16(bytes, 0);
+        if (machine == IMAGE_FILE_MACHINE_AMD64 or machine == IMAGE_FILE_MACHINE_ARM64) return parseCoff(arena, bytes, options);
         return error.InvalidObject;
     }
 };
@@ -1508,7 +1591,7 @@ fn parseMachO(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildE
                 addend = switch (kind) {
                     .abs64 => @bitCast(readU64(field, 0)),
                     .abs32 => readU32(field, 0),
-                    .pc32, .abs32s, .branch26, .page21, .pageoff12, .got_load_page21, .got_load_pageoff12 => addend_before orelse 0,
+                    .pc32, .abs32s, .branch26, .page21, .pageoff12, .rva32, .got_load_page21, .got_load_pageoff12 => addend_before orelse 0,
                 };
                 if (addend_before != null and (kind == .abs64 or kind == .abs32)) return error.InvalidObject;
             } else {
@@ -1556,6 +1639,316 @@ fn classifyMachO(segname: []const u8, sectname: []const u8, flags: u32, options:
     return error.UnsupportedSection;
 }
 
+/// A COFF relocatable object for x86_64 or arm64 Windows. Section names are
+/// read through the string table when long; a COMDAT section's external
+/// symbols are weak unless the section allows no duplicates; a weak
+/// external aliasing a definition becomes that definition under the weak
+/// name; auxiliary symbol records keep their table index as skipped entries
+/// so relocations index the table directly.
+fn parseCoff(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildError!Object {
+    if (bytes.len < 20) return error.InvalidObject;
+    const machine = readU16(bytes, 0);
+    const arm64 = machine == IMAGE_FILE_MACHINE_ARM64;
+    const section_count: usize = readU16(bytes, 2);
+    const symtab_offset: usize = readU32(bytes, 8);
+    const symbol_count: usize = readU32(bytes, 12);
+    const headers_at: usize = 20 + @as(usize, readU16(bytes, 16));
+    if (headers_at + section_count * coff_section_header_size > bytes.len) return error.InvalidObject;
+    if (symtab_offset + symbol_count * coff_symbol_size > bytes.len) return error.InvalidObject;
+    var strtab: []const u8 = &.{};
+    if (symtab_offset != 0) {
+        const strtab_at = symtab_offset + symbol_count * coff_symbol_size;
+        if (strtab_at + 4 > bytes.len) return error.InvalidObject;
+        const strtab_size = readU32(bytes, strtab_at);
+        if (strtab_size < 4 or strtab_at + strtab_size > bytes.len) return error.InvalidObject;
+        strtab = bytes[strtab_at..][0..strtab_size];
+    }
+
+    const CoffSection = struct {
+        name: []const u8,
+        size: u64,
+        offset: u32,
+        reloc_offset: u32,
+        reloc_count: u32,
+        characteristics: u32,
+        /// For a COMDAT section, the selection its section symbol's
+        /// auxiliary record names; set while the symbols are read.
+        comdat_selection: u8 = 0,
+    };
+    const raw = try arena.alloc(CoffSection, section_count);
+    for (raw, 0..) |*section, index| {
+        const header = bytes[headers_at + index * coff_section_header_size ..][0..coff_section_header_size];
+        const size = readU32(header, 16);
+        const offset = readU32(header, 20);
+        const characteristics = readU32(header, 36);
+        var reloc_count: u32 = readU16(header, 32);
+        var reloc_offset = readU32(header, 24);
+        if (characteristics & IMAGE_SCN_LNK_NRELOC_OVFL != 0 and reloc_count == 0xffff) {
+            if (@as(u64, reloc_offset) + coff_reloc_size > bytes.len) return error.InvalidObject;
+            reloc_count = readU32(bytes, reloc_offset);
+            if (reloc_count == 0) return error.InvalidObject;
+            reloc_count -= 1;
+            reloc_offset += coff_reloc_size;
+        }
+        if (@as(u64, reloc_offset) + @as(u64, reloc_count) * coff_reloc_size > bytes.len) return error.InvalidObject;
+        const uninitialized = characteristics & IMAGE_SCN_CNT_UNINITIALIZED_DATA != 0;
+        if (!uninitialized and (offset > bytes.len or bytes.len - offset < size)) return error.InvalidObject;
+        section.* = .{
+            .name = try coffSectionName(header[0..8], strtab),
+            .size = size,
+            .offset = offset,
+            .reloc_offset = reloc_offset,
+            .reloc_count = reloc_count,
+            .characteristics = characteristics,
+        };
+    }
+
+    // Symbols by table index, auxiliary records included as skipped
+    // entries. A weak external is filled once its tag symbol is read.
+    const symbols = try arena.alloc(ObjectSymbol, symbol_count);
+    const WeakTag = struct { symbol: u32, tag: u32 };
+    var weak_tags: std.ArrayList(WeakTag) = .empty;
+    var index: usize = 0;
+    while (index < symbol_count) {
+        const entry = bytes[symtab_offset + index * coff_symbol_size ..][0..coff_symbol_size];
+        const name = try coffSymbolName(entry[0..8], strtab);
+        const value = readU32(entry, 8);
+        const section_number: i16 = @bitCast(readU16(entry, 12));
+        const symbol_type = readU16(entry, 14);
+        const storage_class = entry[16];
+        const aux_count: usize = entry[17];
+        if (index + 1 + aux_count > symbol_count) return error.InvalidObject;
+        const skipped: ObjectSymbol = .{ .name = name, .value = 0, .size = 0, .section = null, .bind = .local, .kind = .notype, .hidden = false, .skip = true };
+        if (section_number > 0 and @as(usize, @intCast(section_number)) > section_count) return error.InvalidObject;
+        const section: ?u32 = if (section_number > 0) @as(u32, @intCast(section_number - 1)) else null;
+        const is_function = symbol_type & 0xf0 == IMAGE_SYM_DTYPE_FUNCTION << 4;
+        switch (storage_class) {
+            IMAGE_SYM_CLASS_EXTERNAL => {
+                if (section_number == IMAGE_SYM_ABSOLUTE or section_number == IMAGE_SYM_DEBUG) return error.UnsupportedSymbol;
+                if (section == null) {
+                    // A nonzero value is a common symbol.
+                    if (value != 0) return error.UnsupportedSymbol;
+                    symbols[index] = .{ .name = name, .value = 0, .size = 0, .section = null, .bind = .global, .kind = .notype, .hidden = false, .skip = false };
+                } else {
+                    const in = raw[section.?];
+                    if (value > in.size) return error.InvalidObject;
+                    const comdat = in.characteristics & IMAGE_SCN_LNK_COMDAT != 0 and in.comdat_selection != IMAGE_COMDAT_SELECT_NODUPLICATES and in.comdat_selection != IMAGE_COMDAT_SELECT_ASSOCIATIVE;
+                    symbols[index] = .{
+                        .name = name,
+                        .value = value,
+                        .size = 0,
+                        .section = section,
+                        .bind = if (comdat) .weak else .global,
+                        .kind = if (is_function or in.characteristics & IMAGE_SCN_CNT_CODE != 0) .func else .object,
+                        .hidden = false,
+                        .skip = false,
+                    };
+                }
+            },
+            IMAGE_SYM_CLASS_STATIC => {
+                if (section == null) {
+                    // An absolute or debug static, such as a feature flag.
+                    symbols[index] = skipped;
+                } else if (aux_count != 0 and value == 0 and std.mem.eql(u8, name, raw[section.?].name)) {
+                    // The section's own symbol, whose auxiliary record
+                    // carries the COMDAT selection.
+                    const aux = bytes[symtab_offset + (index + 1) * coff_symbol_size ..][0..coff_symbol_size];
+                    raw[section.?].comdat_selection = aux[14];
+                    symbols[index] = .{ .name = "", .value = 0, .size = 0, .section = section, .bind = .local, .kind = .section, .hidden = false, .skip = false };
+                } else {
+                    const in = raw[section.?];
+                    if (value > in.size) return error.InvalidObject;
+                    symbols[index] = .{
+                        .name = name,
+                        .value = value,
+                        .size = 0,
+                        .section = section,
+                        .bind = .local,
+                        .kind = if (is_function or in.characteristics & IMAGE_SCN_CNT_CODE != 0) .func else .object,
+                        .hidden = false,
+                        .skip = false,
+                    };
+                }
+            },
+            IMAGE_SYM_CLASS_WEAK_EXTERNAL => {
+                if (aux_count == 0 or section != null) return error.UnsupportedSymbol;
+                const aux = bytes[symtab_offset + (index + 1) * coff_symbol_size ..][0..coff_symbol_size];
+                const tag = readU32(aux, 0);
+                if (tag >= symbol_count) return error.InvalidObject;
+                try weak_tags.append(arena, .{ .symbol = @intCast(index), .tag = tag });
+                symbols[index] = .{ .name = name, .value = 0, .size = 0, .section = null, .bind = .weak, .kind = .notype, .hidden = false, .skip = false };
+            },
+            else => symbols[index] = skipped,
+        }
+        for (1..aux_count + 1) |aux| symbols[index + aux] = skipped;
+        index += 1 + aux_count;
+    }
+    for (weak_tags.items) |pending| {
+        const tag = symbols[pending.tag];
+        if (tag.skip) return error.InvalidObject;
+        const section = tag.section orelse continue;
+        const symbol = &symbols[pending.symbol];
+        symbol.section = section;
+        symbol.value = tag.value;
+        symbol.kind = tag.kind;
+    }
+
+    const sections = try arena.alloc(Section, section_count);
+    var text_section: ?u32 = null;
+    for (raw, sections, 0..) |section, *out, section_index| {
+        const class = try classifyCoff(section.name, section.characteristics, options);
+        if (class == .text and text_section == null and std.mem.eql(u8, section.name, ".text")) text_section = @intCast(section_index);
+        const align_field = (section.characteristics >> 20) & 0xf;
+        const addralign: u64 = if (align_field == 0) 16 else @as(u64, 1) << @intCast(align_field - 1);
+        if (addralign > page_size) return error.UnsupportedSection;
+        out.* = .{
+            .class = class,
+            .bytes = if (class == .bss or class == .skip) &.{} else bytes[section.offset..][0..@intCast(section.size)],
+            .size = section.size,
+            .addralign = addralign,
+        };
+    }
+    // COFF symbols have no size: a symbol runs to the next one in its
+    // section, or to the section's end.
+    const by_position = try arena.alloc(u32, symbol_count);
+    var positioned: u32 = 0;
+    for (symbols, 0..) |symbol, symbol_index| {
+        if (symbol.skip or symbol.section == null or symbol.kind == .section) continue;
+        by_position[positioned] = @intCast(symbol_index);
+        positioned += 1;
+    }
+    std.mem.sort(u32, by_position[0..positioned], symbols, struct {
+        fn lessThan(all: []const ObjectSymbol, a: u32, b: u32) bool {
+            if (all[a].section.? != all[b].section.?) return all[a].section.? < all[b].section.?;
+            return all[a].value < all[b].value;
+        }
+    }.lessThan);
+    for (by_position[0..positioned], 0..) |symbol_index, position| {
+        const symbol = &symbols[symbol_index];
+        const section = symbol.section.?;
+        var end = raw[section].size;
+        if (position + 1 < positioned) {
+            const next = symbols[by_position[position + 1]];
+            if (next.section.? == section) end = next.value;
+        }
+        symbol.size = end - symbol.value;
+    }
+
+    var relocs: std.ArrayList(Reloc) = .empty;
+    for (raw, sections, 0..) |section, classified, section_index| {
+        if (classified.class == .skip or classified.class == .bss) continue;
+        for (0..section.reloc_count) |reloc_index| {
+            const entry = bytes[section.reloc_offset + reloc_index * coff_reloc_size ..][0..coff_reloc_size];
+            const offset = readU32(entry, 0);
+            const symbol_index = readU32(entry, 4);
+            const reloc_type = readU16(entry, 8);
+            if (symbol_index >= symbol_count) return error.InvalidObject;
+            const target = symbols[symbol_index];
+            if (target.skip) return error.InvalidObject;
+            const decoded = try decodeCoffReloc(arm64, reloc_type, classified.bytes, offset, section.size);
+            if (decoded.kind == .abs32 and decoded.section_relative) {
+                // A section-relative field names an offset in a debug
+                // section, which is what an absolute site into a debug
+                // region resolves to.
+                const target_section = target.section orelse return error.UnsupportedRelocation;
+                if (sections[target_section].class.isAllocated()) return error.UnsupportedRelocation;
+            }
+            try relocs.append(arena, .{ .section = @intCast(section_index), .offset = offset, .kind = decoded.kind, .symbol = symbol_index, .addend = decoded.addend });
+        }
+    }
+    return .{ .sections = sections, .symbols = symbols, .relocs = relocs.items, .text_section = text_section };
+}
+
+const DecodedCoffReloc = struct { kind: RelocKind, addend: i64, section_relative: bool = false };
+
+/// The site kind and addend of a COFF relocation: the addend is the
+/// field's contents, which an instruction field keeps in its immediate.
+fn decodeCoffReloc(arm64: bool, reloc_type: u16, section_bytes: []const u8, offset: u32, section_size: u64) BuildError!DecodedCoffReloc {
+    const width: u64 = if (!arm64 and reloc_type == IMAGE_REL_AMD64_ADDR64 or arm64 and reloc_type == IMAGE_REL_ARM64_ADDR64) 8 else 4;
+    if (@as(u64, offset) + width > section_size) return error.InvalidObject;
+    const field = section_bytes[offset..][0..@intCast(width)];
+    if (!arm64) {
+        return switch (reloc_type) {
+            IMAGE_REL_AMD64_ADDR64 => .{ .kind = .abs64, .addend = @bitCast(readU64(field, 0)) },
+            IMAGE_REL_AMD64_ADDR32 => .{ .kind = .abs32, .addend = readU32(field, 0) },
+            IMAGE_REL_AMD64_ADDR32NB => .{ .kind = .rva32, .addend = readU32(field, 0) },
+            IMAGE_REL_AMD64_REL32...IMAGE_REL_AMD64_REL32_5 => .{ .kind = .pc32, .addend = @as(i64, @as(i32, @bitCast(readU32(field, 0)))) - 4 - @as(i64, reloc_type - IMAGE_REL_AMD64_REL32) },
+            IMAGE_REL_AMD64_SECREL => .{ .kind = .abs32, .addend = readU32(field, 0), .section_relative = true },
+            else => error.UnsupportedRelocation,
+        };
+    }
+    const instruction = readU32(field, 0);
+    return switch (reloc_type) {
+        IMAGE_REL_ARM64_ADDR32 => .{ .kind = .abs32, .addend = instruction },
+        IMAGE_REL_ARM64_ADDR32NB => .{ .kind = .rva32, .addend = instruction },
+        IMAGE_REL_ARM64_BRANCH26 => .{ .kind = .branch26, .addend = @as(i64, @as(i26, @bitCast(@as(u26, @truncate(instruction))))) << 2 },
+        IMAGE_REL_ARM64_PAGEBASE_REL21 => .{ .kind = .page21, .addend = ((instruction >> 29) & 0x3) | ((instruction >> 3) & 0x1f_fffc) },
+        IMAGE_REL_ARM64_PAGEOFFSET_12A => .{ .kind = .pageoff12, .addend = (instruction >> 10) & 0xfff },
+        IMAGE_REL_ARM64_PAGEOFFSET_12L => .{ .kind = .pageoff12, .addend = @as(i64, (instruction >> 10) & 0xfff) << (pageOffsetShift(instruction) orelse return error.UnsupportedRelocation) },
+        IMAGE_REL_ARM64_SECREL => .{ .kind = .abs32, .addend = instruction, .section_relative = true },
+        IMAGE_REL_ARM64_ADDR64 => .{ .kind = .abs64, .addend = @bitCast(readU64(field, 0)) },
+        else => error.UnsupportedRelocation,
+    };
+}
+
+fn classifyCoff(name: []const u8, characteristics: u32, options: BuildOptions) BuildError!SectionClass {
+    // Linker directives and the address-significance table are consumed by
+    // a linker, never placed.
+    if (characteristics & (IMAGE_SCN_LNK_INFO | IMAGE_SCN_LNK_REMOVE) != 0) return .skip;
+    if (std.mem.startsWith(u8, name, ".debug_")) {
+        if (characteristics & IMAGE_SCN_MEM_DISCARDABLE == 0) return error.UnsupportedSection;
+        if (!options.keep_debug) return .skip;
+        if (std.mem.eql(u8, name, ".debug_line")) return .debug_line;
+        if (std.mem.eql(u8, name, ".debug_info")) return .debug_info;
+        if (std.mem.eql(u8, name, ".debug_abbrev")) return .debug_abbrev;
+        return error.UnsupportedSection;
+    }
+    if (characteristics & IMAGE_SCN_CNT_CODE != 0) return .text;
+    if (characteristics & IMAGE_SCN_CNT_UNINITIALIZED_DATA != 0) return .bss;
+    if (characteristics & IMAGE_SCN_CNT_INITIALIZED_DATA != 0) {
+        if (std.mem.startsWith(u8, name, ".pdata")) return .pdata;
+        if (std.mem.startsWith(u8, name, ".xdata")) return .xdata;
+        // Thread-local storage and C runtime initializer tables are the
+        // host's to lay out.
+        if (std.mem.startsWith(u8, name, ".tls") or std.mem.startsWith(u8, name, ".CRT")) return error.UnsupportedSection;
+        if (characteristics & IMAGE_SCN_MEM_WRITE != 0) return .data;
+        return .rodata;
+    }
+    return error.UnsupportedSection;
+}
+
+/// A section header's name: inline, or "/decimal" and "//base64" offsets
+/// into the string table.
+fn coffSectionName(field: *const [8]u8, strtab: []const u8) BuildError![]const u8 {
+    if (field[0] != '/') return std.mem.sliceTo(field, 0);
+    var offset: u64 = 0;
+    if (field[1] == '/') {
+        const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        for (field[2..]) |digit| {
+            const value = std.mem.indexOfScalar(u8, alphabet, digit) orelse return error.InvalidObject;
+            offset = offset * 64 + value;
+        }
+    } else {
+        const digits = std.mem.sliceTo(field[1..], 0);
+        if (digits.len == 0) return error.InvalidObject;
+        for (digits) |digit| {
+            if (digit < '0' or digit > '9') return error.InvalidObject;
+            offset = offset * 10 + (digit - '0');
+        }
+    }
+    if (offset >= strtab.len) return error.InvalidObject;
+    return std.mem.sliceTo(strtab[@intCast(offset)..], 0);
+}
+
+/// A symbol's name: inline, or an offset into the string table when the
+/// field's first word is zero.
+fn coffSymbolName(field: *const [8]u8, strtab: []const u8) BuildError![]const u8 {
+    if (readU32(field, 0) != 0) return std.mem.sliceTo(field, 0);
+    const offset = readU32(field, 4);
+    if (offset >= strtab.len) return error.InvalidObject;
+    return std.mem.sliceTo(strtab[offset..], 0);
+}
+
 fn readU16(bytes: []const u8, at: usize) u16 {
     return std.mem.readInt(u16, bytes[at..][0..2], .little);
 }
@@ -1599,6 +1992,49 @@ const R_X86_64_PC32 = 2;
 const R_X86_64_PLT32 = 4;
 const R_X86_64_32 = 10;
 const R_X86_64_32S = 11;
+
+const IMAGE_FILE_MACHINE_AMD64 = 0x8664;
+const IMAGE_FILE_MACHINE_ARM64 = 0xaa64;
+const coff_section_header_size = 40;
+const coff_symbol_size = 18;
+const coff_reloc_size = 10;
+const IMAGE_SCN_LNK_INFO = 0x0000_0200;
+const IMAGE_SCN_LNK_REMOVE = 0x0000_0800;
+const IMAGE_SCN_LNK_COMDAT = 0x0000_1000;
+const IMAGE_SCN_CNT_CODE = 0x0000_0020;
+const IMAGE_SCN_CNT_INITIALIZED_DATA = 0x0000_0040;
+const IMAGE_SCN_CNT_UNINITIALIZED_DATA = 0x0000_0080;
+const IMAGE_SCN_LNK_NRELOC_OVFL = 0x0100_0000;
+const IMAGE_SCN_MEM_DISCARDABLE = 0x0200_0000;
+const IMAGE_SCN_MEM_EXECUTE = 0x2000_0000;
+const IMAGE_SCN_MEM_READ = 0x4000_0000;
+const IMAGE_SCN_MEM_WRITE = 0x8000_0000;
+const IMAGE_SYM_UNDEFINED = 0;
+const IMAGE_SYM_ABSOLUTE = -1;
+const IMAGE_SYM_DEBUG = -2;
+const IMAGE_SYM_CLASS_EXTERNAL = 2;
+const IMAGE_SYM_CLASS_STATIC = 3;
+const IMAGE_SYM_CLASS_FILE = 103;
+const IMAGE_SYM_CLASS_WEAK_EXTERNAL = 105;
+const IMAGE_SYM_DTYPE_FUNCTION = 2;
+const IMAGE_COMDAT_SELECT_NODUPLICATES = 1;
+const IMAGE_COMDAT_SELECT_ANY = 2;
+const IMAGE_COMDAT_SELECT_ASSOCIATIVE = 5;
+const IMAGE_WEAK_EXTERN_SEARCH_ALIAS = 3;
+const IMAGE_REL_AMD64_ADDR64 = 0x0001;
+const IMAGE_REL_AMD64_ADDR32 = 0x0002;
+const IMAGE_REL_AMD64_ADDR32NB = 0x0003;
+const IMAGE_REL_AMD64_REL32 = 0x0004;
+const IMAGE_REL_AMD64_REL32_5 = 0x0009;
+const IMAGE_REL_AMD64_SECREL = 0x000b;
+const IMAGE_REL_ARM64_ADDR32 = 0x0001;
+const IMAGE_REL_ARM64_ADDR32NB = 0x0002;
+const IMAGE_REL_ARM64_BRANCH26 = 0x0003;
+const IMAGE_REL_ARM64_PAGEBASE_REL21 = 0x0004;
+const IMAGE_REL_ARM64_PAGEOFFSET_12A = 0x0006;
+const IMAGE_REL_ARM64_PAGEOFFSET_12L = 0x0007;
+const IMAGE_REL_ARM64_SECREL = 0x0008;
+const IMAGE_REL_ARM64_ADDR64 = 0x000e;
 
 const MH_MAGIC_64 = 0xfeedfacf;
 const MH_OBJECT = 1;
@@ -1972,6 +2408,334 @@ pub const TestMachObject = struct {
         try out.appendSlice(allocator, &entry);
     }
 };
+
+/// A minimal COFF relocatable object for tests: sections and symbols given
+/// as data, encoded the way a compiler lays them out, with the auxiliary
+/// records a section symbol and a weak external carry.
+pub const TestCoffObject = struct {
+    pub const TestSection = struct {
+        name: []const u8,
+        bytes: []const u8 = &.{},
+        /// For an uninitialized section.
+        size: u64 = 0,
+        characteristics: u32,
+        /// The COMDAT selection the section symbol's record names.
+        selection: u8 = 0,
+    };
+    pub const TestSymbol = struct {
+        name: []const u8,
+        /// 0 for undefined, else a 1-based index into the sections.
+        section: u16,
+        value: u32 = 0,
+        class: enum { external, static, section, weak_external } = .external,
+        function: bool = false,
+        /// For a weak external, the index in the symbols of its tag.
+        tag: u32 = 0,
+    };
+    pub const TestRelocation = struct {
+        /// 1-based index of the section the field is in.
+        section: u16,
+        offset: u32,
+        /// Index into the symbols.
+        symbol: u32,
+        type: u16,
+    };
+
+    pub fn encode(allocator: Allocator, machine: u16, sections: []const TestSection, symbols: []const TestSymbol, relocations: []const TestRelocation) Allocator.Error![]u8 {
+        var strtab: std.ArrayList(u8) = .empty;
+        defer strtab.deinit(allocator);
+        try strtab.appendNTimes(allocator, 0, 4);
+        // Table indices: a section symbol and a weak external carry one
+        // auxiliary record each.
+        const table_index = try allocator.alloc(u32, symbols.len);
+        defer allocator.free(table_index);
+        var table_count: u32 = 0;
+        for (symbols, table_index) |symbol, *index| {
+            index.* = table_count;
+            table_count += if (symbol.class == .section or symbol.class == .weak_external) 2 else 1;
+        }
+        const headers_end: usize = 20 + sections.len * coff_section_header_size;
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(allocator);
+        try out.appendNTimes(allocator, 0, headers_end);
+        // Section data, then each section's relocations.
+        const data_offsets = try allocator.alloc(u32, sections.len);
+        defer allocator.free(data_offsets);
+        for (sections, data_offsets) |section, *offset| {
+            offset.* = if (section.bytes.len == 0) 0 else @intCast(out.items.len);
+            try out.appendSlice(allocator, section.bytes);
+        }
+        const reloc_offsets = try allocator.alloc(u32, sections.len);
+        defer allocator.free(reloc_offsets);
+        const reloc_counts = try allocator.alloc(u16, sections.len);
+        defer allocator.free(reloc_counts);
+        for (sections, reloc_offsets, reloc_counts, 1..) |_, *offset, *count, section_index| {
+            offset.* = @intCast(out.items.len);
+            count.* = 0;
+            for (relocations) |relocation| {
+                if (relocation.section != section_index) continue;
+                var entry: [coff_reloc_size]u8 = undefined;
+                std.mem.writeInt(u32, entry[0..4], relocation.offset, .little);
+                std.mem.writeInt(u32, entry[4..8], table_index[relocation.symbol], .little);
+                std.mem.writeInt(u16, entry[8..10], relocation.type, .little);
+                try out.appendSlice(allocator, &entry);
+                count.* += 1;
+            }
+            if (count.* == 0) offset.* = 0;
+        }
+        const symtab_offset: u32 = @intCast(out.items.len);
+        for (symbols) |symbol| {
+            var entry: [coff_symbol_size]u8 = @splat(0);
+            if (symbol.name.len <= 8) {
+                @memcpy(entry[0..symbol.name.len], symbol.name);
+            } else {
+                std.mem.writeInt(u32, entry[4..8], @intCast(strtab.items.len), .little);
+                try strtab.appendSlice(allocator, symbol.name);
+                try strtab.append(allocator, 0);
+            }
+            std.mem.writeInt(u32, entry[8..12], symbol.value, .little);
+            std.mem.writeInt(u16, entry[12..14], symbol.section, .little);
+            std.mem.writeInt(u16, entry[14..16], if (symbol.function) IMAGE_SYM_DTYPE_FUNCTION << 4 else 0, .little);
+            entry[16] = switch (symbol.class) {
+                .external => IMAGE_SYM_CLASS_EXTERNAL,
+                .static, .section => IMAGE_SYM_CLASS_STATIC,
+                .weak_external => IMAGE_SYM_CLASS_WEAK_EXTERNAL,
+            };
+            entry[17] = if (symbol.class == .section or symbol.class == .weak_external) 1 else 0;
+            try out.appendSlice(allocator, &entry);
+            var aux: [coff_symbol_size]u8 = @splat(0);
+            switch (symbol.class) {
+                .section => {
+                    const section = sections[symbol.section - 1];
+                    std.mem.writeInt(u32, aux[0..4], @intCast(section.bytes.len), .little);
+                    std.mem.writeInt(u16, aux[4..6], reloc_counts[symbol.section - 1], .little);
+                    aux[14] = section.selection;
+                    try out.appendSlice(allocator, &aux);
+                },
+                .weak_external => {
+                    std.mem.writeInt(u32, aux[0..4], table_index[symbol.tag], .little);
+                    std.mem.writeInt(u32, aux[4..8], IMAGE_WEAK_EXTERN_SEARCH_ALIAS, .little);
+                    try out.appendSlice(allocator, &aux);
+                },
+                .external, .static => {},
+            }
+        }
+        // Section headers, with long names in the string table.
+        for (sections, 0..) |section, index| {
+            const header = out.items[20 + index * coff_section_header_size ..][0..coff_section_header_size];
+            if (section.name.len <= 8) {
+                @memcpy(header[0..section.name.len], section.name);
+            } else {
+                header[0] = '/';
+                _ = std.fmt.printInt(header[1..8], strtab.items.len, 10, .lower, .{});
+                try strtab.appendSlice(allocator, section.name);
+                try strtab.append(allocator, 0);
+            }
+            std.mem.writeInt(u32, header[16..20], @intCast(if (section.bytes.len == 0) section.size else section.bytes.len), .little);
+            std.mem.writeInt(u32, header[20..24], data_offsets[index], .little);
+            std.mem.writeInt(u32, header[24..28], reloc_offsets[index], .little);
+            std.mem.writeInt(u16, header[32..34], reloc_counts[index], .little);
+            std.mem.writeInt(u32, header[36..40], section.characteristics, .little);
+        }
+        std.mem.writeInt(u32, strtab.items[0..4], @intCast(strtab.items.len), .little);
+        try out.appendSlice(allocator, strtab.items);
+        const file_header = out.items[0..20];
+        std.mem.writeInt(u16, file_header[0..2], machine, .little);
+        std.mem.writeInt(u16, file_header[2..4], @intCast(sections.len), .little);
+        std.mem.writeInt(u32, file_header[8..12], symtab_offset, .little);
+        std.mem.writeInt(u32, file_header[12..16], table_count, .little);
+        return try out.toOwnedSlice(allocator);
+    }
+};
+
+const coff_text_flags: u32 = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ | (5 << 20);
+const coff_rdata_flags: u32 = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | (4 << 20);
+const coff_data_flags: u32 = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | (4 << 20);
+const coff_bss_flags: u32 = IMAGE_SCN_CNT_UNINITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | (5 << 20);
+const coff_unwind_flags: u32 = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | (3 << 20);
+const coff_directive_flags: u32 = IMAGE_SCN_LNK_INFO | IMAGE_SCN_LNK_REMOVE | (1 << 20);
+const coff_debug_flags: u32 = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_DISCARDABLE | (1 << 20);
+
+test "an x86_64 COFF object becomes an image with unwind tables and weak aliases" {
+    const allocator = std.testing.allocator;
+    // entry: call helper; call roc_alloc; lea rax, [rip + table]; nops
+    // helper at 24: ret; memcpy's default at 28: ret
+    var text: [32]u8 = @splat(0x90);
+    text[0] = 0xe8;
+    text[5] = 0xe8;
+    text[10] = 0x48;
+    text[11] = 0x8d;
+    text[12] = 0x05;
+    @memset(text[1..5], 0);
+    @memset(text[6..10], 0);
+    @memset(text[13..17], 0);
+    text[24] = 0xc3;
+    text[28] = 0xc3;
+    var strong: [16]u8 = @splat(0x90);
+    strong[0] = 0xc3;
+    var rdata: [8]u8 = @splat(0);
+    std.mem.writeInt(u64, &rdata, 24, .little);
+    var pdata: [12]u8 = @splat(0);
+    std.mem.writeInt(u32, pdata[4..8], 24, .little);
+    var info: [16]u8 = @splat(0);
+    std.mem.writeInt(u32, info[8..12], 2, .little);
+    const object = try TestCoffObject.encode(allocator, IMAGE_FILE_MACHINE_AMD64, &.{
+        .{ .name = ".text", .bytes = &text, .characteristics = coff_text_flags | IMAGE_SCN_LNK_COMDAT, .selection = IMAGE_COMDAT_SELECT_ANY },
+        .{ .name = ".text2", .bytes = &strong, .characteristics = coff_text_flags | IMAGE_SCN_LNK_COMDAT, .selection = IMAGE_COMDAT_SELECT_NODUPLICATES },
+        .{ .name = ".rdata", .bytes = &rdata, .characteristics = coff_rdata_flags },
+        .{ .name = ".data", .bytes = &@as([8]u8, @splat(0)), .characteristics = coff_data_flags },
+        .{ .name = ".bss", .size = 16, .characteristics = coff_bss_flags },
+        .{ .name = ".pdata", .bytes = &pdata, .characteristics = coff_unwind_flags },
+        .{ .name = ".xdata", .bytes = "\x01\x00\x00\x00", .characteristics = coff_unwind_flags },
+        .{ .name = ".drectve", .bytes = " /DEFAULTLIB:foo", .characteristics = coff_directive_flags },
+        .{ .name = ".debug_abbrev", .bytes = "abbrev", .characteristics = coff_debug_flags },
+        .{ .name = ".debug_info", .bytes = &info, .characteristics = coff_debug_flags },
+    }, &.{
+        .{ .name = ".text", .section = 1, .class = .section },
+        .{ .name = "entry", .section = 1, .value = 0, .function = true },
+        .{ .name = "helper", .section = 1, .value = 24, .class = .static, .function = true },
+        .{ .name = ".weak.memcpy.default", .section = 1, .value = 28, .class = .static, .function = true },
+        .{ .name = "memcpy", .section = 0, .class = .weak_external, .tag = 3 },
+        .{ .name = ".text2", .section = 2, .class = .section },
+        .{ .name = "strong_fn", .section = 2, .value = 0, .function = true },
+        .{ .name = "roc_alloc", .section = 0 },
+        .{ .name = "table", .section = 3, .value = 0 },
+        .{ .name = "counter", .section = 5, .value = 0 },
+        .{ .name = ".xdata", .section = 7, .class = .section },
+        .{ .name = ".debug_abbrev", .section = 9, .class = .section },
+        .{ .name = "roc_expect_err_region", .section = 0, .class = .weak_external, .tag = 7 },
+    }, &.{
+        .{ .section = 1, .offset = 1, .symbol = 2, .type = IMAGE_REL_AMD64_REL32 },
+        .{ .section = 1, .offset = 6, .symbol = 7, .type = IMAGE_REL_AMD64_REL32 },
+        .{ .section = 1, .offset = 13, .symbol = 8, .type = IMAGE_REL_AMD64_REL32 },
+        .{ .section = 3, .offset = 0, .symbol = 1, .type = IMAGE_REL_AMD64_ADDR64 },
+        .{ .section = 4, .offset = 0, .symbol = 9, .type = IMAGE_REL_AMD64_ADDR64 },
+        .{ .section = 6, .offset = 0, .symbol = 1, .type = IMAGE_REL_AMD64_ADDR32NB },
+        .{ .section = 6, .offset = 4, .symbol = 1, .type = IMAGE_REL_AMD64_ADDR32NB },
+        .{ .section = 6, .offset = 8, .symbol = 10, .type = IMAGE_REL_AMD64_ADDR32NB },
+        .{ .section = 10, .offset = 0, .symbol = 1, .type = IMAGE_REL_AMD64_ADDR64 },
+        .{ .section = 10, .offset = 8, .symbol = 11, .type = IMAGE_REL_AMD64_SECREL },
+    });
+    defer allocator.free(object);
+    const image = try build(allocator, &.{object}, .{ .keep_debug = true, .atoms = .whole });
+    defer allocator.free(image);
+    const view = try View.init(image);
+    // Text: .text, then .text2 at 32; read-only data at 48.
+    try std.testing.expectEqual(@as(u32, 48), view.textSize());
+    try std.testing.expectEqual(@as(usize, 56), view.block().len);
+    // call helper: 24 - 5; lea table: 48 - 17.
+    try std.testing.expectEqual(@as(i32, 19), std.mem.readInt(i32, view.block()[1..5], .little));
+    try std.testing.expectEqual(@as(i32, 31), std.mem.readInt(i32, view.block()[13..17], .little));
+    try std.testing.expectEqualSlices(u8, &pdata, view.pdata());
+    try std.testing.expectEqualStrings("\x01\x00\x00\x00", view.xdata());
+    try std.testing.expectEqualStrings("abbrev", view.debugAbbrev());
+    // The import: roc_alloc's call, relative to the end of its field.
+    try std.testing.expectEqual(@as(usize, 1), view.imports().len);
+    try std.testing.expectEqualStrings("roc_alloc", view.name(view.imports()[0].name));
+    const call = view.importSites(view.imports()[0]);
+    try std.testing.expectEqual(@as(usize, 1), call.len);
+    try std.testing.expectEqual(@backingInt(SiteKind.pc32), call[0].kind);
+    try std.testing.expectEqual(@as(u32, 6), call[0].offset);
+    try std.testing.expectEqual(@as(i64, -4), call[0].addend);
+    // Local sites: the table's pointer, the data's pointer, the three
+    // unwind fields, then the debug fields.
+    const local = view.localSites();
+    try std.testing.expectEqual(@as(usize, 7), local.len);
+    try std.testing.expectEqual(@backingInt(SiteKind.abs64), local[0].kind);
+    try std.testing.expectEqual(@as(u32, 48), local[0].offset);
+    try std.testing.expectEqual(@backingInt(Region.block), local[0].target_region);
+    try std.testing.expectEqual(@as(i64, 24), local[0].addend);
+    try std.testing.expectEqual(@backingInt(Region.data), local[1].region);
+    try std.testing.expectEqual(@backingInt(Region.bss), local[1].target_region);
+    for (local[2..5], [_]u32{ 0, 4, 8 }, [_]Region{ .block, .block, .xdata }, [_]i64{ 0, 24, 0 }) |site, offset, target, addend| {
+        try std.testing.expectEqual(@backingInt(SiteKind.rva32), site.kind);
+        try std.testing.expectEqual(@backingInt(Region.pdata), site.region);
+        try std.testing.expectEqual(offset, site.offset);
+        try std.testing.expectEqual(@backingInt(target), site.target_region);
+        try std.testing.expectEqual(addend, site.addend);
+    }
+    try std.testing.expectEqual(@backingInt(SiteKind.abs64), local[5].kind);
+    try std.testing.expectEqual(@backingInt(Region.debug_info), local[5].region);
+    try std.testing.expectEqual(@backingInt(SiteKind.abs32), local[6].kind);
+    try std.testing.expectEqual(@backingInt(Region.debug_abbrev), local[6].target_region);
+    try std.testing.expectEqual(@as(i64, 2), local[6].addend);
+    // Exports: entry is weak (a COMDAT any section), strong_fn is not,
+    // memcpy is its default under the weak name; the statics are not
+    // exported, and the weak reference to a missing default is no import.
+    try std.testing.expectEqual(@as(usize, 5), view.exports().len);
+    const entry = view.findExport("entry").?;
+    try std.testing.expectEqual(symbol_exported | symbol_weak, entry.flags);
+    try std.testing.expectEqual(@as(u32, 24), entry.size);
+    try std.testing.expectEqual(symbol_exported, view.findExport("strong_fn").?.flags);
+    const memcpy = view.findExport("memcpy").?;
+    try std.testing.expectEqual(@as(u32, 28), memcpy.value);
+    try std.testing.expectEqual(@backingInt(SymbolType.func), memcpy.type);
+    try std.testing.expectEqual(symbol_exported | symbol_weak, memcpy.flags);
+    try std.testing.expect(view.findExport("helper") == null);
+    try std.testing.expectEqual(@as(u32, 16), view.findExport("counter").?.size);
+    try std.testing.expectEqual(@as(u32, 16), view.bssSize());
+    const again = try build(allocator, &.{object}, .{ .keep_debug = true, .atoms = .whole });
+    defer allocator.free(again);
+    try std.testing.expectEqualSlices(u8, image, again);
+}
+
+test "an arm64 COFF object keeps its instruction addends" {
+    const allocator = std.testing.allocator;
+    // entry: bl roc_alloc; adrp/add x16, table + 4; adrp/ldr x16, counter + 8; ret
+    const text = words(&.{ bl_instruction, adrp_x16, add_x16_x16 | (4 << 10), adrp_x16, ldr_x16_x16 | (1 << 10), ret_instruction });
+    var pdata: [8]u8 = @splat(0);
+    const object = try TestCoffObject.encode(allocator, IMAGE_FILE_MACHINE_ARM64, &.{
+        .{ .name = ".text", .bytes = &text, .characteristics = coff_text_flags },
+        .{ .name = ".rdata", .bytes = "constant", .characteristics = coff_rdata_flags },
+        .{ .name = ".data", .bytes = &@as([16]u8, @splat(0)), .characteristics = coff_data_flags },
+        .{ .name = ".pdata", .bytes = &pdata, .characteristics = coff_unwind_flags },
+        .{ .name = ".xdata", .bytes = "\x00\x00\x00\x00", .characteristics = coff_unwind_flags },
+    }, &.{
+        .{ .name = "entry", .section = 1, .value = 0, .function = true },
+        .{ .name = "roc_alloc", .section = 0 },
+        .{ .name = "table", .section = 2, .value = 0 },
+        .{ .name = "counter", .section = 3, .value = 0 },
+        .{ .name = ".xdata", .section = 5, .class = .section },
+    }, &.{
+        .{ .section = 1, .offset = 0, .symbol = 1, .type = IMAGE_REL_ARM64_BRANCH26 },
+        .{ .section = 1, .offset = 4, .symbol = 2, .type = IMAGE_REL_ARM64_PAGEBASE_REL21 },
+        .{ .section = 1, .offset = 8, .symbol = 2, .type = IMAGE_REL_ARM64_PAGEOFFSET_12A },
+        .{ .section = 1, .offset = 12, .symbol = 3, .type = IMAGE_REL_ARM64_PAGEBASE_REL21 },
+        .{ .section = 1, .offset = 16, .symbol = 3, .type = IMAGE_REL_ARM64_PAGEOFFSET_12L },
+        .{ .section = 4, .offset = 0, .symbol = 0, .type = IMAGE_REL_ARM64_ADDR32NB },
+        .{ .section = 4, .offset = 4, .symbol = 4, .type = IMAGE_REL_ARM64_ADDR32NB },
+    });
+    defer allocator.free(object);
+    const image = try build(allocator, &.{object}, .{ .keep_debug = false, .atoms = .whole });
+    defer allocator.free(image);
+    const view = try View.init(image);
+    try std.testing.expectEqual(@as(u32, 24), view.textSize());
+    try std.testing.expectEqualStrings("constant", view.block()[24..32]);
+    // table + 4 in the block: same page, low bits 28.
+    try std.testing.expectEqual(adrp_x16, std.mem.readInt(u32, view.block()[4..8], .little));
+    try std.testing.expectEqual(add_x16_x16 | (28 << 10), std.mem.readInt(u32, view.block()[8..12], .little));
+    const branch = view.importSites(view.imports()[0]);
+    try std.testing.expectEqual(@backingInt(SiteKind.branch26), branch[0].kind);
+    try std.testing.expectEqual(@as(i64, 0), branch[0].addend);
+    // counter + 8 in the data: a page site and a scaled offset site.
+    const local = view.localSites();
+    try std.testing.expectEqual(@as(usize, 4), local.len);
+    try std.testing.expectEqual(@backingInt(SiteKind.page21), local[0].kind);
+    try std.testing.expectEqual(@as(i64, 0), local[0].addend);
+    try std.testing.expectEqual(@backingInt(SiteKind.pageoff12), local[1].kind);
+    try std.testing.expectEqual(@as(i64, 8), local[1].addend);
+    try std.testing.expectEqual(@backingInt(Region.data), local[1].target_region);
+    try std.testing.expectEqual(@backingInt(Region.pdata), local[2].region);
+    try std.testing.expectEqual(@backingInt(Region.xdata), local[3].target_region);
+}
+
+test "an image-relative site holds the value it is given" {
+    var field: [4]u8 = @splat(0xff);
+    try std.testing.expect(applySite(&field, .rva32, 0x1234, 0x1_0000_0000));
+    try std.testing.expectEqual(@as(u32, 0x1234), std.mem.readInt(u32, &field, .little));
+    try std.testing.expect(!applySite(&field, .rva32, 1 << 32, 0));
+    try std.testing.expect(!applySite(&field, .rva32, -1, 0));
+}
 
 test "an image resolves block-internal references and keeps the rest as sites" {
     const allocator = std.testing.allocator;

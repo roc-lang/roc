@@ -71,6 +71,7 @@ pub fn imageKind(target: roc_target.RocTarget) ImageKind {
     const arch = target.toCpuArch();
     if (os == .linux and arch == .x86_64) return .native;
     if (os == .macos and arch == .aarch64) return .native;
+    if (os == .windows and (arch == .x86_64 or arch == .aarch64)) return .native;
     return .none;
 }
 

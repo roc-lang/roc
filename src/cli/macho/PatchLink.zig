@@ -259,6 +259,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
                 // Debug words are not loaded.
                 .block => unreachable, // the image builder admits no absolute words in code, which cannot be rebased
                 .bss, .debug_line, .debug_info, .debug_abbrev => continue,
+                .pdata, .xdata => unreachable, // a Mach-O image carries no unwind regions
             }
             const fixup: Fixup = .{ .segment = data_segment_index, .offset = place.data - data_vmaddr + site.offset };
             if (site.target_region == UnitImage.import_target) {
@@ -457,6 +458,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
                 // Zero-fill: the window is already zero.
                 .bss => {},
                 .debug_line, .debug_info, .debug_abbrev => unreachable, // image symbols live only in allocated regions
+                .pdata, .xdata => unreachable, // a Mach-O image carries no unwind regions
             },
         }
     }
@@ -554,6 +556,7 @@ const Place = struct {
             .block => self.block,
             .data => self.data,
             .bss => self.bss,
+            .pdata, .xdata => unreachable, // a Mach-O image carries no unwind regions
             .debug_abbrev => self.debug[0],
             .debug_info => self.debug[1],
             .debug_line => self.debug[2],
@@ -750,6 +753,7 @@ const Context = struct {
             .block => self.out[@intCast(self.fileOffsetOf(place.block))..][0..len],
             .data => self.out[@intCast(self.fileOffsetOf(place.data))..][0..len],
             .bss => &.{},
+            .pdata, .xdata => unreachable, // a Mach-O image carries no unwind regions
             .debug_abbrev => self.out[@intCast(self.debug_offsets[0] + place.debug[0])..][0..len],
             .debug_info => self.out[@intCast(self.debug_offsets[1] + place.debug[1])..][0..len],
             .debug_line => self.out[@intCast(self.debug_offsets[2] + place.debug[2])..][0..len],
@@ -814,6 +818,7 @@ const Task = struct {
                     .data => 1,
                     .bss => 2,
                     .debug_line, .debug_info, .debug_abbrev => unreachable, // image symbols live only in allocated regions
+                    .pdata, .xdata => unreachable, // a Mach-O image carries no unwind regions
                 }
             ];
             std.mem.writeInt(u16, entry[6..8], 0, .little);

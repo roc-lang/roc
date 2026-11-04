@@ -25,8 +25,35 @@
 //! of a path (`key`).
 const std = @import("std");
 const build_options = @import("build_options");
-const MachoHostPrelink = @import("macho/HostPrelink.zig");
 const Allocator = std.mem.Allocator;
+
+/// Whether a `provides` symbol is a procedure or a value.
+pub const ProvideKind = enum(u8) { procedure = 0, data = 1 };
+
+/// One `provides` symbol of the platform, as a Mach-O or COFF host link
+/// places it: those hosts size each symbol's window by its kind and layout
+/// size, which the program's images tell before the host is looked up.
+pub const Provide = struct {
+    /// The C name, without any Mach-O underscore.
+    name: []const u8,
+    kind: ProvideKind,
+    /// A data symbol's layout size; 0 for a procedure.
+    size: u64,
+
+    /// The bytes the symbol's window takes.
+    pub fn windowSize(self: Provide) u64 {
+        return switch (self.kind) {
+            .procedure => procedure_window,
+            .data => std.mem.alignForward(u64, self.size, window_align),
+        };
+    }
+};
+
+/// A procedure window of a Mach-O or COFF host: room for a long jump and a
+/// trap.
+pub const procedure_window: u64 = 16;
+/// The alignment of every window of a Mach-O or COFF host.
+pub const window_align: u64 = 16;
 
 /// The address the app region starts at. The host must end below it, and
 /// app code reaches host code with 32-bit displacements, so the app region
@@ -143,9 +170,9 @@ pub const KeyInput = struct {
     link_abi: []const u8,
     /// Sorted, distinct.
     provides: []const []const u8,
-    /// For a Mach-O host, each provide's kind and layout size, in the
-    /// provides' order; empty for an ELF host, whose windows are fixed.
-    provide_layouts: []const MachoHostPrelink.Provide = &.{},
+    /// For a Mach-O or COFF host, each provide's kind and layout size, in
+    /// the provides' order; empty for an ELF host, whose windows are fixed.
+    provide_layouts: []const Provide = &.{},
     /// The symbols kept for the app region; sorted, distinct.
     keep: []const []const u8,
     /// The platform's link items as its header names them, relative to its

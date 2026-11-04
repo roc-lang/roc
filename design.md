@@ -14545,8 +14545,8 @@ worker a session has a task queued, and the session's owner takes completions
 it already has without waiting while checking continues. A platform module with
 requirements has no object of its own, so a module importing one runs as the
 whole program. How an object is loaded depends only on the compiler's host,
-never on what a load finds: a Linux x86_64 or macOS arm64 host, whose units
-carry unit images (Fast Dev Link), registers available images in imports-first order and
+never on what a load finds: a Linux x86_64, macOS arm64 or Windows host, whose
+units carry unit images (Fast Dev Link), registers available images in imports-first order and
 loads only the whole images required by an evaluator's emitted relocations,
 including carried data and frozen callable pointers, and their transitive image
 imports. These are explicit producer records, not a reconstruction from LIR
@@ -24679,15 +24679,17 @@ qualified source names.
 
 ## Fast Dev Link
 
-A `roc build --opt=dev --specialize=no` of a Linux x86_64 executable, by a
-compiler running on Linux with a cache, or of a macOS arm64 executable, by a
-compiler running on macOS with a cache, links its executable without
-composing a program object and without LLD. The per-build work after the
-edited module's code exists is a function of that module and of the output's
-size, never of the program's module count or the host's size. Every other
-target, output kind and `--no-cache` composes a program object and links it
-with LLD; the choice is a switch on target, host, output kind and cache
-presence (`fastDevLinkApplies`), never a reaction to a failure.
+A `roc build --opt=dev --specialize=no` with a cache of a Linux x86_64, macOS
+arm64 or Windows (x86_64 or arm64) executable links its executable without
+composing a program object and without LLD, whatever host the compiler runs
+on: the link is a function of the target's format, and the compiler host only
+supplies the system calls the output file is written with (`link_output`).
+The per-build work after the edited module's code exists is a function of
+that module and of the output's size, never of the program's module count or
+the host's size. Every other target, output kind and `--no-cache` composes a
+program object and links it with LLD; the choice is a switch on target,
+output kind and cache presence (`fastDevLinkApplies`), never a reaction to a
+failure.
 
 **Unit images.** A `.boxy` unit's cache entry (`boxy_object_cache`) carries,
 beside its pieces, a unit image (`backend.dev.UnitImage`): the unit's text
@@ -24791,27 +24793,31 @@ what the host provides, and stack rooms filled.
 
 **Pre-linked host.** A platform's host is linked once with the existing LLD
 flags from the platform's link inputs plus one generated object, and filed as
-one cache entry per host (`host_prelink`, `macho/HostPrelink`, family
-`prelinked_host`). The generated object defines every `provides` symbol as a
-window the host's references resolve to at prelink time, which each build
-fills in: a jump to the entry wrapper for a procedure, the value's bytes for
-a data symbol. On Linux the windows are absolute addresses at a fixed place
-in the app region, and a provided value larger than its window is a reported
-build error. On macOS the windows are sections of the host itself, a
-procedure's 16 bytes in `__TEXT` for a long jump and a value's layout size in
-`__DATA`, where the pointers in the copied value can be rebased; which
-provides are procedures and how large the values are is part of the host's
-key, read from the program's images, so the Mach-O host's lookup waits for
-them and nothing is ever too large. The object also reserves what the patch
-link appends: on Linux room in the host's first segment for a program header
-table with spare entries, on macOS a header pad for the app's segment load
-commands. The host link keeps exactly the symbols the app region may import:
+one cache entry per host (`host_prelink`, `macho/HostPrelink`,
+`coff/HostPrelink`, family `prelinked_host`). The generated object defines
+every `provides` symbol as a window the host's references resolve to at
+prelink time, which each build fills in: a jump to the entry wrapper for a
+procedure, the value's bytes for a data symbol. On Linux the windows are
+absolute addresses at a fixed place in the app region, and a provided value
+larger than its window is a reported build error. On macOS and Windows the
+windows are sections of the host itself, a procedure's 16 bytes of code for a
+long jump and a value's layout size of writable data, where the pointers in
+the copied value can be relocated; which provides are procedures and how
+large the values are is part of the host's key, read from the program's
+images, so those hosts' lookups wait for them and nothing is ever too large.
+The object also reserves what the patch link appends: on Linux room in the
+host's first segment for a program header table with spare entries, on macOS
+a header pad for the app's segment load commands; on Windows the prelink's
+page file alignment leaves the header page room for the app's section
+headers. The host link keeps exactly the symbols the app region may import:
 the platform's hosted symbols, the fixed runtime set and the support image's
 imports. On Linux it keeps them with `-u`; on macOS the generated object
 branches to each of them from a trampoline, which keeps it in the link and
 gives a symbol a dylib defines an in-image address, with every kept symbol
 left to dynamic lookup (`-U`) so a host lacking one still links and the side
-table lists it as absent. The host's key is a function of contents only
+table lists it as absent; on Windows `/include` keeps each one and gives a
+symbol a DLL exports its import thunk, with unresolved ones left so
+(`/force:unresolved`) and listed as absent. The host's key is a function of contents only
 (compiler compatibility, record format, target, link ABI, the provides and
 kept symbol lists, the provides' layouts, the link item names, and the
 bundle hash or per-file content digests of the inputs); it never contains a
@@ -24829,9 +24835,10 @@ every remaining import must be a hosted symbol or a member of the runtime
 set: a host that lacks one is the user's missing-host-symbols error, any
 other unresolved name is a compiler invariant.
 
-**The link.** The output is created as an anonymous file in the destination
-directory when the build starts, and a background job hashes the host inputs,
-looks the host up and copies it into the output while the program compiles;
+**The link.** The output is created in the destination directory when the
+build starts (an anonymous file on Linux, a temporary name elsewhere), and a
+background job hashes the host inputs, looks the host up and copies it into
+the output while the program compiles;
 on a miss the link step prelinks the host. The link then walks atoms from
 the `provides` symbols, places the reached images after the host at
 addresses that are a function of their content digests, resolves imports
@@ -24862,6 +24869,24 @@ unslid address and every reference across the host boundary is
 page-relative or rebased; the app region must lie within 4 GiB of the
 host's text, LLD's own limit for arm64 code, and a program beyond it is the
 reported dev-program-too-large error.
+
+A Windows link appends sections after the host's loaded ones: `.roctext`,
+read-and-execute, holding every placed image's code block; `.rocdata`,
+read-and-write, holding every image's data with its zero-fill as the
+section's virtual tail; `.rocpdat`, the exception directory, holding the
+host's function table entries and those of the app's placed functions in
+address order, then the app's unwind information, which a COFF image keeps
+as regions of its own; and `.rocrelo`, the base relocation directory,
+holding the host's blocks and one entry for every absolute word the app
+holds, so the executable keeps its dynamic base. The host's debug sections,
+which LLD places last, move after the app with the images' fragments
+appended, and the symbol table follows with the app's symbols appended and
+the host's entries renumbered for the inserted sections. Every address in
+the link is image relative: a 32-bit image-relative field (`rva32`) takes
+it as is, an absolute field adds the image base. The build id is written
+into the host's CodeView debug entry. When the host's header page cannot
+hold the inserted section headers, the host's section contents move one
+page down the file.
 
 ## Watch Mode For Check And Test
 
