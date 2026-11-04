@@ -8637,10 +8637,19 @@ path that returns; it records each call's demand on its result too. Demand
 flows from consumers to the values that reach them through bindings,
 field and payload reads, constructors, branches, loops, join points, and calls, including
 a function value's captures when the value may be called. Parts are paths of
-field, item, and tag-payload steps. A value's parts recur only through a tag
-payload, so a path that repeats a payload step folds to that step's first
-occurrence, and every path is bounded by the program's labels. Each summary
-only grows, so the interprocedural fixed point ends without a round limit. The
+field, item, and tag-payload steps, each carrying the label that names the
+part within its parent and the part's own Monotype. A part whose type equals
+the type of a part above it on the path sits at a recursive position of that
+type, so the path folds to that part; a type that contains itself is
+recursive whatever labels lead back to it, and labels alone cannot decide
+this, since unrelated types share tag and field labels. The steps of a path
+therefore have distinct types, so a recursive type contributes as many paths
+as its unfolded shape has parts, not one per ordering of its recursive
+positions. Paths share one root, the value itself, so demand passes through a
+nominal wrap, row coercion, or typed boundary unchanged; a read meets the part
+it names by label, since a row coercion can show one part at two types. Each
+summary only grows within that finite set of paths, so the interprocedural
+fixed point ends without a round limit. The
 clone resolves a call's result demand against the demand on the result of the
 innermost call it is inlining, and checks the arguments it knows against the
 callee's summaries; it never reanalyzes a body.
@@ -25336,6 +25345,13 @@ and installation phases under the same diagnostic.
 The specialization, evaluation, runtime LIR, ARC, static-data and native test
 execution producers increment their own counters. A complete result hit leaves
 every counter zero. This variable uses the same developer-only gate.
+
+`ROC_VERIFY_SEALED_TYPE_VIEW` builds each published module's sealed type view
+(`src/check/sealed_type_view.zig`, which reads checked types directly from the
+sealed solver store) and asserts, before anything rewrites the publication,
+that it renders every published source root exactly as checked type
+publication does. The snapshot tool, eval test runner and strategy
+differential runner set it in their build steps.
 
 
 ## Integer SIMD Builtins
