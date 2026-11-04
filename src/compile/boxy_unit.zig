@@ -48,17 +48,36 @@ pub const Unit = struct {
     /// expect it lowers counts into a site of its expect-site table, and it
     /// exports a wrapper per top-level expect of its module.
     test_unit: bool = false,
+    /// For a wasm target: whether the platform reserves low memory, so the
+    /// unit's code checks its stack bounds (`object_cache.KeyInput.wasm_stack_checks`).
+    wasm_stack_checks: bool = false,
 };
 
-/// Whether a unit compiled for `target` carries a unit image: the targets
-/// a fast dev link serves. Every entry for such a target holds one,
-/// whichever command wrote it.
-pub fn producesImage(target: roc_target.RocTarget) bool {
+/// The kind of unit image a unit compiled for a target carries.
+pub const ImageKind = enum {
+    /// None: the unit's code is its pieces alone.
+    none,
+    /// A `backend.dev.UnitImage` beside the unit's pieces.
+    native,
+    /// A `backend.wasm.WasmUnitImage`, which is all of the unit's code.
+    wasm,
+};
+
+/// The kind of unit image a unit compiled for `target` carries. Every
+/// entry for the target holds one, whichever command wrote it.
+pub fn imageKind(target: roc_target.RocTarget) ImageKind {
+    if (target.toCpuArch() == .wasm32) return .wasm;
     return switch (target.toOsTag()) {
-        .linux => target.toCpuArch() == .x86_64,
-        .macos => target.toCpuArch() == .aarch64,
-        else => false,
+        .linux => if (target.toCpuArch() == .x86_64) .native else .none,
+        .macos => if (target.toCpuArch() == .aarch64) .native else .none,
+        else => .none,
     };
+}
+
+/// Whether a unit compiled for `target` carries a native unit image: the
+/// targets a fast dev link serves and compile-time evaluation loads.
+pub fn producesImage(target: roc_target.RocTarget) bool {
+    return imageKind(target) == .native;
 }
 
 /// A unit image's bytes, its code locations, and what keeps them alive.
@@ -89,10 +108,10 @@ pub const Image = struct {
 /// A unit's object.
 pub const Built = struct {
     restored: bool,
-    /// The unit's code in pieces, when the unit wanted them. Owned by the
-    /// unit's `gpa`.
+    /// The unit's code in pieces, when the unit wanted them and its target
+    /// has pieces (every target but wasm). Owned by the unit's `gpa`.
     pieces: ?*backend.dev.UnitPieces.Pieces,
-    /// The unit's image, for a target that `producesImage`.
+    /// The unit's image, for a target with an `imageKind`.
     image: ?Image = null,
     hosted_symbols: []const []const u8,
     /// The ownership signatures the object exports. Owned by the unit's `gpa`.
@@ -134,7 +153,9 @@ pub const Built = struct {
 /// `run_image` marks the root unit of a dev run image
 /// (`object_cache.KeyInput.run_image`), and `expect_sites` a test unit
 /// (`object_cache.KeyInput.expect_sites`).
-pub fn objectKey(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *const Artifact, platform: ?ImportedView, opt: []const u8, inline_expects: bool, target: roc_target.RocTarget, paired_platforms: []const [32]u8, run_image: bool, expect_sites: bool) Allocator.Error!object_cache.Key {
+/// `wasm_stack_checks` is the platform's stack-check mode on a wasm target.
+pub fn objectKey(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *const Artifact, platform: ?ImportedView, opt: []const u8, inline_expects: bool, target: roc_target.RocTarget, paired_platforms: []const [32]u8, run_image: bool, expect_sites: bool, wasm_stack_checks: bool) Allocator.Error!object_cache.Key {
+    std.debug.assert(!wasm_stack_checks or imageKind(target) == .wasm);
     const hosted_bindings: ?[32]u8 = if (platform) |platform_view| blk: {
         const inputs = try gpa.alloc(object_cache.HostedBindingInput, platform_view.hosted_bindings.bindings.len);
         defer gpa.free(inputs);
@@ -156,13 +177,14 @@ pub fn objectKey(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *co
         .inline_expects = inline_expects,
         .run_image = run_image,
         .expect_sites = expect_sites,
+        .wasm_stack_checks = wasm_stack_checks,
     });
 }
 
-/// Restore `key`'s entry from the per-module Boxy object cache, recording
-/// its exports in `interfaces`. Null for a miss, or for bytes this compiler
-/// did not write.
-pub fn restore(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.Key, interfaces: *ExportInterfaces) Allocator.Error!?object_cache.Entry {
+/// Restore `key`'s entry, a unit compiled for `target`, from the per-module
+/// Boxy object cache, recording its exports in `interfaces`. Null for a
+/// miss, or for bytes this compiler did not write.
+pub fn restore(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.Key, target: roc_target.RocTarget, interfaces: *ExportInterfaces) Allocator.Error!?object_cache.Entry {
     const manager = cache_manager orelse {
         if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: no cache manager to restore key {s}\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
         return null;
@@ -180,7 +202,7 @@ pub fn restore(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.
         },
     };
     errdefer object_cache.deinitEntry(gpa, entry);
-    if (!imageReads(entry)) {
+    if (!imageReads(entry, imageKind(target))) {
         if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache entry for key {s} holds no image this compiler reads\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
         object_cache.deinitEntry(gpa, entry);
         return null;
@@ -189,23 +211,35 @@ pub fn restore(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.
     return entry;
 }
 
-/// Whether `entry`'s image, if it has one, is an image this compiler reads,
-/// and its code locations, if it has them, a table this compiler reads. A
-/// library unit's entry carries both; the root unit's, which no
-/// compile-time evaluation loads, only the image. An entry that does not
-/// read is bytes this compiler did not write (a miss), never a link-time or
+/// Whether `entry`'s image is an image of `kind` this compiler reads, and
+/// its code locations, if it has them, a table this compiler reads. A
+/// native library unit's entry carries both; a native root unit's, which no
+/// compile-time evaluation loads, only the image; a wasm unit's only its
+/// wasm image, which is all of its code. An entry that does not read is
+/// bytes this compiler did not write (a miss), never a link-time or
 /// compile-time evaluation failure.
-fn imageReads(entry: object_cache.Entry) bool {
-    if (entry.image.len == 0) return entry.code_locations.len == 0;
-    const image: []align(backend.dev.UnitImage.alignment.toByteUnits()) const u8 = @alignCast(entry.image);
-    _ = backend.dev.UnitImage.View.init(image) catch return false;
-    return entry.code_locations.len == 0 or backend.dev.CodeLocations.validate(entry.code_locations);
+fn imageReads(entry: object_cache.Entry, kind: ImageKind) bool {
+    switch (kind) {
+        .none => return entry.image.len == 0 and entry.code_locations.len == 0,
+        .native => {
+            if (entry.image.len == 0) return entry.code_locations.len == 0;
+            const image: []align(backend.dev.UnitImage.alignment.toByteUnits()) const u8 = @alignCast(entry.image);
+            _ = backend.dev.UnitImage.View.init(image) catch return false;
+            return entry.code_locations.len == 0 or backend.dev.CodeLocations.validate(entry.code_locations);
+        },
+        .wasm => {
+            if (entry.pieces.len != 0 or entry.code_locations.len != 0) return false;
+            const image: []align(backend.wasm.WasmUnitImage.alignment.toByteUnits()) const u8 = @alignCast(entry.image);
+            _ = backend.wasm.WasmUnitImage.View.init(image) catch return false;
+            return true;
+        },
+    }
 }
 
 /// Restore `key`'s entry like `restore`, serving it from a mapping of the
 /// cache file: the pieces are left undecoded and the image is borrowed from
 /// the mapping, which the returned `Image` keeps alive.
-pub fn restoreMapped(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.Key, interfaces: *ExportInterfaces) Allocator.Error!?struct { entry: object_cache.Entry, data: CacheData } {
+pub fn restoreMapped(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.Key, target: roc_target.RocTarget, interfaces: *ExportInterfaces) Allocator.Error!?struct { entry: object_cache.Entry, data: CacheData } {
     const manager = cache_manager orelse return null;
     const data = manager.loadFamilyMapped(gpa, .checked, .boxy_object, key.bytes, object_cache.scope) orelse {
         if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: no object cache entry for key {s}\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
@@ -225,7 +259,7 @@ pub fn restoreMapped(gpa: Allocator, cache_manager: ?*CacheManager, key: object_
         object_cache.deinitEntryView(gpa, entry);
         data.deinit(gpa);
     }
-    if (!imageReads(entry)) {
+    if (!imageReads(entry, imageKind(target))) {
         if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache entry for key {s} holds no image this compiler reads\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
         object_cache.deinitEntryView(gpa, entry);
         data.deinit(gpa);
@@ -324,11 +358,11 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     const module_name = unit.artifact.canonical_names.moduleNameText(unit.artifact.module_identity.module_name);
     var restore_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_restore);
     defer restore_scope.end();
-    if (try restoreMapped(gpa, unit.cache_manager, unit.key, unit.interfaces)) |restored| {
+    if (try restoreMapped(gpa, unit.cache_manager, unit.key, unit.target, unit.interfaces)) |restored| {
         defer object_cache.deinitEntryView(gpa, restored.entry);
         // The mapping stays alive as the image's owner; otherwise it is
         // released once the pieces are decoded.
-        const keeps_mapping = producesImage(unit.target);
+        const keeps_mapping = imageKind(unit.target) != .none;
         defer if (!keeps_mapping) restored.data.deinit(gpa);
         errdefer if (keeps_mapping) restored.data.deinit(gpa);
         const entry = restored.entry;
@@ -337,16 +371,18 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
         if (dev_diagnostics.isSet(.verify_boxy_object_reuse)) {
             const fresh = try build(unit, module_name);
             defer fresh.deinit(gpa);
-            const encoded = try backend.dev.UnitPieces.encode(gpa, fresh.pieces.?);
-            defer gpa.free(encoded);
-            if (!std.mem.eql(u8, encoded, entry.pieces)) {
-                base.invariant("the cached pieces of module {s} differ from a fresh build of them: its key misses an input", .{module_name});
+            if (fresh.pieces) |fresh_pieces| {
+                const encoded = try backend.dev.UnitPieces.encode(gpa, fresh_pieces);
+                defer gpa.free(encoded);
+                if (!std.mem.eql(u8, encoded, entry.pieces)) {
+                    base.invariant("the cached pieces of module {s} differ from a fresh build of them: its key misses an input", .{module_name});
+                }
             }
             if (fresh.image) |image| if (!std.mem.eql(u8, image.bytes, entry.image)) {
                 base.invariant("the cached image of module {s} differs from a fresh build of it: its key misses an input", .{module_name});
             };
         }
-        const pieces: ?*backend.dev.UnitPieces.Pieces = if (unit.want_pieces) pieces: {
+        const pieces: ?*backend.dev.UnitPieces.Pieces = if (unit.want_pieces and imageKind(unit.target) != .wasm) pieces: {
             const decoded = try gpa.create(backend.dev.UnitPieces.Pieces);
             errdefer gpa.destroy(decoded);
             decoded.* = backend.dev.UnitPieces.decode(gpa, entry.pieces) catch |err| switch (err) {
@@ -382,7 +418,7 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     errdefer built.deinit(gpa);
     var cache_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_cache);
     defer cache_scope.end();
-    const encoded = try backend.dev.UnitPieces.encode(gpa, built.pieces.?);
+    const encoded = if (built.pieces) |pieces| try backend.dev.UnitPieces.encode(gpa, pieces) else &.{};
     defer gpa.free(encoded);
     try store(gpa, unit.cache_manager, unit.key, .{
         .exports = built.exports,
@@ -393,7 +429,7 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
         .expect_sites = built.expect_sites,
         .test_roots = built.test_roots,
     });
-    if (unit.want_pieces) return built;
+    if (unit.want_pieces or built.pieces == null) return built;
     var without_pieces = built;
     built.pieces.?.deinit();
     gpa.destroy(built.pieces.?);
@@ -443,6 +479,36 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
 
     var codegen_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_codegen);
     defer codegen_scope.end();
+    if (imageKind(unit.target) == .wasm) {
+        std.debug.assert(!unit.test_unit);
+        const bytes = backend.wasm.UnitCompile.compileUnitImage(gpa, &lowered.lir_result.store, &lowered.lir_result.layouts, &.{}, static_data, .{
+            .cpu_level = unit.target.cpuLevel(),
+            .stack_checks = unit.wasm_stack_checks,
+            .executor = unit.config.post_check_executor,
+        }) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {
+                std.log.err("Wasm compilation of module {s} failed: {}", .{ module_name, err });
+                return error.NativeCompilationFailed;
+            },
+        };
+        errdefer gpa.free(bytes);
+        codegen_scope.end();
+        const records = try exportRecords(gpa, &lowered, unit.interfaces);
+        defer gpa.free(records);
+        var hosted_arena = std.heap.ArenaAllocator.init(gpa);
+        defer hosted_arena.deinit();
+        const hosted_symbols = try dupeSymbols(gpa, try hostedSymbols(hosted_arena.allocator(), &lowered.lir_result.store));
+        errdefer freeSymbols(gpa, hosted_symbols);
+        if (trace_clock) |io| std.debug.print("boxy-work: built wasm unit {s} in {d} ms ({d} image bytes)\n", .{ module_name, @divTrunc(std.Io.Timestamp.now(io, .awake).nanoseconds - build_started_ns, std.time.ns_per_ms), bytes.len });
+        return .{
+            .restored = false,
+            .pieces = null,
+            .image = .{ .bytes = bytes, .code_locations = &.{}, .owner = .owned },
+            .hosted_symbols = hosted_symbols,
+            .exports = try dupeRecords(gpa, records),
+        };
+    }
     var object_compiler = backend.ObjectFileCompiler.init(gpa);
     var backend_timing: ?backend.ObjectFileCompiler.Timing = if (trace_clock) |io| .init(io) else null;
     if (backend_timing) |*timing| object_compiler.timing = timing;

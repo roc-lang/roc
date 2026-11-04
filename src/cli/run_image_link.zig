@@ -89,6 +89,7 @@ pub const Plan = struct {
         for (self.states) |state_or_null| if (state_or_null) |state| {
             self.gpa.free(state.atoms);
             self.gpa.free(state.targets);
+            self.gpa.free(state.imports_used);
         };
         self.gpa.free(self.states);
         self.gpa.free(self.images);
@@ -132,9 +133,11 @@ pub fn plan(gpa: Allocator, std_io: std.Io, inputs: Inputs) PlanError!Plan {
     var walk: unit_walk.Walk = .{
         .gpa = gpa,
         .images = images,
-        .exports = &exports,
-        .host = .{ .context = @ptrCast(&inputs.host_symbols), .find = findHostSymbol },
-        .host_required = inputs.host_symbols,
+        .resolver = .{
+            .exports = &exports,
+            .host = .{ .context = @ptrCast(&inputs.host_symbols), .find = findHostSymbol },
+            .host_required = inputs.host_symbols,
+        },
     };
     defer walk.deinit();
     try walk.init();
@@ -150,7 +153,7 @@ pub fn plan(gpa: Allocator, std_io: std.Io, inputs: Inputs) PlanError!Plan {
     }
     try walk.run();
     // Every import resolves to a program symbol or one the shim resolves.
-    std.debug.assert(walk.missing.count() == 0);
+    std.debug.assert(walk.resolver.missing.count() == 0);
 
     var order_list: std.ArrayList(u32) = .empty;
     defer order_list.deinit(gpa);

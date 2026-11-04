@@ -591,7 +591,7 @@ reads that distinction, or anything else, back out of the spelling:
 | --- | --- | --- |
 | `roc__d{N}` | the value owner `N` holds | program |
 | `roc__d{N}_{k}` | the `k`th further node (from 1) of owner `N`'s value | program |
-| `roc__h{hash}` | a datum named by content: a string literal's backing or a carried constant | shared |
+| `roc__h{hash}` | a datum named by content: a string literal's backing, a carried constant, or a constant a wasm unit defines for itself (`UnitCompile.contentNamedStaticData`) | shared |
 | `roc__p{hash}` | a procedure, by its `ProcIdentity` | shared |
 | `roc__p{hash}.{k}` | the `k`th fragment function (from 1) of a procedure's wasm code ("Wasm Function Limits") | shared |
 
@@ -2423,13 +2423,16 @@ An entry-block slot is allocated for the whole activation, so LLVM can overlap
 two slots only through `llvm.lifetime.start` and `llvm.lifetime.end`. The LLVM
 backend brackets the slot of every local whose address it passes to an
 out-of-line Roc procedure call (a result returned through memory, or an
-argument passed by pointer) with markers at that local's exact lifetime
-boundaries, which the shared LIR stack planner solves over the procedure's
-explicit control-flow graph. Other slots carry no markers: SROA removes slots
-whose addresses never escape, and markers on them would only add optimizer
-work. Procedure arguments, which the prologue writes, and locals in deferred
-string-match captures, which the backend materializes outside the statements
-that access them, keep their activation lifetime.
+argument passed by pointer) or an explicit RC helper call with markers at that
+storage owner's exact lifetime boundaries, which the shared LIR stack planner
+solves over the procedure's explicit control-flow graph. Other slots carry no
+markers: SROA removes slots whose addresses never escape, and markers on them
+would only add optimizer work. RC argument emission and lifetime planning
+share the same size rule: small values use the shared RC scratch slot; larger
+values pass their own storage. Views extend their owner's lifetime. Procedure
+arguments, which the prologue writes, and locals in deferred string-match
+captures, which the backend materializes outside the statements that access
+them, keep their activation lifetime.
 
 LLVM call sites do not acquire `alwaysinline` from loop nesting. Nesting depth
 does not establish execution frequency or bound the combined body of a caller
@@ -8637,10 +8640,19 @@ path that returns; it records each call's demand on its result too. Demand
 flows from consumers to the values that reach them through bindings,
 field and payload reads, constructors, branches, loops, join points, and calls, including
 a function value's captures when the value may be called. Parts are paths of
-field, item, and tag-payload steps. A value's parts recur only through a tag
-payload, so a path that repeats a payload step folds to that step's first
-occurrence, and every path is bounded by the program's labels. Each summary
-only grows, so the interprocedural fixed point ends without a round limit. The
+field, item, and tag-payload steps, each carrying the label that names the
+part within its parent and the part's own Monotype. A part whose type equals
+the type of a part above it on the path sits at a recursive position of that
+type, so the path folds to that part; a type that contains itself is
+recursive whatever labels lead back to it, and labels alone cannot decide
+this, since unrelated types share tag and field labels. The steps of a path
+therefore have distinct types, so a recursive type contributes as many paths
+as its unfolded shape has parts, not one per ordering of its recursive
+positions. Paths share one root, the value itself, so demand passes through a
+nominal wrap, row coercion, or typed boundary unchanged; a read meets the part
+it names by label, since a row coercion can show one part at two types. Each
+summary only grows within that finite set of paths, so the interprocedural
+fixed point ends without a round limit. The
 clone resolves a call's result demand against the demand on the result of the
 innermost call it is inlining, and checks the arguments it knows against the
 callee's summaries; it never reanalyzes a body.
@@ -14238,7 +14250,8 @@ evaluation runs against (Compile-Time Evaluation Strategy). `roc check` and
 `roc run` with `--specialize=no` therefore leave identical cache contents for
 the same sources when the run lowers its whole program, and `roc build`
 adds exactly the module objects still missing (`compile.boxy_object_cache`,
-the `boxy_object` family).
+the `boxy_object` family); a wasm build adds its target's units beside the
+native ones (Fast Dev Link, "Wasm unit images").
 `roc test` checks its root for explicit test roots
 (`Validation.explicit_roots`), which is its own check under either strategy,
 and with `--specialize=no` it leaves exactly what that check leaves plus one
@@ -22276,11 +22289,14 @@ payloads use the same memory-view plan: an immutable alias or field read names
 its ultimate storage owner and a committed byte offset. LLVM does not rebuild
 these aliases or field reads field by field. The existing per-proc
 value planner uses the shared LIR access inventory and liveness solution to
-prove these views. Join parameters, explicit mutations, and uninitialized
-storage remain snapshots. A single static definition may execute repeatedly:
-a view may not remain live across its storage owner's next definition.
-View chains are resolved once, and all reads through them extend the owner's
-LLVM slot lifetime. A view's definition does not overwrite its owner's bytes.
+prove these views. A join declaration does not mutate its parameters: an
+`initialize_join_param` write is an ordinary definition. Single-definition join
+parameters are eligible view owners; multiple definitions, explicit replacement,
+and uninitialized storage retain snapshots. A single static definition may
+execute repeatedly: a view may not remain live across its storage owner's next
+definition. View chains are resolved once, and all reads through them extend the
+owner's LLVM slot lifetime. A view's definition does not overwrite its owner's
+bytes.
 
 An ordinary indirect fast-call parameter with no body writes can use the
 caller's storage directly. Tail-group parameters keep their snapshots because
@@ -22475,23 +22491,31 @@ Stable does not mean distinct. Before emitting a procedure, `LirCodeGen` walks
 its exact control-flow graph and inventories every definition and indirect
 write. A one-definition `assign_ref.local` may adopt its source's authoritative
 location only when both locals have the same runtime representation and the
-source is immutable. Multiply-defined locals, join parameters, uninitialized
-poisoning, output-pointer writes, control-flow capture writes, and aggregate
-stores therefore retain independent storage identities. This lets immutable alias
-chains emit no load/store copies without allowing a later source mutation to
-change an earlier snapshot. Floating-point values that require per-binding NaN
-normalization and vector values retain independent locations. The proof never
-uses emission order, last-use guesses, or an adjacent-instruction peephole.
+source has at most one definition. Join declarations do not write storage;
+initialization of a join parameter counts as an ordinary definition. The planner
+proves that the alias is not live at procedure entry or across its ultimate
+owner's definition, including when that definition executes again in a loop.
+Multiply-defined locals, explicit replacements, uninitialized poisoning,
+output-pointer writes, control-flow capture writes, and aggregate stores retain
+independent storage identities. This lets immutable alias chains emit no
+load/store copies without allowing a later source mutation to change an earlier
+snapshot. Floating-point values that require per-binding NaN normalization and
+vector values retain independent locations. The proof never uses emission
+order, last-use guesses, or an adjacent-instruction peephole.
 
 Native stack planning uses the shared LIR stack planner, which builds a
 procedure's control-flow graph from the shared LIR read/definition
 inventories, plus explicit native descriptor accesses and fused-result writes.
 Runtime successor edges distinguish join declarations from jumps, and pattern
-captures write only on their successful edges. Immutable aliases share a storage identity; their
-combined reads keep that identity live. Each instruction-selection region holds
-all its inputs and outputs simultaneously, so multiword copies cannot overwrite
-unread operands. This analysis follows explicit ARC statements as ordinary reads
-and makes no ownership decisions.
+captures write only on their successful edges. Immutable aliases share a storage
+identity; their combined reads keep that identity live. The planner solves
+independent local lifetimes once, resolves eligible alias chains against that
+solution, and unions their live ranges into the owner's range before assigning
+slots. This preserves loop snapshots without a second control-flow solve.
+Each instruction-selection region holds all its inputs and outputs
+simultaneously, so multiword copies cannot overwrite unread operands. This
+analysis follows explicit ARC statements as ordinary reads and makes no
+ownership decisions.
 
 The planner forms basic blocks once. Within each block it records disjoint
 read-before-write intervals, propagating only live-in requirements backward across
@@ -24251,9 +24275,15 @@ writes its addend once every compiler-owned object is composed and before the
 object is sealed. The analysis follows stack-pointer-derived values through
 structured control flow to the frames each function reserves and the stack
 pointer each call starts at; a function that reads the stack pointer without
-lowering it uses LLVM's red zone of at most 128 bytes. A cycle of unchecked
-functions with a frame, or a stack pointer set to a value not derived from it,
-is a compiler invariant violation. Code the host provides is the host's own
+lowering it uses LLVM's red zone of at most 128 bytes. A dev procedure's
+dynamic frame region lowers the stack pointer by an amount only known at
+runtime, so the dev backend checks the bounds again right after reserving it;
+the analysis measures what follows from the new stack pointer, and that check
+gets the room every check of the function gets, which covers the deepest the
+function reaches below any of its stack pointers. A cycle of unchecked
+functions with a frame, a stack pointer set to a constant, or a dynamic
+region with anything but its check between the reservation and the next call
+or stack pointer change, is a compiler invariant violation. Code the host provides is the host's own
 business and needs no room.
 
 Compiler-owned code compiled ahead of time follows the same rule. Builtins
@@ -24689,6 +24719,75 @@ function of code alone. Cached source tables contain semantic module names
 and content-derived module identities, never workspace-qualified display names.
 Compile-time failure locations and cached test observations bind those
 identities to the current compilation's source environments before reporting.
+
+**Wasm unit images.** Units are lowered and cached per target. A `.boxy`
+dev build of `wasm32` or `wasm32v1` with a cache restores or builds a unit
+per module for its own target after checking (`buildWasmUnits`, the same
+scheduling `roc build` gives a native link's units), plus the root unit,
+while compile-time evaluation keeps running the native units; such a build
+has two entries per module. A wasm unit's entry is keyed by the unit key
+with the wasm target and the platform's stack-check mode
+(`boxy_object_cache.KeyInput.wasm_stack_checks`), holds no pieces, and
+carries a wasm unit image (`backend.wasm.WasmUnitImage`) that `WasmCodeGen`
+writes while compiling the unit alone (`backend.wasm.UnitCompile`): the
+unit's signatures, its function bodies exactly as a code section stores
+them, its data segments, its exports and table-slot requests, the imports
+its code names (builtins, the Boxy runtime, the runtime set, hosted
+functions, other units' exports, the position-independent base globals),
+and every index or address in a body or segment as a site over a padded
+field that holds zero, so placing a body never changes its length. Each
+function and segment is an atom whose sites are its edges; with stack
+checks, each function also records the frame facts `StackRoom` fills a
+check's room from. Nothing is merged into a unit: what other code defines
+is an import with the signature the call uses. The constants the program
+named for itself (the nodes of its descriptors, dictionaries, names and
+carried values) are defined weak under content names and referenced by
+name (`UnitCompile.contentNamedStaticData`, `CodeExcerpt.ContentNames`), so
+a link keeps one copy of a constant several units carry; the slots the
+unit's code names, mutable constants and host-visible constants keep the
+program's names. Bodies keep the one position-independent form every wasm
+object Roc emits uses, so one image serves every output kind.
+
+**Wasm fast dev link.** Such a build on a Linux host links its output by
+composing images, with no LLD on the module path (`wasm_link.zig`). Two
+images join the units, each converted once from a `wasm-ld -r` composition
+(`backend.wasm.ObjectImage`) and filed under the `prelinked_host` family as
+a wasm record (`wasm_host_image.zig`): the support image (compiler-rt, the
+builtins, the Boxy runtime and the stack support functions for the target
+and stack-check mode, keyed by those and the objects' digests) and, for a
+module, the host image (the platform's link inputs, keyed by the target, the
+link items, the inputs' digests or bundle hash and the platform's declared
+link configuration). Object images may define globals with constant initial
+values, name constructors, mark definitions weak, keep the atoms the object
+retains as roots, and import under a module and field other than the symbol
+name. A background job hashes and looks both up while the program compiles;
+a miss converts after lowering. Names resolve in the two scopes sealing
+gives today's link: a unit's or the support code's import resolves to the
+app's definitions (strong over weak, then the smallest digest), then to a
+symbol the link defines (`__stack_pointer`, `__memory_base` and
+`__table_base` as constant 0, `__indirect_function_table`, `__stack_low`,
+`__stack_high`, `__heap_base`, `__data_end`, `__wasm_call_ctors`, ...), then
+to the host's definitions, else to the embedder; a host import resolves only
+to the names the app gives the host (its provides, exported data and the
+WebAssembly 1.0 stack accessors), then to the link's symbols, else to the
+embedder. An atom walk from the platform's exports, the stack exports, the
+host's retained atoms and the provides decides what is placed. Index spaces
+follow placement order (host, support, units by content digest; within an
+image, its order), memory follows `linker.wasmStackLayout` with initialized
+segments first and zero-filled ones after (emitted as zeros only when memory
+may not start zeroed), as one active data segment, and the table holds every
+reached function a table site names. Every section's size is known before a
+byte is written; bodies and segments are copied and patched in place in
+parallel tasks, and with stack checks `StackRoom.programRooms` fills each
+check's room from the images' frame facts over the composed call graph. A
+name section is written only with `--debug` (no DWARF). Engine limits,
+undefined platform exports, conflicting embedder imports, memory settings
+the program does not fit and parameter counts past the engine limit are CLI
+errors. `output: Shared` produces the same finished module as `exe` (the
+wasm link has no `-shared` mode). `output: Archive` packages a relocatable
+object the same walk composes from the support image and the units: every
+site a relocation, only the app's public names global, undefined symbols for
+what the host provides, and stack rooms filled.
 
 **Pre-linked host.** A platform's host is linked once with the existing LLD
 flags from the platform's link inputs plus one generated object, and filed as
@@ -25302,6 +25401,13 @@ and installation phases under the same diagnostic.
 The specialization, evaluation, runtime LIR, ARC, static-data and native test
 execution producers increment their own counters. A complete result hit leaves
 every counter zero. This variable uses the same developer-only gate.
+
+`ROC_VERIFY_SEALED_TYPE_VIEW` builds each published module's sealed type view
+(`src/check/sealed_type_view.zig`, which reads checked types directly from the
+sealed solver store) and asserts, before anything rewrites the publication,
+that it renders every published source root exactly as checked type
+publication does. The snapshot tool, eval test runner and strategy
+differential runner set it in their build steps.
 
 
 ## Integer SIMD Builtins

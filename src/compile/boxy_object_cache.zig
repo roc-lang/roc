@@ -62,6 +62,9 @@ pub const KeyInput = struct {
     /// it compiles counts into a site of its expect-site table, and it
     /// exports a wrapper per top-level expect of its modules.
     expect_sites: bool = false,
+    /// For a wasm target: whether the platform reserves low memory, so the
+    /// code checks its stack bounds.
+    wasm_stack_checks: bool = false,
 };
 
 /// The key of a module's object for `input` under this compiler.
@@ -82,6 +85,7 @@ pub fn key(input: KeyInput) Key {
     hasher.update(&[_]u8{@intFromBool(input.inline_expects)});
     hasher.update(&[_]u8{@intFromBool(input.run_image)});
     hasher.update(&[_]u8{@intFromBool(input.expect_sites)});
+    hasher.update(&[_]u8{@intFromBool(input.wasm_stack_checks)});
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -141,7 +145,8 @@ pub const TestRootRecord = struct {
     symbol: u32,
 };
 
-/// One module's cached object.
+/// One module's cached object. A wasm target's entry holds no pieces and no
+/// code locations: its code is its wasm unit image (`WasmUnitImage`).
 pub const Entry = struct {
     exports: []const ExportRecord,
     /// The hosted function symbols the object references.
@@ -167,8 +172,8 @@ pub const Entry = struct {
     /// Module names are semantic; module identities bind locations to the
     /// current compilation's source environments, independent of checkout.
     code_locations: []const u8 = &.{},
-    /// The module's unit image (`UnitImage`), for a target a fast dev link
-    /// serves; empty for any other target.
+    /// The module's unit image: a `UnitImage` for a Linux x86_64 target, a
+    /// `WasmUnitImage` for a wasm target, and empty for any other target.
     image: []const u8 = &.{},
 };
 
@@ -478,6 +483,10 @@ test "a Boxy object key is a function of exactly its declared inputs" {
     var test_unit = testInput();
     test_unit.expect_sites = true;
     try std.testing.expect(!std.mem.eql(u8, &baseline.bytes, &key(test_unit).bytes));
+
+    var stack_checked = testInput();
+    stack_checked.wasm_stack_checks = true;
+    try std.testing.expect(!std.mem.eql(u8, &baseline.bytes, &key(stack_checked).bytes));
 
     // A length prefix keeps one field's tail from reading as the next's head.
     var moved_boundary = testInput();

@@ -294,6 +294,9 @@ pub const Store = struct {
     /// Probes never nest (they bracket leaf-level unification), so this is a
     /// flag, not a depth.
     savepoint_active: bool = false,
+    /// Set once checking has solved this store (see `seal`). Every write to a
+    /// sealed store is a violated compiler invariant.
+    sealed: bool = false,
     savepoint_baseline_slots: u32 = 0,
     savepoint_baseline_descs: u32 = 0,
     slot_trail: std.ArrayListUnmanaged(SlotUndo) = .empty,
@@ -337,6 +340,7 @@ pub const Store = struct {
 
     /// Relocate the self-contained type store and its explicit nominal lookup index.
     pub fn rebindSourceReferences(store: *Store, mapper: anytype) @TypeOf(mapper.*).Error!void {
+        store.debugAssertUnsealed();
         for (0..store.descs.backing.items.len) |i| {
             var desc = store.descs.backing.items.get(i);
             try rebindSourceReferenceValue(&desc.content, mapper);
@@ -402,8 +406,30 @@ pub const Store = struct {
         };
     }
 
+    /// Make this store read-only: checking has solved it, and every later
+    /// stage only reads it. Sealing happens at a quiescent point, with no
+    /// savepoint open and no class frozen.
+    pub fn seal(self: *Self) void {
+        if (std.debug.runtime_safety) {
+            if (self.sealed) base.invariant("a type store was sealed twice", .{});
+            if (self.savepoint_active) base.invariant("a type store was sealed with a savepoint open", .{});
+            if (self.frozen_anchors.count() != 0) base.invariant("a type store was sealed with a frozen class", .{});
+        }
+        self.sealed = true;
+    }
+
+    /// Whether checking has solved and sealed this store (see `seal`).
+    pub fn isSealed(self: *const Self) bool {
+        return self.sealed;
+    }
+
+    fn debugAssertUnsealed(self: *const Self) void {
+        if (std.debug.runtime_safety and self.sealed) base.invariant("a sealed type store was written", .{});
+    }
+
     /// Ensure that slots & descriptor arrays have at least the provided capacity
     pub fn ensureTotalCapacity(self: *Self, capacity: usize) Allocator.Error!void {
+        self.debugAssertUnsealed();
         try self.descs.backing.ensureTotalCapacity(self.gpa, capacity);
         try self.slots.ensureTotalCapacity(self.gpa, capacity);
         try self.root_metas.ensureTotalCapacity(self.gpa, capacity);
@@ -595,6 +621,7 @@ pub const Store = struct {
     }
 
     fn createSavepointImpl(self: *Self, comptime take_clone: bool) Allocator.Error!Savepoint {
+        self.debugAssertUnsealed();
         const verify_clone: SavepointVerifyClone =
             if (savepoint_verification == .clone_crosscheck and take_clone) vc: {
                 break :vc try self.cloneForSavepointVerification();
@@ -635,6 +662,7 @@ pub const Store = struct {
     /// savepoint lengths; the baselines deactivate so in-place writes stop
     /// journaling.
     pub fn commitSavepoint(self: *Self, savepoint: *Savepoint) void {
+        self.debugAssertUnsealed();
         std.debug.assert(self.savepoint_active);
         self.desc_trail.shrinkRetainingCapacity(savepoint.desc_trail_len);
         self.slot_trail.shrinkRetainingCapacity(savepoint.slot_trail_len);
@@ -673,6 +701,7 @@ pub const Store = struct {
 
     /// Undo everything done since `savepoint` was created.
     pub fn rollbackToSavepoint(self: *Self, savepoint: *Savepoint) void {
+        self.debugAssertUnsealed();
         self.class_watch.noteRollback();
         self.settled_descs.clear();
         // Replay journaled in-place writes in reverse so each pre-existing entry
@@ -782,6 +811,7 @@ pub const Store = struct {
     /// value so rollback can restore it; a failed journal append is propagated
     /// rather than risk a type store the trail can no longer faithfully undo.
     fn setSlot(self: *Self, idx: SlotStore.Idx, val: Slot) Allocator.Error!void {
+        self.debugAssertUnsealed();
         if (self.savepoint_active and @backingInt(idx) < self.savepoint_baseline_slots) {
             try self.slot_trail.append(self.gpa, .{ .idx = idx, .old = self.slots.get(idx) });
         }
@@ -815,6 +845,7 @@ pub const Store = struct {
 
     /// `setDesc` without the frozen-class guard, for freezing and thawing.
     fn setDescUnguarded(self: *Self, idx: DescStore.Idx, val: Desc) Allocator.Error!void {
+        self.debugAssertUnsealed();
         if (self.savepoint_active and @backingInt(idx) < self.savepoint_baseline_descs) {
             try self.desc_trail.append(self.gpa, .{ .idx = idx, .old = self.descs.get(idx) });
         }
@@ -829,6 +860,7 @@ pub const Store = struct {
     /// that every class reachable from these classes is among them or already
     /// settled.
     pub fn markSettled(self: *Self, vars: []const Var) Allocator.Error!void {
+        self.debugAssertUnsealed();
         for (vars) |var_| try self.settled_descs.insert(self.gpa, self.resolveVar(var_).desc_idx);
     }
 
@@ -839,6 +871,7 @@ pub const Store = struct {
 
     /// In-place equivalence-class root metadata write. See setSlot.
     fn setRootMeta(self: *Self, idx: DescStore.Idx, val: RootMeta) Allocator.Error!void {
+        self.debugAssertUnsealed();
         if (self.savepoint_active and @backingInt(idx) < self.savepoint_baseline_descs) {
             try self.root_meta_trail.append(self.gpa, .{ .idx = idx, .old = self.getRootMeta(idx) });
         }
@@ -847,6 +880,7 @@ pub const Store = struct {
     }
 
     fn setUnionRank(self: *Self, storage_var: Var, rank: u8) Allocator.Error!void {
+        self.debugAssertUnsealed();
         const slot_idx = Self.varToSlotIdx(storage_var);
         if (self.savepoint_active and @backingInt(slot_idx) < self.savepoint_baseline_slots) {
             try self.union_rank_trail.append(self.gpa, .{ .idx = slot_idx, .old = self.getUnionRank(storage_var) });
@@ -862,6 +896,7 @@ pub const Store = struct {
     /// respect to allocation failure. The two stores always use identical
     /// indices. A descriptor a merge freed is reused before the stores grow.
     fn appendClass(self: *Self, desc: Desc, checked_var: Var) Allocator.Error!DescStore.Idx {
+        self.debugAssertUnsealed();
         if (self.takeFreeDesc()) |desc_idx| {
             // Inside a probe the freed descriptor predates it (frees made
             // during the probe are pending), so both writes journal and
@@ -898,6 +933,7 @@ pub const Store = struct {
     /// While a probe is open the free waits for the probe to commit, since
     /// rollback would restore `former_root`'s slot.
     fn freeDesc(self: *Self, desc_idx: DescStore.Idx, former_root: Var) Allocator.Error!void {
+        self.debugAssertUnsealed();
         std.debug.assert(!std.meta.eql(self.slots.get(Self.varToSlotIdx(former_root)), Slot{ .root = desc_idx }));
         if (self.savepoint_active) {
             // Reserve the free-list room now so committing never fails.
@@ -964,6 +1000,7 @@ pub const Store = struct {
     }
 
     fn putClassDerivedMapPlan(self: *Self, class: DescStore.Idx, plan: DerivedMapPlan) Allocator.Error!void {
+        self.debugAssertUnsealed();
         const slot = self.derivedMapPlanSlot(class);
         if (slot.found and std.meta.eql(self.derived_map_plans.items.items[slot.index].plan, plan)) return;
         try self.journalDerivedMapPlans();
@@ -975,6 +1012,7 @@ pub const Store = struct {
     }
 
     fn removeClassDerivedMapPlan(self: *Self, class: DescStore.Idx) Allocator.Error!void {
+        self.debugAssertUnsealed();
         const slot = self.derivedMapPlanSlot(class);
         if (!slot.found) return;
         try self.journalDerivedMapPlans();
@@ -1050,6 +1088,7 @@ pub const Store = struct {
     /// Create a variable redirecting to the provided var
     /// Used in tests
     pub fn freshRedirect(self: *Self, var_: Var) std.mem.Allocator.Error!Var {
+        self.debugAssertUnsealed();
         try self.slots.ensureUnusedCapacity(self.gpa, 1);
         try self.union_ranks.items.ensureUnusedCapacity(self.gpa, 1);
         const slot_idx = self.slots.appendAssumeCapacity(.{ .redirect = var_ });
@@ -1060,6 +1099,7 @@ pub const Store = struct {
 
     /// Create a new variable with the given descriptor
     pub fn register(self: *Self, desc: Desc) std.mem.Allocator.Error!Var {
+        self.debugAssertUnsealed();
         try self.slots.ensureUnusedCapacity(self.gpa, 1);
         try self.union_ranks.items.ensureUnusedCapacity(self.gpa, 1);
         const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(self.slots.len()))));
@@ -1074,6 +1114,7 @@ pub const Store = struct {
 
     /// Create a new variable with the provided content assuming there is capacity
     pub fn appendFromContentAssumeCapacity(self: *Self, content: Content, rank: Rank) Var {
+        self.debugAssertUnsealed();
         std.debug.assert(!self.savepoint_active);
         const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(self.slots.len()))));
         const checked_var = Self.slotIdxToVar(slot_idx);
@@ -1101,6 +1142,7 @@ pub const Store = struct {
 
     /// Freeze the class `var_` belongs to; `var_` becomes its anchor.
     pub fn freezeClass(self: *Self, var_: Var) Allocator.Error!void {
+        self.debugAssertUnsealed();
         const storage = self.resolveStorageRoot(var_);
         std.debug.assert(!storage.desc.flags.frozen);
         std.debug.assert(storage.meta.checked_var == var_);
@@ -1112,6 +1154,7 @@ pub const Store = struct {
 
     /// End every class's freeze; afterwards the store holds no frozen class.
     pub fn thawFrozenClasses(self: *Self) Allocator.Error!void {
+        self.debugAssertUnsealed();
         var anchors = self.frozen_anchors.constIterator();
         while (anchors.next()) |entry| {
             const idx = entry.key_ptr.*;
@@ -1182,6 +1225,7 @@ pub const Store = struct {
     /// (after the declared scheme was copied out of them) so the def's body
     /// check can generate the annotation again.
     pub fn resetVarToUnbound(self: *Self, target_var: Var, rank: Rank) Allocator.Error!void {
+        self.debugAssertUnsealed();
         std.debug.assert(@backingInt(target_var) < self.len());
         try self.isolateWriteTarget(target_var);
         const storage = self.resolveStorageRoot(target_var);
@@ -1210,6 +1254,7 @@ pub const Store = struct {
     /// over this function, which correctly propagates rank, unless you already
     /// know the two vars are of  the same rank.
     pub fn dangerousSetVarDesc(self: *Self, target_var: Var, desc: Desc) Allocator.Error!void {
+        self.debugAssertUnsealed();
         std.debug.assert(@backingInt(target_var) < self.len());
         const resolved = try self.resolveWriteTarget(target_var);
         self.noteContentRewrite(resolved.desc.content);
@@ -1221,6 +1266,7 @@ pub const Store = struct {
     /// before a decision. The view is of the class itself, so a frozen class
     /// shows it too; the rollback restores the shared descriptor.
     pub fn setClassContentInSavepoint(self: *Self, target_var: Var, content: Content) Allocator.Error!void {
+        self.debugAssertUnsealed();
         std.debug.assert(self.savepoint_active);
         const resolved = self.resolveVar(target_var);
         self.noteContentRewrite(resolved.desc.content);
@@ -1257,6 +1303,7 @@ pub const Store = struct {
 
     /// Set a type variable to the provided content
     pub fn setVarContent(self: *Self, target_var: Var, content: Content) Allocator.Error!void {
+        self.debugAssertUnsealed();
         std.debug.assert(@backingInt(target_var) < self.len());
         const resolved = try self.resolveWriteTarget(target_var);
         self.noteContentRewrite(resolved.desc.content);
@@ -1269,6 +1316,7 @@ pub const Store = struct {
     /// Close an otherwise-unresolved variable to the empty tag union while
     /// retaining the checker's authoritative defaulting decision.
     pub fn setVarToEmptyTagUnionDefault(self: *Self, target_var: Var) Allocator.Error!void {
+        self.debugAssertUnsealed();
         std.debug.assert(@backingInt(target_var) < self.len());
         try self.isolateWriteTarget(target_var);
         const resolved = self.resolveVar(target_var);
@@ -1286,6 +1334,7 @@ pub const Store = struct {
     /// caller mirroring the marker into a durable record writes one entry per
     /// class rather than one per occurrence.
     pub fn markVarStaticDispatchRejected(self: *Self, target_var: Var) Allocator.Error!bool {
+        self.debugAssertUnsealed();
         std.debug.assert(@backingInt(target_var) < self.len());
         try self.isolateWriteTarget(target_var);
         const resolved = self.resolveVar(target_var);
@@ -1299,6 +1348,7 @@ pub const Store = struct {
     /// Record that a defaulting decision is about to choose `target_var`'s
     /// equivalence class. Provenance only: content and links are untouched.
     pub fn markVarDefaultDecided(self: *Self, target_var: Var) Allocator.Error!void {
+        self.debugAssertUnsealed();
         std.debug.assert(@backingInt(target_var) < self.len());
         const resolved = self.resolveVar(target_var);
         if (resolved.desc.flags.default_decided) return;
@@ -1310,6 +1360,7 @@ pub const Store = struct {
     /// Withdraw a `markVarDefaultDecided` whose decision left the class
     /// undetermined: the default it anticipated never reached this class.
     pub fn clearVarDefaultDecided(self: *Self, target_var: Var) Allocator.Error!void {
+        self.debugAssertUnsealed();
         std.debug.assert(@backingInt(target_var) < self.len());
         const resolved = self.resolveVar(target_var);
         if (!resolved.desc.flags.default_decided) return;
@@ -1339,6 +1390,7 @@ pub const Store = struct {
     /// to a var that predates the opening, such as a substituted arg, and
     /// keeps that var's provenance.
     pub fn markNominalBackingStructure(self: *Self, opened: Var, start: u32, end: u32) Allocator.Error!void {
+        self.debugAssertUnsealed();
         std.debug.assert(start <= end and end <= self.len());
         const opened_root = self.resolveVar(opened).var_;
         var minted = start;
@@ -1358,6 +1410,7 @@ pub const Store = struct {
     /// Record definition-site annotation openness (design.md "Derived Parser
     /// Tag-Row Closure"). Provenance travels with the flex equivalence class.
     pub fn markAnnotationTagExt(self: *Self, target_var: Var) Allocator.Error!void {
+        self.debugAssertUnsealed();
         try self.isolateWriteTarget(target_var);
         const resolved = self.resolveVar(target_var);
         std.debug.assert(resolved.desc.content == .flex);
@@ -1370,6 +1423,7 @@ pub const Store = struct {
     /// Joins"). The mark travels with the row's equivalence class and its
     /// copies.
     pub fn markHostFixedRow(self: *Self, target_var: Var) Allocator.Error!void {
+        self.debugAssertUnsealed();
         const resolved = try self.resolveWriteTarget(target_var);
         var desc = resolved.desc;
         desc.flags.host_fixed_row = true;
@@ -1379,6 +1433,7 @@ pub const Store = struct {
     /// Bound an annotated definition's implicitly opened row (design.md
     /// "Polarity"). The bound travels with the row's equivalence class.
     pub fn markBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
+        self.debugAssertUnsealed();
         const resolved = try self.resolveWriteTarget(target_var);
         var desc = resolved.desc;
         desc.flags.bounded_row_ext = true;
@@ -1389,6 +1444,7 @@ pub const Store = struct {
     /// released where the platform relates them, and a bound an enclosing
     /// release cleared is applied again for the owners that still hold it.
     pub fn clearBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
+        self.debugAssertUnsealed();
         const resolved = try self.resolveWriteTarget(target_var);
         var desc = resolved.desc;
         desc.flags.bounded_row_ext = false;
@@ -1445,6 +1501,7 @@ pub const Store = struct {
     /// over this function, which correctly propagates rank, unless you already
     /// know the two vars are of the same rank.
     pub fn dangerousSetVarRedirect(self: *Self, comptime rule: RedirectRule, target_var: Var, redirect_to: Var) Allocator.Error!void {
+        self.debugAssertUnsealed();
         std.debug.assert(@backingInt(target_var) < self.len());
         std.debug.assert(@backingInt(redirect_to) < self.len());
         try self.isolateWriteTarget(target_var);
@@ -1663,11 +1720,13 @@ pub const Store = struct {
 
     /// Append a var to the backing list, returning the idx
     pub fn appendVar(self: *Self, v: Var) std.mem.Allocator.Error!VarSafeList.Idx {
+        self.debugAssertUnsealed();
         return try self.vars.append(self.gpa, v);
     }
 
     /// Append a var to the backing list, returning the idx
     pub fn appendVars(self: *Self, s: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
+        self.debugAssertUnsealed();
         const trace = tracy.traceNamed(@src(), "typesStore.appendVars");
         defer trace.end();
         // A source slice that lives inside this same list (a `sliceVars`
@@ -1690,16 +1749,19 @@ pub const Store = struct {
 
     /// Append a slice of record fields to the backing list, returning the range
     pub fn appendRecordFields(self: *Self, slice: []const RecordField) std.mem.Allocator.Error!RecordFieldSafeMultiList.Range {
+        self.debugAssertUnsealed();
         return try self.record_fields.appendSlice(self.gpa, slice);
     }
 
     /// Append a slice of tags to the backing list, returning the range
     pub fn appendTags(self: *Self, slice: []const Tag) std.mem.Allocator.Error!TagSafeMultiList.Range {
+        self.debugAssertUnsealed();
         return try self.tags.appendSlice(self.gpa, slice);
     }
 
     /// Append interpolation part metadata to the backing list, returning the range
     pub fn appendInterpolationParts(self: *Self, slice: []const InterpolationPartMetadata) std.mem.Allocator.Error!InterpolationPartMetadata.SafeList.Range {
+        self.debugAssertUnsealed();
         return try self.interpolation_parts.appendSlice(self.gpa, slice);
     }
 
@@ -1714,6 +1776,7 @@ pub const Store = struct {
         prefix: StaticDispatchConstraint.SafeList.Range,
         suffix: []const StaticDispatchConstraint,
     ) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
+        self.debugAssertUnsealed();
         const list = &self.static_dispatch_constraints.items;
         const start: u32 = @backingInt(prefix.start);
         const end: u32 = start + @as(u32, @intCast(prefix.count));
@@ -1753,6 +1816,7 @@ pub const Store = struct {
 
     /// Append static dispatch constraints to the backing list, returning the range
     pub fn appendStaticDispatchConstraints(self: *Self, s: []const StaticDispatchConstraint) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
+        self.debugAssertUnsealed();
         return try self.static_dispatch_constraints.appendSlice(self.gpa, s);
     }
 
@@ -1817,6 +1881,7 @@ pub const Store = struct {
 
     /// Pool interpolation metadata for a `from_interpolation` constraint.
     pub fn appendInterpolationMetadata(self: *Self, metadata: InterpolationMetadata) std.mem.Allocator.Error!InterpolationMetadata.OptIdx {
+        self.debugAssertUnsealed();
         std.debug.assert(metadata.isPresent());
         return .from(try self.interpolation_metadata.append(self.gpa, metadata));
     }
@@ -1830,6 +1895,7 @@ pub const Store = struct {
     /// Record a numeric literal conversion's facts, for a constraint's
     /// `numeral`.
     pub fn appendNumeralInfo(self: *Self, info: NumeralInfo) std.mem.Allocator.Error!NumeralInfo.OptIdx {
+        self.debugAssertUnsealed();
         return .from(try self.numeral_infos.append(self.gpa, info));
     }
 
@@ -1938,6 +2004,7 @@ pub const Store = struct {
     /// Must not run inside a unification savepoint: the declaration table is
     /// not journaled, so a rollback could not undo the registration.
     pub fn registerNominalDecl(self: *Self, decl: NominalDecl) Allocator.Error!NominalDecl.Idx {
+        self.debugAssertUnsealed();
         std.debug.assert(!self.savepoint_active);
         std.debug.assert(decl.source.sourceDecl().present);
 
@@ -2008,6 +2075,7 @@ pub const Store = struct {
     /// Overwrite a nominal declaration entry in place (used by copy_import to
     /// fill a reserved entry once its formals and backing have been copied).
     pub fn setNominalDecl(self: *Self, idx: NominalDecl.Idx, decl: NominalDecl) void {
+        self.debugAssertUnsealed();
         std.debug.assert(!self.savepoint_active);
         self.noteNominalDeclWrite(decl);
         self.nominal_decls.set(idx, decl);
@@ -2020,6 +2088,7 @@ pub const Store = struct {
     /// Mark a nominal declaration invalid (malformed backing or invalid
     /// recursion). Applications of invalid declarations poison to err.
     pub fn markNominalDeclInvalid(self: *Self, idx: NominalDecl.Idx) void {
+        self.debugAssertUnsealed();
         std.debug.assert(!self.savepoint_active);
         var decl = self.nominal_decls.get(idx).*;
         decl.flags.valid = false;
@@ -2036,6 +2105,7 @@ pub const Store = struct {
 
     /// Set the rank for a descriptor
     pub fn setDescRank(self: *Self, desc_idx: DescStore.Idx, rank: Rank) Allocator.Error!void {
+        self.debugAssertUnsealed();
         var desc = self.descs.get(desc_idx);
         // A frozen class is ground, so no rank changes what it means.
         if (desc.flags.frozen) return;
@@ -2092,6 +2162,7 @@ pub const Store = struct {
     /// Mutates storage redirects in place to compress the storage path. This
     /// never changes the checked representative returned to callers.
     pub fn resolveVarAndCompressPath(self: *Self, initial_var: Var) ResolvedVarDesc {
+        self.debugAssertUnsealed();
         const storage = self.resolveStorageRoot(initial_var);
 
         // Compress the chain so future resolves are O(1). Skipped during a probe:
@@ -2231,6 +2302,7 @@ pub const Store = struct {
     /// Alias spelling is not preserved by choosing an alias representative; source
     /// alias views stay separate from the concrete solved backing variable.
     pub fn union_(self: *Self, a_var: Var, b_var: Var, new_desc: Desc) Allocator.Error!void {
+        self.debugAssertUnsealed();
         const a_data = self.resolveStorageRoot(a_var);
         const b_data = self.resolveStorageRoot(b_var);
         if (a_data.desc.flags.frozen or b_data.desc.flags.frozen) return self.unionWithFrozen(a_data, b_data, new_desc);
@@ -2334,6 +2406,7 @@ pub const Store = struct {
     /// class's checked representative owns the mismatch, so its whole class
     /// joins the error class.
     pub fn poisonOnMismatch(self: *Self, a_var: Var, b_var: Var) Allocator.Error!void {
+        self.debugAssertUnsealed();
         self.ground_epoch +%= 1;
         // A frozen class never changes: an operand inside one is detached and
         // poisoned alone, and an anchor, which is a type's structure rather
@@ -2401,6 +2474,7 @@ pub const Store = struct {
     /// an occurrence that only joined its class (a lookup of a binding) is
     /// detached and poisoned alone, and the class keeps its type.
     pub fn poisonOccurrence(self: *Self, var_: Var) Allocator.Error!void {
+        self.debugAssertUnsealed();
         const class = self.resolveStorageRoot(var_);
         const err_desc = Desc{
             .content = .err,
@@ -2469,6 +2543,7 @@ pub const Store = struct {
     /// Set a root var to be the specified content
     /// Used in tests
     pub fn setRootVarContent(self: *Self, var_: Var, content: Content) (error{VarNotRoot} || Allocator.Error)!void {
+        self.debugAssertUnsealed();
         const slot = self.slots.get(Self.varToSlotIdx(var_));
         switch (slot) {
             .root => |desc_idx| {
@@ -2552,11 +2627,12 @@ pub const Store = struct {
 
         /// Deserialize into a Store value (no in-place modification of cache buffer).
         /// The base parameter is the base address of the serialized buffer in memory.
-        /// WARNING: The returned Store points into the cache buffer and CANNOT be mutated.
-        /// Use deserializeWithCopy() if the store needs to be mutable.
+        /// The returned Store points into the cache buffer, so it is sealed: it
+        /// holds a solved module's types, which are only ever read.
         pub fn deserializeInto(self: *const Serialized, base_addr: usize, gpa: Allocator) Store {
             return Store{
                 .gpa = gpa,
+                .sealed = true,
                 .frozen_anchors = .init(gpa),
                 .slots = self.slots.deserializeInto(base_addr),
                 .descs = self.descs.deserializeInto(base_addr),
@@ -2857,6 +2933,117 @@ test "resolveVarAndCompressPath - flattens redirect chain to flex" {
     try std.testing.expectEqual(c, result.var_);
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(a));
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(b));
+}
+
+/// A sealed store holding `a`, a redirect to the flex `b`, for the sealing
+/// tests. The caller deinits it.
+fn sealedTestStore(a: *Var, b: *Var) Allocator.Error!Store {
+    var store = try Store.init(std.testing.allocator);
+    errdefer store.deinit();
+    b.* = try store.fresh();
+    a.* = try store.freshRedirect(b.*);
+    store.seal();
+    return store;
+}
+
+test "a sealed store answers every read" {
+    var a: Var = undefined;
+    var b: Var = undefined;
+    var store = try sealedTestStore(&a, &b);
+    defer store.deinit();
+
+    try std.testing.expect(store.isSealed());
+    try std.testing.expectEqual(b, store.resolveVar(a).var_);
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, store.resolveVar(a).desc.content);
+    try std.testing.expectEqual(Slot{ .redirect = b }, store.getSlot(a));
+    try std.testing.expectEqual(@as(u64, 2), store.len());
+    try std.testing.expect(!store.varDefaultDecided(a));
+    try std.testing.expect(!store.isSettled(a));
+    try std.testing.expect(store.derivedMapPlan(a) == null);
+}
+
+fn writeSealedDescriptor() Allocator.Error!void {
+    var a: Var = undefined;
+    var b: Var = undefined;
+    var store = try sealedTestStore(&a, &b);
+    defer store.deinit();
+    try store.setVarContent(a, .err);
+}
+
+test "a descriptor write to a sealed store is a violated invariant" {
+    try base.death_test.expectPanic("a sealed type store was written", writeSealedDescriptor, .{});
+}
+
+fn createVarInSealedStore() Allocator.Error!void {
+    var a: Var = undefined;
+    var b: Var = undefined;
+    var store = try sealedTestStore(&a, &b);
+    defer store.deinit();
+    _ = try store.fresh();
+}
+
+test "creating a var in a sealed store is a violated invariant" {
+    try base.death_test.expectPanic("a sealed type store was written", createVarInSealedStore, .{});
+}
+
+fn appendToSealedPool() Allocator.Error!void {
+    var a: Var = undefined;
+    var b: Var = undefined;
+    var store = try sealedTestStore(&a, &b);
+    defer store.deinit();
+    _ = try store.appendVars(&.{ a, b });
+}
+
+test "appending to a sealed store's pools is a violated invariant" {
+    try base.death_test.expectPanic("a sealed type store was written", appendToSealedPool, .{});
+}
+
+fn unifySealedClasses() Allocator.Error!void {
+    var a: Var = undefined;
+    var b: Var = undefined;
+    var store = try sealedTestStore(&a, &b);
+    defer store.deinit();
+    try store.union_(a, a, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
+}
+
+test "merging classes of a sealed store is a violated invariant" {
+    try base.death_test.expectPanic("a sealed type store was written", unifySealedClasses, .{});
+}
+
+fn openSavepointOnSealedStore() Allocator.Error!void {
+    var a: Var = undefined;
+    var b: Var = undefined;
+    var store = try sealedTestStore(&a, &b);
+    defer store.deinit();
+    _ = try store.createSavepoint();
+}
+
+test "opening a savepoint on a sealed store is a violated invariant" {
+    try base.death_test.expectPanic("a sealed type store was written", openSavepointOnSealedStore, .{});
+}
+
+fn compressSealedPath() Allocator.Error!void {
+    var a: Var = undefined;
+    var b: Var = undefined;
+    var store = try sealedTestStore(&a, &b);
+    defer store.deinit();
+    _ = store.resolveVarAndCompressPath(a);
+}
+
+test "path compression on a sealed store is a violated invariant" {
+    try base.death_test.expectPanic("a sealed type store was written", compressSealedPath, .{});
+}
+
+fn sealTwice() Allocator.Error!void {
+    var a: Var = undefined;
+    var b: Var = undefined;
+    var store = try sealedTestStore(&a, &b);
+    defer store.deinit();
+    store.seal();
+}
+
+test "sealing a sealed store is a violated invariant" {
+    try base.death_test.expectPanic("a type store was sealed twice", sealTwice, .{});
 }
 
 test "union rank keeps a long checked-representative chain storage-flat" {

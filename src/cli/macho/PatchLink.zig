@@ -75,7 +75,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
 
     // What the program reaches from the `provides` symbols.
     const host = inputs.host;
-    var walk: unit_walk.Walk = .{ .gpa = gpa, .images = images.items, .exports = &exports, .host = .{ .context = &host, .find = findHostSymbol }, .host_required = inputs.host_required };
+    var walk: unit_walk.Walk = .{ .gpa = gpa, .images = images.items, .resolver = .{ .exports = &exports, .host = .{ .context = &host, .find = findHostSymbol }, .host_required = inputs.host_required } };
     defer walk.deinit();
     try walk.init();
     for (host.provides()) |provide| {
@@ -84,9 +84,9 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     }
     std.debug.assert(walk.states[root_image] != null);
     try walk.run();
-    if (walk.missing.count() != 0) {
-        const names_out = try arena.alloc([]const u8, walk.missing.count());
-        for (walk.missing.keys(), names_out) |name, *out| out.* = try arena.dupe(u8, name);
+    if (walk.resolver.missing.count() != 0) {
+        const names_out = try arena.alloc([]const u8, walk.resolver.missing.count());
+        for (walk.resolver.missing.keys(), names_out) |name, *out| out.* = try arena.dupe(u8, name);
         outcome.missing = names_out;
         return error.MissingHostSymbols;
     }
@@ -282,7 +282,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         slot.* = exports.get(name) orelse unreachable; // the walk above resolved every provided symbol
         const view = images.items[slot.image].view;
         const symbol = view.symbols()[slot.symbol];
-        if (@as(HostPrelink.ProvideKind, @enumFromInt(provide.kind)) == .procedure) continue;
+        if (@as(HostPrelink.ProvideKind, @fromBackingInt(@intCast(provide.kind))) == .procedure) continue;
         // A value's window holds the value's bytes, so the words in it are
         // rebased and bound as the words in the value are.
         const region: UnitImage.Region = @fromBackingInt(symbol.region);
@@ -448,7 +448,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         const symbol = view.symbols()[found.symbol];
         const region: UnitImage.Region = @fromBackingInt(symbol.region);
         const address = places[found.image].base(region) + symbol.value;
-        switch (@as(HostPrelink.ProvideKind, @enumFromInt(provide.kind))) {
+        switch (@as(HostPrelink.ProvideKind, @fromBackingInt(@intCast(provide.kind)))) {
             .procedure => writeLongJump(window[0..16], provide.vaddr, address),
             .data => switch (region) {
                 .block, .data => {
@@ -1022,7 +1022,7 @@ const SectionSpec = struct { name: []const u8, addr: u64, size: u64, offset: u64
 fn writeSegment(out: []u8, at: usize, name: []const u8, vmaddr: u64, vmsize: u64, fileoff: u64, filesize: u64, prot: u32, sections: []const SectionSpec) usize {
     const command = out[at..][0..segment_command_size];
     @memset(command, 0);
-    std.mem.writeInt(u32, command[0..4], @intFromEnum(macho.LC.SEGMENT_64), .little);
+    std.mem.writeInt(u32, command[0..4], @backingInt(macho.LC.SEGMENT_64), .little);
     std.mem.writeInt(u32, command[4..8], @intCast(segment_command_size + sections.len * section_header_size), .little);
     @memcpy(command[8..][0..name.len], name);
     std.mem.writeInt(u64, command[24..32], vmaddr, .little);

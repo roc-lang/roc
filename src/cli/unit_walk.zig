@@ -37,26 +37,43 @@ pub const Target = union(enum) {
     missing,
 };
 
+/// One export of an image, as `collectExportsOf` reads it.
+pub const ExportEntry = struct {
+    name: []const u8,
+    weak: bool,
+    /// The symbol a `SymbolRef` names it by.
+    symbol: u32,
+};
+
 /// Every export of `images`, each name resolved to its one definition.
 pub fn collectExports(gpa: Allocator, images: []const ImageInput) Allocator.Error!Exports {
+    return collectExportsOf(Native, gpa, images);
+}
+
+/// Every export of `images`, images of the kind `Kind` describes (see
+/// `AtomWalk`), each name resolved to its one definition: a strong one over
+/// a weak one, then the one in the image with the smallest digest.
+pub fn collectExportsOf(comptime Kind: type, gpa: Allocator, images: []const Kind.Image) Allocator.Error!Exports {
     var exports: Exports = .empty;
     errdefer exports.deinit(gpa);
     var export_total: u32 = 0;
-    for (images) |image| export_total += @intCast(image.view.exports().len);
+    for (images) |image| export_total += Kind.exportCount(image);
     try exports.ensureTotalCapacity(gpa, export_total);
     for (images, 0..) |image, image_index| {
-        const symbols = image.view.symbols();
-        for (image.view.exports()) |symbol_index| {
-            const gop = exports.getOrPutAssumeCapacity(image.view.name(symbols[symbol_index].name));
+        for (0..Kind.exportCount(image)) |at| {
+            const entry = Kind.exportAt(image, @intCast(at));
+            if (entry.name.len == 0) continue;
+            const gop = exports.getOrPutAssumeCapacity(entry.name);
             if (gop.found_existing) {
-                const existing = images[gop.value_ptr.image].view;
-                const existing_weak = existing.symbols()[gop.value_ptr.symbol].flags & UnitImage.symbol_weak != 0;
-                const candidate_weak = symbols[symbol_index].flags & UnitImage.symbol_weak != 0;
-                if (existing_weak == candidate_weak) {
-                    if (std.mem.order(u8, &existing.header.digest, &image.view.header.digest) != .gt) continue;
-                } else if (candidate_weak) continue;
+                const existing = images[gop.value_ptr.image];
+                const existing_weak = Kind.exportWeak(existing, gop.value_ptr.symbol);
+                if (existing_weak == entry.weak) {
+                    const existing_digest = Kind.digest(existing);
+                    const image_digest = Kind.digest(image);
+                    if (std.mem.order(u8, &existing_digest, &image_digest) != .gt) continue;
+                } else if (entry.weak) continue;
             }
-            gop.value_ptr.* = .{ .image = @intCast(image_index), .symbol = symbol_index };
+            gop.value_ptr.* = .{ .image = @intCast(image_index), .symbol = entry.symbol };
         }
     }
     return exports;
@@ -70,111 +87,211 @@ pub const HostLookup = struct {
     find: *const fn (context: *const anyopaque, name: []const u8) ?u64,
 };
 
-/// The atom-level reachability walk over every image: an image is placed
-/// when one of its atoms is reached, and every import of a placed image is
-/// resolved.
-pub const Walk = struct {
-    gpa: Allocator,
-    images: []const ImageInput,
-    exports: *const Exports,
-    host: HostLookup,
-    /// Symbols the host must provide when the app imports them, sorted: an
-    /// import of one the host lacks is the user's missing-host-symbol error,
-    /// and an import resolving to nothing else is a compiler invariant.
-    host_required: []const []const u8,
-    /// Per image, once reached: its reached atoms and its import targets.
-    states: []?State = &.{},
-    stack: std.ArrayList(struct { image: u32, atom: u32 }) = .empty,
-    missing: std.StringArrayHashMapUnmanaged(void) = .empty,
+/// What following an edge of an atom reaches.
+pub const Edge = union(enum) {
+    /// Another atom of the same image.
+    atom: u32,
+    /// An import of the same image, by index.
+    import: u32,
+    /// Nothing a walk follows.
+    none,
+};
 
-    pub const State = struct {
-        atoms: []bool,
-        targets: []Target,
+/// The atom-level reachability walk over every image of a program, for
+/// the image kind `Kind` describes: an image is placed when one of its
+/// atoms is reached, every import of a placed image is resolved by
+/// `Kind.Resolver`, and an import resolving to another image's symbol
+/// reaches that symbol's atom. `Kind` declares:
+///
+/// - `Image`, `Target` and `Resolver` types, where `Resolver` has
+///   `fn resolve(*Resolver, gpa, images, image_index, import_index) !Target`
+///   and may have `fn deinit(*Resolver, gpa)`;
+/// - `importCount(Image)`, `atomCount(Image)`, `roots(Image)` with
+///   `rootEdge(Image, item) Edge` for its items, and `atomEdges(Image, atom)`
+///   with `edge(Image, item) Edge` for its items;
+/// - `symbolAtom(Image, symbol) ?u32` and `reference(Target) ?SymbolRef`;
+/// - for `collectExportsOf`: `exportCount(Image)`, `exportAt(Image, at)
+///   ExportEntry`, `exportWeak(Image, symbol)` and `digest(Image)`.
+pub fn AtomWalk(comptime Kind: type) type {
+    return struct {
+        const Self = @This();
+
+        gpa: Allocator,
+        images: []const Kind.Image,
+        resolver: Kind.Resolver,
+        /// Per image, once reached: its reached atoms and its import targets.
+        states: []?State = &.{},
+        stack: std.ArrayList(struct { image: u32, atom: u32 }) = .empty,
+
+        pub const State = struct {
+            atoms: []bool,
+            targets: []Kind.Target,
+            /// Which imports an edge of a reached atom names.
+            imports_used: []bool,
+        };
+
+        pub fn init(self: *Self) Allocator.Error!void {
+            self.states = try self.gpa.alloc(?State, self.images.len);
+            @memset(self.states, null);
+        }
+
+        pub fn deinit(self: *Self) void {
+            for (self.states) |state_or_null| if (state_or_null) |state| {
+                self.gpa.free(state.atoms);
+                self.gpa.free(state.targets);
+                self.gpa.free(state.imports_used);
+            };
+            self.gpa.free(self.states);
+            self.stack.deinit(self.gpa);
+            if (@hasDecl(Kind.Resolver, "deinit")) self.resolver.deinit(self.gpa);
+        }
+
+        /// Reach `image`'s symbol `symbol`, placing the image if it was not.
+        pub fn reachSymbol(self: *Self, image: u32, symbol: u32) Allocator.Error!void {
+            const state = try self.place(image);
+            const atom = Kind.symbolAtom(self.images[image], symbol) orelse return;
+            try self.reachAtom(image, state, atom);
+        }
+
+        /// Reach `image`'s atom `atom`, placing the image if it was not.
+        pub fn reachImageAtom(self: *Self, image: u32, atom: u32) Allocator.Error!void {
+            try self.reachAtom(image, try self.place(image), atom);
+        }
+
+        fn reachAtom(self: *Self, image: u32, state: State, atom: u32) Allocator.Error!void {
+            if (state.atoms[atom]) return;
+            state.atoms[atom] = true;
+            try self.stack.append(self.gpa, .{ .image = image, .atom = atom });
+        }
+
+        fn follow(self: *Self, image: u32, state: State, edge: Edge) Allocator.Error!void {
+            switch (edge) {
+                .atom => |atom| try self.reachAtom(image, state, atom),
+                .import => |import| {
+                    state.imports_used[import] = true;
+                    if (Kind.reference(state.targets[import])) |found| try self.reachSymbol(found.image, found.symbol);
+                },
+                .none => {},
+            }
+        }
+
+        /// `image`'s state, created with its imports resolved and its roots
+        /// reached the first time.
+        pub fn place(self: *Self, image: u32) Allocator.Error!State {
+            if (self.states[image]) |state| return state;
+            const view = self.images[image];
+            const atoms = try self.gpa.alloc(bool, Kind.atomCount(view));
+            errdefer self.gpa.free(atoms);
+            @memset(atoms, false);
+            const targets = try self.gpa.alloc(Kind.Target, Kind.importCount(view));
+            errdefer self.gpa.free(targets);
+            const imports_used = try self.gpa.alloc(bool, targets.len);
+            errdefer self.gpa.free(imports_used);
+            @memset(imports_used, false);
+            for (targets, 0..) |*target, import| target.* = try self.resolver.resolve(self.gpa, self.images, image, @intCast(import));
+            // Once recorded, the state is the walk's to free; recording it
+            // before following the roots lets a cycle of imports find it.
+            const state: State = .{ .atoms = atoms, .targets = targets, .imports_used = imports_used };
+            self.states[image] = state;
+            for (Kind.roots(view)) |item| try self.follow(image, state, Kind.rootEdge(view, item));
+            return state;
+        }
+
+        /// Follow every reached atom's edges until nothing new is reached.
+        pub fn run(self: *Self) Allocator.Error!void {
+            while (self.stack.pop()) |item| {
+                const state = self.states[item.image].?;
+                const view = self.images[item.image];
+                for (Kind.atomEdges(view, item.atom)) |entry| try self.follow(item.image, state, Kind.edge(view, entry));
+            }
+        }
+    };
+}
+
+/// How native unit images (`backend.dev.UnitImage`) are walked: an import
+/// resolves first to an export of an image, then to a symbol the host
+/// provides.
+pub const Native = struct {
+    pub const Image = ImageInput;
+    pub const Target = unit_walk_Target;
+
+    /// Resolves a native image's imports.
+    pub const Resolver = struct {
+        exports: *const Exports,
+        host: HostLookup,
+        /// Symbols the host must provide when the app imports them, sorted:
+        /// an import of one the host lacks is the user's missing-host-symbol
+        /// error, and an import resolving to nothing else is a compiler
+        /// invariant.
+        host_required: []const []const u8,
+        missing: std.StringArrayHashMapUnmanaged(void) = .empty,
+
+        pub fn resolve(self: *Resolver, gpa: Allocator, images: []const Image, image: u32, import_index: u32) Allocator.Error!unit_walk_Target {
+            const view = images[image].view;
+            const name = view.name(view.imports()[import_index].name);
+            if (self.exports.get(name)) |found| return .{ .app = found };
+            if (self.host.find(self.host.context, name)) |host| return .{ .host = host };
+            if (findSorted(self.host_required, name) == null) {
+                base.invariant("unit image link invariant violated: the app imports {s}, which is neither a program symbol nor a symbol the host may define", .{name});
+            }
+            try self.missing.put(gpa, name, {});
+            return .missing;
+        }
+
+        pub fn deinit(self: *Resolver, gpa: Allocator) void {
+            self.missing.deinit(gpa);
+        }
     };
 
-    pub fn init(self: *Walk) Allocator.Error!void {
-        self.states = try self.gpa.alloc(?State, self.images.len);
-        @memset(self.states, null);
+    pub fn importCount(image: Image) usize {
+        return image.view.imports().len;
     }
-
-    pub fn deinit(self: *Walk) void {
-        for (self.states) |state_or_null| if (state_or_null) |state| {
-            self.gpa.free(state.atoms);
-            self.gpa.free(state.targets);
+    pub fn atomCount(image: Image) usize {
+        return image.view.atoms().len;
+    }
+    pub fn roots(image: Image) []const u32 {
+        return image.view.roots();
+    }
+    pub fn atomEdges(image: Image, atom: u32) []const u32 {
+        return image.view.atomEdges(atom);
+    }
+    pub fn edge(_: Image, entry: u32) Edge {
+        if (entry & UnitImage.edge_import == 0) return .{ .atom = entry };
+        return .{ .import = entry & ~UnitImage.edge_import };
+    }
+    pub fn rootEdge(image: Image, entry: u32) Edge {
+        return edge(image, entry);
+    }
+    pub fn symbolAtom(image: Image, symbol: u32) ?u32 {
+        const atom = image.view.symbolAtoms()[symbol];
+        return if (atom == UnitImage.no_atom) null else atom;
+    }
+    pub fn reference(target: unit_walk_Target) ?SymbolRef {
+        return switch (target) {
+            .app => |found| found,
+            .host, .missing => null,
         };
-        self.gpa.free(self.states);
-        self.stack.deinit(self.gpa);
-        self.missing.deinit(self.gpa);
     }
-
-    /// Reach `image`'s symbol `symbol`, placing the image if it was not.
-    pub fn reachSymbol(self: *Walk, image: u32, symbol: u32) Allocator.Error!void {
-        const state = try self.place(image);
-        const atom = self.images[image].view.symbolAtoms()[symbol];
-        if (atom == UnitImage.no_atom) return;
-        try self.reachAtom(image, state, atom);
+    pub fn exportCount(image: Image) u32 {
+        return @intCast(image.view.exports().len);
     }
-
-    fn reachAtom(self: *Walk, image: u32, state: State, atom: u32) Allocator.Error!void {
-        if (state.atoms[atom]) return;
-        state.atoms[atom] = true;
-        try self.stack.append(self.gpa, .{ .image = image, .atom = atom });
+    pub fn exportAt(image: Image, at: u32) ExportEntry {
+        const symbol_index = image.view.exports()[at];
+        const symbol = image.view.symbols()[symbol_index];
+        return .{ .name = image.view.name(symbol.name), .weak = symbol.flags & UnitImage.symbol_weak != 0, .symbol = symbol_index };
     }
-
-    /// Follow an edge or root entry of `image`.
-    fn follow(self: *Walk, image: u32, state: State, entry: u32) Allocator.Error!void {
-        if (entry & UnitImage.edge_import == 0) return self.reachAtom(image, state, entry);
-        switch (state.targets[entry & ~UnitImage.edge_import]) {
-            .app => |found| try self.reachSymbol(found.image, found.symbol),
-            .host, .missing => {},
-        }
+    pub fn exportWeak(image: Image, symbol: u32) bool {
+        return image.view.symbols()[symbol].flags & UnitImage.symbol_weak != 0;
     }
-
-    /// `image`'s state, created with its imports resolved and its roots
-    /// reached the first time.
-    fn place(self: *Walk, image: u32) Allocator.Error!State {
-        if (self.states[image]) |state| return state;
-        const view = self.images[image].view;
-        // Once recorded, the state is the walk's to free; recording it
-        // before following the roots lets a cycle of imports find it.
-        const state = try self.resolve(view);
-        self.states[image] = state;
-        for (view.roots()) |entry| try self.follow(image, state, entry);
-        return state;
-    }
-
-    /// A fresh state for an image: nothing reached, every import resolved.
-    fn resolve(self: *Walk, view: UnitImage.View) Allocator.Error!State {
-        const atoms = try self.gpa.alloc(bool, view.atoms().len);
-        errdefer self.gpa.free(atoms);
-        @memset(atoms, false);
-        const targets = try self.gpa.alloc(Target, view.imports().len);
-        errdefer self.gpa.free(targets);
-        for (view.imports(), targets) |import, *target| {
-            const name = view.name(import.name);
-            target.* = if (self.exports.get(name)) |found|
-                .{ .app = found }
-            else if (self.host.find(self.host.context, name)) |host|
-                .{ .host = host }
-            else missing: {
-                if (findSorted(self.host_required, name) == null) {
-                    base.invariant("unit image link invariant violated: the app imports {s}, which is neither a program symbol nor a symbol the host may define", .{name});
-                }
-                try self.missing.put(self.gpa, name, {});
-                break :missing .missing;
-            };
-        }
-        return .{ .atoms = atoms, .targets = targets };
-    }
-
-    /// Follow every reached atom's edges until nothing new is reached.
-    pub fn run(self: *Walk) Allocator.Error!void {
-        while (self.stack.pop()) |item| {
-            const state = self.states[item.image].?;
-            for (self.images[item.image].view.atomEdges(item.atom)) |entry| try self.follow(item.image, state, entry);
-        }
+    pub fn digest(image: Image) [32]u8 {
+        return image.view.header.digest;
     }
 };
+
+const unit_walk_Target = Target;
+
+/// The walk over native unit images.
+pub const Walk = AtomWalk(Native);
 
 /// The index of `wanted` in the sorted `list`, if it is there.
 pub fn findSorted(list: []const []const u8, wanted: []const u8) ?usize {

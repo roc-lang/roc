@@ -113,7 +113,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     // only the reached atoms' bytes are written. Every import of a reached
     // image is resolved, the app region first, then the host.
     const host_view = inputs.host;
-    var walk: unit_walk.Walk = .{ .gpa = gpa, .images = images.items, .exports = &exports, .host = .{ .context = &host_view, .find = findHostSymbol }, .host_required = inputs.host_required };
+    var walk: unit_walk.Walk = .{ .gpa = gpa, .images = images.items, .resolver = .{ .exports = &exports, .host = .{ .context = &host_view, .find = findHostSymbol }, .host_required = inputs.host_required } };
     defer walk.deinit();
     try walk.init();
     // The checked program defines every `provides` symbol (the checker
@@ -124,9 +124,9 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     }
     std.debug.assert(walk.states[root_image] != null);
     try walk.run();
-    if (walk.missing.count() != 0) {
-        const names_out = try arena.alloc([]const u8, walk.missing.count());
-        for (walk.missing.keys(), names_out) |name, *out| out.* = try arena.dupe(u8, name);
+    if (walk.resolver.missing.count() != 0) {
+        const names_out = try arena.alloc([]const u8, walk.resolver.missing.count());
+        for (walk.resolver.missing.keys(), names_out) |name, *out| out.* = try arena.dupe(u8, name);
         outcome.missing = names_out;
         return error.MissingHostSymbols;
     }
