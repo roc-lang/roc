@@ -3530,7 +3530,7 @@ pub const Builder = struct {
     /// where it is closed, and a crash where checking rejected the plan or
     /// found its value unreachable.
     fn lowerPlannedLiteral(self: *Builder, node: u32, kind: LIR.LiteralRejectionKind, plan_id: static_dispatch.StaticDispatchPlanId, lit_ty: TypeId) Allocator.Error!void {
-        switch (try self.dispatchPlan(plan_id).resolution) {
+        switch ((try self.dispatchPlan(plan_id)).resolution) {
             .direct_closed => try self.lowerLiteralConversion(node, kind, plan_id, lit_ty),
             .direct_parametric, .evidence_dependent => try self.lowerInstanceLiteral(node, lit_ty),
             .checked_error => {

@@ -2484,7 +2484,7 @@ fn templateHasInterfaceRelations(view: ModuleView, template: *const checked.Chec
 /// the template's relation table relates only cells private to its own body,
 /// so requesters never replay it.
 fn templateInterfaceIsClosed(view: ModuleView, template: *const checked.CheckedProcedureTemplate) Allocator.Error!bool {
-    const schema = try view.try dispatch.templateSchema(template.template_id);
+    const schema = try view.dispatch.templateSchema(template.template_id);
     return schema.vars.len == 0 and
         schema.params.len == 0 and
         !try view.types.rootHasIdentityVariables(template.checked_fn_root);
@@ -2647,7 +2647,7 @@ const ParametricHoles = struct {
 
 /// The requirement schema of a procedure template's scheme.
 fn templateSchemaIn(view: ModuleView, template: *const checked.CheckedProcedureTemplate) Allocator.Error!SchemeRequirements {
-    return schemeRequirements(view, template.checked_fn_root, try view.try dispatch.templateSchema(template.template_id));
+    return schemeRequirements(view, template.checked_fn_root, try view.dispatch.templateSchema(template.template_id));
 }
 
 /// A checked plan's recorded entries for a target's requirements, with the
@@ -52559,11 +52559,11 @@ const BodyContext = struct {
         const ref_id = self.view.resolved_refs.lookupIdByExpr(expr) orelse return emptySchema(self.view);
         const record = resolvedRecord(self.view, .{ .source = ref_id });
         return switch (record.ref) {
-            .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |proc| self.procedureUseSchema(proc),
-            .platform_required_proc => |proc| self.procedureUseSchema(proc.procedure),
+            .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |proc| try self.procedureUseSchema(proc),
+            .platform_required_proc => |proc| try self.procedureUseSchema(proc.procedure),
             .local_proc => |local| try self.scopeSchema(self.view, local.dispatch_scope),
-            .top_level_const, .imported_const => |const_use| self.constUseSchema(const_use),
-            .platform_required_const => |required| self.constUseSchema(required.const_use),
+            .top_level_const, .imported_const => |const_use| try self.constUseSchema(const_use),
+            .platform_required_const => |required| try self.constUseSchema(required.const_use),
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .platform_required_declaration, .platform_required_checked_error => emptySchema(self.view),
         };
     }
@@ -52582,7 +52582,7 @@ const BodyContext = struct {
         return scopeSchemaIn(view, scope_id);
     }
 
-    fn procedureUseSchema(self: *BodyContext, proc: checked.ProcedureUseTemplate) SchemeRequirements {
+    fn procedureUseSchema(self: *BodyContext, proc: checked.ProcedureUseTemplate) Allocator.Error!SchemeRequirements {
         if (self.builder.callableEvalForProcedureUse(proc)) |callable_eval| {
             // A callable-eval binding lowers through its root's entry wrapper,
             // whose scheme is the binding's own.
@@ -52606,7 +52606,7 @@ const BodyContext = struct {
 
     /// The schema of the entry template a const use evaluates through; a
     /// stored or unimplemented const lowers no template body.
-    fn constUseSchema(self: *BodyContext, const_use: checked.ConstUseTemplate) SchemeRequirements {
+    fn constUseSchema(self: *BodyContext, const_use: checked.ConstUseTemplate) Allocator.Error!SchemeRequirements {
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
         return switch (template.state) {
@@ -52811,7 +52811,15 @@ const BodyContext = struct {
         template: checked.CheckedProcedureTemplate,
         vector: []const SpecEvidence,
     ) Allocator.Error!EvidenceChain {
-        const schema = (try templateSchemaIn(self.view, &template));
+        return self.rootEvidenceAtSchema(try templateSchemaIn(self.view, &template), vector);
+    }
+
+    /// The root evidence of a scheme instantiated at its own variables.
+    fn rootEvidenceAtSchema(
+        self: *BodyContext,
+        schema: SchemeRequirements,
+        vector: []const SpecEvidence,
+    ) Allocator.Error!EvidenceChain {
         // These cells and their slot array live only as long as the body graph.
         // Stored function evidence retains the vector and scope, never slots.
         const slots = try self.graph.arena().alloc(SubstSlot, schema.scheme_vars.len);
@@ -52954,7 +52962,7 @@ const BodyContext = struct {
                             .target = target.target,
                             .instantiation = null,
                             .local_proc_context = target.local_proc_context,
-                            .nested = self.dependentCallableNestedEvidence(constraint, target),
+                            .nested = try self.dependentCallableNestedEvidence(constraint, target),
                         };
                         break :independent .{ .target = independent_target };
                     },
@@ -53846,7 +53854,7 @@ const BodyContext = struct {
                 // A signature that leaves a scheme variable to the target's
                 // nested evidence cannot supply an independent callable's
                 // substitution; checking records that callable's own contract.
-                break :blk if (schema == .from_callable and !(try target.try view.dispatch.templateSchema(template.template_id)).callable_determines_scheme) .requires_record else schema;
+                break :blk if (schema == .from_callable and !(try target.view.dispatch.templateSchema(template.template_id)).callable_determines_scheme) .requires_record else schema;
             },
             .local_proc => |local| static_dispatch.procedureEvidenceSchema((try self.scopeSchema(target.view, local.dispatch_scope)).params),
             .structural => Common.invariant("structural evidence target reached callable nested-evidence classification"),
@@ -53877,7 +53885,7 @@ const BodyContext = struct {
         self: *BodyContext,
         dependent: anytype,
         target: *const SpecEvidenceTarget,
-    ) DependentCallableEvidenceError!NestedSpecEvidence {
+    ) (DependentCallableEvidenceError || Allocator.Error)!NestedSpecEvidence {
         const schema = if (dependent.independent_callable and !dependent.reuse_slot_nested_evidence)
             try self.targetProcedureEvidenceSchema(target)
         else
@@ -53889,15 +53897,17 @@ const BodyContext = struct {
         self: *BodyContext,
         dependent: anytype,
         target: *const SpecEvidenceTarget,
-    ) NestedSpecEvidence {
+    ) Allocator.Error!NestedSpecEvidence {
         if (selectCallableContract(.{ .target = target }, dependent.callable_contract)) |contract| {
             return switch (contract) {
                 .target => |selected| selected.nested,
                 .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => Common.invariant("callable target contract selected non-callable evidence"),
             };
         }
-        return self.dependentCallableNestedEvidenceChecked(dependent, target) catch
-            Common.invariant("independent dispatch callable attempted to synthesize SchemeUseRecord-supplied nested evidence");
+        return self.dependentCallableNestedEvidenceChecked(dependent, target) catch |err| switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.RequiresRecordSynthesis => Common.invariant("independent dispatch callable attempted to synthesize SchemeUseRecord-supplied nested evidence"),
+        };
     }
 
     /// The alias-scope evidence a direct edge resolved, when it instantiated
@@ -53985,7 +53995,7 @@ const BodyContext = struct {
                     .target => |target| target,
                     .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => Common.invariant("dispatch target evidence was not a callable target"),
                 };
-                break :blk switch (self.dependentCallableNestedEvidence(dependent, target)) {
+                break :blk switch (try self.dependentCallableNestedEvidence(dependent, target)) {
                     .resolved => |resolved| .{ .materialized_contract = resolved },
                     .synthesize => .derive,
                 };
@@ -54234,7 +54244,7 @@ const BodyContext = struct {
 
     /// The requirement contract a checked iterator dispatch call recorded for
     /// its target, mirroring `dispatchTargetContract`.
-    fn iteratorCallContract(self: *BodyContext, call: static_dispatch.IteratorDispatchCall) ?EvidenceContract {
+    fn iteratorCallContract(self: *BodyContext, call: static_dispatch.ResolvedIteratorDispatchCall) ?EvidenceContract {
         return switch (call.resolution) {
             .direct_closed, .direct_parametric => |direct| blk: {
                 const node = (try self.view.dispatch.evidenceNode(direct.evidence));
@@ -54266,7 +54276,7 @@ const BodyContext = struct {
                     .target => |target| target,
                     .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => Common.invariant("iterator target evidence was not a callable target"),
                 };
-                break :blk switch (self.dependentCallableNestedEvidence(dependent, target)) {
+                break :blk switch (try self.dependentCallableNestedEvidence(dependent, target)) {
                     .resolved => |resolved| .{ .materialized_contract = resolved },
                     .synthesize => .derive,
                 };
@@ -68396,11 +68406,7 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     try checked_types.fillSyntheticTypeRoot(gpa, inner_ty, .{ .flex = .{} });
     const fn_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{outer_ty}, outer_ty);
     var scheme_vars = [_]checked.CheckedTypeId{outer_ty};
-    const templates = checked.CheckedProcedureTemplateTable{ .scheme_vars_pool = &scheme_vars };
-    var template: checked.CheckedProcedureTemplate = undefined;
-    template.checked_fn_root = fn_ty;
-    template.scheme_vars = .{ .start = 0, .len = 1 };
-    template.evidence_params = .{};
+    const templates = checked.CheckedProcedureTemplateTable{};
 
     // Only type instantiation and lexical binding are exercised here.
     var builder: Builder = undefined;
@@ -68436,7 +68442,7 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     ctx.evidence = .{ .scope = undefined };
     defer ctx.instantiation.deinit();
 
-    const root = try ctx.rootEvidenceAtOwnScheme(template, &.{});
+    const root = try ctx.rootEvidenceAtSchema(.{ .view = ctx.view, .root = fn_ty, .scheme_vars = &scheme_vars, .params = &.{}, .params_start = 0 }, &.{});
     const outer_node = root.subst[0].node;
     const root_node = try ctx.instNode(fn_ty);
     const str_node = try graph.newNode(.{ .primitive = .str });
@@ -68463,7 +68469,7 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     var sibling = ctx;
     sibling.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
     defer sibling.instantiation.deinit();
-    const sibling_root = try sibling.rootEvidenceAtOwnScheme(template, &.{});
+    const sibling_root = try sibling.rootEvidenceAtSchema(.{ .view = sibling.view, .root = fn_ty, .scheme_vars = &scheme_vars, .params = &.{}, .params_start = 0 }, &.{});
     const sibling_node = try sibling.instNode(fn_ty);
     const sibling_request = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{inner_node}), .ret = inner_node } });
     try relateConstructionFunctionRequestInterface(graph, sibling_node, sibling_request);

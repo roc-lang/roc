@@ -16975,25 +16975,17 @@ test "procedure evidence schema positively classifies callable paths and pathles
         .{ .method = @fromBackingInt(@intCast(1)), .dispatcher_ty = @fromBackingInt(@intCast(1)), .callable_ty = @fromBackingInt(@intCast(3)), .slot = 0, .structural = .encoder, .path = .{ .last = 0, .len = 1 } },
         .{ .method = @fromBackingInt(@intCast(2)), .dispatcher_ty = @fromBackingInt(@intCast(2)), .callable_ty = @fromBackingInt(@intCast(4)), .slot = 1, .path = .{ .last = 1, .len = 1 } },
     };
-    const table = CheckedProcedureTemplateTable{
-        .evidence_params_pool = params[0..],
-    };
-    var template: CheckedProcedureTemplate = undefined;
-    template.evidence_params = .{ .start = 0, .len = 2 };
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.from_callable,
-        static_dispatch.procedureEvidenceSchema(table.evidenceParams(&template)),
+        static_dispatch.procedureEvidenceSchema(&params),
     );
 
     var pathless_params = params;
     pathless_params[1].path = .{};
     pathless_params[1].source = .erased_row_remainder;
-    const pathless_table = CheckedProcedureTemplateTable{
-        .evidence_params_pool = pathless_params[0..],
-    };
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.requires_record,
-        static_dispatch.procedureEvidenceSchema(pathless_table.evidenceParams(&template)),
+        static_dispatch.procedureEvidenceSchema(&pathless_params),
     );
 
     var target_params = [_]static_dispatch.EvidenceParamRecord{params[0]};
@@ -17020,18 +17012,14 @@ test "procedure evidence schema positively classifies callable paths and pathles
 
     var defaulted_pathless_params = pathless_params;
     defaulted_pathless_params[1].source = .{ .explicit_default = .mono_specialization };
-    const defaulted_pathless_table = CheckedProcedureTemplateTable{
-        .evidence_params_pool = defaulted_pathless_params[0..],
-    };
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.from_callable,
-        static_dispatch.procedureEvidenceSchema(defaulted_pathless_table.evidenceParams(&template)),
+        static_dispatch.procedureEvidenceSchema(&defaulted_pathless_params),
     );
 
-    template.evidence_params = .{};
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.none,
-        static_dispatch.procedureEvidenceSchema(table.evidenceParams(&template)),
+        static_dispatch.procedureEvidenceSchema(&.{}),
     );
 }
 
