@@ -1941,6 +1941,12 @@ pub const IteratorForPlanId = enum(u32) { _ };
 pub const IteratorDispatchOperand = union(enum) {
     checked_expr: CheckedExprId,
     loop_iterator_state,
+    /// The empty `List(item)` an interpolation's iterator is built from.
+    interpolation_seed,
+    /// The iterator an interpolation has built so far.
+    interpolation_iterator,
+    /// The interpolated value an interpolation appends next.
+    interpolation_value,
 };
 
 /// Public `IteratorDispatchCall` declaration.
@@ -1989,14 +1995,47 @@ pub const IteratorRepresentationTopology = struct {
 };
 
 /// Public `IteratorForPlan` declaration.
+///
+/// The two synthetic iterator dispatches a construct owns: a `for` loop's
+/// `iter` over its iterable and `next` over its iterator state each round, or
+/// an interpolation's `iter` over an empty list and `append` over its
+/// iterator for each interpolated value.
 pub const IteratorForPlan = struct {
     iter: IteratorDispatchCall,
+    /// `next` for a loop, `append` for an interpolation.
     next: IteratorDispatchCall,
-    iterable: CheckedExprId,
     item_ty: CheckedTypeId,
     iterator_ty: CheckedTypeId,
-    step_ty: CheckedTypeId,
-    step_topology: IteratorStepTopology,
+    site: Site,
+
+    pub const Site = union(enum) {
+        for_loop: ForLoop,
+        interpolation: Interpolation,
+    };
+
+    pub const ForLoop = struct {
+        iterable: CheckedExprId,
+        step_ty: CheckedTypeId,
+        step_topology: IteratorStepTopology,
+    };
+
+    pub const Interpolation = struct {
+        expr: CheckedExprId,
+        /// The empty `List(item)` the iterator is built from.
+        seed_list_ty: CheckedTypeId,
+    };
+
+    /// The plan's `for` loop site; the plan is a loop's.
+    pub fn forLoopSite(self: IteratorForPlan) ForLoop {
+        std.debug.assert(self.site == .for_loop);
+        return self.site.for_loop;
+    }
+
+    /// The plan's interpolation site; the plan is an interpolation's.
+    pub fn interpolationSite(self: IteratorForPlan) Interpolation {
+        std.debug.assert(self.site == .interpolation);
+        return self.site.interpolation;
+    }
 };
 
 /// Public `StaticDispatchPlanTable` declaration.
@@ -2245,6 +2284,52 @@ pub const StaticDispatchPlanTable = struct {
                         .constraint_fn_var = constraint_fn_var,
                         .literal_kind = .interpolation,
                     });
+
+                    // The iterator the assembler receives: `iter` on an empty
+                    // `List(item)`, then `append` for each value.
+                    const item_var = interpolation.item_var orelse
+                        base.invariant("checked static dispatch registry invariant violated: checked interpolation has no item variable", .{});
+                    const iterator_var = interpolation.iterator_var orelse
+                        base.invariant("checked static dispatch registry invariant violated: checked interpolation has no iterator variable", .{});
+                    const seed_list_var = interpolation.seed_list_var orelse
+                        base.invariant("checked static dispatch registry invariant violated: checked interpolation has no seed list variable", .{});
+                    const iter_fn_var = interpolation.iter_fn_var orelse
+                        base.invariant("checked static dispatch registry invariant violated: checked interpolation has no iter dispatch variable", .{});
+                    const append_fn_var = interpolation.append_fn_var orelse
+                        base.invariant("checked static dispatch registry invariant violated: checked interpolation has no append dispatch variable", .{});
+                    const iterator_ty = try checkedTypeIdForVar(allocator, module, checked_types, iterator_var);
+                    const seed_list_ty = try checkedTypeIdForVar(allocator, module, checked_types, seed_list_var);
+                    const iterator_for_id: IteratorForPlanId = @fromBackingInt(@intCast(@as(u32, @intCast(iterator_for_plans.items.len))));
+                    var iter_args = [_]IteratorDispatchOperand{.interpolation_seed};
+                    const iter_ar = try pushOperands(IteratorDispatchOperand, &iter_operand_pool, allocator, &iter_args);
+                    var append_args = [_]IteratorDispatchOperand{ .interpolation_iterator, .interpolation_value };
+                    const append_ar = try pushOperands(IteratorDispatchOperand, &iter_operand_pool, allocator, &append_args);
+                    try iterator_for_plans.append(allocator, .{
+                        .iter = .{
+                            .method = try names.internMethodName("iter"),
+                            .dispatcher_ty = seed_list_ty,
+                            .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, iter_fn_var),
+                            .dispatcher_arg_index = 0,
+                            .args = iter_ar,
+                        },
+                        .next = .{
+                            .method = try names.internMethodName("append"),
+                            .dispatcher_ty = iterator_ty,
+                            .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, append_fn_var),
+                            .dispatcher_arg_index = 0,
+                            .args = append_ar,
+                        },
+                        .item_ty = try checkedTypeIdForVar(allocator, module, checked_types, item_var),
+                        .iterator_ty = iterator_ty,
+                        .site = .{ .interpolation = .{ .expr = checked_expr, .seed_list_ty = seed_list_ty } },
+                    });
+                    try iterator_plan_sources.append(allocator, .{
+                        .iter_dispatcher_var = seed_list_var,
+                        .next_dispatcher_var = iterator_var,
+                        .iter_fn_var = iter_fn_var,
+                        .next_fn_var = append_fn_var,
+                    });
+                    try iterator_for_by_node.append(allocator, .{ .key = @backingInt(expr_idx), .val = @backingInt(iterator_for_id) });
                 },
                 .e_type_dispatch_call => {
                     const dispatch_call = expr.data.e_type_dispatch_call;
@@ -2592,11 +2677,13 @@ pub const StaticDispatchPlanTable = struct {
                 try iterator_for_plans.append(allocator, .{
                     .iter = iter_call,
                     .next = next_call,
-                    .iterable = iterable_expr,
                     .item_ty = item_ty,
                     .iterator_ty = iterator_ty,
-                    .step_ty = step_ty,
-                    .step_topology = step_topology,
+                    .site = .{ .for_loop = .{
+                        .iterable = iterable_expr,
+                        .step_ty = step_ty,
+                        .step_topology = step_topology,
+                    } },
                 });
                 try iterator_plan_sources.append(allocator, .{
                     .iter_dispatcher_var = module.exprType(iterable_idx),

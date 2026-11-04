@@ -154,7 +154,7 @@ NO CHANGE
 								(p-assign (ident "person"))))
 						(segments
 							(segment (name "age") (mode "required")))))
-				(e-interpolation (constraint-fn-var 292) (dispatcher-var 26)
+				(e-interpolation (constraint-fn-var 295) (dispatcher-var 26)
 					(first
 						(e-literal (string "")))
 					(parts
@@ -188,10 +188,10 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Str => {}"))
-		(patt (type "{ age: a, name: a, .. } -> b where [b.from_interpolation : List(Str) -> Try(List(a) -> b, [InvalidInterpolation(Str)])]"))
+		(patt (type "{ age: item, name: item, .. } -> a where [a.from_interpolation : List(Str) -> Try(Iter(item) -> a, [InvalidInterpolation(Str)])]"))
 		(patt (type "_arg -> [Ok({})]")))
 	(expressions
 		(expr (type "Str => {}"))
-		(expr (type "{ age: a, name: a, .. } -> b where [b.from_interpolation : List(Str) -> Try(List(a) -> b, [InvalidInterpolation(Str)])]"))
+		(expr (type "{ age: item, name: item, .. } -> a where [a.from_interpolation : List(Str) -> Try(Iter(item) -> a, [InvalidInterpolation(Str)])]"))
 		(expr (type "_arg -> [Ok({})]"))))
 ~~~

@@ -6,7 +6,7 @@ type=snippet
 # SOURCE
 ~~~roc
 Url := [Url(Str)].{
-    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidInterpolation(Str)])
+    from_interpolation : List(Str) -> Try((Iter(Str) -> Url), [InvalidInterpolation(Str)])
     from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Url.Url(assemble(values)))
 }
 
@@ -76,7 +76,7 @@ EndOfFile,
 							(ty (name "Try"))
 							(ty-fn
 								(ty-apply
-									(ty (name "List"))
+									(ty (name "Iter"))
 									(ty (name "Str")))
 								(ty (name "Url")))
 							(ty-tag-union
@@ -134,7 +134,7 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 Url := [Url(Str)].{
-	from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidInterpolation(Str)])
+	from_interpolation : List(Str) -> Try((Iter(Str) -> Url), [InvalidInterpolation(Str)])
 	from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Url.Url(assemble(values)))
 }
 
@@ -153,9 +153,9 @@ main = {
 		(e-lambda
 			(args
 				(p-assign (ident "segments")))
-			(e-dispatch-call (method "map_ok") (constraint-fn-var 325)
+			(e-dispatch-call (method "map_ok") (constraint-fn-var 329)
 				(receiver
-					(e-call (constraint-fn-var 322)
+					(e-call (constraint-fn-var 326)
 						(e-lookup-external
 							(builtin))
 						(e-lookup-local
@@ -173,7 +173,7 @@ main = {
 								(e-nominal (nominal "Url")
 									(e-tag (name "Url")
 										(args
-											(e-call (constraint-fn-var 349)
+											(e-call (constraint-fn-var 353)
 												(e-lookup-local
 													(p-assign (ident "assemble")))
 												(e-lookup-local
@@ -185,7 +185,7 @@ main = {
 				(ty-apply (name "Try") (builtin)
 					(ty-parens
 						(ty-fn (effectful false)
-							(ty-apply (name "List") (builtin)
+							(ty-apply (name "Iter") (builtin)
 								(ty-lookup (name "Str") (builtin)))
 							(ty-lookup (name "Url") (local))))
 					(ty-tag-union
@@ -222,12 +222,12 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(Str) -> Try(List(Str) -> Url, [InvalidInterpolation(Str)])"))
+		(patt (type "List(Str) -> Try(Iter(Str) -> Url, [InvalidInterpolation(Str)])"))
 		(patt (type "Try(Url, [InvalidInterpolation(Str)])")))
 	(type_decls
 		(nominal (type "Url")
 			(ty-header (name "Url"))))
 	(expressions
-		(expr (type "List(Str) -> Try(List(Str) -> Url, [InvalidInterpolation(Str)])"))
+		(expr (type "List(Str) -> Try(Iter(Str) -> Url, [InvalidInterpolation(Str)])"))
 		(expr (type "Try(Url, [InvalidInterpolation(Str)])"))))
 ~~~

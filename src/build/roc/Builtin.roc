@@ -2899,17 +2899,17 @@ Builtin :: [].{
 		##
 		## The compiler calls this at compile time with the literal's segments: the
 		## text before the first interpolation, then the text after each one. It
-		## returns the function the compiler calls at runtime with the interpolated
-		## values, in order, to assemble the string.
+		## returns the function the compiler calls at runtime with an iterator over
+		## the interpolated values, in order, to assemble the string.
 		## ```roc
-		## expect Str.from_interpolation(["a", "c"]).map_ok(|assemble| assemble(["b"])) == Ok("abc")
+		## expect Str.from_interpolation(["a", "c"]).map_ok(|assemble| assemble(["b"].iter())) == Ok("abc")
 		## ```
-		from_interpolation : List(Str) -> Try((List(Str) -> Str), [InvalidInterpolation(Str)])
+		from_interpolation : List(Str) -> Try((Iter(Str) -> Str), [InvalidInterpolation(Str)])
 		from_interpolation = |segments|
 			Ok(
 				|values| {
 					first = List.first(segments).ok_or("")
-					List.fold_with_index(values, first, |acc, value, index| acc.concat(value).concat(List.get(segments, index + 1).ok_or("")))
+					values.with_index().fold(first, |acc, (index, value)| acc.concat(value).concat(List.get(segments, index + 1).ok_or("")))
 				},
 			)
 

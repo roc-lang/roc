@@ -168,7 +168,7 @@ pub const Task = union(enum) {
     finish_interpolation: CheckedExprId,
     /// Pop a literal conversion's `Try` result and push the literal's value.
     finish_literal_conversion: FinishLiteralConversion,
-    finish_interpolation_call: struct { assembler: LocalId, assembler_ty: TypeId, values_ty: TypeId, count: u32, result: TypeId },
+    finish_interpolation_call: struct { assembler: LocalId, assembler_ty: TypeId, plan: static_dispatch.IteratorForPlanId, count: u32, result: TypeId },
     /// Pop a `Str` interpolation's values and write them once with its
     /// non-empty segments (`str_from_parts`); its assembler is not called.
     finish_str_from_parts: struct { expr: CheckedExprId, count: u32, result: TypeId },
@@ -2687,8 +2687,16 @@ pub const Builder = struct {
             .finish_interpolation_call => |call| {
                 const values = try self.popValues(call.count);
                 defer self.allocator.free(values);
-                const list = try self.buildList(call.values_ty, values);
-                try self.pushValue(try self.emitErasedCall(call.assembler, call.assembler_ty, &.{list}, call.result));
+                // The iterator the assembler receives: `iter` on the list of
+                // the values. Every closure Boxy builds is boxed, so an
+                // iterator over one list costs one allocation and a box per
+                // step, where appending each value onto an empty list's
+                // iterator would nest a boxed closure per value per step.
+                const plan = self.view.view.static_dispatch_plans.iterator_for_plans[@backingInt(call.plan)];
+                const iterator_ty = try self.convert(plan.iterator_ty);
+                const list = try self.buildList(try self.convert(plan.interpolationSite().seed_list_ty), values);
+                const iterator = try self.emitDispatch(plan.iter.resolution, plan.iter.callable_ty, &.{list}, iterator_ty);
+                try self.pushValue(try self.emitErasedCall(call.assembler, call.assembler_ty, &.{iterator}, call.result));
             },
             .finish_str_from_parts => |call| {
                 const values = try self.popValues(call.count);
@@ -4148,16 +4156,9 @@ pub const Builder = struct {
         const assembler = self.popValue();
         const interpolation = self.bodies().expr(expr_id).data.interpolation;
         const assembler_ty = try self.convert(interpolation.assembler_ty);
-        const values_ty = switch (self.program.store.get(assembler_ty)) {
-            .function => |function| blk: {
-                const args = self.program.store.span(function.args);
-                if (args.len != 1) invariant("an interpolation assembler does not take exactly the values list");
-                break :blk args[0];
-            },
-            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("an interpolation assembler is not a function"),
-        };
+        const plan = interpolation.iter_plan orelse invariant("an interpolation has no checked iterator plan");
         // The values are lowered after the assembler, in order.
-        try self.push(.{ .finish_interpolation_call = .{ .assembler = assembler, .assembler_ty = assembler_ty, .values_ty = values_ty, .count = @intCast(interpolation.values.len), .result = try self.exprType(expr_id) } });
+        try self.push(.{ .finish_interpolation_call = .{ .assembler = assembler, .assembler_ty = assembler_ty, .plan = plan, .count = @intCast(interpolation.values.len), .result = try self.exprType(expr_id) } });
         try self.pushExprsReversed(interpolation.values);
     }
 
@@ -8861,7 +8862,8 @@ pub const Builder = struct {
         const plan = table.iterator_for_plans[@backingInt(plan_id)];
         const iterable = self.popValue();
         const iterator_ty = try self.convert(plan.iterator_ty);
-        const step_ty = try self.convert(plan.step_ty);
+        const for_site = plan.forLoopSite();
+        const step_ty = try self.convert(for_site.step_ty);
         const iterator = try self.emitDispatch(plan.iter.resolution, plan.iter.callable_ty, &.{iterable}, iterator_ty);
 
         const binders: []const checked.PatternBinderId = if (mutations) |id| blk: {
@@ -8882,11 +8884,11 @@ pub const Builder = struct {
         if (head_merge) |m| try self.enterMerge(m);
         const step_value = try self.emitDispatch(plan.next.resolution, plan.next.callable_ty, &.{state}, step_ty);
         const names = self.view.nameStore();
-        const done = try self.program.store.internName(names.tagLabelText(plan.step_topology.done_tag));
-        const skip = try self.program.store.internName(names.tagLabelText(plan.step_topology.skip_tag));
-        const one = try self.program.store.internName(names.tagLabelText(plan.step_topology.one_tag));
-        const item_name = try self.program.store.internName(names.recordFieldLabelText(plan.step_topology.item_field));
-        const rest_name = try self.program.store.internName(names.recordFieldLabelText(plan.step_topology.rest_field));
+        const done = try self.program.store.internName(names.tagLabelText(for_site.step_topology.done_tag));
+        const skip = try self.program.store.internName(names.tagLabelText(for_site.step_topology.skip_tag));
+        const one = try self.program.store.internName(names.tagLabelText(for_site.step_topology.one_tag));
+        const item_name = try self.program.store.internName(names.recordFieldLabelText(for_site.step_topology.item_field));
+        const rest_name = try self.program.store.internName(names.recordFieldLabelText(for_site.step_topology.rest_field));
 
         // Done: leave the loop.
         const not_done_hole = try self.newHole();

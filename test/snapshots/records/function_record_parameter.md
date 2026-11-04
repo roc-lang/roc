@@ -61,7 +61,7 @@ NO CHANGE
 					(e-lookup-local
 						(p-assign (ident "age"))))
 				(args)))
-		(e-interpolation (constraint-fn-var 247) (dispatcher-var 18)
+		(e-interpolation (constraint-fn-var 250) (dispatcher-var 18)
 			(first
 				(e-literal (string "Hello ")))
 			(parts
@@ -74,5 +74,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ age: a, name: b } -> c where [a.to_str : a -> b, c.from_interpolation : List(Str) -> Try(List(b) -> c, [InvalidInterpolation(Str)])]"))
+(expr (type "{ age: a, name: item } -> b where [a.to_str : a -> item, b.from_interpolation : List(Str) -> Try(Iter(item) -> b, [InvalidInterpolation(Str)])]"))
 ~~~

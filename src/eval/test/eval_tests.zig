@@ -2729,7 +2729,7 @@ const core_tests = [_]TestCase{
         \\Url := [Url(Str)].{
         \\    from_quote : Str -> Try(Url, [BadQuotedBytes(Str)])
         \\    from_quote = |str| Ok(Url(str))
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Url), [InvalidInterpolation(Str)])
         \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Url.Url(assemble(values)))
         \\    inner : Url -> Str
         \\    inner = |Url.Url(str)| str
@@ -2749,8 +2749,8 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Shape := [Shape(U64, List(Str))].{
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Shape), [InvalidInterpolation(Str)])
-        \\    from_interpolation = |segments| Ok(|values| Shape.Shape(List.len(segments), values))
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Shape), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments| Ok(|values| Shape.Shape(List.len(segments), List.from_iter(values)))
         \\}
         \\
         \\main = {
@@ -2768,7 +2768,7 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Wrapped := [Wrapped(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Wrapped), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Wrapped), [InvalidInterpolation(Str)])
         \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Wrapped.Wrapped(assemble(values)))
         \\}
         \\
@@ -2792,8 +2792,8 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Count := [Count(U64)].{
-        \\    from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
-        \\    from_interpolation = |_segments| Ok(|values| Count.Count(List.len(values)))
+        \\    from_interpolation : List(Str) -> Try((Iter(item) -> Count), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |_segments| Ok(|values| Count.Count(values.fold(0, |count, _| count + 1)))
         \\}
         \\
         \\around = |f, x| f("a${x}b${x}c")
@@ -2810,7 +2810,7 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Count := [Count(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(item) -> Count), [InvalidInterpolation(Str)])
         \\    from_interpolation = |_segments| Ok(|_| Count.Count("none"))
         \\}
         \\
@@ -2828,8 +2828,8 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Count := [Count(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
-        \\    from_interpolation = |_segments| Ok(|values| Count.Count(Str.inspect(values)))
+        \\    from_interpolation : List(Str) -> Try((Iter(item) -> Count), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |_segments| Ok(|values| Count.Count(Str.inspect(List.from_iter(values))))
         \\}
         \\
         \\main = {
@@ -2846,7 +2846,7 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Count := [Count(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(item) -> Count), [InvalidInterpolation(Str)])
         \\    from_interpolation = |_segments| Ok(|_| Count.Count("none"))
         \\}
         \\
@@ -2866,8 +2866,8 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Count := [Count(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
-        \\    from_interpolation = |_segments| Ok(|values| Count.Count(Str.inspect(values)))
+        \\    from_interpolation : List(Str) -> Try((Iter(item) -> Count), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |_segments| Ok(|values| Count.Count(Str.inspect(List.from_iter(values))))
         \\}
         \\
         \\main = {
@@ -2886,7 +2886,7 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Url := [Url(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Url), [InvalidInterpolation(Str)])
         \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Url.Url(assemble(values)))
         \\}
         \\
@@ -2922,7 +2922,7 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Url := [Url(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidUrl])
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Url), [InvalidUrl])
         \\    from_interpolation = |_segments| Ok(|values| Url.Url(Str.join_with(values, "")))
         \\}
         \\
@@ -2940,7 +2940,7 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Url := [Url(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Url), [InvalidInterpolation(Str)])
         \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Url.Url(assemble(values)))
         \\}
         \\
@@ -2984,7 +2984,7 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Strict := [Strict].{
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Strict), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Strict), [InvalidInterpolation(Str)])
         \\    from_interpolation = |_segments| Err(InvalidInterpolation("Strict rejects every interpolation"))
         \\}
         \\
@@ -3002,7 +3002,7 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Html := [Html(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Html), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Html), [InvalidInterpolation(Str)])
         \\    from_interpolation = |segments|
         \\        if segments.any(|segment| segment.contains("<script")) {
         \\            Err(InvalidInterpolation("Html literals can't contain script tags"))

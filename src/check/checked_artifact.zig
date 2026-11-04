@@ -11367,6 +11367,9 @@ pub const CheckedExprData = union(enum) {
 /// `values`; every segment is a checked string segment.
 pub const CheckedInterpolation = struct {
     plan: ?StaticDispatchPlanId,
+    /// The `iter` and `append` dispatches that build the iterator the
+    /// assembler receives (`IteratorForPlan.Site.interpolation`).
+    iter_plan: ?static_dispatch.IteratorForPlanId,
     segments: []const CheckedExprId,
     values: []const CheckedExprId,
     assembler_ty: CheckedTypeId,
@@ -13558,13 +13561,14 @@ pub const CheckedBodyStore = struct {
 
             if (self.source_node_map.exprAtRawNode(raw_node)) |checked_expr| {
                 const data = &self.stored_exprs.items[@backingInt(checked_expr)].data;
-                if (data.* != .for_) {
-                    checkedArtifactInvariant(
-                        "iterator-for plan {d} points at non-for checked expression {d}",
+                switch (data.*) {
+                    .for_ => |*for_| for_.plan = plan_val,
+                    .interpolation => |*interpolation| interpolation.iter_plan = plan_val,
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .hosted_lambda, .run_low_level => checkedArtifactInvariant(
+                        "iterator plan {d} points at checked expression {d}, which is neither a for loop nor an interpolation",
                         .{ @backingInt(plan_val), @backingInt(checked_expr) },
-                    );
+                    ),
                 }
-                data.for_.plan = plan_val;
                 continue;
             }
 
@@ -15555,6 +15559,7 @@ const CheckedBodyPayloadCopier = struct {
         }
         return .{ .interpolation = .{
             .plan = null,
+            .iter_plan = null,
             .segments = segments,
             .values = values,
             .assembler_ty = try self.checkedTypeForRequiredVar(
@@ -22449,6 +22454,8 @@ const CheckedTemplateRefCollector = struct {
                 const id = interpolation.plan orelse checkedArtifactInvariant("checked interpolation expression reached template closure collection without a static-dispatch plan", .{});
                 try self.appendDispatchRef(id);
                 try self.pushStaticDispatchPlanArgs(id);
+                const iter_plan = interpolation.iter_plan orelse checkedArtifactInvariant("checked interpolation expression reached template closure collection without an iterator plan", .{});
+                try self.pushIteratorForPlan(iter_plan);
             },
             .numeral => |numeral| {
                 // Builtin-targeted literals carry no plan (their bits are
@@ -22644,7 +22651,7 @@ const CheckedTemplateRefCollector = struct {
     ) Allocator.Error!void {
         for (call.argsSlice(self.static_dispatch_plans)) |arg| switch (arg) {
             .checked_expr => |expr| try self.pushChild(.{ .expr = expr }),
-            .loop_iterator_state => {},
+            .loop_iterator_state, .interpolation_seed, .interpolation_iterator, .interpolation_value => {},
         };
     }
 
@@ -41733,6 +41740,7 @@ test "checked divergence publishes both inline-expect runtime modes" {
         .{ .id = @fromBackingInt(@intCast(4)), .ty = testIndexId(CheckedTypeId, 0), .source_region = base.Region.zero(), .data = .{ .type_dispatch_call = null } },
         .{ .id = @fromBackingInt(@intCast(5)), .ty = testIndexId(CheckedTypeId, 0), .source_region = base.Region.zero(), .data = .{ .interpolation = .{
             .plan = null,
+            .iter_plan = null,
             .segments = &divergent_segment,
             .values = &.{},
             .assembler_ty = testIndexId(CheckedTypeId, 0),
@@ -41815,7 +41823,7 @@ fn divergenceParityFixture(comptime kind: CheckedExprKind) CheckedExprData {
         .unary_not => .{ .unary_not = op },
         .field_access => .{ .field_access = .{ .receiver = op, .segments = &.{} } },
         .dispatch_call => .{ .dispatch_call = null },
-        .interpolation => .{ .interpolation = .{ .plan = null, .segments = ops, .values = &.{}, .assembler_ty = ty } },
+        .interpolation => .{ .interpolation = .{ .plan = null, .iter_plan = null, .segments = ops, .values = &.{}, .assembler_ty = ty } },
         .structural_eq => .{ .structural_eq = .{ .lhs = op, .rhs = op, .negated = false } },
         .structural_hash => .{ .structural_hash = .{ .value = op, .hasher = op } },
         .method_eq => .{ .method_eq = null },

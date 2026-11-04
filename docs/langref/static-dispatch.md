@@ -77,7 +77,7 @@ Here are all the method names that the language or the builtins use:
 | `negate`, `not` | Unary `-`, unary `!` | The type has a negation or complement operation. |
 | `from_numeral : Numeral -> Try(T, [InvalidNumeral(Str)])` | Number literals | You want number literals to work as values of the type. |
 | `from_quote : Str -> Try(T, [BadQuotedBytes(Str)])` | String literals | You want string literals to work as values of the type. |
-| `from_interpolation : List(Str) -> Try((List(item) -> T), [InvalidInterpolation(Str)])` | String literals with interpolation | You want interpolated string literals to work as values of the type. |
+| `from_interpolation : List(Str) -> Try((Iter(item) -> T), [InvalidInterpolation(Str)])` | String literals with interpolation | You want interpolated string literals to work as values of the type. |
 | `iter : T -> Iter(item)` | `for item in value` | You want `for` loops to work on the type. |
 | `next` | Each step of a `for` loop | Usually only `Iter` needs this; collections define `iter` instead. |
 | `parser_for : encoding -> (state -> Try({ value : T, rest : state }, err))` | Parsers, such as JSON parsing | You want the type to be parseable from formats like JSON. |
@@ -316,12 +316,13 @@ A string literal with interpolations in it, like `"<p>Hello, ${name}!</p>"`, use
 1. At compile time, `from_interpolation` gets called with the literal's _segments_, which are the
    pieces of text around the interpolations. Here, those are `["<p>Hello, ", "!</p>"]`.
 2. It returns a function, which gets called each time the program evaluates the string literal.
-   That function receives the interpolated values (here, just `name`) as a list, and returns the
-   finished value.
+   That function receives an iterator over the interpolated values (here, just `name`), and
+   returns the finished value. The iterator is built on the stack, so a literal allocates nothing
+   beyond what the function itself does.
 
 ```roc
 Html := [Html(Str)].{
-    from_interpolation : List(Str) -> Try((List(Str) -> Html), [InvalidInterpolation(Str)])
+    from_interpolation : List(Str) -> Try((Iter(Str) -> Html), [InvalidInterpolation(Str)])
     from_interpolation = |segments|
         if segments.any(|segment| segment.contains("<script")) {
             Err(InvalidInterpolation("Html literals can't contain script tags"))
