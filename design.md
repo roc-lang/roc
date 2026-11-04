@@ -4914,9 +4914,13 @@ sealed. It consists of exactly these parts:
   literal dispatch plans, row-coerced results, record omitted defaults,
   top-level demand dependencies, invoking definitions, callable checking
   facts, the checking dependency digest, problems, the import mapping,
-  selected hoisted roots, promoted local procedures, platform requirement
-  solutions, and the per-expression checking facts ("Per-Expression Checking
-  Facts").
+  and the per-expression checking facts ("Per-Expression Checking Facts").
+  The selected compile-time roots, the promoted local procedures, the
+  platform requirement solutions with their identity variables, and the
+  exhaustiveness checks left to evaluation are `ModuleEnv` side lists that
+  checking writes when it completes, so every later analysis reads them
+  from the module, after a cache hit as well. An exhaustiveness check's
+  index in its list is its checked site id.
 - The evaluation output: the constant store (`ConstStore`), compile-time root
   payloads and compile-time root reads. Compile-time evaluation writes it and
   nothing else does.

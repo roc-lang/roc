@@ -28,7 +28,7 @@ pub const CheckedNames = CanonicalNames;
 pub const CanonicalTypeKeys = @import("canonical_type_keys.zig");
 pub const StaticDispatchRegistry = @import("static_dispatch_registry.zig");
 pub const CheckedTraverse = @import("checked_traverse.zig");
-pub const HoistRoots = @import("hoist_roots.zig");
+pub const HoistRoots = @import("can").HoistRoots;
 pub const RequirementSolution = @import("requirement_solution.zig");
 pub const ConstStore = @import("const_store.zig");
 pub const CheckedArtifact = @import("checked_artifact.zig");
@@ -70,7 +70,6 @@ test "check tests" {
     std.testing.refAllDecls(@import("report.zig"));
     std.testing.refAllDecls(@import("static_dispatch_registry.zig"));
     std.testing.refAllDecls(@import("checked_traverse.zig"));
-    std.testing.refAllDecls(@import("hoist_roots.zig"));
     std.testing.refAllDecls(@import("requirement_solution.zig"));
     std.testing.refAllDecls(@import("canonical_names.zig"));
     std.testing.refAllDecls(@import("canonical_type_keys.zig"));

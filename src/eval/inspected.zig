@@ -1398,20 +1398,6 @@ pub fn parseProgram(
         .published_only => {},
     }
 
-    const selected_hoisted_roots = main_checked.checker.selectedHoistedRoots();
-    var top_level_hoisted_roots = std.ArrayList(check.HoistRoots.SelectedHoistedRoot).empty;
-    defer top_level_hoisted_roots.deinit(allocator);
-    const hoisted_roots = switch (options.roots) {
-        .eval, .inspected, .comptime_repl => roots: {
-            for (selected_hoisted_roots) |root| {
-                if (main_checked.checker.selectedHoistedRootIsTopLevel(root)) {
-                    try top_level_hoisted_roots.append(allocator, root);
-                }
-            }
-            break :roots top_level_hoisted_roots.items;
-        },
-        .published_only => selected_hoisted_roots,
-    };
     var checked_artifact = try check.CheckedArtifact.publishFromTypedModule(
         allocator,
         &typed_cir_modules,
@@ -1422,8 +1408,10 @@ pub fn parseProgram(
             .imports = publish_imports,
             .available_artifacts = available_artifacts,
             .explicit_roots = explicit_roots,
-            .hoisted_roots = hoisted_roots,
-            .promoted_local_procedures = main_checked.checker.promotedLocalProcedures(),
+            .hoisted_roots = switch (options.roots) {
+                .eval, .inspected, .comptime_repl => .top_level,
+                .published_only => .selected,
+            },
             .compile_time_finalizer = if (options.ctfe_options) |ctfe_options|
                 CompileTimeFinalization.finalizerWithOptions(ctfe_options)
             else
@@ -1935,6 +1923,7 @@ fn publishImportArtifacts(
             1,
             .{
                 .module_env_storage = .{ .static_builtin = builtin_module.?.env },
+                .hoisted_roots = .none,
                 .io = io,
                 .compile_time_finalizer = CompileTimeFinalization.finalizer(),
             },
@@ -1979,7 +1968,7 @@ fn publishImportArtifacts(
                     .io = io,
                     .imports = published_keys.items,
                     .available_artifacts = available_artifacts,
-                    .promoted_local_procedures = extra_modules[extra_i].checker.promotedLocalProcedures(),
+                    .hoisted_roots = .none,
                     .compile_time_finalizer = CompileTimeFinalization.finalizer(),
                     .problem_store = switch (problem_reporting) {
                         .ignore_comptime_problems => null,

@@ -152,7 +152,7 @@ test "evaluation diagnostics retain exact checked text across serialization" {
             .condition_type = type_text,
             .missing_patterns = .{ .start = 0, .count = 1 },
         } });
-        source.assignPendingStaticExhaustivenessSite(.{ .match_expr = @fromBackingInt(@intCast(3)) }, @fromBackingInt(@intCast(2)));
+        source.pending_static_exhaustiveness.items[0].site = @fromBackingInt(@intCast(2));
         break :blk try Templates.fromStore(allocator, &source);
     };
     defer templates.deinit(allocator);

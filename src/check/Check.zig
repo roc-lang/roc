@@ -25,7 +25,7 @@ const problem = @import("problem.zig");
 const snapshot_mod = @import("snapshot.zig");
 const exhaustive = @import("exhaustive.zig");
 const ExhaustivenessContext = @import("exhaustiveness_context.zig");
-const hoist_roots = @import("hoist_roots.zig");
+const hoist_roots = @import("can").HoistRoots;
 const output_type_roots = @import("output_type_roots.zig");
 const dispatch_evidence = @import("dispatch_evidence.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
@@ -4654,12 +4654,12 @@ pub fn deinit(self: *Self) void {
 
 /// Returns the hoisted roots selected while checking this module.
 pub fn selectedHoistedRoots(self: *const Self) []const hoist_roots.SelectedHoistedRoot {
-    return self.selected_hoisted_roots.items;
+    return self.cir.selected_hoisted_roots.items.items;
 }
 
 /// Returns the local function bindings this module promoted to procedures.
 pub fn promotedLocalProcedures(self: *const Self) []const hoist_roots.PromotedLocalProcedure {
-    return self.promoted_local_procedures.items;
+    return self.cir.promoted_local_procedures.items.items;
 }
 
 /// Mark every candidate on the stack from `depth` inward contextual: its
@@ -13189,12 +13189,63 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     try self.publishCallableCheckingFacts();
     try self.recordErroneousNodes();
+    try self.recordCheckingOutputs();
     var checking_scope = try checking_interface.makeScope(self.gpa, self.cir, self.builtin_ctx.builtin_module, self.imported_modules, self.owner_modules);
     defer checking_scope.deinit();
     try checking_interface.publish(self.cir, &checking_scope, defReference, checkingBindingOwner);
 
     self.debugAssertNominalDeclTableComplete();
     self.debugAssertFramesBalanced();
+}
+
+/// Record the selected compile-time roots, the promoted local procedures,
+/// the platform requirement solutions and the pending exhaustiveness checks
+/// into the module's checked outputs. A pending exhaustiveness check's index
+/// in `ModuleEnv.exhaustiveness_obligations` is its checked site id.
+fn recordCheckingOutputs(self: *Self) Allocator.Error!void {
+    const env = self.cir;
+    try env.selected_hoisted_roots.items.ensureTotalCapacity(env.gpa, self.selected_hoisted_roots.items.len);
+    env.selected_hoisted_roots.items.clearRetainingCapacity();
+    for (self.selected_hoisted_roots.items) |root| {
+        var recorded = root;
+        recorded.top_level = self.selectedHoistedRootIsTopLevel(root);
+        env.selected_hoisted_roots.items.appendAssumeCapacity(recorded);
+    }
+    env.promoted_local_procedures.items.clearRetainingCapacity();
+    try env.promoted_local_procedures.items.appendSlice(env.gpa, self.promoted_local_procedures.items);
+
+    env.platform_requirement_solutions.items.clearRetainingCapacity();
+    env.platform_requirement_identity_vars.items.clearRetainingCapacity();
+    try env.platform_requirement_solutions.items.ensureTotalCapacity(env.gpa, self.platform_requirement_solutions.items.len);
+    for (self.platform_requirement_solutions.items) |solution| {
+        const identities_start: u32 = @intCast(env.platform_requirement_identity_vars.items.items.len);
+        try env.platform_requirement_identity_vars.items.appendSlice(env.gpa, solution.identity_vars);
+        env.platform_requirement_solutions.items.appendAssumeCapacity(.{
+            .requires_idx = solution.requires_idx,
+            .def = solution.def,
+            .solved_var = solution.solved_var,
+            .is_function = solution.is_function,
+            .outcome = switch (solution.outcome) {
+                .success => .success,
+                .checked_error => .checked_error,
+                .pending => unreachable, // finalizePlatformRequirementSolutions decides every solution
+            },
+            .identities_start = identities_start,
+            .identities_len = @intCast(solution.identity_vars.len),
+        });
+    }
+
+    const pending = self.problems.pending_static_exhaustiveness.items;
+    env.exhaustiveness_obligations.items.clearRetainingCapacity();
+    try env.exhaustiveness_obligations.items.ensureTotalCapacity(env.gpa, pending.len);
+    for (pending, 0..) |*obligation, index| {
+        obligation.site = @fromBackingInt(@intCast(index));
+        env.exhaustiveness_obligations.items.appendAssumeCapacity(.{
+            .mode = obligation.mode,
+            .source = obligation.source,
+            .region = obligation.region,
+        });
+    }
 }
 
 /// Record every node whose own checked state is erroneous
@@ -18377,13 +18428,6 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
         });
         identity_vars_owned = false;
     }
-}
-
-/// The platform requirement solutions recorded while checking this app root,
-/// in requires-clause order. The rows and their identity slices are
-/// checker-owned and remain valid until `deinit`.
-pub fn platformRequirementSolutions(self: *const Self) []const requirement_solution.SolutionInput {
-    return self.platform_requirement_solutions.items;
 }
 
 fn instantiatePlatformRequiredType(

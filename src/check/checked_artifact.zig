@@ -23,11 +23,10 @@ const canonical = @import("canonical_names.zig");
 pub const CheckedModuleDigest = canonical.CheckedModuleDigest;
 const canonical_type_keys = @import("canonical_type_keys.zig");
 const type_key_engine = @import("type_key_engine.zig");
-const hoist_roots = @import("hoist_roots.zig");
+const hoist_roots = @import("can").HoistRoots;
 const const_store = @import("const_store.zig");
 const problem = @import("problem.zig");
 pub const EvaluationDiagnostics = @import("evaluation_diagnostics.zig").Templates;
-const requirement_solution = @import("requirement_solution.zig");
 const artifact_serialize = @import("artifact_serialize.zig");
 const SerializedSlice = artifact_serialize.SerializedSlice;
 
@@ -725,20 +724,47 @@ pub const PublishInputs = struct {
     relation_artifacts: []const ImportedModuleView = &.{},
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelation = null,
-    /// Requirement solutions the checker recorded for this app root (empty
-    /// for every other module kind); published as the artifact's
-    /// `PlatformRequirementSolutionTable`.
-    platform_requirement_solutions: []const requirement_solution.SolutionInput = &.{},
     explicit_roots: []const ExplicitRootRequestInput = &.{},
-    hoisted_roots: []const hoist_roots.SelectedHoistedRoot = &.{},
-    /// Local function bindings checking promoted to procedures of their own.
-    promoted_local_procedures: []const hoist_roots.PromotedLocalProcedure = &.{},
+    /// Which of the compile-time roots checking selected
+    /// (`ModuleEnv.selected_hoisted_roots`) the artifact evaluates.
+    hoisted_roots: HoistedRootSelection = .selected,
     compile_time_finalizer: CompileTimeFinalizer,
     /// Prepared metadata may serve frontend imports; evaluation and cache publication wait.
     evaluation_phase: enum { immediate, post_frontend } = .immediate,
     problem_store: ?*problem.Store = null,
     validation: can.Can.Validation = .checking,
 };
+
+/// Which of a module's checker-selected compile-time roots its artifact
+/// evaluates.
+pub const HoistedRootSelection = enum {
+    /// Every root checking selected.
+    selected,
+    /// Only the roots that materialize a top-level binding.
+    top_level,
+    none,
+};
+
+/// The checker-selected compile-time roots `selection` keeps, in selection
+/// order. The caller owns the returned slice.
+fn selectHoistedRoots(
+    allocator: Allocator,
+    module_env: *const ModuleEnv,
+    selection: HoistedRootSelection,
+) Allocator.Error![]hoist_roots.SelectedHoistedRoot {
+    const selected = module_env.selected_hoisted_roots.items.items;
+    var kept = try std.ArrayList(hoist_roots.SelectedHoistedRoot).initCapacity(allocator, selected.len);
+    errdefer kept.deinit(allocator);
+    for (selected) |root| {
+        const keep = switch (selection) {
+            .selected => true,
+            .top_level => root.top_level,
+            .none => false,
+        };
+        if (keep) kept.appendAssumeCapacity(root);
+    }
+    return try kept.toOwnedSlice(allocator);
+}
 
 /// Public `CompileTimeFinalizer` declaration.
 pub const CompileTimeFinalizer = struct {
@@ -10459,6 +10485,8 @@ pub const ExhaustivenessResolutionPolicy = union(enum) {
     compile_time_replaced_by_root: ComptimeRootId,
     compile_time_only,
     runtime_reachable,
+    /// No checked body reaches the site, so no evaluation decides it and its
+    /// checking mode does.
     not_pending,
 };
 
@@ -13302,7 +13330,7 @@ const EvidencePass = struct {
     template_iterator_refs: *const TemplateIteratorRefs,
     entry_wrappers: *const EntryWrapperTable,
     compile_time_roots: *const CompileTimeRootTable,
-    platform_requirement_solutions: []const requirement_solution.SolutionInput,
+    platform_requirement_solutions: []const ModuleEnv.PlatformRequirementSolution,
     platform_requirement_root_evidence: []artifact_serialize.Span,
     template_root_evidence: []?artifact_serialize.Span,
 
@@ -13434,7 +13462,7 @@ const EvidencePass = struct {
         template_iterator_refs: *const TemplateIteratorRefs,
         entry_wrappers: *const EntryWrapperTable,
         compile_time_roots: *const CompileTimeRootTable,
-        platform_requirement_solutions: []const requirement_solution.SolutionInput,
+        platform_requirement_solutions: []const ModuleEnv.PlatformRequirementSolution,
         platform_requirement_root_evidence: []artifact_serialize.Span,
         template_root_evidence: []?artifact_serialize.Span,
     ) EvidencePass {
@@ -13721,7 +13749,6 @@ const EvidencePass = struct {
             switch (solution.outcome) {
                 .checked_error => continue,
                 .success => {},
-                .pending => checkedArtifactInvariant("platform requirement solution was not finalized before evidence publication", .{}),
             }
             if (!solution.is_function) continue;
 
@@ -16467,7 +16494,7 @@ fn resolveTotalDispatchPlans(
     template_iterator_refs: *const TemplateIteratorRefs,
     entry_wrappers: *const EntryWrapperTable,
     compile_time_roots: *const CompileTimeRootTable,
-    platform_requirement_solutions: []const requirement_solution.SolutionInput,
+    platform_requirement_solutions: []const ModuleEnv.PlatformRequirementSolution,
     platform_requirement_root_evidence: []artifact_serialize.Span,
     template_root_evidence: []?artifact_serialize.Span,
 ) Allocator.Error!void {
@@ -19118,7 +19145,6 @@ pub const PlatformRequirementRelationInput = struct {
     declaration: PlatformRequiredDeclarationId,
     requires_idx: u32,
     app_value: TopLevelValueRef,
-    requested_source_ty: canonical.CanonicalTypeKey,
     value_kind: PlatformRequiredValueKind,
     /// The app-store checked root the checker solved this requirement's type to.
     solved_root_app: CheckedTypeId,
@@ -19136,7 +19162,6 @@ pub const PlatformRequiredBindingInput = struct {
     declaration: PlatformRequiredDeclarationId,
     requires_idx: u32,
     app_value: TopLevelValueRef,
-    requested_source_ty: canonical.CanonicalTypeKey,
     checked_relation: PlatformRequirementRelationId,
     value_use: PlatformRequiredValueUse,
 };
@@ -19423,7 +19448,6 @@ pub const PlatformRequirementRelation = struct {
     declaration: PlatformRequiredDeclarationId,
     requires_idx: u32,
     app_value: TopLevelValueRef,
-    requested_source_ty: canonical.CanonicalTypeKey,
     requested_source_ty_payload: CheckedTypeId,
     /// Root-call dispatch evidence in `app_value.artifact`.
     root_evidence: artifact_serialize.Span = .{},
@@ -19515,7 +19539,6 @@ pub const PlatformRequirementRelationTable = struct {
             var projector = CheckedTypeStoreImportProjector.initPreservingSourceInstance(allocator, checked_types, names, app_view.*);
             defer projector.deinit();
             const payload = try projector.project(input.solved_root_app);
-            const payload_key = (try checked_types.rootKey(payload));
 
             rows[i] = .{
                 .id = input.id,
@@ -19524,7 +19547,6 @@ pub const PlatformRequirementRelationTable = struct {
                 .declaration = input.declaration,
                 .requires_idx = input.requires_idx,
                 .app_value = input.app_value,
-                .requested_source_ty = payload_key,
                 .requested_source_ty_payload = payload,
                 .root_evidence = input.root_evidence,
                 .value_kind = input.value_kind,
@@ -19621,7 +19643,7 @@ fn platformRequirementSolutionTableFromInputs(
     top_level_values: *const TopLevelValueTable,
     exported_procedure_bindings: *const ExportedProcedureBindingTable,
     exported_const_templates: *const ExportedConstTemplateTable,
-    inputs: []const requirement_solution.SolutionInput,
+    inputs: []const ModuleEnv.PlatformRequirementSolution,
     root_evidence: []const artifact_serialize.Span,
 ) Allocator.Error!PlatformRequirementSolutionTable {
     if (inputs.len != root_evidence.len) {
@@ -19641,7 +19663,6 @@ fn platformRequirementSolutionTableFromInputs(
         switch (input.outcome) {
             .checked_error => continue,
             .success => {},
-            .pending => checkedArtifactInvariant("platform requirement solution was not finalized by checking", .{}),
         }
 
         const top_level = top_level_values.lookupByDef(input.def) orelse {
@@ -19676,7 +19697,8 @@ fn platformRequirementSolutionTableFromInputs(
         }
 
         const identity_start: u32 = @intCast(identity_solutions.items.len);
-        for (input.identity_vars) |identity_var| {
+        const identity_vars = module.moduleEnvConst().platformRequirementIdentityVars(input);
+        for (identity_vars) |identity_var| {
             const identity_root = try appendCheckedTypeRoot(allocator, module, checked_types, &active, identity_var);
             try identity_solutions.append(allocator, identity_root);
         }
@@ -19689,7 +19711,7 @@ fn platformRequirementSolutionTableFromInputs(
             .root_evidence = evidence,
             .value_kind = value_kind,
             .identity_start = identity_start,
-            .identity_len = @intCast(input.identity_vars.len),
+            .identity_len = @intCast(identity_vars.len),
         });
     }
 
@@ -19707,7 +19729,6 @@ pub const PlatformRequiredBinding = struct {
     declaration: PlatformRequiredDeclarationId,
     requires_idx: u32,
     app_value: TopLevelValueRef,
-    requested_source_ty: canonical.CanonicalTypeKey,
     checked_relation: PlatformRequirementRelationId,
     value_use: StoredPlatformRequiredValueUse,
 };
@@ -19823,7 +19844,6 @@ pub const PlatformRequiredBindingTable = struct {
                 .declaration = binding.declaration,
                 .requires_idx = binding.requires_idx,
                 .app_value = binding.app_value,
-                .requested_source_ty = checked_relation.requested_source_ty,
                 .checked_relation = binding.checked_relation,
                 .value_use = stored_value_use,
             };
@@ -22287,7 +22307,6 @@ fn buildPlatformAppRelationFromDeclarations(
     module_idx: u32,
     requirement_context: PlatformRequirementContextKey,
     declarations: []const PlatformRequiredDeclaration,
-    required_type_keys: []const canonical.CanonicalTypeKey,
     app_artifact: *const CheckedModuleArtifact,
 ) Allocator.Error!PlatformAppRelation {
     var relations = std.ArrayList(PlatformRequirementRelationInput).empty;
@@ -22308,7 +22327,6 @@ fn buildPlatformAppRelationFromDeclarations(
             continue;
         };
 
-        const requested_source_ty = required_type_keys[@backingInt(declaration.id)];
         const app_value_ref = TopLevelValueRef{
             .artifact = app_artifact.key.digest(),
             .pattern = solution.pattern,
@@ -22329,7 +22347,6 @@ fn buildPlatformAppRelationFromDeclarations(
             .declaration = declaration.id,
             .requires_idx = declaration.requires_idx,
             .app_value = app_value_ref,
-            .requested_source_ty = requested_source_ty,
             .value_kind = value_kind,
             .solved_root_app = solution.solved_root,
             .root_evidence = solution.root_evidence,
@@ -22341,7 +22358,6 @@ fn buildPlatformAppRelationFromDeclarations(
             .declaration = declaration.id,
             .requires_idx = declaration.requires_idx,
             .app_value = app_value_ref,
-            .requested_source_ty = requested_source_ty,
             .checked_relation = relation_id,
             .value_use = if (value_kind == .procedure_value) blk: {
                 const procedure_binding = switch (top_level.value) {
@@ -22676,10 +22692,7 @@ pub fn pairCheckedPlatform(
     errdefer result.checked_types.synthesized_keys.?.destroy();
     // The pairing's own types name its own names while it is built here.
     result.checked_types.key_names = &result.canonical_names;
-    const platform_types = platform.typesView();
-    const type_keys = try session.alloc(canonical.CanonicalTypeKey, platform.platform_type_inputs.requirements.len);
-    for (platform.platform_type_inputs.requirements, type_keys) |required, *key| key.* = (try platform_types.rootKey(required.root));
-    const relation = try buildPlatformAppRelationFromDeclarations(session, platform.module_identity.module_idx, try platform.platformRequirementContextKey(), platform.platform_required_declarations.declarations, type_keys, app);
+    const relation = try buildPlatformAppRelationFromDeclarations(session, platform.module_identity.module_idx, try platform.platformRequirementContextKey(), platform.platform_required_declarations.declarations, app);
     result.checking_context_identity.platform_app_relation = relation.key;
     const relations = [_]ImportedModuleView{importedView(app)};
     var substitutions = try PlatformRelationTypeSubstitutions.fromRelation(session, result.module_identity, &result.canonical_names, &result.checked_types, &result.platform_required_declarations, &result.platform_type_inputs, &relations, relation);
@@ -23513,10 +23526,6 @@ const NominalCapabilitySeenKey = struct {
         }
     };
 };
-
-fn canonicalTypeKeyEql(a: canonical.CanonicalTypeKey, b: canonical.CanonicalTypeKey) bool {
-    return std.meta.eql(a.bytes, b.bytes);
-}
 
 fn canonicalNominalTypeKeyEql(a: canonical.NominalTypeKey, b: canonical.NominalTypeKey) bool {
     return a.module == b.module and a.source_decl == b.source_decl;
@@ -25581,7 +25590,6 @@ const ExhaustivenessTemplateReachability = struct {
 
 fn publishCheckedExhaustivenessSites(
     allocator: Allocator,
-    maybe_problem_store: ?*problem.Store,
     bodies: CheckedBodies,
     owner_artifact: canonical.ArtifactRef,
     templates: *const CheckedProcedureTemplateTable,
@@ -25589,27 +25597,45 @@ fn publishCheckedExhaustivenessSites(
     root_requests: *const RootRequestTable,
     reachability: *const ExhaustivenessTemplateReachability,
 ) Allocator.Error!CheckedExhaustivenessSiteTable {
-    const problem_store = maybe_problem_store orelse return .{};
-    var sites = std.ArrayList(CheckedExhaustivenessSite).empty;
-    errdefer sites.deinit(allocator);
+    const obligations = bodies.env.exhaustiveness_obligations.items.items;
+    const sites = try allocator.alloc(CheckedExhaustivenessSite, obligations.len);
+    errdefer allocator.free(sites);
 
-    for (problem_store.pending_static_exhaustiveness.items) |pending| {
-        const source_is_published = switch (pending.source) {
+    for (obligations, sites, 0..) |obligation, *site, index| {
+        const id: CheckedExhaustivenessSiteId = @fromBackingInt(@intCast(index));
+        const kind: CheckedComptimeSiteKind = switch (obligation.source) {
+            .match_expr => .match,
+            .destructure_pattern => .destructure,
+        };
+        const checked_expr: ?CIR.Expr.Idx = switch (obligation.source) {
+            .match_expr => |source_expr| source_expr,
+            .destructure_pattern => null,
+        };
+        const checked_pattern: ?CIR.Pattern.Idx = switch (obligation.source) {
+            .match_expr => null,
+            .destructure_pattern => |source_pattern| source_pattern,
+        };
+        const source_is_published = switch (obligation.source) {
             .match_expr => |source_expr| bodies.index().reachesExpr(source_expr),
             .destructure_pattern => |source_pattern| bodies.index().reachesPattern(source_pattern),
         };
         if (!source_is_published) {
             // Checking may replace an erroneous enclosing expression with a
             // runtime-error node. Its child source occurrences are then
-            // intentionally absent from the checked body graph. Leave the
-            // diagnostic pending: static failures are flushed after
-            // compile-time finalization, while an empirical-only site under a
-            // runtime error can never execute and needs no publication.
+            // intentionally absent from the checked body graph, so no
+            // evaluation reaches the site and its checking mode decides it.
+            site.* = .{
+                .id = id,
+                .kind = kind,
+                .region = obligation.region,
+                .checked_expr = checked_expr,
+                .checked_pattern = checked_pattern,
+                .policy = .not_pending,
+            };
             continue;
         }
 
-        const id: CheckedExhaustivenessSiteId = @fromBackingInt(@intCast(@as(u32, @intCast(sites.items.len))));
-        const needle: CheckedBodyNeedle = switch (pending.source) {
+        const needle: CheckedBodyNeedle = switch (obligation.source) {
             .match_expr => |source_expr| .{ .expr = source_expr },
             .destructure_pattern => |source_pattern| .{ .pattern = source_pattern },
         };
@@ -25622,11 +25648,11 @@ fn publishCheckedExhaustivenessSites(
                 .runtime_reachable
             else if (reachability.templateIsCompileTimeReachable(template_ref))
                 .compile_time_only
-            else switch (pending.mode) {
+            else switch (obligation.mode) {
                 .static => .runtime_reachable,
                 .empirical => .compile_time_only,
             }
-        else switch (pending.mode) {
+        else switch (obligation.mode) {
             .empirical => .compile_time_only,
             .static => .runtime_reachable,
         };
@@ -25636,8 +25662,8 @@ fn publishCheckedExhaustivenessSites(
             }
             break :blk false;
         } else if (owner_template) |template| blk: {
-            const index = reachability.localTemplateIndex(template).?;
-            break :blk reachability.pairing_templates[index] and !reachability.runtime_templates[index];
+            const template_index = reachability.localTemplateIndex(template).?;
+            break :blk reachability.pairing_templates[template_index] and !reachability.runtime_templates[template_index];
         } else false;
         const owner: ?CheckedExhaustivenessSiteOwner = if (replacing_root) |root|
             .{ .root = root.id }
@@ -25645,35 +25671,19 @@ fn publishCheckedExhaustivenessSites(
             .{ .procedure_template = template_ref }
         else
             null;
-        const site = switch (pending.source) {
-            .match_expr => |source_expr| blk: {
-                break :blk CheckedExhaustivenessSite{
-                    .id = id,
-                    .kind = .match,
-                    .region = pending.region,
-                    .owner = owner,
-                    .checked_expr = source_expr,
-                    .policy = policy,
-                    .requires_pairing = requires_pairing,
-                };
-            },
-            .destructure_pattern => |source_pattern| blk: {
-                break :blk CheckedExhaustivenessSite{
-                    .id = id,
-                    .kind = .destructure,
-                    .region = pending.region,
-                    .owner = owner,
-                    .checked_pattern = source_pattern,
-                    .policy = policy,
-                    .requires_pairing = requires_pairing,
-                };
-            },
+        site.* = .{
+            .id = id,
+            .kind = kind,
+            .region = obligation.region,
+            .owner = owner,
+            .checked_expr = checked_expr,
+            .checked_pattern = checked_pattern,
+            .policy = policy,
+            .requires_pairing = requires_pairing,
         };
-        try sites.append(allocator, site);
-        problem_store.assignPendingStaticExhaustivenessSite(pending.source, id);
     }
 
-    return .{ .sites = try sites.toOwnedSlice(allocator) };
+    return .{ .sites = sites };
 }
 
 /// What a checked body search looks for.
@@ -26794,7 +26804,6 @@ test "platform relation procedure use preserves exported runtime result provenan
     const required_binding_id: PlatformRequiredBindingId = @fromBackingInt(@intCast(8));
     const required_declaration_id: PlatformRequiredDeclarationId = @fromBackingInt(@intCast(9));
     const required_relation_id: PlatformRequirementRelationId = @fromBackingInt(@intCast(10));
-    const requested_source_ty = canonical.CanonicalTypeKey{ .bytes = @as([32]u8, @splat(0xC1)) };
     const exported = ImportedProcedureBindingView{
         .binding = .{
             .artifact = app_key.digest(),
@@ -26840,7 +26849,6 @@ test "platform relation procedure use preserves exported runtime result provenan
         .declaration = required_declaration_id,
         .requires_idx = 0,
         .app_value = app_value_ref,
-        .requested_source_ty = requested_source_ty,
         .checked_relation = required_relation_id,
         .value_use = stored_use,
     }});
@@ -29858,7 +29866,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 112;
+    const serialized_layout_version: u32 = 113;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -31373,12 +31381,6 @@ pub const CheckedModuleArtifact = struct {
             if (!self.typesView().containsId(relation.requested_source_ty_payload)) {
                 base.invariant(
                     "checked artifact invariant violated: platform requirement relation {d} requested payload is out of range",
-                    .{i},
-                );
-            }
-            if (!canonicalTypeKeyEql(try self.typesView().rootKey(relation.requested_source_ty_payload), relation.requested_source_ty)) {
-                base.invariant(
-                    "checked artifact invariant violated: platform requirement relation {d} requested payload key disagrees with relation key",
                     .{i},
                 );
             }
@@ -33073,7 +33075,11 @@ pub fn publishFromTypedModule(
 
     const owner_artifact = artifact_key.digest();
 
-    const analyses = try BodyAnalyses.create(allocator, inputs.io, module_env, inputs.promoted_local_procedures);
+    const promoted_local_procedures = module_env.promoted_local_procedures.items.items;
+    const requirement_solutions = module_env.platform_requirement_solutions.items.items;
+    const selected_hoisted_roots = try selectHoistedRoots(allocator, module_env, inputs.hoisted_roots);
+    defer allocator.free(selected_hoisted_roots);
+    const analyses = try BodyAnalyses.create(allocator, inputs.io, module_env, promoted_local_procedures);
     var analyses_owned = true;
     errdefer if (analyses_owned) analyses.destroy();
     const module_index = &analyses.index;
@@ -33088,7 +33094,7 @@ pub fn publishFromTypedModule(
     const sealed_keys = try sealed_type_keys.SealedTypeKeys.create(allocator, inputs.io, module_env);
     var sealed_keys_owned = true;
     errdefer if (sealed_keys_owned) sealed_keys.destroy();
-    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, artifact_key.digest(), inputs.imports, inputs.available_artifacts, module_index, inputs.hoisted_roots, inputs.promoted_local_procedures, sealed_keys);
+    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, artifact_key.digest(), inputs.imports, inputs.available_artifacts, module_index, selected_hoisted_roots, promoted_local_procedures, sealed_keys);
     defer checked_type_publication.deinitIndex(allocator);
     errdefer checked_type_publication.store.deinit(allocator);
     const checked_types = &checked_type_publication.store;
@@ -33156,7 +33162,7 @@ pub fn publishFromTypedModule(
         owner_artifact,
         &checked_type_publication,
         module_index,
-        inputs.promoted_local_procedures,
+        promoted_local_procedures,
     );
     const template_lookup = checked_procedure_templates.asLookup(module_idx);
 
@@ -33210,7 +33216,7 @@ pub fn publishFromTypedModule(
         allocator,
         module,
         value_binding_defs,
-        inputs.hoisted_roots,
+        selected_hoisted_roots,
         inputs.explicit_roots,
         &checked_type_publication,
         module_index,
@@ -33356,7 +33362,7 @@ pub fn publishFromTypedModule(
 
     const platform_requirement_root_evidence = try allocator.alloc(
         artifact_serialize.Span,
-        inputs.platform_requirement_solutions.len,
+        requirement_solutions.len,
     );
     defer allocator.free(platform_requirement_root_evidence);
     @memset(platform_requirement_root_evidence, .{});
@@ -33382,7 +33388,7 @@ pub fn publishFromTypedModule(
         &template_iterator_refs,
         &entry_wrappers,
         &compile_time_roots,
-        inputs.platform_requirement_solutions,
+        requirement_solutions,
         platform_requirement_root_evidence,
         template_root_evidence,
     );
@@ -33537,7 +33543,6 @@ pub fn publishFromTypedModule(
 
     var exhaustiveness_sites = try publishCheckedExhaustivenessSites(
         allocator,
-        inputs.problem_store,
         publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
         owner_artifact,
         &checked_procedure_templates,
@@ -33605,7 +33610,7 @@ pub fn publishFromTypedModule(
         &top_level_values,
         &exported_procedure_bindings,
         &exported_const_templates,
-        inputs.platform_requirement_solutions,
+        requirement_solutions,
         platform_requirement_root_evidence,
     );
     errdefer platform_requirement_solutions.deinit(allocator);
@@ -33804,6 +33809,7 @@ fn expectProvidedExportKind(
     var artifact = try publishFromTypedModule(allocator, &modules, 1, .{
         .io = std.testing.io,
         .module_env_storage = .{ .checked_source = test_env.module_env },
+        .hoisted_roots = .none,
         .imports = &imports,
         .compile_time_finalizer = .{ .finalize = &NoFinalization.finalize },
         .evaluation_phase = .post_frontend,
@@ -35384,8 +35390,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xB8, 0x7E, 0xFD, 0x61, 0x26, 0x54, 0x90, 0x0E, 0x55, 0xA2, 0xD7, 0xFE, 0x37, 0xCE, 0xF3, 0x44,
-        0xB1, 0x3A, 0x54, 0x4A, 0xEB, 0xFA, 0xD4, 0xDE, 0x18, 0x8A, 0x77, 0x37, 0x6D, 0x6C, 0x88, 0x7A,
+        0x7A, 0x05, 0x49, 0x64, 0xEF, 0x85, 0x6F, 0xE6, 0x61, 0xF1, 0x82, 0x2F, 0xFF, 0x22, 0x1F, 0x87,
+        0x49, 0xE3, 0xCD, 0xF0, 0xCF, 0x71, 0x9C, 0x53, 0xBD, 0xBE, 0x37, 0xD2, 0x07, 0xFF, 0x24, 0x0E,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -35634,6 +35640,7 @@ test "publishing a module releases each resource exactly once under allocation f
             var artifact = try publishFromTypedModule(failing, typed_modules, 1, .{
                 .io = std.testing.io,
                 .module_env_storage = .{ .checked_source = module_env },
+                .hoisted_roots = .none,
                 .imports = direct,
                 .available_artifacts = views,
                 .compile_time_finalizer = finalize,
