@@ -34818,12 +34818,12 @@ test "SERIALIZED_VERSION_HASH golden value" {
 }
 
 test "closed direct evidence excludes specialization-dependent nested recipes" {
-    const evidence_0 = testIndexId(static_dispatch.EvidenceNodeId, 0);
-    const evidence_1 = testIndexId(static_dispatch.EvidenceNodeId, 1);
-    const evidence_2 = testIndexId(static_dispatch.EvidenceNodeId, 2);
-    const evidence_3 = testIndexId(static_dispatch.EvidenceNodeId, 3);
-    const evidence_4 = testIndexId(static_dispatch.EvidenceNodeId, 4);
-    const evidence_5 = testIndexId(static_dispatch.EvidenceNodeId, 5);
+    const evidence_0 = static_dispatch.EvidenceNodeId{ .index = 0, .owner = .module };
+    const evidence_1 = static_dispatch.EvidenceNodeId{ .index = 1, .owner = .module };
+    const evidence_2 = static_dispatch.EvidenceNodeId{ .index = 2, .owner = .module };
+    const evidence_3 = static_dispatch.EvidenceNodeId{ .index = 3, .owner = .module };
+    const evidence_4 = static_dispatch.EvidenceNodeId{ .index = 4, .owner = .module };
+    const evidence_5 = static_dispatch.EvidenceNodeId{ .index = 5, .owner = .module };
     const def_0 = testIndexId(CIR.Def.Idx, 0);
     const def_1 = testIndexId(CIR.Def.Idx, 1);
     const callable_ty = testIndexId(CheckedTypeId, 0);
@@ -34860,18 +34860,14 @@ test "closed direct evidence excludes specialization-dependent nested recipes" {
         .{ .target = procedure_target, .instantiation = .monomorphic, .nested = .{ .resolved = .{ .start = 2, .len = 1 } } },
         .{ .target = local_target, .instantiation = .monomorphic, .nested = .{ .resolved = .{} } },
     };
-    const plans = static_dispatch.StaticDispatchPlanTable{
-        .evidence_nodes = &nodes,
-        .evidence_refs = &refs,
-    };
     var states = @as([nodes.len]DirectEvidenceClosure, @splat(.unknown));
 
-    try std.testing.expect(try directEvidenceIsClosed(std.testing.allocator, &plans, evidence_0, &states));
-    try std.testing.expect(!try directEvidenceIsClosed(std.testing.allocator, &plans, evidence_1, &states));
-    try std.testing.expect(!try directEvidenceIsClosed(std.testing.allocator, &plans, evidence_2, &states));
-    try std.testing.expect(try directEvidenceIsClosed(std.testing.allocator, &plans, evidence_3, &states));
-    try std.testing.expect(!try directEvidenceIsClosed(std.testing.allocator, &plans, evidence_4, &states));
-    try std.testing.expect(!try directEvidenceIsClosed(std.testing.allocator, &plans, evidence_5, &states));
+    try std.testing.expect(try directEvidenceIsClosed(std.testing.allocator, &nodes, &refs, evidence_0, &states));
+    try std.testing.expect(!try directEvidenceIsClosed(std.testing.allocator, &nodes, &refs, evidence_1, &states));
+    try std.testing.expect(!try directEvidenceIsClosed(std.testing.allocator, &nodes, &refs, evidence_2, &states));
+    try std.testing.expect(try directEvidenceIsClosed(std.testing.allocator, &nodes, &refs, evidence_3, &states));
+    try std.testing.expect(!try directEvidenceIsClosed(std.testing.allocator, &nodes, &refs, evidence_4, &states));
+    try std.testing.expect(!try directEvidenceIsClosed(std.testing.allocator, &nodes, &refs, evidence_5, &states));
 }
 
 test "publishing a module releases each resource exactly once under allocation failure" {
@@ -35426,6 +35422,7 @@ test "issue 11737: identical callable contract vectors share their checked stora
     const allocator = std.testing.allocator;
     var pass: EvidencePass = undefined;
     pass.allocator = allocator;
+    pass.owner = .module;
     pass.evidence_refs = .empty;
     pass.callable_contract_buckets = .empty;
     pass.callable_contracts = .empty;

@@ -3358,12 +3358,7 @@ test "method registry distinguishes a rejected declaration from an undeclared me
     try std.testing.expect(registry.lookup(.{ .owner = .{ .builtin = .box }, .method = @fromBackingInt(@intCast(3)) }) == null);
 }
 
-/// Convert an intentional fixture-table position while preserving enum inference.
-fn fixtureTableIndex(comptime index: u32) u32 {
-    return index;
-}
-
-fn testPlan(node: u32, args_start: u32, args_len: u32) StaticDispatchCallPlan {
+fn testPlan(node: u32, args_start: u32, args_len: u32) RecordedDispatchPlan {
     return .{
         .node = node,
         .method = @fromBackingInt(@intCast(1)),
@@ -3381,14 +3376,14 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
     // The fixup count is fixed by the number of serialized base pointers, never
     // by how much data each pool holds. The two tables below differ in operand
     // count by three orders of magnitude yet relocate identically.
-    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".field_names.len == 19);
+    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".field_names.len == 13);
 
     inline for (.{ @as(u32, 4), @as(u32, 4000) }) |operand_count| {
         const operands = try gpa.alloc(StaticDispatchOperand, operand_count);
         defer gpa.free(operands);
         for (operands, 0..) |*op, i| op.* = .{ .checked_expr = @fromBackingInt(@intCast(@as(u32, @intCast(i)) + 100)) };
 
-        var plans = [_]StaticDispatchCallPlan{
+        var plans = [_]RecordedDispatchPlan{
             testPlan(10, 0, 2),
             testPlan(11, 2, operand_count - 2),
         };
@@ -3396,34 +3391,10 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
             .{ .key = 10, .val = 0 },
             .{ .key = 11, .val = 1 },
         };
-        var evidence_nodes = [_]EvidenceNode{.{
-            .target = .{
-                .module_idx = 7,
-                .def_idx = @fromBackingInt(@intCast(8)),
-                .kind = .{ .local_proc = .{
-                    .binder = @fromBackingInt(@intCast(9)),
-                    .expr = @fromBackingInt(@intCast(10)),
-                    .context_anchor = @fromBackingInt(@intCast(12)),
-                } },
-                .callable_ty = @fromBackingInt(@intCast(11)),
-            },
-            .dispatcher_ty = @fromBackingInt(@intCast(12)),
-            .instantiation = .{ .callable = @fromBackingInt(@intCast(13)) },
-            .nested = .{ .resolved = .{ .start = 0, .len = 1 } },
-        }};
-        var evidence_refs = [_]CheckedEvidence{
-            .{ .dispatcher_ty = @fromBackingInt(@intCast(14)), .resolution = .{ .structural = .{
-                .derivation = .encoder,
-                .dispatcher_ty = @fromBackingInt(@intCast(14)),
-                .callable_ty = @fromBackingInt(@intCast(15)),
-            } } },
-            .{ .dispatcher_ty = @fromBackingInt(@intCast(12)), .resolution = .{ .direct = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
+        var plan_sources = [_]PlanSource{
+            .{ .dispatcher_var = @fromBackingInt(@intCast(30)), .constraint_fn_var = null },
+            .{ .dispatcher_var = @fromBackingInt(@intCast(31)), .constraint_fn_var = @fromBackingInt(@intCast(32)) },
         };
-        var site_evidence = [_]SiteEvidenceEntry{.{
-            .key = 16,
-            .start = 1,
-            .len = 1,
-        }};
         var iterator_topologies = [_]IteratorRepresentationTopology{.{
             .len_field = @fromBackingInt(@intCast(20)),
             .step_field = @fromBackingInt(@intCast(21)),
@@ -3441,9 +3412,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
             .by_node = &by_node,
             .iterator_topologies = &iterator_topologies,
             .operand_pool = operands,
-            .evidence_nodes = &evidence_nodes,
-            .evidence_refs = &evidence_refs,
-            .site_evidence = &site_evidence,
+            .plan_sources = &plan_sources,
         };
 
         const rt = try artifact_serialize.roundTripForTest(gpa, StaticDispatchPlanTable, &table);
@@ -3466,18 +3435,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
         );
 
         try std.testing.expectEqual(@as(?u32, 1), lookupPlanKV(loaded.by_node, 11));
-
-        const node = loaded.evidenceNode(@fromBackingInt(@intCast(fixtureTableIndex(0))));
-        try std.testing.expectEqual(@as(?CheckedTypeId, @fromBackingInt(@intCast(12))), node.dispatcher_ty);
-        try std.testing.expectEqual(@as(CheckedTypeId, @fromBackingInt(@intCast(13))), node.instantiation.callable);
-        const nested = loaded.nestedEvidence(node);
-        try std.testing.expectEqual(@as(usize, 1), nested.len);
-        try std.testing.expectEqual(StructuralKind.encoder, nested[0].resolution.structural.derivation.kind());
-        try std.testing.expectEqual(@as(CheckedTypeId, @fromBackingInt(@intCast(14))), nested[0].resolution.structural.dispatcher_ty);
-        try std.testing.expectEqual(@as(CheckedTypeId, @fromBackingInt(@intCast(15))), nested[0].resolution.structural.callable_ty);
-        const site = loaded.siteEvidence(@fromBackingInt(@intCast(16))) orelse return error.TestExpectedEqual;
-        try std.testing.expectEqual(@as(usize, 1), site.len);
-        try std.testing.expectEqual(@as(EvidenceNodeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))), site[0].resolution.direct);
+        try std.testing.expectEqualSlices(PlanSource, &plan_sources, loaded.plan_sources);
     }
 }
 

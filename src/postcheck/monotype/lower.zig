@@ -54161,7 +54161,7 @@ const BodyContext = struct {
                         template.forwarded_lookup orelse
                             Common.invariant("method target alias binding was not an exact procedure alias"),
                         wrapper.template,
-                        templateSchemaIn(use.view, &use.view.templates.get(wrapper.template.template)),
+                        try templateSchemaIn(use.view, &use.view.templates.get(wrapper.template.template)),
                     };
                 },
                 .local => |local| .{
