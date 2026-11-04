@@ -150,7 +150,7 @@ pub fn resolveProcReuseSources(
                 const op = store.stmtRow(dyn_stmt.data);
                 if (op == .call_erased and op.call_erased.reuse_source != null) try calls.append(allocator, current);
             },
-            else => {},
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
         }
     }
 
@@ -166,7 +166,7 @@ pub fn resolveProcReuseSources(
                 op.call_erased.reuse_source = owners.reuseSource(store, layouts, op.call_erased.closure);
                 dyn_stmt.data = try store.addStmtRow(LIR.DynOp, op);
             },
-            else => unreachable, // only erased calls were collected above
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => unreachable, // only erased calls were collected above
         }
     }
 }

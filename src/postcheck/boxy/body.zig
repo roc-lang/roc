@@ -9033,7 +9033,7 @@ pub const Builder = struct {
     fn chainCall(self: *Builder, expr: CheckedExprId) Allocator.Error!?ChainCall {
         const plan_id = switch (self.bodies().expr(expr).data) {
             .dispatch_call, .type_dispatch_call => |plan| plan orelse return null,
-            else => return null,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
         };
         const call_plan = self.dispatchPlan(plan_id);
         // A `map` dispatch on a type with a map method carries the map
@@ -9417,7 +9417,7 @@ pub const Builder = struct {
         const owner: static_dispatch.IteratorOwner = switch (self.program.store.get(iterator_ty)) {
             .nominal => |nominal| switch (nominal.builtin orelse return null) {
                 .iter => .iter,
-                else => return null,
+                .stream, .bool, .try_, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .list, .box, .dict, .set, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => return null,
             },
             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => return null,
         };
