@@ -4651,7 +4651,8 @@ in-flight type (call-site constraints flow into the inferred scheme), unannotate
 members' top-level lambdas stay in the frame instead of generalizing on their
 own, and the whole group generalizes at the frame's boundary. References to
 annotated members instantiate the pre-declared scheme, preserving sound
-polymorphic recursion for annotated defs. The same rule applies to
+polymorphic recursion for annotated defs, except recursion that grows its
+types forever (Growing Polymorphic Recursion, below). The same rule applies to
 block-local `s_decl` functions: each local function decl is a binding group
 of one with its own rank frame, and annotated (type-var-free) locals
 pre-declare their scheme. An unannotated local's lambda stays in that frame
@@ -4762,6 +4763,52 @@ the scheme quantifies, solved to anything other than a variable, a closed
 row, or a row's extension, is an invariant violation, since the annotation's rigids and
 bounded rows admit nothing else, and a use still unrelated when the module
 finishes checking is one too.
+
+### Growing Polymorphic Recursion
+
+Polymorphic recursion is legal only while following the recursion around
+never keeps making a type bigger. `depth : a, U64 -> U64` whose body calls
+`depth([x], n - 1)` uses `depth` at `List(a)` inside `depth` at `a`, so the
+next level is at `List(List(a))`, and so on: every level needs a new
+specialization, and a compiler that specializes (Monotype) can never finish.
+The checker rejects such recursion as a type error at the use that grows the
+type, under every lowering strategy, so whether a program compiles never
+depends on the strategy. Recursion at a concrete type (`depth([1.U8], n - 1)`
+inside the same `depth`), recursion that swaps variables (`go(y, x)` inside
+`go : a, b -> ...`), and ordinary mutual recursion stay legal: each reaches
+finitely many types.
+
+The rule is the expansion-cycle test. The graph's nodes are the type
+variables of used schemes. Every use adds an edge from each node that its
+copy of a scheme variable contains to that scheme variable; the edge grows
+when the node sits strictly inside the copy's type (`a` in `List(a)`), and
+not when the copy is the node itself. A use is rejected exactly when one of
+its growing edges lies within a strongly connected component: going around
+the cycle wraps the same variable again. The test reads settled types and
+terminates by construction; it has no depth limit or counter.
+
+Every use that can lie on a cycle is recorded (`GrowthUse`) with its
+substitution, and `rejectGrowingPolymorphicRecursion` judges them all once,
+after every definition is checked, against the settled types. A cycle must
+contain a recursive use: a use of a definition that has not generalized yet
+(a predeclared scheme, an in-flight or still-open group member reached by
+name or by dispatch), since otherwise every definition on the cycle would
+have generalized before the next one was checked. A generalization boundary
+whose body made a recursive use, directly or in a nested boundary, publishes
+its scheme's variables (`growth_scheme_vars`), and a use of such a scheme is a
+recursive use in turn, so the uses recorded are exactly the recursive uses
+and the uses of schemes that can reach one; a module without recursion
+records nothing. Which boundaries enclose a recursive use is tracked by rank
+alone (`growth_use_rank`): a recursive use is enclosed by every boundary open
+at the current rank, and closing a boundary lowers the mark below its rank.
+The pass is linear in the recorded uses and the sizes of their copies'
+types. Predeclared uses are recorded when their relation to the binding's
+own scheme is accepted (Predeclared Scheme Uses); every other use is
+recorded at its instantiation.
+
+A rejected use is a Growing Polymorphic Recursion error at the use, showing
+the type it was used at. The use becomes a runtime error, like any other
+rejected use, which also cuts the cycle for every later stage.
 
 ### Value Bindings Generalize By Expression
 

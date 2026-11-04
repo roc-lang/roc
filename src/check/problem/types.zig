@@ -92,6 +92,7 @@ pub const Problem = union(enum) {
     invalid_nominal_decl_recursion: InvalidNominalDeclRecursion,
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
+    growing_polymorphic_recursion: GrowingPolymorphicRecursion,
     row_label_conflict: RowLabelConflict,
     polymorphic_value: VarWithSnapshot,
     polymorphic_var_annotation: PolymorphicVarAnnotation,
@@ -440,6 +441,18 @@ pub const VarWithSnapshot = struct {
 
     /// If this type was found in a top-level def, the name of that def
     def_name: ?Ident.Idx,
+};
+
+/// A use of a function on a recursion cycle whose type wraps a type variable
+/// of that same cycle in more structure, so every trip around the cycle would
+/// use the function at a strictly bigger type (design.md "Growing Polymorphic
+/// Recursion").
+pub const GrowingPolymorphicRecursion = struct {
+    region: base.Region,
+    /// The name the use refers to, when it is a plain name.
+    def_name: ?Ident.Idx,
+    /// The function's type at this use.
+    use_snapshot: SnapshotContentIdx,
 };
 
 /// One label repeated along a row's extension chain, whose occurrences cannot

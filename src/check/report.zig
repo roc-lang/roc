@@ -124,6 +124,7 @@ const LiteralDefaulted = problem_mod.LiteralDefaulted;
 
 // Generic errors
 const VarWithSnapshot = problem_mod.VarWithSnapshot;
+const GrowingPolymorphicRecursion = problem_mod.GrowingPolymorphicRecursion;
 const RowLabelConflict = problem_mod.types.RowLabelConflict;
 
 // Context types for precise error reporting
@@ -1064,6 +1065,9 @@ pub const ReportBuilder = struct {
             },
             .anonymous_recursion => |data| {
                 return self.buildAnonymousRecursionReport(data);
+            },
+            .growing_polymorphic_recursion => |data| {
+                return self.buildGrowingPolymorphicRecursionReport(data);
             },
             .row_label_conflict => |data| {
                 return self.buildRowLabelConflictReport(data);
@@ -5200,6 +5204,42 @@ pub const ReportBuilder = struct {
             D.bytes("If you need a recursive data structure, define a nominal type using"),
             D.bytes(":=").withAnnotation(.inline_code),
             D.bytes(".").withNoPrecedingSpace(),
+        }, self, &report);
+
+        return report;
+    }
+
+    fn buildGrowingPolymorphicRecursionReport(self: *Self, data: GrowingPolymorphicRecursion) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Growing Polymorphic Recursion", "", .runtime_error);
+        errdefer report.deinit();
+        if (data.def_name) |def_name| {
+            try D.renderSliceInto(&.{
+                D.bytes("This use of"),
+                D.ident(def_name).withAnnotation(.inline_code),
+                D.bytes("is part of a recursion that uses it at a bigger type every time around."),
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("This call is part of a recursion that uses its function at a bigger type every time around."),
+            }, self, &report, &report.headline);
+        }
+
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{D.bytes("Here it is used at this type:")}, self, &report);
+        try report.document.addLineBreaks(2);
+        try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(data.use_snapshot)));
+        try report.document.addLineBreaks(2);
+
+        try report.document.addReflowingText("This type wraps a type variable of the recursion inside a bigger type, and the recursion comes back around to this use with that bigger type. The next time around it would be wrapped again, and so on without end. Roc compiles a separate copy of a function for each type it is used at, so this would need infinitely many copies.");
+        try report.document.addLineBreaks(2);
+
+        try D.renderSlice(&.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("Recursive uses may be at other types, as long as going around the recursion does not keep making the type bigger. Giving the value the same type at every level, for example by collecting the nested values in a"),
+            D.bytes("List").withAnnotation(.inline_code),
+            D.bytes(", fixes this.").withNoPrecedingSpace(),
         }, self, &report);
 
         return report;
