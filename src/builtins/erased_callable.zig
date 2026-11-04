@@ -32,7 +32,9 @@ pub const RocOps = utils.RocOps;
 /// transferred allocation is shared at runtime. `capture` remains borrowed for
 /// the duration of the call.
 /// `out_desc` receives the exact descriptor of the returned bytes, or null for
-/// descriptor-free results.
+/// descriptor-free results. The erased-call runtime passes a tagged address
+/// here that names its pending cell (`native_callable.callerCell`): a host
+/// passes an aligned pointer, and generated callees write nothing through it.
 pub const ErasedCallableFn = *const fn (
     ops: *RocOps,
     ret: ?[*]u8,

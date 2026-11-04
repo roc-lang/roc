@@ -40,6 +40,7 @@ const TypeId = types.TypeId;
 const ModuleIndex = types.ModuleIndex;
 const Program = lower.Program;
 const Layouts = @import("layouts.zig").Layouts;
+const StaticDescs = @import("static_descs.zig").StaticDescs;
 const WorkerId = lower.WorkerId;
 const invariant = types.invariant;
 const invariantFmt = types.invariantFmt;
@@ -397,6 +398,9 @@ pub const Builder = struct {
     /// name the exact ordered descriptor locals, not an approximation of types.
     args_descs: std.HashMapUnmanaged(ArgsDescKey, LocalId, ArgsDescContext, std.hash_map.default_max_load_percentage) = .empty,
 
+    /// What each local holding static data holds, for a dictionary that
+    /// captures it.
+    static_words: collections.DenseMapUnmanaged(LocalId, StaticDescs.CaptureWord) = .empty,
     /// Each type's descriptor once noted (`Input.stored_functions`).
     noted_descs: collections.DenseMapUnmanaged(TypeId, LocalId) = .empty,
     /// The locals the entry chain defines, which every statement of the
@@ -476,6 +480,7 @@ pub const Builder = struct {
         while (args_keys.next()) |key| self.allocator.free(key.descs);
         self.args_descs.deinit(self.allocator);
         self.noted_descs.deinit(self.allocator);
+        self.static_words.deinit(self.allocator);
         self.entry_locals.deinit(self.allocator);
         self.opened_components.deinit(self.allocator);
         self.open_members.deinit(self.allocator);
@@ -601,7 +606,7 @@ pub const Builder = struct {
     /// Replace `hole` with `stmt`.
     pub fn fill(self: *Builder, hole: CFStmtId, stmt: LIR.CFStmt, kind: LIR.OriginKind) Allocator.Error!void {
         var emitted = stmt;
-        if (emitted == .dyn and lir_core.DynOps.isComposition(self.store.stmtRow(emitted.dyn.data))) {
+        if (self.program.input.composition_sites and emitted == .dyn and lir_core.DynOps.isComposition(self.store.stmtRow(emitted.dyn.data))) {
             std.debug.assert(emitted.dyn.composition_cache == null);
             const site = self.composition_site_count;
             self.composition_site_count = std.math.add(u32, site, 1) catch return error.OutOfMemory;
@@ -1068,6 +1073,7 @@ pub const Builder = struct {
         const local = try self.closedLocal(.opaque_ptr);
         try self.emitEntry(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = slot } }, .next = undefined } });
         try self.type_descs.put(self.allocator, ty, local);
+        try self.static_words.put(self.allocator, local, .{ .desc = ty });
         return local;
     }
 
@@ -1424,7 +1430,7 @@ pub const Builder = struct {
         const ret_abi = try self.hostAbiLayout(ret_ty);
         const extern_proc = try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
-            .identity = LIR.ProcIdentity.programLocal("boxy.hosted_extern", @backingInt(self.worker_id)),
+            .identity = self.program.programLocalIdentity("boxy.hosted_extern", @backingInt(self.worker_id)),
             .emission_unit = .isolated,
             .args = try self.store.addLocalSpan(extern_params),
             .ret_layout = ret_abi,
@@ -3586,6 +3592,7 @@ pub const Builder = struct {
                 return switch (edge.args[index]) {
                     .root => |root| try self.composeRootThunk(root),
                     .forwarded => |forwarded| try self.scopeLiteral(.{ .depth = 0, .index = forwarded }),
+                    .unbound => try self.unreadLiteralArg(),
                 };
             },
         }
@@ -3596,10 +3603,13 @@ pub const Builder = struct {
     /// arguments of its edges that name scopes outside them are read by no
     /// body the thunk lowers.
     fn unreachableWord(self: *Builder) Allocator.Error!LocalId {
-        return try self.nullWord();
+        const local = try self.nullWord();
+        try self.static_words.put(self.allocator, local, .zero);
+        return local;
     }
 
-    /// A word holding null.
+    /// A word holding null. A recursive dictionary's placeholder is one, which
+    /// keeps that dictionary composed: `dict_patch` fills it at runtime.
     fn nullWord(self: *Builder) Allocator.Error!LocalId {
         const local = try self.closedLocal(.opaque_ptr);
         try self.emitEntry(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = try self.program.static_descs.nullWordSlot() } }, .next = undefined } });
@@ -3640,7 +3650,14 @@ pub const Builder = struct {
         return switch (source) {
             .root => |root| try self.rootThunk(root),
             .forwarded => |index| try self.scopeLiteral(.{ .depth = 0, .index = index }),
+            .unbound => try self.unreadLiteralArg(),
         };
+    }
+
+    /// The literal argument of an instantiation no use fixes: like a
+    /// `from_scheme` dictionary, a crash nothing reads.
+    fn unreadLiteralArg(self: *Builder) Allocator.Error!LocalId {
+        return try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, .unreachable_value), &.{});
     }
 
     /// The immortal callable of this body's module's `literal_argument`
@@ -6758,11 +6775,27 @@ pub const Builder = struct {
     }
 
     pub fn composeDictionary(self: *Builder, entry: WorkerId, captures: []const LocalId) Allocator.Error!LocalId {
+        if (try self.staticDictionary(entry, captures)) |local| return local;
         const local = try self.closedLocal(try self.erasedLayout());
         try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .dict_compose = .{
             .worker = self.program.worker(entry).proc,
             .captures = try self.store.addLocalSpan(captures),
         } }), .next = undefined } });
+        return local;
+    }
+
+    /// The dictionary of `entry` as static data, when all of `captures` are
+    /// themselves static. A compile-time program reads its function values'
+    /// types back from what its compositions noted, so it composes them.
+    fn staticDictionary(self: *Builder, entry: WorkerId, captures: []const LocalId) Allocator.Error!?LocalId {
+        if (self.program.input.stored_functions) return null;
+        const words = try self.allocator.alloc(StaticDescs.CaptureWord, captures.len);
+        defer self.allocator.free(words);
+        for (captures, words) |capture, *word| word.* = self.static_words.get(capture) orelse return null;
+        const dictionary = try self.program.static_descs.dictionary(self.program.worker(entry).proc, words);
+        const local = try self.closedLocal(try self.erasedLayout());
+        try self.emitEntry(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = dictionary.slot } }, .next = undefined } });
+        try self.static_words.put(self.allocator, local, .{ .callable = dictionary.node });
         return local;
     }
 
@@ -7547,10 +7580,17 @@ pub const Builder = struct {
             }
             try own_dicts.appendSlice(self.allocator, self.dict_locals);
             // Its own scheme's literal arguments, from the construction's
-            // edge, then the enclosing scope's.
+            // edge, then the enclosing scope's. A construction with no checked
+            // instantiation has no edge: no use instantiated the lambda, so
+            // nothing calls it, and like a `from_scheme` dictionary each
+            // argument is a crash nothing reads.
             const literal_args = self.view.view.checked_procedure_templates.literalEdgeArgs(.{ .use = expr_id });
-            if (literal_args.len != scheme.literal_requirements.len) invariant("a generalized lambda's construction has no literal arguments for its scheme's literal_requirements");
-            for (literal_args) |source| try own_dicts.append(self.allocator, try self.literalArg(source));
+            if (literal_args.len == scheme.literal_requirements.len) {
+                for (literal_args) |source| try own_dicts.append(self.allocator, try self.literalArg(source));
+            } else {
+                if (subst.len != 0) invariant("a generalized lambda's instantiated construction has no literal arguments for its scheme's literal_requirements");
+                for (scheme.literal_requirements) |_| try own_dicts.append(self.allocator, try self.unreadLiteralArg());
+            }
             try own_dicts.appendSlice(self.allocator, self.literal_locals);
             descs = own_descs.items;
             dicts = own_dicts.items;
@@ -8964,8 +9004,7 @@ pub const Builder = struct {
     /// Whether a component of type `ty` stored at `slot` is held in a box
     /// the committed layout inserted to break a recursive type.
     pub fn isRecursionBox(self: *Builder, slot: layout.Idx, ty: TypeId) Allocator.Error!bool {
-        if (self.program.result.layouts.getLayout(slot).tag != .box) return false;
-        return self.program.store.get(try self.structuralType(ty)) != .box;
+        return try self.program.layouts.isRecursionBox(slot, ty);
     }
 
     /// `value` (of `ty`) as it is stored at `slot`: boxed when the slot is a

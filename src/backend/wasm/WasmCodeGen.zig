@@ -443,6 +443,9 @@ boxy_runtime_symbols: ?BoxyRuntimeSignatures.SymbolTable = null,
 /// The procedure being compiled's tail carry parameter, if it takes one
 /// (`procCarriesTailArgs`).
 carry: ?Storage.LocalInfo = null,
+/// The address of the pending cell of the procedure being compiled
+/// (`LirProcSpec.uses_pending_cell`).
+pending_cell: ?Storage.LocalInfo = null,
 /// Undefined `__stack_pointer` symbol used only while emitting relocatable app objects.
 stack_pointer_symbol: ?SymbolIndex = null,
 /// Undefined `__indirect_function_table` symbol used only while emitting relocatable app objects.
@@ -1357,10 +1360,14 @@ fn addRcHelperFunctionSymbol(
     );
 }
 
+/// A procedure's symbol, named by its identity. A procedure the unit
+/// defines for other units of the link (`LIR.LirProcSpec.exported`) is
+/// global; every other is local.
 fn addLirProcFunctionSymbol(
     self: *Self,
     defined: index_types.DefinedFunction,
     identity: LIR.ProcIdentity,
+    exported: bool,
 ) Allocator.Error!SymbolIndex {
     const name = identity.symbolName(self.allocator) catch return error.OutOfMemory;
     errdefer self.allocator.free(name);
@@ -1368,7 +1375,7 @@ fn addLirProcFunctionSymbol(
     return try self.addTrackedDefinedFunctionSymbol(
         defined,
         name,
-        WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN,
+        if (exported) 0 else WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN,
     );
 }
 
@@ -1668,9 +1675,14 @@ fn prependStackChecks(self: *Self, symbols: StackCheckSymbols, locals: []const L
         if (position(self.localFunctionIndexFromGlobal(func_idx), first, count)) |pos| needs_check[pos] = true;
     }
     for (symbols.static_data_callees) |name| {
-        const symbol = self.module.findDefinedFunctionSymbolExact(name) catch |err|
-            wasmInvariantFmt("WASM/codegen invariant violated: static data names function {s} ({s})", .{ name, @errorName(err) });
-        const func_idx = self.module.linking.symbol_table.items[symbol.raw()].index;
+        const symbol = self.module.linking.findSymbolByName(name, self.module.imports.items, self.module.global_imports.items, self.module.table_imports.items) orelse
+            wasmInvariantFmt("WASM/codegen invariant violated: static data names function {s}, which the module neither defines nor imports", .{name});
+        const sym = self.module.linking.symbol_table.items[symbol];
+        if (sym.kind != .function) wasmInvariantFmt("WASM/codegen invariant violated: static data names {s} as a function", .{name});
+        // A procedure another unit defines is in that unit's table, so its
+        // own unit checks it.
+        if (sym.isUndefined()) continue;
+        const func_idx = sym.index;
         if (position(self.localFunctionIndexFromGlobal(func_idx), first, count)) |pos| needs_check[pos] = true;
     }
 
@@ -1720,6 +1732,17 @@ fn prependStackChecks(self: *Self, symbols: StackCheckSymbols, locals: []const L
 
 /// Prepend `if (__stack_pointer < __stack_low + room) roc_wasm_stack_overflow()`.
 fn prependStackCheck(self: *Self, body: *CodeBuilder, symbols: StackCheckSymbols) Allocator.Error!void {
+    try self.insertStackCheck(body, symbols, .prepend);
+}
+
+/// Emit a stack-bound check at the end of `body`'s code, as a dynamic frame
+/// allocation must at once: its room is filled like every other check's
+/// (`StackRoom`).
+fn appendStackCheck(self: *Self, body: *CodeBuilder, symbols: StackCheckSymbols) Allocator.Error!void {
+    try self.insertStackCheck(body, symbols, .append);
+}
+
+fn insertStackCheck(self: *Self, body: *CodeBuilder, symbols: StackCheckSymbols, where: enum { prepend, append }) Allocator.Error!void {
     var check = std.ArrayList(u8).empty;
     defer check.deinit(self.allocator);
     var relocs: [3]CodeBuilder.Relocation = undefined;
@@ -1732,13 +1755,20 @@ fn prependStackCheck(self: *Self, body: *CodeBuilder, symbols: StackCheckSymbols
     try WasmModule.appendPaddedI32(self.allocator, &check, 0);
     try check.appendSlice(self.allocator, &.{ Op.i32_lt_u, Op.@"if", 0x40, Op.call });
     relocs[2] = .{ .index = .{ .type_id = .function_index_leb, .code_pos = @intCast(check.items.len), .symbol_index = symbols.overflow } };
-    try WasmModule.appendPaddedU32(self.allocator, &check, self.module.linking.symbol_table.items[symbols.overflow.raw()].index);
+    try WasmModule.appendPaddedU32(self.allocator, &check, self.tables().module.linking.symbol_table.items[symbols.overflow.raw()].index);
     try check.append(self.allocator, Op.end);
 
-    try body.prependToCode(self.allocator, check.items);
+    const base_pos: u32 = switch (where) {
+        .prepend => 0,
+        .append => @intCast(body.code.items.len),
+    };
+    switch (where) {
+        .prepend => try body.prependToCode(self.allocator, check.items),
+        .append => try body.code.appendSlice(self.allocator, check.items),
+    }
     for (relocs) |reloc| switch (reloc) {
-        .index => |idx| try body.addIndexRelocation(self.allocator, idx.type_id, idx.code_pos, idx.symbol_index),
-        .offset => |off| try body.addOffsetRelocation(self.allocator, off.type_id, off.code_pos, off.symbol_index, off.addend),
+        .index => |idx| try body.addIndexRelocation(self.allocator, idx.type_id, base_pos + idx.code_pos, idx.symbol_index),
+        .offset => |off| try body.addOffsetRelocation(self.allocator, off.type_id, base_pos + off.code_pos, off.symbol_index, off.addend),
     };
 }
 
@@ -6092,6 +6122,12 @@ pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocat
     // are already known and can be called without triggering recursive compilation.
     for (proc_specs, 0..) |proc, i| {
         if (proc.is_static_initializer) continue;
+        // Another unit defines a linked procedure; `registerUnitImports`
+        // imported it.
+        if (proc.linked) {
+            std.debug.assert(self.registered_procs.get(@intCast(i)) != null);
+            continue;
+        }
         try self.registerProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(i)))), proc);
     }
     try self.buildProcArgCountsTable(proc_specs);
@@ -6181,7 +6217,7 @@ fn compileProcBodies(self: *Self, proc_specs: []const LirProcSpec) Allocator.Err
         var count: usize = 0;
         defer deinitJobArtifacts(jobs[0..count]);
         while (cursor < proc_specs.len and count < body_wave_capacity) : (cursor += 1) {
-            if (proc_specs[cursor].is_static_initializer) continue;
+            if (proc_specs[cursor].is_static_initializer or proc_specs[cursor].linked) continue;
             jobs[count] = .{ .owner = self, .unit = .{ .proc = @fromBackingInt(@intCast(@as(u32, @intCast(cursor)))) } };
             count += 1;
         }
@@ -6333,6 +6369,7 @@ fn bodyWorker(self: *const Self, allocator: Allocator, recorder: *BodyArtifact.R
     worker.proc_arg_counts_offset = self.proc_arg_counts_offset;
     worker.tail_area = self.tail_area;
     worker.stack_pointer_symbol = self.stack_pointer_symbol;
+    worker.stack_checks = self.stack_checks;
     worker.indirect_table_symbol = self.indirect_table_symbol;
     worker.relocatable_object = self.relocatable_object;
     worker.track_static_data_addresses = self.track_static_data_addresses;
@@ -6717,6 +6754,14 @@ fn generateFrameReplacingCall(self: *Self, proc_id: LIR.LirProcSpecId, call_args
         try self.emitDataAddressConst(area, @intCast(tail_area_args_offset + offsets[hidden_index]));
         try self.emitLocalGet(carry_local);
         try self.emitStoreOp(.i32, 0);
+        hidden_index += 1;
+    }
+    if (hidden.pending) {
+        // The callee leaves its pending call where this procedure's caller
+        // waits for this procedure's.
+        try self.emitDataAddressConst(area, @intCast(tail_area_args_offset + offsets[hidden_index]));
+        try self.emitPendingCell();
+        try self.emitStoreOp(.i32, 0);
     }
     try self.emitDataAddressConst(area, 0);
     try self.emitI32Const(@intCast(tailMemberNumber(driver, proc_id)));
@@ -6780,19 +6825,23 @@ fn buildProcArgCountsTable(self: *Self, proc_specs: []const LirProcSpec) Allocat
 /// Does NOT compile the body—that's done by compileProcSpecBody.
 fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
     const key: u32 = @backingInt(proc_id);
+    const type_idx = try self.procFuncType(proc);
+    const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
+    const func_idx = defined.function.raw();
+    _ = try self.addLirProcFunctionSymbol(defined, proc.identity, proc.exported);
+    const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
 
+    self.registered_procs.put(key, func_idx) catch return error.OutOfMemory;
+    self.proc_table_indices.put(key, table_idx) catch return error.OutOfMemory;
+}
+
+/// The wasm type of a procedure under its ABI: the erased ABI's, or the Roc
+/// convention's for its arguments, hidden parameters and result.
+fn procFuncType(self: *Self, proc: LirProcSpec) Allocator.Error!u32 {
     if (proc.abi == .erased_callable or proc.abi == .erased_record) {
         // Matches `builtins.erased_callable.ErasedCallableFn`: pointers for
         // ops, ret, args, capture, reuse, and out_desc.
-        const type_idx = try self.internFuncType(&.{ .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
-        const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
-        const func_idx = defined.function.raw();
-        _ = try self.addLirProcFunctionSymbol(defined, proc.identity);
-        const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
-
-        self.registered_procs.put(key, func_idx) catch return error.OutOfMemory;
-        self.proc_table_indices.put(key, table_idx) catch return error.OutOfMemory;
-        return;
+        return try self.internFuncType(&.{ .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     }
 
     const args = self.store.getLocalSpan(proc.args);
@@ -6806,19 +6855,14 @@ fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) 
         param_types.append(self.allocator, vt) catch return error.OutOfMemory;
     }
     if (direct_count < args.len) param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
-    // The hidden result pointer and tail carry follow the explicit arguments.
+    // The hidden result pointer, tail carry, and pending cell follow the
+    // explicit arguments.
     const hidden = self.hiddenParams(proc);
     if (hidden.result) param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
     if (hidden.carry) param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
+    if (hidden.pending) param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
     const ret_vt = try self.resolveValType(proc.ret_layout);
-    const type_idx = try self.internFuncType(param_types.items, &.{ret_vt});
-    const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
-    const func_idx = defined.function.raw();
-    _ = try self.addLirProcFunctionSymbol(defined, proc.identity);
-    const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
-
-    self.registered_procs.put(key, func_idx) catch return error.OutOfMemory;
-    self.proc_table_indices.put(key, table_idx) catch return error.OutOfMemory;
+    return try self.internFuncType(param_types.items, &.{ret_vt});
 }
 
 /// Compile a proc body. The proc must already be registered via registerProcSpec.
@@ -6919,6 +6963,11 @@ fn emitProcSpecBody(
     const saved_carry = self.carry;
     defer self.carry = saved_carry;
     self.carry = null;
+    const saved_pending_cell = self.pending_cell;
+    defer self.pending_cell = saved_pending_cell;
+    self.pending_cell = null;
+    // The erased ABI's last argument, once it is bound.
+    var erased_invocation: ?u32 = null;
 
     const erased_abi = proc.abi == .erased_callable or proc.abi == .erased_record;
     if (erased_abi) {
@@ -6927,9 +6976,9 @@ fn emitProcSpecBody(
     }
 
     const erased_ret_ptr: ?u32 = if (proc.abi == .erased_callable) blk: {
-        // The last parameter is the erased-callable ABI's `out_desc` slot,
-        // which generated code ignores.
-        const ret_ptr, const args_ptr, const capture_ptr, const reuse_ptr, _ = try self.allocAnonymousLocals(.i32, 5);
+        // The last parameter names the waiter that invoked this procedure.
+        const ret_ptr, const args_ptr, const capture_ptr, const reuse_ptr, const invocation = try self.allocAnonymousLocals(.i32, 5);
+        erased_invocation = invocation;
         try self.bindErasedCallableAdapterParams(
             proc,
             args,
@@ -6940,8 +6989,9 @@ fn emitProcSpecBody(
         );
         break :blk ret_ptr;
     } else if (proc.abi == .erased_record) blk: {
-        // The reuse and `out_desc` slots are never read.
-        const ret_ptr, const args_ptr, const capture_ptr, _, _ = try self.allocAnonymousLocals(.i32, 5);
+        // The reuse slot is never read.
+        const ret_ptr, const args_ptr, const capture_ptr, _, const invocation = try self.allocAnonymousLocals(.i32, 5);
+        erased_invocation = invocation;
         try self.bindErasedRecordParams(proc, ret_ptr, args_ptr, capture_ptr);
         break :blk ret_ptr;
     } else blk: {
@@ -6955,6 +7005,7 @@ fn emitProcSpecBody(
         const hidden = self.hiddenParams(proc);
         if (hidden.result) _ = try self.bindProcParamLocal(proc.dyn_result.?);
         if (hidden.carry) self.carry = .{ .idx = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory, .val_type = .i32 };
+        if (hidden.pending) self.pending_cell = .{ .idx = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory, .val_type = .i32 };
         if (stored_args) |base_local| {
             for (direct_count..args.len) |i| {
                 const binding = try self.bindProcParamLocal(GuardedList.at(args, i));
@@ -6966,20 +7017,32 @@ fn emitProcSpecBody(
         break :blk null;
     };
 
-    if (proc.reads_caller_drives) {
-        // Read before anything else can make an erased call: the runtime's
-        // answer describes only this invocation.
-        const flag = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory;
-        // The runtime names the callable it invokes by the function pointer
-        // callable values hold, which is this procedure's table index. A
-        // procedure without one is never the callee of an erased call.
-        if (self.tables().proc_table_indices.get(key)) |table_idx|
-            try self.emitFunctionTableIndexConst(table_idx)
-        else
-            try self.emitNullPtr();
-        try self.emitBuiltinCall(.native_callable_caller_drives);
-        try self.emitLocalSet(flag);
-        self.caller_drives = .{ .idx = flag, .val_type = .i32 };
+    if (proc.uses_pending_cell and self.pending_cell == null) {
+        const cell_offset = try self.allocStackMemory(builtins.native_callable.pending_words * 4, 4);
+        const own_cell = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory;
+        try self.emitFpOffset(cell_offset);
+        try self.emitLocalSet(own_cell);
+        try self.emitLocalGet(own_cell);
+        try self.emitI32Const(0);
+        try self.emitStoreOp(.i32, 0);
+        self.pending_cell = .{ .idx = own_cell, .val_type = .i32 };
+        if (proc.reads_caller_drives) {
+            // A cell in the erased ABI's last argument belongs to the runtime
+            // that invoked this procedure, and makes its calls.
+            try self.emitLocalGet(erased_invocation orelse
+                wasmInvariantFmt("WASM/codegen invariant violated: a procedure outside the erased ABI reads a caller's cell", .{}));
+            try self.emitBuiltinCall(.native_callable_caller_cell);
+            const caller_cell = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(caller_cell);
+            self.caller_drives = .{ .idx = caller_cell, .val_type = .i32 };
+            try self.emitLocalGet(caller_cell);
+            try self.emitLocalGet(own_cell);
+            try self.emitLocalGet(caller_cell);
+            self.currentCode().append(self.allocator, Op.select) catch return error.OutOfMemory;
+            const cell = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(cell);
+            self.pending_cell = .{ .idx = cell, .val_type = .i32 };
+        }
     }
 
     // Pre-allocate frame pointer local (after params, so it doesn't conflict).
@@ -7097,8 +7160,8 @@ fn emitProcSpecBody(
 
 /// Move the state a split procedure's body reads across statements out of
 /// the root function's wasm locals into frame slots: every LIR local the
-/// prologue bound, the return value, the tail carry, and the caller-drives
-/// flag. Later bindings are made as frame slots directly (`procLocalBinding`).
+/// prologue bound, the return value, the tail carry, the caller-drives
+/// flag, and the pending cell. Later bindings are made as frame slots directly (`procLocalBinding`).
 fn spillProcStateToFrame(self: *Self, scope: Storage.Scope) Allocator.Error!void {
     var bound = self.storage.boundSince(scope);
     while (bound.nextBinding()) |binding| {
@@ -7112,6 +7175,7 @@ fn spillProcStateToFrame(self: *Self, scope: Storage.Scope) Allocator.Error!void
     self.proc_return = .{ .idx = try self.allocStackMemory(ret_size, ret_size), .val_type = self.proc_return.val_type, .home = .frame_slot };
     if (self.carry) |carry| self.carry = try self.spillBindingToFrame(carry);
     if (self.caller_drives) |flag| self.caller_drives = try self.spillBindingToFrame(flag);
+    if (self.pending_cell) |cell| self.pending_cell = try self.spillBindingToFrame(cell);
 }
 
 fn requireProcBody(proc_id: LIR.LirProcSpecId, proc: LirProcSpec) LIR.CFStmtId {
@@ -7248,6 +7312,50 @@ fn resolveSymbolTarget(self: *Self, symbol_text: []const u8, params: []const Val
 
 fn emitNullPtr(self: *Self) Allocator.Error!void {
     try self.emitI32Const(0);
+}
+
+/// Import, for a unit compiled alone (`UnitCompile`), every function its
+/// code calls but does not define: each builtin wrapper and, for a program
+/// with the `.boxy` runtime contract, each Boxy runtime entry point, under
+/// the signatures `builtin_signatures` and `boxy_runtime_signatures` read
+/// off their definitions; the runtime set and the platform's hosted
+/// functions (`registerHostedSymbolTargets`); and every procedure another
+/// unit defines (`LIR.LirProcSpec.linked`), under its identity's symbol
+/// and the Roc convention its defining unit declares it with. Runs before
+/// any defined function exists.
+pub fn registerUnitImports(self: *Self, proc_specs: []const LIR.LirProcSpec, with_boxy_runtime: bool) HostedSymbolError!void {
+    std.debug.assert(self.module.function_offsets.items.len == 0 and self.module.func_type_indices.items.len == 0);
+    var builtin_symbols = BuiltinSignatures.SymbolTable.initUndefined();
+    inline for (comptime std.enums.values(BuiltinKind)) |kind| {
+        const sig = BuiltinSignatures.sigOf(kind);
+        const imported = try self.module.addFunctionImportWithSymbol("env", sig.name, try self.internFuncType(sig.wasm_params, sig.wasm_results));
+        builtin_symbols.set(kind, imported.symbol);
+    }
+    self.configureBuiltinRelocs(builtin_symbols);
+    if (with_boxy_runtime) {
+        var runtime_symbols = BoxyRuntimeSignatures.SymbolTable.initUndefined();
+        inline for (comptime std.enums.values(BoxyRuntimeSignatures.Entry)) |entry| {
+            const sig = BoxyRuntimeSignatures.sigOf(entry);
+            const imported = try self.module.addFunctionImportWithSymbol("env", sig.name, try self.internFuncType(sig.params, sig.results));
+            runtime_symbols.set(entry, imported.symbol);
+        }
+        self.configureBoxyRuntimeRelocs(runtime_symbols);
+    }
+    try self.registerHostedSymbolTargets(proc_specs);
+    for (proc_specs, 0..) |proc, i| {
+        if (!proc.linked) continue;
+        const name = proc.identity.symbolName(self.allocator) catch return error.OutOfMemory;
+        {
+            errdefer self.allocator.free(name);
+            try self.function_symbol_names.append(self.allocator, name);
+        }
+        const imported = try self.module.addFunctionImportWithSymbol("env", name, try self.procFuncType(proc));
+        const func_idx = imported.function.raw();
+        try self.recordFunctionSymbol(func_idx, imported.symbol);
+        const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
+        try self.registered_procs.put(@intCast(i), func_idx);
+        try self.proc_table_indices.put(@intCast(i), table_idx);
+    }
 }
 
 /// Resolve every hosted proc's linker symbol before proc compilation.
@@ -7706,7 +7814,11 @@ fn generateCFStmtUntil(self: *Self, stmt_id: CFStmtId, stop: ?CFStmtId) Allocato
                     try self.emitI64Const(t.branch_value);
                     self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
                 } else {
-                    try self.emitI32Const(@intCast(t.branch_value));
+                    // The condition's low 32 bits as the local holds them:
+                    // a branch value of a 32-bit unsigned type at or past
+                    // 2^31 is the same bits as a negative `i32.const`.
+                    const low_bits: u32 = @truncate(@as(u64, @bitCast(t.branch_value)));
+                    try self.emitI32Const(@bitCast(low_bits));
                     self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
                 }
 
@@ -8801,13 +8913,14 @@ fn beginStoredArgs(self: *Self, proc: LirProcSpec) Allocator.Error!?StoredArgs {
 
 /// The hidden trailing parameters of a `.roc` procedure's wasm signature,
 /// after its explicit arguments: the address of its dynamic result's
-/// storage, then its tail carry.
+/// storage, then its tail carry, then its caller's pending cell.
 const HiddenParams = struct {
     result: bool,
     carry: bool,
+    pending: bool,
 
     fn count(self: HiddenParams) usize {
-        return @as(usize, @intFromBool(self.result)) + @intFromBool(self.carry);
+        return @as(usize, @intFromBool(self.result)) + @intFromBool(self.carry) + @intFromBool(self.pending);
     }
 };
 
@@ -8815,6 +8928,7 @@ fn hiddenParams(self: *const Self, proc: LirProcSpec) HiddenParams {
     return .{
         .result = proc.abi == .roc and proc.dyn_result != null,
         .carry = procCarriesTailArgs(self.store, proc),
+        .pending = proc.takesPendingCell(),
     };
 }
 
@@ -9087,11 +9201,11 @@ fn bindErasedRecordParams(self: *Self, proc: LirProcSpec, ret_ptr: u32, args_ptr
     if (explicit_count > 1) wasmInvariantFmt("WASM/codegen invariant violated: erased_record proc has {d} explicit parameters", .{explicit_count});
 }
 
-/// Whether a direct call passes or returns dynamic values: the callee has a
+/// Whether a direct call passes hidden values or dynamic ones: the callee has a
 /// dynamic parameter or result, or the target is dynamic.
 fn callIsDynamic(self: *const Self, proc_id: LIR.LirProcSpecId, target: ProcLocalId) bool {
     const callee = self.store.getProcSpec(proc_id);
-    if (callee.dyn_result != null or self.localDyn(target) != null) return true;
+    if (callee.dyn_result != null or callee.takesPendingCell() or self.localDyn(target) != null) return true;
     const params = self.store.getLocalSpan(callee.args);
     for (0..params.len) |i| {
         if (self.localDyn(GuardedList.at(params, i)) != null) return true;
@@ -9141,6 +9255,7 @@ fn generateDynCall(self: *Self, proc_id: LIR.LirProcSpecId, args: ProcLocalSpan,
     }
     // An ordinary call's arguments stay in this frame: no carry.
     if (procCarriesTailArgs(self.store, callee)) try self.emitI32Const(0);
+    if (callee.takesPendingCell()) try self.emitPendingCell();
     try self.emitCall(func_idx);
     try self.emitTailDrive(callee);
 
@@ -9264,6 +9379,9 @@ fn generateDynFrameAlloc(self: *Self) Allocator.Error!void {
     self.currentCode().append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), total) catch return error.OutOfMemory;
     try self.emitStackPointerGlobal(Op.global_set);
+    // The region's size is only known at runtime, so the stack bounds are
+    // checked again below it.
+    if (self.stack_checks) |symbols| try self.appendStackCheck(self.currentBody(), symbols);
 
     // Each local's offset becomes its address in the region.
     for (0..locals.len) |i| {
@@ -9653,6 +9771,7 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             try self.emitLeadingValue(c.closure, .i32);
             const payload = try self.emitSetNewLocal(.i32);
             const t = try self.dynTarget(dst);
+            if (c.deferred) try self.emitPendingCell();
             try self.emitLocalGet(payload);
             try self.emitLoadOpSized(.i32, 4, 0);
             if (c.deferred) {
@@ -10008,6 +10127,7 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
 
     const ret_size = try self.layoutStorageByteSize(self.runtimeRepresentationLayoutIdx(c.ret_layout));
     const ret_offset = if (ret_size == 0) null else try self.allocStackMemory(ret_size, try self.layoutStorageByteAlign(c.ret_layout));
+    if (c.deferred) try self.emitPendingCell();
     try self.emitLocalGet(fn_ptr);
     if (c.deferred) {
         try self.emitLocalGet(payload_ptr);
@@ -10074,6 +10194,12 @@ fn emitDrivePending(self: *Self, drive: LIR.PendingDrive, ret_layout: layout.Idx
     }
 }
 
+/// Push the address of this procedure's pending cell.
+fn emitPendingCell(self: *Self) Allocator.Error!void {
+    try self.emitBindingGet(self.pending_cell orelse
+        wasmInvariantFmt("WASM/codegen invariant violated: a statement that can leave an erased call pending in a procedure without a pending cell", .{}));
+}
+
 /// Run the erased calls pending after a statement marked `drive`, writing
 /// the last one's result to the storage whose address `slot_local` holds
 /// (none for a zero-sized result). Under `.unless_caller_drives` this
@@ -10088,6 +10214,7 @@ fn emitDriveInto(self: *Self, drive: LIR.PendingDrive, slot_local: ?u32) Allocat
         self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
         self.currentCode().append(self.allocator, @backingInt(BlockType.void)) catch return error.OutOfMemory;
     }
+    try self.emitPendingCell();
     if (slot_local) |slot| try self.emitLocalGet(slot) else try self.emitNullPtr();
     try self.emitBuiltinCall(.native_callable_drive);
     if (drive == .unless_caller_drives) {

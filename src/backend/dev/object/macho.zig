@@ -383,6 +383,7 @@ pub const MachOWriter = struct {
                     .aarch64 => MachO.ARM64_RELOC_PAGEOFF12,
                 },
             },
+            .abs32s => invariant("Mach-O invariant violated: an abs32s data relocation, which only a Linux x86_64 test unit emits", .{}),
         };
         try self.text_relocs.append(self.allocator, .{
             .offset = offset,

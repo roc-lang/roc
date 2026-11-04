@@ -327,6 +327,9 @@ pub const MonoLlvmCodeGen = struct {
     /// Where the erased-callable procedure being compiled keeps whether the
     /// erased-call runtime invoked it, when its body reads that.
     caller_drives_flag: ?LlvmBuilder.Value = null,
+    /// The address of the pending cell of the procedure being compiled
+    /// (`LirProcSpec.uses_pending_cell`).
+    pending_cell: ?LlvmBuilder.Value = null,
     /// The `result` dynamic local of the procedure being compiled, when its
     /// result is dynamic (`LirProcSpec.dyn_result`).
     current_dyn_result: ?LocalId = null,
@@ -1906,6 +1909,9 @@ pub const MonoLlvmCodeGen = struct {
         dyn_result_index: ?u32,
         /// Parameter index of the tail carry (`procCarriesTailArgs`).
         carry_index: ?u32,
+        /// Parameter index of the caller's pending cell
+        /// (`LirProcSpec.takesPendingCell`).
+        pending_index: ?u32,
         /// Parameter index of the tail group's shared argument storage, and
         /// that storage's shape, if the group passes any argument in memory.
         scratch_index: ?u32,
@@ -1967,12 +1973,17 @@ pub const MonoLlvmCodeGen = struct {
             cursor += 1;
             break :blk cursor - 1;
         } else null;
+        const pending_index: ?u32 = if (proc.takesPendingCell()) blk: {
+            cursor += 1;
+            break :blk cursor - 1;
+        } else null;
         return .{
             .lowered = lowered,
             .arg_layouts = owned,
             .args_start = args_start,
             .dyn_result_index = dyn_result_index,
             .carry_index = carry_index,
+            .pending_index = pending_index,
             .scratch_index = if (scratch.size > 0) cursor else null,
             .scratch = scratch,
             .tail_args = tail_args,
@@ -1999,9 +2010,10 @@ pub const MonoLlvmCodeGen = struct {
         @memset(offsets, 0);
         const stored = try arena.alloc(bool, lowered.args.len);
         @memset(stored, false);
-        // The dynamic result address, the tail carry, and the storage pointer
-        // follow the arguments, so their registers are reserved up front.
-        const trailing_pointers: u32 = @as(u32, @intFromBool(proc.dyn_result != null)) + @intFromBool(procCarriesTailArgs(self.store, proc));
+        // The dynamic result address, the tail carry, the pending cell, and
+        // the storage pointer follow the arguments, so their registers are
+        // reserved up front.
+        const trailing_pointers: u32 = @as(u32, @intFromBool(proc.dyn_result != null)) + @intFromBool(procCarriesTailArgs(self.store, proc)) + @intFromBool(proc.takesPendingCell());
         if (self.usesTailDrivers()) {
             // Only a signature past the wasm parameter limit takes a storage
             // pointer, which then counts against the limit too.
@@ -2110,7 +2122,8 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Where a pending frame-replacing call keeps each of its callee's
     /// arguments in the static argument storage, and where those arguments
-    /// end, which is where it keeps the callee's tail carry.
+    /// end, which is where it keeps the callee's tail carry and, a word
+    /// later, its pending cell.
     fn tailArgOffsets(self: *MonoLlvmCodeGen, arg_layouts: []const layout.Idx, offsets: ?[]u32) u32 {
         var offset: u32 = 0;
         for (arg_layouts, 0..) |arg_layout, i| {
@@ -2142,8 +2155,7 @@ pub const MonoLlvmCodeGen = struct {
             if (!isTailDriverMember(proc)) continue;
             const arg_layouts = try self.procArgLayouts(proc, .explicit);
             defer self.allocator.free(arg_layouts);
-            const carry_size: u32 = if (procCarriesTailArgs(self.store, proc)) @intCast(self.target.ptrBitWidth() / 8) else 0;
-            area_size = @max(area_size, self.tailArgOffsets(arg_layouts, null) + carry_size);
+            area_size = @max(area_size, self.tailArgOffsets(arg_layouts, null) + 2 * self.targetWordSize());
             const driver = self.tailDriverFor(proc) orelse blk: {
                 const fn_ty = builder.fnType(.void, &.{ptr_ty}, .normal) catch return error.OutOfMemory;
                 const name = builder.strtabStringFmt("{s}roc_tail_driver.{d}", .{ self.static_symbol_prefix, self.tail_drivers.items.len }) catch return error.OutOfMemory;
@@ -2270,6 +2282,10 @@ pub const MonoLlvmCodeGen = struct {
                 try param_types.append(self.allocator, ptr_ty);
                 try call_args.append(self.allocator, try self.loadPointer(try self.offsetPtr(args_ptr, carry_offset)));
             }
+            if (sig.pending_index != null) {
+                try param_types.append(self.allocator, ptr_ty);
+                try call_args.append(self.allocator, try self.loadPointer(try self.offsetPtr(args_ptr, carry_offset + self.targetWordSize())));
+            }
             if (scratch) |storage| {
                 try param_types.append(self.allocator, ptr_ty);
                 try call_args.append(self.allocator, storage);
@@ -2330,6 +2346,8 @@ pub const MonoLlvmCodeGen = struct {
             try self.storeLocalToMemory(dst, arg_local, size, self.alignmentForLayout(arg_layout));
         }
         if (carry) |storage| try self.storePointer(try self.offsetPtr(self.tail_args_ptr.?, carry_offset), storage);
+        if (proc.takesPendingCell()) try self.storePointer(try self.offsetPtr(self.tail_args_ptr.?, carry_offset + self.targetWordSize()), self.pending_cell orelse
+            llvmInvariantFmt("frame-replacing call to proc {d} without a pending cell", .{@backingInt(proc_id)}));
         try self.emitFreeCarry();
         _ = wip.store(.normal, try self.intValue(.i32, tailMemberNumber(driver, proc_id)), self.tail_pending_ptr.?, LlvmBuilder.Alignment.fromByteUnits(4)) catch return error.OutOfMemory;
         if (self.fast_ret_registers) |registers| {
@@ -2466,6 +2484,7 @@ pub const MonoLlvmCodeGen = struct {
         }
         if (sig.dyn_result_index != null) try param_types.append(self.allocator, ptr_ty);
         if (sig.carry_index != null) try param_types.append(self.allocator, ptr_ty);
+        if (sig.pending_index != null) try param_types.append(self.allocator, ptr_ty);
         if (sig.scratch_index != null) try param_types.append(self.allocator, ptr_ty);
 
         const fn_ty = builder.fnType(ret_ty, param_types.items, .normal) catch return error.OutOfMemory;
@@ -2610,6 +2629,13 @@ pub const MonoLlvmCodeGen = struct {
             try param_types.append(self.allocator, ptr_ty);
             try call_args.append(self.allocator, try self.nullPtr());
         }
+        // Whatever calls this function expects a result, so it makes the
+        // call its procedure leaves pending.
+        const pending_cell: ?LlvmBuilder.Value = if (sig.pending_index != null) try self.allocPendingCell() else null;
+        if (pending_cell) |cell| {
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, cell);
+        }
         if (scratch) |storage| {
             try param_types.append(self.allocator, ptr_ty);
             try call_args.append(self.allocator, storage);
@@ -2619,6 +2645,7 @@ pub const MonoLlvmCodeGen = struct {
             try self.storeCAbiRegisterResult(builder, sig.lowered.ret.registers, result, ret_ptr, proc.ret_layout);
         }
         try self.emitTailDrive(proc, ret_ptr);
+        if (pending_cell) |cell| try self.callBuiltinVoid(.native_callable_drive, &.{ ptr_ty, ptr_ty }, &.{ cell, ret_ptr });
         _ = wip.retVoid() catch return error.OutOfMemory;
         try self.finishCurrentWipFunction();
     }
@@ -2689,6 +2716,7 @@ pub const MonoLlvmCodeGen = struct {
         const outer_tail_scratch = self.current_tail_scratch;
         const outer_tail_group = self.current_tail_group;
         const outer_caller_drives_flag = self.caller_drives_flag;
+        const outer_pending_cell = self.pending_cell;
         const outer_dyn_result = self.current_dyn_result;
         const outer_carry = self.current_carry;
         const outer_frame_locals = self.current_frame_locals;
@@ -2706,6 +2734,7 @@ pub const MonoLlvmCodeGen = struct {
             self.current_tail_scratch = outer_tail_scratch;
             self.current_tail_group = outer_tail_group;
             self.caller_drives_flag = outer_caller_drives_flag;
+            self.pending_cell = outer_pending_cell;
             self.current_dyn_result = outer_dyn_result;
             self.current_carry = outer_carry;
             self.current_frame_locals = outer_frame_locals;
@@ -2777,16 +2806,24 @@ pub const MonoLlvmCodeGen = struct {
         else
             null;
         self.caller_drives_flag = null;
-        if (proc.reads_caller_drives) {
-            // Read before anything else can make an erased call: the
-            // runtime's answer describes only this invocation.
-            const flag_ptr = try self.allocEntryBlockSlot(.i8, 1, LlvmBuilder.Alignment.fromByteUnits(1), "caller_drives");
-            // The runtime names the callable it invokes by the function
-            // pointer callable values hold, which is this procedure's.
-            const own_fn = self.proc_registry.get(@backingInt(proc_id)) orelse return error.CompilationFailed;
-            const flag = try self.callBuiltin(.native_callable_caller_drives, .i8, &.{try self.ptrType()}, &.{own_fn.toValue(builder)});
-            _ = wip.store(.normal, flag, flag_ptr, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.OutOfMemory;
-            self.caller_drives_flag = flag_ptr;
+        self.pending_cell = null;
+        if (fast_sig) |sig| {
+            if (sig.pending_index) |index| self.pending_cell = wip.arg(index);
+        }
+        if (proc.uses_pending_cell and self.pending_cell == null) {
+            const own_cell = try self.allocPendingCell();
+            self.pending_cell = own_cell;
+            if (proc.reads_caller_drives) {
+                // A cell in the erased ABI's last argument belongs to the
+                // runtime that invoked this procedure, and makes its calls.
+                const ptr_ty = try self.ptrType();
+                const caller_cell = try self.callBuiltin(.native_callable_caller_cell, ptr_ty, &.{ptr_ty}, &.{wip.arg(5)});
+                const caller_drives = wip.icmp(.ne, caller_cell, try self.nullPtr(), "") catch return error.OutOfMemory;
+                const flag_ptr = try self.allocEntryBlockSlot(.i1, 1, LlvmBuilder.Alignment.fromByteUnits(1), "caller_drives");
+                _ = wip.store(.normal, caller_drives, flag_ptr, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.OutOfMemory;
+                self.caller_drives_flag = flag_ptr;
+                self.pending_cell = wip.select(.normal, caller_drives, caller_cell, own_cell, "") catch return error.OutOfMemory;
+            }
         }
 
         self.current_dyn_result = proc.dyn_result;
@@ -4700,6 +4737,10 @@ pub const MonoLlvmCodeGen = struct {
             try param_types.append(self.allocator, ptr_ty);
             try call_args.append(self.allocator, try self.nullPtr());
         }
+        if (sig.pending_index != null) {
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, try self.pendingCell());
+        }
         if (scratch) |storage| {
             try param_types.append(self.allocator, ptr_ty);
             try call_args.append(self.allocator, storage);
@@ -4796,6 +4837,12 @@ pub const MonoLlvmCodeGen = struct {
             try param_types.append(self.allocator, ptr_ty);
             try call_args.append(self.allocator, storage);
         }
+        if (sig.pending_index != null) {
+            // The callee leaves its pending call where this procedure's
+            // caller waits for this procedure's.
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, try self.pendingCell());
+        }
         if (sig.scratch_index != null) {
             try param_types.append(self.allocator, ptr_ty);
             try call_args.append(self.allocator, self.current_tail_scratch orelse
@@ -4850,11 +4897,24 @@ pub const MonoLlvmCodeGen = struct {
             break :blk buf;
         };
         if (deferred) {
-            try self.callBuiltinVoid(.native_callable_defer, &.{ ptr_ty, ptr_ty, ptr_ty, self.ptrSizedIntType() }, &.{ fn_ptr, closure_ptr, args_buf, try self.intValue(self.ptrSizedIntType(), self.store.getErasedCallArgsPlan(arg_plan).size) });
+            try self.callBuiltinVoid(.native_callable_defer, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, self.ptrSizedIntType() }, &.{ try self.pendingCell(), fn_ptr, closure_ptr, args_buf, try self.intValue(self.ptrSizedIntType(), self.store.getErasedCallArgsPlan(arg_plan).size) });
         } else {
             const ret_ptr = if (self.slot(target).size == 0) try self.nullPtr() else self.slot(target).ptr;
             try self.callBuiltinVoid(.native_callable_call, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{ fn_ptr, ret_ptr, args_buf, capture_ptr, reuse_ptr });
         }
+    }
+
+    /// An empty pending cell in this frame.
+    fn allocPendingCell(self: *MonoLlvmCodeGen) Error!LlvmBuilder.Value {
+        const word_size = self.targetWordSize();
+        const cell = try self.allocEntryBlockSlot(.i8, builtins.native_callable.pending_words * word_size, LlvmBuilder.Alignment.fromByteUnits(word_size), "pending_cell");
+        try self.storePointer(cell, try self.nullPtr());
+        return cell;
+    }
+
+    /// The pending cell of the procedure being compiled.
+    fn pendingCell(self: *const MonoLlvmCodeGen) Error!LlvmBuilder.Value {
+        return self.pending_cell orelse llvmInvariantFmt("a statement that can leave an erased call pending in a procedure without a pending cell", .{});
     }
 
     /// Run the erased calls a callee left pending, as the tail-drive pass
@@ -4873,8 +4933,7 @@ pub const MonoLlvmCodeGen = struct {
         if (drive == .unless_caller_drives) {
             const flag_ptr = self.caller_drives_flag orelse
                 llvmInvariantFmt("procedure reads a caller-drives flag it never recorded", .{});
-            const flag = wip.load(.normal, .i8, flag_ptr, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
-            const caller_drives = wip.icmp(.ne, flag, try self.intValue(.i8, 0), "") catch return error.OutOfMemory;
+            const caller_drives = wip.load(.normal, .i1, flag_ptr, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
             const drive_block = wip.block(0, "drive_pending") catch return error.OutOfMemory;
             done_block = wip.block(0, "pending_done") catch return error.OutOfMemory;
             _ = wip.brCond(caller_drives, done_block.?, drive_block, .none) catch return error.OutOfMemory;
@@ -4886,7 +4945,7 @@ pub const MonoLlvmCodeGen = struct {
             builder.nullValue(ptr_ty) catch return error.OutOfMemory
         else
             self.slot(target).ptr;
-        try self.callBuiltinVoid(.native_callable_drive, &.{ptr_ty}, &.{ret_ptr});
+        try self.callBuiltinVoid(.native_callable_drive, &.{ ptr_ty, ptr_ty }, &.{ try self.pendingCell(), ret_ptr });
         if (done_block) |block| {
             _ = wip.br(block) catch return error.OutOfMemory;
             wip.cursor = .{ .block = block };
@@ -11994,7 +12053,7 @@ pub const MonoLlvmCodeGen = struct {
                             try self.intValue(usize_ty, self.layoutByteSize(self.localLayout(args)))
                     else
                         try self.intValue(usize_ty, 0);
-                    try self.callBuiltinVoid(.native_callable_defer, &.{ ptr_ty, ptr_ty, ptr_ty, usize_ty }, &.{ fn_ptr, closure_ptr, args_ptr, args_len });
+                    try self.callBuiltinVoid(.native_callable_defer, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, usize_ty }, &.{ try self.pendingCell(), fn_ptr, closure_ptr, args_ptr, args_len });
                 } else {
                     const ret_ptr = if (self.localDyn(target) == null and self.layoutByteSize(self.localLayout(target)) == 0)
                         try self.nullPtr()
