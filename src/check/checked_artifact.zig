@@ -26794,14 +26794,20 @@ fn checkedTypeHoldsFunction(
                             checkedArtifactInvariant("a box payload capability names a nominal its module does not declare", .{});
                         try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = declaration.backing });
                     },
+                    // The capability names its nominal in the declaring
+                    // module's own names.
                     .imported_box_payload_capability => |imported| {
-                        const declaring: CheckedTypeStoreView = if (imported.artifact.eql(own_key))
-                            own_types
-                        else
-                            (import_views.viewForKey(imported.artifact) orelse checkedArtifactInvariant("a nominal type's declaring module is not available", .{})).checked_types;
-                        const declaration = declaring.nominalDeclarationForPayload(nominal) orelse
-                            checkedArtifactInvariant("a box payload capability names a nominal its module does not declare", .{});
-                        try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring, .ty = declaration.backing });
+                        if (imported.artifact.eql(own_key)) {
+                            const declaration = own_types.nominalDeclarationForPayload(nominal) orelse
+                                checkedArtifactInvariant("a box payload capability names a nominal its module does not declare", .{});
+                            try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = own_types, .ty = declaration.backing });
+                        } else {
+                            const declaring = import_views.viewForKey(imported.artifact) orelse checkedArtifactInvariant("a nominal type's declaring module is not available", .{});
+                            const capability = declaring.interface_capabilities.boxPayloadCapability(imported.capability);
+                            const declaration = declaring.checked_types.nominalDeclaration(capability.nominal) orelse
+                                checkedArtifactInvariant("a box payload capability names a nominal its module does not declare", .{});
+                            try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring.checked_types, .ty = declaration.backing });
+                        }
                     },
                     .opaque_without_backing => {},
                 }

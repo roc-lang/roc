@@ -524,10 +524,14 @@ pub fn rootHoldsFunction(
                             base.invariant("compile-time finalization invariant violated: a box payload capability names a nominal its module does not declare", .{});
                         try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = declaration.backing });
                     },
+                    // The capability names its nominal in the declaring
+                    // module's own names.
                     .imported_box_payload_capability => |imported| {
                         const declaring = typesOf(modules, imports, imported.artifact) orelse
                             base.invariant("compile-time finalization invariant violated: a nominal type's declaring module is not in the program", .{});
-                        const declaration = declaring.nominalDeclarationForPayload(nominal) orelse
+                        const capabilities = capabilitiesOf(modules, imports, imported.artifact) orelse
+                            base.invariant("compile-time finalization invariant violated: a nominal type's declaring module is not in the program", .{});
+                        const declaration = declaring.nominalDeclaration(capabilities.boxPayloadCapability(imported.capability).nominal) orelse
                             base.invariant("compile-time finalization invariant violated: a box payload capability names a nominal its module does not declare", .{});
                         try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring, .ty = declaration.backing });
                     },
@@ -545,6 +549,16 @@ fn typesOf(modules: []const *const checked.CheckedModuleArtifact, imports: []con
     }
     for (imports) |import| {
         if (import.key.digest().eql(key)) return import.checked_types;
+    }
+    return null;
+}
+
+fn capabilitiesOf(modules: []const *const checked.CheckedModuleArtifact, imports: []const checked.ImportedModuleView, key: canonical.CheckedModuleDigest) ?*const checked.ModuleInterfaceCapabilities {
+    for (modules) |module| {
+        if (module.key.digest().eql(key)) return &module.interface_capabilities;
+    }
+    for (imports) |import| {
+        if (import.key.digest().eql(key)) return import.interface_capabilities;
     }
     return null;
 }
