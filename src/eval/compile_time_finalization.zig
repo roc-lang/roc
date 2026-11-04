@@ -7368,22 +7368,46 @@ test "compile-time finalization declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
-/// A whole image with a callable, mutable zero-fill and, optionally, a data
-/// pointer to another image's callable. No executable instruction references
-/// that import: demand must follow the data relocation.
+/// A whole image with a callable returning 42, mutable zero-fill and,
+/// optionally, a data pointer to another image's callable, in the host's
+/// own instruction set and object format. No executable instruction
+/// references that import: demand must follow the data relocation.
 fn ctfeSelectionTestImage(allocator: Allocator, name: []const u8, pointer: []const u8, imported: ?[]const u8, weak: bool) backend.dev.UnitImage.BuildError![]align(16) u8 {
     const Image = backend.dev.UnitImage;
-    const symbols = [_]Image.TestObject.TestSymbol{
-        .{ .name = name, .section = 1, .size = 6, .global = true, .func = true },
-        .{ .name = pointer, .section = 2, .size = 8, .global = true },
-        .{ .name = imported orelse name, .section = 0, .global = true, .func = true, .weak = weak },
+    const object = if (builtin.os.tag == .macos) macho: {
+        // mov w0, #42; ret
+        const text = [_]u8{ 0x40, 0x05, 0x80, 0x52, 0xc0, 0x03, 0x5f, 0xd6 };
+        const name_z = try std.fmt.allocPrint(allocator, "_{s}", .{name});
+        defer allocator.free(name_z);
+        const pointer_z = try std.fmt.allocPrint(allocator, "_{s}", .{pointer});
+        defer allocator.free(pointer_z);
+        const imported_z = try std.fmt.allocPrint(allocator, "_{s}", .{imported orelse name});
+        defer allocator.free(imported_z);
+        const symbols = [_]Image.TestMachObject.TestSymbol{
+            .{ .name = name_z, .section = 1, .value = 0, .external = true },
+            .{ .name = pointer_z, .section = 2, .value = 0, .external = true },
+            .{ .name = imported_z, .section = 0, .external = true, .weak_ref = weak },
+        };
+        // `ARM64_RELOC_UNSIGNED`, an 8-byte pointer.
+        const relocations = [_]Image.TestMachObject.TestRelocation{.{ .section = 2, .offset = 0, .symbol = 3, .type = 0, .pcrel = false, .length = 3 }};
+        break :macho try Image.TestMachObject.encode(allocator, &.{
+            .{ .segname = "__TEXT", .sectname = "__text", .bytes = &text, .flags = 0x8000_0000 },
+            .{ .segname = "__DATA", .sectname = "__data", .bytes = &@as([8]u8, @splat(0)), .@"align" = 3 },
+            .{ .segname = "__DATA", .sectname = "__bss", .size = 8, .@"align" = 3, .flags = 1 },
+        }, symbols[0..if (imported != null) 3 else 2], if (imported != null) &relocations else &.{});
+    } else elf: {
+        const symbols = [_]Image.TestObject.TestSymbol{
+            .{ .name = name, .section = 1, .size = 6, .global = true, .func = true },
+            .{ .name = pointer, .section = 2, .size = 8, .global = true },
+            .{ .name = imported orelse name, .section = 0, .global = true, .func = true, .weak = weak },
+        };
+        const relocations = [_]Image.TestObject.TestRelocation{.{ .section = 2, .offset = 0, .symbol = 3, .type = 1, .addend = 0 }};
+        break :elf try Image.TestObject.encode(allocator, &.{
+            .{ .name = ".text", .flags = 6, .bytes = &.{ 0xb8, 42, 0, 0, 0, 0xc3 } },
+            .{ .name = ".data", .flags = 3, .bytes = &@as([8]u8, @splat(0)), .addralign = 8 },
+            .{ .name = ".bss", .type = 8, .flags = 3, .size = 8, .addralign = 8 },
+        }, symbols[0..if (imported != null) 3 else 2], if (imported != null) &relocations else &.{});
     };
-    const relocations = [_]Image.TestObject.TestRelocation{.{ .section = 2, .offset = 0, .symbol = 3, .type = 1, .addend = 0 }};
-    const object = try Image.TestObject.encode(allocator, &.{
-        .{ .name = ".text", .flags = 6, .bytes = &.{ 0xb8, 42, 0, 0, 0, 0xc3 } },
-        .{ .name = ".data", .flags = 3, .bytes = &@as([8]u8, @splat(0)), .addralign = 8 },
-        .{ .name = ".bss", .type = 8, .flags = 3, .size = 8, .addralign = 8 },
-    }, symbols[0..if (imported != null) 3 else 2], if (imported != null) &relocations else &.{});
     defer allocator.free(object);
     return Image.build(allocator, &.{object}, .{ .keep_debug = false, .atoms = .whole });
 }
