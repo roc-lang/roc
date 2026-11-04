@@ -602,8 +602,38 @@ fn resolveShimFunction(name: []const u8) ?usize {
     }
     if (resolveRuntimeSymbol(name)) |address| return address;
     if (resolveHostedSymbol(name)) |address| return address;
-    return resolvePackageSymbol(name);
+    if (resolvePackageSymbol(name)) |address| return address;
+    return resolveSystemSymbol(name);
 }
+
+/// A function of the system libraries the support image's builtins call,
+/// looked up by name in this process: libSystem on macOS, kernel32 and
+/// ntdll on Windows. A Linux support image calls none.
+fn resolveSystemSymbol(name: []const u8) ?usize {
+    var buffer: [256]u8 = undefined;
+    if (name.len >= buffer.len) return null;
+    @memcpy(buffer[0..name.len], name);
+    buffer[name.len] = 0;
+    const name_z: [*:0]const u8 = buffer[0..name.len :0];
+    if (builtin.os.tag == .macos) {
+        // `RTLD_DEFAULT`: every image the process has loaded.
+        const default_handle: ?*anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -2))));
+        return @intFromPtr(std.c.dlsym(default_handle, name_z) orelse return null);
+    }
+    if (builtin.os.tag == .windows) {
+        for ([_][*:0]const u16{ std.unicode.utf8ToUtf16LeStringLiteral("kernel32.dll"), std.unicode.utf8ToUtf16LeStringLiteral("ntdll.dll") }) |module_name| {
+            const module = system_libraries.GetModuleHandleW(module_name) orelse continue;
+            if (system_libraries.GetProcAddress(module, name_z)) |address| return @intFromPtr(address);
+        }
+        return null;
+    }
+    return null;
+}
+
+const system_libraries = struct {
+    extern "kernel32" fn GetModuleHandleW(name: ?[*:0]const u16) callconv(.winapi) ?*anyopaque;
+    extern "kernel32" fn GetProcAddress(module: *anyopaque, name: [*:0]const u8) callconv(.winapi) ?*anyopaque;
+};
 
 /// An object-cache entry linked into this executable, by its C-ABI entry
 /// name, which the generated platform shim recorded next to its address.

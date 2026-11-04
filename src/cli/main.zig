@@ -6966,12 +6966,18 @@ fn writeComposedRunImage(
         var shim_builtins: [shim_builtin_count][]const u8 = undefined;
         for (builtins_registry.BuiltinFn.image_tracking, &shim_builtins) |builtin_fn, *name| name.* = builtin_fn.symbolName();
         const sorted_shim_builtins = try fast_dev_link.sortedUnion(ctx.arena, &.{&shim_builtins});
+        const support_view = backend.dev.UnitImage.View.init(support) catch base.invariant("roc run invariant violated: the embedded support image does not read", .{});
+        // The support image's imports: the runtime set and the system
+        // library functions its builtins call, which the shim resolves in
+        // its own process.
+        const support_imports = try ctx.arena.alloc([]const u8, support_view.imports().len);
+        for (support_view.imports(), support_imports) |import, *name| name.* = try ctx.arena.dupe(u8, support_view.name(import.name));
         const link_inputs: run_image_link.Inputs = .{
-            .support = .{ .view = backend.dev.UnitImage.View.init(support) catch base.invariant("roc run invariant violated: the embedded support image does not read", .{}) },
+            .support = .{ .view = support_view },
             .units = inputs,
             .root = library.images.len,
             .entrypoints = units.entrypoint_names,
-            .host_symbols = try fast_dev_link.sortedUnion(ctx.arena, &.{ units.hosted_symbols, &host_symbols.runtime_symbols, sorted_shim_builtins }),
+            .host_symbols = try fast_dev_link.sortedUnion(ctx.arena, &.{ units.hosted_symbols, &host_symbols.runtime_symbols, sorted_shim_builtins, support_imports }),
             .shim_builtins = sorted_shim_builtins,
         };
         var plan = run_image_link.plan(ctx.gpa, ctx.io.std_io, link_inputs) catch |err| switch (err) {
